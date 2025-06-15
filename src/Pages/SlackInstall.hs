@@ -5,7 +5,6 @@
 
 module Pages.SlackInstall (linkProjectGetH, postH, registerGlobalDiscordCommands, linkDiscordGetH, discordInteractionsH, DiscordInteraction, DiscordInteractionResponse, LinkProjectsForm, updateWebHook, SlackLink) where
 
-
 -- import Crypto.Error (CryptoFailable (..), eitherCryptoError)
 
 -- import Crypto.PubKey.Ed25519 (publicKey, signature, verify)

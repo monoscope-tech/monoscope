@@ -88,12 +88,14 @@ import Pages.Telemetry.Trace qualified as Trace
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget qualified as Widget
 
+
 -- =============================================================================
 -- Common query parameter type aliases
 -- =============================================================================
 
 type ProjectId = Capture "projectID" Projects.ProjectId
 type GetRedirect = Verb 'GET 302
+
 
 -- Query parameter types
 type QPT a = QueryParam a Text
@@ -103,8 +105,10 @@ type QPB a = QueryParam a Bool
 type QPI a = QueryParam a Int
 type QEID a = QueryParam a Endpoints.EndpointId
 
+
 -- Custom type for handling all query parameters
 data AllQueryParams
+
 
 -- =============================================================================
 -- Custom content types
@@ -113,15 +117,19 @@ data AllQueryParams
 -- Define custom RawJSON content type
 data RawJSON
 
+
 instance Accept RawJSON where
   contentType _ = "application/json"
+
 
 instance MimeUnrender RawJSON BS.ByteString where
   mimeUnrender _ = Right . BL.toStrict
 
+
 -- When bytestring is returned for json, simply return the bytestring
 instance Servant.MimeRender JSON ByteString where
   mimeRender _ = fromStrict
+
 
 -- =============================================================================
 -- Route Definitions
@@ -129,6 +137,7 @@ instance Servant.MimeRender JSON ByteString where
 
 -- Root routes
 type role Routes nominal
+
 
 type Routes :: Type -> Type
 data Routes mode = Routes
@@ -149,8 +158,10 @@ data Routes mode = Routes
   }
   deriving stock (Generic)
 
+
 -- Cookie Protected Routes
 type role CookieProtectedRoutes nominal
+
 
 type CookieProtectedRoutes :: Type -> Type
 data CookieProtectedRoutes mode = CookieProtectedRoutes
@@ -167,40 +178,32 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardDuplicatePost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "duplicate" :> Post '[HTML] (RespHeaders NoContent)
   , dashboardDuplicateWidget :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "duplicate" :> Post '[HTML] (RespHeaders Widget.Widget)
   , dashboardWidgetExpandGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "expand" :> Get '[HTML] (RespHeaders (Html ()))
-  
-  -- API routes  
-  , apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders Api.ApiGet)
+  , -- API routes
+    apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders Api.ApiGet)
   , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (RespHeaders Api.ApiMut)
   , apiPatch :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Patch '[HTML] (RespHeaders Api.ApiMut)
   , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders Api.ApiMut)
-  
-  -- Charts and widgets
-  , chartsDataGet :: mode :- "chart_data" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
+  , -- Charts and widgets
+    chartsDataGet :: mode :- "chart_data" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> ReqBody '[JSON] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
-  
-  -- Endpoints and fields
-  , endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> Get '[HTML] (RespHeaders EndpointList.EndpointRequestStatsVM)
+  , -- Endpoints and fields
+    endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> Get '[HTML] (RespHeaders EndpointList.EndpointRequestStatsVM)
   , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage ApiCatalog.HostEventsVM)))
   , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (RespHeaders FieldDetails.FieldPut)
-  
-  -- Slack/Discord integration
-  , slackInstallPost :: mode :- "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
+  , -- Slack/Discord integration
+    slackInstallPost :: mode :- "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
   , slackUpdateWebhook :: mode :- "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
-  
-  -- Reports and sharing
-  , reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Reports.ReportsGet)
+  , -- Reports and sharing
+    reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" ReportsM.ReportId :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (RespHeaders Reports.ReportsPost)
   , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QPT "event_type" :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
-  
-  -- Billing
-  , manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> QPT "from" :> Get '[HTML] (RespHeaders LemonSqueezy.BillingGet)
-  
-  -- Swagger/documentation
-  , swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] (RespHeaders AE.Value)
-  
-  -- Sub-route groups
-  , projects :: mode :- ProjectsRoutes
+  , -- Billing
+    manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> QPT "from" :> Get '[HTML] (RespHeaders LemonSqueezy.BillingGet)
+  , -- Swagger/documentation
+    swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] (RespHeaders AE.Value)
+  , -- Sub-route groups
+    projects :: mode :- ProjectsRoutes
   , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes
   , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes
   , monitors :: mode :- "p" :> ProjectId :> MonitorsRoutes
@@ -209,9 +212,11 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   }
   deriving stock (Generic)
 
+
 -- Log Explorer Routes
 type role LogExplorerRoutes' nominal
 type LogExplorerRoutes = NamedRoutes LogExplorerRoutes'
+
 
 type LogExplorerRoutes' :: Type -> Type
 data LogExplorerRoutes' mode = LogExplorerRoutes'
@@ -222,9 +227,11 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
   }
   deriving stock (Generic)
 
+
 -- Anomalies Routes
 type role AnomaliesRoutes' nominal
 type AnomaliesRoutes = NamedRoutes AnomaliesRoutes'
+
 
 type AnomaliesRoutes' :: Type -> Type
 data AnomaliesRoutes' mode = AnomaliesRoutes'
@@ -238,9 +245,11 @@ data AnomaliesRoutes' mode = AnomaliesRoutes'
   }
   deriving stock (Generic)
 
+
 -- Telemetry Routes
 type role TelemetryRoutes' nominal
 type TelemetryRoutes = NamedRoutes TelemetryRoutes'
+
 
 type TelemetryRoutes' :: Type -> Type
 data TelemetryRoutes' mode = TelemetryRoutes'
@@ -252,9 +261,11 @@ data TelemetryRoutes' mode = TelemetryRoutes'
   }
   deriving stock (Generic)
 
+
 -- Monitors Routes
 type role MonitorsRoutes' nominal
 type MonitorsRoutes = NamedRoutes MonitorsRoutes'
+
 
 type MonitorsRoutes' :: Type -> Type
 data MonitorsRoutes' mode = MonitorsRoutes'
@@ -273,9 +284,11 @@ data MonitorsRoutes' mode = MonitorsRoutes'
   }
   deriving stock (Generic)
 
+
 -- Specification Routes
 type role SpecificationRoutes' nominal
 type SpecificationRoutes = NamedRoutes SpecificationRoutes'
+
 
 type SpecificationRoutes' :: Type -> Type
 data SpecificationRoutes' mode = SpecificationRoutes'
@@ -285,9 +298,11 @@ data SpecificationRoutes' mode = SpecificationRoutes'
   }
   deriving stock (Generic)
 
+
 -- Projects Routes
 type role ProjectsRoutes' nominal
 type ProjectsRoutes = NamedRoutes ProjectsRoutes'
+
 
 type ProjectsRoutes' :: Type -> Type
 data ProjectsRoutes' mode = ProjectsRoutes'
@@ -296,37 +311,32 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , createPost :: mode :- "p" :> "update" :> Capture "projectId" Projects.ProjectId :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (RespHeaders CreateProject.CreateProject)
   , settingsGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "settings" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
   , integrationGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "integrations" :> Get '[HTML] (RespHeaders (Html ()))
-  
-  -- Project management
-  , deleteGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "delete" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
+  , -- Project management
+    deleteGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "delete" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
   , deleteProjectH :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "delete" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , deleteProjectGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "delete" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
-  
-  -- Member management
-  , membersManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Get '[HTML] (RespHeaders ManageMembers.ManageMembers)
+  , -- Member management
+    membersManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Get '[HTML] (RespHeaders ManageMembers.ManageMembers)
   , membersManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> QPT "onboarding" :> ReqBody '[FormUrlEncoded] ManageMembers.ManageMembersForm :> Post '[HTML] (RespHeaders ManageMembers.ManageMembers)
   , manageSubscriptionGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_subscription" :> Get '[HTML] (RespHeaders (Html ()))
-  
-  -- Notifications
-  , notificationsUpdateChannelPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Post '[HTML] (RespHeaders (Html ()))
-  
-  -- Onboarding routes
-  , onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> QPT "step" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , -- Notifications
+    notificationsUpdateChannelPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Post '[HTML] (RespHeaders (Html ()))
+  , -- Onboarding routes
+    onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> QPT "step" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders (Html ()))
   , onboardingConfPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "survey" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingConfForm :> Post '[HTML] (RespHeaders (Html ()))
   , onboardingDiscordPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "discord" :> ReqBody '[FormUrlEncoded] Onboarding.DiscordForm :> Post '[HTML] (RespHeaders (Html ()))
   , onboardingPhoneEmailsPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "phone-emails" :> ReqBody '[JSON] Onboarding.NotifChannelForm :> Post '[HTML] (RespHeaders (Html ()))
   , onboardingIntegrationCheck :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "integration-check" :> QPT "language" :> Get '[HTML] (RespHeaders (Html ()))
   , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> QPT "step" :> Post '[HTML] (RespHeaders (Html ()))
-  
-  -- Pricing routes
-  , onboardingPricingUpdate :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "pricing" :> ReqBody '[FormUrlEncoded] CreateProject.PricingUpdateForm :> Post '[HTML] (RespHeaders (Html ()))
+  , -- Pricing routes
+    onboardingPricingUpdate :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "pricing" :> ReqBody '[FormUrlEncoded] CreateProject.PricingUpdateForm :> Post '[HTML] (RespHeaders (Html ()))
   , pricingUpdateGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "update_pricing" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  
-  -- Proxy/landing
-  , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[PlainText] (RespHeaders Text)
+  , -- Proxy/landing
+    proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[PlainText] (RespHeaders Text)
   }
   deriving stock (Generic)
+
 
 -- =============================================================================
 -- Server Implementations
@@ -363,6 +373,7 @@ server pool =
           cookieProtectedServer
     }
 
+
 -- Cookie Protected server
 cookieProtectedServer :: Servant.ServerT (Servant.NamedRoutes CookieProtectedRoutes) ATAuthCtx
 cookieProtectedServer =
@@ -380,48 +391,40 @@ cookieProtectedServer =
     , dashboardDuplicatePost = Dashboards.dashboardDuplicatePostH
     , dashboardDuplicateWidget = Dashboards.dashboardDuplicateWidgetPostH
     , dashboardWidgetExpandGet = Dashboards.dashboardWidgetExpandGetH
-    
-    -- API handlers
-    , apiGet = Api.apiGetH
+    , -- API handlers
+      apiGet = Api.apiGetH
     , apiDelete = Api.apiDeleteH
     , apiPatch = Api.apiActivateH
     , apiPost = Api.apiPostH
-    
-    -- Chart and widget handlers
-    , chartsDataGet = Charts.queryMetrics
+    , -- Chart and widget handlers
+      chartsDataGet = Charts.queryMetrics
     , widgetPost = Widget.widgetPostH
-    
-    -- Slack/Discord handlers
-    , slackInstallPost = SlackInstall.postH
+    , -- Slack/Discord handlers
+      slackInstallPost = SlackInstall.postH
     , slackUpdateWebhook = SlackInstall.updateWebHook
-    
-    -- Report and share handlers
-    , reportsGet = Reports.reportsGetH
+    , -- Report and share handlers
+      reportsGet = Reports.reportsGetH
     , reportsSingleGet = Reports.singleReportGetH
     , reportsPost = Reports.reportsPostH
     , shareLinkPost = Share.shareLinkPostH
-    
-    -- Swagger handlers
-    , swaggerGenerateGet = GenerateSwagger.generateGetH
-    
-    -- Field handlers
-    , editField = FieldDetails.fieldPutH
-    
-    -- Billing handlers
-    , manageBillingGet = LemonSqueezy.manageBillingGetH
-    
-    -- Endpoint handlers
-    , endpointListGet = EndpointList.endpointListGetH
+    , -- Swagger handlers
+      swaggerGenerateGet = GenerateSwagger.generateGetH
+    , -- Field handlers
+      editField = FieldDetails.fieldPutH
+    , -- Billing handlers
+      manageBillingGet = LemonSqueezy.manageBillingGetH
+    , -- Endpoint handlers
+      endpointListGet = EndpointList.endpointListGetH
     , apiCatalogGet = ApiCatalog.apiCatalogH
-    
-    -- Sub-route handlers
-    , projects = projectsServer
+    , -- Sub-route handlers
+      projects = projectsServer
     , logExplorer = logExplorerServer
     , anomalies = anomaliesServer
     , monitors = monitorsServer
     , specification = specificationServer
     , traces = telemetryServer
     }
+
 
 -- Log Explorer server
 logExplorerServer :: Projects.ProjectId -> Servant.ServerT LogExplorerRoutes ATAuthCtx
@@ -432,6 +435,7 @@ logExplorerServer pid =
     , aiSearchPost = Log.aiSearchH pid
     , schemaGet = addRespHeaders Schema.telemetrySchemaJson
     }
+
 
 -- Anomalies server
 anomaliesServer :: Projects.ProjectId -> Servant.ServerT AnomaliesRoutes ATAuthCtx
@@ -446,6 +450,7 @@ anomaliesServer pid =
     , detailsGet = AnomalyList.anomalyDetailsGetH pid
     }
 
+
 -- Telemetry server
 telemetryServer :: Projects.ProjectId -> Servant.ServerT TelemetryRoutes ATAuthCtx
 telemetryServer pid =
@@ -456,6 +461,7 @@ telemetryServer pid =
     , metricDetailsGetH = Metrics.metricDetailsGetH pid
     , metricBreakdownGetH = Metrics.metricBreakdownGetH pid
     }
+
 
 -- Monitors server
 monitorsServer :: Projects.ProjectId -> Servant.ServerT MonitorsRoutes ATAuthCtx
@@ -475,6 +481,7 @@ monitorsServer pid =
     , collectionVarsDelete = TestCollectionEditor.collectionStepVariablesDeleteH pid
     }
 
+
 -- Specification server
 specificationServer :: Projects.ProjectId -> Servant.ServerT SpecificationRoutes ATAuthCtx
 specificationServer pid =
@@ -483,6 +490,7 @@ specificationServer pid =
     , documentationPost = Documentation.documentationPostH pid
     , documentationGet = Documentation.documentationGetH pid
     }
+
 
 -- Projects server
 projectsServer :: Servant.ServerT ProjectsRoutes ATAuthCtx
@@ -512,6 +520,7 @@ projectsServer =
     , proxyLanding = Onboarding.proxyLandingH
     }
 
+
 -- =============================================================================
 -- Utility handlers and helpers
 -- =============================================================================
@@ -526,6 +535,7 @@ data Status = Status
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Status
 
+
 statusH :: ATBaseCtx Status
 statusH = do
   let query = [sql| select version(); |]
@@ -539,8 +549,10 @@ statusH = do
       , gitCommitDate = toText $ giCommitDate gi
       }
 
+
 pingH :: ATBaseCtx Text
 pingH = pure "pong"
+
 
 -- =============================================================================
 -- Authentication and error handling
@@ -552,9 +564,11 @@ pingH = pure "pong"
 genAuthServerContext :: Logger -> AuthContext -> Servant.Context '[APItoolkitAuthContext, Servant.ErrorFormatters]
 genAuthServerContext logger env = authHandler logger env :. errorFormatters env :. EmptyContext
 
+
 errorFormatters :: AuthContext -> Servant.ErrorFormatters
 errorFormatters env =
   Servant.defaultErrorFormatters{Servant.notFoundErrorFormatter = notFoundPage env}
+
 
 notFoundPage :: AuthContext -> Servant.NotFoundErrorFormatter
 notFoundPage env _req =
@@ -562,6 +576,7 @@ notFoundPage env _req =
    in case result of
         Left err -> err
         Right _ -> Servant.err404
+
 
 -- =============================================================================
 -- Custom HasServer instances
@@ -573,6 +588,7 @@ notFoundPage env _req =
 instance HasServer api ctx => HasServer (AllQueryParams :> api) ctx where
   type ServerT (AllQueryParams :> api) m = [(Text, Maybe Text)] -> ServerT api m
 
+
   route _ ctx subserver = route (Proxy :: Proxy api) ctx subserver'
     where
       grabAllParams :: Request -> [(Text, Maybe Text)]
@@ -583,6 +599,7 @@ instance HasServer api ctx => HasServer (AllQueryParams :> api) ctx where
         | (k, mv) <- req.queryString
         ]
       subserver' = passToServer subserver grabAllParams
+
 
   hoistServerWithContext
     :: Proxy (AllQueryParams :> api)
