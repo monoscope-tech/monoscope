@@ -27,7 +27,6 @@ import Effectful.Time qualified as Time
 -- import Fmt (commaizeF, fmt) -- Using prettyPrintCount instead
 import Langchain.LLM.Core qualified as LLM
 import Langchain.LLM.OpenAI (OpenAI (..))
-import Log qualified
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
@@ -37,13 +36,12 @@ import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Schema qualified as Schema
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), currProject, pageActions, pageTitle, sessM)
 import Pkg.Components qualified as Components
-import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, queryEditorInitializationCode, queryLibrary_, visTypes)
-import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTStat, WTTimeseriesLine))
+import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, queryEditorInitializationCode, queryLibrary_)
+import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (pSource, parseQueryToAST, toQText)
 import Relude hiding (ask)
@@ -51,7 +49,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (displayTimestamp, faSprite_, formatUTC, freeTierLimitExceededBanner, getServiceColors, listToIndexHashMap, lookupVecTextByKey, prettyPrintCount, systemPrompt)
+import Utils (faSprite_, freeTierLimitExceededBanner, getServiceColors, listToIndexHashMap, lookupVecTextByKey, prettyPrintCount, systemPrompt)
 
 
 -- $setup
@@ -868,11 +866,11 @@ aiSearchH _pid requestBody = do
               if "Please provide a query"
                 `T.isInfixOf` cleanedQuery
                 || "I need more"
-                `T.isInfixOf` cleanedQuery
+                  `T.isInfixOf` cleanedQuery
                 || "Could you please"
-                `T.isInfixOf` cleanedQuery
+                  `T.isInfixOf` cleanedQuery
                 || T.length cleanedQuery
-                < 3
+                  < 3
                 then pure $ Left "INVALID_QUERY_ERROR"
                 else pure $ Right (cleanedQuery, vizTypeM)
 

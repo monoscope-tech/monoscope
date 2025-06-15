@@ -25,7 +25,6 @@ import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
 import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
 import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
-import Pages.SlackInstall (registerGlobalDiscordCommands)
 import Pkg.Queue qualified as Queue
 import ProcessMessage (processMessages)
 import Relude

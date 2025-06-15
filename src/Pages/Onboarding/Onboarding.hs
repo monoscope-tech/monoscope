@@ -22,7 +22,7 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as BL
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
-import Data.Effectful.Wreq qualified as W
+import Data.Effectful.Wreq qualified as W (get, responseBody)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Tuple.Extra (thd3)
@@ -47,17 +47,15 @@ import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users
 import NeatInterpolation (text)
-import Network.HTTP.Types (status200)
-import Network.Wreq (get, responseBody)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components
 import Pkg.Mail (sendDiscordNotif)
 import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import Servant (err401, err500, errBody)
+import Servant (err401, errBody)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, redirectCS)
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, redirectCS)
 import Utils (faSprite_, getOtelLangVersion, insertIfNotExist, lookupValueText)
 import Web.FormUrlEncoded
 
@@ -486,7 +484,7 @@ integrationsPage pid apikey =
                           , hxSelect_ "#mainArticle"
                           , hxIndicator_ $ "#fw-indicator-" <> lang
                           ]
-                        <> [checked_ | (idx == 0)]
+                          <> [checked_ | (idx == 0)]
                       unless (T.null fwIcon) $ img_ [class_ "h-5 w-5", src_ $ "https://apitoolkit.io/assets/img/framework-logos/" <> fwIcon]
                       span_ $ toHtml fwName
                 br_ []
@@ -850,13 +848,11 @@ universalIndicator =
 -- This bypasses CORS restrictions by fetching the content server-side
 proxyLandingH :: [Text] -> ATAuthCtx (RespHeaders Text)
 proxyLandingH path = do
-  traceShowM "proxyLandingH "
-  traceShowM path
   let baseUrl = "https://apitoolkit.io/"
       fullUrl = baseUrl <> T.intercalate "/" path
 
   response <- W.get (toString fullUrl)
 
-  let content = fromMaybe "" $ response L.^? responseBody
+  let content = fromMaybe "" $ response L.^? W.responseBody
       textContent = TE.decodeUtf8 $ BL.toStrict content
   addRespHeaders textContent

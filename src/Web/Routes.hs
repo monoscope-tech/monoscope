@@ -19,15 +19,19 @@ import Effectful.State.Static.Local qualified as State
 import GitHash (giCommitDate, giHash, tGitInfoCwd)
 import Log (Logger, UTCTime)
 import Lucid (Html)
+import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields (FieldId)
+import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Reports qualified as ReportsM
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Schema qualified as Schema
+import Models.Tests.Testing qualified as TestingM
 import Network.HTTP.Types (notFound404)
 import Network.Wai (Request, queryString)
-import Pages.Anomalies.Routes qualified as AnomaliesRoutes
-import Pages.Anomalies.Server qualified as AnomaliesRoutes
+import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.Api qualified as Api
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
@@ -36,20 +40,27 @@ import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
 import Pages.Endpoints.EndpointList qualified as EndpointList
 import Pages.Fields.FieldDetails qualified as FieldDetails
 import Pages.LemonSqueezy qualified as LemonSqueezy
-import Pages.LogExplorer.Routes qualified as LogExplorerRoutes
-import Pages.Monitors.Routes qualified as MonitorsRoutes
-import Pages.Projects.Routes qualified as ProjectsRoutes
-import Pages.Projects.Server qualified as ProjectsRoutes
+import Pages.Log qualified as Log
+import Pages.LogExplorer.LogItem qualified as LogItem
+import Pages.Monitors.Alerts qualified as Alerts
+import Pages.Monitors.MetricMonitors qualified as MetricMonitors
+import Pages.Monitors.TestCollectionEditor qualified as TestCollectionEditor
+import Pages.Monitors.Testing qualified as Testing
+import Pages.Onboarding.Onboarding qualified as Onboarding
+import Pages.Projects.CreateProject qualified as CreateProject
+import Pages.Projects.Integrations qualified as Integrations
+import Pages.Projects.ListProjects qualified as ListProjects
+import Pages.Projects.ManageMembers qualified as ManageMembers
 import Pages.Reports qualified as Reports
 import Pages.Share qualified as Share
 import Pages.SlackInstall qualified as SlackInstall
+import Pages.Specification.Documentation qualified as Documentation
 import Pages.Specification.GenerateSwagger qualified as GenerateSwagger
-import Pages.Specification.Routes qualified as SpecificationRoutes
-import Pages.Specification.Server qualified as SpecificationRoutes
-import Pages.Telemetry.Routes qualified as TelemetryRoutes
+import Pages.Telemetry.Metrics qualified as Metrics
+import Pages.Telemetry.Spans qualified as Spans
+import Pages.Telemetry.Trace qualified as Trace
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget qualified as Widget
-import Pkg.RouteUtils
 import Relude
 import Servant
 import Servant.HTML.Lucid (HTML)
@@ -57,7 +68,7 @@ import Servant.Htmx
 import Servant.Server.Generic (AsServerT)
 import Servant.Server.Internal.Delayed (passToServer)
 import System.Config (AuthContext)
-import System.Types
+import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
 import Web.Auth (APItoolkitAuthContext, authHandler)
 import Web.Auth qualified as Auth
 import Web.ClientMetadata qualified as ClientMetadata
@@ -134,6 +145,248 @@ server pool =
     }
 
 
+-- LogExplorerRoutes definitions
+type role LogExplorerRoutes' nominal
+
+
+type LogExplorerRoutes = NamedRoutes LogExplorerRoutes'
+
+
+type QPU a = QueryParam a UTCTime
+type QPT a = QueryParam a Text
+
+
+type QP a b = QueryParam a b
+
+
+type QPB a = QueryParam a Bool
+
+
+type QPI a = QueryParam a Int
+
+
+type QEID a = QueryParam a Endpoints.EndpointId
+
+
+type ProjectId = Capture "projectID" Projects.ProjectId
+
+
+type GetRedirect = Verb 'GET 302
+
+
+type LogExplorerRoutes' :: Type -> Type
+data LogExplorerRoutes' mode = LogExplorerRoutes'
+  { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> QPT "source" :> QPT "target-spans" :> QPT "queryTitle" :> QPT "queryLibId" :> QPT "details_width" :> QPT "target_event" :> QPT "showTrace" :> HXRequest :> HXBoosted :> QPT "json" :> QPT "viz_type" :> Get '[HTML, JSON] (RespHeaders Log.LogsGet)
+  , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> QPT "source" :> Get '[HTML] (RespHeaders LogItem.ApiItemDetailed)
+  , aiSearchPost :: mode :- "log_explorer" :> "ai_search" :> ReqBody '[JSON] AE.Value :> Post '[JSON] (RespHeaders AE.Value)
+  , schemaGet :: mode :- "log_explorer" :> "schema" :> Get '[JSON] (RespHeaders AE.Value)
+  }
+  deriving stock (Generic)
+
+
+logExplorerServer :: Projects.ProjectId -> Servant.ServerT LogExplorerRoutes ATAuthCtx
+logExplorerServer pid =
+  LogExplorerRoutes'
+    { logExplorerGet = Log.apiLogH pid
+    , logExplorerItemDetailedGet = LogItem.expandAPIlogItemH pid
+    , aiSearchPost = Log.aiSearchH pid
+    , schemaGet = addRespHeaders Schema.telemetrySchemaJson
+    }
+
+
+-- AnomaliesRoutes definitions
+type role AnomaliesRoutes' nominal
+
+
+type AnomaliesRoutes = NamedRoutes AnomaliesRoutes'
+
+
+type AnomaliesRoutes' :: Type -> Type
+data AnomaliesRoutes' mode = AnomaliesRoutes'
+  { acknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "acknowlege" :> QPT "host" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
+  , unAcknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unacknowlege" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
+  , archiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "archive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
+  , unarchiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
+  , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] AnomalyList.AnomalyBulkForm :> Post '[HTML] (RespHeaders AnomalyList.AnomalyAction)
+  , listGet :: mode :- QPT "layout" :> QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "load_more" :> QEID "endpoint" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders AnomalyList.AnomalyListGet)
+  , detailsGet :: mode :- "by_hash" :> Capture "targetHash" Text :> QPT "modal" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyDetails)
+  }
+  deriving stock (Generic)
+
+
+anomaliesServer :: Projects.ProjectId -> Servant.ServerT AnomaliesRoutes ATAuthCtx
+anomaliesServer pid =
+  AnomaliesRoutes'
+    { acknowlegeGet = AnomalyList.acknowlegeAnomalyGetH pid
+    , unAcknowlegeGet = AnomalyList.unAcknowlegeAnomalyGetH pid
+    , archiveGet = AnomalyList.archiveAnomalyGetH pid
+    , unarchiveGet = AnomalyList.unArchiveAnomalyGetH pid
+    , bulkActionsPost = AnomalyList.anomalyBulkActionsPostH pid
+    , listGet = AnomalyList.anomalyListGetH pid
+    , detailsGet = AnomalyList.anomalyDetailsGetH pid
+    }
+
+
+-- TelemetryRoutes definitions
+type role TelemetryRoutes' nominal
+
+
+type TelemetryRoutes = NamedRoutes TelemetryRoutes'
+
+
+type TelemetryRoutes' :: Type -> Type
+data TelemetryRoutes' mode = TelemetryRoutes'
+  { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPT "span_id" :> QPT "nav" :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
+  , spanGetH :: mode :- "spans" :> Capture "trace_id" Text :> Capture "span_id" Text :> Get '[HTML] (RespHeaders (Html ()))
+  , metricsOVGetH :: mode :- "metrics" :> QPT "tab" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "metric_prefix" :> QPI "cursor" :> Get '[HTML] (RespHeaders Metrics.MetricsOverViewGet)
+  , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Html ()))
+  , metricBreakdownGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "breakdown" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
+  }
+  deriving stock (Generic)
+
+
+telemetryServer :: Projects.ProjectId -> Servant.ServerT TelemetryRoutes ATAuthCtx
+telemetryServer pid =
+  TelemetryRoutes'
+    { tracesGet = Trace.traceH pid
+    , spanGetH = Spans.spanGetH pid
+    , metricsOVGetH = Metrics.metricsOverViewGetH pid
+    , metricDetailsGetH = Metrics.metricDetailsGetH pid
+    , metricBreakdownGetH = Metrics.metricBreakdownGetH pid
+    }
+
+
+-- MonitorsRoutes definitions
+type role MonitorsRoutes' nominal
+
+
+type MonitorsRoutes = NamedRoutes MonitorsRoutes'
+
+
+type MonitorsRoutes' :: Type -> Type
+data MonitorsRoutes' mode = MonitorsRoutes'
+  { alertUpsertPost :: mode :- "alerts" :> ReqBody '[FormUrlEncoded] Alerts.AlertUpsertForm :> Post '[HTML] (RespHeaders Alerts.Alert)
+  , alertListGet :: mode :- "alerts" :> Get '[HTML] (RespHeaders Alerts.Alert)
+  , alertSingleGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Get '[HTML] (RespHeaders Alerts.Alert)
+  , alertSingleToggleActive :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[HTML] (RespHeaders Alerts.Alert)
+  , monitorListGet :: mode :- "monitors" :> QueryParam "filter" Text :> QueryParam "since" Text :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage Testing.CollectionListItemVM)))
+  , monitorCreatePost :: mode :- "monitors" :> "create" :> QPT "monitor-type" :> Get '[HTML] (RespHeaders (PageCtx MetricMonitors.MonitorCreate))
+  , collectionGet :: mode :- "monitors" :> "collection" :> QueryParam "col_id" TestingM.CollectionId :> Get '[HTML] (RespHeaders TestCollectionEditor.CollectionGet)
+  , collectionDashboardGet :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "overview" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , collectionStepsUpdate :: mode :- "monitors" :> "collection" :> ReqBody '[JSON] TestingM.CollectionStepUpdateForm :> QPT "onboarding" :> Post '[HTML] (RespHeaders TestCollectionEditor.CollectionMut)
+  , collectionRunTests :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> QueryParam "step_index" Int :> ReqBody '[JSON] TestingM.CollectionStepUpdateForm :> Patch '[HTML] (RespHeaders TestCollectionEditor.CollectionRunTest)
+  , collectionVarsPost :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "variables" :> ReqBody '[JSON] TestCollectionEditor.CollectionVariableForm :> Post '[HTML] (RespHeaders (Html ()))
+  , collectionVarsDelete :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "variables" :> Capture "variable_name" Text :> Delete '[HTML] (RespHeaders (Html ()))
+  }
+  deriving stock (Generic)
+
+
+monitorsServer :: Projects.ProjectId -> Servant.ServerT MonitorsRoutes ATAuthCtx
+monitorsServer pid =
+  MonitorsRoutes'
+    { alertUpsertPost = Alerts.alertUpsertPostH pid
+    , alertListGet = Alerts.alertListGetH pid
+    , alertSingleGet = Alerts.alertSingleGetH pid
+    , alertSingleToggleActive = Alerts.alertSingleToggleActiveH pid
+    , monitorListGet = Testing.testingGetH pid
+    , monitorCreatePost = MetricMonitors.monitorCreateGetH pid
+    , collectionGet = TestCollectionEditor.collectionGetH pid
+    , collectionStepsUpdate = TestCollectionEditor.collectionStepsUpdateH pid
+    , collectionRunTests = TestCollectionEditor.collectionRunTestsH pid
+    , collectionDashboardGet = Testing.collectionDashboard pid
+    , collectionVarsPost = TestCollectionEditor.collectionStepVariablesUpdateH pid
+    , collectionVarsDelete = TestCollectionEditor.collectionStepVariablesDeleteH pid
+    }
+
+
+-- SpecificationRoutes definitions
+type role SpecificationRoutes' nominal
+
+
+type SpecificationRoutes = NamedRoutes SpecificationRoutes'
+
+
+type SpecificationRoutes' :: Type -> Type
+data SpecificationRoutes' mode = SpecificationRoutes'
+  { documentationPut :: mode :- "documentation" :> "save" :> ReqBody '[JSON] Documentation.SaveSwaggerForm :> Post '[HTML] (RespHeaders Documentation.DocumentationMut)
+  , documentationPost :: mode :- "documentation" :> ReqBody '[FormUrlEncoded] Documentation.SwaggerForm :> Post '[HTML] (RespHeaders Documentation.DocumentationMut)
+  , documentationGet :: mode :- "documentation" :> QueryParam "swagger_id" Text :> QueryParam "host" Text :> Get '[HTML] (RespHeaders (PageCtx Documentation.DocumentationGet))
+  }
+  deriving stock (Generic)
+
+
+specificationServer :: Projects.ProjectId -> Servant.ServerT SpecificationRoutes ATAuthCtx
+specificationServer pid =
+  SpecificationRoutes'
+    { documentationPut = Documentation.documentationPutH pid
+    , documentationPost = Documentation.documentationPostH pid
+    , documentationGet = Documentation.documentationGetH pid
+    }
+
+
+-- ProjectsRoutes definitions
+type role ProjectsRoutes' nominal
+
+
+type ProjectsRoutes = NamedRoutes ProjectsRoutes'
+
+
+type ProjectsRoutes' :: Type -> Type
+data ProjectsRoutes' mode = ProjectsRoutes'
+  { listGet :: mode :- Get '[HTML] (RespHeaders ListProjects.ListProjectsGet)
+  , onboardingProject :: mode :- "p" :> "new" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] (PageCtx (Html ()))) -- p represents project
+  , createPost :: mode :- "p" :> "update" :> Capture "projectId" Projects.ProjectId :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (RespHeaders CreateProject.CreateProject)
+  , settingsGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "settings" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
+  , integrationGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "integrations" :> Get '[HTML] (RespHeaders (Html ()))
+  , deleteGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "delete" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
+  , deleteProjectH :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "delete" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , notificationsUpdateChannelPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Post '[HTML] (RespHeaders (Html ()))
+  , deleteProjectGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "delete" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
+  , membersManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Get '[HTML] (RespHeaders ManageMembers.ManageMembers)
+  , membersManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> QPT "onboarding" :> ReqBody '[FormUrlEncoded] ManageMembers.ManageMembersForm :> Post '[HTML] (RespHeaders ManageMembers.ManageMembers)
+  , manageSubscriptionGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_subscription" :> Get '[HTML] (RespHeaders (Html ()))
+  , onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> QPT "step" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders (Html ()))
+  , onboardingConfPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "survey" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingConfForm :> Post '[HTML] (RespHeaders (Html ()))
+  , onboardingDiscordPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "discord" :> ReqBody '[FormUrlEncoded] Onboarding.DiscordForm :> Post '[HTML] (RespHeaders (Html ()))
+  , onboardingPhoneEmailsPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "phone-emails" :> ReqBody '[JSON] Onboarding.NotifChannelForm :> Post '[HTML] (RespHeaders (Html ()))
+  , onboardingIntegrationCheck :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "integration-check" :> QPT "language" :> Get '[HTML] (RespHeaders (Html ()))
+  , onboardingPricingUpdate :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "pricing" :> ReqBody '[FormUrlEncoded] CreateProject.PricingUpdateForm :> Post '[HTML] (RespHeaders (Html ()))
+  , pricingUpdateGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "update_pricing" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> QPT "step" :> Post '[HTML] (RespHeaders (Html ()))
+  , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[PlainText] (RespHeaders Text)
+  }
+  deriving stock (Generic)
+
+
+projectsServer :: Servant.ServerT ProjectsRoutes ATAuthCtx
+projectsServer =
+  ProjectsRoutes'
+    { listGet = ListProjects.listProjectsGetH
+    , onboardingProject = CreateProject.projectOnboarding
+    , createPost = CreateProject.createProjectPostH
+    , settingsGet = CreateProject.projectSettingsGetH
+    , integrationGet = Integrations.integrationsSettingsGetH
+    , deleteGet = CreateProject.deleteProjectGetH
+    , deleteProjectH = CreateProject.projectDeleteGetH
+    , notificationsUpdateChannelPost = Integrations.updateNotificationsChannel
+    , deleteProjectGet = CreateProject.deleteProjectGetH
+    , membersManageGet = ManageMembers.manageMembersGetH
+    , membersManagePost = ManageMembers.manageMembersPostH
+    , manageSubscriptionGet = ManageMembers.manageSubGetH
+    , onboading = Onboarding.onboardingGetH
+    , onboardingInfoPost = Onboarding.onboardingInfoPost
+    , onboardingConfPost = Onboarding.onboardingConfPost
+    , onboardingDiscordPost = Onboarding.discorPostH
+    , onboardingPhoneEmailsPost = Onboarding.phoneEmailPostH
+    , onboardingIntegrationCheck = Onboarding.checkIntegrationGet
+    , onboardingPricingUpdate = CreateProject.pricingUpdateH
+    , pricingUpdateGet = CreateProject.pricingUpdateGetH
+    , onboardingSkipped = Onboarding.onboardingStepSkipped
+    , proxyLanding = Onboarding.proxyLandingH
+    }
+
+
 type role CookieProtectedRoutes nominal
 
 
@@ -151,12 +404,12 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardDuplicatePost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "duplicate" :> Post '[HTML] (RespHeaders NoContent)
   , dashboardDuplicateWidget :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "duplicate" :> Post '[HTML] (RespHeaders Widget.Widget)
   , dashboardWidgetExpandGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "expand" :> Get '[HTML] (RespHeaders (Html ()))
-  , projects :: mode :- ProjectsRoutes.Routes
-  , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes.Routes
-  , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes.Routes
-  , monitors :: mode :- "p" :> ProjectId :> MonitorsRoutes.Routes
-  , specification :: mode :- "p" :> ProjectId :> SpecificationRoutes.Routes
-  , traces :: mode :- "p" :> ProjectId :> TelemetryRoutes.Routes
+  , projects :: mode :- ProjectsRoutes
+  , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes
+  , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes
+  , monitors :: mode :- "p" :> ProjectId :> MonitorsRoutes
+  , specification :: mode :- "p" :> ProjectId :> SpecificationRoutes
+  , traces :: mode :- "p" :> ProjectId :> TelemetryRoutes
   , apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders Api.ApiGet)
   , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (RespHeaders Api.ApiMut)
   , apiPatch :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Patch '[HTML] (RespHeaders Api.ApiMut)
@@ -193,12 +446,12 @@ cookieProtectedServer =
     , dashboardDuplicatePost = Dashboards.dashboardDuplicatePostH
     , dashboardDuplicateWidget = Dashboards.dashboardDuplicateWidgetPostH
     , dashboardWidgetExpandGet = Dashboards.dashboardWidgetExpandGetH
-    , projects = ProjectsRoutes.server
-    , logExplorer = LogExplorerRoutes.server
-    , anomalies = AnomaliesRoutes.server
-    , monitors = MonitorsRoutes.server
-    , specification = SpecificationRoutes.server
-    , traces = TelemetryRoutes.server
+    , projects = projectsServer
+    , logExplorer = logExplorerServer
+    , anomalies = anomaliesServer
+    , monitors = monitorsServer
+    , specification = specificationServer
+    , traces = telemetryServer
     , apiGet = Api.apiGetH
     , apiDelete = Api.apiDeleteH
     , apiPatch = Api.apiActivateH

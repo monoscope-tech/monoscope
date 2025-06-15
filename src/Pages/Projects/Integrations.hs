@@ -15,7 +15,7 @@ import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx
-import Models.Apis.Slack (SlackData, getDiscordData, getDiscordDataByProjectId, getProjectSlackData)
+import Models.Apis.Slack (SlackData, getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions

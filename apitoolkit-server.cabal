@@ -78,8 +78,6 @@ library
       Opentelemetry.OtlpServerSpec
       Pages.Anomalies.AnomalyList
       Pages.Anomalies.AnomalyListSpec
-      Pages.Anomalies.Routes
-      Pages.Anomalies.Server
       Pages.Api
       Pages.ApiSpec
       Pages.BodyWrapper
@@ -96,12 +94,10 @@ library
       Pages.LemonSqueezy
       Pages.Log
       Pages.LogExplorer.LogItem
-      Pages.LogExplorer.Routes
       Pages.LogSpec
       Pages.Monitors.Alerts
       Pages.Monitors.AlertsSpec
       Pages.Monitors.MetricMonitors
-      Pages.Monitors.Routes
       Pages.Monitors.TestCollectionEditor
       Pages.Monitors.Testing
       Pages.Monitors.TestingSpec
@@ -112,8 +108,6 @@ library
       Pages.Projects.ManageMembers
       Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
-      Pages.Projects.Routes
-      Pages.Projects.Server
       Pages.Reports
       Pages.ReportsSpec
       Pages.Share
@@ -123,10 +117,7 @@ library
       Pages.Specification.DocumentationSpec
       Pages.Specification.GenerateSwagger
       Pages.Specification.GenerateSwaggerSpec
-      Pages.Specification.Routes
-      Pages.Specification.Server
       Pages.Telemetry.Metrics
-      Pages.Telemetry.Routes
       Pages.Telemetry.Spans
       Pages.Telemetry.Trace
       Pages.Telemetry.Utils
@@ -149,7 +140,6 @@ library
       Pkg.Parser.Stats
       Pkg.ParserSpec
       Pkg.Queue
-      Pkg.RouteUtils
       Pkg.TestUtils
       Pkg.THUtils
       ProcessMessage
@@ -361,7 +351,6 @@ library
     , wreq
     , xxhash
     , yaml
-    , mime-types
   default-language: GHC2021
 
 executable apitoolkit-server-exe

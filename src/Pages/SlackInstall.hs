@@ -17,10 +17,8 @@ import Data.Aeson
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
-import Data.ByteString.Lazy qualified as BL
 import Data.ByteString.Lazy qualified as LBS
 import Data.Default (Default (def))
-import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -32,24 +30,19 @@ import Lucid
 import Models.Apis.Slack (getDiscordData, insertAccessToken, insertDiscordData, updateDiscordNotificationChannel)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Network.Wreq (FormParam (..), defaults, header, postWith, responseBody)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Pkg.Components (navBar)
 import Pkg.Mail (sendSlackMessage)
 import Relude hiding (ask, asks)
-import Servant (err401)
 
 import Control.Exception (try)
 import Control.Lens hiding ((.=))
 import Data.Aeson.QQ (aesonQQ)
-import Data.ByteString.Lazy qualified as BL
-import Data.Text qualified as T
 import Data.Vector qualified as V
 import Langchain.LLM.Core qualified as LLM
 import Langchain.LLM.OpenAI (OpenAI (..))
 import Network.HTTP.Client (RequestBody (..))
 import Network.HTTP.Client.MultipartFormData (PartM, partFileRequestBody)
-import Network.Mime (defaultMimeLookup)
 import Network.Wreq
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
