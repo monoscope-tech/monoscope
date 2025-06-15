@@ -417,8 +417,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "Previous messages in this thread:"
           ]
-          <> msgs'
-          <> ["\n\nCurrent user query: " <> question]
+        <> msgs'
+        <> ["\n\nCurrent user query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
@@ -490,8 +490,8 @@ registerGlobalDiscordCommands appId botToken = do
   let url =
         T.unpack
           $ "https://discord.com/api/v10/applications/"
-            <> appId
-            <> "/commands"
+          <> appId
+          <> "/commands"
 
       askCommand =
         AE.object
@@ -575,8 +575,10 @@ data BufferResponse = BufferResponse
 instance FromJSON BufferResponse where
   parseJSON = withObject "BufferResponse" $ \o ->
     BufferResponse
-      <$> o .: "type"
-      <*> o .: "data"
+      <$> o
+      .: "type"
+      <*> o
+      .: "data"
 
 
 replyWithChartImage :: DiscordInteraction -> AE.Value -> Text -> Text -> IO ()

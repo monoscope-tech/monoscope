@@ -486,7 +486,7 @@ integrationsPage pid apikey =
                           , hxSelect_ "#mainArticle"
                           , hxIndicator_ $ "#fw-indicator-" <> lang
                           ]
-                          <> [checked_ | (idx == 0)]
+                        <> [checked_ | (idx == 0)]
                       unless (T.null fwIcon) $ img_ [class_ "h-5 w-5", src_ $ "https://apitoolkit.io/assets/img/framework-logos/" <> fwIcon]
                       span_ $ toHtml fwName
                 br_ []
@@ -828,7 +828,7 @@ stepIndicator step title prevUrl = do
         a_ [class_ "flex items-center gap-3 flex text-brand w-full mt-2", href_ prevUrl] $ do
           faSprite_ "arrow-left" "regular" "h-4 w-4"
           span_ [class_ "font-semibold"] "Back"
-    span_ [class_ " text-textStrong text-4xl font-semibold mt-4"] $ toHtml title
+    span_ [class_ " text-textStrong text-4xl mt-4"] $ toHtml title
 
 
 faQ :: Text -> Text -> Html ()
