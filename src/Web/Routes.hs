@@ -1,5 +1,6 @@
 module Web.Routes (server, genAuthServerContext) where
 
+-- Standard library imports
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
@@ -8,17 +9,42 @@ import Data.Pool (Pool)
 import Data.Text.Encoding qualified as TE
 import Data.Text.Encoding.Error qualified as TE
 import Data.UUID qualified as UUID
+import Relude
+
+-- Database imports
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Deriving.Aeson qualified as DAE
+import Effectful.PostgreSQL.Transact (queryOne_)
+
+-- Effectful imports
 import Effectful (runPureEff)
 import Effectful.Error.Static (runErrorNoCallStack)
-import Effectful.PostgreSQL.Transact (queryOne_)
 import Effectful.Reader.Static (runReader)
 import Effectful.State.Static.Local qualified as State
+
+-- Web and server imports
 import GitHash (giCommitDate, giHash, tGitInfoCwd)
 import Log (Logger, UTCTime)
 import Lucid (Html)
+import Network.HTTP.Types (notFound404)
+import Network.Wai (Request, queryString)
+import Servant
+import Servant.HTML.Lucid (HTML)
+import Servant.Htmx
+import Servant.Server.Generic (AsServerT)
+import Servant.Server.Internal.Delayed (passToServer)
+import Web.Cookie (SetCookie)
+
+-- System and configuration imports
+import Deriving.Aeson qualified as DAE
+import System.Config (AuthContext)
+import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
+import Web.Auth (APItoolkitAuthContext, authHandler)
+import Web.Auth qualified as Auth
+import Web.ClientMetadata qualified as ClientMetadata
+import Web.Error
+
+-- Model imports
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields (FieldId)
@@ -29,8 +55,8 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Tests.Testing qualified as TestingM
-import Network.HTTP.Types (notFound404)
-import Network.Wai (Request, queryString)
+
+-- Page imports
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.Api qualified as Api
 import Pages.BodyWrapper (PageCtx (..))
@@ -61,35 +87,48 @@ import Pages.Telemetry.Spans qualified as Spans
 import Pages.Telemetry.Trace qualified as Trace
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget qualified as Widget
-import Relude
-import Servant
-import Servant.HTML.Lucid (HTML)
-import Servant.Htmx
-import Servant.Server.Generic (AsServerT)
-import Servant.Server.Internal.Delayed (passToServer)
-import System.Config (AuthContext)
-import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
-import Web.Auth (APItoolkitAuthContext, authHandler)
-import Web.Auth qualified as Auth
-import Web.ClientMetadata qualified as ClientMetadata
-import Web.Cookie (SetCookie)
-import Web.Error
 
+-- =============================================================================
+-- Common query parameter type aliases
+-- =============================================================================
 
-type role Routes nominal
+type ProjectId = Capture "projectID" Projects.ProjectId
+type GetRedirect = Verb 'GET 302
 
+-- Query parameter types
+type QPT a = QueryParam a Text
+type QPU a = QueryParam a UTCTime
+type QP a b = QueryParam a b
+type QPB a = QueryParam a Bool
+type QPI a = QueryParam a Int
+type QEID a = QueryParam a Endpoints.EndpointId
+
+-- Custom type for handling all query parameters
+data AllQueryParams
+
+-- =============================================================================
+-- Custom content types
+-- =============================================================================
 
 -- Define custom RawJSON content type
 data RawJSON
 
-
 instance Accept RawJSON where
   contentType _ = "application/json"
-
 
 instance MimeUnrender RawJSON BS.ByteString where
   mimeUnrender _ = Right . BL.toStrict
 
+-- When bytestring is returned for json, simply return the bytestring
+instance Servant.MimeRender JSON ByteString where
+  mimeRender _ = fromStrict
+
+-- =============================================================================
+-- Route Definitions
+-- =============================================================================
+
+-- Root routes
+type role Routes nominal
 
 type Routes :: Type -> Type
 data Routes mode = Routes
@@ -105,16 +144,196 @@ data Routes mode = Routes
   , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> QPT "onboarding" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] SlackInstall.SlackLink)
   , discordLinkProjectGet :: mode :- "discord" :> "oauth" :> "callback" :> QPT "state" :> QPT "code" :> QPT "guild_id" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] SlackInstall.SlackLink)
   , discordInteractions :: mode :- "discord" :> "interactions" :> ReqBody '[RawJSON] BS.ByteString :> Header "X-Signature-Ed25519" BS.ByteString :> Header "X-Signature-Timestamp" BS.ByteString :> Post '[JSON] AE.Value
-  , -- , discordInteractions :: mode :- "discord" :> "interactions" :> ReqBody' '[OctetStream] BS.ByteString :> Header "X-Signature-Ed25519" BS.ByteString :> Header "X-Signature-Timestamp" BS.ByteString :> Post '[JSON] AE.Value
-    clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
+  , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
   , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[JSON] LemonSqueezy.WebhookData :> Post '[HTML] (Html ())
   }
   deriving stock (Generic)
 
+-- Cookie Protected Routes
+type role CookieProtectedRoutes nominal
 
-server
-  :: Pool PG.Connection
-  -> Routes (AsServerT ATBaseCtx)
+type CookieProtectedRoutes :: Type -> Type
+data CookieProtectedRoutes mode = CookieProtectedRoutes
+  { -- Dashboard routes
+    dashboardRedirectGet :: mode :- "p" :> ProjectId :> AllQueryParams :> GetRedirect '[HTML] (Headers '[Header "Location" Text] NoContent)
+  , endpointDetailsRedirect :: mode :- "p" :> ProjectId :> "endpoints" :> "details" :> AllQueryParams :> GetRedirect '[HTML] (Headers '[Header "Location" Text] NoContent)
+  , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
+  , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "embedded" :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardsGet))
+  , dashboardsPost :: mode :- "p" :> ProjectId :> "dashboards" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardForm :> Post '[HTML] (RespHeaders NoContent)
+  , dashboardWidgetPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "widget_id" :> ReqBody '[JSON] Widget.Widget :> Put '[HTML] (RespHeaders (Widget.Widget))
+  , dashboardWidgetReorderPatchH :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets_order" :> ReqBody '[JSON] (Map Text Dashboards.WidgetReorderItem) :> Patch '[HTML] (RespHeaders NoContent)
+  , dashboardDelete :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Delete '[HTML] (RespHeaders NoContent)
+  , dashboardRenamePatch :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "rename" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardRenameForm :> Patch '[HTML] (RespHeaders (Html ()))
+  , dashboardDuplicatePost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "duplicate" :> Post '[HTML] (RespHeaders NoContent)
+  , dashboardDuplicateWidget :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "duplicate" :> Post '[HTML] (RespHeaders Widget.Widget)
+  , dashboardWidgetExpandGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "expand" :> Get '[HTML] (RespHeaders (Html ()))
+  
+  -- API routes  
+  , apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders Api.ApiGet)
+  , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (RespHeaders Api.ApiMut)
+  , apiPatch :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Patch '[HTML] (RespHeaders Api.ApiMut)
+  , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders Api.ApiMut)
+  
+  -- Charts and widgets
+  , chartsDataGet :: mode :- "chart_data" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
+  , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> ReqBody '[JSON] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
+  
+  -- Endpoints and fields
+  , endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> Get '[HTML] (RespHeaders EndpointList.EndpointRequestStatsVM)
+  , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage ApiCatalog.HostEventsVM)))
+  , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (RespHeaders FieldDetails.FieldPut)
+  
+  -- Slack/Discord integration
+  , slackInstallPost :: mode :- "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
+  , slackUpdateWebhook :: mode :- "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
+  
+  -- Reports and sharing
+  , reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Reports.ReportsGet)
+  , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" ReportsM.ReportId :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
+  , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (RespHeaders Reports.ReportsPost)
+  , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QPT "event_type" :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
+  
+  -- Billing
+  , manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> QPT "from" :> Get '[HTML] (RespHeaders LemonSqueezy.BillingGet)
+  
+  -- Swagger/documentation
+  , swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] (RespHeaders AE.Value)
+  
+  -- Sub-route groups
+  , projects :: mode :- ProjectsRoutes
+  , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes
+  , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes
+  , monitors :: mode :- "p" :> ProjectId :> MonitorsRoutes
+  , specification :: mode :- "p" :> ProjectId :> SpecificationRoutes
+  , traces :: mode :- "p" :> ProjectId :> TelemetryRoutes
+  }
+  deriving stock (Generic)
+
+-- Log Explorer Routes
+type role LogExplorerRoutes' nominal
+type LogExplorerRoutes = NamedRoutes LogExplorerRoutes'
+
+type LogExplorerRoutes' :: Type -> Type
+data LogExplorerRoutes' mode = LogExplorerRoutes'
+  { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> QPT "source" :> QPT "target-spans" :> QPT "queryTitle" :> QPT "queryLibId" :> QPT "details_width" :> QPT "target_event" :> QPT "showTrace" :> HXRequest :> HXBoosted :> QPT "json" :> QPT "viz_type" :> Get '[HTML, JSON] (RespHeaders Log.LogsGet)
+  , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> QPT "source" :> Get '[HTML] (RespHeaders LogItem.ApiItemDetailed)
+  , aiSearchPost :: mode :- "log_explorer" :> "ai_search" :> ReqBody '[JSON] AE.Value :> Post '[JSON] (RespHeaders AE.Value)
+  , schemaGet :: mode :- "log_explorer" :> "schema" :> Get '[JSON] (RespHeaders AE.Value)
+  }
+  deriving stock (Generic)
+
+-- Anomalies Routes
+type role AnomaliesRoutes' nominal
+type AnomaliesRoutes = NamedRoutes AnomaliesRoutes'
+
+type AnomaliesRoutes' :: Type -> Type
+data AnomaliesRoutes' mode = AnomaliesRoutes'
+  { acknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "acknowlege" :> QPT "host" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
+  , unAcknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unacknowlege" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
+  , archiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "archive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
+  , unarchiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
+  , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] AnomalyList.AnomalyBulkForm :> Post '[HTML] (RespHeaders AnomalyList.AnomalyAction)
+  , listGet :: mode :- QPT "layout" :> QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "load_more" :> QEID "endpoint" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders AnomalyList.AnomalyListGet)
+  , detailsGet :: mode :- "by_hash" :> Capture "targetHash" Text :> QPT "modal" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyDetails)
+  }
+  deriving stock (Generic)
+
+-- Telemetry Routes
+type role TelemetryRoutes' nominal
+type TelemetryRoutes = NamedRoutes TelemetryRoutes'
+
+type TelemetryRoutes' :: Type -> Type
+data TelemetryRoutes' mode = TelemetryRoutes'
+  { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPT "span_id" :> QPT "nav" :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
+  , spanGetH :: mode :- "spans" :> Capture "trace_id" Text :> Capture "span_id" Text :> Get '[HTML] (RespHeaders (Html ()))
+  , metricsOVGetH :: mode :- "metrics" :> QPT "tab" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "metric_prefix" :> QPI "cursor" :> Get '[HTML] (RespHeaders Metrics.MetricsOverViewGet)
+  , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Html ()))
+  , metricBreakdownGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "breakdown" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
+  }
+  deriving stock (Generic)
+
+-- Monitors Routes
+type role MonitorsRoutes' nominal
+type MonitorsRoutes = NamedRoutes MonitorsRoutes'
+
+type MonitorsRoutes' :: Type -> Type
+data MonitorsRoutes' mode = MonitorsRoutes'
+  { alertUpsertPost :: mode :- "alerts" :> ReqBody '[FormUrlEncoded] Alerts.AlertUpsertForm :> Post '[HTML] (RespHeaders Alerts.Alert)
+  , alertListGet :: mode :- "alerts" :> Get '[HTML] (RespHeaders Alerts.Alert)
+  , alertSingleGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Get '[HTML] (RespHeaders Alerts.Alert)
+  , alertSingleToggleActive :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[HTML] (RespHeaders Alerts.Alert)
+  , monitorListGet :: mode :- "monitors" :> QueryParam "filter" Text :> QueryParam "since" Text :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage Testing.CollectionListItemVM)))
+  , monitorCreatePost :: mode :- "monitors" :> "create" :> QPT "monitor-type" :> Get '[HTML] (RespHeaders (PageCtx MetricMonitors.MonitorCreate))
+  , collectionGet :: mode :- "monitors" :> "collection" :> QueryParam "col_id" TestingM.CollectionId :> Get '[HTML] (RespHeaders TestCollectionEditor.CollectionGet)
+  , collectionDashboardGet :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "overview" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , collectionStepsUpdate :: mode :- "monitors" :> "collection" :> ReqBody '[JSON] TestingM.CollectionStepUpdateForm :> QPT "onboarding" :> Post '[HTML] (RespHeaders TestCollectionEditor.CollectionMut)
+  , collectionRunTests :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> QueryParam "step_index" Int :> ReqBody '[JSON] TestingM.CollectionStepUpdateForm :> Patch '[HTML] (RespHeaders TestCollectionEditor.CollectionRunTest)
+  , collectionVarsPost :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "variables" :> ReqBody '[JSON] TestCollectionEditor.CollectionVariableForm :> Post '[HTML] (RespHeaders (Html ()))
+  , collectionVarsDelete :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "variables" :> Capture "variable_name" Text :> Delete '[HTML] (RespHeaders (Html ()))
+  }
+  deriving stock (Generic)
+
+-- Specification Routes
+type role SpecificationRoutes' nominal
+type SpecificationRoutes = NamedRoutes SpecificationRoutes'
+
+type SpecificationRoutes' :: Type -> Type
+data SpecificationRoutes' mode = SpecificationRoutes'
+  { documentationPut :: mode :- "documentation" :> "save" :> ReqBody '[JSON] Documentation.SaveSwaggerForm :> Post '[HTML] (RespHeaders Documentation.DocumentationMut)
+  , documentationPost :: mode :- "documentation" :> ReqBody '[FormUrlEncoded] Documentation.SwaggerForm :> Post '[HTML] (RespHeaders Documentation.DocumentationMut)
+  , documentationGet :: mode :- "documentation" :> QueryParam "swagger_id" Text :> QueryParam "host" Text :> Get '[HTML] (RespHeaders (PageCtx Documentation.DocumentationGet))
+  }
+  deriving stock (Generic)
+
+-- Projects Routes
+type role ProjectsRoutes' nominal
+type ProjectsRoutes = NamedRoutes ProjectsRoutes'
+
+type ProjectsRoutes' :: Type -> Type
+data ProjectsRoutes' mode = ProjectsRoutes'
+  { listGet :: mode :- Get '[HTML] (RespHeaders ListProjects.ListProjectsGet)
+  , onboardingProject :: mode :- "p" :> "new" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] (PageCtx (Html ()))) -- p represents project
+  , createPost :: mode :- "p" :> "update" :> Capture "projectId" Projects.ProjectId :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (RespHeaders CreateProject.CreateProject)
+  , settingsGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "settings" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
+  , integrationGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "integrations" :> Get '[HTML] (RespHeaders (Html ()))
+  
+  -- Project management
+  , deleteGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "delete" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
+  , deleteProjectH :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "delete" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , deleteProjectGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "delete" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
+  
+  -- Member management
+  , membersManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Get '[HTML] (RespHeaders ManageMembers.ManageMembers)
+  , membersManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> QPT "onboarding" :> ReqBody '[FormUrlEncoded] ManageMembers.ManageMembersForm :> Post '[HTML] (RespHeaders ManageMembers.ManageMembers)
+  , manageSubscriptionGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_subscription" :> Get '[HTML] (RespHeaders (Html ()))
+  
+  -- Notifications
+  , notificationsUpdateChannelPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Post '[HTML] (RespHeaders (Html ()))
+  
+  -- Onboarding routes
+  , onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> QPT "step" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders (Html ()))
+  , onboardingConfPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "survey" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingConfForm :> Post '[HTML] (RespHeaders (Html ()))
+  , onboardingDiscordPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "discord" :> ReqBody '[FormUrlEncoded] Onboarding.DiscordForm :> Post '[HTML] (RespHeaders (Html ()))
+  , onboardingPhoneEmailsPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "phone-emails" :> ReqBody '[JSON] Onboarding.NotifChannelForm :> Post '[HTML] (RespHeaders (Html ()))
+  , onboardingIntegrationCheck :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "integration-check" :> QPT "language" :> Get '[HTML] (RespHeaders (Html ()))
+  , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> QPT "step" :> Post '[HTML] (RespHeaders (Html ()))
+  
+  -- Pricing routes
+  , onboardingPricingUpdate :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "pricing" :> ReqBody '[FormUrlEncoded] CreateProject.PricingUpdateForm :> Post '[HTML] (RespHeaders (Html ()))
+  , pricingUpdateGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "update_pricing" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  
+  -- Proxy/landing
+  , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[PlainText] (RespHeaders Text)
+  }
+  deriving stock (Generic)
+
+-- =============================================================================
+-- Server Implementations
+-- =============================================================================
+
+-- Main server for the root routes
+server :: Pool PG.Connection -> Routes (AsServerT ATBaseCtx)
 server pool =
   Routes
     { public = Servant.serveDirectoryWebApp "./static/public"
@@ -144,46 +363,67 @@ server pool =
           cookieProtectedServer
     }
 
+-- Cookie Protected server
+cookieProtectedServer :: Servant.ServerT (Servant.NamedRoutes CookieProtectedRoutes) ATAuthCtx
+cookieProtectedServer =
+  CookieProtectedRoutes
+    { -- Dashboard handlers
+      dashboardRedirectGet = Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" ["overview", "http", "logs", "traces", "events"]
+    , endpointDetailsRedirect = Dashboards.entrypointRedirectGetH "endpoint-stats.yaml" "Endpoint Analytics" ["endpoints", "http", "events"]
+    , dashboardsGet = Dashboards.dashboardGetH
+    , dashboardsGetList = Dashboards.dashboardsGetH
+    , dashboardsPost = Dashboards.dashboardsPostH
+    , dashboardWidgetPut = Dashboards.dashboardWidgetPutH
+    , dashboardWidgetReorderPatchH = Dashboards.dashboardWidgetReorderPatchH
+    , dashboardDelete = Dashboards.dashboardDeleteH
+    , dashboardRenamePatch = Dashboards.dashboardRenamePatchH
+    , dashboardDuplicatePost = Dashboards.dashboardDuplicatePostH
+    , dashboardDuplicateWidget = Dashboards.dashboardDuplicateWidgetPostH
+    , dashboardWidgetExpandGet = Dashboards.dashboardWidgetExpandGetH
+    
+    -- API handlers
+    , apiGet = Api.apiGetH
+    , apiDelete = Api.apiDeleteH
+    , apiPatch = Api.apiActivateH
+    , apiPost = Api.apiPostH
+    
+    -- Chart and widget handlers
+    , chartsDataGet = Charts.queryMetrics
+    , widgetPost = Widget.widgetPostH
+    
+    -- Slack/Discord handlers
+    , slackInstallPost = SlackInstall.postH
+    , slackUpdateWebhook = SlackInstall.updateWebHook
+    
+    -- Report and share handlers
+    , reportsGet = Reports.reportsGetH
+    , reportsSingleGet = Reports.singleReportGetH
+    , reportsPost = Reports.reportsPostH
+    , shareLinkPost = Share.shareLinkPostH
+    
+    -- Swagger handlers
+    , swaggerGenerateGet = GenerateSwagger.generateGetH
+    
+    -- Field handlers
+    , editField = FieldDetails.fieldPutH
+    
+    -- Billing handlers
+    , manageBillingGet = LemonSqueezy.manageBillingGetH
+    
+    -- Endpoint handlers
+    , endpointListGet = EndpointList.endpointListGetH
+    , apiCatalogGet = ApiCatalog.apiCatalogH
+    
+    -- Sub-route handlers
+    , projects = projectsServer
+    , logExplorer = logExplorerServer
+    , anomalies = anomaliesServer
+    , monitors = monitorsServer
+    , specification = specificationServer
+    , traces = telemetryServer
+    }
 
--- LogExplorerRoutes definitions
-type role LogExplorerRoutes' nominal
-
-
-type LogExplorerRoutes = NamedRoutes LogExplorerRoutes'
-
-
-type QPU a = QueryParam a UTCTime
-type QPT a = QueryParam a Text
-
-
-type QP a b = QueryParam a b
-
-
-type QPB a = QueryParam a Bool
-
-
-type QPI a = QueryParam a Int
-
-
-type QEID a = QueryParam a Endpoints.EndpointId
-
-
-type ProjectId = Capture "projectID" Projects.ProjectId
-
-
-type GetRedirect = Verb 'GET 302
-
-
-type LogExplorerRoutes' :: Type -> Type
-data LogExplorerRoutes' mode = LogExplorerRoutes'
-  { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> QPT "source" :> QPT "target-spans" :> QPT "queryTitle" :> QPT "queryLibId" :> QPT "details_width" :> QPT "target_event" :> QPT "showTrace" :> HXRequest :> HXBoosted :> QPT "json" :> QPT "viz_type" :> Get '[HTML, JSON] (RespHeaders Log.LogsGet)
-  , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> QPT "source" :> Get '[HTML] (RespHeaders LogItem.ApiItemDetailed)
-  , aiSearchPost :: mode :- "log_explorer" :> "ai_search" :> ReqBody '[JSON] AE.Value :> Post '[JSON] (RespHeaders AE.Value)
-  , schemaGet :: mode :- "log_explorer" :> "schema" :> Get '[JSON] (RespHeaders AE.Value)
-  }
-  deriving stock (Generic)
-
-
+-- Log Explorer server
 logExplorerServer :: Projects.ProjectId -> Servant.ServerT LogExplorerRoutes ATAuthCtx
 logExplorerServer pid =
   LogExplorerRoutes'
@@ -193,27 +433,7 @@ logExplorerServer pid =
     , schemaGet = addRespHeaders Schema.telemetrySchemaJson
     }
 
-
--- AnomaliesRoutes definitions
-type role AnomaliesRoutes' nominal
-
-
-type AnomaliesRoutes = NamedRoutes AnomaliesRoutes'
-
-
-type AnomaliesRoutes' :: Type -> Type
-data AnomaliesRoutes' mode = AnomaliesRoutes'
-  { acknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "acknowlege" :> QPT "host" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , unAcknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unacknowlege" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , archiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "archive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , unarchiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] AnomalyList.AnomalyBulkForm :> Post '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , listGet :: mode :- QPT "layout" :> QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "load_more" :> QEID "endpoint" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders AnomalyList.AnomalyListGet)
-  , detailsGet :: mode :- "by_hash" :> Capture "targetHash" Text :> QPT "modal" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyDetails)
-  }
-  deriving stock (Generic)
-
-
+-- Anomalies server
 anomaliesServer :: Projects.ProjectId -> Servant.ServerT AnomaliesRoutes ATAuthCtx
 anomaliesServer pid =
   AnomaliesRoutes'
@@ -226,25 +446,7 @@ anomaliesServer pid =
     , detailsGet = AnomalyList.anomalyDetailsGetH pid
     }
 
-
--- TelemetryRoutes definitions
-type role TelemetryRoutes' nominal
-
-
-type TelemetryRoutes = NamedRoutes TelemetryRoutes'
-
-
-type TelemetryRoutes' :: Type -> Type
-data TelemetryRoutes' mode = TelemetryRoutes'
-  { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPT "span_id" :> QPT "nav" :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
-  , spanGetH :: mode :- "spans" :> Capture "trace_id" Text :> Capture "span_id" Text :> Get '[HTML] (RespHeaders (Html ()))
-  , metricsOVGetH :: mode :- "metrics" :> QPT "tab" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "metric_prefix" :> QPI "cursor" :> Get '[HTML] (RespHeaders Metrics.MetricsOverViewGet)
-  , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Html ()))
-  , metricBreakdownGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "breakdown" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
-  }
-  deriving stock (Generic)
-
-
+-- Telemetry server
 telemetryServer :: Projects.ProjectId -> Servant.ServerT TelemetryRoutes ATAuthCtx
 telemetryServer pid =
   TelemetryRoutes'
@@ -255,32 +457,7 @@ telemetryServer pid =
     , metricBreakdownGetH = Metrics.metricBreakdownGetH pid
     }
 
-
--- MonitorsRoutes definitions
-type role MonitorsRoutes' nominal
-
-
-type MonitorsRoutes = NamedRoutes MonitorsRoutes'
-
-
-type MonitorsRoutes' :: Type -> Type
-data MonitorsRoutes' mode = MonitorsRoutes'
-  { alertUpsertPost :: mode :- "alerts" :> ReqBody '[FormUrlEncoded] Alerts.AlertUpsertForm :> Post '[HTML] (RespHeaders Alerts.Alert)
-  , alertListGet :: mode :- "alerts" :> Get '[HTML] (RespHeaders Alerts.Alert)
-  , alertSingleGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Get '[HTML] (RespHeaders Alerts.Alert)
-  , alertSingleToggleActive :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[HTML] (RespHeaders Alerts.Alert)
-  , monitorListGet :: mode :- "monitors" :> QueryParam "filter" Text :> QueryParam "since" Text :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage Testing.CollectionListItemVM)))
-  , monitorCreatePost :: mode :- "monitors" :> "create" :> QPT "monitor-type" :> Get '[HTML] (RespHeaders (PageCtx MetricMonitors.MonitorCreate))
-  , collectionGet :: mode :- "monitors" :> "collection" :> QueryParam "col_id" TestingM.CollectionId :> Get '[HTML] (RespHeaders TestCollectionEditor.CollectionGet)
-  , collectionDashboardGet :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "overview" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , collectionStepsUpdate :: mode :- "monitors" :> "collection" :> ReqBody '[JSON] TestingM.CollectionStepUpdateForm :> QPT "onboarding" :> Post '[HTML] (RespHeaders TestCollectionEditor.CollectionMut)
-  , collectionRunTests :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> QueryParam "step_index" Int :> ReqBody '[JSON] TestingM.CollectionStepUpdateForm :> Patch '[HTML] (RespHeaders TestCollectionEditor.CollectionRunTest)
-  , collectionVarsPost :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "variables" :> ReqBody '[JSON] TestCollectionEditor.CollectionVariableForm :> Post '[HTML] (RespHeaders (Html ()))
-  , collectionVarsDelete :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "variables" :> Capture "variable_name" Text :> Delete '[HTML] (RespHeaders (Html ()))
-  }
-  deriving stock (Generic)
-
-
+-- Monitors server
 monitorsServer :: Projects.ProjectId -> Servant.ServerT MonitorsRoutes ATAuthCtx
 monitorsServer pid =
   MonitorsRoutes'
@@ -298,23 +475,7 @@ monitorsServer pid =
     , collectionVarsDelete = TestCollectionEditor.collectionStepVariablesDeleteH pid
     }
 
-
--- SpecificationRoutes definitions
-type role SpecificationRoutes' nominal
-
-
-type SpecificationRoutes = NamedRoutes SpecificationRoutes'
-
-
-type SpecificationRoutes' :: Type -> Type
-data SpecificationRoutes' mode = SpecificationRoutes'
-  { documentationPut :: mode :- "documentation" :> "save" :> ReqBody '[JSON] Documentation.SaveSwaggerForm :> Post '[HTML] (RespHeaders Documentation.DocumentationMut)
-  , documentationPost :: mode :- "documentation" :> ReqBody '[FormUrlEncoded] Documentation.SwaggerForm :> Post '[HTML] (RespHeaders Documentation.DocumentationMut)
-  , documentationGet :: mode :- "documentation" :> QueryParam "swagger_id" Text :> QueryParam "host" Text :> Get '[HTML] (RespHeaders (PageCtx Documentation.DocumentationGet))
-  }
-  deriving stock (Generic)
-
-
+-- Specification server
 specificationServer :: Projects.ProjectId -> Servant.ServerT SpecificationRoutes ATAuthCtx
 specificationServer pid =
   SpecificationRoutes'
@@ -323,42 +484,7 @@ specificationServer pid =
     , documentationGet = Documentation.documentationGetH pid
     }
 
-
--- ProjectsRoutes definitions
-type role ProjectsRoutes' nominal
-
-
-type ProjectsRoutes = NamedRoutes ProjectsRoutes'
-
-
-type ProjectsRoutes' :: Type -> Type
-data ProjectsRoutes' mode = ProjectsRoutes'
-  { listGet :: mode :- Get '[HTML] (RespHeaders ListProjects.ListProjectsGet)
-  , onboardingProject :: mode :- "p" :> "new" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] (PageCtx (Html ()))) -- p represents project
-  , createPost :: mode :- "p" :> "update" :> Capture "projectId" Projects.ProjectId :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (RespHeaders CreateProject.CreateProject)
-  , settingsGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "settings" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
-  , integrationGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "integrations" :> Get '[HTML] (RespHeaders (Html ()))
-  , deleteGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "delete" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
-  , deleteProjectH :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "delete" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , notificationsUpdateChannelPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Post '[HTML] (RespHeaders (Html ()))
-  , deleteProjectGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "delete" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
-  , membersManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Get '[HTML] (RespHeaders ManageMembers.ManageMembers)
-  , membersManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> QPT "onboarding" :> ReqBody '[FormUrlEncoded] ManageMembers.ManageMembersForm :> Post '[HTML] (RespHeaders ManageMembers.ManageMembers)
-  , manageSubscriptionGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_subscription" :> Get '[HTML] (RespHeaders (Html ()))
-  , onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> QPT "step" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders (Html ()))
-  , onboardingConfPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "survey" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingConfForm :> Post '[HTML] (RespHeaders (Html ()))
-  , onboardingDiscordPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "discord" :> ReqBody '[FormUrlEncoded] Onboarding.DiscordForm :> Post '[HTML] (RespHeaders (Html ()))
-  , onboardingPhoneEmailsPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "phone-emails" :> ReqBody '[JSON] Onboarding.NotifChannelForm :> Post '[HTML] (RespHeaders (Html ()))
-  , onboardingIntegrationCheck :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "integration-check" :> QPT "language" :> Get '[HTML] (RespHeaders (Html ()))
-  , onboardingPricingUpdate :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "pricing" :> ReqBody '[FormUrlEncoded] CreateProject.PricingUpdateForm :> Post '[HTML] (RespHeaders (Html ()))
-  , pricingUpdateGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "update_pricing" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> QPT "step" :> Post '[HTML] (RespHeaders (Html ()))
-  , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[PlainText] (RespHeaders Text)
-  }
-  deriving stock (Generic)
-
-
+-- Projects server
 projectsServer :: Servant.ServerT ProjectsRoutes ATAuthCtx
 projectsServer =
   ProjectsRoutes'
@@ -386,111 +512,9 @@ projectsServer =
     , proxyLanding = Onboarding.proxyLandingH
     }
 
-
-type role CookieProtectedRoutes nominal
-
-
-type CookieProtectedRoutes :: Type -> Type
-data CookieProtectedRoutes mode = CookieProtectedRoutes
-  { dashboardRedirectGet :: mode :- "p" :> ProjectId :> AllQueryParams :> GetRedirect '[HTML] (Headers '[Header "Location" Text] NoContent)
-  , endpointDetailsRedirect :: mode :- "p" :> ProjectId :> "endpoints" :> "details" :> AllQueryParams :> GetRedirect '[HTML] (Headers '[Header "Location" Text] NoContent)
-  , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
-  , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "embedded" :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardsGet))
-  , dashboardsPost :: mode :- "p" :> ProjectId :> "dashboards" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardForm :> Post '[HTML] (RespHeaders NoContent)
-  , dashboardWidgetPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "widget_id" :> ReqBody '[JSON] Widget.Widget :> Put '[HTML] (RespHeaders (Widget.Widget))
-  , dashboardWidgetReorderPatchH :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets_order" :> ReqBody '[JSON] (Map Text Dashboards.WidgetReorderItem) :> Patch '[HTML] (RespHeaders NoContent)
-  , dashboardDelete :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Delete '[HTML] (RespHeaders NoContent)
-  , dashboardRenamePatch :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "rename" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardRenameForm :> Patch '[HTML] (RespHeaders (Html ()))
-  , dashboardDuplicatePost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "duplicate" :> Post '[HTML] (RespHeaders NoContent)
-  , dashboardDuplicateWidget :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "duplicate" :> Post '[HTML] (RespHeaders Widget.Widget)
-  , dashboardWidgetExpandGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "expand" :> Get '[HTML] (RespHeaders (Html ()))
-  , projects :: mode :- ProjectsRoutes
-  , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes
-  , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes
-  , monitors :: mode :- "p" :> ProjectId :> MonitorsRoutes
-  , specification :: mode :- "p" :> ProjectId :> SpecificationRoutes
-  , traces :: mode :- "p" :> ProjectId :> TelemetryRoutes
-  , apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders Api.ApiGet)
-  , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (RespHeaders Api.ApiMut)
-  , apiPatch :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Patch '[HTML] (RespHeaders Api.ApiMut)
-  , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders Api.ApiMut)
-  , slackInstallPost :: mode :- "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
-  , slackUpdateWebhook :: mode :- "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
-  , reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Reports.ReportsGet)
-  , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" ReportsM.ReportId :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
-  , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (RespHeaders Reports.ReportsPost)
-  , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QPT "event_type" :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
-  , swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] (RespHeaders AE.Value)
-  , chartsDataGet :: mode :- "chart_data" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
-  , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (RespHeaders FieldDetails.FieldPut)
-  , manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> QPT "from" :> Get '[HTML] (RespHeaders LemonSqueezy.BillingGet)
-  , endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> Get '[HTML] (RespHeaders EndpointList.EndpointRequestStatsVM)
-  , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage ApiCatalog.HostEventsVM)))
-  , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> ReqBody '[JSON] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
-  }
-  deriving stock (Generic)
-
-
-cookieProtectedServer :: Servant.ServerT (Servant.NamedRoutes CookieProtectedRoutes) ATAuthCtx
-cookieProtectedServer =
-  CookieProtectedRoutes
-    { dashboardRedirectGet = Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" ["overview", "http", "logs", "traces", "events"]
-    , endpointDetailsRedirect = Dashboards.entrypointRedirectGetH "endpoint-stats.yaml" "Endpoint Analytics" ["endpoints", "http", "events"]
-    , dashboardsGet = Dashboards.dashboardGetH
-    , dashboardsGetList = Dashboards.dashboardsGetH
-    , dashboardsPost = Dashboards.dashboardsPostH
-    , dashboardWidgetPut = Dashboards.dashboardWidgetPutH
-    , dashboardWidgetReorderPatchH = Dashboards.dashboardWidgetReorderPatchH
-    , dashboardDelete = Dashboards.dashboardDeleteH
-    , dashboardRenamePatch = Dashboards.dashboardRenamePatchH
-    , dashboardDuplicatePost = Dashboards.dashboardDuplicatePostH
-    , dashboardDuplicateWidget = Dashboards.dashboardDuplicateWidgetPostH
-    , dashboardWidgetExpandGet = Dashboards.dashboardWidgetExpandGetH
-    , projects = projectsServer
-    , logExplorer = logExplorerServer
-    , anomalies = anomaliesServer
-    , monitors = monitorsServer
-    , specification = specificationServer
-    , traces = telemetryServer
-    , apiGet = Api.apiGetH
-    , apiDelete = Api.apiDeleteH
-    , apiPatch = Api.apiActivateH
-    , apiPost = Api.apiPostH
-    , slackInstallPost = SlackInstall.postH
-    , slackUpdateWebhook = SlackInstall.updateWebHook
-    , reportsGet = Reports.reportsGetH
-    , reportsSingleGet = Reports.singleReportGetH
-    , reportsPost = Reports.reportsPostH
-    , shareLinkPost = Share.shareLinkPostH
-    , swaggerGenerateGet = GenerateSwagger.generateGetH
-    , chartsDataGet = Charts.queryMetrics
-    , editField = FieldDetails.fieldPutH
-    , manageBillingGet = LemonSqueezy.manageBillingGetH
-    , endpointListGet = EndpointList.endpointListGetH
-    , apiCatalogGet = ApiCatalog.apiCatalogH
-    , widgetPost = Widget.widgetPostH
-    }
-
-
--- | The context that will be made available to request handlers. We supply the
--- "cookie-auth"-tagged request handler defined above, so that the 'HasServer' instance
--- of 'AuthProtect' can extract the handler and run it on the request.
-genAuthServerContext :: Logger -> AuthContext -> Servant.Context '[APItoolkitAuthContext, Servant.ErrorFormatters]
-genAuthServerContext logger env = authHandler logger env :. errorFormatters env :. EmptyContext
-
-
-errorFormatters :: AuthContext -> Servant.ErrorFormatters
-errorFormatters env =
-  Servant.defaultErrorFormatters{Servant.notFoundErrorFormatter = notFoundPage env}
-
-
-notFoundPage :: AuthContext -> Servant.NotFoundErrorFormatter
-notFoundPage env _req =
-  let result = runPureEff $ runErrorNoCallStack $ renderError env notFound404
-   in case result of
-        Left err -> err
-        Right _ -> Servant.err404
-
+-- =============================================================================
+-- Utility handlers and helpers
+-- =============================================================================
 
 data Status = Status
   { dbVersion :: Maybe Text
@@ -501,7 +525,6 @@ data Status = Status
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Status
-
 
 statusH :: ATBaseCtx Status
 statusH = do
@@ -516,28 +539,39 @@ statusH = do
       , gitCommitDate = toText $ giCommitDate gi
       }
 
-
 pingH :: ATBaseCtx Text
-pingH = do
-  pure "pong"
+pingH = pure "pong"
 
+-- =============================================================================
+-- Authentication and error handling
+-- =============================================================================
 
--- When bystring is returned for json, simply return the bytestring
-instance Servant.MimeRender JSON ByteString where
-  mimeRender _ = fromStrict
+-- | The context that will be made available to request handlers. We supply the
+-- "cookie-auth"-tagged request handler defined above, so that the 'HasServer' instance
+-- of 'AuthProtect' can extract the handler and run it on the request.
+genAuthServerContext :: Logger -> AuthContext -> Servant.Context '[APItoolkitAuthContext, Servant.ErrorFormatters]
+genAuthServerContext logger env = authHandler logger env :. errorFormatters env :. EmptyContext
 
+errorFormatters :: AuthContext -> Servant.ErrorFormatters
+errorFormatters env =
+  Servant.defaultErrorFormatters{Servant.notFoundErrorFormatter = notFoundPage env}
 
--- | Our custom combinator, indicating
---   "this endpoint wants all query parameters."
-data AllQueryParams
+notFoundPage :: AuthContext -> Servant.NotFoundErrorFormatter
+notFoundPage env _req =
+  let result = runPureEff $ runErrorNoCallStack $ renderError env notFound404
+   in case result of
+        Left err -> err
+        Right _ -> Servant.err404
 
+-- =============================================================================
+-- Custom HasServer instances
+-- =============================================================================
 
 -- | We add a HasServer instance that says:
 --   - The handler will receive a list of (Text, Maybe Text).
 --   - We pull that out of the WAI `Request` in `route`.
 instance HasServer api ctx => HasServer (AllQueryParams :> api) ctx where
   type ServerT (AllQueryParams :> api) m = [(Text, Maybe Text)] -> ServerT api m
-
 
   route _ ctx subserver = route (Proxy :: Proxy api) ctx subserver'
     where
@@ -549,7 +583,6 @@ instance HasServer api ctx => HasServer (AllQueryParams :> api) ctx where
         | (k, mv) <- req.queryString
         ]
       subserver' = passToServer subserver grabAllParams
-
 
   hoistServerWithContext
     :: Proxy (AllQueryParams :> api)
