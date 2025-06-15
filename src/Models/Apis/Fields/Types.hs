@@ -24,7 +24,6 @@ import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (ZonedTime)
-import Data.Time.Clock (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)

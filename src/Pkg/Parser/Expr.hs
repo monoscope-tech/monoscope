@@ -14,7 +14,7 @@ import Data.Vector qualified as V
 import Pkg.Parser.Core
 import Relude hiding (GT, LT, Sum, many, some)
 import Text.Megaparsec
-import Text.Megaparsec.Char (alphaNumChar, char, digitChar, space, space1, string)
+import Text.Megaparsec.Char (alphaNumChar, char, space, space1, string)
 import Text.Megaparsec.Char.Lexer qualified as L
 
 

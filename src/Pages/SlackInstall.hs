@@ -5,37 +5,31 @@
 
 module Pages.SlackInstall (linkProjectGetH, postH, registerGlobalDiscordCommands, linkDiscordGetH, discordInteractionsH, DiscordInteraction, DiscordInteractionResponse, LinkProjectsForm, updateWebHook, SlackLink) where
 
-import Control.Lens ((.~), (^.))
 
 -- import Crypto.Error (CryptoFailable (..), eitherCryptoError)
 
 -- import Crypto.PubKey.Ed25519 (publicKey, signature, verify)
 
 import Crypto.Error qualified as Crypto
-import Crypto.Sign.Ed25519 qualified as Ed
-import Data.ByteArray.Encoding qualified as BAE
 
 import Crypto.PubKey.Ed25519 qualified as Ed25519
 import Data.Aeson
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
-import Data.ByteString.Char8 qualified as BSC
 import Data.ByteString.Lazy qualified as BL
 import Data.ByteString.Lazy qualified as LBS
 import Data.Default (Default (def))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Deriving.Aeson qualified as DAE
-import Effectful.Error.Static (Error, throwError)
+import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
-import GHC.Generics (Generic)
 import Lucid
-import Models.Apis.Slack (DiscordData (..), getDiscordData, insertAccessToken, insertDiscordData, updateDiscordNotificationChannel)
+import Models.Apis.Slack (getDiscordData, insertAccessToken, insertDiscordData, updateDiscordNotificationChannel)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Network.Wreq (FormParam (..), defaults, header, postWith, responseBody)
@@ -47,8 +41,6 @@ import Servant (err401)
 
 import Control.Exception (try)
 import Control.Lens hiding ((.=))
-import Data.Aeson (encode, object, (.=))
-import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.ByteString.Lazy qualified as BL
 import Data.Text qualified as T

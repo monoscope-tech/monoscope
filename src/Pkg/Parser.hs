@@ -6,7 +6,7 @@ import Data.Default (Default (def))
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time.Calendar (fromGregorian)
-import Data.Time.Clock (UTCTime (..), diffUTCTime, nominalDiffTimeToSeconds, secondsToDiffTime)
+import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects

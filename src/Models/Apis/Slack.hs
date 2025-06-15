@@ -9,7 +9,7 @@ module Models.Apis.Slack (
   getDiscordData,
 ) where
 
-import Database.PostgreSQL.Entity.DBT (execute, query, queryOne, withPool)
+import Database.PostgreSQL.Entity.DBT (execute, queryOne)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (DBT, executeMany)

@@ -3,7 +3,6 @@
 module System.Config (EnvConfig (..), AuthContext (..), DashboardM, ctxToHandler, getAppContext, configToEnv, DeploymentEnv (..)) where
 
 import Colourista.IO (blueMessage)
-import Data.ByteString qualified as BS
 import Data.Cache (Cache, newCache)
 import Data.Default (Default (..))
 import Data.Default.Instances ()
@@ -20,7 +19,7 @@ import Pkg.DBUtils qualified as DBUtils
 import Relude
 import Servant.Server (Handler)
 import System.Clock (TimeSpec (TimeSpec))
-import System.Envy (FromEnv (..), ReadShowVar (..), Var (..), decodeEnv, decodeWithDefaults, fromVar, toVar)
+import System.Envy (FromEnv (..), ReadShowVar (..), Var (..), decodeEnv, fromVar, toVar)
 import System.Logging qualified as Logging
 
 

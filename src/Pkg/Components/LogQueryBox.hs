@@ -2,9 +2,7 @@ module Pkg.Components.LogQueryBox (logQueryBox_, visTypes, queryLibrary_, queryE
 
 import Data.Aeson qualified as AE
 import Data.Default
-import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
-import Data.Time (defaultTimeLocale, formatTime)
+import Data.Text qualified as T ()
 import Data.Vector qualified as V
 import Lucid
 import Lucid.Aria qualified as Aria

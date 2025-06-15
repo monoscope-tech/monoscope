@@ -9,17 +9,15 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
-import Fmt qualified as Ft
 import Language.Haskell.TH.Syntax qualified as THS
 import Lucid
-import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxPost_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Text.Printf (printf)
 import Text.Slugify (slugify)
 import Utils (faSprite_, prettyPrintCount)
 

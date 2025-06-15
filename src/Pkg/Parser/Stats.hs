@@ -20,8 +20,7 @@ import Pkg.Parser.Core
 import Pkg.Parser.Expr (Expr, Subject (..), kqlTimespanToTimeBucket, pExpr, pSubject)
 import Relude hiding (Sum, some)
 import Text.Megaparsec
-import Text.Megaparsec.Char (alphaNumChar, char, digitChar, space, space1, string)
-import Text.Megaparsec.Char.Lexer qualified as L
+import Text.Megaparsec.Char (alphaNumChar, char, digitChar, space, string)
 
 
 -- Default bin size for auto binning if not otherwise specified
