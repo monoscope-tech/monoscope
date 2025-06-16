@@ -170,6 +170,8 @@ nonNull x = x
 
 queryMetrics :: (Effectful.Internal.Monad.IOE :> es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es, State.State TriggerEvents :> es, Time.Time :> es) => M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
 queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) allParams = do
+  traceShowM respDataType
+  traceShowM queryM
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)

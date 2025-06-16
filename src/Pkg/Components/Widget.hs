@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), mapChatTypeToWidgetType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), mapChatTypeToWidgetType,mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -583,17 +583,7 @@ createSeries widgetType query =
               , "data"
                   AE..= if isStat
                     then AE.Array V.empty -- No mark area for stat widgets
-                    else
-                      AE.Array
-                        ( V.fromList
-                            [ AE.Array
-                                ( V.fromList
-                                    [ AE.object ["x" AE..= 5]
-                                    , AE.object ["x" AE..= 25]
-                                    ]
-                                )
-                            ]
-                        )
+                    else AE.Array V.empty
               ]
         , "showBackground" AE..= not isStat
         , "backgroundStyle"

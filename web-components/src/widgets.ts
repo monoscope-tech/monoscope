@@ -98,7 +98,8 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     subtitle && (subtitle.innerHTML = `${window.formatNumber(rows_per_min)} rows/min`);
 
     const value = $(`${chartId}Value`);
-    value && ((value.innerHTML = `${summarizeByPrefix} ${window.formatNumber(Number(stats[summarizeBy]))}`), value.classList.remove('hidden'));
+    value &&
+      ((value.innerHTML = `${summarizeByPrefix} ${window.formatNumber(Number(stats[summarizeBy]))}`), value.classList.remove('hidden'));
 
     chart.hideLoading();
     chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source), true);
@@ -243,14 +244,14 @@ window.formatNumber = (n: number): string => {
   if (n >= 1_000_000_000) return `${Math.floor(n / 1_000_000_000)}.${Math.floor((n % 1_000_000_000) / 100_000_000)}B`;
   if (n >= 1_000_000) return `${Math.floor(n / 1_000_000)}.${Math.floor((n % 1_000_000) / 100_000)}M`;
   if (n >= 1_000) return `${Math.floor(n / 1_000)}.${Math.floor((n % 1_000) / 100)}K`;
-  
+
   // Format decimals appropriately based on magnitude
   if (!Number.isInteger(n)) {
     if (n >= 100) return Math.round(n).toString();
     if (n >= 10) return parseFloat(n.toFixed(1)).toString();
     return parseFloat(n.toFixed(2)).toString();
   }
-  
+
   return n.toString();
 };
 

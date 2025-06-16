@@ -37,6 +37,7 @@ import Relude hiding (ask, asks)
 import Control.Exception (try)
 import Control.Lens hiding ((.=))
 import Data.Aeson.QQ (aesonQQ)
+import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Effectful (raise)
 import Effectful.Internal.Monad (subsume)
@@ -341,89 +342,131 @@ discordInteractionsH rawBody signatureM timestampM = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
   let envCfg = authCtx.env
-  case (signatureM, timestampM) of
-    (Just sig, Just tme)
-      | verifyDiscordSignature (encodeUtf8 envCfg.discordPublicKey) sig tme rawBody -> do
-          let intrM = (AE.decodeStrict' rawBody) :: Maybe DiscordInteraction
-          case intrM of
-            Nothing -> throwError err401{errBody = "Invalid interaction data"}
-            Just interaction -> do
-              case interaction.interaction_type of
-                Ping -> pure $ AE.object ["type" .= (1 :: Int)]
-                ApplicationCommand -> do
-                  case data_i interaction of
-                    Just cmdData -> do
-                      discordData <- getDiscordData (fromMaybe "" interaction.guild_id)
-                      threadMsgs <- liftIO $ getThreadStarterMessage interaction envCfg.discordBotToken
-                      let fullPrompt = case cmdData.options of
-                            Just (InteractionOption{value = String q} : _) -> case threadMsgs of
-                              Just msgs -> threadsPrompt msgs q
-                              _ -> systemPrompt <> "\n\nUser query: " <> q
-                            _ -> ""
-                      case discordData of
-                        Just d -> do
-                          case cmdData.name of
-                            "ask" -> do
-                              result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
-                              case result of
-                                Left err -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("Sorry, there was an error processing your request")]]
-                                Right response -> do
-                                  let (q, vizTypeM) = response
-                                  traceShowM q 
-                                  traceShowM vizTypeM
-                                  case vizTypeM of
-                                    Just vizType -> do
-                                      let widgetJson =
-                                            Widget.widgetToECharts
-                                              $ (def :: Widget.Widget)
-                                                { Widget.wType = Widget.mapChatTypeToWidgetType vizType
-                                                , Widget.standalone = Just True
-                                                , Widget.hideSubtitle = Just True
-                                                , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
-                                                , Widget.summarizeBy = Just Widget.SBMax
-                                                , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
-                                                , Widget.unit = Just "ms"
-                                                , Widget.hideLegend = Just True
-                                                , Widget._projectId = Just d.projectId
-                                                , Widget.query = Just q
-                                                }
-                                      let queryAST = parseQueryToAST q
-                                      case queryAST of
-                                        Left err -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("Sorry, there was an error processing your request")]]
-                                        Right qq -> do
-                                          _ <- liftIO $ sendDeferredResponse interaction.id interaction.token envCfg.discordBotToken
-                                          let sqlQueryComponents =
-                                                (defSqlQueryCfg d.projectId now Nothing Nothing)
-                                                  { dateRange = (Nothing, Nothing)
-                                                  }
-                                          let (_, qc) = queryASTToComponents sqlQueryComponents qq
-                                              sqlQuery = maybeToMonoid qc.finalSummarizeQuery
-                                          metricData <- liftIO $ Chart.fetchMetricsData Chart.DTMetric sqlQuery now Nothing Nothing authCtx
-                                          let reqBody = AE.object ["chart_data" .= AE.toJSON metricData, "echartOptions" .= widgetJson]
-                                          _ <- liftIO $ replyWithChartImage interaction reqBody envCfg.discordBotToken envCfg.discordClientId
-                                          pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("Generated query: ")]]
-                                    Nothing -> do
-                                      pure $ AE.object ["type" .= (5 :: Int), "data" .= AE.object ["content" .= ("Generated query: " <> q)]]
-                            "chart" -> do
-                              result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
-                              case result of
-                                Left err -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("Sorry, there was an error processing your request")]]
-                                Right response -> do
-                                  _ <- liftIO $ replyWithChartImage interaction chartOptions envCfg.discordBotToken envCfg.discordClientId
-                                  pure $ AE.object ["type" .= (5 :: Int), "data" .= AE.object ["content" .= ("Generated query: ")]]
-                            "here" -> do
-                              case (interaction.channel_id, interaction.guild_id) of
-                                (Just channelId, Just guildId) -> do
-                                  _ <- updateDiscordNotificationChannel guildId channelId
-                                  pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "Got it, notifications and alerts on your project will now be sent to this channel"]]
-                                _ -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "No channel ID provided"]]
-                            _ -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "The command is not recognized"]]
-                        Nothing -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("Sorry, there was an error processing your request")]]
-                    Nothing -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "No command data provided"]]
-      | otherwise -> do
-          throwError err401{errBody = "Invalid signature"}
-    _ -> do
-      throwError err401{errBody = "Invalid signature"}
+
+  validateSignature envCfg signatureM timestampM rawBody
+
+  -- Parse interaction
+  interaction <- parseInteraction rawBody
+
+  case interaction.interaction_type of
+    Ping -> pure $ AE.object ["type" .= (1 :: Int)]
+    ApplicationCommand -> handleApplicationCommand interaction envCfg now authCtx
+  where
+    validateSignature envCfg (Just sig) (Just tme) body
+      | verifyDiscordSignature (encodeUtf8 envCfg.discordPublicKey) sig tme body = pure ()
+      | otherwise = throwError err401{errBody = "Invalid signature"}
+    validateSignature _ _ _ _ = throwError err401{errBody = "Invalid signature"}
+
+
+parseInteraction :: BS.ByteString -> ATBaseCtx DiscordInteraction
+parseInteraction rawBody = do
+  case AE.decodeStrict' rawBody of
+    Nothing -> throwError err401{errBody = "Invalid interaction data"}
+    Just interaction -> pure interaction
+
+
+handleApplicationCommand :: DiscordInteraction -> EnvConfig -> UTCTime -> AuthContext -> ATBaseCtx AE.Value
+handleApplicationCommand interaction envCfg now authCtx = do
+  cmdData <- case data_i interaction of
+    Nothing -> throwError err400{errBody = "No command data provided"}
+    Just cmd -> pure cmd
+
+  discordData <- getDiscordData (fromMaybe "" interaction.guild_id)
+  case discordData of
+    Nothing -> pure $ contentResponse "Sorry, there was an error processing your request"
+    Just d -> handleCommand cmdData interaction envCfg now authCtx d
+
+
+handleCommand :: InteractionData -> DiscordInteraction -> EnvConfig -> UTCTime -> AuthContext -> DiscordData -> ATBaseCtx AE.Value
+handleCommand cmdData interaction envCfg now authCtx discordData =
+  case cmdData.name of
+    "ask" -> handleAskCommand cmdData interaction envCfg now authCtx discordData
+    "here" -> handleHereCommand interaction
+    _ -> pure $ contentResponse "The command is not recognized"
+
+
+handleAskCommand :: InteractionData -> DiscordInteraction -> EnvConfig -> UTCTime -> AuthContext -> DiscordData -> ATBaseCtx AE.Value
+handleAskCommand cmdData interaction envCfg now authCtx discordData = do
+  _ <- liftIO $ sendDeferredResponse interaction.id interaction.token envCfg.discordBotToken
+  fullPrompt <- buildPrompt cmdData interaction envCfg
+  result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
+  case result of
+    Left err -> do 
+      _ <- liftIO $ sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken "Sorry, there was an error processing your request"
+      pure $ AE.object[]
+    Right (query, vizTypeM) -> do
+      traceShowM query
+      traceShowM vizTypeM
+      case vizTypeM of
+        Just vizType -> handleVisualization query vizType interaction envCfg now authCtx discordData
+        Nothing -> do 
+          _ <- liftIO $ sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken ("Generated query: " <> query)
+          pure $ AE.object[]
+
+handleVisualization :: Text -> Text -> DiscordInteraction -> EnvConfig -> UTCTime -> AuthContext -> DiscordData -> ATBaseCtx AE.Value
+handleVisualization query vizType interaction envCfg now authCtx discordData = do
+  let widgetJson = createWidgetJson vizType discordData.projectId query
+      chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
+
+  queryAST <- case parseQueryToAST query of
+    Left err -> throwError err400{errBody = "Invalid query"}
+    Right ast -> pure ast
+  let sqlQueryComponents =
+        (defSqlQueryCfg discordData.projectId now Nothing Nothing)
+          { dateRange = (Nothing, Nothing)
+          }
+      (_, qc) = queryASTToComponents sqlQueryComponents queryAST
+      sqlQuery = maybeToMonoid qc.finalSummarizeQuery
+
+  metricData <- liftIO $ Chart.fetchMetricsData Chart.DTMetric sqlQuery now Nothing Nothing authCtx
+
+  let reqBody = AE.object ["chartType".= chartType, "chartData" .= AE.toJSON metricData, "echartOptions" .= widgetJson]
+
+  _ <- liftIO $ replyWithChartImage interaction reqBody envCfg.discordBotToken envCfg.discordClientId
+  pure $ contentResponse "Generated query: "
+
+
+handleHereCommand :: DiscordInteraction -> ATBaseCtx AE.Value
+handleHereCommand interaction =
+  case (interaction.channel_id, interaction.guild_id) of
+    (Just channelId, Just guildId) -> do
+      _ <- updateDiscordNotificationChannel guildId channelId
+      pure $ contentResponse "Got it, notifications and alerts on your project will now be sent to this channel"
+    _ -> pure $ contentResponse "No channel ID provided"
+
+
+-- Helper functions
+buildPrompt :: InteractionData -> DiscordInteraction -> EnvConfig -> ATBaseCtx Text
+buildPrompt cmdData interaction envCfg = do
+  threadMsgs <- liftIO $ getThreadStarterMessage interaction envCfg.discordBotToken
+  pure $ case cmdData.options of
+    Just (InteractionOption{value = String q} : _) -> case threadMsgs of
+      Just msgs -> threadsPrompt msgs q
+      _ -> systemPrompt <> "\n\nUser query: " <> q
+    _ -> ""
+
+
+createWidgetJson :: Text -> Projects.ProjectId -> Text -> AE.Value
+createWidgetJson vizType projectId query =
+  Widget.widgetToECharts
+    $ (def :: Widget.Widget)
+      { Widget.wType = Widget.mapChatTypeToWidgetType vizType
+      , Widget.standalone = Just True
+      , Widget.hideSubtitle = Just True
+      , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
+      , Widget.summarizeBy = Just Widget.SBMax
+      , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
+      , Widget.unit = Just "ms"
+      , Widget.hideLegend = Just True
+      , Widget._projectId = Just projectId
+      , Widget.query = Just query
+      }
+
+
+
+
+contentResponse :: Text -> AE.Value
+contentResponse msg = AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= msg]]
 
 
 threadsPrompt :: [DiscordMessage] -> Text -> Text
@@ -638,3 +681,11 @@ replyWithChartImage interaction chartOption botToken appId = do
 
       _ <- postWith (defaults & authHeader botToken & contentTypeHeader "multipart/form-data") followupUrl parts'
       pure ()
+
+
+sendJsonFollowupResponse :: Text -> Text -> Text -> Text  -> IO ()
+sendJsonFollowupResponse appId interactionToken botToken content = do
+  let followupUrl = T.unpack $ "https://discord.com/api/v10/webhooks/" <> appId <> "/" <> interactionToken
+      payload = AE.object["content" .= content]
+  _ <- postWith (defaults & authHeader botToken & contentTypeHeader "application/json") followupUrl payload
+  pure ()
