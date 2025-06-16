@@ -2,7 +2,7 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Pages.Charts.Charts (queryMetrics, MetricsData (..), MetricsStats (..), DataType (..)) where
+module Pages.Charts.Charts (queryMetrics, MetricsData (..), fetchMetricsData, MetricsStats (..), DataType (..)) where
 
 import Control.Exception.Annotated (checkpoint)
 import Data.Aeson qualified as AE
@@ -11,7 +11,9 @@ import Data.Default
 import Data.List (maximum)
 import Data.Map.Strict qualified as M
 import Data.Semigroup (Max (..))
-import Data.Time (addUTCTime)
+import Database.PostgreSQL.Entity.DBT (withPool)
+
+import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
 import Data.Vector qualified as V
@@ -21,8 +23,10 @@ import Database.PostgreSQL.Transact qualified as DBT
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
+import Effectful qualified as Effectful.Internal.Monad
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.Reader.Static qualified
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
 import Language.Haskell.TH.Syntax qualified as THS
@@ -41,6 +45,7 @@ import Pkg.Parser qualified as Parser
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
+import System.Config (AuthContext (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
 import Utils (JSONHttpApiData (..))
@@ -163,8 +168,9 @@ nonNull (Just "") = Nothing
 nonNull x = x
 
 
-queryMetrics :: (DB :> es, Log :> es, State.State TriggerEvents :> es, Time.Time :> es) => M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
+queryMetrics :: (Effectful.Internal.Monad.IOE :> es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es, State.State TriggerEvents :> es, Time.Time :> es) => M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
 queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) allParams = do
+  authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   let mappng = DashboardUtils.variablePresets (maybe "" (.toText) pidM) fromD toD allParams
@@ -195,22 +201,35 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
               }
       let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
       pure $ maybeToMonoid qc.finalSummarizeQuery
+  mData <- liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx
+  pure mData
 
+
+fetchMetricsData
+  :: DataType
+  -> Text
+  -> UTCTime
+  -> Maybe UTCTime
+  -> Maybe UTCTime
+  -> AuthContext
+  -> IO MetricsData
+fetchMetricsData respDataType sqlQuery now fromD toD authCtx = do
   let baseMetricsData =
         def
           { from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
           , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
           }
+
   checkpoint (toAnnotation sqlQuery) $ case respDataType of
     DTFloat -> do
-      chartData <- dbtToEff $ DBT.queryOne_ (Query $ encodeUtf8 sqlQuery)
+      chartData <- withPool authCtx.pool $ DBT.queryOne_ (Query $ encodeUtf8 sqlQuery)
       pure
         baseMetricsData
           { dataFloat = chartData <&> \(Only v) -> v
           , rowsCount = 1
           }
     DTMetric -> do
-      chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
+      chartData <- withPool authCtx.pool $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
       let chartsDataV = V.fromList chartData
       let (hdrs, groupedData, rowsCount, rpm) = pivot' chartsDataV
       pure
@@ -222,14 +241,14 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
           , stats = Just $ statsTriple chartsDataV
           }
     DTText -> do
-      chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
+      chartData <- withPool authCtx.pool $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
       pure
         baseMetricsData
           { dataText = V.fromList chartData
           , rowsCount = fromIntegral $ length chartData
           }
     DTJson -> do
-      chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
+      chartData <- withPool authCtx.pool $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
       pure
         baseMetricsData
           { dataJSON = V.fromList chartData

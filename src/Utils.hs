@@ -18,6 +18,7 @@ module Utils (
   lookupVecIntByKey,
   lookupValueText,
   formatUTC,
+  callOpenAIAPI,
   insertIfNotExist,
   parseUTC,
   lookupVecTextByKey,
@@ -76,6 +77,9 @@ import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Database.PostgreSQL.Transact
+import Effectful.Reader.Static qualified
+import Langchain.LLM.Core qualified as LLM
+import Langchain.LLM.OpenAI
 import Lucid
 import Lucid.Hyperscript (__)
 import Lucid.Svg qualified as Svg
@@ -89,6 +93,8 @@ import Numeric (showHex)
 import Pkg.THUtils (hashFile)
 import Relude hiding (notElem, show)
 import Servant
+import System.Config (AuthContext (..), EnvConfig (..))
+import System.Types (ATAuthCtx, ATBaseCtx)
 import Text.Printf (printf)
 import Text.Regex.TDFA ((=~))
 import Text.Show
@@ -604,6 +610,78 @@ prettyPrintCount n
   | n >= 1_000_000 = T.pack (show (n `div` 1_000_000)) <> "." <> T.pack (show ((n `mod` 1_000_000) `div` 100_000)) <> "M"
   | n >= 1_000 = T.pack (show (n `div` 1_000)) <> "." <> T.pack (show ((n `mod` 1_000) `div` 100)) <> "K"
   | otherwise = T.pack (show n)
+
+
+callOpenAIAPI :: Text -> Text -> IO (Either Text (Text, Maybe Text))
+callOpenAIAPI fullPrompt apiKey = do
+  let openAI =
+        OpenAI
+          { apiKey = apiKey
+          , openAIModelName = "gpt-4o-mini"
+          , callbacks = []
+          , baseUrl = Nothing
+          }
+  -- Use langchain-hs to generate response
+  result <- liftIO $ LLM.generate openAI fullPrompt Nothing
+  case result of
+    Left err -> pure $ Left $ "LLM Error: " <> T.pack err
+    Right response -> do
+      -- Parse the response for query and visualization type
+      let lines' = T.lines $ T.strip response
+          queryLine = fromMaybe "" (viaNonEmpty head lines')
+
+          -- Check if a visualization type is specified
+          vizTypeM =
+            if length lines' > 1
+              then parseVisualizationType (lines' L.!! 1)
+              else Nothing
+
+          -- Clean the query by removing any code block markup and language identifiers
+          cleanedQuery =
+            T.strip
+              $ if "```" `T.isPrefixOf` queryLine
+                then
+                  let withoutFirstLine = maybe "" (T.unlines . toList) $ viaNonEmpty tail (T.lines queryLine)
+                      withoutBackticks = T.takeWhile (/= '`') withoutFirstLine
+                   in T.strip withoutBackticks
+                else queryLine
+       in -- Check if the response indicates an invalid query
+          if "Please provide a query"
+            `T.isInfixOf` cleanedQuery
+            || "I need more"
+              `T.isInfixOf` cleanedQuery
+            || "Could you please"
+              `T.isInfixOf` cleanedQuery
+            || T.length cleanedQuery
+              < 3
+            then pure $ Left "INVALID_QUERY_ERROR"
+            else pure $ Right (cleanedQuery, vizTypeM)
+
+
+-- Parse visualization type from the response
+parseVisualizationType :: Text -> Maybe Text
+parseVisualizationType line = do
+  let lowerLine = T.toLower $ T.strip line
+      prefixes = ["visualization:", "visualization type:", "viz:", "viz type:", "chart:", "chart type:", "type:"]
+      -- Try to match any of the prefixes
+      matchedPrefix = find (`T.isPrefixOf` lowerLine) prefixes
+
+  matchedPrefix >>= \prefix -> do
+    -- Extract the visualization type after the prefix
+    let rawType = T.strip $ T.drop (T.length prefix) lowerLine
+
+    -- Map to known visualization types
+    case rawType of
+      "bar" -> Just "timeseries"
+      "line" -> Just "timeseries_line"
+      "logs" -> Just "logs"
+      "timeseries" -> Just "timeseries"
+      "timeseries_line" -> Just "timeseries_line"
+      "bar chart" -> Just "timeseries"
+      "line chart" -> Just "timeseries_line"
+      "time series" -> Just "timeseries"
+      "time series line" -> Just "timeseries_line"
+      _ -> Nothing -- Unknown visualization type
 
 
 systemPrompt :: Text

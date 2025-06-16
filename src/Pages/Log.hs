@@ -19,6 +19,7 @@ import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Vector qualified as V
+import Effectful (liftIO, raise, subsume)
 import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static qualified
@@ -49,7 +50,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (faSprite_, freeTierLimitExceededBanner, getServiceColors, listToIndexHashMap, lookupVecTextByKey, prettyPrintCount, systemPrompt)
+import Utils (callOpenAIAPI, displayTimestamp, faSprite_, formatUTC, freeTierLimitExceededBanner, getServiceColors, listToIndexHashMap, lookupVecTextByKey, prettyPrintCount, systemPrompt)
 
 
 -- $setup
@@ -802,6 +803,9 @@ apiLogsPage page = do
 
 aiSearchH :: Projects.ProjectId -> AE.Value -> ATAuthCtx (RespHeaders AE.Value)
 aiSearchH _pid requestBody = do
+  authCtx <- Effectful.Reader.Static.ask @AuthContext
+  let envCfg = authCtx.env
+
   let inputTextM = AET.parseMaybe (AE.withObject "request" (AE..: "input")) requestBody
   case inputTextM of
     Nothing -> do
@@ -813,7 +817,8 @@ aiSearchH _pid requestBody = do
           addErrorToast "Please enter a search query" Nothing
           throwError Servant.err400{Servant.errBody = "Empty input"}
         else do
-          result <- callOpenAIAPI inputText
+          let fullPrompt = systemPrompt <> "\n\nUser query: " <> inputText
+          result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
           case result of
             Left errMsg -> do
               addErrorToast "AI search failed" (Just errMsg)
@@ -824,80 +829,6 @@ aiSearchH _pid requestBody = do
                   [ "query" AE..= kqlQuery
                   , "visualization_type" AE..= vizType
                   ]
-  where
-    callOpenAIAPI :: Text -> ATAuthCtx (Either Text (Text, Maybe Text))
-    callOpenAIAPI input = do
-      authCtx <- Effectful.Reader.Static.ask @AuthContext
-      let config = authCtx.env
-      let openAI =
-            OpenAI
-              { apiKey = config.openaiApiKey
-              , openAIModelName = "gpt-4o-mini"
-              , callbacks = []
-              , baseUrl = Nothing
-              }
-      let fullPrompt = systemPrompt <> "\n\nUser query: " <> input
-
-      -- Use langchain-hs to generate response
-      result <- liftIO $ LLM.generate openAI fullPrompt Nothing
-      case result of
-        Left err -> pure $ Left $ "LLM Error: " <> T.pack err
-        Right response -> do
-          -- Parse the response for query and visualization type
-          let lines' = T.lines $ T.strip response
-              queryLine = fromMaybe "" (viaNonEmpty head lines')
-
-              -- Check if a visualization type is specified
-              vizTypeM =
-                if length lines' > 1
-                  then parseVisualizationType (lines' L.!! 1)
-                  else Nothing
-
-              -- Clean the query by removing any code block markup and language identifiers
-              cleanedQuery =
-                T.strip
-                  $ if "```" `T.isPrefixOf` queryLine
-                    then
-                      let withoutFirstLine = maybe "" (T.unlines . toList) $ viaNonEmpty tail (T.lines queryLine)
-                          withoutBackticks = T.takeWhile (/= '`') withoutFirstLine
-                       in T.strip withoutBackticks
-                    else queryLine
-           in -- Check if the response indicates an invalid query
-              if "Please provide a query"
-                `T.isInfixOf` cleanedQuery
-                || "I need more"
-                `T.isInfixOf` cleanedQuery
-                || "Could you please"
-                `T.isInfixOf` cleanedQuery
-                || T.length cleanedQuery
-                < 3
-                then pure $ Left "INVALID_QUERY_ERROR"
-                else pure $ Right (cleanedQuery, vizTypeM)
-
-    -- Parse visualization type from the response
-    parseVisualizationType :: Text -> Maybe Text
-    parseVisualizationType line = do
-      let lowerLine = T.toLower $ T.strip line
-          prefixes = ["visualization:", "visualization type:", "viz:", "viz type:", "chart:", "chart type:", "type:"]
-          -- Try to match any of the prefixes
-          matchedPrefix = find (`T.isPrefixOf` lowerLine) prefixes
-
-      matchedPrefix >>= \prefix -> do
-        -- Extract the visualization type after the prefix
-        let rawType = T.strip $ T.drop (T.length prefix) lowerLine
-
-        -- Map to known visualization types
-        case rawType of
-          "bar" -> Just "timeseries"
-          "line" -> Just "timeseries_line"
-          "logs" -> Just "logs"
-          "timeseries" -> Just "timeseries"
-          "timeseries_line" -> Just "timeseries_line"
-          "bar chart" -> Just "timeseries"
-          "line chart" -> Just "timeseries_line"
-          "time series" -> Just "timeseries"
-          "time series line" -> Just "timeseries_line"
-          _ -> Nothing -- Unknown visualization type
 
 
 curateCols :: [Text] -> [Text] -> [Text]

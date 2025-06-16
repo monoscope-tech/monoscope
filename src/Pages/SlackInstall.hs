@@ -38,17 +38,25 @@ import Control.Exception (try)
 import Control.Lens hiding ((.=))
 import Data.Aeson.QQ (aesonQQ)
 import Data.Vector qualified as V
+import Effectful (raise)
+import Effectful.Internal.Monad (subsume)
+import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
 import Langchain.LLM.OpenAI (OpenAI (..))
 import Network.HTTP.Client (RequestBody (..))
 import Network.HTTP.Client.MultipartFormData (PartM, partFileRequestBody)
 import Network.Wreq
+import Pages.Charts.Charts (queryMetrics)
+import Pages.Charts.Charts qualified as Chart
+import Pkg.Components.Widget (Widget (..))
+import Pkg.Components.Widget qualified as Widget
+import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), defSqlQueryCfg, parseQuery, parseQueryToAST, queryASTToComponents)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server
 import System.Config (AuthContext (env, pool), EnvConfig (..))
-import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, addSuccessToast)
-import Utils (faSprite_, systemPrompt)
+import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, addSuccessToast, atAuthToBase)
+import Utils (callOpenAIAPI, faSprite_, systemPrompt)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -330,7 +338,9 @@ instance ToJSON InteractionApplicationCommandCallbackData
 
 discordInteractionsH :: BS.ByteString -> Maybe BS.ByteString -> Maybe BS.ByteString -> ATBaseCtx AE.Value
 discordInteractionsH rawBody signatureM timestampM = do
-  envCfg <- asks env
+  authCtx <- Effectful.Reader.Static.ask @AuthContext
+  now <- Time.currentTime
+  let envCfg = authCtx.env
   case (signatureM, timestampM) of
     (Just sig, Just tme)
       | verifyDiscordSignature (encodeUtf8 envCfg.discordPublicKey) sig tme rawBody -> do
@@ -348,41 +358,67 @@ discordInteractionsH rawBody signatureM timestampM = do
                       let fullPrompt = case cmdData.options of
                             Just (InteractionOption{value = String q} : _) -> case threadMsgs of
                               Just msgs -> threadsPrompt msgs q
-                              _ -> systemPrompt <> "\n\n User query:" <> q
+                              _ -> systemPrompt <> "\n\nUser query: " <> q
                             _ -> ""
-                      let openAI =
-                            OpenAI
-                              { apiKey = envCfg.openaiApiKey
-                              , openAIModelName = "gpt-4o-mini"
-                              , callbacks = []
-                              , baseUrl = Nothing
-                              }
-
-                      case cmdData.name of
-                        "ask" -> do
-                          result <- liftIO $ LLM.generate openAI fullPrompt Nothing
-                          case result of
-                            Left err -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("Sorry, there was an error processing your request")]]
-                            Right response -> do
-                              _ <- liftIO $ replyWithChartImage interaction chartOptions envCfg.discordBotToken envCfg.discordClientId
-                              pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("Generated query: " <> response)]]
-                        "chart" -> do
-                          result <- liftIO $ LLM.generate openAI fullPrompt Nothing
-                          case result of
-                            Left err -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("Sorry, there was an error processing your request")]]
-                            Right response -> do
-                              _ <- liftIO $ replyWithChartImage interaction chartOptions envCfg.discordBotToken envCfg.discordClientId
-                              pure $ AE.object ["type" .= (5 :: Int), "data" .= AE.object ["content" .= ("Generated query: " <> response)]]
-                        "here" -> do
-                          case (interaction.channel_id, interaction.guild_id) of
-                            (Just channelId, Just guildId) -> do
-                              case discordData of
-                                Just _ -> do
+                      case discordData of
+                        Just d -> do
+                          case cmdData.name of
+                            "ask" -> do
+                              result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
+                              case result of
+                                Left err -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("Sorry, there was an error processing your request")]]
+                                Right response -> do
+                                  let (q, vizTypeM) = response
+                                  traceShowM q 
+                                  traceShowM vizTypeM
+                                  case vizTypeM of
+                                    Just vizType -> do
+                                      let widgetJson =
+                                            Widget.widgetToECharts
+                                              $ (def :: Widget.Widget)
+                                                { Widget.wType = Widget.mapChatTypeToWidgetType vizType
+                                                , Widget.standalone = Just True
+                                                , Widget.hideSubtitle = Just True
+                                                , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
+                                                , Widget.summarizeBy = Just Widget.SBMax
+                                                , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
+                                                , Widget.unit = Just "ms"
+                                                , Widget.hideLegend = Just True
+                                                , Widget._projectId = Just d.projectId
+                                                , Widget.query = Just q
+                                                }
+                                      let queryAST = parseQueryToAST q
+                                      case queryAST of
+                                        Left err -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("Sorry, there was an error processing your request")]]
+                                        Right qq -> do
+                                          _ <- liftIO $ sendDeferredResponse interaction.id interaction.token envCfg.discordBotToken
+                                          let sqlQueryComponents =
+                                                (defSqlQueryCfg d.projectId now Nothing Nothing)
+                                                  { dateRange = (Nothing, Nothing)
+                                                  }
+                                          let (_, qc) = queryASTToComponents sqlQueryComponents qq
+                                              sqlQuery = maybeToMonoid qc.finalSummarizeQuery
+                                          metricData <- liftIO $ Chart.fetchMetricsData Chart.DTMetric sqlQuery now Nothing Nothing authCtx
+                                          let reqBody = AE.object ["chart_data" .= AE.toJSON metricData, "echartOptions" .= widgetJson]
+                                          _ <- liftIO $ replyWithChartImage interaction reqBody envCfg.discordBotToken envCfg.discordClientId
+                                          pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("Generated query: ")]]
+                                    Nothing -> do
+                                      pure $ AE.object ["type" .= (5 :: Int), "data" .= AE.object ["content" .= ("Generated query: " <> q)]]
+                            "chart" -> do
+                              result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
+                              case result of
+                                Left err -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("Sorry, there was an error processing your request")]]
+                                Right response -> do
+                                  _ <- liftIO $ replyWithChartImage interaction chartOptions envCfg.discordBotToken envCfg.discordClientId
+                                  pure $ AE.object ["type" .= (5 :: Int), "data" .= AE.object ["content" .= ("Generated query: ")]]
+                            "here" -> do
+                              case (interaction.channel_id, interaction.guild_id) of
+                                (Just channelId, Just guildId) -> do
                                   _ <- updateDiscordNotificationChannel guildId channelId
                                   pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "Got it, notifications and alerts on your project will now be sent to this channel"]]
-                                Nothing -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "No discord data found"]]
-                            _ -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "No channel ID provided"]]
-                        _ -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "The command is not recognized"]]
+                                _ -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "No channel ID provided"]]
+                            _ -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "The command is not recognized"]]
+                        Nothing -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= ("Sorry, there was an error processing your request")]]
                     Nothing -> pure $ AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= "No command data provided"]]
       | otherwise -> do
           throwError err401{errBody = "Invalid signature"}
@@ -401,8 +437,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "Previous messages in this thread:"
           ]
-        <> msgs'
-        <> ["\n\nCurrent user query: " <> question]
+          <> msgs'
+          <> ["\n\nCurrent user query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
@@ -474,8 +510,8 @@ registerGlobalDiscordCommands appId botToken = do
   let url =
         T.unpack
           $ "https://discord.com/api/v10/applications/"
-          <> appId
-          <> "/commands"
+            <> appId
+            <> "/commands"
 
       askCommand =
         AE.object
@@ -560,16 +596,16 @@ instance FromJSON BufferResponse where
   parseJSON = withObject "BufferResponse" $ \o ->
     BufferResponse
       <$> o
-      .: "type"
+        .: "type"
       <*> o
-      .: "data"
+        .: "data"
 
 
 replyWithChartImage :: DiscordInteraction -> AE.Value -> Text -> Text -> IO ()
 replyWithChartImage interaction chartOption botToken appId = do
   let interactionToken = interaction.token
-  _ <- sendDeferredResponse interaction.id interaction.token botToken
-  let chartshotUrl = "https://chartshot.s.past3.tech/generate-chart"
+  -- _ <- sendDeferredResponse interaction.id interaction.token botToken
+  let chartshotUrl = "http://localhost:3001/generate-chart"
       chartReqPayload = encode chartOption
 
   chartResp <- post chartshotUrl chartReqPayload
@@ -602,12 +638,3 @@ replyWithChartImage interaction chartOption botToken appId = do
 
       _ <- postWith (defaults & authHeader botToken & contentTypeHeader "multipart/form-data") followupUrl parts'
       pure ()
-
-
-chartOptions :: AE.Value
-chartOptions =
-  [aesonQQ|{"type": "png",
-  "width": 600,
-  "height": 400,
-  "option":{"title":{"text":"Stacked Line"},"tooltip":{"trigger":"axis"},"legend":{"data":["Email","Union Ads","Video Ads","Direct","Search Engine"]},"grid":{"left":"3%","right":"4%","bottom":"3%","containLabel":true},"toolbox":{"feature":{"saveAsImage":{}}},"xAxis":{"type":"category","boundaryGap":false,"data":["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]},"yAxis":{"type":"value"},"series":[{"name":"Email","type":"line","stack":"Total","data":[120,132,101,134,90,230,210]},{"name":"Union Ads","type":"line","stack":"Total","data":[220,182,191,234,290,330,310]},{"name":"Video Ads","type":"line","stack":"Total","data":[150,232,201,154,190,330,410]},{"name":"Direct","type":"line","stack":"Total","data":[320,332,301,334,390,330,320]},{"name":"Search Engine","type":"line","stack":"Total","data":[820,932,901,934,1290,1330,1320]}]}
-}|]
