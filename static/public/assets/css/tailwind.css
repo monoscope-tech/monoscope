@@ -150,7 +150,7 @@
   --color-base-content: #000626e6;
   --color-primary: #0068ff;
   --color-primary-content: #ffffff;
-  --color-secondary: #fbfcfd;
+  --color-secondary: --color-textBrand;
   --color-secondary-content: #000833a6;
   --color-accent: #00158005;
   --color-accent-content: #0068ff;

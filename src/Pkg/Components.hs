@@ -96,7 +96,7 @@ codeExample code = do
           $ faSprite_ "copy" "solid" "h-4 w-4 inline-block"
       div_ [class_ "relative flex-auto flex flex-col bg-fillWeaker"] do
         pre_ [class_ "flex leading-snug"] do
-          code_ [class_ "flex-auto relative block  text-textStrong py-4 px-4 overflow-auto hljs atom-one-light"] $ toHtml code
+          code_ [class_ "flex-auto relative block  text-textStrong py-4 px-4 overflow-auto hljs atom-one-dark"] $ toHtml code
 
 
 codeEmphasis :: Text -> Html ()
