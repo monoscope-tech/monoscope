@@ -425,9 +425,13 @@ integrationsPage :: Projects.ProjectId -> Text -> Html ()
 integrationsPage pid apikey =
   div_ [class_ "w-full flex h-screen overflow-hidden group/pg"] do
     div_ [class_ "w-1/2 bg-white h-full flex flex-col"] do
-      div_ [class_ "pt-[156px] px-12 flex-shrink-0"] $ 
-        div_ [class_ "max-w-[550px]"] $ stepIndicator 5 "Instrument your apps or servers" $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
-      
+      div_ [class_ "pt-[156px] px-12 flex-shrink-0"]
+        $ div_ [class_ "max-w-[550px]"]
+        $ stepIndicator 5 "Instrument your apps or servers"
+        $ "/p/"
+        <> pid.toText
+        <> "/onboarding?step=NotifChannel"
+
       div_ [class_ "flex-col w-full gap-4 flex mt-4 px-12 overflow-y-auto flex-grow"] do
         p_ [class_ "text-textStrong"] do
           "Send Logs, Metrics or Traces. Select an item below for instructions. "
@@ -462,7 +466,7 @@ integrationsPage pid apikey =
             , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=Integration"
             ]
             "Skip"
-            
+
     div_ [class_ "w-1/2 h-full overflow-hidden border-l border-weak"] do
       div_ [class_ "h-full flex flex-col"] do
         div_ [class_ "w-full h-full overflow-y-auto rounded-2xl blue-gradient-box bg-bgBase"] do
@@ -490,7 +494,7 @@ integrationsPage pid apikey =
                         <> [checked_ | (idx == 0)]
                       unless (T.null fwIcon) $ img_ [class_ "h-5 w-5", src_ $ "https://apitoolkit.io/assets/img/framework-logos/" <> fwIcon]
                       span_ $ toHtml fwName
-                
+
                 div_ [class_ "relative p-8"] do
                   div_ [id_ $ "fw-indicator-" <> lang, class_ "htmx-indicator flex justify-center py-5"]
                     $ span_ [class_ "loading loading-dots loading-md"] ""

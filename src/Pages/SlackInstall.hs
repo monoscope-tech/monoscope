@@ -391,15 +391,16 @@ handleAskCommand cmdData interaction envCfg now authCtx discordData = do
   fullPrompt <- buildPrompt cmdData interaction envCfg
   result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
   case result of
-    Left err -> do 
+    Left err -> do
       _ <- liftIO $ sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken "Sorry, there was an error processing your request"
-      pure $ AE.object[]
+      pure $ AE.object []
     Right (query, vizTypeM) -> do
       case vizTypeM of
         Just vizType -> handleVisualization query vizType interaction envCfg now authCtx discordData
-        Nothing -> do 
+        Nothing -> do
           _ <- liftIO $ sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken ("Generated query: " <> query)
-          pure $ AE.object[]
+          pure $ AE.object []
+
 
 handleVisualization :: Text -> Text -> DiscordInteraction -> EnvConfig -> UTCTime -> AuthContext -> DiscordData -> ATBaseCtx AE.Value
 handleVisualization query vizType interaction envCfg now authCtx discordData = do
@@ -418,7 +419,7 @@ handleVisualization query vizType interaction envCfg now authCtx discordData = d
 
   metricData <- liftIO $ Chart.fetchMetricsData Chart.DTMetric sqlQuery now Nothing Nothing authCtx
 
-  let reqBody = AE.object ["chartType".= chartType, "chartData" .= AE.toJSON metricData, "echartOptions" .= widgetJson]
+  let reqBody = AE.object ["chartType" .= chartType, "chartData" .= AE.toJSON metricData, "echartOptions" .= widgetJson]
 
   _ <- liftIO $ replyWithChartImage interaction reqBody envCfg.discordBotToken envCfg.discordClientId
   pure $ contentResponse "Generated query: "
@@ -461,8 +462,6 @@ createWidgetJson vizType projectId query =
       }
 
 
-
-
 contentResponse :: Text -> AE.Value
 contentResponse msg = AE.object ["type" .= (4 :: Int), "data" .= AE.object ["content" .= msg]]
 
@@ -478,8 +477,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "Previous messages in this thread:"
           ]
-          <> msgs'
-          <> ["\n\nCurrent user query: " <> question]
+        <> msgs'
+        <> ["\n\nCurrent user query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
@@ -551,8 +550,8 @@ registerGlobalDiscordCommands appId botToken = do
   let url =
         T.unpack
           $ "https://discord.com/api/v10/applications/"
-            <> appId
-            <> "/commands"
+          <> appId
+          <> "/commands"
 
       askCommand =
         AE.object
@@ -561,14 +560,14 @@ registerGlobalDiscordCommands appId botToken = do
           , "type" .= 1
           , "options"
               .= ( AE.Array
-                     $ V.fromList
-                       [ AE.object
-                           [ "name" .= ("quest" :: T.Text)
-                           , "description" .= ("Your question in natural language" :: T.Text)
-                           , "type" .= (3 :: Int) -- STRING
-                           , "required" .= True
-                           ]
-                       ]
+                    $ V.fromList
+                      [ AE.object
+                          [ "name" .= ("quest" :: T.Text)
+                          , "description" .= ("Your question in natural language" :: T.Text)
+                          , "type" .= (3 :: Int) -- STRING
+                          , "required" .= True
+                          ]
+                      ]
                  )
           ]
 
@@ -579,14 +578,14 @@ registerGlobalDiscordCommands appId botToken = do
           , "type" .= 1
           , "options"
               .= ( AE.Array
-                     $ V.fromList
-                       [ AE.object
-                           [ "name" .= ("query" :: T.Text)
-                           , "description" .= ("Enter query" :: T.Text)
-                           , "type" .= 3
-                           , "required" .= True
-                           ]
-                       ]
+                    $ V.fromList
+                      [ AE.object
+                          [ "name" .= ("query" :: T.Text)
+                          , "description" .= ("Enter query" :: T.Text)
+                          , "type" .= 3
+                          , "required" .= True
+                          ]
+                      ]
                  )
           ]
       hereCommand =
@@ -637,9 +636,9 @@ instance FromJSON BufferResponse where
   parseJSON = withObject "BufferResponse" $ \o ->
     BufferResponse
       <$> o
-        .: "type"
+      .: "type"
       <*> o
-        .: "data"
+      .: "data"
 
 
 replyWithChartImage :: DiscordInteraction -> AE.Value -> Text -> Text -> IO ()
@@ -681,9 +680,9 @@ replyWithChartImage interaction chartOption botToken appId = do
       pure ()
 
 
-sendJsonFollowupResponse :: Text -> Text -> Text -> Text  -> IO ()
+sendJsonFollowupResponse :: Text -> Text -> Text -> Text -> IO ()
 sendJsonFollowupResponse appId interactionToken botToken content = do
   let followupUrl = T.unpack $ "https://discord.com/api/v10/webhooks/" <> appId <> "/" <> interactionToken
-      payload = AE.object["content" .= content]
+      payload = AE.object ["content" .= content]
   _ <- postWith (defaults & authHeader botToken & contentTypeHeader "application/json") followupUrl payload
   pure ()

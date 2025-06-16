@@ -293,8 +293,8 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
               $ widget
               & #html
                 ?~ ( renderText
-                       $ div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-                       $ forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
+                      $ div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
+                      $ forM_ issuesVM (\x -> div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] $ toHtml x)
                    )
           Widget.WTStat -> do
             stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
