@@ -444,7 +444,7 @@ integrationsPage pid apikey =
         div_ [class_ "flex items-center gap-4 py-8"] do
           button_ [class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
           a_
-            [ class_ "px-4 py-3 flex items-center underline text-brand text-xl"
+            [ class_ "px-4 py-3 flex items-center underline text-brand text-xl cursor-pointer"
             , type_ "button"
             , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=Integration"
             ]
@@ -766,7 +766,7 @@ inviteTeamMemberModal pid emails = do
                         inviteMemberItem email
         div_ [class_ "modal-action w-full flex items-center justify-start gap-4 mt-2"] do
           button_ [class_ "btn-primary px-8 py-2 text-lg rounded-xl cursor-pointer flex items-center", type_ "button", onclick_ "htmx.trigger('#members-container', 'submit')"] "Proceed"
-          label_ [class_ "text-brand underline", Lucid.for_ "inviteModal"] "Back"
+          label_ [class_ "text-brand underline cursor-pointer", Lucid.for_ "inviteModal"] "Back"
 
 
 functionalities :: [(Text, Text)]
