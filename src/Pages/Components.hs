@@ -301,7 +301,7 @@ systemsPricing pid critical isCurrent = do
                 if isCurrent then "Current plan" else "Start 30 day free trial"
           included features $ span_ [] do
             "Everything in "
-            span_ [class_ "text-textBrand"] "pas as you use"
+            span_ [class_ "text-textBrand"] "pay as you use"
             " plus..."
   where
     features =
