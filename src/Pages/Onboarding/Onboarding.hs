@@ -48,7 +48,6 @@ import Models.Users.Users
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components
-import Pkg.Mail (sendDiscordNotif)
 import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -147,19 +146,6 @@ data NotifChannelForm = NotifChannelForm
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON, FromForm)
-
-
-discorPostH :: Projects.ProjectId -> DiscordForm -> ATAuthCtx (RespHeaders (Html ()))
-discorPostH pid form = do
-  (sess, project) <- Sessions.sessionAndProject pid
-  let notifs = ordNub $ (map (.toText) (V.toList project.notificationsChannel) <> [(Projects.NDiscord).toText])
-  sendDiscordNotif form.url "APItoolkit connected successfully"
-  let stepsCompleted = project.onboardingStepsCompleted
-      newCompleted = insertIfNotExist "NotifChannel" stepsCompleted
-      q = [sql| update projects.projects set onboarding_steps_completed=? where id=? |]
-  _ <- dbtToEff do Projects.updateNotificationsChannel pid notifs (Just form.url)
-  _ <- dbtToEff $ execute q (newCompleted, pid)
-  addRespHeaders $ button_ [class_ "text-green-500"] "Connected"
 
 
 onboardingStepSkipped :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -596,18 +582,17 @@ notifChannels appCtx pid phone emails hasDiscord hasSlack = do
                 img_ [src_ "/public/assets/svgs/slack.svg"]
                 span_ [class_ "text-center text-black text-xl font-semibold"] "Slack"
               let
-                -- slackDev = "https://slack.com/oauth/v2/authorize?client_id=6187126212950.6193763110659&scope=chat:write,incoming-webhook&user_scope="
-                slackPro = "https://slack.com/oauth/v2/authorize?client_id=6211090672305.6200958370180&scope=chat:write,incoming-webhook&user_scope="
+                slackPro = "https://slack.com/oauth/v2/authorize?client_id=" <> appCtx.config.slackClientId <> "&scope=chat:write,incoming-webhook&user_scope="
               if hasSlack
-                then button_ [class_ "text-green-500"] "Connected"
+                then button_ [class_ "text-green-500 font-semibold"] "Connected"
                 else a_
                   [ target_ "_blank"
-                  , class_ "border px-4 py-2 flex items-center shadow-xs border-[var(--brand-color)] rounded-xl text-brand"
+                  , class_ "border px-3 h-8 flex items-center shadow-xs border-[var(--brand-color)] rounded-lg text-brand font-semibold"
                   , href_ $ slackPro <> "&redirect_uri=" <> slackRedirectUri <> pid.toText <> "?onboarding=true"
                   ]
                   do
                     "Connect"
-            let dscdInstallUri = "https://discord.com/oauth2/authorize?response_type=code&client_id=1328384474395967631&permissions=277025392640&integration_type=0&scope=bot+applications.commands"
+            let dscdInstallUri = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands"
                 extraQueryP = "&state=" <> pid.toText <> "__onboarding" <> "&redirect_uri=" <> discordUri
             div_ [class_ "px-3 py-2 rounded-xl border border-[#001066]/10  bg-fillWeak justify-between items-center flex"] $ do
               div_ [class_ "items-center gap-1.5 flex overflow-hidden"] $ do

@@ -150,7 +150,7 @@ integrationsBody sess envCfg isUpdate cp notifChannel slackData = do
               case slackData of
                 Just s -> p_ [class_ "text-sm text-gray-500 mb-4 text-green-500"] "Already connected, but you can add again to change workspace or channel."
                 Nothing -> pass
-              a_ [target_ "_blank", class_ "", href_ $ "https://slack.com/oauth/v2/authorize?client_id=6211090672305.6200958370180&scope=chat:write,incoming-webhook&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> pid] do
+              a_ [target_ "_blank", class_ "", href_ $ "https://slack.com/oauth/v2/authorize?client_id=" <> envCfg.slackClientId <> "&scope=chat:write,incoming-webhook&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> pid] do
                 img_ [alt_ "Add to slack", height_ "40", width_ "139", src_ "https://platform.slack-edge.com/img/add_to_slack.png", term "srcSet" "https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"]
 
           let isCheckedD = Projects.NDiscord `elem` notif
@@ -169,7 +169,7 @@ integrationsBody sess envCfg isUpdate cp notifChannel slackData = do
 
             div_ [class_ "px-6 pb-6"] do
               let addQueryParams = "&state=" <> pid <> "&redirect_uri=" <> envCfg.discordRedirectUri
-              a_ [target_ "_blank", class_ "flex items-center gap-2 border p-2 w-max border-strokeStrong rounded-lg", href_ $ "https://discord.com/oauth2/authorize?response_type=code&client_id=1328384474395967631&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> addQueryParams] do
+              a_ [target_ "_blank", class_ "flex items-center gap-2 border p-2 w-max border-strokeStrong rounded-lg", href_ $ "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> envCfg.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> addQueryParams] do
                 faSprite_ "discord" "solid" "h-6 w-6 text-textBrand"
                 span_ [class_ "text-sm text-textStrong font-semibold"] "Add to Discord"
 
