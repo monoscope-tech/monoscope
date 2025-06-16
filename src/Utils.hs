@@ -77,7 +77,6 @@ import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Database.PostgreSQL.Transact
-import Effectful.Reader.Static qualified
 import Langchain.LLM.Core qualified as LLM
 import Langchain.LLM.OpenAI
 import Lucid
@@ -93,8 +92,6 @@ import Numeric (showHex)
 import Pkg.THUtils (hashFile)
 import Relude hiding (notElem, show)
 import Servant
-import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, ATBaseCtx)
 import Text.Printf (printf)
 import Text.Regex.TDFA ((=~))
 import Text.Show
@@ -649,11 +646,11 @@ callOpenAIAPI fullPrompt apiKey = do
           if "Please provide a query"
             `T.isInfixOf` cleanedQuery
             || "I need more"
-            `T.isInfixOf` cleanedQuery
+              `T.isInfixOf` cleanedQuery
             || "Could you please"
-            `T.isInfixOf` cleanedQuery
+              `T.isInfixOf` cleanedQuery
             || T.length cleanedQuery
-            < 3
+              < 3
             then pure $ Left "INVALID_QUERY_ERROR"
             else pure $ Right (cleanedQuery, vizTypeM)
 

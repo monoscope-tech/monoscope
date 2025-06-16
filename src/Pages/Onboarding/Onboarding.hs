@@ -566,10 +566,47 @@ languageItem pid lang ext = do
               faSprite_ "spinner" "regular" "h-4 w-4 animate-spin"
 
 
+-- Helper function to render connection status button
+connectionStatusButton :: Bool -> Text -> Html ()
+connectionStatusButton isConnected connectUrl
+  | isConnected = button_ [class_ "text-green-500 font-semibold"] "Connected"
+  | otherwise =
+      a_
+        [ target_ "_blank"
+        , class_ "border px-3 h-8 flex items-center shadow-xs border-[var(--brand-color)] rounded-lg text-brand font-semibold"
+        , href_ connectUrl
+        ]
+        "Connect"
+
+
+-- Helper function to render integration card
+integrationCard :: Text -> Text -> Bool -> Text -> Html ()
+integrationCard serviceName iconPath isConnected connectUrl = do
+  div_ [class_ "px-3 py-2 rounded-xl border border-[#001066]/10 bg-fillWeak justify-between items-center flex"] $ do
+    div_ [class_ "items-center gap-1.5 flex overflow-hidden"] $ do
+      img_ [src_ iconPath]
+      span_ [class_ "text-center text-black text-xl font-semibold"] $ toHtml serviceName
+    connectionStatusButton isConnected connectUrl
+
+
+-- Helper function to render form field with label
+formField :: Text -> Text -> Text -> Text -> Text -> Html ()
+formField labelText inputType inputName inputId inputValue = do
+  div_ [class_ "flex flex-col gap-2"] $ do
+    div_ [class_ "flex w-full items-center gap-1"] $ do
+      span_ [class_ "text-textStrong lowercase first-letter:uppercase"] $ toHtml labelText
+    if inputType == "textarea"
+      then textarea_ [class_ "w-full rounded-lg border border-strokeStrong", type_ "text", name_ inputName, id_ inputId] ""
+      else input_ [class_ "input w-full h-12", type_ inputType, name_ inputName, id_ inputId, value_ inputValue]
+
+
 notifChannels :: AuthContext -> Projects.ProjectId -> Text -> Vector Text -> Bool -> Bool -> Html ()
 notifChannels appCtx pid phone emails hasDiscord hasSlack = do
   let slackRedirectUri = appCtx.env.slackRedirectUri
       discordUri = appCtx.env.discordRedirectUri
+      slackUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> appCtx.config.slackClientId <> "&scope=chat:write,incoming-webhook&user_scope=" <> "&redirect_uri=" <> slackRedirectUri <> pid.toText <> "?onboarding=true"
+      discordUrl = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> "&state=" <> pid.toText <> "__onboarding" <> "&redirect_uri=" <> discordUri
+
   div_ [class_ "w-[550px] mx-auto mt-[156px] mb-10"] $ do
     div_ [id_ "inviteModalContainer"] pass
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
@@ -577,36 +614,8 @@ notifChannels appCtx pid phone emails hasDiscord hasSlack = do
       div_ [class_ "flex-col w-full gap-8 flex mt-4"] $ do
         div_ [class_ "w-full flex flex-col gap-8"] $ do
           div_ [class_ "w-full gap-2 grid grid-cols-2"] $ do
-            div_ [class_ "px-3 py-2 rounded-xl border border-[#001066]/10  bg-fillWeak justify-between items-center flex"] $ do
-              div_ [class_ "items-center gap-1.5 flex overflow-hidden"] $ do
-                img_ [src_ "/public/assets/svgs/slack.svg"]
-                span_ [class_ "text-center text-black text-xl font-semibold"] "Slack"
-              let
-                slackPro = "https://slack.com/oauth/v2/authorize?client_id=" <> appCtx.config.slackClientId <> "&scope=chat:write,incoming-webhook&user_scope="
-              if hasSlack
-                then button_ [class_ "text-green-500 font-semibold"] "Connected"
-                else a_
-                  [ target_ "_blank"
-                  , class_ "border px-3 h-8 flex items-center shadow-xs border-[var(--brand-color)] rounded-lg text-brand font-semibold"
-                  , href_ $ slackPro <> "&redirect_uri=" <> slackRedirectUri <> pid.toText <> "?onboarding=true"
-                  ]
-                  do
-                    "Connect"
-            let dscdInstallUri = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands"
-                extraQueryP = "&state=" <> pid.toText <> "__onboarding" <> "&redirect_uri=" <> discordUri
-            div_ [class_ "px-3 py-2 rounded-xl border border-[#001066]/10  bg-fillWeak justify-between items-center flex"] $ do
-              div_ [class_ "items-center gap-1.5 flex overflow-hidden"] $ do
-                img_ [src_ "/public/assets/svgs/discord.svg"]
-                div_ [class_ "text-center text-black text-xl font-semibold"] "Discord"
-              if hasDiscord
-                then button_ [class_ "text-green-500 font-semibold"] "Connected"
-                else a_
-                  [ target_ "_blank"
-                  , class_ "border px-3 h-8 flex items-center shadow-xs border-[var(--brand-color)] rounded-lg text-brand font-semibold"
-                  , href_ $ dscdInstallUri <> extraQueryP
-                  ]
-                  do
-                    "Connect"
+            integrationCard "Slack" "/public/assets/svgs/slack.svg" hasSlack slackUrl
+            integrationCard "Discord" "/public/assets/svgs/discord.svg" hasDiscord discordUrl
           form_
             [ class_ "flex flex-col gap-8"
             , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/phone-emails"
@@ -617,14 +626,8 @@ notifChannels appCtx pid phone emails hasDiscord hasSlack = do
             , hxIndicator_ "#loadingIndicator"
             ]
             $ do
-              div_ [class_ "flex flex-col gap-2"] do
-                div_ [class_ "flex w-full items-center gap-1"] $ do
-                  span_ [class_ " text-textStrong lowercase first-letter:uppercase"] "Notify phone number"
-                input_ [class_ "input w-full h-12", type_ "text", name_ "phoneNumber", id_ "phone", value_ phone]
-              div_ [class_ "flex flex-col gap-2"] do
-                div_ [class_ "flex w-full items-center gap-1"] $ do
-                  span_ [class_ " text-textStrong lowercase first-letter:uppercase"] "Notify the following email address"
-                textarea_ [class_ "w-full rounded-lg border border-strokeStrong", type_ "text", name_ "emails", id_ "emails_input"] ""
+              formField "Notify phone number" "text" "phoneNumber" "phone" phone
+              formField "Notify the following email address" "textarea" "emails" "emails_input" ""
               div_ [class_ "items-center gap-4 flex"] $ do
                 button_ [class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center"] "Proceed"
       let tgs = decodeUtf8 $ AE.encode $ V.toList emails

@@ -11,13 +11,12 @@ import Data.Default
 import Data.List (maximum)
 import Data.Map.Strict qualified as M
 import Data.Semigroup (Max (..))
-import Database.PostgreSQL.Entity.DBT (withPool)
-
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
+import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple.Types (Only (..), Query (Query))
 import Database.PostgreSQL.Transact qualified as DBT
 import Deriving.Aeson qualified as DAE
@@ -25,7 +24,6 @@ import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
 import Effectful qualified as Effectful.Internal.Monad
 import Effectful.Log (Log)
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static qualified
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time

@@ -17,7 +17,7 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static (ask)
 import Log qualified
-import Models.Apis.Slack (DiscordData, SlackData (..), getProjectSlackData)
+import Models.Apis.Slack (SlackData (..), getProjectSlackData)
 import Models.Projects.Projects qualified as Projects
 import Network.Wreq (defaults, header, postWith)
 import Relude hiding (ask)

@@ -19,15 +19,10 @@ import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Vector qualified as V
-import Effectful (liftIO, raise, subsume)
 import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
-
--- import Fmt (commaizeF, fmt) -- Using prettyPrintCount instead
-import Langchain.LLM.Core qualified as LLM
-import Langchain.LLM.OpenAI (OpenAI (..))
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
@@ -50,7 +45,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (callOpenAIAPI, displayTimestamp, faSprite_, formatUTC, freeTierLimitExceededBanner, getServiceColors, listToIndexHashMap, lookupVecTextByKey, prettyPrintCount, systemPrompt)
+import Utils (callOpenAIAPI, faSprite_, freeTierLimitExceededBanner, getServiceColors, listToIndexHashMap, lookupVecTextByKey, prettyPrintCount, systemPrompt)
 
 
 -- $setup

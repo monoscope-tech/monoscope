@@ -1,16 +1,8 @@
--- TODO: temporary, to work with current logic
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-
 module Pages.SlackInstall (linkProjectGetH, postH, registerGlobalDiscordCommands, linkDiscordGetH, discordInteractionsH, DiscordInteraction, DiscordInteractionResponse, LinkProjectsForm, updateWebHook, SlackLink) where
 
--- import Crypto.Error (CryptoFailable (..), eitherCryptoError)
-
--- import Crypto.PubKey.Ed25519 (publicKey, signature, verify)
-
+import Control.Exception (try)
+import Control.Lens hiding ((.=))
 import Crypto.Error qualified as Crypto
-
 import Crypto.PubKey.Ed25519 qualified as Ed25519
 import Data.Aeson
 import Data.Aeson qualified as AE
@@ -20,44 +12,33 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Default (Default (def))
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Data.Time (UTCTime)
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Deriving.Aeson qualified as DAE
 import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
+import Effectful.Time qualified as Time
 import Lucid
-import Models.Apis.Slack (DiscordData, getDiscordData, insertAccessToken, insertDiscordData, updateDiscordNotificationChannel)
+import Models.Apis.Slack (DiscordData (..), getDiscordData, insertAccessToken, insertDiscordData, updateDiscordNotificationChannel)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
-import Pkg.Components (navBar)
-import Pkg.Mail (sendSlackMessage)
-import Relude hiding (ask, asks)
-
-import Control.Exception (try)
-import Control.Lens hiding ((.=))
-import Data.Aeson.QQ (aesonQQ)
-import Data.Time (UTCTime)
-import Data.Vector qualified as V
-import Effectful (raise)
-import Effectful.Internal.Monad (subsume)
-import Effectful.Time qualified as Time
-import Langchain.LLM.Core qualified as LLM
-import Langchain.LLM.OpenAI (OpenAI (..))
-import Models.Apis.Slack (DiscordData (..))
 import Network.HTTP.Client (RequestBody (..))
 import Network.HTTP.Client.MultipartFormData (PartM, partFileRequestBody)
 import Network.Wreq
-import Pages.Charts.Charts (queryMetrics)
+import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Pages.Charts.Charts qualified as Chart
-import Pkg.Components.Widget (Widget (..))
+import Pkg.Components (navBar)
 import Pkg.Components.Widget qualified as Widget
-import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), defSqlQueryCfg, parseQuery, parseQueryToAST, queryASTToComponents)
+import Pkg.Mail (sendSlackMessage)
+import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), defSqlQueryCfg, parseQueryToAST, queryASTToComponents)
+import Relude hiding (ask, asks)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server
 import System.Config (AuthContext (env, pool), EnvConfig (..))
-import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, addSuccessToast, atAuthToBase)
+import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Utils (callOpenAIAPI, faSprite_, systemPrompt)
 import Web.FormUrlEncoded (FromForm)
 
