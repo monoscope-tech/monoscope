@@ -26,7 +26,7 @@ import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
 import Lucid
-import Models.Apis.Slack (getDiscordData, insertAccessToken, insertDiscordData, updateDiscordNotificationChannel)
+import Models.Apis.Slack (DiscordData, getDiscordData, insertAccessToken, insertDiscordData, updateDiscordNotificationChannel)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
@@ -44,6 +44,7 @@ import Effectful.Internal.Monad (subsume)
 import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
 import Langchain.LLM.OpenAI (OpenAI (..))
+import Models.Apis.Slack (DiscordData (..))
 import Network.HTTP.Client (RequestBody (..))
 import Network.HTTP.Client.MultipartFormData (PartM, partFileRequestBody)
 import Network.Wreq
@@ -477,8 +478,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "Previous messages in this thread:"
           ]
-        <> msgs'
-        <> ["\n\nCurrent user query: " <> question]
+          <> msgs'
+          <> ["\n\nCurrent user query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
@@ -550,8 +551,8 @@ registerGlobalDiscordCommands appId botToken = do
   let url =
         T.unpack
           $ "https://discord.com/api/v10/applications/"
-          <> appId
-          <> "/commands"
+            <> appId
+            <> "/commands"
 
       askCommand =
         AE.object
@@ -560,14 +561,14 @@ registerGlobalDiscordCommands appId botToken = do
           , "type" .= 1
           , "options"
               .= ( AE.Array
-                    $ V.fromList
-                      [ AE.object
-                          [ "name" .= ("quest" :: T.Text)
-                          , "description" .= ("Your question in natural language" :: T.Text)
-                          , "type" .= (3 :: Int) -- STRING
-                          , "required" .= True
-                          ]
-                      ]
+                     $ V.fromList
+                       [ AE.object
+                           [ "name" .= ("quest" :: T.Text)
+                           , "description" .= ("Your question in natural language" :: T.Text)
+                           , "type" .= (3 :: Int) -- STRING
+                           , "required" .= True
+                           ]
+                       ]
                  )
           ]
 
@@ -578,14 +579,14 @@ registerGlobalDiscordCommands appId botToken = do
           , "type" .= 1
           , "options"
               .= ( AE.Array
-                    $ V.fromList
-                      [ AE.object
-                          [ "name" .= ("query" :: T.Text)
-                          , "description" .= ("Enter query" :: T.Text)
-                          , "type" .= 3
-                          , "required" .= True
-                          ]
-                      ]
+                     $ V.fromList
+                       [ AE.object
+                           [ "name" .= ("query" :: T.Text)
+                           , "description" .= ("Enter query" :: T.Text)
+                           , "type" .= 3
+                           , "required" .= True
+                           ]
+                       ]
                  )
           ]
       hereCommand =
@@ -636,9 +637,9 @@ instance FromJSON BufferResponse where
   parseJSON = withObject "BufferResponse" $ \o ->
     BufferResponse
       <$> o
-      .: "type"
+        .: "type"
       <*> o
-      .: "data"
+        .: "data"
 
 
 replyWithChartImage :: DiscordInteraction -> AE.Value -> Text -> Text -> IO ()
