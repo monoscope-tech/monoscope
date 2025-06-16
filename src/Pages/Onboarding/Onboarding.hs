@@ -491,7 +491,7 @@ integrationsPage pid apikey =
                     , hxTrigger_ "load"
                     , hxSwap_ "innerHTML"
                     , hxSelect_ "#mainArticle"
-                    , class_ ""
+                    , class_ "prose-a:!text-brand prose-a:!underline"
                     ]
                     ""
 
