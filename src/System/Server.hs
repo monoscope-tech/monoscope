@@ -55,10 +55,6 @@ runAPItoolkit tp =
 
 runServer :: IOE :> es => Log.Logger -> AuthContext -> TracerProvider -> Eff es ()
 runServer appLogger env tp = do
-  -- let appId = env.config.discordClientId
-  --     token = env.config.discordBotToken
-  -- res <- liftIO $ registerGlobalDiscordCommands appId token
-  -- traceShowM res
   loggingMiddleware <- Logging.runLog (show env.config.environment) appLogger WaiLog.mkLogMiddleware
   let server = mkServer appLogger env
   let warpSettings =

@@ -395,8 +395,6 @@ handleAskCommand cmdData interaction envCfg now authCtx discordData = do
       _ <- liftIO $ sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken "Sorry, there was an error processing your request"
       pure $ AE.object[]
     Right (query, vizTypeM) -> do
-      traceShowM query
-      traceShowM vizTypeM
       case vizTypeM of
         Just vizType -> handleVisualization query vizType interaction envCfg now authCtx discordData
         Nothing -> do 
