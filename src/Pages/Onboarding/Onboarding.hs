@@ -423,11 +423,13 @@ integrationGroups =
 
 integrationsPage :: Projects.ProjectId -> Text -> Html ()
 integrationsPage pid apikey =
-  div_ [class_ "w-full flex h-full group/pg"] do
-    div_ [class_ "w-1/2 bg-white pt-[156px] h-full px-12 pb-24 border-r border-weak flex flex-col gap-4"] do
-      div_ [class_ "max-w-[550px]"] $ stepIndicator 5 "Instrument your apps or servers" $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
-      div_ [class_ "flex-col w-full gap-4 flex mt-4"] do
-        p_ [class_ " text-textStrong"] do
+  div_ [class_ "w-full flex h-screen overflow-hidden group/pg"] do
+    div_ [class_ "w-1/2 bg-white h-full flex flex-col"] do
+      div_ [class_ "pt-[156px] px-12 flex-shrink-0"] $ 
+        div_ [class_ "max-w-[550px]"] $ stepIndicator 5 "Instrument your apps or servers" $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
+      
+      div_ [class_ "flex-col w-full gap-4 flex mt-4 px-12 overflow-y-auto flex-grow"] do
+        p_ [class_ "text-textStrong"] do
           "Send Logs, Metrics or Traces. Select an item below for instructions. "
           br_ []
           "Click proceed when you're done integrating your applications."
@@ -452,7 +454,7 @@ integrationsPage pid apikey =
             $ forM_ langsList \(lang, langName, _) ->
               languageItem pid langName lang
 
-        div_ [class_ "flex items-center gap-4 pb-24"] do
+        div_ [class_ "flex items-center gap-4 py-8"] do
           button_ [class_ "btn btn-primary cursor-pointer", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
           a_
             [ class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold"
@@ -460,14 +462,15 @@ integrationsPage pid apikey =
             , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=Integration"
             ]
             "Skip"
-    div_ [class_ "w-1/2 flex items-center px-12"] do
-      div_ [class_ "rounded-2xl w-full blue-gradient-box bg-bgBase flex flex-col justify-between items-center h-[90vh]"] do
-        div_ [class_ "w-full h-full overflow-y-auto"] do
+            
+    div_ [class_ "w-1/2 h-full overflow-hidden border-l border-weak"] do
+      div_ [class_ "h-full flex flex-col"] do
+        div_ [class_ "w-full h-full overflow-y-auto rounded-2xl blue-gradient-box bg-bgBase"] do
           -- Display guides for all integration options
           forM_ integrationGroups \(_, integrations) -> do
             forM_ integrations \(lang, langName, frameworks) ->
               div_ [class_ $ "p-4 lang-guide hidden group-has-[#check-" <> lang <> ":checked]/pg:block", id_ $ lang <> "_main"] do
-                div_ [class_ "px-8 sticky top-0 z-10"]
+                div_ [class_ "px-8 sticky top-0 z-10 bg-bgBase py-2"]
                   $ div_ [class_ "inline-block tabs tabs-box tabs-outline p-0 bg-bgBase text-textWeak border ", role_ "tablist"]
                   $ forM_ (zip [0 ..] frameworks) \(idx, (fwName, fwIcon, fwPath)) ->
                     label_ [class_ "tab gap-2 items-center", Lucid.for_ $ "fw-tab-" <> lang <> "-" <> show idx] do
@@ -487,7 +490,7 @@ integrationsPage pid apikey =
                         <> [checked_ | (idx == 0)]
                       unless (T.null fwIcon) $ img_ [class_ "h-5 w-5", src_ $ "https://apitoolkit.io/assets/img/framework-logos/" <> fwIcon]
                       span_ $ toHtml fwName
-                br_ []
+                
                 div_ [class_ "relative p-8"] do
                   div_ [id_ $ "fw-indicator-" <> lang, class_ "htmx-indicator flex justify-center py-5"]
                     $ span_ [class_ "loading loading-dots loading-md"] ""
