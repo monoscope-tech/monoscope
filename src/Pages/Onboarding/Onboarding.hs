@@ -149,6 +149,19 @@ data NotifChannelForm = NotifChannelForm
   deriving anyclass (AE.FromJSON, AE.ToJSON, FromForm)
 
 
+discorPostH :: Projects.ProjectId -> DiscordForm -> ATAuthCtx (RespHeaders (Html ()))
+discorPostH pid form = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  let notifs = ordNub $ (map (.toText) (V.toList project.notificationsChannel) <> [(Projects.NDiscord).toText])
+  sendDiscordNotif form.url "APItoolkit connected successfully"
+  let stepsCompleted = project.onboardingStepsCompleted
+      newCompleted = insertIfNotExist "NotifChannel" stepsCompleted
+      q = [sql| update projects.projects set onboarding_steps_completed=? where id=? |]
+  _ <- dbtToEff do Projects.updateNotificationsChannel pid notifs (Just form.url)
+  _ <- dbtToEff $ execute q (newCompleted, pid)
+  addRespHeaders $ button_ [class_ "text-green-500"] "Connected"
+
+
 onboardingStepSkipped :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 onboardingStepSkipped pid stepM = do
   (sess, project) <- Sessions.sessionAndProject pid
@@ -427,7 +440,7 @@ integrationsPage pid apikey =
           div_ [class_ "flex items-center gap-2"] do
             div_ [class_ "flex-1 font-mono bg-bgBase p-3 border border-[#001066]/10 rounded-lg overflow-x-auto", id_ "api-key-display"] $ toHtml apikey
             button_
-              [ class_ "px-3 py-2 bg-fillStrong rounded-lg text-white flex items-center gap-1 hover:bg-fillStronger"
+              [ class_ "px-4 py-2 bg-fillStrong rounded-xl text-white flex items-center gap-1 hover:bg-fillStronger"
               , type_ "button"
               , onclick_ "navigator.clipboard.writeText(document.getElementById('api-key-display').textContent); this.innerHTML = '<span>Copied!</span><svg class=\"h-4 w-4\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M5 13l4 4L19 7\"></path></svg>';"
               ]
@@ -443,9 +456,9 @@ integrationsPage pid apikey =
               languageItem pid langName lang
 
         div_ [class_ "flex items-center gap-4 py-8"] do
-          button_ [class_ "btn btn-primary cursor-pointer", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
+          button_ [class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
           a_
-            [ class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold"
+            [ class_ "px-4 py-3 flex items-center underline text-brand text-xl"
             , type_ "button"
             , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=Integration"
             ]
@@ -586,10 +599,10 @@ notifChannels appCtx pid phone emails hasDiscord hasSlack = do
                 -- slackDev = "https://slack.com/oauth/v2/authorize?client_id=6187126212950.6193763110659&scope=chat:write,incoming-webhook&user_scope="
                 slackPro = "https://slack.com/oauth/v2/authorize?client_id=6211090672305.6200958370180&scope=chat:write,incoming-webhook&user_scope="
               if hasSlack
-                then button_ [class_ "text-green-500 font-semibold"] "Connected"
+                then button_ [class_ "text-green-500"] "Connected"
                 else a_
                   [ target_ "_blank"
-                  , class_ "border px-3 h-8 flex items-center shadow-xs border-[var(--brand-color)] rounded-lg text-brand font-semibold"
+                  , class_ "border px-4 py-2 flex items-center shadow-xs border-[var(--brand-color)] rounded-xl text-brand"
                   , href_ $ slackPro <> "&redirect_uri=" <> slackRedirectUri <> pid.toText <> "?onboarding=true"
                   ]
                   do
@@ -628,7 +641,7 @@ notifChannels appCtx pid phone emails hasDiscord hasSlack = do
                   span_ [class_ " text-textStrong lowercase first-letter:uppercase"] "Notify the following email address"
                 textarea_ [class_ "w-full rounded-lg border border-strokeStrong", type_ "text", name_ "emails", id_ "emails_input"] ""
               div_ [class_ "items-center gap-4 flex"] $ do
-                button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg cursor-pointer"] "Proceed"
+                button_ [class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center"] "Proceed"
       let tgs = decodeUtf8 $ AE.encode $ V.toList emails
       script_
         [text|
@@ -676,15 +689,15 @@ createMonitorPage pid colM = do
           div_ [class_ "w-full"] $ termRaw "assertion-builder" [id_ ""] ""
           div_ [class_ "w-full"] $ termRaw "steps-editor" [id_ "stepsEditor", term "isOnboarding" "true"] ""
           div_ [class_ "items-center gap-4 flex"] $ do
-            button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg cursor-pointer", type_ "submit"] "Proceed"
+            button_ [class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center", type_ "submit"] "Proceed"
             button_
-              [ class_ "px-6 h-14 flex items-center border border-[var(--brand-color)] text-brand text-xl font-semibold rounded-lg cursor-pointer"
+              [ class_ "px-8 py-3 flex items-center border border-[var(--brand-color)] text-brand text-xl rounded-xl cursor-pointer"
               , onclick_ "window.addCollectionStep()"
               , type_ "button"
               ]
               "Add a step"
             button_
-              [ class_ "px-2 h-14 flex items-center underline text-brand text-xl font-semibold cursor-pointer"
+              [ class_ "px-4 py-3 flex items-center underline text-brand text-xl cursor-pointer"
               , type_ "button"
               , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=CreateMonitor"
               ]
@@ -702,7 +715,7 @@ onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
           createSelectField cSize "company Size" [("1 - 4", "1 to 4"), ("5 - 10", "5 to 10"), ("11 - 25", "11 to 25"), ("26+", "26 and above")]
           createSelectField fUsFrm "where Did You Hear About Us" [("google", "Google"), ("twitter", "Twitter"), ("linkedin", "LinkedIn"), ("friend", "Friend"), ("other", "Other")]
         div_ [class_ "items-center gap-1 flex"] $ do
-          button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg cursor-pointer"] "Proceed"
+          button_ [class_ "btn-primary px-6 py-4 text-xl rounded-lg cursor-pointer flex items-center"] "Proceed"
 
 
 onboardingConfigBody :: Projects.ProjectId -> Text -> [Text] -> Html ()
@@ -725,7 +738,7 @@ onboardingConfigBody pid loca func = do
             div_ [class_ "pt-2 flex-col gap-4 flex"] $ do
               forM_ functionalities $ createBinaryField "checkbox" "functionality" func
         div_ [class_ "items-center gap-1 flex"] $ do
-          button_ [class_ "px-6 h-14 flex items-center btn-primary text-xl font-semibold rounded-lg cursor-pointer"] "Proceed"
+          button_ [class_ "btn-primary px-6 py-4 text-xl rounded-lg cursor-pointer flex items-center"] "Proceed"
 
 
 inviteTeamMemberModal :: Projects.ProjectId -> Vector Text -> Html ()
@@ -749,7 +762,7 @@ inviteTeamMemberModal pid emails = do
                   $ div_ [class_ "flex flex-col gap-1 w-full"]
                   $ do
                     input_ [class_ "input input-sm w-full", placeholder_ "email@example.com", type_ "email", id_ "add-member-input"]
-                button_ [class_ "btn-primary rounded-lg  px-3 h-8 justify-center items-center flex text-white text-sm font-semibold", onclick_ "appendMember()"] "invite"
+                button_ [class_ "btn-primary rounded-xl px-4 py-2 justify-center items-center flex text-white text-sm", onclick_ "appendMember()"] "invite"
               div_ [class_ "w-full"] $ do
                 div_ [class_ "w-full  text-textStrong text-sm font-semibold"] "Members"
                 div_ [class_ "w-full border-t border-weak"] $ do
@@ -763,9 +776,9 @@ inviteTeamMemberModal pid emails = do
                       inviteMemberItem "hidden"
                       forM_ emails $ \email -> do
                         inviteMemberItem email
-        div_ [class_ "modal-action w-full flex items-center justify-start gap-2 mt-2"] do
-          button_ [class_ "btn btn-primary font-semibold rounded-lg cursor-pointer", type_ "button", onclick_ "htmx.trigger('#members-container', 'submit')"] "Proceed"
-          label_ [class_ "text-brand font-semibold underline", Lucid.for_ "inviteModal"] "Close"
+        div_ [class_ "modal-action w-full flex items-center justify-start gap-4 mt-2"] do
+          button_ [class_ "btn-primary px-8 py-2 text-lg rounded-xl cursor-pointer flex items-center", type_ "button", onclick_ "htmx.trigger('#members-container', 'submit')"] "Proceed"
+          label_ [class_ "text-brand underline", Lucid.for_ "inviteModal"] "Back"
 
 
 functionalities :: [(Text, Text)]
@@ -798,7 +811,7 @@ inviteMemberItem email = do
       option_ [class_ "text-gray-500", value_ "view"] "Can View"
     button_
       [ [__| on click remove the closest parent <div/> then halt |]
-      , class_ "text-brand ml-4 font-semibold text-sm underline"
+      , class_ "text-brand ml-4 text-sm underline"
       , type_ "button"
       ]
       "remove"
@@ -845,7 +858,7 @@ stepIndicator step title prevUrl = do
       when (step > 1) $ do
         a_ [class_ "flex items-center gap-3 flex text-brand w-full mt-2", href_ prevUrl] $ do
           faSprite_ "arrow-left" "regular" "h-4 w-4"
-          span_ [class_ "font-semibold"] "Back"
+          span_ [] "Back"
     span_ [class_ " text-textStrong text-4xl mt-4"] $ toHtml title
 
 
