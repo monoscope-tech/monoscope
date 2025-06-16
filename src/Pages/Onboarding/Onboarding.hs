@@ -415,10 +415,7 @@ integrationsPage pid apikey =
       div_ [class_ "pt-[156px] px-12 flex-shrink-0"]
         $ div_ [class_ "max-w-[550px]"]
         $ stepIndicator 5 "Instrument your apps or servers"
-        $ "/p/"
-          <> pid.toText
-          <> "/onboarding?step=NotifChannel"
-
+        $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
       div_ [class_ "flex-col w-full gap-4 flex mt-4 px-12 overflow-y-auto flex-grow"] do
         p_ [class_ "text-textStrong"] do
           "Send Logs, Metrics or Traces. Select an item below for instructions. "
@@ -457,6 +454,50 @@ integrationsPage pid apikey =
     div_ [class_ "w-1/2 h-full overflow-hidden border-l border-weak"] do
       div_ [class_ "h-full flex flex-col"] do
         div_ [class_ "w-full h-full overflow-y-auto rounded-2xl blue-gradient-box bg-bgBase"] do
+          -- Welcome content shown when no integration is selected
+          div_ [class_ "p-12 text-center group-has-[.checkbox:checked]/pg:hidden flex items-center justify-center h-full"] do
+            div_ [class_ "flex flex-col w-full items-center gap-8"] do
+              -- Icon/graphic
+              div_ [class_ "p-6 bg-fillWeak rounded-full"] do
+                faSprite_ "brackets-curly" "regular" "h-16 w-16 text-brand"
+
+              -- Welcome text
+              h2_ [class_ "text-3xl text-textStrong"] "👈 Select your stack on the left to begin"
+              p_ [class_ "text-lg text-textWeak max-w-md"] do
+                "You can also check out our youtube videos for more interactive walkthorughs."
+
+                -- YouTube video embeds
+                div_ [class_ "grid grid-cols-2 gap-4 w-full"] do
+                  -- Video 1
+                  div_ [class_ "relative overflow-hidden rounded-lg border border-weak", style_ "padding-bottom: 56.25%;"] do
+                    iframe_
+                      [ class_ "absolute top-0 left-0 w-full h-full"
+                      , src_ "https://www.youtube.com/embed/Q-tGuIkDmyk?si=BIHn2vN1m9gDs_9v"
+                      , title_ "YouTube video player"
+                      , term "frameborder" "0"
+                      , term "allow" "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                      , term "referrerpolicy" "strict-origin-when-cross-origin"
+                      , term "allowfullscreen" ""
+                      ]
+                      ""
+
+                  -- Video 2 (replace VIDEO_ID_2 with actual ID)
+                  div_ [class_ "relative overflow-hidden rounded-lg border border-weak", style_ "padding-bottom: 56.25%;"] do
+                    iframe_
+                      [ class_ "absolute top-0 left-0 w-full h-full"
+                      , src_ "https://www.youtube.com/embed/OALS4ckfOdI"
+                      , title_ "YouTube video player"
+                      , term "frameborder" "0"
+                      , term "allow" "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                      , term "referrerpolicy" "strict-origin-when-cross-origin"
+                      , term "allowfullscreen" ""
+                      ]
+                      ""
+
+                div_ [class_ "text-center mt-3"]
+                  $ a_ [href_ "https://www.youtube.com/@apitoolkit", target_ "_blank", class_ "text-brand hover:underline text-sm font-medium"] do
+                    "Watch more tutorials →"
+
           -- Display guides for all integration options
           forM_ integrationGroups \(_, integrations) -> do
             forM_ integrations \(lang, langName, frameworks) ->
