@@ -325,7 +325,6 @@ data ProjectsRoutes' mode = ProjectsRoutes'
     onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> QPT "step" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders (Html ()))
   , onboardingConfPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "survey" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingConfForm :> Post '[HTML] (RespHeaders (Html ()))
-  , onboardingDiscordPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "discord" :> ReqBody '[FormUrlEncoded] Onboarding.DiscordForm :> Post '[HTML] (RespHeaders (Html ()))
   , onboardingPhoneEmailsPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "phone-emails" :> ReqBody '[JSON] Onboarding.NotifChannelForm :> Post '[HTML] (RespHeaders (Html ()))
   , onboardingIntegrationCheck :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "integration-check" :> QPT "language" :> Get '[HTML] (RespHeaders (Html ()))
   , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> QPT "step" :> Post '[HTML] (RespHeaders (Html ()))
@@ -511,7 +510,6 @@ projectsServer =
     , onboading = Onboarding.onboardingGetH
     , onboardingInfoPost = Onboarding.onboardingInfoPost
     , onboardingConfPost = Onboarding.onboardingConfPost
-    , onboardingDiscordPost = Onboarding.discorPostH
     , onboardingPhoneEmailsPost = Onboarding.phoneEmailPostH
     , onboardingIntegrationCheck = Onboarding.checkIntegrationGet
     , onboardingPricingUpdate = CreateProject.pricingUpdateH

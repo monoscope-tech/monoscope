@@ -6,6 +6,8 @@ import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Pool ()
+import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Effectful (
   Eff,
   IOE,
@@ -15,7 +17,7 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static (ask)
 import Log qualified
-import Models.Apis.Slack (SlackData (..), getProjectSlackData)
+import Models.Apis.Slack (DiscordData, SlackData (..), getProjectSlackData)
 import Models.Projects.Projects qualified as Projects
 import Network.Wreq (defaults, header, postWith)
 import Relude hiding (ask)
@@ -63,11 +65,13 @@ sendSlackMessage pid message = do
     Nothing -> Log.logAttention "sendSlackMessage is not configured. But was called" (pid, message)
 
 
-sendDiscordNotif :: IOE :> es => Text -> Text -> Eff es ()
-sendDiscordNotif webhookUrl message = do
+sendDiscordNotif :: Text -> Text -> ATBackgroundCtx ()
+sendDiscordNotif message channelId = do
+  appCtx <- ask @Config.AuthContext
   let msg = AE.object ["content" AE..= message]
-  let opts = defaults & header "Content-Type" .~ ["application/json"]
-  response <- liftIO $ postWith opts (toString webhookUrl) msg
+      url = T.unpack $ "https://discord.com/api/v10/channels/" <> channelId <> "/messages"
+      opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [TE.encodeUtf8 $ "Bot " <> appCtx.config.discordBotToken]
+  response <- liftIO $ postWith opts url msg
   pass
 
 

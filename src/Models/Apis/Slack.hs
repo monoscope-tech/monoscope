@@ -78,7 +78,7 @@ getDiscordData guildId = dbtToEff $ queryOne q (Only guildId)
 getDiscordDataByProjectId :: DB :> es => Projects.ProjectId -> Eff es (Maybe DiscordData)
 getDiscordDataByProjectId pid = dbtToEff $ queryOne q (Only pid)
   where
-    q = [sql|SELECT project_id, guild_id notifs_channel_id FROM apis.discord WHERE project_id =? |]
+    q = [sql|SELECT project_id, guild_id, notifs_channel_id FROM apis.discord WHERE project_id =? |]
 
 
 updateDiscordNotificationChannel :: DB :> es => Text -> Text -> Eff es (Int64)

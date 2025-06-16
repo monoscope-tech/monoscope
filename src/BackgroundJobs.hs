@@ -36,6 +36,7 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
+import Models.Apis.Slack (DiscordData (..), getDiscordDataByProjectId)
 import Models.Projects.LemonSqueezy qualified as LemonSqueezy
 import Models.Projects.Projects (ProjectId (unProjectId))
 import Models.Projects.Projects qualified as Projects
@@ -350,8 +351,8 @@ queryMonitorsTriggered queryMonitorIds = do
       else do
         if Just True
           == ( monitorE.warningThreshold <&> \warningThreshold ->
-                (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
-                  || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
+                 (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
+                   || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
              )
           then handleQueryMonitorThreshold monitorE False
           else pass
@@ -412,8 +413,12 @@ dailyReportForProject pid = do
 <https://app.apitoolkit.io/p/{pid.toText}/reports/{show report.id.reportId}|View today's report>
 |]
       Projects.NDiscord -> do
+        discordData <- getDiscordDataByProjectId pid
         let projectUrl = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
-        whenJust pr.discordUrl \url -> sendDiscordNotif url [fmtTrim|**Daily REPORT**: [{pr.title}]({projectUrl})|]
+        whenJust discordData \d -> do
+          case d.notifsChannelId of
+            Just channelId -> sendDiscordNotif channelId [fmtTrim|**Daily REPORT**: [{pr.title}]({projectUrl})|]
+            Nothing -> pass
       _ -> do
         users & mapM_ \user -> do
           let firstName = user.firstName
@@ -475,7 +480,11 @@ weeklyReportForProject pid = do
                      |]
       Projects.NDiscord -> do
         let projectUrl = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
-        whenJust pr.discordUrl \url -> sendDiscordNotif url [fmtTrim|**WEEKLY REPORT**: [{pr.title}]({projectUrl})|]
+        discordData <- getDiscordDataByProjectId pid
+        whenJust discordData \d -> do
+          case d.notifsChannelId of
+            Just channelId -> sendDiscordNotif channelId [fmtTrim|**WEEKLY REPORT**: [{pr.title}]({projectUrl})|]
+            Nothing -> pass
       _ -> do
         totalRequest <- dbtToEff $ RequestDumps.getLastSevenDaysTotalRequest pid
         when (totalRequest > 0) do
@@ -567,7 +576,11 @@ We have detected a new endpoint on *{project.title}*
 **Endpoints**: 
 `{endpointLines}`
 [View more](https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash})|]
-          whenJust project.discordUrl (`sendDiscordNotif` msg)
+          discordData <- getDiscordDataByProjectId pid
+          whenJust discordData \d -> do
+            case d.notifsChannelId of
+              Just channelId -> sendDiscordNotif channelId msg
+              Nothing -> pass
         _ -> do
           forM_ users \u -> do
             let templateVars =
@@ -672,7 +685,7 @@ We have detected a new endpoint on *{project.title}*
                   , archivedAt = Nothing
                   }
             )
-          <$> errs
+            <$> errs
 
       forM_ project.notificationsChannel \case
         Projects.NSlack ->
@@ -692,7 +705,11 @@ A new runtime exception has been detected. click the link below to see more deta
 
 [View more](https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash})|]
 
-          whenJust project.discordUrl (`sendDiscordNotif` msg)
+          discordData <- getDiscordDataByProjectId pid
+          whenJust discordData \d -> do
+            case d.notifsChannelId of
+              Just channelId -> sendDiscordNotif channelId msg
+              Nothing -> pass
         _ ->
           forM_ users \u -> do
             let errosJ =

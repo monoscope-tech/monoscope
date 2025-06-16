@@ -226,11 +226,21 @@ installedSuccessDisocrd = do
 linkDiscordGetH :: Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text] SlackLink)
 linkDiscordGetH pidM' codeM guildIdM = do
   envCfg <- asks env
-  let pidM = pidM' >>= Projects.projectIdFromText
+  let res = pidM' >>= (\t -> Just $ T.splitOn "__" t)
+  let pidM = res >>= (\r -> Projects.projectIdFromText $ fromMaybe "" $ viaNonEmpty head r)
+  let isOnboarding = maybe False (\r -> length r > 1) res
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Nothing
+          , currProject = Nothing
+          , pageTitle = "Discord app installed"
+          }
   case (pidM, codeM, guildIdM) of
     (Just pid, Just code, Just guildId) -> do
       _ <- dbtToEff $ insertDiscordData pid guildId
-      pure $ addHeader "" $ DiscordLinked $ PageCtx def ()
+      case isOnboarding of
+        True -> do pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
+        _ -> pure $ addHeader "" $ DiscordLinked $ PageCtx def ()
     _ ->
       pure $ addHeader "" $ DiscordError $ PageCtx def ()
 

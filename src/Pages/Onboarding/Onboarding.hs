@@ -4,7 +4,6 @@ module Pages.Onboarding.Onboarding (
   onboardingGetH,
   onboardingInfoPost,
   onboardingConfPost,
-  discorPostH,
   phoneEmailPostH,
   pricingPage,
   checkIntegrationGet,
@@ -40,7 +39,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Models.Apis.Slack (getProjectSlackData)
+import Models.Apis.Slack (getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
@@ -94,11 +93,12 @@ onboardingGetH pid onboardingStepM = do
       addRespHeaders $ PageCtx bodyConfig $ createMonitorPage pid colsM
     "NotifChannel" -> do
       slack <- getProjectSlackData pid
+      discord <- getDiscordDataByProjectId pid
       let phone = fromMaybe "" project.notifyPhoneNumber
           emails = project.notifyEmails
-          hasDiscord = isJust project.discordUrl
+          hasDiscord = isJust discord
           hasSlack = isJust slack
-      addRespHeaders $ PageCtx bodyConfig $ notifChannels pid appContx.config.slackRedirectUri phone emails hasDiscord hasSlack
+      addRespHeaders $ PageCtx bodyConfig $ notifChannels appContx pid phone emails hasDiscord hasSlack
     "Integration" -> do
       apiKey <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
       let key = if V.length apiKey > 0 then let defKey = V.head apiKey in defKey.keyPrefix else "<API_KEY>"
@@ -147,19 +147,6 @@ data NotifChannelForm = NotifChannelForm
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON, FromForm)
-
-
-discorPostH :: Projects.ProjectId -> DiscordForm -> ATAuthCtx (RespHeaders (Html ()))
-discorPostH pid form = do
-  (sess, project) <- Sessions.sessionAndProject pid
-  let notifs = ordNub $ (map (.toText) (V.toList project.notificationsChannel) <> [(Projects.NDiscord).toText])
-  sendDiscordNotif form.url "APItoolkit connected successfully"
-  let stepsCompleted = project.onboardingStepsCompleted
-      newCompleted = insertIfNotExist "NotifChannel" stepsCompleted
-      q = [sql| update projects.projects set onboarding_steps_completed=? where id=? |]
-  _ <- dbtToEff do Projects.updateNotificationsChannel pid notifs (Just form.url)
-  _ <- dbtToEff $ execute q (newCompleted, pid)
-  addRespHeaders $ button_ [class_ "text-green-500 font-semibold"] "Connected"
 
 
 onboardingStepSkipped :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -429,8 +416,8 @@ integrationsPage pid apikey =
         $ div_ [class_ "max-w-[550px]"]
         $ stepIndicator 5 "Instrument your apps or servers"
         $ "/p/"
-        <> pid.toText
-        <> "/onboarding?step=NotifChannel"
+          <> pid.toText
+          <> "/onboarding?step=NotifChannel"
 
       div_ [class_ "flex-col w-full gap-4 flex mt-4 px-12 overflow-y-auto flex-grow"] do
         p_ [class_ "text-textStrong"] do
@@ -491,7 +478,7 @@ integrationsPage pid apikey =
                           , hxSelect_ "#mainArticle"
                           , hxIndicator_ $ "#fw-indicator-" <> lang
                           ]
-                        <> [checked_ | (idx == 0)]
+                          <> [checked_ | (idx == 0)]
                       unless (T.null fwIcon) $ img_ [class_ "h-5 w-5", src_ $ "https://apitoolkit.io/assets/img/framework-logos/" <> fwIcon]
                       span_ $ toHtml fwName
 
@@ -539,8 +526,10 @@ languageItem pid lang ext = do
               faSprite_ "spinner" "regular" "h-4 w-4 animate-spin"
 
 
-notifChannels :: Projects.ProjectId -> Text -> Text -> Vector Text -> Bool -> Bool -> Html ()
-notifChannels pid slackRedirectUri phone emails hasDiscord hasSlack = do
+notifChannels :: AuthContext -> Projects.ProjectId -> Text -> Vector Text -> Bool -> Bool -> Html ()
+notifChannels appCtx pid phone emails hasDiscord hasSlack = do
+  let slackRedirectUri = appCtx.env.slackRedirectUri
+      discordUri = appCtx.env.discordRedirectUri
   div_ [class_ "w-[550px] mx-auto mt-[156px] mb-10"] $ do
     div_ [id_ "inviteModalContainer"] pass
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
@@ -564,13 +553,21 @@ notifChannels pid slackRedirectUri phone emails hasDiscord hasSlack = do
                   ]
                   do
                     "Connect"
+            let dscdInstallUri = "https://discord.com/oauth2/authorize?response_type=code&client_id=1328384474395967631&permissions=277025392640&integration_type=0&scope=bot+applications.commands"
+                extraQueryP = "&state=" <> pid.toText <> "__onboarding" <> "&redirect_uri=" <> discordUri
             div_ [class_ "px-3 py-2 rounded-xl border border-[#001066]/10  bg-fillWeak justify-between items-center flex"] $ do
               div_ [class_ "items-center gap-1.5 flex overflow-hidden"] $ do
                 img_ [src_ "/public/assets/svgs/discord.svg"]
                 div_ [class_ "text-center text-black text-xl font-semibold"] "Discord"
               if hasDiscord
                 then button_ [class_ "text-green-500 font-semibold"] "Connected"
-                else discordModal pid
+                else a_
+                  [ target_ "_blank"
+                  , class_ "border px-3 h-8 flex items-center shadow-xs border-[var(--brand-color)] rounded-lg text-brand font-semibold"
+                  , href_ $ dscdInstallUri <> extraQueryP
+                  ]
+                  do
+                    "Connect"
           form_
             [ class_ "flex flex-col gap-8"
             , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/phone-emails"
@@ -651,31 +648,6 @@ createMonitorPage pid colM = do
               , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=CreateMonitor"
               ]
               "Skip"
-
-
-discordModal :: Projects.ProjectId -> Html ()
-discordModal pid = do
-  div_ [id_ "discord-modal"] $ do
-    label_ [Lucid.for_ "my_modal_6", class_ "border px-3 h-8 flex items-center shadow-xs border-[var(--brand-color)] rounded-lg text-brand font-semibold"] "Connect"
-    input_ [type_ "checkbox", id_ "my_modal_6", class_ "modal-toggle"]
-    div_ [class_ "modal", role_ "dialog"] do
-      div_ [class_ "modal-box"] $ do
-        div_
-          [ hxPost_ $ "/p/" <> pid.toText <> "/onboarding/discord"
-          , hxTarget_ "#discord-modal"
-          , hxSwap_ "innerHTML"
-          , id_ "dscrd"
-          , hxVals_ "js:{url: document.getElementById('discord-url').value}"
-          ]
-          do
-            div_ [[__| on click halt|]] do
-              h3_ [class_ "text-lg font-bold"] "Enter discord webhook URL"
-              p_ [class_ "py-4 flex items-center gap-1"] do
-                "Enter your preferred channels' webhook url. You can find it in the channel settings."
-              input_ [type_ "text", class_ "input w-full h-12", id_ "discord-url", name_ "url", required_ "required"]
-            div_ [class_ "modal-action"] do
-              button_ [class_ "btn btn-primary rounded-lg btn-sm", type_ "button", onclick_ "htmx.trigger('#dscrd','submit')"] "Submit"
-      label_ [class_ "modal-backdrop", Lucid.for_ "my_modal_6"] "Close"
 
 
 onboardingInfoBody :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Html ()
