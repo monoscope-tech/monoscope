@@ -153,6 +153,7 @@ data Routes mode = Routes
   , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> QPT "onboarding" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] SlackInstall.SlackLink)
   , discordLinkProjectGet :: mode :- "discord" :> "oauth" :> "callback" :> QPT "state" :> QPT "code" :> QPT "guild_id" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] SlackInstall.SlackLink)
   , discordInteractions :: mode :- "discord" :> "interactions" :> ReqBody '[RawJSON] BS.ByteString :> Header "X-Signature-Ed25519" BS.ByteString :> Header "X-Signature-Timestamp" BS.ByteString :> Post '[JSON] AE.Value
+  , slackInteractions :: mode :- "interactions" :> "slack" :> ReqBody '[FormUrlEncoded] SlackInstall.SlackInteraction :> Post '[JSON] AE.Value
   , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
   , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[JSON] LemonSqueezy.WebhookData :> Post '[HTML] (Html ())
   }
@@ -191,9 +192,6 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage ApiCatalog.HostEventsVM)))
   , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (RespHeaders FieldDetails.FieldPut)
   , -- Slack/Discord integration
-    slackInstallPost :: mode :- "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
-  , slackUpdateWebhook :: mode :- "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
-  , -- Reports and sharing
     reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" ReportsM.ReportId :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (RespHeaders Reports.ReportsPost)
@@ -356,6 +354,7 @@ server pool =
     , slackLinkProjectGet = SlackInstall.linkProjectGetH
     , discordLinkProjectGet = SlackInstall.linkDiscordGetH
     , discordInteractions = SlackInstall.discordInteractionsH
+    , slackInteractions = SlackInstall.slackInteractionsH
     , clientMetadata = ClientMetadata.clientMetadataH
     , lemonWebhook = LemonSqueezy.webhookPostH
     , cookieProtected = \sessionWithCookies ->
@@ -399,9 +398,6 @@ cookieProtectedServer =
       chartsDataGet = Charts.queryMetrics
     , widgetPost = Widget.widgetPostH
     , -- Slack/Discord handlers
-      slackInstallPost = SlackInstall.postH
-    , slackUpdateWebhook = SlackInstall.updateWebHook
-    , -- Report and share handlers
       reportsGet = Reports.reportsGetH
     , reportsSingleGet = Reports.singleReportGetH
     , reportsPost = Reports.reportsPostH

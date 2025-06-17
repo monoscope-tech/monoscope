@@ -725,6 +725,7 @@ CREATE TABLE IF NOT EXISTS apis.slack
   webhook_url   TEXT        NOT     NULL   DEFAULT        '',
   UNIQUE (project_id)
 );
+ALTER TABLE apis.slack ADD COLUMN IF NOT EXISTS team_id TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS apis.discord (
   id               UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY,
