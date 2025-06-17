@@ -598,7 +598,7 @@ formField labelText inputType inputName inputId inputValue = do
     div_ [class_ "flex w-full items-center gap-1"] $ do
       span_ [class_ "text-textStrong lowercase first-letter:uppercase"] $ toHtml labelText
     if inputType == "textarea"
-      then textarea_ [class_ "w-full rounded-lg border border-strokeStrong", type_ "text", name_ inputName, id_ inputId] ""
+      then textarea_ [class_ "textarea w-full rounded-lg border border-strokeStrong", type_ "text", name_ inputName, id_ inputId] ""
       else input_ [class_ "input w-full h-12", type_ inputType, name_ inputName, id_ inputId, value_ inputValue]
 
 
@@ -681,12 +681,6 @@ createMonitorPage pid colM = do
           div_ [class_ "items-center gap-4 flex"] $ do
             button_ [class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center", type_ "submit"] "Proceed"
             button_
-              [ class_ "px-8 py-3 flex items-center border border-[var(--brand-color)] text-brand text-xl rounded-xl cursor-pointer"
-              , onclick_ "window.addCollectionStep()"
-              , type_ "button"
-              ]
-              "Add a step"
-            button_
               [ class_ "px-4 py-3 flex items-center underline text-brand text-xl cursor-pointer"
               , type_ "button"
               , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=CreateMonitor"
@@ -740,7 +734,7 @@ inviteTeamMemberModal pid emails = do
       div_ [class_ "modal-box flex flex-col gap-4"] $ do
         div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"]
           $ faSprite_ "circle-check" "regular" "h-6 w-6 text-green-500"
-        span_ [class_ " text-textStrong text-2xl font-semibold"] "Test notifications sent"
+        span_ [class_ " text-textStrong text-2xl font-semibold"] "We've sent you a test notification"
         div_ [class_ "text-[#000833]/60"] "No notification? Close this modal and verify emails and channels."
         div_ [class_ "h-1 w-full  bg-fillWeak"] pass
         div_ [class_ "flex-col gap-4 flex"] $ do
