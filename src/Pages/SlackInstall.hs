@@ -1,7 +1,10 @@
-module Pages.SlackInstall (linkProjectGetH, postH, registerGlobalDiscordCommands, linkDiscordGetH, discordInteractionsH, DiscordInteraction, DiscordInteractionResponse, LinkProjectsForm, updateWebHook, SlackLink) where
+-- TODO: temporary, to work with current logic
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-import Control.Exception (try)
-import Control.Lens hiding ((.=))
+module Pages.SlackInstall (linkProjectGetH, postH, linkDiscordGetH, discordInteractionsH, DiscordInteraction, DiscordInteractionResponse, LinkProjectsForm, updateWebHook, SlackLink) where
+
 import Crypto.Error qualified as Crypto
 import Crypto.PubKey.Ed25519 qualified as Ed25519
 import Data.Aeson
@@ -24,10 +27,37 @@ import Lucid
 import Models.Apis.Slack (DiscordData (..), getDiscordData, insertAccessToken, insertDiscordData, updateDiscordNotificationChannel)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Network.HTTP.Client (RequestBody (..))
-import Network.HTTP.Client.MultipartFormData (PartM, partFileRequestBody)
-import Network.Wreq
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
+import Pkg.Components (navBar)
+import Pkg.Mail (sendSlackMessage)
+import Relude hiding (ask, asks)
+
+import Control.Exception (try)
+import Control.Lens ((.~), (^.))
+import Data.Aeson.QQ (aesonQQ)
+import Data.Effectful.Wreq (
+  HTTP,
+  Options,
+  defaults,
+  getWith,
+  header,
+  post,
+  postWith,
+  responseBody,
+ )
+import Data.Time (UTCTime)
+import Data.Vector qualified as V
+import Effectful (Eff, type (:>))
+import Effectful.Internal.Monad (subsume)
+import Effectful.Time qualified as Time
+import Langchain.LLM.Core qualified as LLM
+import Langchain.LLM.OpenAI (OpenAI (..))
+import Models.Apis.Slack (DiscordData (..))
+import Network.HTTP.Client (RequestBody (..), Response (responseStatus))
+import Network.HTTP.Client.MultipartFormData (PartM, partFileRequestBody)
+import Network.Wreq (FormParam ((:=)), partContentType, partLBS)
+import Network.Wreq.Types (FormParam)
+import Pages.Charts.Charts (queryMetrics)
 import Pages.Charts.Charts qualified as Chart
 import Pkg.Components (navBar)
 import Pkg.Components.Widget qualified as Widget
@@ -36,7 +66,7 @@ import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), defSqlQueryCfg, parse
 import Relude hiding (ask, asks)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
-import Servant.Server
+import Servant.Server (ServerError (errBody), err400, err401)
 import System.Config (AuthContext (env, pool), EnvConfig (..))
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Utils (callOpenAIAPI, faSprite_, systemPrompt)
@@ -69,7 +99,7 @@ data TokenResponse = TokenResponse
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] TokenResponse
 
 
-exchangeCodeForToken :: Text -> Text -> Text -> Text -> IO (Maybe TokenResponse)
+exchangeCodeForToken :: HTTP :> es => Text -> Text -> Text -> Text -> Eff es (Maybe TokenResponse)
 exchangeCodeForToken clientId clientSecret redirectUri code = do
   let formData :: [FormParam]
       formData =
@@ -115,7 +145,7 @@ linkProjectGetH pid slack_code onboardingM = do
   let client_id = envCfg.slackClientId
   let client_secret = envCfg.slackClientSecret
   let redirect_uri = envCfg.slackRedirectUri
-  token <- liftIO $ exchangeCodeForToken client_id client_secret (redirect_uri <> pid.toText <> if isJust onboardingM then "?onboarding=true" else "") (fromMaybe "" slack_code)
+  token <- exchangeCodeForToken client_id client_secret (redirect_uri <> pid.toText <> if isJust onboardingM then "?onboarding=true" else "") (fromMaybe "" slack_code)
   let bwconf =
         (def :: BWConfig)
           { sessM = Nothing
@@ -218,6 +248,7 @@ linkDiscordGetH pidM' codeM guildIdM = do
           }
   case (pidM, codeM, guildIdM) of
     (Just pid, Just code, Just guildId) -> do
+      _ <- registerDiscordCommands envCfg.discordClientId envCfg.discordBotToken guildId
       _ <- dbtToEff $ insertDiscordData pid guildId
       case isOnboarding of
         True -> do pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
@@ -379,18 +410,18 @@ handleCommand cmdData interaction envCfg now authCtx discordData =
 
 handleAskCommand :: InteractionData -> DiscordInteraction -> EnvConfig -> UTCTime -> AuthContext -> DiscordData -> ATBaseCtx AE.Value
 handleAskCommand cmdData interaction envCfg now authCtx discordData = do
-  _ <- liftIO $ sendDeferredResponse interaction.id interaction.token envCfg.discordBotToken
+  _ <- sendDeferredResponse interaction.id interaction.token envCfg.discordBotToken
   fullPrompt <- buildPrompt cmdData interaction envCfg
   result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
   case result of
     Left err -> do
-      _ <- liftIO $ sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken "Sorry, there was an error processing your request"
+      _ <- sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken "Sorry, there was an error processing your request"
       pure $ AE.object []
     Right (query, vizTypeM) -> do
       case vizTypeM of
         Just vizType -> handleVisualization query vizType interaction envCfg now authCtx discordData
         Nothing -> do
-          _ <- liftIO $ sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken ("Generated query: " <> query)
+          _ <- sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken ("Generated query: " <> query)
           pure $ AE.object []
 
 
@@ -413,7 +444,7 @@ handleVisualization query vizType interaction envCfg now authCtx discordData = d
 
   let reqBody = AE.object ["chartType" .= chartType, "chartData" .= AE.toJSON metricData, "echartOptions" .= widgetJson]
 
-  _ <- liftIO $ replyWithChartImage interaction reqBody envCfg.discordBotToken envCfg.discordClientId
+  _ <- replyWithChartImage interaction reqBody envCfg.discordBotToken envCfg.discordClientId
   pure $ contentResponse "Generated query: "
 
 
@@ -429,7 +460,7 @@ handleHereCommand interaction =
 -- Helper functions
 buildPrompt :: InteractionData -> DiscordInteraction -> EnvConfig -> ATBaseCtx Text
 buildPrompt cmdData interaction envCfg = do
-  threadMsgs <- liftIO $ getThreadStarterMessage interaction envCfg.discordBotToken
+  threadMsgs <- getThreadStarterMessage interaction envCfg.discordBotToken
   pure $ case cmdData.options of
     Just (InteractionOption{value = String q} : _) -> case threadMsgs of
       Just msgs -> threadsPrompt msgs q
@@ -514,7 +545,7 @@ data DiscordMessage = DiscordMessage
   deriving anyclass (FromJSON)
 
 
-getThreadStarterMessage :: DiscordInteraction -> Text -> IO (Maybe [DiscordMessage])
+getThreadStarterMessage :: HTTP :> es => DiscordInteraction -> Text -> Eff es (Maybe [DiscordMessage])
 getThreadStarterMessage interaction botToken = do
   case interaction.channel_id of
     Just channelId -> case interaction.channel of
@@ -537,25 +568,27 @@ getThreadStarterMessage interaction botToken = do
     Nothing -> pure $ Nothing
 
 
-registerGlobalDiscordCommands :: T.Text -> T.Text -> IO (Either T.Text ())
-registerGlobalDiscordCommands appId botToken = do
+registerDiscordCommands :: HTTP :> es => Text -> Text -> Text -> Eff es (Either Text ())
+registerDiscordCommands appId botToken guildId = do
   let url =
         T.unpack
           $ "https://discord.com/api/v10/applications/"
             <> appId
+            <> "/guilds"
+            <> guildId
             <> "/commands"
 
       askCommand =
         AE.object
-          [ "name" .= ("ask" :: T.Text)
-          , "description" .= ("Ask a question about your project using natural language" :: T.Text)
+          [ "name" .= ("ask" :: Text)
+          , "description" .= ("Ask a question about your project using natural language" :: Text)
           , "type" .= 1
           , "options"
               .= ( AE.Array
                      $ V.fromList
                        [ AE.object
-                           [ "name" .= ("quest" :: T.Text)
-                           , "description" .= ("Your question in natural language" :: T.Text)
+                           [ "name" .= ("quest" :: Text)
+                           , "description" .= ("Your question in natural language" :: Text)
                            , "type" .= (3 :: Int) -- STRING
                            , "required" .= True
                            ]
@@ -563,45 +596,27 @@ registerGlobalDiscordCommands appId botToken = do
                  )
           ]
 
-      queryCommand =
-        AE.object
-          [ "name" .= ("query" :: T.Text)
-          , "description" .= ("query data on your project" :: T.Text)
-          , "type" .= 1
-          , "options"
-              .= ( AE.Array
-                     $ V.fromList
-                       [ AE.object
-                           [ "name" .= ("query" :: T.Text)
-                           , "description" .= ("Enter query" :: T.Text)
-                           , "type" .= 3
-                           , "required" .= True
-                           ]
-                       ]
-                 )
-          ]
       hereCommand =
         AE.object
-          [ "name" .= ("here" :: T.Text)
-          , "description" .= ("Channel for apitoolkit to send notifications" :: T.Text)
+          [ "name" .= ("here" :: Text)
+          , "description" .= ("Channel for apitoolkit to send notifications" :: Text)
           , "type" .= 1
           ]
-
-      commandBody = AE.Array $ V.fromList [askCommand, queryCommand, hereCommand]
-
       opts = defaults & authHeader botToken & contentTypeHeader "application/json"
 
-  result <- try $ putWith opts url (AE.encode commandBody) :: IO (Either SomeException (Response LBS.ByteString))
-
-  case result of
-    Left err -> pure $ Left (T.pack $ show err)
-    Right resp ->
-      if (resp ^. responseStatus . statusCode) `elem` [200, 201]
-        then pure $ Right ()
-        else pure $ Left $ TE.decodeUtf8 . LBS.toStrict $ resp ^. responseBody
+  _ <- postWith opts url (AE.encode askCommand)
+  _ <- postWith opts url (AE.encode hereCommand)
+  pure $ Right ()
 
 
-sendDeferredResponse :: Text -> Text -> Text -> IO ()
+-- if (result ^. responseStatus . statusCode) `elem` [200, 201]
+--   then pure $ Right ()
+--   else
+--     if (result' ^. responseStatus . statusCode) `elem` [200, 201]
+--       then pure $ Right ()
+--       else pure $ Left $ "Something went wrong"
+
+sendDeferredResponse :: HTTP :> es => Text -> Text -> Text -> Eff es ()
 sendDeferredResponse interactionId interactionToken botToken = do
   let url = T.unpack $ "https://discord.com/api/v10/interactions/" <> interactionId <> "/" <> interactionToken <> "/callback"
       payload = encode $ object ["type" .= (5 :: Int)]
@@ -609,11 +624,11 @@ sendDeferredResponse interactionId interactionToken botToken = do
   pure ()
 
 
-authHeader :: Text -> Network.Wreq.Options -> Network.Wreq.Options
+authHeader :: Text -> Data.Effectful.Wreq.Options -> Data.Effectful.Wreq.Options
 authHeader token = header "Authorization" .~ [TE.encodeUtf8 $ "Bot " <> token]
 
 
-contentTypeHeader :: Text -> Network.Wreq.Options -> Network.Wreq.Options
+contentTypeHeader :: Text -> Data.Effectful.Wreq.Options -> Data.Effectful.Wreq.Options
 contentTypeHeader contentType = header "Content-Type" .~ [TE.encodeUtf8 contentType]
 
 
@@ -633,7 +648,7 @@ instance FromJSON BufferResponse where
         .: "data"
 
 
-replyWithChartImage :: DiscordInteraction -> AE.Value -> Text -> Text -> IO ()
+replyWithChartImage :: HTTP :> es => DiscordInteraction -> AE.Value -> Text -> Text -> Eff es ()
 replyWithChartImage interaction chartOption botToken appId = do
   let interactionToken = interaction.token
   -- _ <- sendDeferredResponse interaction.id interaction.token botToken
@@ -647,12 +662,12 @@ replyWithChartImage interaction chartOption botToken appId = do
       payloadJson =
         encode
           $ object
-            [ "content" .= ("Here's your chart!" :: T.Text)
+            [ "content" .= ("Here's your chart!" :: Text)
             , "attachments"
                 .= V.fromList
                   [ object
                       [ "id" .= (0 :: Int)
-                      , "filename" .= ("chart.png" :: T.Text)
+                      , "filename" .= ("chart.png" :: Text)
                       ]
                   ]
             ]
@@ -672,7 +687,7 @@ replyWithChartImage interaction chartOption botToken appId = do
       pure ()
 
 
-sendJsonFollowupResponse :: Text -> Text -> Text -> Text -> IO ()
+sendJsonFollowupResponse :: HTTP :> es => Text -> Text -> Text -> Text -> Eff es ()
 sendJsonFollowupResponse appId interactionToken botToken content = do
   let followupUrl = T.unpack $ "https://discord.com/api/v10/webhooks/" <> appId <> "/" <> interactionToken
       payload = AE.object ["content" .= content]
