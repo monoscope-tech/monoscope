@@ -58,22 +58,19 @@ import Network.HTTP.Client (RequestBody (..), Response (responseStatus))
 import Network.HTTP.Client.MultipartFormData (PartM, partFileRequestBody)
 import Network.HTTP.Types (urlEncode)
 import Network.URI (escapeURIString)
-import Network.Wreq (FormParam ((:=)), partContentType, partLBS)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Pages.Charts.Charts (queryMetrics)
 import Pages.Charts.Charts qualified as Chart
 import Pkg.Components (navBar)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Mail (sendSlackMessage)
-import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), defSqlQueryCfg, parseQueryToAST, queryASTToComponents)
 import Relude hiding (ask, asks)
 import Servant.API (FormUrlEncoded, Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400, err401)
 import System.Config (AuthContext (AuthContext, env, pool), EnvConfig (..))
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, addSuccessToast)
-import Utils (callOpenAIAPI, escapedQueryPartial, faSprite_, systemPrompt)
+import Utils (callOpenAIAPI, faSprite_, systemPrompt)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -107,10 +104,10 @@ exchangeCodeForToken :: HTTP :> es => Text -> Text -> Text -> Text -> Eff es (Ma
 exchangeCodeForToken clientId clientSecret redirectUri code = do
   let formData :: [FormParam]
       formData =
-        [ "client_id" := clientId
-        , "client_secret" := clientSecret
-        , "code" := code
-        , "redirect_uri" := redirectUri
+        [ "client_id" Wreq.:= clientId
+        , "client_secret" Wreq.:= clientSecret
+        , "code" Wreq.:= code
+        , "redirect_uri" Wreq.:= redirectUri
         ]
 
   let hds = header "Content-Type" .~ ["application/x-www-form-urlencoded; charset=utf-8"]
@@ -436,8 +433,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "Previous messages in this thread:"
           ]
-        <> msgs'
-        <> ["\n\nCurrent user query: " <> question]
+          <> msgs'
+          <> ["\n\nCurrent user query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
@@ -550,9 +547,9 @@ instance FromJSON BufferResponse where
   parseJSON = withObject "BufferResponse" $ \o ->
     BufferResponse
       <$> o
-      .: "type"
+        .: "type"
       <*> o
-      .: "data"
+        .: "data"
 
 
 getChartImageBytes :: HTTP :> es => AE.Value -> Eff es (Maybe LBS.ByteString)
