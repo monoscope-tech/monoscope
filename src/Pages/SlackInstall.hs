@@ -1,4 +1,3 @@
--- TODO: temporary, to work with current logic
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
@@ -380,7 +379,6 @@ discordInteractionsH rawBody signatureM timestampM = do
                       [ "embeds"
                           .= AE.Array (V.fromList [AE.object ["title" .= "Here is your chart", "image" .= AE.object ["url" .= chartImageUrl reqBody baseUrl]]])
                       ]
-              traceShowM content
               sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
               pure $ contentResponse "Generated query: "
             Nothing -> do
@@ -438,8 +436,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "Previous messages in this thread:"
           ]
-          <> msgs'
-          <> ["\n\nCurrent user query: " <> question]
+        <> msgs'
+        <> ["\n\nCurrent user query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
@@ -552,9 +550,9 @@ instance FromJSON BufferResponse where
   parseJSON = withObject "BufferResponse" $ \o ->
     BufferResponse
       <$> o
-        .: "type"
+      .: "type"
       <*> o
-        .: "data"
+      .: "data"
 
 
 getChartImageBytes :: HTTP :> es => AE.Value -> Eff es (Maybe LBS.ByteString)
@@ -600,7 +598,7 @@ slackInteractionsH interaction = do
         Right (query, vizTypeM) -> do
           case vizTypeM of
             Just vizType -> do
-              let reqBody = getChartData query vizType authCtx slackData.projectId
+              -- let reqBody = getChartData query vizType authCtx slackData.projectId
               -- _ <- replyWithChartImage interaction reqBody envCfg.discordBotToken envCfg.discordClientId
               let content = AE.object ["response_type" .= "in_channel", "text" .= ("Generated query: " <> query <> "\n\n" <> vizType <> slackData.projectId.toText)]
               sendSlackFollowupResponse inter.response_url content

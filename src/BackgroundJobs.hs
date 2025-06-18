@@ -351,8 +351,8 @@ queryMonitorsTriggered queryMonitorIds = do
       else do
         if Just True
           == ( monitorE.warningThreshold <&> \warningThreshold ->
-                 (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
-                   || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
+                (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
+                  || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
              )
           then handleQueryMonitorThreshold monitorE False
           else pass
@@ -685,7 +685,7 @@ We have detected a new endpoint on *{project.title}*
                   , archivedAt = Nothing
                   }
             )
-            <$> errs
+          <$> errs
 
       forM_ project.notificationsChannel \case
         Projects.NSlack ->
