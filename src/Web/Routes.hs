@@ -3,11 +3,8 @@ module Web.Routes (server, genAuthServerContext) where
 -- Standard library imports
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as BL
 import Data.Map qualified as Map
 import Data.Pool (Pool)
-import Data.Text.Encoding qualified as TE
-import Data.Text.Encoding.Error qualified as TE
 import Data.UUID qualified as UUID
 import Relude
 

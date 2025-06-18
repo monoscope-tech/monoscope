@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
 module Pages.Onboarding.Onboarding (
@@ -18,14 +19,12 @@ module Pages.Onboarding.Onboarding (
 import Control.Lens qualified as L
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
-import Data.ByteString.Lazy qualified as BL
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.Wreq qualified as W (get, responseBody)
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Data.Tuple.Extra (thd3)
-import Data.Vector as V (Vector, fromList, head, length, toList)
+import Data.Vector qualified as V (Vector, fromList, head, length, toList)
 import Database.PostgreSQL.Entity.DBT (execute, queryOne)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -135,7 +134,7 @@ data OnboardingConfForm = OnboardingConForm
   deriving anyclass (FromForm)
 
 
-data DiscordForm = DiscordForm {url :: Text}
+newtype DiscordForm = DiscordForm {url :: Text}
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
@@ -177,7 +176,7 @@ phoneEmailPostH pid form = do
       emails = form.emails
       notifs = if phone /= "" then map (.toText) (V.toList project.notificationsChannel) <> [(Projects.NPhone).toText] else map (.toText) (V.toList project.notificationsChannel)
       notifs' = if emails /= [] then notifs <> [(Projects.NEmail).toText] else notifs
-      notifsTxt = ordNub $ notifs'
+      notifsTxt = ordNub notifs'
       stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "NotifChannel" stepsCompleted
       q = [sql| update projects.projects set notifications_channel=?::notification_channel_enum[], notify_phone_number=?, notify_emails=?::text[],onboarding_steps_completed=? where id=? |]
@@ -520,7 +519,7 @@ integrationsPage pid apikey =
                           , hxSelect_ "#mainArticle"
                           , hxIndicator_ $ "#fw-indicator-" <> lang
                           ]
-                        <> [checked_ | (idx == 0)]
+                          <> [checked_ | idx == 0]
                       unless (T.null fwIcon) $ img_ [class_ "h-5 w-5", src_ $ "https://apitoolkit.io/assets/img/framework-logos/" <> fwIcon]
                       span_ $ toHtml fwName
 
@@ -558,7 +557,7 @@ languageItem pid lang ext = do
         div_ [class_ "hidden group-has-[.checkbox:checked]/li:block text-sm toggle-target", id_ $ "integration-check-container" <> T.replace "#" "" lang] do
           div_
             [ class_ "flex items-center gap-2 "
-            , hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check?language=" <> (T.replace "#" "sharp" lang)
+            , hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check?language=" <> T.replace "#" "sharp" lang
             , hxSwap_ "innerHTML"
             , hxTarget_ $ "#integration-check-" <> ext
             , hxTrigger_ "load delay:5s"
@@ -602,7 +601,7 @@ formField labelText inputType inputName inputId inputValue = do
       else input_ [class_ "input w-full h-12", type_ inputType, name_ inputName, id_ inputId, value_ inputValue]
 
 
-notifChannels :: AuthContext -> Projects.ProjectId -> Text -> Vector Text -> Bool -> Bool -> Html ()
+notifChannels :: AuthContext -> Projects.ProjectId -> Text -> V.Vector Text -> Bool -> Bool -> Html ()
 notifChannels appCtx pid phone emails hasDiscord hasSlack = do
   let slackRedirectUri = appCtx.env.slackRedirectUri
       discordUri = appCtx.env.discordRedirectUri
@@ -725,7 +724,7 @@ onboardingConfigBody pid loca func = do
           button_ [class_ "btn-primary px-6 py-4 text-xl rounded-lg cursor-pointer flex items-center"] "Proceed"
 
 
-inviteTeamMemberModal :: Projects.ProjectId -> Vector Text -> Html ()
+inviteTeamMemberModal :: Projects.ProjectId -> V.Vector Text -> Html ()
 inviteTeamMemberModal pid emails = do
   div_ [id_ "invite-modal-container"] $ do
     input_ [type_ "checkbox", id_ "inviteModal", class_ "modal-toggle", checked_]
@@ -810,7 +809,7 @@ createInputField (labelText, value) = do
     input_ [class_ "input w-full h-12", type_ "text", name_ $ T.replace " " "" labelText, required_ "required", value_ value]
 
 
-createSelectField :: Text -> Text -> Vector (Text, Text) -> Html ()
+createSelectField :: Text -> Text -> V.Vector (Text, Text) -> Html ()
 createSelectField val labelText options = do
   div_ [class_ "flex flex-col gap-1 w-full"] $ do
     div_ [class_ "flex w-full items-center gap-1"] $ do
@@ -818,7 +817,7 @@ createSelectField val labelText options = do
       span_ [class_ " text-textWeak"] "*"
     select_ [class_ "select w-full h-12", name_ $ T.replace " " "" labelText, required_ "required"] do
       option_ [value_ ""] ""
-      forM_ options $ \(key, value) -> option_ ([value_ key] ++ [selected_ val | val == key]) $ toHtml value
+      forM_ options $ \(key, value) -> option_ (value_ key : [selected_ val | val == key]) $ toHtml value
 
 
 createBinaryField :: Text -> Text -> [Text] -> (Text, Text) -> Html ()
@@ -833,7 +832,7 @@ stepIndicator :: Int -> Text -> Text -> Html ()
 stepIndicator step title prevUrl = do
   universalIndicator
   div_ [class_ "flex-col gap-4 flex w-full"] $ do
-    a_ [href_ $ "/", class_ "absolute top-10 left-10 py-2 pr-2 bg-bgBase rounded-xs"] do
+    a_ [href_ "/", class_ "absolute top-10 left-10 py-2 pr-2 bg-bgBase rounded-xs"] do
       img_ [class_ "h-7", src_ "/public/assets/svgs/logo.svg"]
     div_ [class_ "flex-col gap-2 flex w-full"] $ do
       div_ [class_ " text-textStrong text-base font-semibold"] $ "Step " <> show step <> " of 6"
@@ -871,5 +870,5 @@ proxyLandingH path = do
   response <- W.get (toString fullUrl)
 
   let content = fromMaybe "" $ response L.^? W.responseBody
-      textContent = TE.decodeUtf8 $ BL.toStrict content
+      textContent = decodeUtf8 content
   addRespHeaders textContent

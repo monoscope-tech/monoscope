@@ -10,12 +10,11 @@ import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Base64 qualified as B64
 import Data.Effectful.UUID (UUIDEff)
 import Data.HashMap.Strict qualified as HashMap
-import Data.List (partition)
+import Data.List qualified as L (partition)
 import Data.Map qualified as Map
 import Data.ProtoLens.Encoding (decodeMessage)
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
@@ -65,7 +64,7 @@ import Utils (b64ToJson, freeTierDailyMaxEvents, nestedJsonFromDotNotation)
 
 -- | Generic lens-based attribute extraction from spans
 getSpanAttributeValue :: Text -> V.Vector PT.ResourceSpans -> V.Vector Text
-getSpanAttributeValue attribute rss = V.mapMaybe (\rs -> getResourceAttr rs <|> getSpanAttr rs) rss
+getSpanAttributeValue attribute = V.mapMaybe (\rs -> getResourceAttr rs <|> getSpanAttr rs)
   where
     getResourceAttr rs = getAttr (resourceAttributes (rs ^. PTF.resource))
     getSpanAttr rs =
@@ -81,7 +80,7 @@ getSpanAttributeValue attribute rss = V.mapMaybe (\rs -> getResourceAttr rs <|> 
 
 -- | Extract attribute values from resource logs
 getLogAttributeValue :: Text -> V.Vector PL.ResourceLogs -> V.Vector Text
-getLogAttributeValue attribute rls = V.mapMaybe (\rl -> getResourceAttr rl <|> getLogAttr rl) rls
+getLogAttributeValue attribute = V.mapMaybe (\rl -> getResourceAttr rl <|> getLogAttr rl)
   where
     getResourceAttr rl = getAttr (resourceAttributes (rl ^. PLF.resource))
     getLogAttr rl =
@@ -113,7 +112,7 @@ processList [] _ = pure []
 processList msgs attrs = checkpoint "processList" $ process `onException` handleException
   where
     handleException = do
-      Log.logAttention "processList: caught exception" (AE.object ["ce-type" AE..= (HashMap.lookup "ce-type" attrs)])
+      Log.logAttention "processList: caught exception" (AE.object ["ce-type" AE..= HashMap.lookup "ce-type" attrs])
       pure $ map fst msgs
 
     process = do
@@ -172,7 +171,10 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
 
           unless (V.null apitoolkitSpans)
             $ checkpoint "processList:traces:processRequestMessages"
-            $ (void $ ProcessMessage.processRequestMessages $ V.toList apitoolkitSpans <&> ("",))
+            $ void
+              ( ProcessMessage.processRequestMessages
+                  $ V.toList apitoolkitSpans <&> ("",)
+              )
 
           unless (null allSpans) do
             checkpoint "processList:traces:bulkInsertSpans" $ Telemetry.bulkInsertOtelLogsAndSpansTF spans'
@@ -189,9 +191,9 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
               Right metricReq -> checkpoint "processList:metrics:getProjectId" do
                 let resourceMetrics = V.fromList $ metricReq ^. PMF.resourceMetrics
                     projectKey = getMetricAttributeValue "at-project-key" resourceMetrics
-                pidM <- join <$> (forM projectKey ProjectApiKeys.getProjectIdByApiKey)
+                pidM <- join <$> forM projectKey ProjectApiKeys.getProjectIdByApiKey
                 let pid2M = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" resourceMetrics
-                case (pidM <|> pid2M) of
+                case pidM <|> pid2M of
                   Just pid -> pure (ackId, convertResourceMetricsToMetricRecords pid resourceMetrics)
                   Nothing -> do
                     Log.logAttention_ "processList:metrics: project API Key and project ID not available in metrics"
@@ -206,7 +208,7 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
 
           pure $ V.toList ackIds
         _ -> do
-          Log.logAttention "processList: unsupported opentelemetry data type" (AE.object ["ce-type" AE..= (HashMap.lookup "ce-type" attrs)])
+          Log.logAttention "processList: unsupported opentelemetry data type" (AE.object ["ce-type" AE..= HashMap.lookup "ce-type" attrs])
           pure []
 
 
@@ -235,7 +237,7 @@ migrateHttpSemanticConventions keyVals = do
       , ("http.client_ip", "client.address")
       ]
     mgVals =
-      (\(k, v) -> maybe (k, v) (\(_, e) -> ((e, v))) (find (\(kk, _) -> kk == k) fieldMappings)) <$> keyVals
+      (\(k, v) -> maybe (k, v) (\(_, e) -> (e, v)) (find (\(kk, _) -> kk == k) fieldMappings)) <$> keyVals
 
     -- Handle the special case of http.target -> url.path and url.query
     migrateHttpTarget kvs = case find (\(k, _) -> k == "http.target") kvs of
@@ -251,9 +253,9 @@ migrateHttpSemanticConventions keyVals = do
             _ -> [("url.path", AE.String path)]
 
           withPathAndQuery =
-            if T.null query || isNothing (find (\(k, _) -> k == "url.path") kvs)
-              then []
-              else [("url.query", AE.String queryWithoutQ)]
+            [ ("url.query", AE.String queryWithoutQ)
+            | not (T.null query || isNothing (find (\(k, _) -> k == "url.path") kvs))
+            ]
          in
           withPath ++ withPathAndQuery
       _ -> []
@@ -262,9 +264,9 @@ migrateHttpSemanticConventions keyVals = do
     migrateMethodOther attributes' =
       case (find (\(k, _) -> k == "http.method") keyVals, find (\(k, _) -> k == "http.request.method_original") keyVals) of
         (Just (_, AE.String method), Just (_, originalMethod)) ->
-          if method == "_OTHER" && (isNothing $ find (\(k, _) -> k == "http.request.method") attributes')
-            then [("http.request.method", originalMethod)]
-            else []
+          [ ("http.request.method", originalMethod)
+          | method == "_OTHER" && isNothing (find (\(k, _) -> k == "http.request.method") attributes')
+          ]
         _ -> []
    in
     mgVals ++ migrateHttpTarget keyVals ++ migrateMethodOther keyVals
@@ -273,11 +275,11 @@ migrateHttpSemanticConventions keyVals = do
 -- Extract structured information from protobuf decoding errors
 createProtoErrorInfo :: String -> ByteString -> AE.Value
 createProtoErrorInfo err msg =
-  case T.splitOn ":" (T.pack err) of
+  case T.splitOn ":" (toText err) of
     (firstPart : details) ->
       -- Extract the field path that caused the error
-      let fieldPath = T.takeWhile (/= ':') (T.strip (T.unwords details))
-          errorType = T.takeWhileEnd (/= ':') (T.strip (T.unwords details))
+      let fieldPath = T.takeWhile (/= ':') (T.strip (unwords details))
+          errorType = T.takeWhileEnd (/= ':') (T.strip (unwords details))
        in AE.object
             [ "err_type" AE..= errorType
             , "field_path" AE..= fieldPath
@@ -294,7 +296,7 @@ nanosecondsToUTC ns = posixSecondsToUTCTime (fromIntegral ns / 1e9)
 
 -- Convert ByteString to hex Text
 byteStringToHexText :: BS.ByteString -> Text
-byteStringToHexText bs = TE.decodeUtf8 (B16.encode bs)
+byteStringToHexText bs = decodeUtf8 (B16.encode bs)
 
 
 keyValueToJSON :: V.Vector PC.KeyValue -> AE.Value
@@ -308,7 +310,7 @@ keyValueToJSON kvs =
     specialKeys = ["at-project-key", "at-project-id"]
 
     -- Split into flat and nested categories
-    (flatPairs, nestedPairs) = partition (\(k, _) -> k `elem` specialKeys) allPairs
+    (flatPairs, nestedPairs) = L.partition (\(k, _) -> k `elem` specialKeys) allPairs
 
     -- Create the nested structure for regular keys
     nestedObj = nestedJsonFromDotNotation nestedPairs
@@ -358,7 +360,7 @@ resourceToJSON (Just resource) =
     -- Special case keys that should remain flat
     specialKeys = ["at-project-key", "at-project-id"]
     -- Split into flat and nested categories
-    (flatPairs, nestedPairs) = partition (\(k, _) -> k `elem` specialKeys) attrPairs
+    (flatPairs, nestedPairs) = L.partition (\(k, _) -> k `elem` specialKeys) attrPairs
 
     -- Create properly nested structure
     nestedObj = nestedJsonFromDotNotation nestedPairs
@@ -563,7 +565,6 @@ convertSpanToOtelLog pid resourceM scopeM pSpan =
           then Nothing
           else
             Just
-              $ T.pack
               $ show
               $ AE.toJSON
               $ V.map
@@ -726,7 +727,7 @@ convertMetricToMetricRecords pid resourceM scopeM metric =
 ---------------------------------------------------------------------------------------
 
 runServer :: Log.Logger -> AuthContext -> IO ()
-runServer appLogger appCtx = runServerWithHandlers def config $ (services appLogger appCtx)
+runServer appLogger appCtx = runServerWithHandlers def config (services appLogger appCtx)
   where
     serverHost = "localhost"
     serverPort = appCtx.config.grpcPort
@@ -764,14 +765,17 @@ traceServiceExport appLogger appCtx (Proto req) = do
 
     unless (V.null apitoolkitSpans)
       $ checkpoint "processList:traces:processRequestMessages"
-      $ (void $ ProcessMessage.processRequestMessages $ V.toList apitoolkitSpans <&> ("",))
+      $ void
+        ( ProcessMessage.processRequestMessages
+            $ V.toList apitoolkitSpans <&> ("",)
+        )
 
     unless (null spans) do
       Telemetry.bulkInsertOtelLogsAndSpansTF spans'
       Anomalies.bulkInsertErrors $ Telemetry.getAllATErrors spans'
 
   -- Return an empty response
-  pure $ defMessage
+  pure defMessage
 
 
 -- | Logs service handler (Export)
@@ -791,7 +795,7 @@ logsServiceExport appLogger appCtx (Proto req) = do
       Telemetry.bulkInsertOtelLogsAndSpansTF (V.fromList logs)
 
   -- Return an empty response
-  pure $ defMessage
+  pure defMessage
 
 
 -- | Metrics service handler (Export)
@@ -804,7 +808,7 @@ metricsServiceExport appLogger appCtx (Proto req) = do
         projectKey = getMetricAttributeValue "at-project-key" resourceMetrics
 
     pidM <- do
-      p1 <- join <$> (forM projectKey $ \key -> ProjectApiKeys.getProjectIdByApiKey key)
+      p1 <- join <$> forM projectKey ProjectApiKeys.getProjectIdByApiKey
       let p2 = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" resourceMetrics
       pure (p1 <|> p2)
 
@@ -817,23 +821,23 @@ metricsServiceExport appLogger appCtx (Proto req) = do
       Nothing -> Log.logAttention_ "Project API Key and project ID not available in metrics"
 
   -- Return an empty response
-  pure $ defMessage
+  pure defMessage
 
 
 services :: Log.Logger -> AuthContext -> [SomeRpcHandler IO]
 services appLogger appCtx =
-  ( fromMethods
-      $ simpleMethods
+  fromMethods
+    ( simpleMethods
         (mkNonStreaming $ traceServiceExport appLogger appCtx :: ServerHandler IO (Protobuf TS.TraceService "export"))
-  )
-    <> ( fromMethods
-          $ simpleMethods
-            (mkNonStreaming $ logsServiceExport appLogger appCtx :: ServerHandler IO (Protobuf LS.LogsService "export"))
-       )
-    <> ( fromMethods
-          $ simpleMethods
-            (mkNonStreaming $ metricsServiceExport appLogger appCtx :: ServerHandler IO (Protobuf MS.MetricsService "export"))
-       )
+    )
+    <> fromMethods
+      ( simpleMethods
+          (mkNonStreaming $ logsServiceExport appLogger appCtx :: ServerHandler IO (Protobuf LS.LogsService "export"))
+      )
+    <> fromMethods
+      ( simpleMethods
+          (mkNonStreaming $ metricsServiceExport appLogger appCtx :: ServerHandler IO (Protobuf MS.MetricsService "export"))
+      )
 
 
 type instance RequestMetadata (Protobuf TS.TraceService "export") = NoMetadata

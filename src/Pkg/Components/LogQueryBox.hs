@@ -76,7 +76,7 @@ logQueryBox_ config = do
                   on keydown[key=='Space' and shiftKey] from document set #ai-search-chkbox.checked to true
                   |]
               ]
-            <> [checked_ | (isJust config.targetWidgetPreview)]
+            <> [checked_ | isJust config.targetWidgetPreview]
           script_
             [text|
             document.addEventListener('keydown', function(e) {
@@ -232,7 +232,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId =
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
 queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
   div_ [class_ "cursor-pointer relative text-textWeak rounded-lg border border-strokeStrong h-full flex gap-2 items-center px-2 mb-2", tabindex_ "0", role_ "button"]
-    $ (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
+    (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
   div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-fillWeak p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
     tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
     tabPanel_ "Recent" (queryLibraryContent_ "Recent" queryLibRecent)
@@ -291,7 +291,7 @@ queryLibItem_ qli =
         a_
           [ class_ "tooltip"
           , term "data-tip" "run query"
-          , term "data-query" $ qli.queryText
+          , term "data-query" qli.queryText
           , [__| on click call #filterElement.handleAddQuery({detail: JSON.parse(@data-query)})|]
           ]
           $ faSprite_ "play" "regular" "h-4 w-4"
@@ -315,7 +315,7 @@ queryLibItem_ qli =
         ul_ [class_ "hidden peer-checked:block z-30"] do
           li_ "Send query to alert"
           li_ "Send query to a dashboard"
-    strong_ $ whenJust qli.title \title -> (toHtml title)
+    strong_ $ whenJust qli.title toHtml
     pre_
       $ code_ [class_ "language-js bg-transparent! queryText whitespace-pre-wrap break-words"]
       $ toHtml qli.queryText

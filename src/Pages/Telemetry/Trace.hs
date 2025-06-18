@@ -308,7 +308,7 @@ getServiceData sp = ServiceData{name = getServiceName sp.resource, duration = sp
 stBox :: Text -> Maybe (Html ()) -> Html ()
 stBox value iconM =
   div_ [class_ "flex items-center px-2 gap-2 border-r last:border-r-0"] do
-    whenJust iconM $ id
+    whenJust iconM id
     span_ [class_ "text-textStrong text-sm"] $ toHtml value
     if isNothing iconM then span_ [class_ "font-medium text-textWeak text-xs"] "Spans" else pass
 

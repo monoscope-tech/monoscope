@@ -44,7 +44,7 @@ rustConfHook (description, buildInfo) flags = do
       library = fromJust $ PD.library packageDescription
       libraryBuildInfo = PD.libBuildInfo library
   dir <- getCurrentDirectory
-  putStrLn $ "=== Adding library paths: " ++ show [(dir ++ "/target/release"), (dir ++ "/target/debug")]
+  putStrLn $ "=== Adding library paths: " ++ show [dir ++ "/target/release", dir ++ "/target/debug"]
   return localBuildInfo
     { localPkgDescr = packageDescription
       { PD.library = Just $ library
@@ -71,12 +71,12 @@ rustBuildHook description localBuildInfo hooks flags = do
   putStrLn "... `rustc` compilation seems to succeed 🦀! Back to Cabal build:"
   putStrLn "******************************************************************"
   putStrLn "Back to Cabal build"
-  putStrLn $ show $ (PD.libBuildInfo $ fromJust (PD.library $ localPkgDescr localBuildInfo ))
+  print $ PD.libBuildInfo $ fromJust (PD.library $ localPkgDescr localBuildInfo)
   let libDir = "/Users/tonyalaribe/Projects/apitoolkit/apitoolkit-server/rust-interop/target/release"
   currentEnv <- lookupEnv "DYLD_LIBRARY_PATH"
-  putStrLn $ show currentEnv
-  setEnv "DYLD_LIBRARY_PATH" (libDir ++ ":" ++ (fromMaybe "" currentEnv))
-  putStrLn $ (libDir  ++ (maybe "" (":"++) currentEnv))
+  print currentEnv
+  setEnv "DYLD_LIBRARY_PATH" (libDir ++ ":" ++ fromMaybe "" currentEnv)
+  putStrLn (libDir  ++ maybe "" (":"++) currentEnv)
   buildHook simpleUserHooks description localBuildInfo hooks flags
 
 -- This handy automation (particularly useful when you want to quickly prototype

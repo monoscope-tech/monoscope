@@ -33,8 +33,8 @@ spec = aroundAll withTestResources do
               }
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger $ CreateProject.createProjectPostH testPid createPForm
-      (pg.unwrapCreateProjectResp <&> (.form.title)) `shouldBe` (Just @Text "Test Project CI")
-      (pg.unwrapCreateProjectResp <&> (.form.description)) `shouldBe` (Just "Test Description")
+      (pg.unwrapCreateProjectResp <&> (.form.title)) `shouldBe` Just @Text "Test Project CI"
+      (pg.unwrapCreateProjectResp <&> (.form.description)) `shouldBe` Just "Test Description"
 
     it "Non empty project list" \TestResources{..} -> do
       pg <-
@@ -59,8 +59,8 @@ spec = aroundAll withTestResources do
               }
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger $ CreateProject.createProjectPostH testPid createPForm
-      (pg.unwrapCreateProjectResp <&> (.form.title)) `shouldBe` (Just @Text "Test Project CI2")
-      (pg.unwrapCreateProjectResp <&> (.form.description)) `shouldBe` (Just "Test Description2")
+      (pg.unwrapCreateProjectResp <&> (.form.title)) `shouldBe` Just @Text "Test Project CI2"
+      (pg.unwrapCreateProjectResp <&> (.form.description)) `shouldBe` Just "Test Description2"
 
     -- FIXME: marked as pending with xit. Test is faily and should be investigated
     xit "Project in list should have new details" \TestResources{..} -> do

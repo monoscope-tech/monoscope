@@ -391,7 +391,7 @@ requestDumpLogUrlPath pid q cols cursor since fromV toV layout source recent = "
     recentTo = cursor >>= (\x -> Just (toText . incrementByOneMillisecond . toString $ x))
     params =
       catMaybes
-        [ Just ("json=true")
+        [ Just "json=true"
         , fmap ("query=" <>) (toQueryParam <$> q)
         , fmap ("cols=" <>) (toQueryParam <$> cols)
         , if recent then Nothing else fmap ("cursor=" <>) (toQueryParam <$> cursor)

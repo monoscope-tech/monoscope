@@ -163,12 +163,12 @@ data WidgetAxis = WidgetAxis
 
 -- Used when converting a widget json to its html representation. Eg in a query chart builder
 widgetPostH :: Projects.ProjectId -> Widget -> ATAuthCtx (RespHeaders Widget)
-widgetPostH pid widget = addRespHeaders (widget & #_projectId .~ Just pid)
+widgetPostH pid widget = addRespHeaders (widget & (#_projectId ?~ pid))
 
 
 -- use either index or the xxhash as id
 widget_ :: Widget -> Html ()
-widget_ w = widgetHelper_ w
+widget_ = widgetHelper_
 
 
 widgetHelper_ :: Widget -> Html ()
@@ -185,17 +185,17 @@ widgetHelper_ w' = case w.wType of
     div_ [class_ "grid-stack nested-grid  h-full -mx-2"] $ forM_ (fromMaybe [] w.children) (\wChild -> widgetHelper_ (wChild{_isNested = Just True}))
   _ -> gridItem_ $ div_ [class_ $ " w-full h-full group/wgt " <> paddingBtm] $ renderChart w
   where
-    w = (w' & #id %~ maybe (slugify <$> w.title) Just)
+    w = w' & #id %~ maybe (slugify <$> w.title) Just
     gridStackHandleClass = if w._isNested == Just True then "nested-grid-stack-handle" else "grid-stack-handle"
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w)), ("h", (.h))]
     attrs = concat [maybe [] (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= layoutField) | (name, layoutField) <- layoutFields]
-    paddingBtm = if w.standalone == Just True then "" else (bool " pb-8 " " standalone pb-4 " (w._isNested == Just True))
+    paddingBtm = if w.standalone == Just True then "" else bool " pb-8 " " standalone pb-4 " (w._isNested == Just True)
     -- Serialize the widget to JSON for easy copying
     widgetJson = decodeUtf8 $ fromLazy $ AE.encode w
     gridItem_ =
       if w.naked == Just True
         then Relude.id
-        else (div_ ([class_ "grid-stack-item h-full flex-1 [.nested-grid_&]:overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs) . div_ [class_ "grid-stack-item-content h-full"])
+        else div_ ([class_ "grid-stack-item h-full flex-1 [.nested-grid_&]:overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs) . div_ [class_ "grid-stack-item-content h-full"]
 
 
 renderWidgetHeader :: Widget -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
@@ -206,7 +206,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
       unless (widget.standalone == Just True) $ span_ [class_ "hidden  group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
       whenJust widget.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
       toHtml $ maybeToMonoid title
-    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl " <> if (isJust valueM) then "" else "hidden", id_ $ wId <> "Value"]
+    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl " <> if isJust valueM then "" else "hidden", id_ $ wId <> "Value"]
       $ whenJust valueM toHtml
     span_ [class_ $ "text-textWeak widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
@@ -334,7 +334,7 @@ renderChart widget = do
         , id_ $ chartId <> "_bordered"
         ]
         do
-          when (isStat) $ div_ [class_ "px-3 py-3 flex-1 flex flex-col justify-end "] do
+          when isStat $ div_ [class_ "px-3 py-3 flex-1 flex flex-col justify-end "] do
             div_ [class_ "flex flex-col gap-1"] do
               strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"]
                 $ whenJust valueM toHtml
@@ -477,9 +477,9 @@ widgetToECharts widget =
               , "top" AE..= fromMaybe "bottom" widget.legendPosition
               , "textStyle" AE..= AE.object ["fontSize" AE..= AE.Number 12] -- // default is usually 12 or 14
               --  Shrink the symbol/icon size
-              , "itemWidth" AE..= (AE.Number 14) -- default is 25
-              , "itemHeight" AE..= (AE.Number 12) -- default is 14
-              , "itemGap" AE..= (AE.Number 8) -- defalt is 10
+              , "itemWidth" AE..= AE.Number 14 -- default is 25
+              , "itemHeight" AE..= AE.Number 12 -- default is 14
+              , "itemGap" AE..= AE.Number 8 -- defalt is 10
               , "padding" AE..= AE.Array [AE.Number 2, AE.Number 4, AE.Number 2, AE.Number 4] -- [top, right, bottom, left]
               , "data" AE..= fromMaybe [] (extractLegend widget)
               ]
@@ -517,7 +517,7 @@ widgetToECharts widget =
                     [ "show" AE..= gridLinesVisibility
                     , "lineStyle" AE..= AE.object ["type" AE..= "dotted", "color" AE..= "#0011661A"]
                     , "interval"
-                        AE..= if (fromMaybe False $ widget ^? #yAxis . _Just . #showOnlyMaxLabel . _Just)
+                        AE..= if fromMaybe False $ widget ^? #yAxis . _Just . #showOnlyMaxLabel . _Just
                           then "function(index, value) { return value === this.yAxis.max }"
                           else AE.Null
                     ]
@@ -528,7 +528,7 @@ widgetToECharts widget =
                     [ "show" AE..= (axisVisibility && fromMaybe True (widget ^? #yAxis . _Just . #showAxisLabel . _Just))
                     , "inside" AE..= False
                     , "formatter"
-                        AE..= if (fromMaybe False $ widget ^? #yAxis . _Just . #showOnlyMaxLabel . _Just)
+                        AE..= if fromMaybe False $ widget ^? #yAxis . _Just . #showOnlyMaxLabel . _Just
                           then "function(value, index) { return (value === this.yAxis.max || value == 0) ? formatNumber(value) : ''; }"
                           else "function(value, index) { return formatNumber(value); }"
                     ]
@@ -536,8 +536,8 @@ widgetToECharts widget =
               ]
         , "dataset"
             AE..= AE.object
-              ["source" AE..= fromMaybe AE.Null (widget.dataset <&> (.source))]
-        , "series" AE..= map (createSeries widget.wType) []
+              ["source" AE..= maybe AE.Null (.source) widget.dataset]
+        , "series" AE..= map (createSeries widget.wType) ([] :: [Maybe Query])
         , "animation" AE..= False
         , if widget.allowZoom == Just True
             then
@@ -581,9 +581,7 @@ createSeries widgetType query =
             AE..= AE.object
               [ "show" AE..= True
               , "data"
-                  AE..= if isStat
-                    then AE.Array V.empty -- No mark area for stat widgets
-                    else AE.Array V.empty
+                  AE..= AE.Array V.empty
               ]
         , "showBackground" AE..= not isStat
         , "backgroundStyle"

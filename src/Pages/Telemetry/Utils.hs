@@ -36,7 +36,7 @@ atMapText key maybeMap = do
   v <- Map.lookup key m
   case v of
     AE.String t -> Just t
-    AE.Number n -> Just $ T.pack $ show n
+    AE.Number n -> Just $ show n
     _ -> Nothing
 
 
@@ -62,7 +62,7 @@ getRequestDetails spanRecord = do
     _ -> case Map.lookup "rpc" m of
       Just (AE.Object o) -> Just ("GRPC", getText "service" o, getText "method" o, getStatus o)
       _ -> case Map.lookup "db" m of
-        Just (AE.Object o) -> Just ("DB", getText "system" o, if (T.null query) then statement else query, getStatus o)
+        Just (AE.Object o) -> Just ("DB", getText "system" o, if T.null query then statement else query, getStatus o)
           where
             statement = getText "statement" o
             query = getText "query" o

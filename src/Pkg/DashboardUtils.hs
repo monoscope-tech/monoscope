@@ -1,7 +1,6 @@
 module Pkg.DashboardUtils (replacePlaceholders, variablePresets) where
 
-import Data.Map qualified as M
-import Data.Text qualified as T
+import Data.Map qualified as Map
 import Data.Time (UTCTime)
 import Relude
 import Text.Regex.TDFA ((=~))
@@ -9,16 +8,16 @@ import Utils qualified
 
 
 -- | Replace all occurrences of {key} in the input text using the provided mapping.
-replacePlaceholders :: M.Map Text Text -> Text -> Text
-replacePlaceholders mappng input = go input
+replacePlaceholders :: Map.Map Text Text -> Text -> Text
+replacePlaceholders mappng = go
   where
     regex = "\\{\\{([^}]+)\\}\\}" :: Text
     go txt =
-      case T.unpack txt =~ T.unpack regex :: (String, String, String, [String]) of
+      case toString txt =~ toString regex :: (String, String, String, [String]) of
         (before, match, after, [key])
           | not (null match) ->
-              let replacement = M.findWithDefault (T.pack match) (T.pack key) mappng
-               in T.pack before <> replacement <> go (T.pack after)
+              let replacement = Map.findWithDefault (toText match) (toText key) mappng
+               in toText before <> replacement <> go (toText after)
         _ -> txt
 
 
@@ -31,8 +30,8 @@ variablePresets pid mf mt allParams =
         (Just a, Nothing) -> andPrefix $ "(" <> field <> " >= '" <> Utils.formatUTC a <> "')"
         (Nothing, Just b) -> andPrefix $ "(" <> field <> " <= '" <> Utils.formatUTC b <> "')"
         (Just a, Just b) -> andPrefix $ "(" <> field <> " >= '" <> Utils.formatUTC a <> "' AND " <> field <> " <= '" <> Utils.formatUTC b <> "')"
-      allParams' = allParams <&> \(a, bm) -> (a, maybeToMonoid bm)
-   in M.fromList
+      allParams' = allParams <&> second maybeToMonoid
+   in Map.fromList
         $ [ ("project_id", pid)
           , ("from", andPrefix $ fmt mf)
           , ("to", andPrefix $ fmt mt)

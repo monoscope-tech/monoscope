@@ -134,7 +134,7 @@ processMessages msgs attrs = do
     let leftMsgs = [(a, b) | (Left a, b) <- zip msgs' msgs]
     forM_ leftMsgs \(a, (ackId, msg)) -> Log.logAttention "Error parsing json msgs" (object ["AckId" .= ackId, "Error" .= a, "OriginalMsg" .= decodeUtf8 @Text msg])
 
-  if (null $ rights msgs')
+  if null $ rights msgs'
     then pure []
     else do
       spans <- forM (rights msgs') \(rmAckId, msg) -> do
@@ -172,7 +172,7 @@ processRequestMessages msgs' = do
   let groupedMsgs = groupMsgsByProjectId msgs'
   -- TODO: Chcek which projects exceed free tier and skip their messages here.
 
-  !processed <- fmap concat $ forM (HM.toList groupedMsgs) \(projectId, projectMsgs) -> do
+  !processed <- concat <$> forM (HM.toList groupedMsgs) \(projectId, projectMsgs) -> do
     let pid = Projects.ProjectId projectId
     projectCacheVal <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid \pid' -> do
       mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
@@ -227,13 +227,12 @@ processRequestMessages msgs' = do
   where
     -- \| Group messages by project ID to reduce cache lookups
     groupMsgsByProjectId :: [(Text, RequestMessages.RequestMessage)] -> HashMap UUID.UUID [(Text, RequestMessages.RequestMessage)]
-    groupMsgsByProjectId mgs' =
+    groupMsgsByProjectId =
       foldr
         ( \(ackId, msg) acc ->
-            HM.insertWith (\new old -> new ++ old) msg.projectId [(ackId, msg)] acc
+            HM.insertWith (++) msg.projectId [(ackId, msg)] acc
         )
         HM.empty
-        mgs'
 
     projectCacheDefault :: Projects.ProjectCache
     projectCacheDefault =
@@ -253,12 +252,12 @@ convertRequestMessageToSpan rm (spanId, trId) =
     { id = UUID.nil
     , project_id = UUID.toText rm.projectId
     , timestamp = zonedTimeToUTC rm.timestamp
-    , parent_id = maybe Nothing (\x -> Just (UUID.toText x)) rm.parentId
+    , parent_id = (Just . UUID.toText) =<< rm.parentId
     , context = Just $ Telemetry.Context{trace_id = Just trId, span_id = Just $ UUID.toText spanId, trace_state = Nothing, trace_flags = Nothing, is_remote = Nothing}
     , name = Just $ rm.method <> maybe "" (" " <>) rm.urlPath
     , start_time = zonedTimeToUTC rm.timestamp
     , end_time = Just $ addUTCTime (realToFrac (fromIntegral rm.duration / 1000000000)) (zonedTimeToUTC rm.timestamp)
-    , kind = Just $ if (T.isSuffixOf "Outgoing" (show rm.sdkType)) then "client" else "server"
+    , kind = Just $ if T.isSuffixOf "Outgoing" (show rm.sdkType) then "client" else "server"
     , level = Nothing
     , body = Just $ AE.object ["request_body" AE..= b64ToJson rm.requestBody, "response_body" AE..= b64ToJson rm.responseBody]
     , severity = Nothing
@@ -297,7 +296,7 @@ createSpanAttributes rm =
   let baseAttrs =
         nestedJsonFromDotNotation
           [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
-          , ("http.request.method", AE.String $ rm.method)
+          , ("http.request.method", AE.String rm.method)
           , ("http.request.path_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.pathParams)
           , ("http.request.query_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.queryParams)
           , ("apitoolkit.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
@@ -305,7 +304,7 @@ createSpanAttributes rm =
           , ("http.response.status_code", AE.Number $ fromIntegral rm.statusCode)
           , ("apitoolkit.sdk_type", AE.String $ show rm.sdkType)
           , ("http.route", maybe (AE.String (T.takeWhile (/= '?') rm.rawUrl)) AE.String rm.urlPath)
-          , ("url.path", AE.String $ rm.rawUrl)
+          , ("url.path", AE.String rm.rawUrl)
           ]
    in baseAttrs
         `lodashMerge` refererObj

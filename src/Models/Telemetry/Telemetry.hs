@@ -56,7 +56,7 @@ import Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Lazy qualified as BL
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Generics.Labels ()
-import Data.List (nubBy)
+import Data.List as L (nubBy)
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (TimeZone (..), UTCTime, formatTime, utcToZonedTime)
@@ -106,7 +106,7 @@ atMapText key maybeMap = do
   val <- getNestedValue (T.split (== '.') key) m
   case val of
     AE.String t -> Just t
-    AE.Number n -> Just $ T.pack $ show n
+    AE.Number n -> Just $ show n
     _ -> Nothing
 
 
@@ -116,7 +116,7 @@ atMapInt key maybeMap = do
   val <- getNestedValue (T.split (== '.') key) m
   case val of
     AE.Number n -> Just $ round n
-    AE.String t -> readMaybe $ T.unpack t
+    AE.String t -> readMaybe $ toString t
     _ -> Nothing
 
 
@@ -697,7 +697,7 @@ instance ToRow OtelLogsAndSpans where
     , toField $ entry.context >>= (.is_remote) -- context___is_remote
     , toField entry.events -- events as JSON
     , toField entry.links -- links
-    , toField $ fmap AE.Object $ fmap KEM.fromMapText entry.attributes -- attributes as JSON
+    , toField $ fmap (AE.Object . KEM.fromMapText) entry.attributes -- attributes as JSON
     , toField $ atMapText "client.address" entry.attributes -- attributes___client___address
     , toField $ atMapInt "client.port" entry.attributes -- attributes___client___port
     , toField $ atMapText "server.address" entry.attributes -- attributes___server___address
@@ -747,7 +747,7 @@ instance ToRow OtelLogsAndSpans where
     , toField $ atMapText "user.full_name" entry.attributes -- attributes___user___full_name
     , toField $ atMapText "user.name" entry.attributes -- attributes___user___name
     , toField $ atMapText "user.hash" entry.attributes -- attributes___user___hash
-    , toField $ fmap AE.Object $ fmap KEM.fromMapText entry.resource -- resource as JSON
+    , toField $ fmap (AE.Object . KEM.fromMapText) entry.resource -- resource as JSON
     , toField $ atMapText "service.name" entry.resource -- resource___service___name
     , toField $ atMapText "service.version" entry.resource -- resource___service___version
     , toField $ atMapText "service.instance.id" entry.resource -- resource___service___instance___id
@@ -763,10 +763,9 @@ instance ToRow OtelLogsAndSpans where
       -- Helper functions for severity fields
       parseSeverityText sev = do
         s <- sev
-        lvl <- s.severity_text
-        pure $ T.pack $ show lvl
+        show <$> s.severity_text
 
-      parseSeverityNumber sev = fmap (T.pack . show . severity_number) sev
+      parseSeverityNumber sev = fmap (show . severity_number) sev
 
 
 bulkInsertOtelLogsAndSpansTF :: (DB :> es, Labeled "timefusion" DB :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()

@@ -32,8 +32,7 @@ spanGetH pid trId spanId = do
         Just ("HTTP", _, _, _) -> do
           if sp.name /= Just "apitoolkit-http-span"
             then do
-              spn <- Telemetry.spanRecordByName pid trId "apitoolkit-http-span"
-              pure spn
+              Telemetry.spanRecordByName pid trId "apitoolkit-http-span"
             else pure Nothing
         _ -> pure Nothing
       addRespHeaders $ expandedSpanItem pid sp aptSpan Nothing Nothing
@@ -105,7 +104,7 @@ expandedSpanItem pid sp aptSp leftM rightM = do
       div_ [class_ "flex gap-2 items-center text-textBrand font-medium text-xs"] do
         whenJust reqDetails $ \case
           ("HTTP", _, _, _) -> do
-            let json = decodeUtf8 $ AE.encode $ convertSpanToRequestMessage sp "" >>= (\req -> Just $ selectiveReqToJson req)
+            let json = decodeUtf8 $ AE.encode $ convertSpanToRequestMessage sp "" >>= (Just . selectiveReqToJson)
             button_
               [ class_ "flex items-center gap-1"
               , onclick_ "window.buildCurlRequest(event)"
@@ -134,7 +133,7 @@ expandedSpanItem pid sp aptSp leftM rightM = do
                 "View parent trace"
                 faSprite_ "cross-hair" "regular" "w-4 h-4"
         let sp_id = UUID.toText sp.id
-        let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" $ sp.timestamp
+        let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" sp.timestamp
         button_
           [ class_ "flex items-center gap-2"
           , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> sp_id <> "/" <> createdAt <> "?event_type=span"
@@ -168,9 +167,9 @@ expandedSpanItem pid sp aptSp leftM rightM = do
         div_ [class_ "hidden a-tab-content", id_ "m-raw-content"] $ do
           jsonValueToHtmlTree (selectiveOtelLogsJson sp) Nothing
         div_ [class_ $ "a-tab-content " <> if isHttp then "hidden" else "", id_ "att-content"] $ do
-          jsonValueToHtmlTree (fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText sp.attributes)) (Just "attributes")
+          jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) sp.attributes) (Just "attributes")
         div_ [class_ "hidden a-tab-content", id_ "meta-content"] $ do
-          jsonValueToHtmlTree (fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText sp.resource)) (Just "resource")
+          jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) sp.resource) (Just "resource")
         div_ [class_ "hidden a-tab-content", id_ "errors-content"] $ do
           renderErrors spanErrors
         div_ [class_ "hidden a-tab-content", id_ "logs-content"] $ do
@@ -300,7 +299,7 @@ selectiveOtelLogsJson sp =
       , maybe [] (\d -> ["status" AE..= d]) sp.status_code
       , maybe [] (\d -> ["kind" AE..= d]) sp.kind
       , maybe [] (\d -> ["body" AE..= d]) sp.body
-      , maybe [] (\d -> ["duration" AE..= (getDurationNSMS $ fromIntegral d)]) sp.duration
+      , maybe [] (\d -> ["duration" AE..= getDurationNSMS (fromIntegral d)]) sp.duration
       , ["parent_id" AE..= sp.parent_id]
       , maybe [] (\d -> ["context" AE..= d]) sp.context
       , maybe [] (\d -> ["severity" AE..= d]) sp.severity

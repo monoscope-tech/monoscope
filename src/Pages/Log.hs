@@ -88,7 +88,7 @@ renderFacets facetSummary = do
       -- Define mapping of field keys to display names and color functions
 
       -- Root level facets (displayed at the top)
-      rootFacets :: [(Text, Text, (Text -> Text))]
+      rootFacets :: [(Text, Text, Text -> Text)]
       rootFacets =
         [ ("level", "Log Level", levelColorFn)
         , ("kind", "Kind", const "")
@@ -102,7 +102,7 @@ renderFacets facetSummary = do
         ]
 
       -- Grouped facets for better organization
-      facetGroups :: [(Text, [(Text, Text, (Text -> Text))])]
+      facetGroups :: [(Text, [(Text, Text, Text -> Text)])]
       facetGroups =
         [
           ( "HTTP"
@@ -216,7 +216,7 @@ renderFacets facetSummary = do
 
   forM_ facetGroups $ \(groupName, facetDisplays) -> renderFacetSection groupName facetDisplays facetMap True
   where
-    renderFacetSection :: Text -> [(Text, Text, (Text -> Text))] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
+    renderFacetSection :: Text -> [(Text, Text, Text -> Text)] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
     renderFacetSection sectionName facetDisplays facetMap collapsed = div_ [class_ "facet-section-group"] do
       label_ [class_ "p-3 bg-fillWeak rounded-lg cursor-pointer flex gap-3 items-center peer"] do
         input_ $ [class_ "hidden peer", type_ "checkbox", name_ $ "section-" <> sectionName] ++ [checked_ | collapsed]
@@ -299,7 +299,7 @@ renderFacets facetSummary = do
 
                         span_ [class_ "facet-value truncate", term "data-tippy-content" val] do
                           let colorClass = colorFn val
-                          when (not $ T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm mr-1.5"] " "
+                          unless (T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm mr-1.5"] " "
                           toHtml val
                       span_ [class_ "facet-count text-textWeak ml-1"] $ toHtml $ prettyPrintCount count
 
@@ -360,7 +360,7 @@ resizer_ targetId urlParam increasingDirection =
     do
       div_
         [ id_ $ "resizer-" <> urlParam
-        , class_ $ "absolute left-1/2 top-1/2 z-50 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-bgBase rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"
+        , class_ "absolute left-1/2 top-1/2 z-50 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-bgBase rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"
         ]
         $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
 
@@ -403,7 +403,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   -- FIXME: we're silently ignoring parse errors and the likes.
   let tableAsVecM = hush tableAsVecE
 
-  (queryLibRecent, queryLibSaved) <- V.partition (\x -> Projects.QLTHistory == (x.queryType)) <$> Projects.queryLibHistoryForUser pid sess.persistentSession.userId
+  (queryLibRecent, queryLibSaved) <- V.partition (\x -> Projects.QLTHistory == x.queryType) <$> Projects.queryLibHistoryForUser pid sess.persistentSession.userId
 
   -- Get facet summary for the time range specified
   facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
@@ -729,7 +729,7 @@ apiLogsPage page = do
             input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked)"]
             script_ "document.getElementById('toggle-filters').checked = localStorage.getItem('toggle-filter-checked') === 'true';"
           span_ [class_ "text-strokeWeak "] "|"
-          div_ [class_ ""] $ span_ [class_ "text-textStrong"] (toHtml $ prettyPrintCount page.resultCount) >> span_ [class_ "text-textStrong"] (toHtml (" rows found"))
+          div_ [class_ ""] $ span_ [class_ "text-textStrong"] (toHtml $ prettyPrintCount page.resultCount) >> span_ [class_ "text-textStrong"] (toHtml " rows found")
         div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
           whenJust page.showTrace \trId -> do
             let url = "/p/" <> page.pid.toText <> "/traces/" <> trId

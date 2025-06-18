@@ -47,8 +47,7 @@ expandAPIlogItemH pid rdId createdAt sourceM = do
                 then do
                   case trIdM of
                     Just trId -> do
-                      aptSpn <- Telemetry.spanRecordByName pid trId "apitoolkit-http-span"
-                      pure aptSpn
+                      Telemetry.spanRecordByName pid trId "apitoolkit-http-span"
                     _ -> pure Nothing
                 else pure Nothing
             _ -> pure Nothing
@@ -217,7 +216,7 @@ apiLogItemView pid lg = do
     div_ [class_ "flex flex-col gap-4"] do
       div_ [class_ "flex items-center gap-4"] do
         let svTxt = maybe "UNSET" (\x -> maybe "UNSET" show x.severity_text) lg.severity
-            cls = getSeverityColor $ svTxt
+            cls = getSeverityColor svTxt
         span_ [class_ $ "rounded-lg border cbadge-sm text-sm px-2 py-1 shrink-0 " <> cls] $ toHtml $ T.toUpper svTxt
         h4_ [class_ "text-slate-800 font-medium"] $ toHtml $ case lg.body of
           Just (AE.String x) -> x
@@ -248,7 +247,7 @@ apiLogItemView pid lg = do
                 "View parent trace"
                 faSprite_ "cross-hair" "regular" "w-4 h-4"
         let lg_id = UUID.toText lg.id
-        let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" $ lg.timestamp
+        let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" lg.timestamp
         button_
           [ class_ "flex items-center gap-2 cursor-pointer"
           , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> lg_id <> "/" <> createdAt <> "?event_type=log"
@@ -267,9 +266,9 @@ apiLogItemView pid lg = do
 
         div_ [class_ "grid my-4 text-slate-600 font"] $ do
           div_ [class_ "a-tab-content", id_ "att-content"] $ do
-            jsonValueToHtmlTree (fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText lg.attributes)) Nothing
+            jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) lg.attributes) Nothing
           div_ [class_ "hidden a-tab-content", id_ "meta-content"] $ do
-            jsonValueToHtmlTree (fromMaybe (AE.object []) (fmap AE.Object $ fmap KEM.fromMapText lg.resource)) Nothing
+            jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) lg.resource) Nothing
 
 
 -- div_ [class_ "px-2 flex flex-col w-full items-center gap-2"] do

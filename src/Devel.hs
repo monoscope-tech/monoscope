@@ -30,13 +30,11 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple qualified as PG
 import Network.HTTP.Types.Status
 import Network.Wai.Middleware.Static (addBase, hasPrefix, noDots, staticPolicy, (>->))
-import Relude hiding (get)
 import System.Config
 import System.Directory (doesFileExist)
 import System.Envy (FromEnv (..), ReadShowVar (..), Var (..), decodeEnv, fromVar, toVar)
 
-import BackgroundJobs qualified as BackgroundJobs
-import Configuration.Dotenv qualified as Dotenv
+import BackgroundJobs qualified
 import Control.Exception.Safe qualified as Safe
 import Data.Time (getCurrentTime)
 import Effectful
@@ -49,7 +47,7 @@ import System.Config qualified as Cfg
 dev2 :: IO ()
 dev2 = do
   _ <- Safe.try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException ())
-  ctx <- runEff $ runFailIO $ Cfg.getAppContext
+  ctx <- runEff $ runFailIO Cfg.getAppContext
   -- traceShowM ctx
   now <- getCurrentTime
   -- _ <- runTestBackground ctx $ BackgroundJobs.runHourlyJob now 18

@@ -89,7 +89,7 @@ kafkaService appLogger appCtx fn = do
     (either throwIO pure =<< K.newConsumer (consumerProps appCtx.config clientId) consumerSub)
     K.closeConsumer
     $ \consumer -> forever do
-      pollResult@(leftRecords, rightRecords) <- partitionEithers <$> K.pollMessageBatch consumer (K.Timeout 100) (K.BatchSize (appCtx.config.messagesPerPubsubPullBatch)) -- timeout in milliseconds
+      pollResult@(leftRecords, rightRecords) <- partitionEithers <$> K.pollMessageBatch consumer (K.Timeout 100) (K.BatchSize appCtx.config.messagesPerPubsubPullBatch) -- timeout in milliseconds
       case rightRecords of
         [] -> pass
         (rec : _) -> do
@@ -106,7 +106,7 @@ kafkaService appLogger appCtx fn = do
                 pure $ map fst allRecords
               Right ids -> pure ids
 
-          (maybe pass throwIO) =<< K.commitAllOffsets (K.OffsetCommitAsync) consumer
+          whenJustM (K.commitAllOffsets K.OffsetCommitAsync consumer) throwIO
       pass
   where
     -- TODO: How should errors and retries be handled and implemented?

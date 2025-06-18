@@ -16,7 +16,7 @@ startApp = do
   withTracer $ \tracer -> do
     tp <- getGlobalTracerProvider
     Server.runAPItoolkit tp
-    pure ()
+    pass
   where
     withTracer :: ((TracerOptions -> Tracer) -> IO c) -> IO c
     withTracer f =

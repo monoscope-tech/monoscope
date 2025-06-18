@@ -91,7 +91,7 @@ getDiscordDataByProjectId pid = dbtToEff $ queryOne q (Only pid)
     q = [sql|SELECT project_id, guild_id, notifs_channel_id FROM apis.discord WHERE project_id =? |]
 
 
-updateDiscordNotificationChannel :: DB :> es => Text -> Text -> Eff es (Int64)
+updateDiscordNotificationChannel :: DB :> es => Text -> Text -> Eff es Int64
 updateDiscordNotificationChannel guildId channelId = dbtToEff $ execute q (channelId, guildId)
   where
     q = [sql|Update apis.discord SET notifs_channel_id=? WHERE guild_id = ? |]

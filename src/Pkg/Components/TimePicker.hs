@@ -80,7 +80,7 @@ parseFromAndTo now fromM toM =
   (parseUTCTime fromM, parseUTCTime toM, formatRange fromM toM)
   where
     parseUTCTime = iso8601ParseM . toString . fromMaybe ""
-    formatRange f t = liftA2 (\start end -> (start, end)) (formatTime' f) (formatTime' t)
+    formatRange f t = liftA2 (,) (formatTime' f) (formatTime' t)
 
     formatTime' :: Maybe Text -> Maybe Text
     formatTime' = fmap (toText . formatTime defaultTimeLocale "%F %T") . parseUTCTime

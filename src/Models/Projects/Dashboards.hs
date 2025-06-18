@@ -3,13 +3,13 @@ module Models.Projects.Dashboards (Dashboard (..), DashboardVM (..), DashboardId
 import Control.Exception (try)
 import Control.Lens
 import Data.Aeson qualified as AE
-import Data.ByteString qualified as B
+import Data.ByteString qualified as BS
 import Data.Default
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
-import Data.List (isSuffixOf)
+import Data.List as L (isSuffixOf)
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Data.Yaml qualified as Yml
@@ -116,7 +116,7 @@ readDashboardsFromDirectory :: FilePath -> Q Exp
 readDashboardsFromDirectory dir = do
   runIO $ putStrLn $ "Reading dashboards from: " ++ dir
   files <- runIO $ listDirectory dir
-  let files' = sort $ filter (".yaml" `isSuffixOf`) files
+  let files' = sort $ filter (".yaml" `L.isSuffixOf`) files
   dashboards <- runIO $ catMaybes <$> mapM (readDashboardFile dir) files'
   THS.lift dashboards
 
@@ -124,7 +124,7 @@ readDashboardsFromDirectory dir = do
 readDashboardFile :: FilePath -> FilePath -> IO (Maybe Dashboard)
 readDashboardFile dir file = do
   let filePath = dir ++ "/" ++ file
-  result <- try $ B.readFile filePath :: IO (Either SomeException B.ByteString)
+  result <- try $ readFileBS filePath :: IO (Either SomeException BS.ByteString)
   case result of
     Left err -> do
       putStrLn $ "Error reading file " ++ filePath ++ ": " ++ show err
@@ -142,7 +142,7 @@ readDashboardEndpoint uri = do
   fileResp <- W.get (toString uri)
   Yml.decodeEither' (toStrict $ fileResp ^. W.responseBody)
     & either
-      (\e -> throwError $ err401{errBody = ("Error decoding dashboard: " <> show e)})
+      (\e -> throwError $ err401{errBody = "Error decoding dashboard: " <> show e})
       pure
 
 

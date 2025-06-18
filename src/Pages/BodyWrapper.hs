@@ -274,7 +274,7 @@ bodyWrapper bcfg child = do
         Nothing -> do
           section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"]
             $ section_ [class_ "flex-1 overflow-y-auto"]
-            $ child
+            child
         Just sess ->
           let currUser = sess.persistentSession.user.getUser
               sideNav' = bcfg.currProject & maybe "" \project -> sideNav sess project (fromMaybe bcfg.pageTitle bcfg.prePageTitle) bcfg.menuItem bcfg.hasIntegrated
@@ -282,10 +282,10 @@ bodyWrapper bcfg child = do
                 sideNav'
                 section_ [class_ "h-screen overflow-y-hidden grow"] do
                   when (currUser.email == "hello@apitoolkit.io")
-                    $ loginBanner
+                    loginBanner
                   unless bcfg.isSettingsPage $ navbar bcfg.currProject (fromMaybe [] (bcfg.currProject <&> \p -> menu p.id)) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
                   section_ [class_ "overflow-y-hidden h-full flex-1"] do
-                    if (bcfg.isSettingsPage)
+                    if bcfg.isSettingsPage
                       then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
                       else child
                   Components.drawer_ "global-data-drawer" Nothing Nothing ""

@@ -50,12 +50,12 @@ connectPostgreSQL connstr = do
   case stat of
     PQ.ConnectionOk -> do
       connectionHandle <- newMVar conn
-      connectionObjects <- newMVar (IntMap.empty)
+      connectionObjects <- newMVar IntMap.empty
       connectionTempNameCounter <- newIORef 0
       let wconn = PGI.Connection{..}
       -- version <- PQ.serverVersion conn
       -- _ <- PGI.execute_ wconn ""
       return wconn
     _ -> do
-      msg <- maybe "connectPostgreSQL error" id <$> PQ.errorMessage conn
+      msg <- fromMaybe "connectPostgreSQL error" <$> PQ.errorMessage conn
       throwIO $ PGI.fatalError msg

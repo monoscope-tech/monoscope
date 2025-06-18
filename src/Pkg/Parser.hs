@@ -123,7 +123,7 @@ sqlFromQueryComponents sqlCfg qc =
       selectedCols = if null qc.select then selVec else qc.select
       selectClause = T.intercalate "," $ colsNoAsClause selectedCols
       -- Extract the raw where clause without the AND prefix
-      rawWhere = maybe "" id qc.whereClause
+      rawWhere = fromMaybe "" qc.whereClause
       -- Use raw where with parentheses but NO AND prefix
       whereClause =
         if T.null rawWhere

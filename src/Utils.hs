@@ -61,14 +61,12 @@ import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
-import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit)
 import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Data.Time (NominalDiffTime, ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
 import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -289,7 +287,7 @@ jsonValueToHtmlTree val pathM = do
                    call navigator.clipboard.writeText(my @data-reqjson)
                    send successToast(value:['Json copied to clipboard']) to <body/>
                  end|]
-        , term "data-reqjson" $ json
+        , term "data-reqjson" json
         ]
         do
           span_ [class_ "underline"] "Copy json"
@@ -298,7 +296,7 @@ jsonValueToHtmlTree val pathM = do
       button_
         [ class_ "flex items-center gap-1 cursor-pointer"
         , onclick_ "window.downloadJson(event)"
-        , term "data-reqjson" $ json
+        , term "data-reqjson" json
         ]
         do
           span_ [class_ "underline"] "Download json"
@@ -313,7 +311,7 @@ jsonValueToHtmlTree val pathM = do
       let fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
       div_
         [ class_ "relative log-item-field-parent"
-        , term "data-field-path" $ replaceNumbers $ if (isJust pathM) then T.replace ".." "." fullFieldPath' else fullFieldPath'
+        , term "data-field-path" $ replaceNumbers $ if isJust pathM then T.replace ".." "." fullFieldPath' else fullFieldPath'
         , term "data-field-value" $ unwrapJsonPrimValue False value
         ]
         $ a_
@@ -324,7 +322,7 @@ jsonValueToHtmlTree val pathM = do
             span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue False value
 
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
-    renderParentType opening closing key count child = div_ [class_ (if key == "" then "log-item-with-children" else "log-item-with-children")] do
+    renderParentType opening closing key count child = div_ [class_ "log-item-with-children"] do
       a_
         [ class_ "inline-block items-center cursor-pointer"
         , onclick_ "this.parentNode.classList.toggle('collapsed')"
@@ -520,7 +518,7 @@ build (x : xs) v = AEKM.singleton (AEK.fromText x) (AE.Object (build xs v))
 
 -- | Succinct “dot‑notation → nested JSON”
 nestedJsonFromDotNotation :: [(Text, AE.Value)] -> AE.Value
-nestedJsonFromDotNotation pairs =
+nestedJsonFromDotNotation =
   -- start from empty object, insert each small object with a lodash‑style merge
   foldl'
     ( \acc (k, v) ->
@@ -528,7 +526,6 @@ nestedJsonFromDotNotation pairs =
          in lodashMerge acc nestedObj
     )
     (AE.object [])
-    pairs
 
 
 convertToDHMS :: NominalDiffTime -> (Int, Int, Int, Int)
@@ -575,24 +572,24 @@ newtype JSONHttpApiData a = JSONHttpApiData a
 instance AE.FromJSON a => FromHttpApiData (JSONHttpApiData a) where
   parseUrlPiece t =
     -- Try to parse assuming it's already a valid JSON string
-    case AE.eitherDecodeStrict' (TE.encodeUtf8 t) of
+    case AE.eitherDecodeStrict' (encodeUtf8 t) of
       Right a -> Right (JSONHttpApiData a)
       -- If parsing fails, try wrapping in quotes and parsing as a string
       Left _ ->
-        case AE.eitherDecodeStrict' (TE.encodeUtf8 $ "\"" <> t <> "\"") of
+        case AE.eitherDecodeStrict' (encodeUtf8 $ "\"" <> t <> "\"") of
           Right a -> Right (JSONHttpApiData a)
           Left err -> Left (fromString err)
 
 
 instance AE.ToJSON a => ToHttpApiData (JSONHttpApiData a) where
   toUrlPiece (JSONHttpApiData a) =
-    case LBS.toStrict $ AE.encode a of
+    case toStrict $ AE.encode a of
       -- If the encoded value starts and ends with quotes, remove them
       bs
         | BS.length bs >= 2 && BS.head bs == 34 && BS.last bs == 34 ->
-            TE.decodeUtf8 $ BS.init $ BS.tail bs
+            decodeUtf8 $ BS.init $ BS.tail bs
       -- Otherwise, keep as is
-      bs -> TE.decodeUtf8 bs
+      bs -> decodeUtf8 bs
 
 
 freeTierDailyMaxEvents :: Integer
@@ -603,10 +600,10 @@ freeTierDailyMaxEvents = 1000
 -- | Example: 1534999 becomes 1.5M, 200000 becomes 200K
 prettyPrintCount :: Int -> Text
 prettyPrintCount n
-  | n >= 1_000_000_000 = T.pack (show (n `div` 1_000_000_000)) <> "." <> T.pack (show ((n `mod` 1_000_000_000) `div` 100_000_000)) <> "B"
-  | n >= 1_000_000 = T.pack (show (n `div` 1_000_000)) <> "." <> T.pack (show ((n `mod` 1_000_000) `div` 100_000)) <> "M"
-  | n >= 1_000 = T.pack (show (n `div` 1_000)) <> "." <> T.pack (show ((n `mod` 1_000) `div` 100)) <> "K"
-  | otherwise = T.pack (show n)
+  | n >= 1_000_000_000 = T.show (n `div` 1_000_000_000) <> "." <> T.show ((n `mod` 1_000_000_000) `div` 100_000_000) <> "B"
+  | n >= 1_000_000 = T.show (n `div` 1_000_000) <> "." <> T.show ((n `mod` 1_000_000) `div` 100_000) <> "M"
+  | n >= 1_000 = T.show (n `div` 1_000) <> "." <> T.show ((n `mod` 1_000) `div` 100) <> "K"
+  | otherwise = T.show n
 
 
 callOpenAIAPI :: Text -> Text -> IO (Either Text (Text, Maybe Text))
@@ -621,10 +618,10 @@ callOpenAIAPI fullPrompt apiKey = do
   -- Use langchain-hs to generate response
   result <- liftIO $ LLM.generate openAI fullPrompt Nothing
   case result of
-    Left err -> pure $ Left $ "LLM Error: " <> T.pack err
+    Left err -> pure $ Left $ "LLM Error: " <> toText err
     Right response -> do
       -- Parse the response for query and visualization type
-      let lines' = T.lines $ T.strip response
+      let lines' = lines $ T.strip response
           queryLine = fromMaybe "" (viaNonEmpty head lines')
 
           -- Check if a visualization type is specified
@@ -638,7 +635,7 @@ callOpenAIAPI fullPrompt apiKey = do
             T.strip
               $ if "```" `T.isPrefixOf` queryLine
                 then
-                  let withoutFirstLine = maybe "" (T.unlines . toList) $ viaNonEmpty tail (T.lines queryLine)
+                  let withoutFirstLine = maybe "" (unlines . toList) $ viaNonEmpty tail (lines queryLine)
                       withoutBackticks = T.takeWhile (/= '`') withoutFirstLine
                    in T.strip withoutBackticks
                 else queryLine
@@ -683,7 +680,7 @@ parseVisualizationType line = do
 
 systemPrompt :: Text
 systemPrompt =
-  T.unlines
+  unlines
     [ "You are a helpful assistant that converts natural language queries to KQL (Kusto Query Language) filter expressions."
     , ""
     , Schema.generateSchemaForAI Schema.telemetrySchema

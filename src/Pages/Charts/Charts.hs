@@ -8,7 +8,7 @@ import Control.Exception.Annotated (checkpoint)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Default
-import Data.List (maximum)
+import Data.List qualified as L (maximum)
 import Data.Map.Strict qualified as M
 import Data.Semigroup (Max (..))
 import Data.Time (UTCTime, addUTCTime)
@@ -56,11 +56,11 @@ pivot' :: V.Vector (Int, Text, Double) -> (V.Vector Text, V.Vector (V.Vector (Ma
 pivot' rows
   | V.null rows = (V.empty, V.empty, 0.0, 0.0)
   | otherwise =
-      let extractHeaders vec = V.uniq . V.map snd3 . V.modify (\mvec -> VA.sortBy (comparing snd3) mvec) $ vec
+      let extractHeaders = V.uniq . V.map snd3 . V.modify (VA.sortBy (comparing snd3))
           headers = extractHeaders rows
           grouped =
             V.groupBy (\a b -> fst3 a == fst3 b)
-              $ V.modify (\mvec -> VA.sortBy (comparing fst3) mvec) rows
+              $ V.modify (VA.sortBy (comparing fst3)) rows
           ngrouped = map (transform headers) grouped
           totalSum = V.sum $ V.map thd3 rows
 
@@ -79,7 +79,7 @@ transform fields tuples =
   V.cons (Just timestamp) (V.map getValue fields)
   where
     getValue field = V.find (\(_, b, _) -> b == field) tuples >>= \(_, _, a) -> Just a
-    timestamp = fromIntegral $ fromMaybe 0 $ fst3 <$> V.find (const True) tuples
+    timestamp = fromIntegral $ maybe 0 fst3 (V.find (const True) tuples)
 
 
 statsTriple :: V.Vector (Int, Text, Double) -> MetricsStats
@@ -108,7 +108,7 @@ statsTriple v
     maxGroupSum =
       if M.null timestampMap
         then 0
-        else maximum $ M.elems timestampMap
+        else L.maximum $ M.elems timestampMap
 
     mode =
       fst

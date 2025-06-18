@@ -148,8 +148,8 @@ generateAndSaveFacets pid tableName columns maxValues timestamp = do
 
 -- | Process query results directly into the final map format
 processQueryResults :: V.Vector (Text, Text, Int) -> HM.HashMap Text [FacetValue]
-processQueryResults results =
-  V.foldr' addResult HM.empty results
+processQueryResults =
+  V.foldr' addResult HM.empty
   where
     addResult (colName, valText, count) acc =
       let
@@ -158,7 +158,7 @@ processQueryResults results =
         newVal = FacetValue valText count
         updatedVals = insertSorted newVal currentVals
        in
-        HM.insert colName (updatedVals) acc
+        HM.insert colName updatedVals acc
 
     -- Insert value into sorted list (by count, descending)
     insertSorted newVal [] = [newVal]

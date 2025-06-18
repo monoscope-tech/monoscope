@@ -6,8 +6,6 @@ import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Pool ()
-import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Effectful (
   Eff,
   IOE,
@@ -69,8 +67,8 @@ sendDiscordNotif :: Text -> Text -> ATBackgroundCtx ()
 sendDiscordNotif message channelId = do
   appCtx <- ask @Config.AuthContext
   let msg = AE.object ["content" AE..= message]
-      url = T.unpack $ "https://discord.com/api/v10/channels/" <> channelId <> "/messages"
-      opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [TE.encodeUtf8 $ "Bot " <> appCtx.config.discordBotToken]
+      url = toString $ "https://discord.com/api/v10/channels/" <> channelId <> "/messages"
+      opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bot " <> appCtx.config.discordBotToken]
   response <- liftIO $ postWith opts url msg
   pass
 
