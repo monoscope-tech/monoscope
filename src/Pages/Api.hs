@@ -155,7 +155,7 @@ mainContent :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Ma
 mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
   copyNewApiKey newKeyM False
   let activeKeys = V.filter (\x -> x.active) apiKeys
-  let revokedKeys = V.filter (\x -> not (x.active)) apiKeys
+  let revokedKeys = V.filter (\x -> not x.active) apiKeys
   div_ [class_ "justify-start items-start gap-4 flex mb-6 text-sm"] $ do
     button_ [onclick_ "navigatable(this, '#active_content', '#main-content', 't-tab-active')", class_ "flex items-center gap-4 a-tab border-b border-b-strokeWeak  px-3 py-2 t-tab-active"] do
       "Active keys"
@@ -170,7 +170,7 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
         th_ [class_ "px-6 py-4 text-left text-sm font-semibold text-textWeak uppercase leading-tight"] "Title"
         th_ [class_ "px-6 py-4 text-left text-sm font-semibold text-textWeak uppercase leading-tight"] "Key"
     tbody_ [class_ ""] do
-      V.indexed activeKeys & mapM_ \(i, apiKey) -> keyRow pid i apiKey
+      V.indexed activeKeys & mapM_ (uncurry (keyRow pid))
 
   table_ [class_ "min-w-full hidden a-tab-content", id_ "revoked_content"] do
     thead_ [class_ "bg-fillWeaker"] do
@@ -178,7 +178,7 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
         th_ [class_ "px-6 py-4 text-left text-sm font-semibold text-textWeak uppercase leading-tight"] "Title"
         th_ [class_ "px-6 py-4 text-left text-sm font-semibold text-textWeak uppercase leading-tight"] "Key"
     tbody_ [class_ ""] do
-      V.indexed revokedKeys & mapM_ \(i, apiKey) -> keyRow pid i apiKey
+      V.indexed revokedKeys & mapM_ (uncurry (keyRow pid))
 
 
 keyRow :: Projects.ProjectId -> Int -> ProjectApiKeys.ProjectApiKey -> Html ()

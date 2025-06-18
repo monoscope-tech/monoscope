@@ -202,7 +202,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
                   , title = "No Issues Or Errors."
                   , description = "Start monitoring errors that happened during a request."
                   , actionText = "Error reporting guide"
-                  , destination = Right $ "https://apitoolkit.io/docs/sdks/nodejs/expressjs/#reporting-errors-to-apitoolkit"
+                  , destination = Right "https://apitoolkit.io/docs/sdks/nodejs/expressjs/#reporting-errors-to-apitoolkit"
                   }
           , elemID = "anomalyListForm"
           , ..

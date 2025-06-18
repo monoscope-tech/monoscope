@@ -53,7 +53,7 @@ apiCatalogH pid sortM timeFilter requestTypeM = do
                   , title = "No " <> requestType <> " Requests Monitored."
                   , description = "You're currently not monitoring your " <> T.toLower requestType <> " integrations."
                   , actionText = "See monitoring guide"
-                  , destination = Right $ "https://apitoolkit.io/docs/sdks/nodejs/expressjs/#monitoring-axios-requests"
+                  , destination = Right "https://apitoolkit.io/docs/sdks/nodejs/expressjs/#monitoring-axios-requests"
                   }
           , elemID = "anomalyListForm"
           }

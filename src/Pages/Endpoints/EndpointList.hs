@@ -103,7 +103,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                       , title = "Waiting for events"
                       , description = "You're currently not sending any data to APItoolkit from your backends yet."
                       , actionText = "Read the setup guide"
-                      , destination = Right $ "https://apitoolkit.io/docs/sdks/"
+                      , destination = Right "https://apitoolkit.io/docs/sdks/"
                       }
               , elemID = "anomalyListForm"
               , ..

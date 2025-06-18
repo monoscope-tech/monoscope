@@ -28,7 +28,7 @@ data FieldInfo = FieldInfo
 
 
 -- | A schema containing fields
-data Schema = Schema
+newtype Schema = Schema
   { fields :: Map Text FieldInfo
   }
   deriving (Eq, Generic, Show)
@@ -178,7 +178,7 @@ telemetrySchemaJson = AE.toJSON telemetrySchema
 -- | Generate a concise schema description for AI queries by categorizing fields
 generateSchemaForAI :: Schema -> Text
 generateSchemaForAI schema =
-  T.unlines
+  unlines
     $ "Available telemetry fields for querying logs and spans:"
     : ""
     : concatMap renderCategory fieldCategories

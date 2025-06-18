@@ -40,6 +40,7 @@ import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.Slack (getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
+import Models.Projects.Projects (NotificationChannel (NEmail, NPhone))
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
@@ -77,7 +78,7 @@ onboardingGetH pid onboardingStepM = do
             (AE.Object q) ->
               let fun = case KM.lookup "functionality" q of
                     Just (AE.Array f) ->
-                      ( \x -> case x of
+                      ( \case
                           AE.String s -> s
                           _ -> ""
                       )
@@ -174,8 +175,8 @@ phoneEmailPostH pid form = do
   (sess, project) <- Sessions.sessionAndProject pid
   let phone = form.phoneNumber
       emails = form.emails
-      notifs = if phone /= "" then map (.toText) (V.toList project.notificationsChannel) <> [(Projects.NPhone).toText] else map (.toText) (V.toList project.notificationsChannel)
-      notifs' = if emails /= [] then notifs <> [(Projects.NEmail).toText] else notifs
+      notifs = if phone /= "" then map (.toText) (V.toList project.notificationsChannel) <> [show NPhone] else map (.toText) (V.toList project.notificationsChannel)
+      notifs' = if emails /= [] then notifs <> [show NEmail] else notifs
       notifsTxt = ordNub notifs'
       stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "NotifChannel" stepsCompleted

@@ -53,10 +53,9 @@ import Data.Aeson.KeyMap qualified as KEM
 import Data.Base64.Types qualified as B64
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Base64 qualified as B64
-import Data.ByteString.Lazy qualified as BL
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Generics.Labels ()
-import Data.List as L (nubBy)
+import Data.List qualified as L (nubBy)
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (TimeZone (..), UTCTime, formatTime, utcToZonedTime)
@@ -765,7 +764,7 @@ instance ToRow OtelLogsAndSpans where
         s <- sev
         show <$> s.severity_text
 
-      parseSeverityNumber sev = fmap (show . severity_number) sev
+      parseSeverityNumber = fmap (show . severity_number)
 
 
 bulkInsertOtelLogsAndSpansTF :: (DB :> es, Labeled "timefusion" DB :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
@@ -773,10 +772,10 @@ bulkInsertOtelLogsAndSpansTF records = do
   updatedRecords <- updateIds records
   _ <- bulkInsertSpansTS updatedRecords
   _ <- bulkInsertOtelLogsAndSpans updatedRecords
-  pure ()
+  pass
   where
     updateIds :: UUIDEff :> es => V.Vector OtelLogsAndSpans -> Eff es (V.Vector OtelLogsAndSpans)
-    updateIds recs = V.mapM updateId recs
+    updateIds = V.mapM updateId
       where
         updateId :: UUIDEff :> es => OtelLogsAndSpans -> Eff es OtelLogsAndSpans
         updateId record = do
@@ -844,7 +843,7 @@ bulkInserSpansAndLogsQuery =
 
 
 removeDuplic :: Eq a => Eq e => [(a, e, b, c, d, q)] -> [(a, e, b, c, d, q)]
-removeDuplic = nubBy (\(a1, a2, _, _, _, _) (b1, b2, _, _, _, _) -> a1 == b1 && a2 == b2)
+removeDuplic = L.nubBy (\(a1, a2, _, _, _, _) (b1, b2, _, _, _, _) -> a1 == b1 && a2 == b2)
 
 
 convertSpanToRequestMessage :: OtelLogsAndSpans -> Text -> Maybe RequestMessage
@@ -878,7 +877,7 @@ convertSpanToRequestMessage sp instrumentationScope = do
         }
   where
     pidM = UUID.fromText sp.project_id
-    attrJson = fromMaybe AE.Null $ fmap AE.Object $ fmap KEM.fromMapText sp.attributes
+    attrJson = maybe AE.Null (AE.Object . KEM.fromMapText) sp.attributes
     (http, req, res, apt, hst, url) = case attrJson of
       AE.Object v ->
         let httpAttsM = KEM.lookup "http" v
@@ -913,7 +912,7 @@ convertSpanToRequestMessage sp instrumentationScope = do
     parentId = UUID.fromText $ fromMaybe "" $ getSpanAttribute "parent_id" apt
     referer = Just $ Left "" :: Maybe (Either Text [Text])
     (requestBody, responseBody) = case sp.body of
-      Just (AE.Object o) -> (B64.encodeBase64 $ maybe "{}" (\x -> BL.toStrict $ AE.encode x) (KEM.lookup "request_body" o), B64.encodeBase64 $ maybe "{}" (\x -> BL.toStrict $ AE.encode x) (KEM.lookup "response_body" o))
+      Just (AE.Object o) -> (B64.encodeBase64 $ maybe "{}" (toStrict . AE.encode) (KEM.lookup "request_body" o), B64.encodeBase64 $ maybe "{}" (toStrict . AE.encode) (KEM.lookup "response_body" o))
       _ -> (B64.encodeBase64 "{}", B64.encodeBase64 "{}")
     reqHeaders = KEM.lookup "header" req
     resHeaders = KEM.lookup "header" res
@@ -1053,7 +1052,7 @@ extractATError spanObj (AE.Object o) = do
       , message = msg
       , rootErrorMessage = msg
       , stackTrace = stack
-      , hash = Just $ (toXXHash (spanObj.project_id <> fromMaybe "" serviceName <> fromMaybe "" spanObj.name <> typ <> msg))
+      , hash = Just (toXXHash (spanObj.project_id <> fromMaybe "" serviceName <> fromMaybe "" spanObj.name <> typ <> msg))
       , technology = Nothing
       , requestMethod = Just "Span Id"
       , requestPath = spanId

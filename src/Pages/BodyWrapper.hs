@@ -283,7 +283,7 @@ bodyWrapper bcfg child = do
                 section_ [class_ "h-screen overflow-y-hidden grow"] do
                   when (currUser.email == "hello@apitoolkit.io")
                     loginBanner
-                  unless bcfg.isSettingsPage $ navbar bcfg.currProject (fromMaybe [] (bcfg.currProject <&> \p -> menu p.id)) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
+                  unless bcfg.isSettingsPage $ navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
                   section_ [class_ "overflow-y-hidden h-full flex-1"] do
                     if bcfg.isSettingsPage
                       then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
@@ -546,21 +546,21 @@ renderNavBottomItem :: Text -> (Text, Text, Text, Text, Text, Maybe Text, Maybe 
 renderNavBottomItem curr (iconName, bgColor, textColor, linkText, link, targetBlankM, onClickM, hxGetM) =
   let
     defaultAttrs =
-      [ class_ $ "hover:bg-blue-50 flex gap-2 items-center "
+      [ class_ "hover:bg-blue-50 flex gap-2 items-center "
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" linkText
       ]
     activeCls = if curr == linkText then "bg-fillWeak" else ""
     attrs =
       defaultAttrs
-        ++ (if isJust targetBlankM then [target_ "BLANK_"] else [])
-        ++ (maybe [] (\onClick -> [onclick_ onClick]) onClickM)
+        ++ [target_ "BLANK_" | isJust targetBlankM]
+        ++ maybe [] (\onClick -> [onclick_ onClick]) onClickM
         ++ (if isJust hxGetM then [hxGet_ link, hxTarget_ "body"] else [href_ link])
    in
     li_ [class_ $ "px-2 py-1 w-[220px] rounded-lg " <> activeCls] do
       a_ attrs $ do
         span_
-          [class_ $ "p-2 rounded-full shrink-0 leading-none"]
+          [class_ "p-2 rounded-full shrink-0 leading-none"]
           (faSprite_ iconName "regular" "shrink-0 h-3 w-3")
         span_
           [class_ "text-textWeak"]

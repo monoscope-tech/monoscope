@@ -101,7 +101,7 @@ createProjectFormV =
     <*> check1 description Valor.pass
 
 
-projectOnboarding :: ATAuthCtx (Headers '[Header "Location" Text] ((PageCtx (Html ()))))
+projectOnboarding :: ATAuthCtx (Headers '[Header "Location" Text] (PageCtx (Html ())))
 projectOnboarding = do
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -275,7 +275,7 @@ getSubscriptionId orderId apiKey = do
           return $ Just res
         Left err -> do
           return Nothing
-data PricingUpdateForm = PricingUpdateForm
+newtype PricingUpdateForm = PricingUpdateForm
   { orderIdM :: Maybe Text
   }
   deriving stock (Eq, Generic, Show)
@@ -294,7 +294,7 @@ pricingUpdateH pid PricingUpdateForm{orderIdM} = do
       handleOnboarding name = when (project.paymentPlan == "ONBOARDING") $ do
         _ <- liftIO $ withResource appCtx.pool \conn -> do
           let fullName = sess.user.firstName <> " " <> sess.user.lastName
-              foundUsFrom = fromMaybe "" $ project.questions >>= (\x -> lookupValueText x "foundUsFrom")
+              foundUsFrom = fromMaybe "" $ project.questions >>= (`lookupValueText` "foundUsFrom")
           createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.user.id pid fullName [foundUsFrom] foundUsFrom
         users <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
         forM_ users $ \user -> ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original user.email) pid.toText project.title name

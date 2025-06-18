@@ -130,5 +130,5 @@ logTest pid colId collectionSteps stepRes = do
       --         , tags = Nothing -- Placeholder for tags
       --         }
       let requestMessages = V.toList (stepResults <&> \sR -> ("", testRunToRequestMsg pid currentTime msg_id sR))
-      _ <- ProcessMessage.processRequestMessages $ requestMessages
+      _ <- ProcessMessage.processRequestMessages requestMessages
       pure $ Right stepResults

@@ -259,7 +259,7 @@ metricsDetailsPage pid sources metric source currentRange = do
             div_ [class_ "flex flex-col gap-2", id_ "breakdown-container"] do
               metricBreakdown pid Nothing metric.metricLabels
 
-        div_ [class_ "hidden a-tab-content", id_ "rl-content"] $ pass
+        div_ [class_ "hidden a-tab-content", id_ "rl-content"] pass
 
 
 metricBreakdown :: Projects.ProjectId -> Maybe Text -> V.Vector Text -> Html ()

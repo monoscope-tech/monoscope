@@ -137,7 +137,7 @@ manageBillingGetH pid from = do
   let cycleStart = calculateCycleStartDate dat currentTime
   totalRequests <- dbtToEff $ LemonSqueezy.getTotalUsage pid cycleStart
   let requestAfter = totalRequests - 20_000_000
-  let estimatedAmount = show $ if requestAfter <= 0 then "34.00" else printf "%.2f" (((fromIntegral requestAfter) / 500_000) + 34.00)
+  let estimatedAmount = show $ if requestAfter <= 0 then "34.00" else printf "%.2f" (fromIntegral requestAfter / 500_000 + 34.00)
   let last_reported = show project.usageLastReported
   let bwconf =
         (def :: BWConfig)

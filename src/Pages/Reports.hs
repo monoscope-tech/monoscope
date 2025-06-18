@@ -397,7 +397,7 @@ buildPerformanceJSON pr = AE.object ["endpoints" AE..= pr]
 
 
 buildAnomalyJSON :: V.Vector Anomalies.IssueL -> Int -> AE.Value
-buildAnomalyJSON anomalies total = AE.object ["anomalies" AE..= (V.catMaybes $ V.map buildjson anomalies), "anomaliesCount" AE..= total]
+buildAnomalyJSON anomalies total = AE.object ["anomalies" AE..= V.catMaybes (V.map buildjson anomalies), "anomaliesCount" AE..= total]
   where
     buildjson :: Anomalies.IssueL -> Maybe AE.Value
     buildjson an = case an.issueData of

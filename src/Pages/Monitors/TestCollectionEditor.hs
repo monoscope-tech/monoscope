@@ -67,7 +67,7 @@ collectionStepsUpdateH pid colF onboardingM = do
       newStepsComp = insertIfNotExist "CreateMonitor" steps
   if not isValid
     then do
-      forM_ errMessage \m -> addErrorToast m Nothing
+      forM_ errMessage (`addErrorToast` Nothing)
       addRespHeaders CollectionMutError
     else do
       let colIdM = colF.collectionId

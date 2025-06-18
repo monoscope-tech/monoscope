@@ -311,7 +311,7 @@ discordInteractionsH rawBody signatureM timestampM = do
     ApplicationCommand -> handleApplicationCommand interaction envCfg authCtx
   where
     validateSignature envCfg (Just sig) (Just tme) body
-      | verifyDiscordSignature (encodeUtf8 envCfg.discordPublicKey) sig tme body = pure ()
+      | verifyDiscordSignature (encodeUtf8 envCfg.discordPublicKey) sig tme body = pass
       | otherwise = throwError err401{errBody = "Invalid signature"}
     validateSignature _ _ _ _ = throwError err401{errBody = "Invalid signature"}
 
