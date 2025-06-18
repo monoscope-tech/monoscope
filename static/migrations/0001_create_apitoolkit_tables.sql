@@ -726,6 +726,7 @@ CREATE TABLE IF NOT EXISTS apis.slack
   UNIQUE (project_id)
 );
 ALTER TABLE apis.slack ADD COLUMN IF NOT EXISTS team_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE apis.slack ADD COLUMN IF NOT EXISTS channel_id TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS apis.discord (
   id               UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY,

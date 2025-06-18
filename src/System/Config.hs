@@ -75,6 +75,7 @@ data EnvConfig = EnvConfig
   , lemonSqueezyWebhookSecret :: Text
   , openaiApiKey :: Text
   , openaiBaseUrl :: Text
+  , chartShotUrl :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)

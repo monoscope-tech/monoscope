@@ -156,6 +156,7 @@ data Routes mode = Routes
   , slackInteractions :: mode :- "interactions" :> "slack" :> ReqBody '[FormUrlEncoded] SlackInstall.SlackInteraction :> Post '[JSON] AE.Value
   , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
   , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[JSON] LemonSqueezy.WebhookData :> Post '[HTML] (Html ())
+  , chartsDataShot :: mode :- "chart_data_shot" :>  QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   }
   deriving stock (Generic)
 
@@ -357,6 +358,7 @@ server pool =
     , slackInteractions = SlackInstall.slackInteractionsH
     , clientMetadata = ClientMetadata.clientMetadataH
     , lemonWebhook = LemonSqueezy.webhookPostH
+    , chartsDataShot = Charts.queryMetrics
     , cookieProtected = \sessionWithCookies ->
         Servant.hoistServerWithContext
           (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))

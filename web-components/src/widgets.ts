@@ -46,6 +46,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   if (!shouldFetch) return;
 
   const { query, querySQL, pid, chartId, summarizeBy, summarizeByPrefix } = widgetData;
+  console.log(JSON.stringify(widgetData));
   const loader = $(`${chartId}_loader`);
   // Show loader before fetch
   if (loader) loader.classList.remove('hidden');

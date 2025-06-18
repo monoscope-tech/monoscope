@@ -43,8 +43,11 @@ import Pkg.Parser qualified as Parser
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
+import Servant.Server (ServerError (errBody), err400)
 import System.Config (AuthContext (..))
 import System.Types
+
+import Effectful.Error.Static (Error, throwError)
 import Text.Megaparsec (parseMaybe)
 import Utils (JSONHttpApiData (..))
 
@@ -166,13 +169,13 @@ nonNull (Just "") = Nothing
 nonNull x = x
 
 
-queryMetrics :: (Effectful.Internal.Monad.IOE :> es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es, State.State TriggerEvents :> es, Time.Time :> es) => M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
+queryMetrics :: (Effectful.Error.Static.Error ServerError :> es, Effectful.Internal.Monad.IOE :> es, Effectful.Reader.Static.Reader AuthContext :> es, Time.Time :> es) => M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
 queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) allParams = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   let mappng = DashboardUtils.variablePresets (maybe "" (.toText) pidM) fromD toD allParams
-  let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST $ DashboardUtils.replacePlaceholders mappng q)
+  let parseQuery q = either (\err -> throwError err400{errBody = "Invalid signature"}) pure (parseQueryToAST $ DashboardUtils.replacePlaceholders mappng q)
 
   sqlQuery <- case (queryM, querySQLM) of
     (_, Just querySQL) -> do

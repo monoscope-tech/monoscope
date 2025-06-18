@@ -604,7 +604,7 @@ notifChannels :: AuthContext -> Projects.ProjectId -> Text -> Vector Text -> Boo
 notifChannels appCtx pid phone emails hasDiscord hasSlack = do
   let slackRedirectUri = appCtx.env.slackRedirectUri
       discordUri = appCtx.env.discordRedirectUri
-      slackUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> appCtx.config.slackClientId <> "&scope=chat:write,incoming-webhook&user_scope=" <> "&redirect_uri=" <> slackRedirectUri <> pid.toText <> "?onboarding=true"
+      slackUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> appCtx.config.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write&user_scope=" <> "&redirect_uri=" <> slackRedirectUri <> pid.toText <> "?onboarding=true"
       discordUrl = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> "&state=" <> pid.toText <> "__onboarding" <> "&redirect_uri=" <> discordUri
 
   div_ [class_ "w-[550px] mx-auto mt-[156px] mb-10"] $ do
