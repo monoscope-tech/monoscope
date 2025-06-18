@@ -36,6 +36,7 @@ import Data.Effectful.Wreq (
   postWith,
   responseBody,
  )
+import Data.Time qualified as Time
 import Effectful (Eff, type (:>))
 import Effectful.Time qualified as Time
 import Network.HTTP.Types (urlEncode)
@@ -347,35 +348,11 @@ discordInteractionsH rawBody signatureM timestampM = do
         Right (query, vizTypeM) -> do
           case vizTypeM of
             Just vizType -> do
-              let baseUrl = authCtx.env.chartShotUrl
-                  hostUrl = authCtx.env.hostUrl
-                  chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-                  reqBody = getChartData query vizType authCtx discordData.projectId chartType
-                  qUrl = hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query))
+              let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
+                  opts = getChartData query vizType authCtx discordData.projectId chartType
+                  qUrl = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> (TE.decodeUtf8 $ urlEncode True (encodeUtf8 query))
                   query_url = "[Open in log explorer](" <> qUrl <> ")"
-                  content =
-                    AE.object
-                      [ "embeds"
-                          AE..= AE.Array
-                            ( V.fromList
-                                [ AE.object
-                                    [ "type" AE..= "rich"
-                                    , "color" AE..= "26879"
-                                    , "title" AE..= "📊 Here is your chart"
-                                    , "description" AE..= "This chart summarizes your query results."
-                                    , "image" AE..= AE.object ["url" AE..= chartImageUrl reqBody baseUrl]
-                                    , "fields"
-                                        AE..= ( AE.Array
-                                                  $ V.fromList
-                                                  $ [ AE.object ["name" AE..= "Query used", "value" AE..= query, "inline" AE..= True]
-                                                    , AE.object ["name" AE..= "Query URL", "value" AE..= query_url, "inline" AE..= True]
-                                                    ]
-                                              )
-                                    , "timestamp" AE..= "2025-06-17T20:00:00Z"
-                                    ]
-                                ]
-                            )
-                      ]
+                  content = getBotContent Discord query query_url opts authCtx.env.chartShotUrl now
               sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
               pure $ contentResponse "Generated query: "
             Nothing -> do
@@ -535,22 +512,6 @@ contentTypeHeader :: Text -> Data.Effectful.Wreq.Options -> Data.Effectful.Wreq.
 contentTypeHeader contentType = header "Content-Type" .~ [encodeUtf8 contentType]
 
 
-data BufferResponse = BufferResponse
-  { bufferType :: String
-  , bufferData :: [Word8]
-  }
-  deriving (Generic, Show)
-
-
-instance AE.FromJSON BufferResponse where
-  parseJSON = AE.withObject "BufferResponse" \o ->
-    BufferResponse
-      <$> o
-        AE..: "type"
-      <*> o
-        AE..: "data"
-
-
 sendJsonFollowupResponse :: HTTP :> es => Text -> Text -> Text -> AE.Value -> Eff es ()
 sendJsonFollowupResponse appId interactionToken botToken content = do
   let followupUrl = toString $ "https://discord.com/api/v10/webhooks/" <> appId <> "/" <> interactionToken
@@ -563,7 +524,7 @@ slackInteractionsH interaction = do
   case interaction.command of
     "here" -> do
       _ <- updateSlackNotificationChannel interaction.team_id interaction.channel_id
-      pure $ AE.object ["response_type" AE..= "in_channel", "text" AE..= "Done, you'll be receiving project notifcations here going forward"]
+      pure $ AE.object ["response_type" .= "in_channel", "text" .= "Done, you'll be receiving project notifcations here going forward", "replace_original" .= True, "delete_original" .= True]
     _ -> do
       slackDataM <- dbtToEff $ getSlackDataByTeamId interaction.team_id
       authCtx <- Effectful.Reader.Static.ask @AuthContext
@@ -571,10 +532,11 @@ slackInteractionsH interaction = do
         case slackDataM of
           Nothing -> sendSlackFollowupResponse interaction.response_url (AE.object ["text" AE..= "Error: something went wrong"])
           Just slackData -> handleAskCommand interaction slackData authCtx
-      pure $ AE.object ["response_type" AE..= "in_channel", "text" AE..= "apitoolkit is working..."]
+      pure $ AE.object ["response_type" .= "in_channel", "text" .= "apitoolkit is working...", "replace_original" .= True, "delete_original" .= True]
   where
     handleAskCommand :: SlackInteraction -> SlackData -> AuthContext -> IO ()
     handleAskCommand inter slackData authCtx = do
+      now <- Time.currentTime
       let envCfg = authCtx.env
       let question = inter.text
           fullPrompt = systemPrompt <> "\n\nUser query: " <> question
@@ -585,9 +547,11 @@ slackInteractionsH interaction = do
         Right (query, vizTypeM) -> do
           case vizTypeM of
             Just vizType -> do
-              -- let reqBody = getChartData query vizType authCtx slackData.projectId
-              -- _ <- replyWithChartImage interaction reqBody envCfg.discordBotToken envCfg.discordClientId
-              let content = AE.object ["response_type" AE..= "in_channel", "text" AE..= ("Generated query: " <> query <> "\n\n" <> vizType <> slackData.projectId.toText)]
+              let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
+                  opts = getChartData query vizType authCtx slackData.projectId chartType
+                  query_url = authCtx.env.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> (TE.decodeUtf8 $ urlEncode True (encodeUtf8 query))
+                  content = getBotContent Slack query query_url opts authCtx.env.chartShotUrl now
+
               sendSlackFollowupResponse inter.response_url content
               pass
             Nothing -> do
@@ -621,8 +585,53 @@ data SlackInteraction = SlackInteraction
   deriving anyclass (AE.FromJSON, FromForm)
 
 
-chartImageUrl :: AE.Value -> Text -> Text
-chartImageUrl options baseUrl =
-  let jsonBS = toStrict (AE.encode options)
+chartImageUrl :: AE.Value -> Text -> Time.UTCTime -> Text
+chartImageUrl options baseUrl now =
+  let jsonBS = LBS.toStrict (AE.encode options)
       encoded = urlEncode True jsonBS
-   in baseUrl <> "?opts=" <> decodeUtf8 encoded
+   in baseUrl <> "?t=" <> show now <> "&opts=" <> TE.decodeUtf8 encoded
+
+
+data BotType = Slack | Discord
+
+
+getBotContent :: BotType -> Text -> Text -> AE.Value -> Text -> Time.UTCTime -> AE.Value
+getBotContent target query query_url chartOptions baseUrl now =
+  case target of
+    Slack ->
+      AE.object
+        [ "attachments"
+            .= AE.Array
+              ( V.fromList
+                  [ AE.object
+                      [ "color" .= "#0068ff"
+                      , "title" .= "📊 Here is your chart"
+                      , "markdown_in" .= (Array $ V.fromList ["text"])
+                      , "title_link" .= query_url
+                      , "text" .= "This chart summarizes your query results."
+                      , "image_url" .= chartImageUrl chartOptions baseUrl now
+                      , "fields" .= AE.Array (V.fromList [AE.object ["title" .= "Query used", "value" .= query]])
+                      , "actions" .= AE.Array (V.fromList [AE.object ["type" .= "button", "text" .= "View in log explorer", "url" .= query_url]])
+                      ]
+                  ]
+              )
+        , "response_type" .= "in_channel"
+        , "replace_original" .= True
+        , "delete_original" .= True
+        ]
+    _ ->
+      AE.object
+        [ "embeds"
+            .= AE.Array
+              ( V.fromList
+                  [ AE.object
+                      [ "type" .= "rich"
+                      , "color" .= "26879"
+                      , "title" .= "📊 Here is your chart"
+                      , "description" .= "This chart summarizes your query results."
+                      , "image" .= AE.object ["url" .= chartImageUrl chartOptions baseUrl now]
+                      , "fields" .= AE.Array (V.fromList [object ["name" .= "Query used", "value" .= query, "inline" .= True], object ["name" .= "Query URL", "value" .= query_url, "inline" .= True]])
+                      ]
+                  ]
+              )
+        ]
