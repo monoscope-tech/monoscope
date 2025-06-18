@@ -1,5 +1,3 @@
-{-# LANGUAGE ViewPatterns #-}
-
 module Pkg.Components.TimePicker (
   parseTimeRange,
   timepicker_,
