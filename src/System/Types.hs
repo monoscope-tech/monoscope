@@ -198,8 +198,7 @@ addRespHeaders resp = do
   pure
     $ addHeader (decodeUtf8 $ AE.encode triggerEvents)
     $ maybe noHeader addHeader redirectDest
-    $ maybe noHeader (\w -> addHeader w.unWidgetJSON) widgetJSON
-    $ resp
+    $ maybe noHeader (\w -> addHeader w.unWidgetJSON) widgetJSON resp
 
 
 -- redirectCS adds a header to the request, which in turn triggers a client side redirect via HTMX redirect header.

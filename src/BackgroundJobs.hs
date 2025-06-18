@@ -1,12 +1,11 @@
 module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..), runHourlyJob, generateOtelFacetsBatch) where
 
 import Control.Lens ((.~))
-import Data.Aeson ((.=))
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.UUID qualified as UUID
-import Data.List (intersect, union)
+import Data.List qualified as L (intersect, union)
 import Data.List.Extra (chunksOf)
 import Data.Pool (withResource)
 import Data.Text qualified as T
@@ -172,7 +171,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
         liftIO $ withResource authCtx.jobsPool \conn -> do
           -- background job to cleanup demo project
           when (dayOfWeek currentDay == Monday) do
-            void $ createJob conn "background_jobs" $ BackgroundJobs.CleanupDemoProject
+            void $ createJob conn "background_jobs" BackgroundJobs.CleanupDemoProject
           forM_ [0 .. 23] \hour -> do
             -- Schedule each hourly job to run at the appropriate hour
             let scheduledTime = addUTCTime (fromIntegral $ hour * 3600) currentTime
@@ -538,7 +537,7 @@ emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email u
 --               |]
 
 convertAnomaliesToIssues :: V.Vector Anomalies.AnomalyVM -> V.Vector Endpoints.Endpoint -> V.Vector Anomalies.Issue
-convertAnomaliesToIssues ans ens = V.catMaybes $ (\e -> V.find (\a -> e.hash `T.isPrefixOf` a.targetHash) ans >>= (\a -> Anomalies.convertAnomalyToIssue (Just e.host) a)) <$> ens
+convertAnomaliesToIssues ans ens = V.catMaybes $ (\e -> V.find (\a -> e.hash `T.isPrefixOf` a.targetHash) ans >>= Anomalies.convertAnomalyToIssue (Just e.host)) <$> ens
 
 
 newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> V.Vector Text -> ATBackgroundCtx ()
@@ -594,17 +593,17 @@ We have detected a new endpoint on *{project.title}*
 
       pass
     Anomalies.ATShape -> do
-      anomaliesVM <- (dbtToEff $ Anomalies.getAnomaliesVM pid targetHashes)
+      anomaliesVM <- dbtToEff $ Anomalies.getAnomaliesVM pid targetHashes
       endpoints <- dbtToEff $ Endpoints.endpointsByHashes pid $ T.take 8 <$> targetHashes
       anomalies <- forM anomaliesVM \anomaly -> do
         let targetHash = anomaly.targetHash
             getShapesQuery = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
-        shapes <- (dbtToEff $ query getShapesQuery (pid, T.take 8 targetHash))
+        shapes <- dbtToEff $ query getShapesQuery (pid, T.take 8 targetHash)
         let targetFields = maybe [] (V.toList . snd) $ V.find (\a -> fst a == targetHash) shapes
         let otherFields = toList <$> toList (snd $ V.unzip $ V.filter (\a -> fst a /= targetHash) shapes)
         updatedFieldFormats <- dbtToEff $ getUpdatedFieldFormats pid (V.fromList targetFields)
-        let newFields = filter (`notElem` foldl' union [] otherFields) targetFields
-        let deletedFields = filter (`notElem` targetFields) $ foldl' intersect (head $ [] :| otherFields) (tail $ [] :| otherFields)
+        let newFields = filter (`notElem` foldl' L.union [] otherFields) targetFields
+        let deletedFields = filter (`notElem` targetFields) $ foldl' L.intersect (head $ [] :| otherFields) (tail $ [] :| otherFields)
         _ <- dbtToEff $ updateShapeCounts pid targetHash (V.fromList newFields) (V.fromList deletedFields) updatedFieldFormats
         -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
         -- users <- dbtToEff $ Projects.usersByProjectId pid
@@ -716,15 +715,15 @@ A new runtime exception has been detected. click the link below to see more deta
                   ( \ee ->
                       let e = ee.errorData
                        in AE.object
-                            [ "root_error_message" .= e.rootErrorMessage
-                            , "error_type" .= e.errorType
-                            , "error_message" .= e.message
-                            , "stack_trace" .= e.stackTrace
-                            , "when" .= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
-                            , "hash" .= e.hash
-                            , "tech" .= e.technology
-                            , "request_info" .= ((fromMaybe "" e.requestMethod) <> " " <> (fromMaybe "" e.requestPath))
-                            , "root_error_type" .= e.rootErrorType
+                            [ "root_error_message" AE..= e.rootErrorMessage
+                            , "error_type" AE..= e.errorType
+                            , "error_message" AE..= e.message
+                            , "stack_trace" AE..= e.stackTrace
+                            , "when" AE..= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
+                            , "hash" AE..= e.hash
+                            , "tech" AE..= e.technology
+                            , "request_info" AE..= (fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
+                            , "root_error_type" AE..= e.rootErrorType
                             ]
                   )
                     <$> errs

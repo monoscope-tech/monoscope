@@ -235,7 +235,7 @@ parens = between (symbol "(") (symbol ")")
 pDuration :: Parser Values
 pDuration = do
   value <- try L.float <|> (fromIntegral <$> L.decimal)
-  unit <- (string "ns" <|> string "us" <|> string "µs" <|> string "ms" <|> string "s" <|> string "m" <|> string "h")
+  unit <- string "ns" <|> string "us" <|> string "µs" <|> string "ms" <|> string "s" <|> string "m" <|> string "h"
   let multiplier = case unit of
         "ns" -> 1
         "us" -> 1000

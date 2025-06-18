@@ -65,7 +65,7 @@ runServer appLogger env tp = do
             Safe.throw exception
   let wrappedServer =
         heartbeatMiddleware
-          . (newOpenTelemetryWaiMiddleware' tp)
+          . newOpenTelemetryWaiMiddleware' tp
           -- . loggingMiddleware
           -- . const
           $ server

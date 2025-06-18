@@ -59,7 +59,7 @@ data BinFunction
 
 
 -- Support for summarize by with bin() function
-data SummarizeByClause = SummarizeByClause [Either Subject BinFunction]
+newtype SummarizeByClause = SummarizeByClause [Either Subject BinFunction]
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -126,7 +126,7 @@ aggFunctionParser =
     , P95 <$> (string "p95(" *> pSubject <* string ")") <*> pure Nothing
     , P99 <$> (string "p99(" *> pSubject <* string ")") <*> pure Nothing
     , P100 <$> (string "p100(" *> pSubject <* string ")") <*> pure Nothing
-    , Count <$> (string "count(" *> (pSubject <|> (string ")" *> pure (Subject "*" "*" []))) <* optional (string ")")) <*> pure Nothing
+    , Count <$> (string "count(" *> (pSubject <|> (string ")" $> Subject "*" "*" [])) <* optional (string ")")) <*> pure Nothing
     , Avg <$> (string "avg(" *> pSubject <* string ")") <*> pure Nothing
     , Min <$> (string "min(" *> pSubject <* string ")") <*> pure Nothing
     , Max <$> (string "max(" *> pSubject <* string ")") <*> pure Nothing
@@ -138,7 +138,7 @@ aggFunctionParser =
 
 
 instance ToQueryText AggFunction where
-  toQText v = display v
+  toQText = display
 
 
 instance ToQueryText [AggFunction] where
@@ -286,7 +286,7 @@ instance ToQueryText SortField where
 -- Right (SortCommand [SortField (Subject "parent_id" "parent_id" []) (Just "asc")])
 pSortSection :: Parser Section
 pSortSection = do
-  _ <- (string "sort by" <|> string "order by")
+  _ <- string "sort by" <|> string "order by"
   space
   fields <- sepBy pSortField (string "," <* space)
   return $ SortCommand fields
@@ -301,7 +301,7 @@ pSortSection = do
 -- Right (TakeCommand 500)
 pTakeSection :: Parser Section
 pTakeSection = do
-  _ <- (string "take" <|> string "limit")
+  _ <- string "take" <|> string "limit"
   space
   limitStr <- some digitChar
   let limit = readMaybe (toString limitStr) :: Maybe Int

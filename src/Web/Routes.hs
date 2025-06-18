@@ -123,7 +123,7 @@ instance Accept RawJSON where
 
 
 instance MimeUnrender RawJSON BS.ByteString where
-  mimeUnrender _ = Right . BL.toStrict
+  mimeUnrender _ = Right . toStrict
 
 
 -- When bytestring is returned for json, simply return the bytestring
@@ -173,7 +173,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
   , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "embedded" :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardsGet))
   , dashboardsPost :: mode :- "p" :> ProjectId :> "dashboards" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardForm :> Post '[HTML] (RespHeaders NoContent)
-  , dashboardWidgetPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "widget_id" :> ReqBody '[JSON] Widget.Widget :> Put '[HTML] (RespHeaders (Widget.Widget))
+  , dashboardWidgetPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "widget_id" :> ReqBody '[JSON] Widget.Widget :> Put '[HTML] (RespHeaders Widget.Widget)
   , dashboardWidgetReorderPatchH :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets_order" :> ReqBody '[JSON] (Map Text Dashboards.WidgetReorderItem) :> Patch '[HTML] (RespHeaders NoContent)
   , dashboardDelete :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Delete '[HTML] (RespHeaders NoContent)
   , dashboardRenamePatch :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "rename" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardRenameForm :> Patch '[HTML] (RespHeaders (Html ()))
@@ -589,8 +589,8 @@ instance HasServer api ctx => HasServer (AllQueryParams :> api) ctx where
     where
       grabAllParams :: Request -> [(Text, Maybe Text)]
       grabAllParams req =
-        [ ( TE.decodeUtf8With TE.lenientDecode k
-          , (TE.decodeUtf8With TE.lenientDecode) <$> mv
+        [ ( decodeUtf8With lenientDecode k
+          , decodeUtf8With lenientDecode <$> mv
           )
         | (k, mv) <- req.queryString
         ]
@@ -603,4 +603,4 @@ instance HasServer api ctx => HasServer (AllQueryParams :> api) ctx where
     -> (forall x. m x -> n x)
     -> ([(Text, Maybe Text)] -> ServerT api m)
     -> ([(Text, Maybe Text)] -> ServerT api n)
-  hoistServerWithContext _ pc nat s = \qs -> hoistServerWithContext (Proxy :: Proxy api) pc nat (s qs)
+  hoistServerWithContext _ pc nat s = hoistServerWithContext (Proxy :: Proxy api) pc nat . s
