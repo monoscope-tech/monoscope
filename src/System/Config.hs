@@ -76,6 +76,7 @@ data EnvConfig = EnvConfig
   , openaiApiKey :: Text
   , openaiBaseUrl :: Text
   , chartShotUrl :: Text
+  , hostUrl :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)

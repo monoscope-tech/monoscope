@@ -23,6 +23,9 @@ import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Pages.Components (navBar)
 import Pkg.Mail (sendSlackMessage)
 import Relude hiding (ask, asks)
+
+import AutoInstrument.Internal.GhcFacade (IsLine (char))
+import Control.Exception (try)
 import Control.Lens ((.~), (^.))
 import Data.Effectful.Wreq (
   HTTP,
@@ -34,6 +37,7 @@ import Data.Effectful.Wreq (
   responseBody,
  )
 import Effectful (Eff, type (:>))
+import Effectful.Time qualified as Time
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
@@ -332,6 +336,7 @@ discordInteractionsH rawBody signatureM timestampM = do
 
     handleAskCommand :: InteractionData -> DiscordInteraction -> EnvConfig -> AuthContext -> DiscordData -> ATBaseCtx AE.Value
     handleAskCommand cmdData interaction envCfg authCtx discordData = do
+      now <- Time.currentTime
       _ <- sendDeferredResponse interaction.id interaction.token envCfg.discordBotToken
       fullPrompt <- buildPrompt cmdData interaction envCfg
       result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
@@ -342,12 +347,34 @@ discordInteractionsH rawBody signatureM timestampM = do
         Right (query, vizTypeM) -> do
           case vizTypeM of
             Just vizType -> do
-              let reqBody = getChartData query vizType authCtx discordData.projectId
-                  baseUrl = authCtx.env.chartShotUrl
+              let baseUrl = authCtx.env.chartShotUrl
+                  hostUrl = authCtx.env.hostUrl
+                  chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
+                  reqBody = getChartData query vizType authCtx discordData.projectId chartType
+                  qUrl = hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query))
+                  query_url = "[Open in log explorer](" <> qUrl <> ")"
                   content =
                     AE.object
                       [ "embeds"
-                          AE..= AE.Array (V.fromList [AE.object ["title" AE..= "Here is your chart", "image" AE..= AE.object ["url" AE..= chartImageUrl reqBody baseUrl]]])
+                          AE..= AE.Array
+                            ( V.fromList
+                                [ AE.object
+                                    [ "type" AE..= "rich"
+                                    , "color" AE..= "26879"
+                                    , "title" AE..= "📊 Here is your chart"
+                                    , "description" AE..= "This chart summarizes your query results."
+                                    , "image" AE..= AE.object ["url" AE..= chartImageUrl reqBody baseUrl]
+                                    , "fields"
+                                        AE..= ( AE.Array
+                                                  $ V.fromList
+                                                  $ [ AE.object ["name" AE..= "Query used", "value" AE..= query, "inline" AE..= True]
+                                                    , AE.object ["name" AE..= "Query URL", "value" AE..= query_url, "inline" AE..= True]
+                                                    ]
+                                              )
+                                    , "timestamp" AE..= "2025-06-17T20:00:00Z"
+                                    ]
+                                ]
+                            )
                       ]
               sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
               pure $ contentResponse "Generated query: "
@@ -356,10 +383,9 @@ discordInteractionsH rawBody signatureM timestampM = do
               pure $ AE.object []
 
 
-getChartData :: Text -> Text -> AuthContext -> Projects.ProjectId -> AE.Value
-getChartData query vizType authCtx pid =
+getChartData :: Text -> Text -> AuthContext -> Projects.ProjectId -> Text -> AE.Value
+getChartData query vizType authCtx pid chartType =
   let widgetJson = createWidgetJson vizType pid query
-      chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
    in AE.object ["q" AE..= query, "p" AE..= pid.toText, "e" AE..= widgetJson, "t" AE..= chartType]
 
 
@@ -525,8 +551,6 @@ instance AE.FromJSON BufferResponse where
         AE..: "data"
 
 
-
-
 sendJsonFollowupResponse :: HTTP :> es => Text -> Text -> Text -> AE.Value -> Eff es ()
 sendJsonFollowupResponse appId interactionToken botToken content = do
   let followupUrl = toString $ "https://discord.com/api/v10/webhooks/" <> appId <> "/" <> interactionToken
@@ -594,7 +618,7 @@ data SlackInteraction = SlackInteraction
   , team_domain :: Text
   }
   deriving (Generic, Show)
-  deriving anyclass (FromForm, AE.FromJSON)
+  deriving anyclass (AE.FromJSON, FromForm)
 
 
 chartImageUrl :: AE.Value -> Text -> Text
