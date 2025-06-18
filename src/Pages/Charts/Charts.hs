@@ -10,7 +10,7 @@ import Data.Annotation (toAnnotation)
 import Data.Default
 import Data.List qualified as L (maximum)
 import Data.Map.Strict qualified as M
-import Data.Semigroup (Max (..))
+import Data.Semigroup (Max (Max))
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
@@ -202,8 +202,7 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
               }
       let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
       pure $ maybeToMonoid qc.finalSummarizeQuery
-  mData <- liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx
-  pure mData
+  liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx
 
 
 fetchMetricsData
