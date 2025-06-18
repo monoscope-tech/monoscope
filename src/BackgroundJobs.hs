@@ -318,24 +318,11 @@ reportUsageToLemonsqueezy :: Text -> Int -> Text -> IO ()
 reportUsageToLemonsqueezy subItemId quantity apiKey = do
   let formData =
         [aesonQQ|{
-          "data": {
-            "type": "usage-records",
-            "attributes": {
-                "quantity": #{quantity},
-                "action": "increment"
-            },
-            "relationships": {
-               "subscription-item": {
-                  "data": {
-                    "type": "subscription-items",
-                    "id": #{subItemId}
-                  }
-                }
-             }}} |]
-  let hds =
-        defaults
-          & (header "Authorization" .~ ["Bearer " <> encodeUtf8 @Text @ByteString apiKey])
-          & (header "Content-Type" .~ ["application/vnd.api+json"])
+          "data": {"type": "usage-records","attributes": {"quantity": #{quantity},"action": "increment"},
+                     "relationships": {"subscription-item": {"data": {"type": "subscription-items","id": #{subItemId}}}}
+                  }}|]
+
+  let hds = defaults & (header "Authorization" .~ ["Bearer " <> encodeUtf8 @Text @ByteString apiKey]) & (header "Content-Type" .~ ["application/vnd.api+json"])
   _ <- postWith hds "https://api.lemonsqueezy.com/v1/usage-records" formData
   pass
 
@@ -350,8 +337,8 @@ queryMonitorsTriggered queryMonitorIds = do
       else do
         if Just True
           == ( monitorE.warningThreshold <&> \warningThreshold ->
-                (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
-                  || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
+                 (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
+                   || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
              )
           then handleQueryMonitorThreshold monitorE False
           else pass
@@ -684,10 +671,10 @@ We have detected a new endpoint on *{project.title}*
                   , archivedAt = Nothing
                   }
             )
-          <$> errs
+            <$> errs
 
       forM_ project.notificationsChannel \case
-        Projects.NSlack ->
+        Projects.NSlack -> 
           sendSlackMessage
             pid
             [fmtTrim| 🤖 *New Runtime Exception(s) Found for `{project.title}`*

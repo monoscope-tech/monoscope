@@ -1,11 +1,17 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendDiscordNotif) where
+module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendDiscordNotif, NotificationAlerts (..)) where
 
 import Control.Lens ((.~))
+import Data.Aeson
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
+import Data.Effectful.Wreq (HTTP)
+import Data.Effectful.Wreq qualified as Wreq
 import Data.Pool ()
+import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
+import Data.Vector qualified as V
 import Effectful (
   Eff,
   IOE,
@@ -13,12 +19,13 @@ import Effectful (
  )
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
-import Effectful.Reader.Static (ask)
+import Effectful.Reader.Static (Reader, ask)
 import Log qualified
 import Models.Apis.Slack (SlackData (..), getProjectSlackData)
 import Models.Projects.Projects qualified as Projects
 import Network.Wreq (defaults, header, postWith)
 import Relude hiding (ask)
+import System.Config (AuthContext)
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx)
 
@@ -84,3 +91,66 @@ slackPostWebhook webhookUrl message = do
             |]
   response <- liftIO $ postWith opts (toString webhookUrl) payload
   pass
+
+
+data NotificationAlerts
+  = EndpointAlert
+  | RuntimeErrorAlert
+      { errorType :: Text
+      , message :: Text
+      , project :: Text
+      , hash :: Text
+      , endpoint :: Maybe Text
+      , firstSeen :: Text
+      , service :: Text
+      }
+  | ShapeAlert
+
+
+sendSlackAlert :: (DB :> es, Effectful.Reader.Static.Reader AuthContext :> es, HTTP :> es) => NotificationAlerts -> Projects.ProjectId -> Eff es ()
+sendSlackAlert alert pid = do
+  appCtx <- ask @Config.AuthContext
+  slackDataM <- getProjectSlackData pid
+  whenJust slackDataM \slackData -> do
+    let send = sendAlert appCtx.env.slackClientId slackData.channelId
+    case alert of
+      RuntimeErrorAlert{..} -> do
+        let content = slackErrorAlert errorType message project hash endpoint service firstSeen
+        _ <- send content
+        pass
+      EndpointAlert -> pass
+      ShapeAlert -> pass
+  where
+    sendAlert :: HTTP :> es => Text -> Text -> Value -> Eff es ()
+    sendAlert channelId token content = do
+      let url = "api.slack.com/user" <> channelId
+      let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [(TE.encodeUtf8 $ "Bearer " <> token)]
+      _ <- Wreq.postWith opts (T.unpack url) content
+      pass
+
+
+slackErrorAlert :: Text -> Text -> Text -> Text -> Maybe Text -> Text -> Text -> Value
+slackErrorAlert errType message project hash endpoint service fristSeen =
+  object
+    [ "blocks"
+        .= Array
+          ( V.fromList
+              [ object ["type" .= "header", "text" .= object ["type" .= "plain_text", "text" .= ("🔴 " <> errType), "emoji" .= True]]
+              , object ["type" .= "section", "text" .= object ["type" .= "mrkdwn", "text" .= ("```" <> message <> "\n```")]]
+              , object
+                  [ "type" .= "context"
+                  , "elements" .= Array (V.fromList $ [object ["type" .= "mrkdwn", "text" .= ("*Source:* `" <> service <> "`")]] ++ maybe [] (\e -> [object ["type" .= "mrkdwn", "text" .= "*Endpoint:* `GET /user/hell world`"]]) endpoint)
+                  ]
+              , object
+                  [ "type" .= "context"
+                  , "elements"
+                      .= Array (V.fromList [object ["type" .= "mrkdwn", "text" .= ("*Project:*" <> project)], object ["type" .= "mrkdwn", "text" .= "*First seen:* <!date^1718654100^{date_short_pretty} at {time}|2025-06-17 20:15C>"]])
+                  ]
+              , object ["type" .= "divider"]
+              , object
+                  [ "type" .= "actions"
+                  , "elements" .= Array (V.fromList [object ["type" .= "button", "text" .= object ["type" .= "plain_text", "text" .= "🔍 Investigate", "emoji" .= Bool True], "url" .= "https://errors.example.com/explore?hash=a8f3c9d2e1b4", "style" .= "primary"]])
+                  ]
+              ]
+          )
+    ]
