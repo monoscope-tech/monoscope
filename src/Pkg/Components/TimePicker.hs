@@ -119,7 +119,7 @@ timepicker_ submitForm currentRange = fieldset_
 
     -- DaisyUI popover content
     ul_
-      [ class_ "dropdown dropdown-end menu w-120 rounded-box bg-bgOverlay shadow-lg"
+      [ class_ "dropdown dropdown-end menu w-96 rounded-box bg-bgOverlay shadow-lg"
       , term "popover" ""
       , id_ "timepicker-popover"
       , term "style" "position-anchor:--timepicker-anchor"
