@@ -104,7 +104,7 @@ expandedSpanItem pid sp aptSp leftM rightM = do
       div_ [class_ "flex gap-2 items-center text-textBrand font-medium text-xs"] do
         whenJust reqDetails $ \case
           ("HTTP", _, _, _) -> do
-            let json = decodeUtf8 $ AE.encode $ selectiveOtelLogsJson sp
+            let json = decodeUtf8 $ AE.encode $ AE.toJSON sp
             button_
               [ class_ "flex items-center gap-1"
               , term "onpointerdown" "window.buildCurlRequest(event)"
@@ -165,7 +165,7 @@ expandedSpanItem pid sp aptSp leftM rightM = do
 
       div_ [class_ "grid my-4 text-slate-600 font"] $ do
         div_ [class_ "hidden a-tab-content", id_ "m-raw-content"] $ do
-          jsonValueToHtmlTree (selectiveOtelLogsJson sp) Nothing
+          jsonValueToHtmlTree (AE.toJSON sp) Nothing
         div_ [class_ $ "a-tab-content " <> if isHttp then "hidden" else "", id_ "att-content"] $ do
           jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) sp.attributes) (Just "attributes")
         div_ [class_ "hidden a-tab-content", id_ "meta-content"] $ do
@@ -189,7 +189,7 @@ expandedSpanItem pid sp aptSp leftM rightM = do
                     button_ [onpointerdown_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Request Details"
                 div_ [] do
                   div_ [id_ "raw_content", class_ "hidden a-tab-content http"] do
-                    jsonValueToHtmlTree (selectiveOtelLogsJson cSp) Nothing
+                    jsonValueToHtmlTree (AE.toJSON cSp) Nothing
                   div_ [id_ "req_content", class_ "hidden a-tab-content http"] do
                     let b = case cSp.body of
                           Just (AE.Object bb) -> case KEM.lookup "request_body" bb of
@@ -277,24 +277,3 @@ spanBadge val key = do
     ]
     $ do
       span_ [] $ toHtml val
-
-
-selectiveOtelLogsJson :: Telemetry.OtelLogsAndSpans -> AE.Value
-selectiveOtelLogsJson sp =
-  AE.object
-    $ concat @[]
-      [ ["start_time" AE..= sp.start_time]
-      , ["end_time" AE..= sp.end_time]
-      , ["resource" AE..= sp.resource]
-      , ["attributes" AE..= sp.attributes]
-      , maybe [] (\d -> ["name" AE..= d]) sp.name
-      , maybe [] (\d -> ["status" AE..= d]) sp.status_code
-      , maybe [] (\d -> ["kind" AE..= d]) sp.kind
-      , maybe [] (\d -> ["body" AE..= d]) sp.body
-      , maybe [] (\d -> ["duration" AE..= getDurationNSMS (fromIntegral d)]) sp.duration
-      , ["parent_id" AE..= sp.parent_id]
-      , maybe [] (\d -> ["context" AE..= d]) sp.context
-      , maybe [] (\d -> ["severity" AE..= d]) sp.severity
-      , maybe [] (\d -> ["events" AE..= d]) sp.events
-      , maybe [] (\d -> ["link" AE..= d]) sp.links
-      ]

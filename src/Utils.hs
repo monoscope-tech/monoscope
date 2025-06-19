@@ -327,7 +327,7 @@ jsonValueToHtmlTree val pathM = do
             span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue False value
 
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
-    renderParentType opening closing key count child = div_ [class_ "log-item-with-children"] do
+    renderParentType opening closing key count child = div_ [class_ $ "log-item-with-children" <> if count == 0 then " collapsed" else ""] do
       a_
         [ class_ "inline-block items-center cursor-pointer"
         , onclick_ "this.parentNode.classList.toggle('collapsed')"
@@ -463,9 +463,9 @@ parseUTC utcTime = iso8601ParseM (toString utcTime)
 
 freeTierLimitExceededBanner :: Text -> Html ()
 freeTierLimitExceededBanner pid =
-  div_ [class_ "flex w-full text-center items-center px-4 gap-4 py-2 bg-red-600 text-white rounded-lg justify-center"] do
+  div_ [class_ "flex w-full text-center items-center px-4 gap-4 py-1 bg-fillError-strong text-textInverse-strong rounded-lg justify-center"] do
     p_ [] "You’ve exceeded your free tier event limit for the past 24 hours. New requests will not be processed until the limit resets."
-    a_ [class_ "font-semibold text-red-700 bg-white px-2 py-1 rounded-lg", href_ $ "/p/" <> pid <> "/manage_billing"] "upgrade now"
+    a_ [class_ "underline underline-offset-2 link ", href_ $ "/p/" <> pid <> "/manage_billing"] "upgrade now"
 
 
 serviceColors :: V.Vector Text
