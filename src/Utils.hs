@@ -463,9 +463,10 @@ parseUTC utcTime = iso8601ParseM (toString utcTime)
 
 freeTierLimitExceededBanner :: Text -> Html ()
 freeTierLimitExceededBanner pid =
-  div_ [class_ "flex w-full text-center items-center px-4 gap-4 py-1 bg-fillError-strong text-textInverse-strong rounded-lg justify-center"] do
-    p_ [] "You’ve exceeded your free tier event limit for the past 24 hours. New requests will not be processed until the limit resets."
-    a_ [class_ "underline underline-offset-2 link ", href_ $ "/p/" <> pid <> "/manage_billing"] "upgrade now"
+  div_ [class_ "flex w-full text-center items-center px-4 gap-4 py-1 bg-fillError-weak text-textError rounded-lg justify-center"] do
+    strong_ "Daily cap reached."
+    " Your free-tier events have run out; unlock more capacity. "
+    a_ [class_ "underline underline-offset-2 link", href_ $ "/p/" <> pid <> "/manage_billing"] "See pricing"
 
 
 serviceColors :: V.Vector Text
