@@ -60,8 +60,8 @@ function getUTCOffset() {
   const sign = offset > 0 ? '-' : '+'
   const absOffset = Math.abs(offset)
   const hours = String(Math.floor(absOffset / 60)).padStart(2, '0')
-  const minutes = String(absOffset % 60).padStart(2, '0')
-  return `UTC${sign}${hours}:${minutes}`
+  const minutes = absOffset % 60
+  return minutes > 0 ? `UTC${sign}${hours}:${String(minutes).padStart(2, '0')}` : `UTC${sign}${hours}`
 }
 window.getUTCOffset = getUTCOffset
 

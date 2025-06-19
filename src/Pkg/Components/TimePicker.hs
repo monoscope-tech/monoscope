@@ -98,10 +98,10 @@ timePickerItems =
 
 timepicker_ :: Maybe Text -> Maybe (Text, Text) -> Html ()
 timepicker_ submitForm currentRange = fieldset_
-  [ class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg overflow-hidden dash-variable text-sm shadow-xs -mt-1.5"
+  [ class_ "border border-strokeWeak p-0 inline-block rounded-lg overflow-hidden dash-variable text-sm shadow-xs -mt-1.5"
   ]
   do
-    legend_ [id_ "offsetIndicator", class_ "px-1 ml-2 text-xs"] "UTC+00:00"
+    legend_ [id_ "offsetIndicator", class_ "px-1 ml-2 text-xs text-textWeak"] "UTC+00"
     input_ [type_ "hidden", id_ "since_input"]
     input_ [type_ "hidden", id_ "custom_range_input"]
 
@@ -151,7 +151,7 @@ timepicker_ submitForm currentRange = fieldset_
           [ [__| on click toggle .hidden on #timepickerSidebar |]
           ]
           do
-            faSprite_ "calendar-range" "regular" "h-4 w-4 mr-2 text-iconNeutral"
+            faSprite_ "calendar" "regular" "h-4 w-4 mr-2 text-iconNeutral"
             span_ "Custom date range"
 
         -- Custom date range picker (hidden by default)
@@ -229,10 +229,10 @@ refreshButton_ = do
           add .animate-spin to the first <svg/> in me then wait 1 seconds then
           remove .animate-spin from the first <svg/> in me |]
       ]
-      $ faSprite_ "arrows-rotate" "regular" "w-3 h-3"
+      $ faSprite_ "arrows-rotate" "regular" "w-3 h-3 text-iconNeutral"
 
     -- Auto-refresh dropdown
-    div_ [class_ "dropdown dropdown-end leading-none join-item border-y border-r border-strokeStrong shadow-sm group/rf"] do
+    div_ [class_ "dropdown dropdown-end leading-none join-item border-y border-r border-strokeWeak shadow-xs group/rf"] do
       div_ [class_ "cursor-pointer py-2 px-3 flex gap-2 items-center leading-none", tabindex_ "0", data_ "tippy-content" "Refresh frequency"] do
         span_ [class_ "auto-refresh-span"] "Off"
         faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral "
