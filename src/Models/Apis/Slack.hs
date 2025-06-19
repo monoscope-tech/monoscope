@@ -14,7 +14,7 @@ module Models.Apis.Slack (
 import Database.PostgreSQL.Entity.DBT (execute, queryOne)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Transact (DBT, executeMany)
+import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as AE
 import Deriving.Aeson qualified as DAE
 import Effectful
@@ -97,7 +97,7 @@ updateDiscordNotificationChannel guildId channelId = dbtToEff $ execute q (chann
     q = [sql|Update apis.discord SET notifs_channel_id=? WHERE guild_id = ? |]
 
 
-updateSlackNotificationChannel :: DB :> es => Text -> Text -> Eff es (Int64)
+updateSlackNotificationChannel :: DB :> es => Text -> Text -> Eff es Int64
 updateSlackNotificationChannel teamId channelId = dbtToEff $ execute q (channelId, teamId)
   where
     q = [sql|Update apis.slack SET channel_id =? WHERE team_id = ? |]

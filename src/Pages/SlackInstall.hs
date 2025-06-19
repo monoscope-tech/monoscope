@@ -1,7 +1,3 @@
-{-# LANGUAGE BlockArguments #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE ExplicitNamespaces #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
 module Pages.SlackInstall (linkProjectGetH, linkDiscordGetH, discordInteractionsH, DiscordInteraction, SlackLink, slackInteractionsH, SlackInteraction) where
@@ -12,7 +8,6 @@ import Crypto.PubKey.Ed25519 qualified as Ed25519
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
-import Data.ByteString.Lazy qualified as LBS
 import Data.Default (Default (def))
 import Data.Text qualified as T
 import Data.Vector qualified as V
@@ -28,7 +23,6 @@ import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Pkg.Components (navBar)
 import Pkg.Mail (sendSlackMessage)
 import Relude hiding (ask, asks)
-
 import Control.Lens ((.~), (^.))
 import Data.Effectful.Wreq (
   HTTP,
@@ -40,14 +34,7 @@ import Data.Effectful.Wreq (
   responseBody,
  )
 import Effectful (Eff, type (:>))
-import Effectful.Concurrent.Async
-import Effectful.Internal.Monad (subsume)
-import Langchain.LLM.Core qualified as LLM
-import Langchain.LLM.OpenAI (OpenAI (..))
-import Network.HTTP.Client (RequestBody (..), Response (responseStatus))
-import Network.HTTP.Client.MultipartFormData (PartM, partFileRequestBody)
 import Network.HTTP.Types (urlEncode)
-import Network.URI (escapeURIString)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import Pkg.Components.Widget qualified as Widget
@@ -70,7 +57,7 @@ data IncomingWebhook = IncomingWebhook
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] IncomingWebhook
 
 
-data TokenResponseTeam = TokenResponseTeam
+newtype TokenResponseTeam = TokenResponseTeam
   { id :: Text
   }
   deriving stock (Generic, Show)
@@ -495,7 +482,7 @@ registerDiscordCommands appId botToken guildId = do
           [ "name" AE..= ("ask" :: Text)
           , "description" AE..= ("Ask a question about your project using natural language" :: Text)
           , "type" AE..= 1
-          , "options" AE..= (AE.Array $ V.fromList [AE.object ["name" AE..= "question", "description" AE..= "Your question in natural language", "type" AE..= 3, "required" AE..= True]])
+          , "options" AE..= AE.Array (V.fromList [AE.object ["name" AE..= "question", "description" AE..= "Your question in natural language", "type" AE..= 3, "required" AE..= True]])
           ]
 
       hereCommand = AE.object ["name" AE..= "here", "description" AE..= "Channel for apitoolkit to send notifications", "type" AE..= 1]
@@ -544,10 +531,10 @@ sendJsonFollowupResponse :: HTTP :> es => Text -> Text -> Text -> AE.Value -> Ef
 sendJsonFollowupResponse appId interactionToken botToken content = do
   let followupUrl = toString $ "https://discord.com/api/v10/webhooks/" <> appId <> "/" <> interactionToken
   _ <- postWith (defaults & authHeader botToken & contentTypeHeader "application/json") followupUrl content
-  pure ()
+  pass
 
 
-slackInteractionsH :: SlackInteraction -> ATBaseCtx (AE.Value)
+slackInteractionsH :: SlackInteraction -> ATBaseCtx AE.Value
 slackInteractionsH interaction = do
   case interaction.command of
     "here" -> do
@@ -558,7 +545,7 @@ slackInteractionsH interaction = do
       authCtx <- Effectful.Reader.Static.ask @AuthContext
       void $ liftIO $ forkIO $ do
         case slackDataM of
-          Nothing -> sendSlackFollowupResponse interaction.response_url (AE.object ["text" AE..= ("Error: something went wrong")])
+          Nothing -> sendSlackFollowupResponse interaction.response_url (AE.object ["text" AE..= "Error: something went wrong"])
           Just slackData -> handleAskCommand interaction slackData authCtx
       pure $ AE.object ["response_type" AE..= "in_channel", "text" AE..= "apitoolkit is working..."]
   where
@@ -570,7 +557,7 @@ slackInteractionsH interaction = do
       result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
       case result of
         Left err ->
-          sendSlackFollowupResponse inter.response_url (AE.object ["text" AE..= ("Error: something went wrong")])
+          sendSlackFollowupResponse inter.response_url (AE.object ["text" AE..= "Error: something went wrong"])
         Right (query, vizTypeM) -> do
           case vizTypeM of
             Just vizType -> do
@@ -578,18 +565,18 @@ slackInteractionsH interaction = do
               -- _ <- replyWithChartImage interaction reqBody envCfg.discordBotToken envCfg.discordClientId
               let content = AE.object ["response_type" AE..= "in_channel", "text" AE..= ("Generated query: " <> query <> "\n\n" <> vizType <> slackData.projectId.toText)]
               sendSlackFollowupResponse inter.response_url content
-              pure ()
+              pass
             Nothing -> do
               let content = AE.object ["response_type" AE..= "in_channel", "text" AE..= ("Generated query: " <> query)]
               sendSlackFollowupResponse inter.response_url content
 
-      pure ()
+      pass
 
 
 sendSlackFollowupResponse :: Text -> AE.Value -> IO ()
 sendSlackFollowupResponse responseUrl content = do
   _ <- Wreq.postWith (defaults & contentTypeHeader "application/json") (toString responseUrl) content
-  pure ()
+  pass
 
 
 data SlackInteraction = SlackInteraction
@@ -612,6 +599,6 @@ data SlackInteraction = SlackInteraction
 
 chartImageUrl :: AE.Value -> Text -> Text
 chartImageUrl options baseUrl =
-  let jsonBS = LBS.toStrict (AE.encode options)
+  let jsonBS = toStrict (AE.encode options)
       encoded = urlEncode True jsonBS
    in baseUrl <> "?opts=" <> decodeUtf8 encoded

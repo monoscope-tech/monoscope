@@ -93,6 +93,7 @@ default-extensions:
   - AllowAmbiguousTypes
   - TupleSections
   - ViewPatterns
+  - DeriveGeneric
 
 description: Please see the README on GitHub at <https://github.com/githubuser/apitoolkit-server#readme>
 
