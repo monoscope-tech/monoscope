@@ -164,7 +164,7 @@ requestMsgToDumpAndEndpoint
   -> RequestMessages.RequestMessage
   -> UTCTime
   -> UUID.UUID
-  -> Either Text (Maybe RequestDumps.RequestDump, Maybe Endpoints.Endpoint, Maybe Shapes.Shape, V.Vector Fields.Field, V.Vector Formats.Format, V.Vector RequestDumps.ATError)
+  -> Either Text (Maybe Endpoints.Endpoint, Maybe Shapes.Shape, V.Vector Fields.Field, V.Vector Formats.Format, V.Vector RequestDumps.ATError)
 requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- TODO: User dumpID and msgID to get correct ID
   let dumpID = fromMaybe dumpIDOriginal rM.msgId
@@ -173,7 +173,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   let method = T.toUpper rM.method
   let urlPath' = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method (fromMaybe "/" rM.urlPath)
   let (urlPathDyn, pathParamsDyn, hasDyn) = ensureUrlParams urlPath'
-  let (urlPath, pathParams) = if hasDyn then (urlPathDyn, pathParamsDyn) else (urlPath', rM.pathParams)
+  let (urlPath, _pathParams) = if hasDyn then (urlPathDyn, pathParamsDyn) else (urlPath', rM.pathParams)
   let !endpointHash = toXXHash $ UUID.toText rM.projectId <> fromMaybe "" rM.host <> method <> urlPath
   let redactFieldsList = pjc.redactFieldslist V.++ V.fromList [".set-cookie", ".password"]
   let redacted = redactJSON redactFieldsList
@@ -218,7 +218,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           <> respBodyFieldsDTO
   let (fields, formats) = V.unzip fieldsDTO
   let !fieldHashes = sortVector $ V.map (.hash) fields
-  let !formatHashes = sortVector $ V.map (.hash) formats
+  -- let !formatHashes = sortVector $ V.map (.hash) formats
 
   --- FIXME: why are we not using the actual url params?
   -- Since it foes into the endpoint, maybe it should be the keys and their type? I'm unsure.
@@ -259,48 +259,6 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- FIXME: simplify processErrors func
   let !(errorsList, _, _) = V.unzip3 $ V.map (processErrors projectId rM.sdkType rM.method (fromMaybe "" rM.urlPath)) $ V.fromList $ fromMaybe [] rM.errors
 
-  -- request dumps are time series dumps representing each requests which we consume from our users.
-  -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
-  -- It's likely a good idea to stop relying on it for some of the time series analysis, to allow us easily support request sampling, but still support
-  -- relatively accurate analytic counts.
-  -- Build the query and params for inserting a request dump into the database.
-
-  let !reqDumpP =
-        RequestDumps.RequestDump
-          { id = dumpID
-          , createdAt = timestampUTC
-          , updatedAt = now
-          , projectId = rM.projectId
-          , host = fromMaybe "" rM.host
-          , urlPath = urlPath
-          , rawUrl = rM.rawUrl
-          , pathParams = pathParams
-          , method = method
-          , referer = fromMaybe "" $ rM.referer >>= either Just listToMaybe
-          , protoMajor = fromIntegral rM.protoMajor
-          , protoMinor = fromIntegral rM.protoMinor
-          , duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral rM.duration
-          , statusCode = fromIntegral rM.statusCode
-          , --
-            queryParams = rM.queryParams
-          , requestBody = reqBody
-          , responseBody = respBody
-          , requestHeaders = rM.requestHeaders
-          , responseHeaders = rM.responseHeaders
-          , --
-            endpointHash = endpointHash
-          , shapeHash = shapeHash
-          , formatHashes = formatHashes
-          , fieldHashes = fieldHashes
-          , durationNs = fromIntegral rM.duration
-          , sdkType = rM.sdkType
-          , parentId = rM.parentId
-          , serviceVersion = rM.serviceVersion
-          , errors = AE.toJSON errorsList
-          , tags = maybe V.empty V.fromList rM.tags
-          , requestType = RequestDumps.getRequestType rM.sdkType
-          }
-
   -- Build all fields and formats, unzip them as separate lists and append them to query and params
   -- We don't border adding them if their shape exists, as we asume that we've already seen such before.
   let fields'
@@ -323,7 +281,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
         | rM.statusCode == 404 = V.empty
         | otherwise = formats
 
-  Right (Just reqDumpP, endpoint, shape, fields', formats', errorsList)
+  Right (endpoint, shape, fields', formats', errorsList)
 
 
 isRequestOutgoing :: RequestDumps.SDKTypes -> Bool

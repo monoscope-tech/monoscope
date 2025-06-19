@@ -9,8 +9,6 @@ module Models.Apis.RequestDumps (
   normalizeUrlPath,
   selectLogTable,
   requestDumpLogUrlPath,
-  selectRequestDumpByProjectAndId,
-  bulkInsertRequestDumps,
   getRequestDumpForReports,
   getRequestDumpsForPreviousReportPeriod,
   getRequestType,
@@ -470,24 +468,6 @@ queryToValues q = dbtToEff $ V.fromList <$> DBT.query_ (Query $ encodeUtf8 q)
 
 queryCount :: DB :> es => Text -> Eff es (Maybe (Only Int))
 queryCount q = dbtToEff $ DBT.queryOne_ (Query $ encodeUtf8 q)
-
-
-bulkInsertRequestDumps :: DB :> es => [RequestDump] -> Eff es ()
-bulkInsertRequestDumps params = void $ dbtToEff $ executeMany q params
-  where
-    q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING; |]
-
-
-selectRequestDumpByProjectAndId :: Projects.ProjectId -> UTCTime -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
-selectRequestDumpByProjectAndId pid createdAt rdId = queryOne q (createdAt, pid, rdId)
-  where
-    q =
-      [sql|SELECT   id,created_at,project_id, host,url_path,method,raw_url,referer,
-                    path_params,status_code,query_params,
-                    request_body,response_body,request_headers,response_headers,
-                    duration_ns, sdk_type,
-                    parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, errors, tags, request_type
-             FROM apis.request_dumps where (created_at=?)  and project_id=? and id=? LIMIT 1|]
 
 
 getLastSevenDaysTotalRequest :: Projects.ProjectId -> DBT IO Int

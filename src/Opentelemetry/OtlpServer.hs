@@ -32,14 +32,13 @@ import Log qualified
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), Severity (..), convertSpanToRequestMessage)
+import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), Severity (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common
 import Network.GRPC.Common.Protobuf
 import Network.GRPC.Server (SomeRpcHandler)
 import Network.GRPC.Server.Run hiding (runServer)
 import Network.GRPC.Server.StreamType
-import ProcessMessage qualified
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
 import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService qualified as TS
@@ -160,27 +159,8 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
           let (ackIds, spans) = V.unzip results
               allSpans = concat spans -- Flattens the list of lists
               spans' = V.fromList allSpans
-              apitoolkitSpans =
-                V.mapMaybe
-                  ( \s ->
-                      if s.name == Just "apitoolkit-http-span"
-                        then convertSpanToRequestMessage s "apitoolkit-http-span"
-                        else Nothing
-                  )
-                  spans'
 
-          unless (V.null apitoolkitSpans)
-            $ checkpoint "processList:traces:processRequestMessages"
-            $ void
-              ( ProcessMessage.processRequestMessages
-                  $ V.toList apitoolkitSpans
-                  <&> ("",)
-              )
-
-          unless (null allSpans) do
-            checkpoint "processList:traces:bulkInsertSpans" $ Telemetry.bulkInsertOtelLogsAndSpansTF spans'
-            checkpoint "processList:traces:bulkInsertErrors" $ Anomalies.bulkInsertErrors $ Telemetry.getAllATErrors spans'
-
+          unless (null allSpans) $ checkpoint "processList:traces:bulkInsertSpans" $ Telemetry.bulkInsertOtelLogsAndSpansTF spans'
           pure $ V.toList ackIds
         Just "org.opentelemetry.otlp.metrics.v1" -> checkpoint "processList:metrics" do
           results <- V.forM msgs' $ \(ackId, msg) ->
@@ -755,26 +735,9 @@ traceServiceExport appLogger appCtx (Proto req) = do
         $ ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
     let spans = convertResourceSpansToOtelLogs projectIdsAndKeys resourceSpans
         spans' = V.fromList spans
-        apitoolkitSpans =
-          V.mapMaybe
-            ( \s ->
-                if s.name == Just "apitoolkit-http-span"
-                  then convertSpanToRequestMessage s "apitoolkit-http-span"
-                  else Nothing
-            )
-            spans'
-
-    unless (V.null apitoolkitSpans)
-      $ checkpoint "processList:traces:processRequestMessages"
-      $ void
-        ( ProcessMessage.processRequestMessages
-            $ V.toList apitoolkitSpans
-            <&> ("",)
-        )
 
     unless (null spans) do
       Telemetry.bulkInsertOtelLogsAndSpansTF spans'
-      Anomalies.bulkInsertErrors $ Telemetry.getAllATErrors spans'
 
   -- Return an empty response
   pure defMessage

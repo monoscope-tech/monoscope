@@ -38,7 +38,6 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Query qualified as Fields
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Formats qualified as Formats
-import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (Context (trace_state))
@@ -146,7 +145,7 @@ processMessages msgs attrs = do
         $ void
         $ Telemetry.bulkInsertOtelLogsAndSpansTF spanVec
 
-      processRequestMessages (rights msgs')
+      pure $ map fst (rights msgs')
 
 
 -- Replace null characters in a Text
@@ -184,34 +183,32 @@ processRequestMessages msgs' = do
       -- Process all messages for this project with the same cache
       forM projectMsgs \(rmAckId, msg) ->
         if exceededFreeTier
-          then pure $ Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty, rmAckId)
+          then pure $ Right (Nothing, Nothing, V.empty, V.empty, V.empty, rmAckId)
           else do
             recId <- UUID.genUUID
             let result = RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal msg timestamp recId
             case result of
               Left err -> pure $ Left (err, rmAckId, msg)
-              Right (rd, enp, s, f, fo, err) -> pure $ Right (rd, enp, s, f, fo, err, rmAckId)
+              Right (enp, s, f, fo, err) -> pure $ Right (enp, s, f, fo, err, rmAckId)
 
   let !(failures, successes) = partitionEithers processed
-      !(reqDumps, endpoints, shapes, fields, formats, errs, rmAckIds) = L.unzip7 successes
-  let !reqDumpsFinal = catMaybes reqDumps
+      !(endpoints, shapes, fields, formats, _errs, rmAckIds) = L.unzip6 successes
   let !endpointsFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes endpoints
   let !shapesFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes shapes
   let !fieldsFinal = VAA.nubBy (comparing (.hash)) $ V.concat fields
   let !formatsFinal = VAA.nubBy (comparing (.hash)) $ V.concat formats
-  let !errsFinal = VAA.nubBy (comparing (.hash)) $ V.concat errs
+  -- let !errsFinal = VAA.nubBy (comparing (.hash)) $ V.concat errs
 
   forM_ failures \(err, rmAckId, msg) ->
     Log.logAttention "Error processing message" (object ["Error" .= err, "AckId" .= rmAckId, "OriginalMsg" .= msg])
 
   afterProcessing <- liftIO $ getTime Monotonic
   result <- try $ Ki.scoped \scope -> do
-    unless (null reqDumpsFinal) $ void $ Ki.fork scope $ RequestDumps.bulkInsertRequestDumps reqDumpsFinal
     unless (null endpointsFinal) $ void $ Ki.fork scope $ Endpoints.bulkInsertEndpoints endpointsFinal
     unless (null shapesFinal) $ void $ Ki.fork scope $ Shapes.bulkInsertShapes shapesFinal
     unless (null fieldsFinal) $ void $ Ki.fork scope $ Fields.bulkInsertFields fieldsFinal
     unless (null formatsFinal) $ void $ Ki.fork scope $ Formats.bulkInsertFormat formatsFinal
-    unless (null errsFinal) $ void $ Ki.fork scope $ Anomalies.bulkInsertErrors errsFinal
+    -- unless (null errsFinal) $ void $ Ki.fork scope $ Anomalies.bulkInsertErrors errsFinal
     Ki.atomically $ Ki.awaitAll scope
 
   endTime <- liftIO $ getTime Monotonic
@@ -219,7 +216,7 @@ processRequestMessages msgs' = do
   let queryTime = toNanoSecs (diffTimeSpec afterProcessing endTime) `div` 1000
   let totalTime = toNanoSecs (diffTimeSpec startTime endTime) `div` 1000
   let projectIds = show $ UUID.toText <$> HM.keys groupedMsgs
-  Log.logInfo_ $ show [fmt| Processing {length groupedMsgs} projectIds from {length msgs'} msgs. saved {length reqDumpsFinal}. totalTime: {totalTime} -> query: {queryTime} -> processing: {processingTime} => projects: {projectIds}|]
+  Log.logInfo_ $ show [fmt| Processing {length groupedMsgs} projectIds from {length msgs'} msgs. totalTime: {totalTime} -> query: {queryTime} -> processing: {processingTime} => projects: {projectIds}|]
   case result of
     Left (e :: SomePostgreSqlException) -> do
       Log.logAttention "Postgres Exception" (show e)
