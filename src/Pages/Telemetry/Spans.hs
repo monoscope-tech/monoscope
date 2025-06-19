@@ -4,6 +4,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
+import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (formatTime)
 import Data.Time.Format (defaultTimeLocale)
@@ -12,13 +13,12 @@ import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry (Context (..), SpanRecord (..), convertSpanToRequestMessage)
+import Models.Telemetry.Telemetry (Context (..), SpanRecord (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.Components (dateTime)
 import Pages.Telemetry.Utils (getErrorDetails, getRequestDetails, getServiceName, getSpanErrors)
 import Relude
-import RequestMessages (RequestMessage (..))
 import System.Types
 import Utils
 
@@ -104,7 +104,7 @@ expandedSpanItem pid sp aptSp leftM rightM = do
       div_ [class_ "flex gap-2 items-center text-textBrand font-medium text-xs"] do
         whenJust reqDetails $ \case
           ("HTTP", _, _, _) -> do
-            let json = decodeUtf8 $ AE.encode $ convertSpanToRequestMessage sp "" >>= (Just . selectiveReqToJson)
+            let json = decodeUtf8 $ AE.encode $ selectiveOtelLogsJson sp
             button_
               [ class_ "flex items-center gap-1"
               , term "onpointerdown" "window.buildCurlRequest(event)"
@@ -178,40 +178,56 @@ expandedSpanItem pid sp aptSp leftM rightM = do
         whenJust reqDetails $ \case
           ("HTTP", method, path, status) -> do
             let cSp = fromMaybe sp aptSp
-            let httpJsonM = convertSpanToRequestMessage cSp ""
-            case httpJsonM of
-              Just httpJson -> do
-                div_ [class_ "a-tab-content nested-tab", id_ "request-content"] do
-                  div_ [id_ "http-content-container", class_ "flex flex-col gap-3 mt-2"] do
-                    div_ [class_ "bg-fillWeak w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"] $ do
-                      div_ [class_ "justify-start items-start flex text-sm"] $ do
-                        button_ [onpointerdown_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Res Body"
-                        button_ [onpointerdown_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Req Body"
-                        button_ [onpointerdown_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
-                        button_ [onpointerdown_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
-                        button_ [onpointerdown_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Request Details"
-                    div_ [] do
-                      div_ [id_ "raw_content", class_ "hidden a-tab-content http"] do
-                        jsonValueToHtmlTree (selectiveReqToJson httpJson) Nothing
-                      div_ [id_ "req_content", class_ "hidden a-tab-content http"] do
-                        let b = case cSp.body of
-                              Just (AE.Object bb) -> case KEM.lookup "request_body" bb of
-                                Just a -> a
-                                _ -> AE.object []
-                              _ -> AE.object []
-                        jsonValueToHtmlTree b $ Just "body.request_body"
-                      div_ [id_ "res_content", class_ "a-tab-content http"] do
-                        let b = case cSp.body of
-                              Just (AE.Object bb) -> case KEM.lookup "response_body" bb of
-                                Just a -> a
-                                _ -> AE.object []
-                              _ -> AE.object []
-                        jsonValueToHtmlTree b $ Just "body.response_body"
-                      div_ [id_ "hed_content", class_ "hidden a-tab-content http"] do
-                        jsonValueToHtmlTree (AE.object ["request_headers" AE..= httpJson.requestHeaders, "response_headers" AE..= httpJson.responseHeaders]) Nothing
-                      div_ [id_ "par_content", class_ "hidden a-tab-content http"] do
-                        jsonValueToHtmlTree (AE.object ["query_params" AE..= httpJson.queryParams, "path_params" AE..= httpJson.pathParams]) Nothing
-              Nothing -> pass
+            div_ [class_ "a-tab-content nested-tab", id_ "request-content"] do
+              div_ [id_ "http-content-container", class_ "flex flex-col gap-3 mt-2"] do
+                div_ [class_ "bg-fillWeak w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"] do
+                  div_ [class_ "justify-start items-start flex text-sm"] do
+                    button_ [onpointerdown_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Res Body"
+                    button_ [onpointerdown_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Req Body"
+                    button_ [onpointerdown_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
+                    button_ [onpointerdown_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
+                    button_ [onpointerdown_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Request Details"
+                div_ [] do
+                  div_ [id_ "raw_content", class_ "hidden a-tab-content http"] do
+                    jsonValueToHtmlTree (selectiveOtelLogsJson cSp) Nothing
+                  div_ [id_ "req_content", class_ "hidden a-tab-content http"] do
+                    let b = case cSp.body of
+                          Just (AE.Object bb) -> case KEM.lookup "request_body" bb of
+                            Just a -> a
+                            _ -> AE.object []
+                          _ -> AE.object []
+                    jsonValueToHtmlTree b $ Just "body.request_body"
+                  div_ [id_ "res_content", class_ "a-tab-content http"] do
+                    let b = case cSp.body of
+                          Just (AE.Object bb) -> case KEM.lookup "response_body" bb of
+                            Just a -> a
+                            _ -> AE.object []
+                          _ -> AE.object []
+                    jsonValueToHtmlTree b $ Just "body.response_body"
+                  div_ [id_ "hed_content", class_ "hidden a-tab-content http"] do
+                    let reqHeaders = case cSp.attributes >>= Map.lookup "http" of
+                          Just (AE.Object httpAtts) -> case KEM.lookup "request" httpAtts of
+                            Just (AE.Object reqAtts) -> KEM.lookup "header" reqAtts
+                            _ -> Nothing
+                          _ -> Nothing
+                        resHeaders = case cSp.attributes >>= Map.lookup "http" of
+                          Just (AE.Object httpAtts) -> case KEM.lookup "response" httpAtts of
+                            Just (AE.Object resAtts) -> KEM.lookup "header" resAtts
+                            _ -> Nothing
+                          _ -> Nothing
+                    jsonValueToHtmlTree (AE.object ["request_headers" AE..= fromMaybe AE.Null reqHeaders, "response_headers" AE..= fromMaybe AE.Null resHeaders]) Nothing
+                  div_ [id_ "par_content", class_ "hidden a-tab-content http"] do
+                    let queryParams = case cSp.attributes >>= Map.lookup "http" of
+                          Just (AE.Object httpAtts) -> case KEM.lookup "request" httpAtts of
+                            Just (AE.Object reqAtts) -> KEM.lookup "query_params" reqAtts
+                            _ -> Nothing
+                          _ -> Nothing
+                        pathParams = case cSp.attributes >>= Map.lookup "http" of
+                          Just (AE.Object httpAtts) -> case KEM.lookup "request" httpAtts of
+                            Just (AE.Object reqAtts) -> KEM.lookup "path_params" reqAtts
+                            _ -> Nothing
+                          _ -> Nothing
+                    jsonValueToHtmlTree (AE.object ["query_params" AE..= fromMaybe AE.Null queryParams, "path_params" AE..= fromMaybe AE.Null pathParams]) Nothing
           _ -> pass
 
 
@@ -261,30 +277,6 @@ spanBadge val key = do
     ]
     $ do
       span_ [] $ toHtml val
-
-
-selectiveReqToJson :: RequestMessage -> AE.Value
-selectiveReqToJson req =
-  AE.object
-    $ concat @[]
-      [ ["created_at" AE..= req.timestamp]
-      , ["errors" AE..= fromMaybe [] req.errors]
-      , ["host" AE..= req.host]
-      , ["method" AE..= req.method]
-      , ["parent_id" AE..= req.parentId]
-      , ["path_params" AE..= req.pathParams]
-      , ["query_params" AE..= req.queryParams]
-      , ["raw_url" AE..= req.rawUrl]
-      , ["referer" AE..= req.referer]
-      , ["request_body" AE..= b64ToJson req.requestBody]
-      , ["request_headers" AE..= req.requestHeaders]
-      , ["response_body" AE..= b64ToJson req.responseBody]
-      , ["response_headers" AE..= req.responseHeaders]
-      , ["service_version" AE..= req.serviceVersion]
-      , ["status_code" AE..= req.statusCode]
-      , ["tags" AE..= req.tags]
-      , ["url_path" AE..= req.urlPath]
-      ]
 
 
 selectiveOtelLogsJson :: Telemetry.OtelLogsAndSpans -> AE.Value

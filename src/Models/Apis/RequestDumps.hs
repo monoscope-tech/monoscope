@@ -29,7 +29,7 @@ import Data.Time.Format
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (executeMany, query, queryOne)
+import Database.PostgreSQL.Entity.DBT (query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField (fromField))
@@ -49,10 +49,9 @@ import Models.Apis.Fields.Query ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.Parser
-import Pkg.Parser.Stats (Section, Sources (SSpans))
+import Pkg.Parser.Stats (Section, Sources)
 import Relude hiding (many, some)
 import Web.HttpApiData (ToHttpApiData (..))
-import Witch (from)
 
 
 data SDKTypes

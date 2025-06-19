@@ -33,7 +33,6 @@ import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Log qualified
-import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Query qualified as Fields
 import Models.Apis.Fields.Types qualified as Fields

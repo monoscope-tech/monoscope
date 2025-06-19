@@ -12,7 +12,6 @@ import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxPatch_, hxPost_, hxTarget_)
 import Lucid.Hyperscript (__)
-import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions

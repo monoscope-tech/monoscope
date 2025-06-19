@@ -22,8 +22,8 @@ import Data.HashTable.Class qualified as HTC
 import Data.HashTable.ST.Cuckoo qualified as HT
 import Data.Scientific qualified as Scientific
 import Data.Text qualified as T
-import Data.Time.Clock as Clock (UTCTime, secondsToNominalDiffTime)
-import Data.Time.LocalTime as Time (ZonedTime, calendarTimeTime, zonedTimeToUTC)
+import Data.Time.Clock as Clock (UTCTime)
+import Data.Time.LocalTime as Time (ZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA

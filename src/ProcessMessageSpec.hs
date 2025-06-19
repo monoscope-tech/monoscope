@@ -10,7 +10,6 @@ import Database.PostgreSQL.Entity.DBT (execute, withPool)
 import Database.PostgreSQL.Simple (Connection)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Pkg.TestUtils qualified as TestUtils
 import ProcessMessage (processMessages, processRequestMessages)

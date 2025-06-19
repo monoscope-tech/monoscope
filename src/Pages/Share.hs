@@ -11,12 +11,10 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
 import Lucid.Hyperscript (__)
-import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Pages.Components (navBar)
-import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Telemetry.Spans qualified as Spans
 import Relude
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)

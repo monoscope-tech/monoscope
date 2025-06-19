@@ -14,12 +14,7 @@ import Effectful.Concurrent (runConcurrent)
 import Effectful.Fail (runFailIO)
 import Effectful.Time (runTime)
 import Log qualified
-import Network.Wai.Handler.Warp (
-  defaultSettings,
-  runSettings,
-  setOnException,
-  setPort,
- )
+import Network.Wai.Handler.Warp (defaultSettings, runSettings, setOnException, setPort)
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
 import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
@@ -102,10 +97,7 @@ instance FromHttpApiData ByteString where
   parseUrlPiece = Right . encodeUtf8
 
 
-mkServer
-  :: Log.Logger
-  -> AuthContext
-  -> Servant.Application
+mkServer :: Log.Logger -> AuthContext -> Servant.Application
 mkServer logger env = do
   genericServeTWithContext
     (effToServantHandler env logger)
@@ -121,11 +113,7 @@ shutdownAPItoolkit env =
     Pool.destroyAllResources env.timefusionPgPool
 
 
-logException
-  :: Text
-  -> Log.Logger
-  -> Safe.SomeException
-  -> IO ()
+logException :: Text -> Log.Logger -> Safe.SomeException -> IO ()
 logException envTxt logger exception =
   runEff
     . runTime
