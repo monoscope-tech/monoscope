@@ -89,13 +89,11 @@ apiGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ApiGet)
 apiGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   apiKeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
-  requestDumps <- dbtToEff $ RequestDumps.countRequestDumpByProject pid
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "API keys"
-          , hasIntegrated = Just (requestDumps > 0)
           , isSettingsPage = True
           }
   addRespHeaders $ ApiGet $ PageCtx bwconf (pid, apiKeys)
@@ -191,7 +189,7 @@ keyRow pid i apiKey = do
         [class_ $ "mr-2 w-full " <> idx]
         $ toHtml
         $ T.take 8 apiKey.keyPrefix
-        <> T.replicate 20 "*"
+          <> T.replicate 20 "*"
       div_ [class_ "hidden group-hover:flex justify-between items-center gap-3"] do
         button_
           [ class_ "text-brand"

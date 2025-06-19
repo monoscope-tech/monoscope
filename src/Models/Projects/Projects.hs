@@ -158,7 +158,6 @@ data Project' = Project'
   , onboardingStepsCompleted :: V.Vector Text
   , notifyPhoneNumber :: Maybe Text
   , notifyEmails :: V.Vector Text
-  , hasIntegrated :: Bool
   , usersDisplayImages :: V.Vector Text
   }
   deriving stock (Generic, Show)

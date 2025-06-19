@@ -9,16 +9,12 @@ module Models.Apis.RequestDumps (
   normalizeUrlPath,
   selectLogTable,
   requestDumpLogUrlPath,
-  selectRequestDumpByProject,
   selectRequestDumpByProjectAndId,
   bulkInsertRequestDumps,
   getRequestDumpForReports,
   getRequestDumpsForPreviousReportPeriod,
-  selectChildSpansAndLogs,
-  countRequestDumpByProject,
   getRequestType,
   getLastSevenDaysTotalRequest,
-  getTotalRequestToReport,
   parseSDKType,
 )
 where
@@ -462,25 +458,6 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
   pure $ Right (logItemsV, queryComponents.toColNames, c)
 
 
-selectChildSpansAndLogs :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Text] -> V.Vector Text -> (Maybe UTCTime, Maybe UTCTime) -> Eff es (V.Vector (V.Vector AE.Value))
-selectChildSpansAndLogs pid projectedColsByUser traceIds dateRange = do
-  now <- Time.currentTime
-  let fmtTime = toText . iso8601Show
-  let qConfig = defSqlQueryCfg pid now (Just SSpans) Nothing
-      (r, _) = getProcessedColumns projectedColsByUser qConfig.defaultSelect
-      dateRangeStr = case dateRange of
-        (Nothing, Just b) -> "AND timestamp BETWEEN '" <> fmtTime b <> "' AND NOW() "
-        (Just a, Just b) -> "AND  timestamp BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
-        _ -> ""
-
-      q =
-        [text|SELECT json_build_array($r) FROM otel_logs_and_spans
-             WHERE project_id=? and  context___trace_id=Any(?) $dateRangeStr and parent_id IS NOT NULL
-           |]
-  v <- dbtToEff $ query (Query $ encodeUtf8 q) (pid, traceIds)
-  pure $ V.mapMaybe valueToVector v
-
-
 valueToVector :: Only AE.Value -> Maybe (V.Vector AE.Value)
 valueToVector (Only val) = case val of
   AE.Array arr -> Just arr
@@ -493,45 +470,6 @@ queryToValues q = dbtToEff $ V.fromList <$> DBT.query_ (Query $ encodeUtf8 q)
 
 queryCount :: DB :> es => Text -> Eff es (Maybe (Only Int))
 queryCount q = dbtToEff $ DBT.queryOne_ (Query $ encodeUtf8 q)
-
-
-selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> Maybe ZonedTime -> Maybe ZonedTime -> DBT IO (V.Vector RequestDumpLogItem, Int)
-selectRequestDumpByProject pid extraQuery cursorM fromM toM = do
-  logItems <- query (Query $ encodeUtf8 q) (pid, cursorT)
-  Only c <- fromMaybe (Only 0) <$> queryOne (Query $ encodeUtf8 qCount) (pid, cursorT)
-  pure (logItems, c)
-  where
-    cursorT = fromMaybe "infinity" cursorM
-    dateRangeStr = from @String $ case (fromM, toM) of
-      (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
-      (Just a, Just b) -> "AND created_at BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
-      _ -> ""
-    extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
-    -- We only let people search within the 14 days time period
-    qCount =
-      [text| SELECT count(*)
-             FROM apis.request_dumps where project_id=? and created_at<? $dateRangeStr |]
-        <> extraQueryParsed
-        <> " limit 1;"
-    q =
-      [text| SELECT id,created_at,project_id,host,url_path,method,raw_url,referer,
-                    path_params, status_code,query_params,
-                    request_body,response_body,'{}'::jsonb,'{}'::jsonb,
-                    duration_ns, sdk_type,
-                    parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, '{}'::jsonb, tags, request_type
-             FROM apis.request_dumps where project_id=? and created_at<? $dateRangeStr |]
-        <> extraQueryParsed
-        <> " order by created_at desc limit 200;"
-
-
-countRequestDumpByProject :: Projects.ProjectId -> DBT IO Int
-countRequestDumpByProject pid = do
-  result <- query q pid
-  case result of
-    [Only c] -> return c
-    v -> return $ length v
-  where
-    q = [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? |]
 
 
 bulkInsertRequestDumps :: DB :> es => [RequestDump] -> Eff es ()
@@ -560,14 +498,3 @@ getLastSevenDaysTotalRequest pid = do
   where
     q =
       [sql| SELECT count(*) FROM otel_logs_and_spans WHERE project_id=? AND timestamp > NOW() - interval '1' day;|]
-
-
-getTotalRequestToReport :: Projects.ProjectId -> UTCTime -> DBT IO Int
-getTotalRequestToReport pid lastReported = do
-  result <- query q (pid, lastReported)
-  case result of
-    [Only c] -> return c
-    v -> return $ length v
-  where
-    q =
-      [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? AND created_at > ?|]

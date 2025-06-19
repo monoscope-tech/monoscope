@@ -56,11 +56,6 @@ spec = aroundAll TestUtils.withSetup do
       resp <- TestUtils.runTestBackground authCtx $ processRequestMessages msgs
       resp `shouldBe` ["m1", "m2"]
 
-    it "should be able to query request dumps that include the added requests" \pool -> do
-      (reqs, count) <- withPool pool $ RequestDumps.selectRequestDumpByProject pid "" Nothing Nothing Nothing
-      count `shouldBe` 2 -- Since 2 were saved above.
-      count `shouldBe` length reqs
-
     it "We should expect 2 endpoints, albeit unacknowleged." \pool -> do
       _ <- withPool pool $ execute [sql|CALL apis.refresh_request_dump_views_every_5mins(0, '{}')|] ()
       endpoints <- withPool pool $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0 "Incoming"

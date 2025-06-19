@@ -445,13 +445,6 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           recentLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' reqFirstCreatedAtM sinceM fromM toM (Just "loadmore") source True
 
           resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing source False
-          -- additionalReqsVec <-
-          --   if (null traceIDs)
-          --     then pure []
-          --     else do
-          --       -- rs <- RequestDumps.selectChildSpansAndLogs pid summaryCols (V.filter (/= "") traceIDs) (fromD, toD)
-          --       pure []
-          -- let finalVecs = requestVecs <> additionalReqsVec
           serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") requestVecs
           colors = getServiceColors (V.catMaybes serviceNames)
       let page =

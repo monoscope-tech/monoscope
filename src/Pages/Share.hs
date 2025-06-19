@@ -96,20 +96,16 @@ shareLinkGetH sid = do
     case r of
       Just (pid, eventId, eventType, createdAt) -> do
         case eventType of
-          "span" -> do
-            spanItem <- Telemetry.spanRecordByProjectAndId pid createdAt eventId
-            pure case spanItem of
-              Just spn -> Just $ Spans.expandedSpanItem pid spn Nothing Nothing Nothing
-              Nothing -> Nothing
           "log" -> do
             logItem <- Telemetry.logRecordByProjectAndId pid createdAt eventId
             pure case logItem of
               Just req -> Just $ apiLogItemView pid (AE.toJSON req)
               Nothing -> Nothing
+          -- Also "span"
           _ -> do
-            reqM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt eventId
-            pure case reqM of
-              Just rq -> Just $ LogItem.expandAPIlogItem' rq.projectId rq False
+            spanItem <- Telemetry.spanRecordByProjectAndId pid createdAt eventId
+            pure case spanItem of
+              Just spn -> Just $ Spans.expandedSpanItem pid spn Nothing Nothing Nothing
               Nothing -> Nothing
       Nothing -> pure Nothing
 
