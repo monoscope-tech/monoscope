@@ -442,7 +442,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
     a_
       [ class_ "hover:bg-blue-50 "
       , term "data-tippy-placement" "right"
-      , term "data-tippy-content" "Documentation"
+      , term "data-tippy-content" "Settings"
       , href_ $ "/p/" <> project.id.toText <> "/settings"
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-blue-100 text-brand leading-none "] (faSprite_ "gear" "regular" "h-3 w-3")
@@ -524,10 +524,8 @@ settingsWrapper :: Projects.ProjectId -> Text -> Html () -> Html ()
 settingsWrapper pid current pageHtml = do
   section_ [class_ "flex h-full w-full"] do
     nav_ [class_ "w-[300px]  h-full p-4 pt-8 border-r border-r-strokWeak"] do
-      h1_ [class_ "text-3xl pl-5 font-medium"] do
-        "Settings"
-      ul_ [class_ "flex flex-col mt-14 gap-2 w-full"] do
-        mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
+      h1_ [class_ "text-3xl pl-5 font-medium"] $ "Settings"
+      ul_ [class_ "flex flex-col mt-14 gap-2 w-full"] $ mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
     main_ [class_ "w-full h-full overflow-y-auto"] do
       pageHtml
 

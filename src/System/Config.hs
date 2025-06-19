@@ -78,6 +78,7 @@ data EnvConfig = EnvConfig
   , openaiBaseUrl :: Text
   , chartShotUrl :: Text
   , hostUrl :: Text
+  , apitoolkitPusherServiceAccountB64 :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)
