@@ -12,7 +12,8 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Log qualified as LogList
-import Pkg.Components qualified as Components
+import Pkg.Components.TimePicker qualified as TimePicker
+import Pkg.Components.ItemsList qualified as Components
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..))
 import Pkg.THUtils qualified as THUtils
 import Relude
@@ -44,7 +45,7 @@ monitorCreateGetH pid monitorType = do
           , currProject = Just project
           , pageTitle = "Create Monitor"
           , prePageTitle = Just "Monitors & Alerts"
-          , pageActions = Just $ Components.timepicker_ (Just "log_explorer_form") Nothing
+          , pageActions = Just $ TimePicker.timepicker_ (Just "log_explorer_form") Nothing
           }
   case monitorType of
     Just "errors" -> addRespHeaders $ PageCtx bwconf (MCMetric pid "errors")

@@ -30,7 +30,7 @@ import Pages.Components (emptyState_, statBox_)
 import Pages.Log (ApiLogsPageData (isTestLog))
 import Pages.Log qualified as Log
 import Pages.Monitors.TestCollectionEditor (castToStepResult)
-import Pkg.Components qualified as Components
+import Pkg.Components.ItemsList (TabFilter(..), TabFilterOpt(..))
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Parser
 import PyF qualified
@@ -91,12 +91,12 @@ testingGetH pid filterTM timeFilter = do
           , navTabs =
               Just
                 $ toHtml
-                $ Components.TabFilter
+                $ TabFilter
                   { current = currentFilterTab
                   , currentURL
                   , options =
-                      [ Components.TabFilterOpt{name = "Active", count = Nothing}
-                      , Components.TabFilterOpt{name = "Inactive", count = Just inactiveColsCount}
+                      [ TabFilterOpt{name = "Active", count = Nothing}
+                      , TabFilterOpt{name = "Inactive", count = Just inactiveColsCount}
                       ]
                   }
           }

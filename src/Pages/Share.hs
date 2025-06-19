@@ -17,7 +17,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Telemetry.Spans qualified as Spans
-import Pkg.Components (navBar)
+import Pages.Components (navBar)
 import Relude
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, jsonValueToHtmlTree, onpointerdown_)

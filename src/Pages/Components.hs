@@ -1,4 +1,4 @@
-module Pages.Components (statBox, drawer_, statBox_, emptyState_, dateTime, paymentPlanPicker) where
+module Pages.Components (statBox, drawer_, statBox_, emptyState_, dateTime, paymentPlanPicker, navBar) where
 
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
@@ -322,3 +322,18 @@ featureRow feature =
   div_ [class_ "flex items-center gap-3"] $ do
     faSprite_ "feature-check" "regular" "h-4 text-textBrand shrink-0"
     p_ [class_ "text-sm text-textStrong leading-tight"] (toHtml feature)
+
+
+navBar :: Html ()
+navBar = do
+  nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full w-full px-6 py-4 bg-base-100 flex flex-row justify-between"] do
+    div_ [class_ "flex justify-between items-center gap-4 w-[1000px] mx-auto"] do
+      a_ [href_ "https://apitoolkit.io", class_ "flex items-center text-gray-500 hover:text-gray-700"] do
+        img_
+          [ class_ "h-12 sd-hidden"
+          , src_ "/public/assets/svgs/logo.svg"
+          ]
+        img_
+          [ class_ "h-12 w-10 hidden sd-show"
+          , src_ "/public/assets/svgs/logo_mini.svg"
+          ]

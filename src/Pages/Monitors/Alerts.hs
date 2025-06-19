@@ -31,7 +31,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Log qualified as LogList
-import Pkg.Components qualified as Components
+import Pkg.Components.TimePicker qualified as Components
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..))
 import Pkg.Parser (defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
 import Pkg.THUtils qualified as THUtils

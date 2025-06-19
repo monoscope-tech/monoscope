@@ -14,7 +14,7 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
 import Pages.Components qualified as Components
-import Pkg.Components qualified as Components
+import Pkg.Components.Modals qualified as Components
 import Pkg.Components.ExternalHeadScripts (externalHeadScripts_)
 import Pkg.THUtils
 import PyF

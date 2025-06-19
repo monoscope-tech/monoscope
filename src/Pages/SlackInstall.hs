@@ -20,7 +20,7 @@ import Lucid
 import Models.Apis.Slack (DiscordData (..), SlackData (..), getDiscordData, getSlackDataByTeamId, insertAccessToken, insertDiscordData, updateDiscordNotificationChannel, updateSlackNotificationChannel)
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
-import Pkg.Components (navBar)
+import Pages.Components (navBar)
 import Pkg.Mail (sendSlackMessage)
 import Relude hiding (ask, asks)
 import Control.Lens ((.~), (^.))

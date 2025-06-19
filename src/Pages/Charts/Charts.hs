@@ -25,7 +25,7 @@ import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Language.Haskell.TH.Syntax qualified as THS
 import Models.Projects.Projects qualified as Projects
-import Pkg.Components qualified as Components
+import Pkg.Components.TimePicker qualified as Components
 import Pkg.DashboardUtils qualified as DashboardUtils
 import Pkg.Parser (
   QueryComponents (finalSummarizeQuery),

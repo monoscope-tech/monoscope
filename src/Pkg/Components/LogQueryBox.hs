@@ -12,7 +12,7 @@ import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
-import Pkg.Components qualified as Components
+import Pkg.Components.Modals qualified as Components
 import Relude
 import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_)
 

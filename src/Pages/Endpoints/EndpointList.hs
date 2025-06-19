@@ -13,7 +13,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pkg.Components qualified as Components
+import Pkg.Components.ItemsList (TabFilter(..), TabFilterOpt(..))
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget (WidgetAxis (..))
 import Pkg.Components.Widget qualified as Widget
@@ -64,13 +64,13 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
           , navTabs =
               Just
                 $ toHtml
-                $ Components.TabFilter
+                $ TabFilter
                   { current = currentFilterTab
                   , currentURL
                   , options =
-                      [ Components.TabFilterOpt{name = "Active", count = Nothing}
-                      , Components.TabFilterOpt{name = "Inbox", count = Just inboxCount}
-                      , Components.TabFilterOpt{name = "Archived", count = Nothing}
+                      [ TabFilterOpt{name = "Active", count = Nothing}
+                      , TabFilterOpt{name = "Inbox", count = Just inboxCount}
+                      , TabFilterOpt{name = "Archived", count = Nothing}
                       ]
                   }
           }

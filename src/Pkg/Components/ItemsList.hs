@@ -11,6 +11,8 @@ module Pkg.Components.ItemsList (
   SearchCfg (..),
   TimelineSteps (..),
   TimelineStep (..),
+  TabFilter (..),
+  TabFilterOpt (..),
 )
 where
 
@@ -25,7 +27,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
 import Pages.Components (emptyState_)
 import Relude
-import Utils (deleteParam, faSprite_)
+import Utils (deleteParam, faSprite_, escapedQueryPartial)
 
 
 data ItemsListCfg = ItemsListCfg
@@ -273,3 +275,34 @@ timelineSteps_ steps colM =
 
         div_ [class_ "pl-2 pb-8 space-y-3 hidden group-has-[.tm-toggle:checked]/tm:block"] step.content
       when (idx < (length steps - 1)) $ hr_ [style_ "width:2px"]
+
+
+--------------------------------------------------------------------
+-- DaisyUI bordered tabs.
+------------------------------------------------------------------
+data TabFilter = TabFilter
+  { current :: Text
+  , currentURL :: Text
+  , options :: [TabFilterOpt]
+  }
+
+
+data TabFilterOpt = TabFilterOpt
+  { name :: Text
+  , count :: Maybe Int
+  }
+
+
+instance ToHtml TabFilter where
+  toHtmlRaw = toHtml
+  toHtml tf = div_ [class_ "tabs tabs-box tabs-outline p-0 bg-fillWeak text-textWeak border items-center border"] do
+    let uri = deleteParam "filter" tf.currentURL
+    forM_ tf.options \opt ->
+      a_
+        [ href_ $ uri <> "&filter=" <> escapedQueryPartial opt.name
+        , role_ "tab"
+        , class_ $ "tab " <> if opt.name == tf.current then "tab-active text-textStrong border border-strokeStrong" else ""
+        ]
+        do
+          span_ $ toHtml opt.name
+          whenJust opt.count $ span_ [class_ "absolute top-[1px] -right-[5px] text-white text-xs font-medium rounded-full px-1 bg-red-500"] . show

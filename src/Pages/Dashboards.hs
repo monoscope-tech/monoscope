@@ -36,7 +36,8 @@ import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
-import Pkg.Components qualified as Components
+import Pkg.Components.TimePicker qualified as TimePicker
+import Pkg.Components.Modals qualified as Modals
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
 import Pkg.Components.Widget qualified as Widget
 import Relude
@@ -62,7 +63,7 @@ instance ToHtml DashboardGet where
 dashboardPage_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> Html ()
 dashboardPage_ pid dashId dash dashVM = do
   -- when  $ freeTierLimitExceededBanner pid.toText
-  Components.modal_ "pageTitleModalId" ""
+  Modals.modal_ "pageTitleModalId" ""
     $ form_
       [ class_ "flex flex-col p-3 gap-3"
       , hxPatch_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/rename")
@@ -260,7 +261,7 @@ loadDashboardFromVM dashVM = case dashVM.schema of
 -- Process a single dashboard variable recursively.
 processVariable :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Variable -> ATAuthCtx Dashboards.Variable
 processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
-  let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
+  let (fromD, toD, _currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
   let variable = Dashboards.replaceQueryVariables pid fromD toD allParams variableBase
   let variable' = variable{Dashboards.value = join (Map.lookup ("var-" <> variable.key) $ Map.fromList allParams) <|> variable.value}
 
@@ -276,7 +277,7 @@ processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
 -- Process a single widget recursively.
 processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
 processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
-  let (_fromD, _toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
+  let (_fromD, _toD, _currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
   let widgetBase' = if isNothing widgetBase._projectId then widgetBase{Widget._projectId = Just pid} else widgetBase
 
   let widget = widgetBase'
@@ -453,7 +454,7 @@ dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> M
 dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
-  let (_fromD, _toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceStr fromDStr toDStr)
+  let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
   (dashVM, dash) <- getDashAndVM dashId fileM
   dash' <- forOf (#variables . traverse . traverse) dash (processVariable pid now (sinceStr, fromDStr, toDStr) allParams)
 
@@ -471,8 +472,8 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
           , pageTitle = if dashVM.title == "" then "Untitled" else dashVM.title
           , pageTitleModalId = Just "pageTitleModalId"
           , pageActions = Just $ div_ [class_ "inline-flex gap-3 items-center leading-[0]"] do
-              Components.timepicker_ Nothing currentRange
-              Components.refreshButton_
+              TimePicker.timepicker_ Nothing currentRange
+              TimePicker.refreshButton_
               div_ [class_ "flex items-center"] do
                 span_ [class_ "text-fillDisabled mr-2"] "|"
                 Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
@@ -589,8 +590,8 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
       when isNewWidget $ h3_ [class_ "text-lg font-normal"] "Add a new widget"
 
     div_ [class_ "flex items-center gap-2"] do
-      Components.timepicker_ Nothing currentRange
-      Components.refreshButton_
+      TimePicker.timepicker_ Nothing currentRange
+      TimePicker.refreshButton_
       span_ [class_ "text-fillDisabled"] "|"
       if isNewWidget
         then button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm leading-none !h-auto", type_ "submit", form_ widgetFormId] "Save changes"
@@ -717,7 +718,7 @@ renderDashboardListItem checked tmplClass title value description icon prview = 
 
 dashboardsGet_ :: DashboardsGet -> Html ()
 dashboardsGet_ dg = do
-  unless dg.embedded $ Components.modal_ "newDashboardMdl" "" $ form_
+  unless dg.embedded $ Modals.modal_ "newDashboardMdl" "" $ form_
     [ class_ "grid grid-cols-7 overflow-hidden h-full gap-4 group/md"
     , hxPost_ ""
     ]

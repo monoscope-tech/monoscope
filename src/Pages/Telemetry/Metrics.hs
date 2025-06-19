@@ -15,7 +15,7 @@ import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components qualified as Components
 import Pages.Telemetry.Utils (metricsTree)
-import Pkg.Components qualified as Components
+import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
@@ -36,7 +36,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-slate-200 text-slate-500"] do
               a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ "tab py-1.5 h-auto! tab-active"] "Overview"
               a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ "tab py-1.5 h-auto! "] "Explorer"
-          , pageActions = Just $ Components.timepicker_ Nothing currentRange
+          , pageActions = Just $ TimePicker.timepicker_ Nothing currentRange
           }
   if tab == "datapoints"
     then do
