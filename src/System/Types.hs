@@ -159,6 +159,7 @@ type ATBackgroundCtx =
      , Time
      , Log
      , UUIDEff
+     , HTTP
      , Ki.StructuredConcurrency
      , Effectful.IOE
      ]
@@ -173,6 +174,7 @@ runBackground logger appCtx process =
     & runTime
     & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
     & runUUID
+    & runHTTPWreq
     & Ki.runStructuredConcurrency
     & Effectful.runEff
 

@@ -409,8 +409,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "Previous messages in this thread:"
           ]
-          <> msgs'
-          <> ["\n\nCurrent user query: " <> question]
+        <> msgs'
+        <> ["\n\nCurrent user query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 

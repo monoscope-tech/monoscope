@@ -25,6 +25,7 @@ import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Log qualified
+import Models.Apis.Anomalies (IssuesData)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Facets qualified as Facets
@@ -33,6 +34,7 @@ import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Reports qualified as Reports
+import Models.Apis.RequestDumps (ATError (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Apis.Slack (DiscordData (..), getDiscordDataByProjectId)
@@ -50,9 +52,10 @@ import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
 import Pages.Reports qualified as RP
 import Pages.Specification.GenerateSwagger (generateSwagger)
-import Pkg.Mail (sendDiscordNotif, sendPostmarkEmail, sendSlackMessage)
+import Pkg.Mail (NotificationAlerts (EndpointAlert, RuntimeErrorAlert), sendDiscordAlert, sendDiscordNotif, sendPostmarkEmail, sendSlackAlert, sendSlackMessage)
 import PyF (fmtTrim)
-import Relude hiding (ask)
+import Relude hiding (ask, when)
+import Relude qualified
 import Relude.Unsafe qualified as Unsafe
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx, runBackground)
@@ -99,7 +102,7 @@ sendMessageToDiscord msg = do
 
 
 jobsRunner :: Log.Logger -> Config.AuthContext -> Job -> IO ()
-jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
+jobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs $ do
   bgJob <- throwParsePayload job
   void $ runBackground logger authCtx do
     case bgJob of
@@ -170,8 +173,8 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
         -- Schedule all 24 hourly jobs in one batch
         liftIO $ withResource authCtx.jobsPool \conn -> do
           -- background job to cleanup demo project
-          when (dayOfWeek currentDay == Monday) do
-            void $ createJob conn "background_jobs" BackgroundJobs.CleanupDemoProject
+          Relude.when (dayOfWeek currentDay == Monday) do
+            void $ createJob conn "background_jobs" $ BackgroundJobs.CleanupDemoProject
           forM_ [0 .. 23] \hour -> do
             -- Schedule each hourly job to run at the appropriate hour
             let scheduledTime = addUTCTime (fromIntegral $ hour * 3600) currentTime
@@ -181,7 +184,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
         projects <- dbtToEff $ query [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
         forM_ projects \p -> do
           liftIO $ withResource authCtx.jobsPool \conn -> do
-            when (dayOfWeek currentDay == Monday)
+            Relude.when (dayOfWeek currentDay == Monday)
               $ void
               $ createJob conn "background_jobs"
               $ BackgroundJobs.WeeklyReports p
@@ -191,10 +194,10 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
       WeeklyReports pid -> weeklyReportForProject pid
       GenSwagger pid uid host -> generateSwaggerForProject pid uid host
       ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
-        when (project.paymentPlan /= "Free" && project.paymentPlan /= "ONBOARDING") $ whenJust project.firstSubItemId \fSubId -> do
+        Relude.when (project.paymentPlan /= "Free" && project.paymentPlan /= "ONBOARDING") $ whenJust project.firstSubItemId \fSubId -> do
           currentTime <- liftIO getZonedTime
           totalToReport <- Telemetry.getTotalEventsToReport pid project.usageLastReported
-          when (totalToReport > 0) do
+          Relude.when (totalToReport > 0) do
             liftIO $ reportUsageToLemonsqueezy fSubId totalToReport authCtx.config.lemonSqueezyApiKey
             _ <- dbtToEff $ LemonSqueezy.addDailyUsageReport pid totalToReport
             _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
@@ -203,7 +206,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
         now <- Time.currentTime
         collectionM <- dbtToEff $ Testing.getCollectionById col_id
         if job.jobRunAt > addUTCTime (-900) now -- Run time is less than 15 mins ago
-          then whenJust collectionM \collection -> when collection.isScheduled do
+          then whenJust collectionM \collection -> Relude.when collection.isScheduled do
             let (Testing.CollectionSteps colStepsV) = collection.collectionSteps
                 Testing.CollectionVariables colV = collection.collectionVariables
             stepResultsE <- TestToDump.runCollectionTest colStepsV colV col_id
@@ -213,7 +216,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
                 pass
               Right stepResults -> do
                 let (_, failed) = Testing.getCollectionRunStatus stepResults
-                when (failed > 0) do
+                Relude.when (failed > 0) do
                   _ <- liftIO $ withResource authCtx.jobsPool \conn -> do
                     createJob conn "background_jobs" $ BackgroundJobs.APITestFailed collection.projectId col_id stepResults
                   pass
@@ -348,7 +351,7 @@ handleQueryMonitorThreshold :: Monitors.QueryMonitorEvaled -> Bool -> ATBackgrou
 handleQueryMonitorThreshold monitorE isAlert = do
   Log.logAttention "Query Monitors Triggered " monitorE
   _ <- dbtToEff $ Monitors.updateQMonitorTriggeredState monitorE.id isAlert
-  when monitorE.alertConfig.emailAll do
+  Relude.when monitorE.alertConfig.emailAll do
     users <- dbtToEff $ Projects.usersByProjectId monitorE.projectId
     forM_ users \u -> emailQueryMonitorAlert monitorE u.email (Just u)
   forM_ monitorE.alertConfig.emails \email -> emailQueryMonitorAlert monitorE email Nothing
@@ -390,7 +393,7 @@ dailyReportForProject pid = do
             , reportType = "daily"
             }
     _ <- dbtToEff $ Reports.addReport report
-    when pr.dailyNotif $ forM_ pr.notificationsChannel \case
+    Relude.when pr.dailyNotif $ forM_ pr.notificationsChannel \case
       Projects.NSlack ->
         sendSlackMessage
           pid
@@ -456,7 +459,7 @@ weeklyReportForProject pid = do
             , reportType = "weekly"
             }
     _ <- dbtToEff $ Reports.addReport report
-    when pr.weeklyNotif $ forM_ pr.notificationsChannel \case
+    Relude.when pr.weeklyNotif $ forM_ pr.notificationsChannel \case
       Projects.NSlack ->
         sendSlackMessage
           pid
@@ -473,7 +476,7 @@ weeklyReportForProject pid = do
             Nothing -> pass
       _ -> do
         totalRequest <- dbtToEff $ RequestDumps.getLastSevenDaysTotalRequest pid
-        when (totalRequest > 0) do
+        Relude.when (totalRequest > 0) do
           forM_ users \user -> do
             let firstName = user.firstName
                 projectTitle = pr.title
@@ -537,36 +540,12 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
       users <- dbtToEff $ Projects.usersByProjectId pid
       project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
       let endpointsPaths = (\e -> e.method <> " " <> e.urlPath) <$> endpoints
-          endpointLines = T.intercalate "\n" (V.toList endpointsPaths)
           anIssues = convertAnomaliesToIssues anomaliesVM endpoints
           targetHash = fromMaybe "" $ viaNonEmpty head (V.toList targetHashes)
       _ <- dbtToEff $ Anomalies.insertIssues anIssues
       forM_ project.notificationsChannel \case
-        Projects.NSlack -> do
-          sendSlackMessage
-            pid
-            [fmtTrim| {{...}} *New Endpoint(s) Detected for `{project.title}`*
-
-We have detected a new endpoint on *{project.title}*
-
-**Endpoints:**
-`{endpointLines}`
-
-<https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on APItoolkit>
-                              |]
-        Projects.NDiscord -> do
-          let msg =
-                [fmtTrim|
-{{···}} **New Endpoint(s) Detected For {project.title}**
-
-**Endpoints**: 
-`{endpointLines}`
-[View more](https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash})|]
-          discordData <- getDiscordDataByProjectId pid
-          whenJust discordData \d -> do
-            case d.notifsChannelId of
-              Just channelId -> sendDiscordNotif channelId msg
-              Nothing -> pass
+        Projects.NSlack -> sendSlackAlert (EndpointAlert project.title endpointsPaths targetHash) pid
+        Projects.NDiscord -> sendDiscordAlert (EndpointAlert project.title endpointsPaths targetHash) pid
         _ -> do
           forM_ users \u -> do
             let templateVars =
@@ -598,25 +577,6 @@ We have detected a new endpoint on *{project.title}*
         pure anomaly{Anomalies.anomalyType = anomalyType, Anomalies.shapeDeletedFields = V.fromList deletedFields, Anomalies.shapeUpdatedFieldFormats = updatedFieldFormats, Anomalies.shapeNewUniqueFields = V.fromList newFields}
       _ <- dbtToEff $ Anomalies.insertIssues $ convertAnomaliesToIssues anomalies endpoints
       pass
-    -- _ <- dbtToEff $ Anomalies.insertIssues $ convertAnomaliesToIssues anomaliesVM endpoints -- Anomalies.convertAnomalyToIssue (endp <&> (.host)) anomaly'
-    -- forM_ project.notificationsChannel \cased
-    --   Projects.NSlack ->
-    --     sendSlackMessage
-    --       pid
-    --       [fmtTrim| 🤖 *New Shape anomaly found for `{project.title}`*
-    --                  We detected a different API request shape to your endpoints than what you usually have
-
-    --                  <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
-    --                       |]
-    --   _ -> do
-    --     forM_ users \u -> do
-    --       let templateVars =
-    --             object
-    --               [ "user_name" .= u.firstName
-    --               , "project_name" .= project.title
-    --               , "anomaly_url" .= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
-    --               ]
-    --       sendPostmarkEmail (CI.original u.email) "anomaly-shape" templateVars
     Anomalies.ATFormat -> do
       -- pass
       -- -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
@@ -626,29 +586,7 @@ We have detected a new endpoint on *{project.title}*
       project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
       _ <- dbtToEff $ Anomalies.insertIssues $ convertAnomaliesToIssues anomaliesVM endpoints
       pass
-    -- forM_ project.notificationsChannel \case
-    --   Projects.NSlack ->
-    --     sendSlackMessage
-    --       pid
-    --       [fmtTrim| 🤖 *New Field Format Anomaly Found for `{project.title}`*
-
-    --                      We detected that a particular field on your API is returning a different format/type than what it usually gets.
-
-    --                      <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
-    --                        |]
-    --   _ -> forM_ users \u -> do
-    --     let firstName = u.firstName
-    --     let title = project.title
-    --     let anomaly_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash
-    --     let templateVars =
-    --           [aesonQQ|{
-    --               "user_name": #{firstName},
-    --               "project_name": #{title},
-    --               "anomaly_url": #{anomaly_url}
-    --          }|]
-    --     sendPostmarkEmail (CI.original u.email) "anomaly-field" templateVars
     Anomalies.ATRuntimeException -> do
-      let targetHash = fromMaybe "" $ viaNonEmpty head (V.toList targetHashes)
       users <- dbtToEff $ Projects.usersByProjectId pid
       project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
       errs <- dbtToEff $ Anomalies.errorsByHashes pid targetHashes
@@ -663,7 +601,7 @@ We have detected a new endpoint on *{project.title}*
                   , updatedAt = err.updatedAt
                   , projectId = pid
                   , anomalyType = Anomalies.ATRuntimeException
-                  , targetHash = targetHash
+                  , targetHash = err.hash
                   , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
                   , acknowlegedAt = Nothing
                   , acknowlegedBy = Nothing
@@ -672,30 +610,22 @@ We have detected a new endpoint on *{project.title}*
                   }
             )
             <$> errs
-
+      -- TODO: refactor
       forM_ project.notificationsChannel \case
-        Projects.NSlack -> 
-          sendSlackMessage
-            pid
-            [fmtTrim| 🤖 *New Runtime Exception(s) Found for `{project.title}`*
-
-A new runtime exception has been detected. click the link below to see more details.
-
-<https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
-                               |]
+        Projects.NSlack ->
+          forM_ errs \err -> do
+            let issD = err.errorData
+                w = toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" issD.when
+                t = show issD.technology
+                alert = RuntimeErrorAlert issD.errorType issD.message project.title err.hash issD.requestPath w t
+            sendSlackAlert alert pid
         Projects.NDiscord -> do
-          let msg =
-                [fmtTrim|
-{{···}} **New Runtime Exception Found for {project.title}**
-A new runtime exception has been detected. click the link below to see more details.
-
-[View more](https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash})|]
-
-          discordData <- getDiscordDataByProjectId pid
-          whenJust discordData \d -> do
-            case d.notifsChannelId of
-              Just channelId -> sendDiscordNotif channelId msg
-              Nothing -> pass
+          forM_ errs \err -> do
+            let issD = err.errorData
+                w = toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" issD.when
+                t = show issD.technology
+                alert = RuntimeErrorAlert issD.errorType issD.message project.title err.hash issD.requestPath w t
+            sendDiscordAlert alert pid
         _ ->
           forM_ users \u -> do
             let errosJ =

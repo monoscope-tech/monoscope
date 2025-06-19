@@ -59,6 +59,7 @@ data EnvConfig = EnvConfig
   , slackClientId :: Text
   , slackClientSecret :: Text
   , slackRedirectUri :: Text
+  , slackBotToken :: Text
   , discordRedirectUri :: Text
   , discordClientId :: Text
   , discordClientSecret :: Text
