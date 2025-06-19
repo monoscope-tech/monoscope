@@ -421,10 +421,10 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           , pageTitle = "Explorer"
           , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/api-log-explorer/"
           , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
-              label_ [class_ "cursor-pointer border border-strokeStrong rounded-lg flex shadow-sm"] do
+              label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs"] do
                 input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
-                span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-3 items-center", data_ "tippy-content" "pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4"
-                span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex  py-1 px-3 items-center", data_ "tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4"
+                span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-3 items-center", data_ "tippy-content" "pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4 text-iconNeutral"
+                span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex  py-1 px-3 items-center", data_ "tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4 text-iconNeutral"
               Components.timepicker_ (Just "log_explorer_form") currentRange
               Components.refreshButton_
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-md p-0 tabs-outline items-center border"] do

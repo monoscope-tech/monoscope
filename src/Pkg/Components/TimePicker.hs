@@ -97,57 +97,72 @@ timePickerItems =
 
 
 timepicker_ :: Maybe Text -> Maybe (Text, Text) -> Html ()
-timepicker_ submitForm currentRange = div_ [class_ "relative"] do
-  input_ [type_ "hidden", id_ "since_input"]
-  input_ [type_ "hidden", id_ "custom_range_input"]
-  a_
-    [ class_ "relative p-2 shadow-xs border border-strokeStrong  text-textWeak flex items-center gap-1.5 rounded-lg cursor-pointer"
-    , [__| on click toggle .hidden on #timepickerBox |]
-    ]
-    do
-      span_ [id_ "offsetIndicator", class_ "absolute top-0 -translate-y-1/2 left-1/2 -translate-x-1/2 bg-white z-50 text-xs"] "UTC+00:00"
-      faSprite_ "calendar" "regular" "h-4 w-4"
-      let attrs = maybe [] (\(s, e) -> [term "data-start" s, term "data-end" e]) currentRange
-      span_ (attrs ++ [class_ "inline-block leading-none", id_ "currentRange"]) $ toHtml (maybe "Last 24 Hours" (\(s, e) -> s <> if T.null e then "" else "-" <> e) currentRange)
-      faSprite_ "chevron-down" "regular" "h-3 w-3 text-iconNeutral "
-  div_ [id_ "timepickerBox", class_ "hidden absolute right-0 z-50 mt-1 rounded-md flex"] do
-    div_ [class_ "relative hidden", id_ "timepickerSidebar"] $ div_ [id_ "startTime", class_ "hidden"] ""
-    div_
-      [class_ "inline-block shrink-0 h-max w-84 overflow-auto bg-bgBase py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-hidden sm:"]
+timepicker_ submitForm currentRange = fieldset_
+  [ class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg overflow-hidden dash-variable text-sm shadow-xs -mt-1.5"
+  ]
+  do
+    legend_ [id_ "offsetIndicator", class_ "px-1 ml-2 text-xs"] "UTC+00:00"
+    input_ [type_ "hidden", id_ "since_input"]
+    input_ [type_ "hidden", id_ "custom_range_input"]
+
+    -- Trigger button using DaisyUI popover approach
+    button_
+      [ term "popovertarget" "timepicker-popover"
+      , term "style" "anchor-name:--timepicker-anchor"
+      , class_ "flex items-center gap-2 relative pt-0 p-2 text-textWeak cursor-pointer"
+      ]
       do
-        let linkClassBase = "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200"
-            action =
+        faSprite_ "calendar" "regular" "h-4 w-4 text-iconNeutral "
+        let attrs = maybe [] (\(s, e) -> [term "data-start" s, term "data-end" e]) currentRange
+        span_ (attrs ++ [class_ "inline-block leading-none", id_ "currentRange"]) $ toHtml (maybe "Last 24 Hours" (\(s, e) -> s <> if T.null e then "" else "-" <> e) currentRange)
+        faSprite_ "chevron-down" "regular" "h-3 w-3"
+
+    -- DaisyUI popover content
+    ul_
+      [ class_ "dropdown dropdown-end menu w-120 rounded-box bg-bgOverlay shadow-lg"
+      , term "popover" ""
+      , id_ "timepicker-popover"
+      , term "style" "position-anchor:--timepicker-anchor"
+      ]
+      do
+        li_ [class_ "menu-title"] "Select Time Range"
+        let action =
               maybe
                 "window.setQueryParamAndReload('since', my @data-value)"
                 (\fm -> [fmt|htmx.trigger("#{fm}", "submit")|])
                 submitForm
             onClickHandler =
               [text|on click set #custom_range_input's value to my @data-value
-                       then toggle .hidden on #timepickerBox
-                       then set #currentRange's innerText to my @data-title
-                       then call window.setParams({since:@data-value, from:'', to:''})
-                       then ${action} |]
+                    then set #currentRange's innerText to my @data-title
+                    then call window.setParams({since:@data-value, from:'', to:''})
+                    then ${action} |]
             timePickerLink val title =
-              a_
-                [ class_ (linkClassBase <> " text-nowrap")
+              li_ $ a_
+                [ class_ "flex items-center justify-between hover:bg-base-200 rounded-lg px-3 py-2"
                 , term "data-value" val
                 , term "data-title" title
                 , termRaw "_" onClickHandler
                 ]
-                $ toHtml title
+                do
+                  span_ [class_ "text-sm"] $ toHtml title
+                  span_ [class_ "text-xs text-base-content/60"] $ toHtml val
         mapM_ (uncurry timePickerLink) timePickerItems
-        a_
-          [ class_ linkClassBase
-          , [__| on click toggle .hidden on #timepickerSidebar |]
+        li_ $ a_
+          [ [__| on click toggle .hidden on #timepickerSidebar |]
           ]
-          "Custom date range"
-    let submitAction =
-          maybe
-            "window.setParams({from: formatDate(start), to: formatDate(end), since: ''}, true);"
-            (\fm -> [text|window.setParams({from: formatDate(start), to: formatDate(end), since: ''}); htmx.trigger("#${fm}", "submit");|])
-            submitForm
-    script_
-      [text|
+          do
+            faSprite_ "calendar-range" "regular" "h-4 w-4 mr-2 text-iconNeutral"
+            span_ "Custom date range"
+
+        -- Custom date range picker (hidden by default)
+        div_ [class_ "relative hidden", id_ "timepickerSidebar"] $ div_ [id_ "startTime", class_ "hidden"] ""
+        let submitAction =
+              maybe
+                "window.setParams({from: formatDate(start), to: formatDate(end), since: ''}, true);"
+                (\fm -> [text|window.setParams({from: formatDate(start), to: formatDate(end), since: ''}); htmx.trigger("#${fm}", "submit");|])
+                submitForm
+        script_
+          [text|
       (function() {
         var formatDateLocal = (date) => new Date(date).toLocaleString();
         document.addEventListener('DOMContentLoaded', ()=> {
@@ -175,7 +190,6 @@ timepicker_ submitForm currentRange = div_ [class_ "relative"] do
                 }
               const formatDate = (date) => date.toISOString();
               document.getElementById('custom_range_input').value = `$${start}/$${end}`;
-              document.getElementById('timepickerBox')?.classList.toggle('hidden');
               document.getElementById('currentRange').innerText = `$${formatDateLocal(start)} - $${formatDateLocal(end)}`;
               ${submitAction}
             });
@@ -209,7 +223,7 @@ refreshButton_ = do
   div_ [class_ "join"] do
     -- Immediate refresh button
     label_
-      [ class_ "cursor-pointer px-3 flex items-center border border-strokeStrong shadow-sm leading-none join-item"
+      [ class_ "cursor-pointer px-3 flex items-center border border-strokeWeak shadow-xs leading-none join-item"
       , data_ "tippy-content" "Refresh"
       , [__| on click trigger 'update-query' on window then
           add .animate-spin to the first <svg/> in me then wait 1 seconds then

@@ -1,14 +1,7 @@
 module Pkg.Components (
-  loader,
   navBar,
-  bashCommand,
-  codeExample,
   modal_,
   dropDownMenu_,
-  codeEmphasis,
-  featureItem,
-  frameworkItem,
-  withEmphasisedText,
   TabFilter (..),
   TabFilterOpt (..),
   module Pkg.Components.ItemsList,
@@ -16,26 +9,12 @@ module Pkg.Components (
 )
 where
 
-import Data.Text qualified as T
 import Lucid
-import Lucid.Base
-import Lucid.Hyperscript
-import Lucid.Svg (d_, fill_, path_, viewBox_)
-import NeatInterpolation (text)
 import Pkg.Components.ItemsList
 import Pkg.Components.Modals (dropDownMenu_, modal_)
 import Pkg.Components.TimePicker
 import Relude
 import Utils
-
-
-loader :: Html ()
-loader =
-  div_ [role_ "status"] do
-    svg_ [class_ "w-8 h-8 mr-2 text-gray-200 animate-spin fill-blue-600", viewBox_ "0 0 100 101", fill_ "none", xmlns_ "http://www.w3.org/2000/svg"] do
-      path_ [d_ "M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z", fill_ "currentColor"]
-      path_ [d_ "M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z", fill_ "currentFill"]
-    span_ [class_ "sr-only"] "Loading..."
 
 
 navBar :: Html ()
@@ -51,81 +30,6 @@ navBar = do
           [ class_ "h-12 w-10 hidden sd-show"
           , src_ "/public/assets/svgs/logo_mini.svg"
           ]
-
-
-bashCommand :: Text -> Html ()
-bashCommand command = do
-  div_ [class_ "w-full"] do
-    div_ [class_ "w-full rounded-lg bg-fillWeaker px-4 py-2 text-slate-700 flex gap-2 items-start"] do
-      span_ [class_ "text-gray-400"] "$"
-      span_ $ toHtml command
-      button_
-        [ termRaw "data-command" command
-        , [__|
-            on click
-              if 'clipboard' in window.navigator then
-                call navigator.clipboard.writeText(my @data-command)
-                send successToast(value:['Command copied to clipboard']) to <body/>
-              end
-      |]
-        ]
-        do
-          faSprite_ "copy" "solid" "h-4 w-4 text-gray-500"
-
-
-codeExample :: Text -> Html ()
-codeExample code = do
-  div_ [class_ "relative overflow-hidden flex bg-fillWeaker border border-weak rounded-xl"] do
-    div_ [class_ "relative w-full flex flex-col"] do
-      div_ [class_ "flex-none border-b border-weak flex justify-between items-center gap-4"] do
-        div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
-          div_ [class_ "w-2.5 h-2.5 bg-red-500 rounded-full"] ""
-          div_ [class_ "w-2.5 h-2.5 bg-yellow-500 rounded-full"] ""
-          div_ [class_ "w-2.5 h-2.5 bg-green-500 rounded-full"] ""
-        button_
-          [ class_ "text-gray-500 font-bold mr-6"
-          , term "data-code" code
-          , [__|
-              on click
-                if 'clipboard' in window.navigator then
-                  call navigator.clipboard.writeText(my @data-code)
-                  send successToast(value:['Copied']) to <body/>
-                end
-           |]
-          ]
-          $ faSprite_ "copy" "solid" "h-4 w-4 inline-block"
-      div_ [class_ "relative flex-auto flex flex-col bg-fillWeaker"] do
-        pre_ [class_ "flex leading-snug"] do
-          code_ [class_ "flex-auto relative block  text-textStrong py-4 px-4 overflow-auto hljs atom-one-dark"] $ toHtml code
-
-
-codeEmphasis :: Text -> Html ()
-codeEmphasis code = span_ [class_ "text-red-500"] $ toHtml code
-
-
-featureItem :: Text -> Html ()
-featureItem title =
-  div_ [class_ "h-8 px-3 rounded-lg flex justify-center items-center gap-2 border border-strokeStrong"] $ do
-    let featureId = T.replace " " "" title
-    input_ [type_ "checkbox", class_ "checkbox checkbox-sm shrink-0", style_ "--chkbg:#000626E5", id_ featureId]
-    label_ [class_ "text-center text-[#000833]/60 text-sm font-semibold", Lucid.for_ featureId] $ toHtml title
-
-
-frameworkItem :: Text -> Text -> Html ()
-frameworkItem lang title =
-  button_ [class_ "h-8 px-3 rounded-lg flex justify-center items-center gap-2 border border-strokeStrong", term "_" [text|on click add .hidden to <.$lang-guide/> then remove .hidden from $title|]] $ do
-    input_ [type_ "radio", class_ "radio radio-sm hrink-0", name_ "frameworks", style_ "--chkbg:#000626E5", id_ title]
-    label_ [class_ "text-center text-[#000833]/60 text-sm font-semibold", Lucid.for_ title] $ toHtml title
-
-
-withEmphasisedText :: [(Text, Bool)] -> Html ()
-withEmphasisedText [] = mempty
-withEmphasisedText ((t, True) : xs) = do
-  codeEmphasis $ " " <> t <> " "
-  withEmphasisedText xs
-withEmphasisedText ((t, False) : xs) = do
-  toHtml t
-  withEmphasisedText xs
 
 
 --------------------------------------------------------------------
@@ -157,8 +61,3 @@ instance ToHtml TabFilter where
         do
           span_ $ toHtml opt.name
           whenJust opt.count $ span_ [class_ "absolute top-[1px] -right-[5px] text-white text-xs font-medium rounded-full px-1 bg-red-500"] . show
-
--- , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-md p-0 tabs-outline items-center  bg-fillWeak  text-textWeak border"] do
---     a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ $ "tab py-1 h-auto! " <> if source == "requests" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Requests"
---     a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ $ "tab py-1 h-auto! " <> if source == "logs" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Logs"
---     a_ [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab py-1 h-auto! " <> if source == "spans" then "tab-active  text-textStrong border border-strokeStrong " else ""] "Traces"
