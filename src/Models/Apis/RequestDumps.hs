@@ -409,10 +409,8 @@ getRequestDumpForReports pid report_type = query (Query $ encodeUtf8 q) pid
      SELECT DISTINCT ON (endpoint_hash)
         id, created_at, project_id, host, url_path, raw_url, method, endpoint_hash,
         CAST (ROUND (AVG (duration_ns) OVER (PARTITION BY endpoint_hash)) AS BIGINT) AS average_duration
-     FROM
-        apis.request_dumps
-     WHERE
-        project_id = ? AND created_at > NOW() - interval $report_interval;
+     FROM apis.request_dumps
+     WHERE project_id = ? AND created_at > NOW() - interval $report_interval;
     |]
 
 
