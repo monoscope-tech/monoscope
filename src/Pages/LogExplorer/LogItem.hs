@@ -23,7 +23,7 @@ import Pages.Telemetry.Spans qualified as Spans
 import Pages.Telemetry.Utils (atMapText, getRequestDetails)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_, getDurationNSMS, getMethodBorderColor, getMethodColor, getSeverityColor, getStatusBorderColor, getStatusColor, jsonValueToHtmlTree)
+import Utils (faSprite_, getDurationNSMS, getMethodBorderColor, getMethodColor, getSeverityColor, getStatusBorderColor, getStatusColor, jsonValueToHtmlTree, onpointerdown_)
 
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiItemDetailed)
@@ -128,7 +128,7 @@ expandAPIlogItem' pid req modal = do
       div_ [class_ "flex items-center gap-2"] do
         button_
           [ class_ "flex items-center gap-1 text-sm text-textBrand cursor-pointer"
-          , onclick_ "window.buildCurlRequest(event)"
+          , onpointerdown_ "window.buildCurlRequest(event)"
           , term "data-reqjson" $ decodeUtf8 $ AE.encode json
           ]
           do
@@ -147,11 +147,11 @@ expandAPIlogItem' pid req modal = do
 
       div_ [class_ "bg-fillWeak w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"] $ do
         div_ [class_ "justify-start items-start flex text-sm"] $ do
-          button_ [onclick_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Raw Details"
-          button_ [onclick_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Req Body"
-          button_ [onclick_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Res Body"
-          button_ [onclick_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
-          button_ [onclick_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
+          button_ [onpointerdown_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Raw Details"
+          button_ [onpointerdown_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Req Body"
+          button_ [onpointerdown_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Res Body"
+          button_ [onpointerdown_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
+          button_ [onpointerdown_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
       div_ [] do
         div_ [id_ "raw_content", class_ "a-tab-content"] do
           jsonValueToHtmlTree json Nothing
@@ -260,8 +260,8 @@ apiLogItemView pid lg = do
 
       div_ [class_ "w-full mt-4", id_ "log-tabs-container"] do
         div_ [class_ "flex", [__|on click halt|]] $ do
-          button_ [class_ "cursor-pointer a-tab border-b-2 border-b-slate-200 px-4 py-1.5 t-tab-active", onclick_ "navigatable(this, '#att-content', '#log-tabs-container', 't-tab-active')"] "Attributes"
-          button_ [class_ "cursor-pointer a-tab border-b-2 border-b-slate-200 px-4 py-1.5 ", onclick_ "navigatable(this, '#meta-content', '#log-tabs-container', 't-tab-active')"] "Process"
+          button_ [class_ "cursor-pointer a-tab border-b-2 border-b-slate-200 px-4 py-1.5 t-tab-active", onpointerdown_ "navigatable(this, '#att-content', '#log-tabs-container', 't-tab-active')"] "Attributes"
+          button_ [class_ "cursor-pointer a-tab border-b-2 border-b-slate-200 px-4 py-1.5 ", onpointerdown_ "navigatable(this, '#meta-content', '#log-tabs-container', 't-tab-active')"] "Process"
           div_ [class_ "w-full border-b-2 border-b-slate-200"] pass
 
         div_ [class_ "grid my-4 text-slate-600 font"] $ do

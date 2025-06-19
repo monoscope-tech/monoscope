@@ -38,7 +38,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
-import Utils (faSprite_)
+import Utils (faSprite_, onpointerdown_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -355,7 +355,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
       , class_ "fixed pt-24 hidden justify-center z-50 w-full p-4 bg-gray-500 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full"
       , id_ "swaggerModal"
       , tabindex_ "-1"
-      , onclick_ "closeModal(event)"
+      , onpointerdown_ "closeModal(event)"
       ]
       do
         div_
@@ -378,8 +378,8 @@ documentationsPage pid swaggers swaggerID jsonString = do
                 -- textarea_ [style_ "height:65vh;resize:none", name_ "swagger_json", class_ "w-full border outline-hidden p-4 focus:outline-hidden focus:border-blue-200", placeholder_ "Paste swagger here"] ""
                 -- Modal footer
                 div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] do
-                  button_ [style_ "margin-right:50px", type_ "button", class_ "btn", onclick_ "closeModal(event)", id_ "close_btn"] "Close"
-                  button_ [type_ "sumbit", class_ "btn btn-primary flex items-center gap-1", onclick_ "saveSwagger()"] do
+                  button_ [style_ "margin-right:50px", type_ "button", class_ "btn", onpointerdown_ "closeModal(event)", id_ "close_btn"] "Close"
+                  button_ [type_ "sumbit", class_ "btn btn-primary flex items-center gap-1", onpointerdown_ "saveSwagger()"] do
                     span_ [] "Confirm  & Save"
                     span_ [class_ "loading loading-dots loading-lg inline-block pl-3 hidden", id_ "save_swagger_loader"] ""
 
@@ -392,7 +392,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
           h3_ [class_ "text-xl text-slate-700 text-2xl font-medium"] "OpenAPI/Swagger"
           div_ [class_ "relative", style_ "width:200px"] do
             button_
-              [ onclick_ "toggleSwaggerHistory(event)"
+              [ onpointerdown_ "toggleSwaggerHistory(event)"
               , id_ "toggle_swagger_btn"
               , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded-sm focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
               ]
@@ -401,8 +401,8 @@ documentationsPage pid swaggers swaggerID jsonString = do
                 faSprite_ "chevron-down" "regular" "h-3 w-3"
             div_ [id_ "swagger_history_container", class_ "absolute hidden bg-base-100 border shadow-sm w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
               swaggers & mapM_ \sw -> do
-                button_ [onclick_ "swaggerChanged(event)", class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"] $ toHtml swaggerID
-        button_ [class_ "place-content-center text-md btn btn-primary", onclick_ "showModal()"] "Save swagger"
+                button_ [onpointerdown_ "swaggerChanged(event)", class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"] $ toHtml swaggerID
+        button_ [class_ "place-content-center text-md btn btn-primary", onpointerdown_ "showModal()"] "Save swagger"
 
       div_ [class_ "w-full h-full", style_ "height: calc(100% - 60px)"] do
         div_ [id_ "columns_container", class_ "w-full h-full flex flex-row", style_ "height: 100%"] do
@@ -421,7 +421,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
           div_ [id_ "editor_container", class_ "flex flex-auto overflow-auto", style_ "width:40%; height:100%"] do
             div_ [class_ "h-full", style_ "width: calc(100% - 2px)"] do
               div_ [class_ "w-full flex gap-8 justify-end px-2 items-center", style_ "height:40px"] do
-                div_ [onclick_ "toggleFontSize(event)", class_ "relative"] do
+                div_ [onpointerdown_ "toggleFontSize(event)", class_ "relative"] do
                   button_ [id_ "toggle_font", class_ "font-semibold"] "Aa"
                   div_ [id_ "toggle_dropdown_container", class_ "absolute hidden flex flex-col justify-between bg-base-100 shadow-sm bottom-0 rounded-b overflow-hidden", style_ "bottom:-105px;left:-50px; height: 100px;width:100px; z-index:999"] do
                     span_ [id_ "toggle_sm", class_ "cursor-pointer  w-full px-3 py-2 hover:bg-blue-100"] "Small"
@@ -435,7 +435,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
             div_ [onmousedown_ "mouseDown(event)", id_ "editor_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219);"] pass
           div_ [id_ "details_container", class_ "flex-auto overflow-y-auto", style_ "width:30%; height:100%"] do
             div_ [id_ "swagger-ui", class_ "relative h-full w-full bg-base-100 overflow-auto"] pass
-          button_ [class_ "absolute z-10 p-2", style_ "right: 15px", onclick_ "fullscreen()", title_ "full screen"] do
+          button_ [class_ "absolute z-10 p-2", style_ "right: 15px", onpointerdown_ "fullscreen()", title_ "full screen"] do
             faSprite_ "square-dashed" "regular" "h-5 w-5"
   -- mainContent swaggers
 

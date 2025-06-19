@@ -1,150 +1,214 @@
 /**
- * Minified by jsDelivr using Terser v5.37.0.
- * Original file: /npm/htmx-ext-preload@2.1.0/preload.js
+ * Original file: /npm/htmx-ext-preload@2.1.1/preload.js
  *
  * Do NOT use SRI with dynamically generated files! More information: https://www.jsdelivr.com/using-sri-with-dynamic-files
  */
-!(function () {
-  function e(n) {
-    if (void 0 !== n.preloadState) return
-    if (
-      !(function (e) {
-        const t = ['href', 'hx-get', 'data-hx-get'],
-          n = e => t.some(t => e.hasAttribute(t)) || 'get' === e.method,
-          o = e.form instanceof HTMLFormElement && n(e.form) && u(e)
-        if (!n(e) && !o) return !1
-        if (e instanceof HTMLInputElement && e.closest('label')) return !1
-        return !0
-      })(n)
-    )
-      return
-    if (n instanceof HTMLFormElement) {
-      const t = n
-      if (!((t.hasAttribute('method') && 'get' === t.method) || t.hasAttribute('hx-get') || t.hasAttribute('hx-data-get'))) return
-      for (let n = 0; n < t.elements.length; n++) {
-        const o = t.elements.item(n)
-        e(o), o.labels.forEach(e)
-      }
-      return
-    }
-    let o = l(n, 'preload')
-    ;(n.preloadAlways = o && o.includes('always')), n.preloadAlways && (o = o.replace('always', '').trim())
-    let r = o || 'mousedown'
-    const a = 'mouseover' === r
-    n.addEventListener(r, t(n, a)),
-      ('mousedown' !== r && 'mouseover' !== r) || n.addEventListener('touchstart', t(n)),
-      'mouseover' === r &&
-        n.addEventListener('mouseout', function (e) {
-          e.target === n && 'TIMEOUT' === n.preloadState && (n.preloadState = 'READY')
-        }),
-      (n.preloadState = 'READY'),
-      htmx.trigger(n, 'preload:init')
-  }
-  function t(e, t = !1) {
-    return function () {
-      if ('READY' === e.preloadState)
-        if (t) {
-          e.preloadState = 'TIMEOUT'
-          const t = 100
-          window.setTimeout(function () {
-            'TIMEOUT' === e.preloadState && ((e.preloadState = 'READY'), n(e))
-          }, t)
-        } else n(e)
-    }
-  }
-  function n(e) {
-    if ('READY' !== e.preloadState) return
-    e.preloadState = 'LOADING'
-    const t = e.getAttribute('hx-get') || e.getAttribute('data-hx-get')
-    if (t) return void r(t, e)
-    const n = 'true' === l(e, 'hx-boost')
-    if (e.hasAttribute('href')) {
-      const t = e.getAttribute('href')
-      n ? r(t, e) : a(t, e)
-    } else if (u(e)) {
-      const t = e.form.getAttribute('action') || e.form.getAttribute('hx-get') || e.form.getAttribute('data-hx-get'),
-        i = htmx.values(e.form),
-        l = !(e.form.getAttribute('hx-get') || e.form.getAttribute('data-hx-get') || n) ? a : r
-      if ('submit' === e.type) return void l(t, e.form, i)
-      const u = e.name || e.control.name
-      if ('SELECT' === e.tagName)
-        return void Array.from(e.options).forEach(n => {
-          if (n.selected) return
-          i.set(u, n.value)
-          const r = o(e.form, i)
-          l(t, e.form, r)
+;(function () {
+  htmx.defineExtension('preload', {
+    onEvent: function (e, t) {
+      if (e === 'htmx:afterProcessNode') {
+        const n = t.target || t.detail.elt
+        const r = [...(n.hasAttribute('preload') ? [n] : []), ...n.querySelectorAll('[preload]')]
+        r.forEach(function (e) {
+          i(e)
+          e.querySelectorAll('[href],[hx-get],[data-hx-get]').forEach(i)
         })
-      const s = e.getAttribute('type') || e.control.getAttribute('type'),
-        d = e.value || e.control?.value
-      if ('radio' === s) i.set(u, d)
-      else if ('checkbox' === s) {
-        const e = i.getAll(u)
-        e.includes(d) ? (i[u] = e.filter(e => e !== d)) : i.append(u, d)
+        return
       }
-      const f = o(e.form, i)
-      l(t, e.form, f)
-    } else;
-  }
-  function o(e, t) {
-    const n = e.elements,
-      o = new FormData()
-    for (let e = 0; e < n.length; e++) {
-      const r = n.item(e)
-      t.has(r.name) && 'SELECT' === r.tagName
-        ? o.append(r.name, t.get(r.name))
-        : t.has(r.name) && t.getAll(r.name).includes(r.value) && o.append(r.name, r.value)
+      if (e === 'htmx:beforeRequest') {
+        const o = t.detail.requestConfig.headers
+        if (!('HX-Preloaded' in o && o['HX-Preloaded'] === 'true')) {
+          return
+        }
+        t.preventDefault()
+        const a = t.detail.xhr
+        a.onload = function () {
+          s(t.detail.elt, a.responseText)
+        }
+        a.onerror = null
+        a.onabort = null
+        a.ontimeout = null
+        a.send()
+      }
+    },
+  })
+  function i(t) {
+    if (t.preloadState !== undefined) {
+      return
     }
-    return o
+    if (!l(t)) {
+      return
+    }
+    if (t instanceof HTMLFormElement) {
+      const o = t
+      if (!((o.hasAttribute('method') && o.method === 'get') || o.hasAttribute('hx-get') || o.hasAttribute('hx-data-get'))) {
+        return
+      }
+      for (let e = 0; e < o.elements.length; e++) {
+        const a = o.elements.item(e)
+        i(a)
+        a.labels.forEach(i)
+      }
+      return
+    }
+    let e = g(t, 'preload')
+    t.preloadAlways = e && e.includes('always')
+    if (t.preloadAlways) {
+      e = e.replace('always', '').trim()
+    }
+    let n = e || 'mousedown'
+    const r = n === 'mouseover'
+    t.addEventListener(n, u(t, r))
+    if (n === 'mousedown' || n === 'mouseover') {
+      t.addEventListener('touchstart', u(t))
+    }
+    if (n === 'mouseover') {
+      t.addEventListener('mouseout', function (e) {
+        if (e.target === t && t.preloadState === 'TIMEOUT') {
+          t.preloadState = 'READY'
+        }
+      })
+    }
+    t.preloadState = 'READY'
+    htmx.trigger(t, 'preload:init')
   }
-  function r(e, t, n = void 0) {
+  function u(t, n = false) {
+    return function () {
+      if (t.preloadState !== 'READY') {
+        return
+      }
+      if (n) {
+        t.preloadState = 'TIMEOUT'
+        const e = 100
+        window.setTimeout(function () {
+          if (t.preloadState === 'TIMEOUT') {
+            t.preloadState = 'READY'
+            r(t)
+          }
+        }, e)
+        return
+      }
+      r(t)
+    }
+  }
+  function r(n) {
+    if (n.preloadState !== 'READY') {
+      return
+    }
+    n.preloadState = 'LOADING'
+    const e = n.getAttribute('hx-get') || n.getAttribute('data-hx-get')
+    if (e) {
+      m(e, n)
+      return
+    }
+    const t = g(n, 'hx-boost') === 'true'
+    if (n.hasAttribute('href')) {
+      const r = n.getAttribute('href')
+      if (t) {
+        m(r, n)
+      } else {
+        h(r, n)
+      }
+      return
+    }
+    if (p(n)) {
+      const r = n.form.getAttribute('action') || n.form.getAttribute('hx-get') || n.form.getAttribute('data-hx-get')
+      const o = htmx.values(n.form)
+      const a = !(n.form.getAttribute('hx-get') || n.form.getAttribute('data-hx-get') || t)
+      const i = a ? h : m
+      if (n.type === 'submit') {
+        i(r, n.form, o)
+        return
+      }
+      const u = n.name || n.control.name
+      if (n.tagName === 'SELECT') {
+        Array.from(n.options).forEach(e => {
+          if (e.selected) return
+          o.set(u, e.value)
+          const t = d(n.form, o)
+          i(r, n.form, t)
+        })
+        return
+      }
+      const s = n.getAttribute('type') || n.control.getAttribute('type')
+      const l = n.value || n.control?.value
+      if (s === 'radio') {
+        o.set(u, l)
+      } else if (s === 'checkbox') {
+        const c = o.getAll(u)
+        if (c.includes(l)) {
+          o[u] = c.filter(e => e !== l)
+        } else {
+          o.append(u, l)
+        }
+      }
+      const f = d(n.form, o)
+      i(r, n.form, f)
+      return
+    }
+  }
+  function d(e, t) {
+    const n = e.elements
+    const r = new FormData()
+    for (let e = 0; e < n.length; e++) {
+      const o = n.item(e)
+      if (t.has(o.name) && o.tagName === 'SELECT') {
+        r.append(o.name, t.get(o.name))
+        continue
+      }
+      if (t.has(o.name) && t.getAll(o.name).includes(o.value)) {
+        r.append(o.name, o.value)
+      }
+    }
+    return r
+  }
+  function m(e, t, n = undefined) {
     htmx.ajax('GET', e, { source: t, values: n, headers: { 'HX-Preloaded': 'true' } })
   }
-  function a(e, t, n = void 0) {
-    const o = new XMLHttpRequest()
-    n && (e += '?' + new URLSearchParams(n.entries()).toString()),
-      o.open('GET', e),
-      o.setRequestHeader('HX-Preloaded', 'true'),
-      (o.onload = function () {
-        i(t, o.responseText)
-      }),
-      o.send()
+  function h(e, t, n = undefined) {
+    const r = new XMLHttpRequest()
+    if (n) {
+      e += '?' + new URLSearchParams(n.entries()).toString()
+    }
+    r.open('GET', e)
+    r.setRequestHeader('HX-Preloaded', 'true')
+    r.onload = function () {
+      s(t, r.responseText)
+    }
+    r.send()
   }
-  function i(e, t) {
-    ;(e.preloadState = e.preloadAlways ? 'READY' : 'DONE'), 'true' === l(e, 'preload-images') && (document.createElement('div').innerHTML = t)
+  function s(e, t) {
+    e.preloadState = e.preloadAlways ? 'READY' : 'DONE'
+    if (g(e, 'preload-images') === 'true') {
+      document.createElement('div').innerHTML = t
+    }
   }
-  function l(e, t) {
-    if (null != e) return e.getAttribute(t) || e.getAttribute('data-' + t) || l(e.parentElement, t)
+  function g(e, t) {
+    if (e == undefined) {
+      return undefined
+    }
+    return e.getAttribute(t) || e.getAttribute('data-' + t) || g(e.parentElement, t)
   }
-  function u(e) {
+  function l(e) {
+    const n = ['href', 'hx-get', 'data-hx-get']
+    const t = t => n.some(e => t.hasAttribute(e)) || t.method === 'get'
+    const r = e.form instanceof HTMLFormElement && t(e.form) && p(e)
+    if (!t(e) && !r) {
+      return false
+    }
+    if (e instanceof HTMLInputElement && e.closest('label')) {
+      return false
+    }
+    return true
+  }
+  function p(e) {
     if (e instanceof HTMLInputElement || e instanceof HTMLButtonElement) {
       const t = e.getAttribute('type')
       return ['checkbox', 'radio', 'submit'].includes(t)
     }
-    return e instanceof HTMLLabelElement ? e.control && u(e.control) : e instanceof HTMLSelectElement
+    if (e instanceof HTMLLabelElement) {
+      return e.control && p(e.control)
+    }
+    return e instanceof HTMLSelectElement
   }
-  htmx.defineExtension('preload', {
-    onEvent: function (t, n) {
-      if ('htmx:afterProcessNode' !== t) {
-        if ('htmx:beforeRequest' === t) {
-          const e = n.detail.requestConfig.headers
-          if (!('HX-Preloaded' in e) || 'true' !== e['HX-Preloaded']) return
-          n.preventDefault()
-          const t = n.detail.xhr
-          ;(t.onload = function () {
-            i(n.detail.elt, t.responseText)
-          }),
-            (t.onerror = null),
-            (t.onabort = null),
-            (t.ontimeout = null),
-            t.send()
-        }
-      } else {
-        const t = n.target || n.detail.elt
-        ;[...(t.hasAttribute('preload') ? [t] : []), ...t.querySelectorAll('[preload]')].forEach(function (t) {
-          e(t), t.querySelectorAll('[href],[hx-get],[data-hx-get]').forEach(e)
-        })
-      }
-    },
-  })
 })()
-//# sourceMappingURL=/sm/e3ca72d32241e17ac871246864a944b2d08fe8dee06bb8651bddc2de6d0e7df9.map

@@ -128,7 +128,7 @@ chartList pid source metricList nextUrl = do
     div_ [class_ "w-full flex flex-col gap-2 metric_filterble"] do
       let detailUrl = "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/?source=" <> source
       let expandBtn =
-            [text|on mousedown or click set #global-data-drawer.checked to true
+            [text|on pointerdown or click set #global-data-drawer.checked to true
                   then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
                   then fetch $detailUrl
                   then set #global-data-drawer-content.innerHTML to it

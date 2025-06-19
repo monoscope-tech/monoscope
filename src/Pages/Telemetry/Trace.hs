@@ -23,7 +23,7 @@ import Pages.Telemetry.Spans qualified as Spans
 import Pages.Telemetry.Utils
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_, getDurationNSMS, getServiceColors, utcTimeToNanoseconds)
+import Utils (faSprite_, getDurationNSMS, getServiceColors, onpointerdown_, utcTimeToNanoseconds)
 
 
 traceH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)
@@ -101,9 +101,9 @@ tracePage p = do
           div_ [class_ "flex flex-col gap-2"] do
             div_ [class_ "flex justify-between mb-2"] do
               div_ [class_ "flex items-center gap-2 text-slate-500 font-medium"] do
-                button_ [class_ "a-tab text-sm px-3 py-1.5 border-b-2 border-b-transparent t-tab-active", onclick_ "navigatable(this, '#flame_graph', '#trace-tabs', 't-tab-active')"] "Flame Graph"
-                button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onclick_ "navigatable(this, '#water_fall', '#trace-tabs', 't-tab-active')"] "Waterfall"
-                button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onclick_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Spans List"
+                button_ [class_ "a-tab text-sm px-3 py-1.5 border-b-2 border-b-transparent t-tab-active", onpointerdown_ "navigatable(this, '#flame_graph', '#trace-tabs', 't-tab-active')"] "Flame Graph"
+                button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#water_fall', '#trace-tabs', 't-tab-active')"] "Waterfall"
+                button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Spans List"
               div_ [class_ "flex items-center gap-2"] do
                 stBox (show $ length p.spanRecords) Nothing
                 stBox (show $ length $ V.filter (\s -> s.status == Just SSError) p.spanRecords) $ Just (faSprite_ "alert-triangle" "regular" "w-3 h-3 text-red-500")
@@ -122,13 +122,13 @@ tracePage p = do
                 div_ [class_ "flex items-center gap-1", id_ "currentSpanIndex", term "data-span" "0"] do
                   button_
                     [ class_ "h-7 w-7 flex items-center justify-center bg-fillWeaker rounded-full font-bold border border-slate-200 text-slate-950  cursor-pointer"
-                    , onclick_ [text|navigateSpans($spanIds, "prev")|]
+                    , onpointerdown_ [text|navigateSpans($spanIds, "prev")|]
                     ]
                     do
                       faSprite_ "chevron-up" "regular" "w-4 h-4"
                   button_
                     [ class_ "h-7 w-7 flex items-center justify-center rounded-full bg-fillWeaker font-bold border border-slate-200 text-slate-950 cursor-pointer"
-                    , onclick_ [text|navigateSpans($spanIds, "next")|]
+                    , onpointerdown_ [text|navigateSpans($spanIds, "next")|]
                     ]
                     do
                       faSprite_ "chevron-down" "regular" "h-4 w-4"
@@ -347,19 +347,19 @@ buildTree spanMap parentId =
     Nothing -> []
     Just spans ->
       [ SpanTree
-        SpanMin
-          { parentSpanId = sp.parentSpanId
-          , spanId = sp.spanId
-          , uSpanId = sp.uSpanId
-          , spanName = sp.spanName
-          , spanDurationNs = sp.spanDurationNs
-          , serviceName = getServiceName sp.resource
-          , startTime = utcTimeToNanoseconds sp.startTime
-          , endTime = utcTimeToNanoseconds <$> sp.endTime
-          , hasErrors = spanHasErrors sp
-          , timestamp = sp.timestamp
-          }
-        (buildTree spanMap (Just sp.spanId))
+          SpanMin
+            { parentSpanId = sp.parentSpanId
+            , spanId = sp.spanId
+            , uSpanId = sp.uSpanId
+            , spanName = sp.spanName
+            , spanDurationNs = sp.spanDurationNs
+            , serviceName = getServiceName sp.resource
+            , startTime = utcTimeToNanoseconds sp.startTime
+            , endTime = utcTimeToNanoseconds <$> sp.endTime
+            , hasErrors = spanHasErrors sp
+            , timestamp = sp.timestamp
+            }
+          (buildTree spanMap (Just sp.spanId))
       | sp <- spans
       ]
 

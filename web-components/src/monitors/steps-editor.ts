@@ -289,19 +289,19 @@ export class StepsEditor extends LitElement {
             draggable="true"
             @dragstart="${(e: any) => e.dataTransfer.setData('text/plain', e.target.dataset.index)}"
           >${faSprite_('grip-dots-vertical', 'solid', 'h-4 w-4')}</div>
-          <div class="flex-1 flex flex-row items-center gap-1 pr-5 py-3" @click="${() => this.toggleExpanded(idx)}">
+          <div class="flex-1 flex flex-row items-center gap-1 pr-5 py-3" @pointerdown="${() => this.toggleExpanded(idx)}">
             <label
              for="stepState-${idx}" class="flex items-center whitespace-nowrap gap-1 py-1 w-max text-xs bg-fillStrong badge text-textInverse-strong">Step ${
                idx + 1
              }</label>
-            <div class="w-full space-y-1 shrink" @click="${(e: any) => e.stopPropagation()}">
+            <div class="w-full space-y-1 shrink" @pointerdown="${(e: any) => e.stopPropagation()}">
               <input
               class="text-lg w-full pl-2 bg-transparent outline-hidden focus:outline-hidden" placeholder="Give your step a name*"
                .value="${stepData.title || ''}" id="title-${idx}" @change=${(e: any) => this.updateValue(e, idx, null, null, 'title')} />
             </div>
             <div class="items-center w-max shrink-0 gap-3 text-xs text-slate-600 flex">
                 <input
-                  @click="${(e: any) => e.stopPropagation()}"
+                  @pointerdown="${(e: any) => e.stopPropagation()}"
                   @change="${(e: any) => {
                     this.collectionSteps[idx].disabled = !e.target.checked;
                     this.requestUpdate();
@@ -310,7 +310,7 @@ export class StepsEditor extends LitElement {
                   type="checkbox"
                   class="toggle toggle-sm  ${stepData.disabled ? 'border-red-500  text-[#ef4444]' : 'border-green-500 text-[#22c55e]'}"
                    />
-                <button class="text-red-700 cursor-pointer" @click="${(e: any) => {
+                <button class="text-red-700 cursor-pointer" @pointerdown="${(e: any) => {
                   e.preventDefault();
                   e.stopPropagation();
                   this.collectionSteps = this.collectionSteps.filter((_, i) => i != idx);
@@ -356,7 +356,7 @@ export class StepsEditor extends LitElement {
                     <div role="tablist" class="tabs tabs-bordered pt-1">
                       <a role="tab" class="tab  ${
                         activeTab === 'request-options' ? 'tab-active [--bc:var(--brand-color)] text-brand font-bold' : ''
-                      }" @click=${() => setActiveTab('request-options')}>
+                      }" @pointerdown=${() => setActiveTab('request-options')}>
                         Request Options ${
                           configuredOptions['request-options'] > 0
                             ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['request-options']}</span>`
@@ -365,7 +365,7 @@ export class StepsEditor extends LitElement {
                       </a>
                       <a role="tab" class="tab ${
                         activeTab === 'query-params' ? 'tab-active [--bc:var(--brand-color)] text-brand font-bold' : ''
-                      }" @click=${() => setActiveTab('query-params')}>
+                      }" @pointerdown=${() => setActiveTab('query-params')}>
                         Query Params ${
                           configuredOptions['query-params'] > 0
                             ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['query-params']}</span>`
@@ -374,7 +374,7 @@ export class StepsEditor extends LitElement {
                       </a>
                       <a role="tab" class="tab ${
                         activeTab === 'request-body' ? 'tab-active [--bc:var(--brand-color)] text-brand font-bold' : ''
-                      }" @click=${() => setActiveTab('request-body')}>
+                      }" @pointerdown=${() => setActiveTab('request-body')}>
                         Request Body ${
                           configuredOptions['request-body'] > 0
                             ? html`<span class="badge badge-sm badge-ghost">${configuredOptions['request-body']}</span>`
@@ -516,7 +516,7 @@ ${stepData._json}</textarea
                   </div>
                 </details>
               </div>
-              <button class="mt-5 btn btn-sm btn-primary px-2 py-1" @click=${(e: any) => this.sendStepRequest(e, idx)}>
+              <button class="mt-5 btn btn-sm btn-primary px-2 py-1" @pointerdown=${(e: any) => this.sendStepRequest(e, idx)}>
               ${this.isSendingRequest[idx] ? html`<span class="loading loading-dots loading-sm"></span>` : 'Send request'}
               </button>
               ${
@@ -564,7 +564,7 @@ ${stepData._json}</textarea
                                 <button
                                   data-tippy-content="Add as an assertion"
                                   class="rounded-full border fill-textDisabled shadow-[0px_4px_4px_0px_rgba(0,0,0,0.06)] border-strokeWeak shadown-sm p-1.5 bg-bgBase"
-                                  @click="${(e: any) => this.addAssertion(e, idx, assertionObj)}"
+                                  @pointerdown="${(e: any) => this.addAssertion(e, idx, assertionObj)}"
                                 >
                                   ${faSprite_('plus', 'regular', 'w-3 h-3')}
                                 </button>
@@ -632,7 +632,7 @@ ${stepData._json}</textarea
               <div class="text-sm space-y-2 px-2 paramRows" id="[${idx}][exports]">
                 <p class=" text-textStrong">Variables consist of a variable name and a json path pointing to the variable in the response.</p>
                 ${this.renderParamsRows(stepData, idx, 'exports')}
-                <button class="flex items-center gap-1 mt-4" type="button" @click=${() => {}}>
+                <button class="flex items-center gap-1 mt-4" type="button" @pointerdown=${() => {}}>
                 ${faSprite_('plus', 'regular', 'w-4 h-4  text-textWeak')}
                 <span class="underline  text-textWeak font-semibold">New variable<span>
                 </button>
@@ -733,7 +733,7 @@ ${stepData._json}</textarea
           />
           <span class="text-xs text-red-500">${error}</span>
         </div>
-        <a class="cursor-pointer text-slate-600" @click=${(e: any) => this.deleteKey(e, idx, type, aidx, key)}>
+        <a class="cursor-pointer text-slate-600" @pointerdown=${(e: any) => this.deleteKey(e, idx, type, aidx, key)}>
           <svg class="inline-block icon w-5 h-5 p-1 rounded-full shadow-sm border stroke-red-500"><use href="/public/assets/svgs/fa-sprites/regular.svg#trash"></use></svg>
         </a>
       </div>`
@@ -937,7 +937,7 @@ ${stepData._json}</textarea
             : html`<div class="p-4 pt-4">
                 <a
                   class="btn btn-sm blue-outline-btn bg-transparent border-[var(--brand-color)] items-center cursor-pointer"
-                  @click=${() => this.addStep()}
+                  @pointerdown=${() => this.addStep()}
                 >
                   <svg class="inline-block icon w-3 h-3"><use href="/public/assets/svgs/fa-sprites/solid.svg#plus"></use></svg>
                   Add new step

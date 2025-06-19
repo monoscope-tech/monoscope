@@ -3,6 +3,7 @@
 
 module Utils (
   eitherStrToText,
+  onpointerdown_,
   jsonValueToHtmlTree,
   userIsProjectMember,
   GetOrRedirect,
@@ -127,6 +128,10 @@ instance Show DBField where
 
 instance ToField DBField where
   toField (MkDBField a) = toField a
+
+
+onpointerdown_ :: Text -> Attribute
+onpointerdown_ = term "onpointerdown"
 
 
 faSprite_ :: Text -> Text -> Text -> Html ()
@@ -643,11 +648,11 @@ callOpenAIAPI fullPrompt apiKey = do
           if "Please provide a query"
             `T.isInfixOf` cleanedQuery
             || "I need more"
-            `T.isInfixOf` cleanedQuery
+              `T.isInfixOf` cleanedQuery
             || "Could you please"
-            `T.isInfixOf` cleanedQuery
+              `T.isInfixOf` cleanedQuery
             || T.length cleanedQuery
-            < 3
+              < 3
             then pure $ Left "INVALID_QUERY_ERROR"
             else pure $ Right (cleanedQuery, vizTypeM)
 

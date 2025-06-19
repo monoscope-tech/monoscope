@@ -19,7 +19,7 @@ import Pages.Charts.Charts qualified as Charts
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Text.Slugify (slugify)
-import Utils (faSprite_, prettyPrintCount)
+import Utils (faSprite_, onpointerdown_, prettyPrintCount)
 
 
 data Query = Query
@@ -231,7 +231,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Expand widget"
               , term
                   "_"
-                  [text| on mousedown or click 
+                  [text| on pointerdown or click 
             set #global-data-drawer.checked to true
             then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
             then fetch `/p/${pid}/dashboards/${dashId}/widgets/${wId}/expand`
@@ -274,12 +274,12 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                  <> maybeToMonoid (widget._projectId <&> (.toText))
-                  <> "/dashboards/"
-                  <> maybeToMonoid widget._dashboardId
-                  <> "/widgets/"
-                  <> wId
-                  <> "/duplicate"
+                    <> maybeToMonoid (widget._projectId <&> (.toText))
+                    <> "/dashboards/"
+                    <> maybeToMonoid widget._dashboardId
+                    <> "/widgets/"
+                    <> wId
+                    <> "/duplicate"
               , hxTrigger_ "click"
               , [__| on click set (the closest <details/>).open to false
                      on htmx:beforeSwap
@@ -299,7 +299,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
             $ button_
               [ class_ "p-2 w-full text-left text-textError"
               , data_ "tippy-content" "Permanently delete this widget"
-              , onclick_
+              , onpointerdown_
                   [text|
                   if(confirm('Are you sure you want to delete this widget? This action cannot be undone.')) {
                     const widgetEl = document.getElementById('${wId}_widgetEl');
@@ -330,7 +330,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ chartId <> "_bordered"
         ]
         do

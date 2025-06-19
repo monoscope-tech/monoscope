@@ -227,7 +227,7 @@ export function renderAssertionBuilder({
               <div class="shrink-0">
                 <div class="flex gap-3 pt-2 items-center">
                   ${passed ? html`<span class="badge badge-success">Passed</span>` : html`<span class="badge badge-error">Failed</span>`}
-                  <a class="cursor-pointer text-slate-600" @click=${() => removeAssertion(index)}>
+                  <a class="cursor-pointer text-slate-600" @pointerdown=${() => removeAssertion(index)}>
                     ${faSprite_('trash', 'regular', 'rounded-full border bg-white shadow-sm p-1 w-5 h-5 stroke-red-500')}
                   </a>
                 </div>
@@ -237,7 +237,7 @@ export function renderAssertionBuilder({
           </div>
         `;
       })}
-      <button class="flex items-center gap-1 mt-4 text-sm" @click=${addAssertion}>
+      <button class="flex items-center gap-1 mt-4 text-sm" @pointerdown=${addAssertion}>
         ${faSprite_('plus', 'regular', 'w-4 h-4 text-textWeak')}
         <span class="underline text-textWeak font-semibold">New assertion</span>
       </button>

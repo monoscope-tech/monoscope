@@ -11,7 +11,7 @@ import Models.Projects.Projects (ProjectId)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Relude
-import Utils (faSprite_)
+import Utils (faSprite_, onpointerdown_)
 
 
 statBox :: Maybe ProjectId -> Text -> Text -> Int -> Maybe Int -> Html ()
@@ -174,7 +174,7 @@ freePricing pid isCurrent = do
     $ do
       div_
         [ class_ "flex flex-col gap-2 h-full relative"
-        , onclick_ "handlePaymentPlanSelect(event, 'freePlan')"
+        , onpointerdown_ "handlePaymentPlanSelect(event, 'freePlan')"
         , id_ "popularPlan"
         ]
         do
@@ -222,7 +222,7 @@ popularPricing pid lemonUrl isCurrent = do
         div_ [class_ "w-[500px] h-36 right-0 top-0 rotate-y-15 rotate-z-15 top-[-55px] right-[-40px] rounded-t-2xl absolute bg-gradient-to-b from-blue-100 to-white"] pass
         div_
           [ class_ "relative flex flex-col gap-2 overflow-hidden"
-          , onclick_ "handlePaymentPlanSelect(event, 'popularPlan')"
+          , onpointerdown_ "handlePaymentPlanSelect(event, 'popularPlan')"
           , id_ "popularPlan"
           ]
           do
@@ -275,7 +275,7 @@ systemsPricing pid critical isCurrent = do
     $ do
       div_
         [ class_ "flex flex-col gap-2"
-        , onclick_ "handlePaymentPlanSelect(event, 'systemsPlan')"
+        , onpointerdown_ "handlePaymentPlanSelect(event, 'systemsPlan')"
         , id_ "systemsPlan"
         ]
         do

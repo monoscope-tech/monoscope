@@ -75,7 +75,7 @@ export class QueryBuilderComponent extends LitElement {
       const addGroupByBtn = this.querySelector('#add-group-by-btn');
       if (addGroupByBtn) {
         console.log('Found add group by button, adding direct event listener');
-        addGroupByBtn.addEventListener('click', () => {
+        addGroupByBtn.addEventListener('pointerdown', () => {
           console.log('Group by button clicked directly');
           this.addGroupByField();
         });
@@ -84,7 +84,7 @@ export class QueryBuilderComponent extends LitElement {
       const addAggBtn = this.querySelector('#add-agg-btn');
       if (addAggBtn) {
         console.log('Found add agg button, adding direct event listener');
-        addAggBtn.addEventListener('click', () => {
+        addAggBtn.addEventListener('pointerdown', () => {
           console.log('Agg button clicked directly');
           this.addAggregation();
         });
@@ -93,7 +93,7 @@ export class QueryBuilderComponent extends LitElement {
       const addSortBtn = this.querySelector('#add-sort-btn');
       if (addSortBtn) {
         console.log('Found add sort button, adding direct event listener');
-        addSortBtn.addEventListener('click', () => {
+        addSortBtn.addEventListener('pointerdown', () => {
           console.log('Sort button clicked directly');
           this.addSortField();
         });
@@ -101,7 +101,7 @@ export class QueryBuilderComponent extends LitElement {
     }, 500);
 
     // Set up click event handler to close popovers when clicking outside
-    document.addEventListener('click', (e: MouseEvent) => {
+    document.addEventListener('pointerdown', (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       if (!target.closest('[popovertarget]') && !target.closest('[popover]') && !target.closest('#sort-by-button')) {
         // Close any open popovers
@@ -136,7 +136,7 @@ export class QueryBuilderComponent extends LitElement {
         };
         
         // Click event for the sort by button
-        sortByButton.addEventListener('click', (e) => {
+        sortByButton.addEventListener('pointerdown', (e) => {
           e.stopPropagation();
           positionSortPopover();
           
@@ -158,14 +158,14 @@ export class QueryBuilderComponent extends LitElement {
         });
         
         // Stop propagation for clicks inside the sort popover without closing it
-        sortByPopover.addEventListener('click', (e) => {
+        sortByPopover.addEventListener('pointerdown', (e) => {
           // Don't close popovers when selecting options - we'll close them after selection is complete
-          // The actual closing will happen in the @click handler for each field item
+          // The actual closing will happen in the @pointerdown handler for each field item
           e.stopPropagation();
         });
         
         // Add event listener to close the sort popover only when clicking outside of sort-by-popover AND more-settings-popover
-        document.addEventListener('click', (e) => {
+        document.addEventListener('pointerdown', (e) => {
           if (sortByPopover.matches?.(':popover-open')) {
             const target = e.target as HTMLElement;
             // Only close if the click is outside both popovers and not on the trigger button
@@ -1075,12 +1075,12 @@ export class QueryBuilderComponent extends LitElement {
     super.connectedCallback();
 
     // Add direct click handler for the whole component
-    this.addEventListener('click', this.handleComponentClick);
+    this.addEventListener('pointerdown', this.handleComponentClick);
   }
 
   disconnectedCallback(): void {
     // Clean up event listeners
-    this.removeEventListener('click', this.handleComponentClick);
+    this.removeEventListener('pointerdown', this.handleComponentClick);
     super.disconnectedCallback();
   }
 
@@ -1133,7 +1133,7 @@ export class QueryBuilderComponent extends LitElement {
               (agg, index) => html`
                 <div class="text-xs text-textDisabled monospace bg-bgWeaker">
                   [<span class="text-textStrong">${agg.function}(${agg.field})</span>
-                  <span class="cursor-pointer" data-tippy-content="Remove aggregation" @click="${() => this.removeAggregation(index)}">✕</span>]
+                  <span class="cursor-pointer" data-tippy-content="Remove aggregation" @pointerdown="${() => this.removeAggregation(index)}">✕</span>]
                 </div>
               `
             )}
@@ -1175,7 +1175,7 @@ export class QueryBuilderComponent extends LitElement {
                     ${this.aggFunctions.map((func) => html`
                       <div 
                         class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newAggFunction === func ? 'bg-fillHover font-medium' : ''}"
-                        @click="${() => this.handleAggFunctionClick(func)}"
+                        @pointerdown="${() => this.handleAggFunctionClick(func)}"
                       >
                         ${this.newAggFunction === func ? '✓ ' : ''}${func}${func !== 'count' ? '(...)' : '(*)'}
                       </div>
@@ -1191,7 +1191,7 @@ export class QueryBuilderComponent extends LitElement {
                       (this.filteredFields.length > 0 ? this.filteredFields : this.fieldsOptions).map((field) => html`
                         <div 
                           class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newAggField === field.value ? 'bg-fillHover font-medium' : ''}"
-                          @click="${() => { 
+                          @pointerdown="${() => { 
                             this.newAggField = field.value; 
                             this.completeAggregation();
                           }}"
@@ -1226,7 +1226,7 @@ export class QueryBuilderComponent extends LitElement {
                 return html`
                   <div class="text-xs text-textDisabled monospace bg-bgWeaker">
                     [<span class="text-textStrong">${field}</span>
-                    <span class="cursor-pointer" data-tippy-content="Remove group by field" @click="${() => this.removeGroupByField(index)}">✕</span>]
+                    <span class="cursor-pointer" data-tippy-content="Remove group by field" @pointerdown="${() => this.removeGroupByField(index)}">✕</span>]
                   </div>
                 `;
               }
@@ -1330,7 +1330,7 @@ export class QueryBuilderComponent extends LitElement {
                     ((this.groupBySearchTerm && this.filteredGroupByFields.length > 0) ? this.filteredGroupByFields : this.fieldsOptions).map((field) => html`
                       <div 
                         class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newGroupByField === field.value ? 'bg-fillHover font-medium' : ''}"
-                        @click="${() => { 
+                        @pointerdown="${() => { 
                           this.newGroupByField = field.value; 
                           this.addGroupByField();
                         }}"
@@ -1362,13 +1362,13 @@ export class QueryBuilderComponent extends LitElement {
                     [<span class="text-textDisabled">sort:</span> <span class="text-textStrong">${sort.field} 
                     <span class="cursor-pointer hover:bg-fillHover px-1" 
                       data-tippy-content="Toggle sort direction" 
-                      @click="${() => {
+                      @pointerdown="${() => {
                         // Toggle direction
                         this.sortFields[index].direction = this.sortFields[index].direction === 'asc' ? 'desc' : 'asc';
                         this.updateQuery();
                         this.requestUpdate();
                       }}">${sort.direction}</span></span>
-                    <span class="cursor-pointer" data-tippy-content="Remove sort field" @click="${() => this.removeSortField(index)}">✕</span>]
+                    <span class="cursor-pointer" data-tippy-content="Remove sort field" @pointerdown="${() => this.removeSortField(index)}">✕</span>]
                   </div>
                 `
               )}
@@ -1393,7 +1393,7 @@ export class QueryBuilderComponent extends LitElement {
                     this.updateLimit();
                   }}"
                 />
-                <span class="cursor-pointer" data-tippy-content="Remove limit" @click="${() => {
+                <span class="cursor-pointer" data-tippy-content="Remove limit" @pointerdown="${() => {
                   this.limitValue = null; // Remove limit
                   this.updateLimit();
                 }}">✕</span>]
@@ -1441,7 +1441,7 @@ export class QueryBuilderComponent extends LitElement {
               ${this.limitValue === null ? html`
                 <div 
                   class="p-2 hover:bg-fillHover cursor-pointer monospace"
-                  @click="${() => {
+                  @pointerdown="${() => {
                     // Add take with a reasonable default value
                     this.limitValue = 1000;
                     this.updateLimit();
@@ -1492,7 +1492,7 @@ export class QueryBuilderComponent extends LitElement {
                   ((this.aggSearchTerm && this.filteredFields.length > 0) ? this.filteredFields : this.fieldsOptions).map((field) => html`
                     <div 
                       class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newSortField === field.value ? 'bg-fillHover font-medium' : ''}"
-                      @click="${(e: Event) => { 
+                      @pointerdown="${(e: Event) => { 
                         e.stopPropagation(); // Stop event propagation
                         
                         this.newSortField = field.value; 

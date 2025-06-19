@@ -548,7 +548,7 @@ export class LogList extends LitElement {
           ? html` <div class="sticky left-1/2 -translate-y-1/2 top-[30px] z-50">
               <button
                 class="cbadge-sm badge-neutral cursor-pointer bg-fillBrand-strong text-textInverse-strong shadow rounded-lg text-sm absolute"
-                @click=${this.handleRecentClick}
+                @pointerdown=${this.handleRecentClick}
               >
                 ${this.recentDataToBeAdded.length} new
               </button>
@@ -587,7 +587,7 @@ export class LogList extends LitElement {
         ${!this.shouldScrollToBottom && this.flipDirection
           ? html`<div style="position: sticky;bottom: 0px;overflow-anchor: none;">
               <button
-                @click=${() => {
+                @pointerdown=${() => {
                   this.shouldScrollToBottom = true;
                   this.scrollToBottom();
                   this.handleRecentConcatenation();
@@ -775,7 +775,7 @@ export class LogList extends LitElement {
                     : nothing}
                   ${children > 0
                     ? html`<button
-                        @click=${(e: any) => {
+                        @pointerdown=${(e: any) => {
                           e.stopPropagation();
                           this.expandTrace(traceId, id);
                         }}
@@ -818,7 +818,7 @@ export class LogList extends LitElement {
               : html`
                   <button
                     class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-                    @click=${() => this.fetchData(this.nextFetchUrl)}
+                    @pointerdown=${() => this.fetchData(this.nextFetchUrl)}
                   >
                     Load more
                   </button>
@@ -838,7 +838,7 @@ export class LogList extends LitElement {
             : html`
                 <button
                   class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-                  @click=${() => {
+                  @pointerdown=${() => {
                     this.fetchData(this.recentFetchUrl, true);
                   }}
                 >
@@ -893,7 +893,7 @@ export class LogList extends LitElement {
     return html`
       <tr
         class=${`item-row relative p-0 flex items-center cursor-pointer whitespace-nowrap ${isNew ? 'animate-fadeBg' : ''}`}
-        @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
+        @pointerdown=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
       >
         ${this.logsColumns
           .filter((v) => v !== 'latency_breakdown')
@@ -946,13 +946,13 @@ export class LogList extends LitElement {
             class="dropdown-content z-1 flex flex-col font-normal bg-white border w-64 border-strokeWeak p-2 text-sm rounded shadow"
           >
             <li class="px-1 cursor-pointer hover:bg-fillWeak">
-              <button class="cursor-pointer py-0.5" @click=${() => this.hideColumn(column)}>Hide column</button>
+              <button class="cursor-pointer py-0.5" @pointerdown=${() => this.hideColumn(column)}>Hide column</button>
             </li>
             <li class="px-1 cursor-pointer hover:bg-fillWeak">
-              <button class="cursor-pointer py-0.5" @click=${() => this.moveColumn(column, -1)}>Move column left</button>
+              <button class="cursor-pointer py-0.5" @pointerdown=${() => this.moveColumn(column, -1)}>Move column left</button>
             </li>
             <li class="px-1 cursor-pointer hover:bg-fillWeak">
-              <button class="cursor-pointer py-0.5" @click=${() => this.moveColumn(column, 1)}>Move column right</button>
+              <button class="cursor-pointer py-0.5" @pointerdown=${() => this.moveColumn(column, 1)}>Move column right</button>
             </li>
           </ul>
         </div>
@@ -976,7 +976,7 @@ export class LogList extends LitElement {
         ${html`
           <div class="tabs tabs-box tabs-md p-0 tabs-outline items-center border">
             <button
-              @click=${() => (this.view = 'tree')}
+              @pointerdown=${() => (this.view = 'tree')}
               class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
                 this.view === 'tree' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
               }`}
@@ -986,7 +986,7 @@ export class LogList extends LitElement {
             </button>
 
             <button
-              @click=${() => (this.view = 'list')}
+              @pointerdown=${() => (this.view = 'list')}
               class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
                 this.view === 'list' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
               }`}
@@ -1011,7 +1011,7 @@ export class LogList extends LitElement {
               class=${`flex items-center cursor-pointer  w-full gap-1 px-2 py-1 text-sm rounded ${
                 this.flipDirection ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
               }`}
-              @click=${() => {
+              @pointerdown=${() => {
                 this.flipDirection = !this.flipDirection;
                 this.spanListTree = this.buildSpanListTree(this.spanListTree.map((span) => span.data).reverse());
                 this.recentDataToBeAdded = this.buildSpanListTree(this.recentDataToBeAdded.map((span) => span.data).reverse());
@@ -1028,7 +1028,7 @@ export class LogList extends LitElement {
               class=${`flex items-center cursor-pointer w-full gap-1 px-2 py-1 text-sm rounded ${
                 this.wrapLines ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
               }`}
-              @click=${() => {
+              @pointerdown=${() => {
                 this.wrapLines = !this.wrapLines;
                 if (this.wrapLines) {
                   let width = Number(
@@ -1120,7 +1120,7 @@ class ColumnsSettings extends LitElement {
                       (col) => html`
                         <li
                           class="px-1 py-0.5 hover:bg-fillWeak cursor-pointer"
-                          @click=${() => {
+                          @pointerdown=${() => {
                             let summaryIndex = this.columns.indexOf('summary');
                             if (summaryIndex === -1 || col === 'latency_breakdown') {
                               this.columns.push(col);
@@ -1159,7 +1159,7 @@ class ColumnsSettings extends LitElement {
               >
                 <span class="text-textStrong">${col}</span>
                 <div class="flex items-center gap-2">
-                  <button class="hidden group-hover:inline-block cursor-pointer" @click=${() => this._removeColumn(index)}>
+                  <button class="hidden group-hover:inline-block cursor-pointer" @pointerdown=${() => this._removeColumn(index)}>
                     ${faSprite('trash-can', 'regular', 'h-3 w-3 text-iconNeutral fill-red-600')}
                   </button>
                   ${faSprite('grip-dots-vertical', 'regular', 'h-4 w-4 text-iconNeutral')}

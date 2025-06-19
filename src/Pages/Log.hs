@@ -45,7 +45,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (callOpenAIAPI, faSprite_, freeTierLimitExceededBanner, getServiceColors, listToIndexHashMap, lookupVecTextByKey, prettyPrintCount, systemPrompt)
+import Utils (callOpenAIAPI, faSprite_, freeTierLimitExceededBanner, getServiceColors, listToIndexHashMap, lookupVecTextByKey, onpointerdown_, prettyPrintCount, systemPrompt)
 
 
 -- $setup
@@ -291,7 +291,7 @@ renderFacets facetSummary = do
                           [ type_ "checkbox"
                           , class_ "checkbox checkbox-sm"
                           , name_ key
-                          , onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
+                          , onpointerdown_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
                           , term "data-tippy-content" (T.replace "___" "." key <> " == \"" <> val <> "\"")
                           , term "data-field" (T.replace "___" "." key)
                           , term "data-value" val
@@ -429,7 +429,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
               Components.refreshButton_
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-md p-0 tabs-outline items-center border"] do
               a_
-                [onclick_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab h-auto! " <> if source == "spans" then "tab-active text-textStrong " else ""]
+                [onpointerdown_ "window.setQueryParamAndReload('source', 'spans')", role_ "tab", class_ $ "tab h-auto! " <> if source == "spans" then "tab-active text-textStrong " else ""]
                 "Events"
                 -- a_ [onclick_ "window.setQueryParamAndReload('source', 'metrics')", role_ "tab", class_ $ "tab py-1.5 h-auto! " <> if source == "metrics" then "tab-active" else ""] "Metrics"
           }
@@ -892,10 +892,10 @@ jsonTreeAuxillaryCode pid query = do
           do
             faSprite_ "copy" "regular" "w-4 h-4 text-iconNeutral"
             span_ [] "Copy field value"
-      li_ $ a_ [class_ "flex gap-2 items-center", onclick_ "filterByField(event, 'Eq')"] do
+      li_ $ a_ [class_ "flex gap-2 items-center", onpointerdown_ "filterByField(event, 'Eq')"] do
         faSprite_ "filter-enhanced" "regular" "w-4 h-4 text-iconNeutral"
         span_ [] "Filter by field"
-      li_ $ a_ [class_ "flex gap-2 items-center", onclick_ "filterByField(event, 'NotEq')"] do
+      li_ $ a_ [class_ "flex gap-2 items-center", onpointerdown_ "filterByField(event, 'NotEq')"] do
         faSprite_ "not-equal" "regular" "w-4 h-4 text-iconNeutral"
         span_ [] "Exclude field"
       li_

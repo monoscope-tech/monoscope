@@ -875,14 +875,14 @@ export class QueryEditorComponent extends LitElement {
     try {
       const currentValue = this.editor.getValue().trim();
       let newValue;
-      
+
       if (replace || !currentValue) {
         newValue = queryFragment;
       } else {
         // Find where to insert the new condition
         const pipeIndex = currentValue.indexOf('|');
         const whereIndex = currentValue.toLowerCase().indexOf('| where ');
-        
+
         if (whereIndex >= 0) {
           // Has explicit where clause - insert after "where"
           const wherePos = whereIndex + 8; // "| where ".length
@@ -1033,7 +1033,7 @@ export class QueryEditorComponent extends LitElement {
     });
 
     let clickedOnSuggestion = false;
-    document.addEventListener('mousedown', (e: MouseEvent) => {
+    document.addEventListener('pointerdown', (e: MouseEvent) => {
       clickedOnSuggestion = !!this.querySelector('.suggestions-dropdown')?.contains(e.target as Node);
     });
 
@@ -1424,7 +1424,7 @@ export class QueryEditorComponent extends LitElement {
     return html`
       <div
         class="flex items-center justify-between px-4 py-2 hover:bg-blue-50 cursor-pointer border-b border-gray-100 ${selectedClass}"
-        @click=${(e: MouseEvent) => this.handleSuggestionClick(item, e)}
+        @pointerdown=${(e: MouseEvent) => this.handleSuggestionClick(item, e)}
         @mouseover=${() => (this.selectedIndex = itemIndex)}
         data-index="${itemIndex}"
       >
@@ -1541,7 +1541,7 @@ export class QueryEditorComponent extends LitElement {
           <div id="editor-container" class="w-full"></div>
           <div
             class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-auto z-[1] text-gray-400 f/nont-mono text-sm leading-[18px] pt-2 pl-0 hidden cursor-text"
-            @click=${() => this.editor?.focus()}
+            @pointerdown=${() => this.editor?.focus()}
           >
             Filter logs and events. Press <span class="kbd">/</span> to search or <span class="kbd">?</span>
             to ask in Natural language.

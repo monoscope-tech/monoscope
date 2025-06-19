@@ -165,7 +165,7 @@ export function renderJsonWithIndentation(
             <span> ${key}: ${typeof value === 'object' && value ? '' : JSON.stringify(value)} </span>
             <button
               class="rounded-full border fill-textDisabled shadow-[0px_4px_4px_0px_rgba(0,0,0,0.06)] border-strokeWeak shadown-sm p-1.5 bg-bgBase"
-              @click="${(e: Event) => addAssertion(e, assertionObj)}"
+              @pointerdown="${(e: Event) => addAssertion(e, assertionObj)}"
             >
               ${faSprite_('plus', 'regular', 'w-3 h-3')}
             </button>

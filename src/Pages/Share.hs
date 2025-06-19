@@ -20,7 +20,7 @@ import Pages.Telemetry.Spans qualified as Spans
 import Pkg.Components (navBar)
 import Relude
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_, jsonValueToHtmlTree)
+import Utils (faSprite_, jsonValueToHtmlTree, onpointerdown_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -147,7 +147,7 @@ apiLogItemView pid req = do
   let reqJson = decodeUtf8 $ AE.encode req
   button_
     [ class_ "btn btn-sm bg-base-100"
-    , onclick_ "window.downloadJson(event)"
+    , onpointerdown_ "window.downloadJson(event)"
     , term "data-reqJson" reqJson
     ]
     (span_ [] "Download" >> faSprite_ "arrow-down-to-line" "regular" "h-3 w-3")

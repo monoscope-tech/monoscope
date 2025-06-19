@@ -54,7 +54,7 @@ import Relude.Unsafe qualified as Unsafe
 import Servant (err401, errBody)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, redirectCS)
-import Utils (faSprite_, getOtelLangVersion, insertIfNotExist, lookupValueText)
+import Utils (faSprite_, getOtelLangVersion, insertIfNotExist, lookupValueText, onpointerdown_)
 import Web.FormUrlEncoded
 
 
@@ -415,8 +415,8 @@ integrationsPage pid apikey =
         $ div_ [class_ "max-w-[550px]"]
         $ stepIndicator 5 "Instrument your apps or servers"
         $ "/p/"
-        <> pid.toText
-        <> "/onboarding?step=NotifChannel"
+          <> pid.toText
+          <> "/onboarding?step=NotifChannel"
       div_ [class_ "flex-col w-full gap-4 flex mt-4 px-12 overflow-y-auto flex-grow"] do
         p_ [class_ "text-textStrong"] do
           "Send Logs, Metrics or Traces. Select an item below for instructions. "
@@ -430,7 +430,7 @@ integrationsPage pid apikey =
             button_
               [ class_ "px-4 py-2 bg-fillStrong rounded-xl text-white flex items-center gap-1 hover:bg-fillStronger"
               , type_ "button"
-              , onclick_ "navigator.clipboard.writeText(document.getElementById('api-key-display').textContent); this.innerHTML = '<span>Copied!</span><svg class=\"h-4 w-4\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M5 13l4 4L19 7\"></path></svg>';"
+              , onpointerdown_ "navigator.clipboard.writeText(document.getElementById('api-key-display').textContent); this.innerHTML = '<span>Copied!</span><svg class=\"h-4 w-4\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M5 13l4 4L19 7\"></path></svg>';"
               ]
               do
                 span_ "Copy"
@@ -746,7 +746,7 @@ inviteTeamMemberModal pid emails = do
                   $ div_ [class_ "flex flex-col gap-1 w-full"]
                   $ do
                     input_ [class_ "input input-sm w-full", placeholder_ "email@example.com", type_ "email", id_ "add-member-input"]
-                button_ [class_ "btn-primary rounded-xl px-4 py-2 justify-center items-center flex text-white text-sm", onclick_ "appendMember()"] "invite"
+                button_ [class_ "btn-primary rounded-xl px-4 py-2 justify-center items-center flex text-white text-sm", onpointerdown_ "appendMember()"] "invite"
               div_ [class_ "w-full"] $ do
                 div_ [class_ "w-full  text-textStrong text-sm font-semibold"] "Members"
                 div_ [class_ "w-full border-t border-weak"] $ do
@@ -761,7 +761,7 @@ inviteTeamMemberModal pid emails = do
                       forM_ emails $ \email -> do
                         inviteMemberItem email
         div_ [class_ "modal-action w-full flex items-center justify-start gap-4 mt-2"] do
-          button_ [class_ "btn-primary px-8 py-2 text-lg rounded-xl cursor-pointer flex items-center", type_ "button", onclick_ "htmx.trigger('#members-container', 'submit')"] "Proceed"
+          button_ [class_ "btn-primary px-8 py-2 text-lg rounded-xl cursor-pointer flex items-center", type_ "button", onpointerdown_ "htmx.trigger('#members-container', 'submit')"] "Proceed"
           label_ [class_ "text-brand underline cursor-pointer", Lucid.for_ "inviteModal"] "Back"
 
 

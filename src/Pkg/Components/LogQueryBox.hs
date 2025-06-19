@@ -14,7 +14,7 @@ import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
 import Pkg.Components qualified as Components
 import Relude
-import Utils (displayTimestamp, faSprite_, formatUTC)
+import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_)
 
 
 -- | Configuration record for the log query box component
@@ -76,7 +76,7 @@ logQueryBox_ config = do
                   on keydown[key=='Space' and shiftKey] from document set #ai-search-chkbox.checked to true
                   |]
               ]
-            <> [checked_ | isJust config.targetWidgetPreview]
+              <> [checked_ | isJust config.targetWidgetPreview]
           script_
             [text|
             document.addEventListener('keydown', function(e) {
@@ -141,7 +141,7 @@ logQueryBox_ config = do
             span_ [class_ "htmx-indicator", id_ "ai-search-loader"] $ faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
             a_
               [ class_ "px-3 py-0.5 inline-flex gap-2 items-center cursor-pointer border text-textDisabled shadow-strokeBrand-weak hover:border-strokeBrand-weak rounded-sm peer-valid:border-strokeBrand-strong peer-valid:text-textBrand peer-valid:shadow-md"
-              , onclick_ "htmx.trigger('#ai-search-input', 'htmx:trigger')"
+              , onpointerdown_ "htmx.trigger('#ai-search-input', 'htmx:trigger')"
               ]
               do
                 faSprite_ "arrow-right" "regular" "h-4 w-4"
@@ -223,7 +223,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId =
                     end
                  |]
           ]
-        <> [checked_ | vizType == defaultVizType]
+          <> [checked_ | vizType == defaultVizType]
       span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
       span_ [] $ toHtml label
 
@@ -231,7 +231,8 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId =
 -- | Query library component for saved and recent queries
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
 queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
-  div_ [class_ "cursor-pointer relative text-textWeak rounded-lg border border-strokeStrong h-full flex gap-2 items-center px-2 mb-2", tabindex_ "0", role_ "button"]
+  div_
+    [class_ "cursor-pointer relative text-textWeak rounded-lg border border-strokeStrong h-full flex gap-2 items-center px-2 mb-2", tabindex_ "0", role_ "button"]
     (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
   div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-fillWeak p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
     tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
