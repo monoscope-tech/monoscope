@@ -3,6 +3,7 @@ module Pkg.Queue (pubsubService, kafkaService) where
 import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
 import Control.Monad.Trans.Resource (runResourceT)
+import Data.Aeson qualified as AE
 import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy.Base64 qualified as LB64
 import Data.Generics.Product (field)
@@ -61,7 +62,7 @@ pubsubService appLogger appCtx topics fn = do
             Left e -> do
               liftIO
                 $ Log.runLogT "apitoolkit" appLogger Log.LogAttention
-                $ Log.logAttention "CAUGHT EXCEPTION: Error processing messages, but continuing" (show e)
+                $ Log.logAttention "pubsubService: CAUGHT EXCEPTION - Error processing messages, but continuing" (AE.object ["error" AE..= show e, "message_count" AE..= length (catMaybes msgsB64), "first_attrs" AE..= firstAttrs, "checkpoint" AE..= ("pubsubService:exception" :: String)])
               -- Return all message IDs so they're acknowledged anyway to prevent reprocessing
               pure $ map fst $ catMaybes msgsB64
             Right ids -> pure ids
@@ -94,14 +95,15 @@ kafkaService appLogger appCtx fn = do
         [] -> pass
         (rec : _) -> do
           let topic = rec.crTopic.unTopicName
-              attributes = HM.insert "ce-type" (topicToCeType topic) $ consumerRecordHeadersToHashMap rec
+              ceType = topicToCeType topic
+              attributes = HM.insert "ce-type" ceType $ consumerRecordHeadersToHashMap rec
               allRecords = consumerRecordToTuple <$> rightRecords
 
           msgIds <-
             tryAny (runBackground appLogger appCtx $ fn allRecords attributes) >>= \case
               Left e -> do
                 Log.runLogT "apitoolkit" appLogger Log.LogAttention
-                  $ Log.logAttention "Error processing Kafka messages, but continuing" (show e)
+                  $ Log.logAttention "kafkaService: CAUGHT EXCEPTION - Error processing Kafka messages, but continuing" (AE.object ["error" AE..= show e, "topic" AE..= topic, "ce-type" AE..= ceType, "record_count" AE..= length allRecords, "attributes" AE..= attributes, "checkpoint" AE..= ("kafkaService:exception" :: String)])
                 -- Return all message IDs so they're acknowledged anyway
                 pure $ map fst allRecords
               Right ids -> pure ids

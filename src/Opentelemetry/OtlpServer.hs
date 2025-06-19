@@ -110,14 +110,13 @@ processList :: (DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Ki.Structured
 processList [] _ = pure []
 processList msgs attrs = checkpoint "processList" $ process `onException` handleException
   where
-    handleException = do
-      Log.logAttention "processList: caught exception" (AE.object ["ce-type" AE..= HashMap.lookup "ce-type" attrs])
+    handleException = checkpoint "processList:exception" $ do
+      Log.logAttention "processList: caught exception" (AE.object ["ce-type" AE..= HashMap.lookup "ce-type" attrs, "msg_count" AE..= length msgs, "attrs" AE..= attrs])
       pure $ map fst msgs
 
     process = do
       let msgs' = V.fromList msgs
       appCtx <- ask @AuthContext
-      Log.logAttention "processList: caught exception" (HashMap.lookup "ce-type" attrs)
       case HashMap.lookup "ce-type" attrs of
         Just "org.opentelemetry.otlp.logs.v1" -> checkpoint "processList:logs" $ do
           results <- V.forM msgs' $ \(ackId, msg) ->
@@ -143,7 +142,7 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
         Just "org.opentelemetry.otlp.traces.v1" -> checkpoint "processList:traces" $ do
           results <- V.forM msgs' $ \(ackId, msg) ->
             case (decodeMessage msg :: Either String TS.ExportTraceServiceRequest) of
-              Left err -> do
+              Left err -> checkpoint "processList:traces:decode-error" $ do
                 Log.logAttention "processList:traces: unable to parse traces service request" (createProtoErrorInfo err msg)
                 pure (ackId, [])
               Right traceReq -> do
@@ -172,12 +171,13 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
               Right metricReq -> checkpoint "processList:metrics:getProjectId" do
                 let resourceMetrics = V.fromList $ metricReq ^. PMF.resourceMetrics
                     projectKey = getMetricAttributeValue "at-project-key" resourceMetrics
+                    projectIdText = getMetricAttributeValue "at-project-id" resourceMetrics
                 pidM <- join <$> forM projectKey ProjectApiKeys.getProjectIdByApiKey
-                let pid2M = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" resourceMetrics
+                let pid2M = Projects.projectIdFromText =<< projectIdText
                 case pidM <|> pid2M of
                   Just pid -> pure (ackId, convertResourceMetricsToMetricRecords pid resourceMetrics)
-                  Nothing -> do
-                    Log.logAttention_ "processList:metrics: project API Key and project ID not available in metrics"
+                  Nothing -> checkpoint "processList:metrics:missing-project-info" $ do
+                    Log.logAttention "processList:metrics: project API Key and project ID not available in metrics" (AE.object ["project_key" AE..= projectKey, "project_id_text" AE..= projectIdText, "pid_from_key" AE..= pidM, "pid_from_text" AE..= pid2M])
                     pure (ackId, [])
 
           let (ackIds, metricLists) = V.unzip results
