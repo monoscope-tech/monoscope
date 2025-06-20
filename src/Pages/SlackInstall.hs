@@ -37,6 +37,7 @@ import Data.Effectful.Wreq (
   responseBody,
  )
 import Data.Time qualified as Time
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Effectful (Eff, type (:>))
 import Effectful.Time qualified as Time
 import Network.HTTP.Types (urlEncode)
@@ -349,21 +350,15 @@ discordInteractionsH rawBody signatureM timestampM = do
           case vizTypeM of
             Just vizType -> do
               let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-                  opts = getChartData query vizType authCtx discordData.projectId chartType
-                  qUrl = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query))
+                  qUrl = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> ("&query=" <> decodeUtf8 (urlEncode True $ encodeUtf8 query))
                   query_url = "[Open in log explorer](" <> qUrl <> ")"
+                  opts = "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query)) <> "&p=" <> discordData.projectId.toText <> "&t=" <> chartType
                   content = getBotContent Discord query query_url opts authCtx.env.chartShotUrl now
               sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
               pure $ contentResponse "Generated query: "
             Nothing -> do
               _ <- sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= ("Generated query: " <> query)])
               pure $ AE.object []
-
-
-getChartData :: Text -> Text -> AuthContext -> Projects.ProjectId -> Text -> AE.Value
-getChartData query vizType authCtx pid chartType =
-  let widgetJson = createWidgetJson vizType pid query
-   in AE.object ["q" AE..= query, "p" AE..= pid.toText, "e" AE..= widgetJson, "t" AE..= chartType]
 
 
 -- Helper functions
@@ -548,7 +543,7 @@ slackInteractionsH interaction = do
           case vizTypeM of
             Just vizType -> do
               let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-                  opts = getChartData query vizType authCtx slackData.projectId chartType
+                  opts = "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query)) <> "&p=" <> slackData.projectId.toText <> "&t=" <> chartType
                   query_url = authCtx.env.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query))
                   content = getBotContent Slack query query_url opts authCtx.env.chartShotUrl now
 
@@ -585,17 +580,16 @@ data SlackInteraction = SlackInteraction
   deriving anyclass (AE.FromJSON, FromForm)
 
 
-chartImageUrl :: AE.Value -> Text -> Time.UTCTime -> Text
+chartImageUrl :: Text -> Text -> Time.UTCTime -> Text
 chartImageUrl options baseUrl now =
-  let jsonBS = toStrict (AE.encode options)
-      encoded = urlEncode True jsonBS
-   in baseUrl <> "?t=" <> show now <> "&opts=" <> decodeUtf8 encoded
+  let timeMs = show $ floor (utcTimeToPOSIXSeconds now * 1000)
+   in baseUrl <> "?t=" <> timeMs <> options
 
 
 data BotType = Slack | Discord
 
 
-getBotContent :: BotType -> Text -> Text -> AE.Value -> Text -> Time.UTCTime -> AE.Value
+getBotContent :: BotType -> Text -> Text -> Text -> Text -> Time.UTCTime -> AE.Value
 getBotContent target query query_url chartOptions baseUrl now =
   case target of
     Slack ->
