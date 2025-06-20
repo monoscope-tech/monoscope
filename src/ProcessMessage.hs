@@ -2,7 +2,7 @@
 
 module ProcessMessage (
   processMessages,
-  processRequestMessages,
+  processSpanToEntities,
 )
 where
 
@@ -10,49 +10,38 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Extra (lodashMerge)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
+import Data.Aeson.Lens (key, _String, _Object)
+import Control.Lens ((^?))
 import Data.Aeson.Types (KeyValue ((.=)), object)
+import Data.Aeson.Types qualified as AE
 import Data.ByteString.Lazy.Char8 qualified as BL
-import Data.Cache qualified as Cache
 import Data.Effectful.UUID (UUIDEff)
 import Data.Effectful.UUID qualified as UUID
-import Data.HashMap.Strict qualified as HM
-import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Data.Vector.Algorithms qualified as VAA
-import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Simple (SomePostgreSqlException)
 import Effectful
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
-import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Log qualified
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields.Query qualified as Fields
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (Context (trace_state))
 import Models.Telemetry.Telemetry qualified as Telemetry
-import PyF (fmt)
 import Relude hiding (ask)
+import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
-import System.Clock (
-  Clock (Monotonic),
-  diffTimeSpec,
-  getTime,
-  toNanoSecs,
- )
+import RequestMessages (fieldsToFieldDTO, sortVector, valueToFields)
 import System.Config qualified as Config
-import UnliftIO.Exception (try)
-import Utils (b64ToJson, eitherStrToText, nestedJsonFromDotNotation)
+import Utils (b64ToJson, eitherStrToText, nestedJsonFromDotNotation, toXXHash)
 
 
 {--
@@ -158,89 +147,108 @@ jsonToMap (AE.Object o) = Just $ AEKM.toMapText o
 jsonToMap _ = Nothing
 
 
--- TODO: Delete and implement one that operates directly on the spans in bulk, as a batch process
-processRequestMessages
-  :: (DB :> es, IOE :> es, Ki.StructuredConcurrency :> es, Log :> es, Reader.Reader Config.AuthContext :> es, Time.Time :> es, UUIDEff :> es)
-  => [(Text, RequestMessages.RequestMessage)]
-  -> Eff es [Text]
-processRequestMessages msgs' = do
-  startTime <- liftIO $ getTime Monotonic
-  appCtx <- ask @Config.AuthContext
-  timestamp <- Time.currentTime
-  let groupedMsgs = groupMsgsByProjectId msgs'
-  -- TODO: Chcek which projects exceed free tier and skip their messages here.
+-- | Process a single span to extract entities
+processSpanToEntities :: Projects.ProjectCache -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, Maybe Shapes.Shape, V.Vector Fields.Field, V.Vector Formats.Format, V.Vector Text)
+processSpanToEntities pjc span dumpId =
+  let projectId = Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText span.project_id
 
-  !processed <-
-    concat <$> forM (HM.toList groupedMsgs) \(projectId, projectMsgs) -> do
-      let pid = Projects.ProjectId projectId
-      projectCacheVal <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid \pid' -> do
-        mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
-        pure $ fromMaybe projectCacheDefault mpjCache
+      -- Extract HTTP attributes from nested JSON structure
+      attributes = fromMaybe mempty span.attributes
+      attrValue = AE.Object $ AEKM.fromMapText attributes
 
-      let exceededFreeTier = projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount >= 5000
+      -- Navigate nested JSON to extract values using lens
+      method = fromMaybe "GET" $ T.toUpper <$> attrValue ^? key "http" . key "request" . key "method" . _String
+      
+      path = fromMaybe "/" $ attrValue ^? key "http" . key "request" . key "path" . _String
+      
+      statusCode = fromMaybe 200 $ do
+        statusStr <- attrValue ^? key "http" . key "response" . key "status_code" . _String
+        readMaybe $ T.unpack statusStr
+      
+      host = fromMaybe "" $ attrValue ^? key "net" . key "host" . key "name" . _String
 
-      -- Process all messages for this project with the same cache
-      forM projectMsgs \(rmAckId, msg) ->
-        if exceededFreeTier
-          then pure $ Right (Nothing, Nothing, V.empty, V.empty, V.empty, rmAckId)
-          else do
-            recId <- UUID.genUUID
-            let result = RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal msg timestamp recId
-            case result of
-              Left err -> pure $ Left (err, rmAckId, msg)
-              Right (enp, s, f, fo, err) -> pure $ Right (enp, s, f, fo, err, rmAckId)
+      -- Extract request/response bodies from span body
+      bodyValue = fromMaybe AE.Null span.body
+      requestBody = fromMaybe AE.Null $ bodyValue ^? key "request_body"
+      responseBody = fromMaybe AE.Null $ bodyValue ^? key "response_body"
 
-  let !(failures, successes) = partitionEithers processed
-      !(endpoints, shapes, fields, formats, _errs, rmAckIds) = L.unzip6 successes
-  let !endpointsFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes endpoints
-  let !shapesFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes shapes
-  let !fieldsFinal = VAA.nubBy (comparing (.hash)) $ V.concat fields
-  let !formatsFinal = VAA.nubBy (comparing (.hash)) $ V.concat formats
-  -- let !errsFinal = VAA.nubBy (comparing (.hash)) $ V.concat errs
+      -- Generate endpoint hash
+      endpointHash = toXXHash $ method <> path
 
-  forM_ failures \(err, rmAckId, msg) ->
-    Log.logAttention "Error processing message" (object ["Error" .= err, "AckId" .= rmAckId, "OriginalMsg" .= msg])
+      -- Extract fields from bodies using existing valueToFields function
+      reqBodyFields = valueToFields requestBody
+      respBodyFields = valueToFields responseBody
 
-  afterProcessing <- liftIO $ getTime Monotonic
-  result <- try $ Ki.scoped \scope -> do
-    unless (null endpointsFinal) $ void $ Ki.fork scope $ Endpoints.bulkInsertEndpoints endpointsFinal
-    unless (null shapesFinal) $ void $ Ki.fork scope $ Shapes.bulkInsertShapes shapesFinal
-    unless (null fieldsFinal) $ void $ Ki.fork scope $ Fields.bulkInsertFields fieldsFinal
-    unless (null formatsFinal) $ void $ Ki.fork scope $ Formats.bulkInsertFormat formatsFinal
-    -- unless (null errsFinal) $ void $ Ki.fork scope $ Anomalies.bulkInsertErrors errsFinal
-    Ki.atomically $ Ki.awaitAll scope
+      -- Build shape hash
+      representativeKP = sortVector $ V.map fst reqBodyFields <> V.map fst respBodyFields
+      combinedKeyPathStr = T.concat $ V.toList representativeKP
+      shapeHash = endpointHash <> show statusCode <> toXXHash combinedKeyPathStr
 
-  endTime <- liftIO $ getTime Monotonic
-  let processingTime = toNanoSecs (diffTimeSpec startTime afterProcessing) `div` 1000
-  let queryTime = toNanoSecs (diffTimeSpec afterProcessing endTime) `div` 1000
-  let totalTime = toNanoSecs (diffTimeSpec startTime endTime) `div` 1000
-  let projectIds = show $ UUID.toText <$> HM.keys groupedMsgs
-  Log.logInfo_ $ show [fmt| Processing {length groupedMsgs} projectIds from {length msgs'} msgs. totalTime: {totalTime} -> query: {queryTime} -> processing: {processingTime} => projects: {projectIds}|]
-  case result of
-    Left (e :: SomePostgreSqlException) -> do
-      Log.logAttention "Postgres Exception" (show e)
-      pure []
-    Right _ -> pure rmAckIds
-  where
-    -- \| Group messages by project ID to reduce cache lookups
-    groupMsgsByProjectId :: [(Text, RequestMessages.RequestMessage)] -> HashMap UUID.UUID [(Text, RequestMessages.RequestMessage)]
-    groupMsgsByProjectId =
-      foldr
-        ( \(ackId, msg) acc ->
-            HM.insertWith (++) msg.projectId [(ackId, msg)] acc
-        )
-        HM.empty
+      -- Convert to field DTOs
+      reqBodyFieldsDTO = V.map (fieldsToFieldDTO Fields.FCRequestBody projectId endpointHash) reqBodyFields
+      respBodyFieldsDTO = V.map (fieldsToFieldDTO Fields.FCResponseBody projectId endpointHash) respBodyFields
+      fieldsDTO = reqBodyFieldsDTO <> respBodyFieldsDTO
 
-    projectCacheDefault :: Projects.ProjectCache
-    projectCacheDefault =
-      Projects.ProjectCache
-        { hosts = []
-        , endpointHashes = []
-        , shapeHashes = []
-        , redactFieldslist = []
-        , weeklyRequestCount = 0
-        , paymentPlan = ""
-        }
+      (fields, formats) = V.unzip fieldsDTO
+      fieldHashes = sortVector $ V.map (.hash) fields
+
+      -- Build endpoint if not in cache
+      endpoint =
+        if endpointHash `elem` pjc.endpointHashes || statusCode == 404
+          then Nothing
+          else
+            Just
+              $ Endpoints.Endpoint
+                { createdAt = span.timestamp
+                , updatedAt = span.timestamp
+                , id = Endpoints.EndpointId dumpId
+                , projectId = projectId
+                , urlPath = path
+                , urlParams = AE.emptyObject
+                , method = method
+                , host = host
+                , hash = endpointHash
+                , outgoing = span.kind == Just "client"
+                , description = ""
+                }
+
+      -- Build shape if not in cache
+      shape =
+        if shapeHash `elem` pjc.shapeHashes || statusCode == 404
+          then Nothing
+          else
+            Just
+              $ Shapes.Shape
+                { id = Shapes.ShapeId dumpId
+                , createdAt = span.timestamp
+                , updatedAt = span.timestamp
+                , approvedOn = Nothing
+                , projectId = projectId
+                , endpointHash = endpointHash
+                , queryParamsKeypaths = V.empty
+                , requestBodyKeypaths = V.map fst reqBodyFields
+                , responseBodyKeypaths = V.map fst respBodyFields
+                , requestHeadersKeypaths = V.empty
+                , responseHeadersKeypaths = V.empty
+                , fieldHashes = fieldHashes
+                , hash = shapeHash
+                , statusCode = statusCode
+                , responseDescription = ""
+                , requestDescription = ""
+                }
+
+      fields' = if statusCode == 404 then V.empty else fields
+      formats' = if statusCode == 404 then V.empty else formats
+
+      -- Collect hashes to update span with
+      hashes =
+        V.fromList
+          $ catMaybes
+            [ Just endpointHash
+            , if isJust shape then Just shapeHash else Nothing
+            ]
+            <> V.toList fieldHashes
+   in (endpoint, shape, fields', formats', hashes)
 
 
 convertRequestMessageToSpan :: RequestMessages.RequestMessage -> (UUID.UUID, Text) -> Telemetry.OtelLogsAndSpans
@@ -322,18 +330,14 @@ createSpanAttributes rm =
     -- Process headers
     headersObj =
       let
-        -- Convert request headers
-        reqHeaders = case rm.requestHeaders of
-          AE.Object obj ->
-            let pairs = [("http.request.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
-             in nestedJsonFromDotNotation pairs
-          _ -> AE.object []
+        -- Convert request headers using lens
+        reqHeaders = maybe (AE.object []) id $ rm.requestHeaders ^? _Object >>= \obj ->
+          let pairs = [("http.request.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
+           in Just $ nestedJsonFromDotNotation pairs
 
-        -- Convert response headers
-        respHeaders = case rm.responseHeaders of
-          AE.Object obj ->
-            let pairs = [("http.response.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
-             in nestedJsonFromDotNotation pairs
-          _ -> AE.object []
+        -- Convert response headers using lens
+        respHeaders = maybe (AE.object []) id $ rm.responseHeaders ^? _Object >>= \obj ->
+          let pairs = [("http.response.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
+           in Just $ nestedJsonFromDotNotation pairs
        in
         reqHeaders `mergeJsonObjects` respHeaders

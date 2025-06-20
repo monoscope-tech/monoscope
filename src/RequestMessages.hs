@@ -8,6 +8,8 @@ module RequestMessages (
   valueToFields,
   redactJSON,
   replaceNullChars,
+  fieldsToFieldDTO,
+  sortVector,
 )
 where
 

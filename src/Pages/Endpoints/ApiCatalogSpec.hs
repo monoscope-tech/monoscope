@@ -8,10 +8,13 @@ import Pages.BodyWrapper (PageCtx (..))
 import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.TestUtils
-import ProcessMessage (processRequestMessages)
+import ProcessMessage (processMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
+import Data.HashMap.Strict qualified as HashMap
+import Data.Aeson qualified as AE
+import Data.ByteString.Lazy qualified as BL
 
 
 testPid :: Projects.ProjectId
@@ -34,10 +37,10 @@ spec = aroundAll withTestResources do
             concat
               $ replicate
                 100
-                [ ("m1", reqMsg1)
-                , ("m2", reqMsg2)
+                [ ("m1", BL.toStrict $ AE.encode reqMsg1)
+                , ("m2", BL.toStrict $ AE.encode reqMsg2)
                 ]
-      _ <- runTestBackground trATCtx $ processRequestMessages msgs
+      _ <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
       _ <- runAllBackgroundJobs trATCtx
       _ <- withPool trPool $ refreshMaterializedView "apis.endpoint_request_stats"
 

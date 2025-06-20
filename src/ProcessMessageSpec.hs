@@ -1,5 +1,6 @@
 module ProcessMessageSpec (spec, testAuthContext) where
 
+import Data.Aeson qualified as AE
 import Data.Cache (Cache, newCache)
 import Data.Default (Default (..))
 import Data.HashMap.Strict qualified as HashMap
@@ -12,7 +13,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Pkg.TestUtils qualified as TestUtils
-import ProcessMessage (processMessages, processRequestMessages)
+import ProcessMessage (processMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Clock (TimeSpec (TimeSpec))
@@ -48,11 +49,11 @@ spec = aroundAll TestUtils.withSetup do
       let reqMsg1 = Unsafe.fromJust $ TestUtils.convert $ TestUtils.testRequestMsgs.reqMsg1 nowTxt
       let reqMsg2 = Unsafe.fromJust $ TestUtils.convert $ TestUtils.testRequestMsgs.reqMsg2 nowTxt
       let msgs =
-            [ ("m1", reqMsg1)
-            , ("m2", reqMsg2)
+            [ ("m1", toStrict $ AE.encode reqMsg1)
+            , ("m2", toStrict $ AE.encode reqMsg2)
             ]
       authCtx <- testAuthContext pool
-      resp <- TestUtils.runTestBackground authCtx $ processRequestMessages msgs
+      resp <- TestUtils.runTestBackground authCtx $ processMessages msgs HashMap.empty
       resp `shouldBe` ["m1", "m2"]
 
     it "We should expect 2 endpoints, albeit unacknowleged." \pool -> do

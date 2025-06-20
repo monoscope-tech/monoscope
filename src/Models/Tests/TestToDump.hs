@@ -11,6 +11,7 @@ import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful
 import Effectful.Ki qualified as Ki
+import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static qualified as Reader
@@ -86,7 +87,7 @@ runCollectionTest collection_steps col_vars cold_id = do
 
 
 logTest
-  :: (DB :> es, IOE :> es, Ki.StructuredConcurrency :> es, Log :> es, Reader.Reader Config.AuthContext :> es, Time.Time :> es, UUIDEff :> es)
+  :: (DB :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" DB :> es, Log :> es, Reader.Reader Config.AuthContext :> es, Time.Time :> es, UUIDEff :> es)
   => Projects.ProjectId
   -> Testing.CollectionId
   -> V.Vector Testing.CollectionStepData
@@ -129,6 +130,6 @@ logTest pid colId collectionSteps stepRes = do
       --         , errors = Nothing -- Placeholder for errors
       --         , tags = Nothing -- Placeholder for tags
       --         }
-      let requestMessages = V.toList (stepResults <&> \sR -> ("", testRunToRequestMsg pid currentTime msg_id sR))
-      _ <- ProcessMessage.processRequestMessages requestMessages
+      let requestMessages = V.toList (stepResults <&> \sR -> ("", toStrict $ AE.encode $ testRunToRequestMsg pid currentTime msg_id sR))
+      _ <- ProcessMessage.processMessages requestMessages mempty
       pure $ Right stepResults

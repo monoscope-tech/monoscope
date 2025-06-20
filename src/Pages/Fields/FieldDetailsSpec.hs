@@ -9,10 +9,13 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.TestUtils
 import Relude
 import Test.Hspec
+import Data.HashMap.Strict qualified as HashMap
+import Data.Aeson qualified as AE
+import Data.ByteString.Lazy qualified as BL
 
 import Models.Apis.Formats qualified as Formats
 import Pages.Fields.FieldDetails qualified as FieldDetails
-import ProcessMessage (processRequestMessages)
+import ProcessMessage (processMessages)
 import Relude.Unsafe qualified as Unsafe
 import Utils (toXXHash)
 
@@ -34,10 +37,10 @@ spec = aroundAll withTestResources do
               concat
                 $ replicate
                   2
-                  [ ("m1", reqMsg1)
-                  , ("m2", reqMsg2)
+                  [ ("m1", BL.toStrict $ AE.encode reqMsg1)
+                  , ("m2", BL.toStrict $ AE.encode reqMsg2)
                   ]
-        _ <- runTestBackground trATCtx $ processRequestMessages msgs
+        _ <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
         _ <- runAllBackgroundJobs trATCtx
         fieldsAll <- withPool trPool $ Fields.selectFields testPid (toXXHash $ testPid.toText <> "api.test.com" <> "POST" <> "/api/v1/user/login")
         let reqBodyFields = V.filter (\field -> field.fieldCategory == Fields.FCRequestBody) fieldsAll

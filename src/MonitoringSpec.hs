@@ -8,11 +8,14 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Pages.Monitors.Alerts (AlertUpsertForm (..), convertToQueryMonitor)
 import Pkg.TestUtils qualified as TestUtils
-import ProcessMessage (processRequestMessages)
+import ProcessMessage (processMessages)
 import ProcessMessageSpec (testAuthContext)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec
+import Data.HashMap.Strict qualified as HashMap
+import Data.Aeson qualified as AE
+import Data.ByteString.Lazy qualified as BL
 
 
 spec :: Spec
@@ -46,13 +49,13 @@ spec = aroundAll TestUtils.withSetup do
       let reqMsg1 = Unsafe.fromJust $ TestUtils.convert $ TestUtils.testRequestMsgs.reqMsg1 nowTxt
       let reqMsg2 = Unsafe.fromJust $ TestUtils.convert $ TestUtils.testRequestMsgs.reqMsg2 nowTxt
       let msgs =
-            [ ("m1", reqMsg1)
-            , ("m2", reqMsg1)
-            , ("m4", reqMsg1)
-            , ("m5", reqMsg1)
-            , ("m5", reqMsg2)
+            [ ("m1", BL.toStrict $ AE.encode reqMsg1)
+            , ("m2", BL.toStrict $ AE.encode reqMsg1)
+            , ("m4", BL.toStrict $ AE.encode reqMsg1)
+            , ("m5", BL.toStrict $ AE.encode reqMsg1)
+            , ("m5", BL.toStrict $ AE.encode reqMsg2)
             ]
-      r <- TestUtils.runTestBackground authCtx $ processRequestMessages msgs
+      r <- TestUtils.runTestBackground authCtx $ processMessages msgs HashMap.empty
       r `shouldBe` ["m1", "m2", "m4", "m5", "m5"]
       respC' <- withPool pool $ execute [sql|CALL monitors.check_triggered_query_monitors(0, '{}')|] ()
       respC' `shouldBe` 0

@@ -14,10 +14,12 @@ import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.TestUtils
-import ProcessMessage (processRequestMessages)
+import ProcessMessage (processMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages (RequestMessage (..), replaceNullChars, valueToFields)
+import Data.HashMap.Strict qualified as HashMap
+import Data.ByteString.Lazy qualified as BL
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
 import Utils (toXXHash)
 
@@ -43,12 +45,12 @@ spec = aroundAll withTestResources do
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
       let msgs =
-            [ ("m1", reqMsg1)
-            , ("m2", reqMsg1) -- same message
-            , ("m3", reqMsg1) -- same message
-            , ("m4", reqMsg1) -- same message
+            [ ("m1", BL.toStrict $ AE.encode reqMsg1)
+            , ("m2", BL.toStrict $ AE.encode reqMsg1) -- same message
+            , ("m3", BL.toStrict $ AE.encode reqMsg1) -- same message
+            , ("m4", BL.toStrict $ AE.encode reqMsg1) -- same message
             ]
-      res <- runTestBackground trATCtx $ processRequestMessages msgs
+      res <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
       _ <- runAllBackgroundJobs trATCtx
 
       pg <-
@@ -87,12 +89,12 @@ spec = aroundAll withTestResources do
       let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
       let reqMsg3 = Unsafe.fromJust $ convert $ msg3 nowTxt
       let msgs =
-            [ ("m1", reqMsg1)
-            , ("m2", reqMsg2)
-            , ("m3", reqMsg3)
-            , ("m4", reqMsg2)
+            [ ("m1", BL.toStrict $ AE.encode reqMsg1)
+            , ("m2", BL.toStrict $ AE.encode reqMsg2)
+            , ("m3", BL.toStrict $ AE.encode reqMsg3)
+            , ("m4", BL.toStrict $ AE.encode reqMsg2)
             ]
-      res <- runTestBackground trATCtx $ processRequestMessages msgs
+      res <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
       _ <- runAllBackgroundJobs trATCtx
 
       pg <-
@@ -141,8 +143,8 @@ spec = aroundAll withTestResources do
 
       let reqMsg4 = Unsafe.fromJust $ convert $ msg4 nowTxt
       let msgs =
-            [("m4", reqMsg4)]
-      res <- runTestBackground trATCtx $ processRequestMessages msgs
+            [("m4", BL.toStrict $ AE.encode reqMsg4)]
+      res <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
       _ <- runAllBackgroundJobs trATCtx
 
       pg <-

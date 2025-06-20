@@ -14,9 +14,12 @@ import Pages.Reports qualified as Reports
 
 import BackgroundJobs qualified
 import Pkg.TestUtils
-import ProcessMessage (processRequestMessages)
+import ProcessMessage (processMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
+import Data.HashMap.Strict qualified as HashMap
+import Data.Aeson qualified as AE
+import Data.ByteString.Lazy qualified as BL
 
 
 testPid :: Projects.ProjectId
@@ -49,8 +52,8 @@ spec = aroundAll withTestResources do
       let reqMsg3 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 "2024-07-05T13:06:26.620094239Z"
       let reqMsg4 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 "2024-07-05T12:06:26.620094239Z"
 
-      let msgs = concat (replicate 100 [("m1", reqMsg1), ("m2", reqMsg2)]) ++ [("m3", reqMsg3), ("m4", reqMsg4)]
-      _ <- runTestBackground trATCtx $ processRequestMessages msgs
+      let msgs = concat (replicate 100 [("m1", BL.toStrict $ AE.encode reqMsg1), ("m2", BL.toStrict $ AE.encode reqMsg2)]) ++ [("m3", BL.toStrict $ AE.encode reqMsg3), ("m4", BL.toStrict $ AE.encode reqMsg4)]
+      _ <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
 
       _ <- liftIO $ withResource trPool \conn -> do
         _ <- createJob conn "background_jobs" $ BackgroundJobs.DailyReports testPid

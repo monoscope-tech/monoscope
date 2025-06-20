@@ -7,10 +7,13 @@ import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Log qualified as Log
 import Pkg.TestUtils
-import ProcessMessage (processRequestMessages)
+import ProcessMessage (processMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec
+import Data.HashMap.Strict qualified as HashMap
+import Data.Aeson qualified as AE
+import Data.ByteString.Lazy qualified as BL
 
 
 testPid :: Projects.ProjectId
@@ -44,8 +47,8 @@ spec = aroundAll withTestResources do
       let reqMsg3 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 yesterdayTxt
       let reqMsg4 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 twoDaysAgoTxt
 
-      let msgs = concat (replicate 100 [("m1", reqMsg1), ("m2", reqMsg2)]) ++ [("m3", reqMsg3), ("m4", reqMsg4)]
-      res <- runTestBackground trATCtx $ processRequestMessages msgs
+      let msgs = concat (replicate 100 [("m1", BL.toStrict $ AE.encode reqMsg1), ("m2", BL.toStrict $ AE.encode reqMsg2)]) ++ [("m3", BL.toStrict $ AE.encode reqMsg3), ("m4", BL.toStrict $ AE.encode reqMsg4)]
+      res <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
       length res `shouldBe` 202
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
