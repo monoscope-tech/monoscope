@@ -3,7 +3,6 @@
 module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendDiscordNotif, sendSlackAlert, NotificationAlerts (..), sendDiscordAlert) where
 
 import Control.Lens ((.~))
-import Data.Aeson
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Effectful.Wreq (HTTP)
@@ -120,11 +119,11 @@ sendDiscordAlert alert pid = do
       EndpointAlert{..} -> send $ discordNewEndpointAlert project endpoints endpointHash projectUrl
       ShapeAlert -> pass
   where
-    sendAlert :: Maybe Text -> Value -> ATBackgroundCtx ()
+    sendAlert :: Maybe Text -> AE.Value -> ATBackgroundCtx ()
     sendAlert channelId content = do
       appCtx <- ask @Config.AuthContext
       let envCfg = appCtx.env
-      let url = T.unpack $ "https://discord.com/api/v10/channels/" <> fromMaybe "" channelId <> "/messages"
+      let url = toString $ "https://discord.com/api/v10/channels/" <> fromMaybe "" channelId <> "/messages"
       let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [TE.encodeUtf8 $ "Bot " <> envCfg.discordBotToken]
       _ <- Wreq.postWith opts url content
       pass
@@ -141,41 +140,41 @@ sendSlackAlert alert pid = do
       EndpointAlert{..} -> sendAlert $ slackNewEndpointsAlert project endpoints slackData.channelId endpointHash projectUrl
       ShapeAlert -> pass
   where
-    sendAlert :: Value -> ATBackgroundCtx ()
+    sendAlert :: AE.Value -> ATBackgroundCtx ()
     sendAlert content = do
       appCtx <- ask @Config.AuthContext
       let envCfg = appCtx.env
       let url = "https://slack.com/api/chat.postMessage"
-      let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [(TE.encodeUtf8 $ "Bearer " <> envCfg.slackBotToken)]
-      _ <- Wreq.postWith opts (T.unpack url) content
+      let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> envCfg.slackBotToken]
+      _ <- Wreq.postWith opts (toString url) content
       pass
 
 
-slackErrorAlert :: Text -> Text -> Text -> Text -> Maybe Text -> Text -> Text -> Text -> Text -> Value
+slackErrorAlert :: Text -> Text -> Text -> Text -> Maybe Text -> Text -> Text -> Text -> Text -> AE.Value
 slackErrorAlert errType message project hash endpoint technology firstSeen channelId projectUrl =
-  object
+  AE.object
     [ "blocks"
-        .= Array
+        AE..= AE.Array
           ( V.fromList
-              [ object ["type" .= "section", "text" .= object ["type" .= "mrkdwn", "text" .= title]]
-              , object ["type" .= "section", "text" .= object ["type" .= "mrkdwn", "text" .= ("```" <> message <> "\n```")]]
-              , object
-                  [ "type" .= "context"
-                  , "elements" .= Array (V.fromList $ [object ["type" .= "mrkdwn", "text" .= ("*Stack:* `" <> technology <> "`")]] ++ maybe [] (\e -> [object ["type" .= "mrkdwn", "text" .= ("*Endpoint:* " <> enp)]]) endpoint)
+              [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= title]]
+              , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> message <> "\n```")]]
+              , AE.object
+                  [ "type" AE..= "context"
+                  , "elements" AE..= AE.Array (V.fromList $ [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Stack:* `" <> technology <> "`")]] ++ maybe [] (\e -> [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Endpoint:* " <> enp)]]) endpoint)
                   ]
-              , object
-                  [ "type" .= "context"
+              , AE.object
+                  [ "type" AE..= "context"
                   , "elements"
-                      .= Array (V.fromList [object ["type" .= "mrkdwn", "text" .= ("*Project:* " <> project)], object ["type" .= "mrkdwn", "text" .= ("*First seen:* " <> firstSeen)]])
+                      AE..= AE.Array (V.fromList [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Project:* " <> project)], AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*First seen:* " <> firstSeen)]])
                   ]
-              , object ["type" .= "divider"]
-              , object
-                  [ "type" .= "actions"
-                  , "elements" .= Array (V.fromList [object ["type" .= "button", "text" .= object ["type" .= "plain_text", "text" .= "🔍 Investigate", "emoji" .= True], "url" .= targetUrl, "style" .= "primary"]])
+              , AE.object ["type" AE..= "divider"]
+              , AE.object
+                  [ "type" AE..= "actions"
+                  , "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 Investigate", "emoji" AE..= True], "url" AE..= targetUrl, "style" AE..= "primary"]])
                   ]
               ]
           )
-    , "channel" .= channelId
+    , "channel" AE..= channelId
     ]
   where
     targetUrl = projectUrl <> "/anomalies/by_hash/" <> hash
@@ -183,35 +182,35 @@ slackErrorAlert errType message project hash endpoint technology firstSeen chann
     enp = maybe "" (\x -> "`" <> x <> "`") endpoint
 
 
-slackNewEndpointsAlert :: Text -> V.Vector Text -> Text -> Text -> Text -> Value
+slackNewEndpointsAlert :: Text -> V.Vector Text -> Text -> Text -> Text -> AE.Value
 slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
-  object
+  AE.object
     [ "blocks"
-        .= Array
+        AE..= AE.Array
           ( V.fromList
-              [ object ["type" .= "section", "text" .= object ["type" .= "mrkdwn", "text" .= ("<" <> targetUrl <> "|:large_blue_circle: New Endpoint(s) Detected>")]]
-              , object ["type" .= "section", "text" .= object ["type" .= "mrkdwn", "text" .= ("We've detected *" <> T.pack (show $ length endpoints) <> "* new endpoint(s) in *" <> projectName <> "*.")]]
-              , object ["type" .= "divider"]
-              , object ["type" .= "section", "text" .= object ["type" .= "mrkdwn", "text" .= ("*Endpoints:*\n\n" <> enps)]]
-              , object ["type" .= "context", "elements" .= Array (V.fromList [object ["type" .= "mrkdwn", "text" .= ("*Project:* " <> projectName)]])]
-              , object
-                  [ "type" .= "actions"
+              [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> targetUrl <> "|:large_blue_circle: New Endpoint(s) Detected>")]]
+              , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("We've detected *" <> toText (show $ length endpoints) <> "* new endpoint(s) in *" <> projectName <> "*.")]]
+              , AE.object ["type" AE..= "divider"]
+              , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Endpoints:*\n\n" <> enps)]]
+              , AE.object ["type" AE..= "context", "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Project:* " <> projectName)]])]
+              , AE.object
+                  [ "type" AE..= "actions"
                   , "elements"
-                      .= Array (V.fromList [object ["type" .= "button", "text" .= object ["type" .= "plain_text", "text" .= "View in Explorer", "emoji" .= False], "style" .= "primary", "url" .= explorerUrl]])
+                      AE..= AE.Array (V.fromList [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "View in Explorer", "emoji" AE..= False], "style" AE..= "primary", "url" AE..= explorerUrl]])
                   ]
               ]
           )
-    , "channel" .= channelId
+    , "channel" AE..= channelId
     ]
   where
     targetUrl = projectUrl <> "/anomalies/by_hash/" <> hash
-    enp = (\x -> "\"" <> x <> "\"") <$> (\x -> T.dropWhile (\xx -> xx /= ' ') x) <$> V.toList endpoints
-    query = urlEncode True $ TE.encodeUtf8 $ "attributes.http.route in (" <> T.intercalate "," enp <> ")"
-    explorerUrl = projectUrl <> "/log_explorer?query=" <> TE.decodeUtf8 query
+    enp = (\x -> "\"" <> x <> "\"") . (\x -> T.dropWhile (\xx -> xx /= ' ') x) <$> V.toList endpoints
+    query = urlEncode True $ encodeUtf8 $ "attributes.http.route in (" <> T.intercalate "," enp <> ")"
+    explorerUrl = projectUrl <> "/log_explorer?query=" <> decodeUtf8 query
     enps = T.intercalate "\n\n" $ (\x -> "`" <> x <> "`") <$> V.toList endpoints
 
 
-discordErrorAlert :: Text -> Text -> Text -> Text -> Maybe Text -> Text -> Text -> Value
+discordErrorAlert :: Text -> Text -> Text -> Text -> Maybe Text -> Text -> Text -> AE.Value
 discordErrorAlert errType message project hash endpoint firstSeen projectUrl =
   [aesonQQ|{
 "embeds": [
@@ -234,7 +233,7 @@ discordErrorAlert errType message project hash endpoint firstSeen projectUrl =
     enp = maybe "" (\x -> "`" <> x <> "`") endpoint
 
 
-discordNewEndpointAlert :: Text -> V.Vector Text -> Text -> Text -> Value
+discordNewEndpointAlert :: Text -> V.Vector Text -> Text -> Text -> AE.Value
 discordNewEndpointAlert projectName endpoints hash projectUrl =
   [aesonQQ|
   {
@@ -258,8 +257,8 @@ discordNewEndpointAlert projectName endpoints hash projectUrl =
     endpointsCount = length endpoints
     description = "We've detected **" <> show endpointsCount <> " new endpoints** in the **" <> projectName <> "** project."
     url = projectUrl <> "/anomalies/by_hash/" <> hash
-    enp = (\x -> "\"" <> x <> "\"") <$> (\x -> T.dropWhile (\xx -> xx /= ' ') x) <$> V.toList endpoints
+    enp = (\x -> "\"" <> x <> "\"") . (\x -> T.dropWhile (\xx -> xx /= ' ') x) <$> V.toList endpoints
     query = urlEncode True $ TE.encodeUtf8 $ "attributes.http.route in (" <> T.intercalate "," enp <> ")"
-    explorerUrl = projectUrl <> "/log_explorer?query=" <> TE.decodeUtf8 query
+    explorerUrl = projectUrl <> "/log_explorer?query=" <> decodeUtf8 query
     explorerLink = "[View in Explorer](" <> explorerUrl <> ")"
     enps = T.intercalate "\n\n" $ (\x -> "`" <> x <> "`") <$> V.toList endpoints
