@@ -10,7 +10,7 @@ import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Base64 qualified as B64
 import Data.Effectful.UUID (UUIDEff)
 import Data.HashMap.Strict qualified as HashMap
-import Data.List qualified as L (partition)
+import Data.List qualified as L
 import Data.Map qualified as Map
 import Data.ProtoLens.Encoding (decodeMessage)
 import Data.Scientific (fromFloatDigits)
@@ -134,10 +134,10 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
                 pure (ackId, join $ V.toList $ V.map (convertResourceLogsToOtelLogs projectIdsAndKeys) resourceLogs)
 
           let (ackIds, logs) = V.unzip results
-              allLogs = concat logs -- Flattens the list of lists
-          unless (null allLogs)
+              allLogs = V.fromList $ concat logs -- Flattens the list of lists
+          unless (V.null allLogs)
             $ checkpoint "processList:logs:bulkInsert"
-            $ Telemetry.bulkInsertOtelLogsAndSpansTF (V.fromList allLogs)
+            $ Telemetry.bulkInsertOtelLogsAndSpansTF allLogs
           pure $ V.toList ackIds
         Just "org.opentelemetry.otlp.traces.v1" -> checkpoint "processList:traces" $ do
           results <- V.forM msgs' $ \(ackId, msg) ->
@@ -156,10 +156,8 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
                 pure (ackId, spans)
 
           let (ackIds, spans) = V.unzip results
-              allSpans = concat spans -- Flattens the list of lists
-              spans' = V.fromList allSpans
-
-          unless (null allSpans) $ checkpoint "processList:traces:bulkInsertSpans" $ Telemetry.bulkInsertOtelLogsAndSpansTF spans'
+              spans' = V.fromList $ concat spans
+          unless (V.null spans') $ checkpoint "processList:traces:bulkInsertSpans" $ Telemetry.bulkInsertOtelLogsAndSpansTF spans'
           pure $ V.toList ackIds
         Just "org.opentelemetry.otlp.metrics.v1" -> checkpoint "processList:metrics" do
           results <- V.forM msgs' $ \(ackId, msg) ->
@@ -177,7 +175,7 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
                 case pidM <|> pid2M of
                   Just pid -> pure (ackId, convertResourceMetricsToMetricRecords pid resourceMetrics)
                   Nothing -> checkpoint "processList:metrics:missing-project-info" $ do
-                    Log.logAttention "processList:metrics: project API Key and project ID not available in metrics" (AE.object ["project_key" AE..= projectKey, "project_id_text" AE..= projectIdText, "pid_from_key" AE..= pidM, "pid_from_text" AE..= pid2M])
+                    Log.logAttention_ "processList:metrics: project API Key and project ID not available in metrics"
                     pure (ackId, [])
 
           let (ackIds, metricLists) = V.unzip results
@@ -287,19 +285,11 @@ keyValueToJSON kvs =
     allPairs' = [(kv ^. PCF.key, anyValueToJSON (Just (kv ^. PCF.value))) | kv <- V.toList kvs]
     allPairs = migrateHttpSemanticConventions allPairs'
 
-    -- Special case keys that should remain flat for OTel compatibility
     specialKeys = ["at-project-key", "at-project-id"]
-
-    -- Split into flat and nested categories
     (flatPairs, nestedPairs) = L.partition (\(k, _) -> k `elem` specialKeys) allPairs
-
-    -- Create the nested structure for regular keys
     nestedObj = nestedJsonFromDotNotation nestedPairs
-
-    -- Create a separate object for special keys that should remain flat
     flatObj = AE.object [AEK.fromText k AE..= v | (k, v) <- flatPairs]
 
-    -- Merge both objects (keeping special keys at the top level)
     mergedObj =
       AE.Object
         $ KEM.union
@@ -336,20 +326,13 @@ resourceToJSON Nothing = AE.Null
 resourceToJSON (Just resource) =
   let
     attrs = V.fromList $ resource ^. PRF.attributes
-    -- Process resource attributes with proper nesting
     attrPairs = [(kv ^. PCF.key, anyValueToJSON (Just (kv ^. PCF.value))) | kv <- V.toList attrs]
-    -- Special case keys that should remain flat
     specialKeys = ["at-project-key", "at-project-id"]
-    -- Split into flat and nested categories
     (flatPairs, nestedPairs) = L.partition (\(k, _) -> k `elem` specialKeys) attrPairs
 
-    -- Create properly nested structure
     nestedObj = nestedJsonFromDotNotation nestedPairs
-
-    -- Add flat keys at top level
     flatObj = AE.object [AEK.fromText k AE..= v | (k, v) <- flatPairs]
    in
-    -- Merge both objects
     AE.Object
       $ KEM.union
         (case flatObj of AE.Object km -> km; _ -> KEM.empty)
