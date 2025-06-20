@@ -543,9 +543,10 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
           anIssues = convertAnomaliesToIssues anomaliesVM endpoints
           targetHash = fromMaybe "" $ viaNonEmpty head (V.toList targetHashes)
       _ <- dbtToEff $ Anomalies.insertIssues anIssues
+      let alert = EndpointAlert project.title endpointsPaths targetHash
       forM_ project.notificationsChannel \case
-        Projects.NSlack -> sendSlackAlert (EndpointAlert project.title endpointsPaths targetHash) pid
-        Projects.NDiscord -> sendDiscordAlert (EndpointAlert project.title endpointsPaths targetHash) pid
+        Projects.NSlack -> sendSlackAlert alert pid project.title
+        Projects.NDiscord -> sendDiscordAlert alert pid project.title
         _ -> do
           forM_ users \u -> do
             let templateVars =
@@ -610,22 +611,12 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
                   }
             )
             <$> errs
-      -- TODO: refactor
+
       forM_ project.notificationsChannel \case
         Projects.NSlack ->
-          forM_ errs \err -> do
-            let issD = err.errorData
-                w = toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" issD.when
-                t = show issD.technology
-                alert = RuntimeErrorAlert issD.errorType issD.message project.title err.hash issD.requestPath w t
-            sendSlackAlert alert pid
-        Projects.NDiscord -> do
-          forM_ errs \err -> do
-            let issD = err.errorData
-                w = toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" issD.when
-                t = show issD.technology
-                alert = RuntimeErrorAlert issD.errorType issD.message project.title err.hash issD.requestPath w t
-            sendDiscordAlert alert pid
+          forM_ errs \err -> do sendSlackAlert (RuntimeErrorAlert err.errorData) pid project.title
+        Projects.NDiscord ->
+          forM_ errs \err -> do sendDiscordAlert (RuntimeErrorAlert err.errorData) pid project.title
         _ ->
           forM_ users \u -> do
             let errosJ =

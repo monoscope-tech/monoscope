@@ -10,6 +10,7 @@ import Data.Effectful.Wreq qualified as Wreq
 import Data.Pool ()
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Data.Time
 import Data.Vector qualified as V
 import Effectful (
   Eff,
@@ -20,6 +21,7 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static (Reader, ask)
 import Log qualified
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Slack (DiscordData (..), SlackData (..), getDiscordData, getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
@@ -95,27 +97,19 @@ slackPostWebhook webhookUrl message = do
 
 data NotificationAlerts
   = EndpointAlert {project :: Text, endpoints :: V.Vector Text, endpointHash :: Text}
-  | RuntimeErrorAlert
-      { errorType :: Text
-      , message :: Text
-      , project :: Text
-      , hash :: Text
-      , endpoint :: Maybe Text
-      , firstSeen :: Text
-      , technology :: Text
-      }
+  | RuntimeErrorAlert RequestDumps.ATError
   | ShapeAlert
 
 
-sendDiscordAlert :: NotificationAlerts -> Projects.ProjectId -> ATBackgroundCtx ()
-sendDiscordAlert alert pid = do
+sendDiscordAlert :: NotificationAlerts -> Projects.ProjectId -> Text -> ATBackgroundCtx ()
+sendDiscordAlert alert pid pTitle = do
   appCtx <- ask @Config.AuthContext
   discordDataM <- getDiscordDataByProjectId pid
   whenJust discordDataM \discordData -> do
     let send = sendAlert discordData.notifsChannelId
     let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
     case alert of
-      RuntimeErrorAlert{..} -> send $ discordErrorAlert errorType message project hash endpoint firstSeen projectUrl
+      RuntimeErrorAlert a -> send $ discordErrorAlert a pTitle projectUrl
       EndpointAlert{..} -> send $ discordNewEndpointAlert project endpoints endpointHash projectUrl
       ShapeAlert -> pass
   where
@@ -124,19 +118,19 @@ sendDiscordAlert alert pid = do
       appCtx <- ask @Config.AuthContext
       let envCfg = appCtx.env
       let url = toString $ "https://discord.com/api/v10/channels/" <> fromMaybe "" channelId <> "/messages"
-      let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [TE.encodeUtf8 $ "Bot " <> envCfg.discordBotToken]
+      let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bot " <> envCfg.discordBotToken]
       _ <- Wreq.postWith opts url content
       pass
 
 
-sendSlackAlert :: NotificationAlerts -> Projects.ProjectId -> ATBackgroundCtx ()
-sendSlackAlert alert pid = do
+sendSlackAlert :: NotificationAlerts -> Projects.ProjectId -> Text -> ATBackgroundCtx ()
+sendSlackAlert alert pid pTitle = do
   appCtx <- ask @Config.AuthContext
   slackDataM <- getProjectSlackData pid
   whenJust slackDataM \slackData -> do
     let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
     case alert of
-      RuntimeErrorAlert{..} -> sendAlert $ slackErrorAlert errorType message project hash endpoint technology firstSeen slackData.channelId projectUrl
+      RuntimeErrorAlert a -> sendAlert $ slackErrorAlert a pTitle slackData.channelId projectUrl
       EndpointAlert{..} -> sendAlert $ slackNewEndpointsAlert project endpoints slackData.channelId endpointHash projectUrl
       ShapeAlert -> pass
   where
@@ -150,17 +144,28 @@ sendSlackAlert alert pid = do
       pass
 
 
-slackErrorAlert :: Text -> Text -> Text -> Text -> Maybe Text -> Text -> Text -> Text -> Text -> AE.Value
-slackErrorAlert errType message project hash endpoint technology firstSeen channelId projectUrl =
+slackErrorAlert :: RequestDumps.ATError -> Text -> Text -> Text -> AE.Value
+slackErrorAlert err project channelId projectUrl =
   AE.object
     [ "blocks"
         AE..= AE.Array
           ( V.fromList
               [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= title]]
-              , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> message <> "\n```")]]
+              , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> err.message <> "\n```")]]
               , AE.object
                   [ "type" AE..= "context"
-                  , "elements" AE..= AE.Array (V.fromList $ [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Stack:* `" <> technology <> "`")]] ++ maybe [] (\e -> [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Endpoint:* " <> enp)]]) endpoint)
+                  , "elements" AE..= AE.Array (V.fromList $ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Stack:* `" <> err.stack <> "`")] : [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Endpoint:* " <> enp)]])
+                  ]
+              , AE.object
+                  [ "type" AE..= "context"
+                  , "elements"
+                      AE..= AE.Array
+                        ( V.fromList
+                            [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Trace Id:* " <> err.traceId)]
+                            , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Span Id:* " <> err.spanId)]
+                            , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> err.serviceName)]
+                            ]
+                        )
                   ]
               , AE.object
                   [ "type" AE..= "context"
@@ -177,9 +182,12 @@ slackErrorAlert errType message project hash endpoint technology firstSeen chann
     , "channel" AE..= channelId
     ]
   where
-    targetUrl = projectUrl <> "/anomalies/by_hash/" <> hash
-    title = "<" <> targetUrl <> "|:red_circle: " <> errType <> ">"
-    enp = maybe "" (\x -> "`" <> x <> "`") endpoint
+    targetUrl = projectUrl <> "/anomalies/by_hash/" <> fromMaybe "" err.hash
+    title = "<" <> targetUrl <> "|:red_circle: " <> err.errorType <> ">"
+    method = fromMaybe "" err.requestMethod
+    path = fromMaybe "" err.requestPath
+    enp = "`" <> method <> " " <> path <> "`"
+    firstSeen = toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" err.when
 
 
 slackNewEndpointsAlert :: Text -> V.Vector Text -> Text -> Text -> Text -> AE.Value
@@ -192,7 +200,6 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
               , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("We've detected *" <> toText (show $ length endpoints) <> "* new endpoint(s) in *" <> projectName <> "*.")]]
               , AE.object ["type" AE..= "divider"]
               , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Endpoints:*\n\n" <> enps)]]
-              , AE.object ["type" AE..= "context", "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Project:* " <> projectName)]])]
               , AE.object
                   [ "type" AE..= "actions"
                   , "elements"
@@ -204,33 +211,43 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
     ]
   where
     targetUrl = projectUrl <> "/anomalies/by_hash/" <> hash
-    enp = (\x -> "\"" <> x <> "\"") . (\x -> T.dropWhile (\xx -> xx /= ' ') x) <$> V.toList endpoints
+    enp = (\x -> "\"" <> x <> "\"") . T.dropWhile (/= ' ') <$> V.toList endpoints
     query = urlEncode True $ encodeUtf8 $ "attributes.http.route in (" <> T.intercalate "," enp <> ")"
     explorerUrl = projectUrl <> "/log_explorer?query=" <> decodeUtf8 query
     enps = T.intercalate "\n\n" $ (\x -> "`" <> x <> "`") <$> V.toList endpoints
 
 
-discordErrorAlert :: Text -> Text -> Text -> Text -> Maybe Text -> Text -> Text -> AE.Value
-discordErrorAlert errType message project hash endpoint firstSeen projectUrl =
+discordErrorAlert :: RequestDumps.ATError -> Text -> Text -> AE.Value
+discordErrorAlert err project projectUrl =
   [aesonQQ|{
 "embeds": [
  {
-      "title": #{errType},
+      "title": #{errorType},
       "description": #{msg},
       "color": 16711680,
       "fields": [
         {"name": "Endpoint", "value": #{enp},"inline": true},
         {"name": "Project","value": #{project}, "inline": true},
-        {"name": "First Seen", "value": #{firstSeen},"inline": true}
+        {"name": "First Seen", "value": #{firstSeen},"inline": true},
+        {"name": "Trace Id" , "value": #{trId},"inline": true},
+        {"name": "Span Id", "value": #{spanId},"inline": true},
+        {"name": "Service", "value": #{serviceName},"inline": true}
       ],
       "url": #{url}
     }],
   "content": "**🔴 New Runtime Error**"
 }|]
   where
-    url = projectUrl <> "/anomalies/by_hash/" <> hash
-    msg = "```" <> message <> "```"
-    enp = maybe "" (\x -> "`" <> x <> "`") endpoint
+    url = projectUrl <> "/anomalies/by_hash/" <> fromMaybe "" err.hash
+    msg = "```" <> err.message <> "```"
+    method = fromMaybe "" err.requestMethod
+    path = fromMaybe "" err.requestPath
+    enp = "`" <> method <> " " <> path <> "`"
+    firstSeen = toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" err.when
+    errorType = err.errorType
+    trId = err.traceId
+    spanId = err.spanId
+    serviceName = err.serviceName
 
 
 discordNewEndpointAlert :: Text -> V.Vector Text -> Text -> Text -> AE.Value
@@ -257,8 +274,8 @@ discordNewEndpointAlert projectName endpoints hash projectUrl =
     endpointsCount = length endpoints
     description = "We've detected **" <> show endpointsCount <> " new endpoints** in the **" <> projectName <> "** project."
     url = projectUrl <> "/anomalies/by_hash/" <> hash
-    enp = (\x -> "\"" <> x <> "\"") . (\x -> T.dropWhile (\xx -> xx /= ' ') x) <$> V.toList endpoints
-    query = urlEncode True $ TE.encodeUtf8 $ "attributes.http.route in (" <> T.intercalate "," enp <> ")"
+    enp = (\x -> "\"" <> x <> "\"") . T.dropWhile (/= ' ') <$> V.toList endpoints
+    query = urlEncode True $ encodeUtf8 $ "attributes.http.route in (" <> T.intercalate "," enp <> ")"
     explorerUrl = projectUrl <> "/log_explorer?query=" <> decodeUtf8 query
     explorerLink = "[View in Explorer](" <> explorerUrl <> ")"
     enps = T.intercalate "\n\n" $ (\x -> "`" <> x <> "`") <$> V.toList endpoints

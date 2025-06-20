@@ -1014,7 +1014,14 @@ extractATError :: OtelLogsAndSpans -> AE.Value -> Maybe RequestDumps.ATError
 extractATError spanObj (AE.Object o) = do
   AE.Object attrs' <- KEM.lookup "event_attributes" o
   AE.Object attrs <- KEM.lookup "exception" attrs'
-
+  let method = case spanObj.attributes >>= Map.lookup "http.request.method" of
+        Just (AE.String s) -> Just s
+        _ -> Nothing
+      urlPath = case spanObj.attributes >>= Map.lookup "http.route" of
+        Just (AE.String s) -> Just s
+        _ -> case spanObj.attributes >>= Map.lookup "http.target" of
+          Just (AE.String s) -> Just s
+          _ -> Nothing
   let lookupText k = case KEM.lookup k attrs of
         Just (AE.String s) -> Just s
         _ -> Nothing
@@ -1025,20 +1032,21 @@ extractATError spanObj (AE.Object o) = do
       stack = getTextOrEmpty "stacktrace"
 
       -- TODO: parse telemetry.sdk.name to SDKTypes
-      -- tech = case spanObj.resource >>= Map.lookup "telemetry" of
-      --   Just (AE.Object tel) ->
-      --     KEM.lookup "sdk" tel
-      --       >>= ( \case
-      --               AE.Object sdkObj -> KEM.lookup "name" sdkObj >>= asText
-      --               _ -> Nothing
-      --           )
-      --   _ -> Nothing
+      tech = case spanObj.resource >>= Map.lookup "telemetry" of
+        Just (AE.Object tel) ->
+          KEM.lookup "sdk" tel
+            >>= ( \case
+                    AE.Object sdkObj -> KEM.lookup "name" sdkObj >>= asText
+                    _ -> Nothing
+                )
+        _ -> Nothing
       serviceName = case spanObj.resource >>= Map.lookup "service" of
         Just (AE.Object serviceObj) ->
           KEM.lookup "name" serviceObj >>= asText
         _ -> Nothing
 
       spanId = spanObj.context >>= (.span_id)
+      trId = spanObj.context >>= (.trace_id)
 
       asText (AE.String t) = Just t
       asText _ = Nothing
@@ -1054,7 +1062,11 @@ extractATError spanObj (AE.Object o) = do
       , stackTrace = stack
       , hash = Just (toXXHash (spanObj.project_id <> fromMaybe "" serviceName <> fromMaybe "" spanObj.name <> typ <> msg))
       , technology = Nothing
-      , requestMethod = Just "Span Id"
-      , requestPath = spanId
+      , serviceName = fromMaybe "<Unknown>" serviceName
+      , requestMethod = method
+      , requestPath = urlPath
+      , spanId = fromMaybe "" spanId
+      , traceId = fromMaybe "" trId
+      , stack = fromMaybe "" tech
       }
 extractATError _ _ = Nothing
