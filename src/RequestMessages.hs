@@ -31,7 +31,6 @@ import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Simple (Query)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Anomalies qualified as Anomalies
-import NeatInterpolation (text)
 import Models.Apis.Fields.Types qualified as Fields (
   Field (..),
   FieldCategoryEnum (..),
@@ -42,6 +41,7 @@ import Models.Apis.Fields.Types qualified as Fields (
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
+import NeatInterpolation (text)
 import Relude
 import Relude.Unsafe as Unsafe (read)
 import Text.Regex.TDFA ((=~))
@@ -145,7 +145,8 @@ processErrors pid maybeSdkType maybeMethod maybePath err = (normalizedError, q, 
         , RequestDumps.requestMethod = maybeMethod <|> err.requestMethod
         , RequestDumps.requestPath = maybePath <|> err.requestPath
         }
-    defaultHash = toXXHash (pid.toText <> err.errorType <> err.message <> maybe "" show maybeSdkType)
+    defaultHash = toXXHash (pid.toText <> err.errorType <> formattedMessage <> maybe "" show maybeSdkType)
+    formattedMessage = fromMaybe err.message (valueToFormatStr err.message)
 
 
 sortVector :: Ord a => V.Vector a -> V.Vector a
@@ -153,8 +154,6 @@ sortVector vec = runST $ do
   mvec <- V.thaw vec
   VA.sort mvec
   V.freeze mvec
-
-
 
 
 -- valueToFields takes an aeson object and converts it into a vector of paths to
@@ -296,16 +295,78 @@ valueToFormat (AET.Array _) = "array"
 --
 valueToFormatStr :: Text -> Maybe Text
 valueToFormatStr val
-  | val =~ ([text|^[0-9]+$|] :: Text) = Just "integer"
-  | val =~ ([text|^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$|] :: Text) = Just "float"
-  | val =~ ([text|^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}|] :: Text) = Just "uuid"
-  | val =~ [text|\b[0-9a-fA-F]{24}\b|] = Just "uuid"
-  | val =~ ([text|^(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)\d\d$|] :: Text) = Just "mm/dd/yyyy"
-  | val =~ ([text|^(0[1-9]|1[012])[- -.](0[1-9]|[12][0-9]|3[01])[- -.](19|20)\d\d$|] :: Text) = Just "mm-dd-yyyy"
-  | val =~ ([text|^(0[1-9]|1[012])[- ..](0[1-9]|[12][0-9]|3[01])[- ..](19|20)\d\d$|] :: Text) = Just "mm.dd.yyyy"
-  | val =~ ([text|^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(([+-]\d\d:\d\d)|Z)?$|] :: Text) = Just "YYYY-MM-DDThh:mm:ss.sTZD"
-  | val =~ ([text|\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b|] :: Text) = Just "ip"
-  | otherwise = Nothing
+  | val =~ ([text|^[0-9]+$|] :: Text) =
+      Just "integer" -- e.g. "12345"
+  | val =~ ([text|^[+-]?(\d+(\.\d*)?|\.\d+)$|] :: Text) =
+      Just "float" -- e.g. "3.1415"
+  | val =~ ([text|^0x[0-9A-Fa-f]+$|] :: Text) =
+      Just "hex_integer" -- e.g. "0xDEADBEEF"
+  | val =~ ([text|\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b|] :: Text) =
+      Just "uuid" -- e.g. "c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd"
+  | val =~ ([text|\b[0-9a-fA-F]{24}\b|] :: Text) =
+      Just "mongo_oid" -- e.g. "507f1f77bcf86cd799439011"
+  | val =~ ([text|\b[a-fA-F0-9]{32}\b|] :: Text) =
+      Just "md5" -- e.g. "d41d8cd98f00b204e9800998ecf8427e"
+  | val =~ ([text|\b[a-fA-F0-9]{40}\b|] :: Text) =
+      Just "sha1" -- e.g. "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+  | val =~ ([text|\b[a-fA-F0-9]{64}\b|] :: Text) =
+      Just "sha256" -- e.g. "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  | val =~ ([text|(?<=\s|^)[A-Za-z0-9+/]{20,}={0,2}(?=\s|$)|] :: Text) =
+      Just "base64" -- e.g. "SGVsbG8gV29ybGQh"
+  | val =~ ([text|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b|] :: Text) =
+      Just "jwt" -- e.g. "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  | val =~ ([text|\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b|] :: Text) =
+      Just "email" -- e.g. "foo.bar@example.com"
+  | val =~ ([text|\bhttps?://[^\s/$.?#].[^\s]*\b|] :: Text) =
+      Just "url" -- e.g. "https://example.com/path?query=1"
+  | val =~ ([text|\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}\b|] :: Text) =
+      Just "hostname" -- e.g. "my-server.local"
+  | val =~ ([text|\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.|$)){4}\b|] :: Text) =
+      Just "ipv4" -- e.g. "192.168.0.1"
+  | val =~ ([text|\b([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}\b|] :: Text) =
+      Just "ipv6" -- e.g. "fe80::1ff:fe23:4567:890a"
+  | val =~ ([text|\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.|$)){4}/([0-9]|[12][0-9]|3[0-2])\b|] :: Text) =
+      Just "cidr4" -- e.g. "10.0.0.0/24"
+  | val =~ ([text|\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b|] :: Text) =
+      Just "mac" -- e.g. "01:23:45:67:89:ab"
+  | val =~ ([text|:\d{1,5}\b|] :: Text) =
+      Just "port" -- e.g. ":8080"
+  | val =~ ([text|\b[1-5][0-9]{2}\b|] :: Text) =
+      Just "http_status" -- e.g. "404"
+  | val =~ ([text|(?:/[A-Za-z0-9._-]+)+/?|] :: Text) =
+      Just "file_path_unix" -- e.g. "/usr/local/bin/script.sh"
+  | val =~ ([text|[A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*|] :: Text) =
+      Just "file_path_windows" -- e.g. "C:\\Program Files\\App\\app.exe"
+  | val =~ ([text|\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\b|] :: Text) =
+      Just "credit_card" -- e.g. "4111111111111111"
+  | val =~ ([text|\b[A-Z]{2}[0-9]{2}[A-Za-z0-9]{4}[0-9]{7}(?:[A-Za-z0-9]?){0,16}\b|] :: Text) =
+      Just "iban" -- e.g. "DE89370400440532013000"
+  | val =~ ([text|\b\d{3}-\d{2}-\d{4}\b|] :: Text) =
+      Just "ssn_us" -- e.g. "123-45-6789"
+  | val =~ ([text|\b\+?[0-9]{1,3}[-.\s]?(\([0-9]{1,4}\)|[0-9]{1,4})[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}\b|] :: Text) =
+      Just "phone" -- e.g. "+1-800-555-1234"
+  | val =~ ([text|\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s\d{1,2}\s(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s\d{4}\s\d{2}:\d{2}:\d{2}\s[+\-]\d{4}\b|] :: Text) =
+      Just "rfc2822_date" -- e.g. "Fri, 21 Nov 1997 09:55:06 -0600"
+  | val =~ ([text|\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+\-]\d{2}:\d{2})?\b|] :: Text) =
+      Just "iso8601" -- e.g. "2023-10-14T10:29:38.64522Z"
+  | val =~ ([text|\b1[0-9]{12}\b|] :: Text) =
+      Just "epoch_ms" -- e.g. "1621255805123"
+  | val =~ ([text|\b1[0-9]{9}\b|] :: Text) =
+      Just "epoch_s" -- e.g. "1621255805"
+  | val =~ ([text|\b\d+(:\d{2}){1,2}(?:\.\d+)?\b|] :: Text) =
+      Just "duration" -- e.g. "01:02:03.456"
+  | val =~ ([text|^\s*at\s[^\s]+\([^\)]+:\d+\)\b|] :: Text) =
+      Just "java_stack" -- e.g. "at com.foo.Bar.method(Bar.java:123)"
+  | val =~ ([text|\bpid[:=]?\d+\b|] :: Text) =
+      Just "pid" -- e.g. "pid=1234"
+  | val =~ ([text|\btid[:=]?\d+\b|] :: Text) =
+      Just "tid" -- e.g. "tid:5678"
+  | val =~ ([text|\bThread-\d+\b|] :: Text) =
+      Just "thread" -- e.g. "Thread-1"
+  | val =~ ([text|\bsession_[A-Za-z0-9\-]{8,}\b|] :: Text) =
+      Just "session_id" -- e.g. "session_abcdef12"
+  | otherwise =
+      Nothing
 
 
 ensureUrlParams :: Text -> (Text, AE.Value, Bool)
