@@ -341,6 +341,7 @@ discordInteractionsH rawBody signatureM timestampM = do
       now <- Time.currentTime
       _ <- sendDeferredResponse interaction.id interaction.token envCfg.discordBotToken
       fullPrompt <- buildPrompt cmdData interaction envCfg
+      traceShowM fullPrompt
       result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
       case result of
         Left err -> do
@@ -365,9 +366,10 @@ discordInteractionsH rawBody signatureM timestampM = do
 buildPrompt :: InteractionData -> DiscordInteraction -> EnvConfig -> ATBaseCtx Text
 buildPrompt cmdData interaction envCfg = do
   threadMsgs <- getThreadStarterMessage interaction envCfg.discordBotToken
+  traceShowM threadMsgs
   pure $ case cmdData.options of
     Just (InteractionOption{value = AE.String q} : _) -> case threadMsgs of
-      Just msgs -> threadsPrompt msgs q
+      Just msgs -> threadsPrompt (reverse msgs) q
       _ -> systemPrompt <> "\n\nUser query: " <> q
     _ -> ""
 
@@ -396,16 +398,17 @@ contentResponse msg = AE.object ["type" AE..= (4 :: Int), "data" AE..= AE.object
 threadsPrompt :: [DiscordMessage] -> Text -> Text
 threadsPrompt msgs question = prompt
   where
-    msgs' = (\x -> "- @" <> x.author.username <> " :" <> x.content) <$> msgs
+    msgs' = (\x -> AE.object ["message" AE..= AE.object ["content" AE..= x.content, "embeds" AE..= x.embeds]]) <$> filter (\x -> x.author.username == "APItoolkit") msgs
+    msgJson = decodeUtf8 $ AE.encode $ AE.Array (V.fromList msgs')
     threadPrompt =
       unlines
         $ [ "\n\nTHREADS:"
           , "- this query is  part of a conversation thread. Use previous messages provited in the thread for additional context if needed."
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
-          , "Previous messages in this thread:"
+          , "\nPrevious thread messages in json:\n"
           ]
-          <> msgs'
-          <> ["\n\nCurrent user query: " <> question]
+          <> [msgJson]
+          <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
@@ -443,6 +446,7 @@ newtype DiscordUser = DiscordUser
 data DiscordMessage = DiscordMessage
   { content :: Text
   , author :: DiscordUser
+  , embeds :: AE.Value
   , timestamp :: Text
   }
   deriving (Generic, Show)
@@ -460,6 +464,7 @@ getThreadStarterMessage interaction botToken = do
             opts = defaults & authHeader botToken & contentTypeHeader "application/json"
         response <- getWith opts url
         response' <- getWith opts starterMessageUrl
+        traceShowM response'
         case AE.eitherDecode (response ^. responseBody) of
           Left err -> do
             return Nothing
