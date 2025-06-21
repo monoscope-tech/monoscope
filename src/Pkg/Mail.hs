@@ -5,11 +5,9 @@ module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendDiscordNotif, sendSlac
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
-import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as Wreq
 import Data.Pool ()
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Data.Time
 import Data.Vector qualified as V
 import Effectful (
@@ -19,10 +17,10 @@ import Effectful (
  )
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
-import Effectful.Reader.Static (Reader, ask)
+import Effectful.Reader.Static (ask)
 import Log qualified
 import Models.Apis.RequestDumps qualified as RequestDumps
-import Models.Apis.Slack (DiscordData (..), SlackData (..), getDiscordData, getDiscordDataByProjectId, getProjectSlackData)
+import Models.Apis.Slack (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq (defaults, header, postWith)

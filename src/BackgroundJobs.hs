@@ -28,7 +28,6 @@ import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Log qualified
-import Models.Apis.Anomalies (IssuesData)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Facets qualified as Facets
@@ -58,8 +57,7 @@ import Pages.Specification.GenerateSwagger (generateSwagger)
 import Pkg.Mail (NotificationAlerts (EndpointAlert, RuntimeErrorAlert), sendDiscordAlert, sendDiscordNotif, sendPostmarkEmail, sendSlackAlert, sendSlackMessage)
 import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
-import Relude hiding (ask, when)
-import Relude qualified
+import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
 import System.Config qualified as Config
@@ -447,7 +445,7 @@ processProjectSpans pid spans = do
     Right _ -> do
       -- Update span records with computed hashes
       forM_ (V.zip spans spanUpdates) \(span, hashes) -> do
-        when (not $ V.null hashes) $ do
+        Relude.when (not $ V.null hashes) $ do
           _ <-
             dbtToEff
               $ execute

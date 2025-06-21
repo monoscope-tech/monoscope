@@ -24,8 +24,6 @@ import Pages.Components (navBar)
 import Pkg.Mail (sendSlackMessage)
 import Relude hiding (ask, asks)
 
-import AutoInstrument.Internal.GhcFacade (IsLine (char))
-import Control.Exception (try)
 import Control.Lens ((.~), (^.))
 import Data.Effectful.Wreq (
   HTTP,
@@ -372,21 +370,21 @@ buildPrompt cmdData interaction envCfg = do
     _ -> ""
 
 
-createWidgetJson :: Text -> Projects.ProjectId -> Text -> AE.Value
-createWidgetJson vizType projectId query =
-  Widget.widgetToECharts
-    $ (def :: Widget.Widget)
-      { Widget.wType = Widget.mapChatTypeToWidgetType vizType
-      , Widget.standalone = Just True
-      , Widget.hideSubtitle = Just True
-      , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
-      , Widget.summarizeBy = Just Widget.SBMax
-      , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
-      , Widget.unit = Just "ms"
-      , Widget.hideLegend = Just True
-      , Widget._projectId = Just projectId
-      , Widget.query = Just query
-      }
+-- createWidgetJson :: Text -> Projects.ProjectId -> Text -> AE.Value
+-- createWidgetJson vizType projectId query =
+--   Widget.widgetToECharts
+--     $ (def :: Widget.Widget)
+--       { Widget.wType = Widget.mapChatTypeToWidgetType vizType
+--       , Widget.standalone = Just True
+--       , Widget.hideSubtitle = Just True
+--       , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
+--       , Widget.summarizeBy = Just Widget.SBMax
+--       , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
+--       , Widget.unit = Just "ms"
+--       , Widget.hideLegend = Just True
+--       , Widget._projectId = Just projectId
+--       , Widget.query = Just query
+--       }
 
 
 contentResponse :: Text -> AE.Value
