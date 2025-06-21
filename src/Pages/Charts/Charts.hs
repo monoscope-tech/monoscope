@@ -21,6 +21,7 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
 import Effectful qualified as Effectful.Internal.Monad
+import Effectful.Error.Static (Error, throwError)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Language.Haskell.TH.Syntax qualified as THS
@@ -41,7 +42,6 @@ import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
 import Servant.Server (ServerError (errBody), err400)
 import System.Config (AuthContext (..))
-import Effectful.Error.Static (Error, throwError)
 import Text.Megaparsec (parseMaybe)
 import Utils (JSONHttpApiData (..))
 

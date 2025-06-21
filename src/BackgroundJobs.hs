@@ -340,8 +340,8 @@ queryMonitorsTriggered queryMonitorIds = do
       else do
         if Just True
           == ( monitorE.warningThreshold <&> \warningThreshold ->
-                 (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
-                   || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
+                (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
+                  || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
              )
           then handleQueryMonitorThreshold monitorE False
           else pass
@@ -610,7 +610,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
                   , archivedAt = Nothing
                   }
             )
-            <$> errs
+          <$> errs
 
       forM_ project.notificationsChannel \case
         Projects.NSlack ->

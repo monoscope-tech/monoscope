@@ -173,7 +173,8 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
             $ checkpoint "processList:traces:processRequestMessages"
             $ void
               ( ProcessMessage.processRequestMessages
-                  $ V.toList apitoolkitSpans <&> ("",)
+                  $ V.toList apitoolkitSpans
+                  <&> ("",)
               )
 
           unless (null allSpans) do
@@ -767,7 +768,8 @@ traceServiceExport appLogger appCtx (Proto req) = do
       $ checkpoint "processList:traces:processRequestMessages"
       $ void
         ( ProcessMessage.processRequestMessages
-            $ V.toList apitoolkitSpans <&> ("",)
+            $ V.toList apitoolkitSpans
+            <&> ("",)
         )
 
     unless (null spans) do

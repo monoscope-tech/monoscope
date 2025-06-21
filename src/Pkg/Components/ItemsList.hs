@@ -27,7 +27,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
 import Pages.Components (emptyState_)
 import Relude
-import Utils (deleteParam, faSprite_, escapedQueryPartial)
+import Utils (deleteParam, escapedQueryPartial, faSprite_)
 
 
 data ItemsListCfg = ItemsListCfg

@@ -30,7 +30,7 @@ import Pages.Components (emptyState_, statBox_)
 import Pages.Log (ApiLogsPageData (isTestLog))
 import Pages.Log qualified as Log
 import Pages.Monitors.TestCollectionEditor (castToStepResult)
-import Pkg.Components.ItemsList (TabFilter(..), TabFilterOpt(..))
+import Pkg.Components.ItemsList (TabFilter (..), TabFilterOpt (..))
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Parser
 import PyF qualified

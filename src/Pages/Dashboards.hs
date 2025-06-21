@@ -36,9 +36,9 @@ import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
-import Pkg.Components.TimePicker qualified as TimePicker
-import Pkg.Components.Modals qualified as Modals
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
+import Pkg.Components.Modals qualified as Modals
+import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Relude
 import Relude.Unsafe qualified as Unsafe
@@ -291,10 +291,10 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
             pure
               $ widget
               & #html
-                ?~
-                  renderText
-                    (div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-                       $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml))
+                ?~ renderText
+                  ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
+                      $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml)
+                  )
           Widget.WTStat -> do
             stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
             pure

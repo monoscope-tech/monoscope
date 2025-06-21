@@ -172,24 +172,25 @@ processRequestMessages msgs' = do
   let groupedMsgs = groupMsgsByProjectId msgs'
   -- TODO: Chcek which projects exceed free tier and skip their messages here.
 
-  !processed <- concat <$> forM (HM.toList groupedMsgs) \(projectId, projectMsgs) -> do
-    let pid = Projects.ProjectId projectId
-    projectCacheVal <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid \pid' -> do
-      mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
-      pure $ fromMaybe projectCacheDefault mpjCache
+  !processed <-
+    concat <$> forM (HM.toList groupedMsgs) \(projectId, projectMsgs) -> do
+      let pid = Projects.ProjectId projectId
+      projectCacheVal <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid \pid' -> do
+        mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
+        pure $ fromMaybe projectCacheDefault mpjCache
 
-    let exceededFreeTier = projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount >= 5000
+      let exceededFreeTier = projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount >= 5000
 
-    -- Process all messages for this project with the same cache
-    forM projectMsgs \(rmAckId, msg) ->
-      if exceededFreeTier
-        then pure $ Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty, rmAckId)
-        else do
-          recId <- UUID.genUUID
-          let result = RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal msg timestamp recId
-          case result of
-            Left err -> pure $ Left (err, rmAckId, msg)
-            Right (rd, enp, s, f, fo, err) -> pure $ Right (rd, enp, s, f, fo, err, rmAckId)
+      -- Process all messages for this project with the same cache
+      forM projectMsgs \(rmAckId, msg) ->
+        if exceededFreeTier
+          then pure $ Right (Nothing, Nothing, Nothing, V.empty, V.empty, V.empty, rmAckId)
+          else do
+            recId <- UUID.genUUID
+            let result = RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal msg timestamp recId
+            case result of
+              Left err -> pure $ Left (err, rmAckId, msg)
+              Right (rd, enp, s, f, fo, err) -> pure $ Right (rd, enp, s, f, fo, err, rmAckId)
 
   let !(failures, successes) = partitionEithers processed
       !(reqDumps, endpoints, shapes, fields, formats, errs, rmAckIds) = L.unzip7 successes

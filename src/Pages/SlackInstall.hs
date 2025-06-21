@@ -341,7 +341,6 @@ discordInteractionsH rawBody signatureM timestampM = do
       now <- Time.currentTime
       _ <- sendDeferredResponse interaction.id interaction.token envCfg.discordBotToken
       fullPrompt <- buildPrompt cmdData interaction envCfg
-      traceShowM fullPrompt
       result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
       case result of
         Left err -> do
@@ -366,7 +365,6 @@ discordInteractionsH rawBody signatureM timestampM = do
 buildPrompt :: InteractionData -> DiscordInteraction -> EnvConfig -> ATBaseCtx Text
 buildPrompt cmdData interaction envCfg = do
   threadMsgs <- getThreadStarterMessage interaction envCfg.discordBotToken
-  traceShowM threadMsgs
   pure $ case cmdData.options of
     Just (InteractionOption{value = AE.String q} : _) -> case threadMsgs of
       Just msgs -> threadsPrompt (reverse msgs) q
@@ -407,8 +405,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-          <> [msgJson]
-          <> ["\n\nUser query: " <> question]
+        <> [msgJson]
+        <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
@@ -464,7 +462,6 @@ getThreadStarterMessage interaction botToken = do
             opts = defaults & authHeader botToken & contentTypeHeader "application/json"
         response <- getWith opts url
         response' <- getWith opts starterMessageUrl
-        traceShowM response'
         case AE.eitherDecode (response ^. responseBody) of
           Left err -> do
             return Nothing

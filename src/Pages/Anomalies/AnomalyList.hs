@@ -56,7 +56,7 @@ import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (dateTime, statBox_)
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
-import Pkg.Components.ItemsList (TabFilter(..), TabFilterOpt(..))
+import Pkg.Components.ItemsList (TabFilter (..), TabFilterOpt (..))
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget qualified as Widget
 import PyF (fmt)
