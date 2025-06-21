@@ -179,11 +179,14 @@ data ProjectCache = ProjectCache
     -- [endpointHash]<>[field_category eg requestBody]<>[field_key_path]
     -- Those redact fields that don't have endpoint or field_category attached, would be aplied to every endpoint and field category.
     redactFieldslist :: V.Vector Text
-  , weeklyRequestCount :: Int
+  , -- Daily count of events from otel_logs_and_spans table for the last 24 hours
+    dailyEventCount :: Int
+  , -- Daily count of metrics for the last 24 hours  
+    dailyMetricCount :: Int
   , paymentPlan :: Text
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow)
+  deriving anyclass (FromRow, NFData)
 
 
 data CreateProject = CreateProject
@@ -205,7 +208,7 @@ data CreateProject = CreateProject
 
 -- FIXME: We currently return an object with empty vectors when nothing was found.
 projectCacheById :: ProjectId -> DBT IO (Maybe ProjectCache)
-projectCacheById pid = queryOne q (pid, pid, pid)
+projectCacheById pid = queryOne q (pid, pid, pid, pid, pid)
   where
     q =
       [sql| select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts,
@@ -213,8 +216,11 @@ projectCacheById pid = queryOne q (pid, pid, pid)
                     coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}'::text[]) shape_hashes,
                     coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields,
                     ( SELECT count(*) FROM otel_logs_and_spans
-                     WHERE project_id=? AND timestamp > NOW() - INTERVAL '7' DAY
-                    ) weekly_request_count,
+                     WHERE project_id=? AND timestamp > NOW() - INTERVAL '1' DAY
+                    ) daily_event_count,
+                    ( SELECT count(*) FROM telemetry.metrics
+                     WHERE project_id=? AND timestamp > NOW() - INTERVAL '1' DAY  
+                    ) daily_metric_count,
                     (SELECT COALESCE((SELECT payment_plan FROM projects.projects WHERE id = ?),'Free')) payment_plan
             from
               (select e.host hosts, e.hash endpoint_hashes, sh.hash shape_hashes, concat(rf.endpoint_hash,'<>', rf.field_category,'<>', rf.path) paths

@@ -85,6 +85,7 @@ data SDKTypes
   | JavaSpring
   | JavaApacheOutgoing
   | JavaVertx
+  | SDKUnknown
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
@@ -124,6 +125,7 @@ parseSDKType "JavaApacheOutgoing" = JavaApacheOutgoing
 parseSDKType "JavaVertx" = JavaVertx
 parseSDKType "JsOutgoing" = JsOutgoing
 parseSDKType "JsNext" = JsNext
+parseSDKType "SDKUnknown" = SDKUnknown
 parseSDKType _ = JsExpress
 
 
@@ -206,6 +208,7 @@ normalizeUrlPath JavaApacheOutgoing statusCode _method urlPath = removeQueryPara
 normalizeUrlPath JavaVertx statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath JsOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath JsNext statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath SDKUnknown statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 
 -- getRequestType ...

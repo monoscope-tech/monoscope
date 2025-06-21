@@ -3,13 +3,14 @@
 
 module RequestMessages (
   RequestMessage (..),
-  requestMsgToDumpAndEndpoint,
   valueToFormatStr,
   valueToFields,
   redactJSON,
   replaceNullChars,
   fieldsToFieldDTO,
   sortVector,
+  ensureUrlParams,
+  processErrors,
 )
 where
 
@@ -18,21 +19,19 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.Types qualified as AET
-import Data.ByteString.Base64 qualified as B64
 import Data.HashMap.Strict qualified as HM
 import Data.HashTable.Class qualified as HTC
 import Data.HashTable.ST.Cuckoo qualified as HT
 import Data.Scientific qualified as Scientific
 import Data.Text qualified as T
-import Data.Time.Clock as Clock (UTCTime)
-import Data.Time.LocalTime as Time (ZonedTime, zonedTimeToUTC)
+import Data.Time.LocalTime (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Simple (Query)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Anomalies qualified as Anomalies
-import Models.Apis.Endpoints qualified as Endpoints
+import NeatInterpolation (text)
 import Models.Apis.Fields.Types qualified as Fields (
   Field (..),
   FieldCategoryEnum (..),
@@ -42,9 +41,7 @@ import Models.Apis.Fields.Types qualified as Fields (
  )
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
-import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
-import NeatInterpolation (text)
 import Relude
 import Relude.Unsafe as Unsafe (read)
 import Text.Regex.TDFA ((=~))
@@ -134,18 +131,21 @@ replaceNullChars :: Text -> Text
 replaceNullChars = T.replace "\\u0000" ""
 
 
-processErrors :: Projects.ProjectId -> RequestDumps.SDKTypes -> Text -> Text -> RequestDumps.ATError -> (RequestDumps.ATError, Query, [DBField])
-processErrors pid sdkType method urlPath err = (normalizedError, q, params)
+-- | Process errors with optional HTTP-specific fields
+-- If HTTP fields are not provided, they remain as Nothing in the error record
+processErrors :: Projects.ProjectId -> Maybe RequestDumps.SDKTypes -> Maybe Text -> Maybe Text -> RequestDumps.ATError -> (RequestDumps.ATError, Query, [DBField])
+processErrors pid maybeSdkType maybeMethod maybePath err = (normalizedError, q, params)
   where
     (q, params) = Anomalies.insertErrorQueryAndParams pid normalizedError
     normalizedError =
       err
         { RequestDumps.projectId = Just pid
-        , RequestDumps.hash = Just $ fromMaybe (toXXHash (pid.toText <> err.errorType <> err.message <> show sdkType)) err.hash
-        , RequestDumps.technology = Just sdkType
-        , RequestDumps.requestMethod = Just method
-        , RequestDumps.requestPath = Just urlPath
+        , RequestDumps.hash = Just $ fromMaybe defaultHash err.hash
+        , RequestDumps.technology = maybeSdkType <|> err.technology
+        , RequestDumps.requestMethod = maybeMethod <|> err.requestMethod
+        , RequestDumps.requestPath = maybePath <|> err.requestPath
         }
+    defaultHash = toXXHash (pid.toText <> err.errorType <> err.message <> maybe "" show maybeSdkType)
 
 
 sortVector :: Ord a => V.Vector a -> V.Vector a
@@ -155,156 +155,6 @@ sortVector vec = runST $ do
   V.freeze mvec
 
 
--- requestMsgToDumpAndEndpoint is a very improtant function designed to be run as a pure function
--- which takes in a request and processes it returning an sql query and it's params which can be executed.
--- The advantage of returning these queries and params is that it becomes possible to group together batches of requests
--- from the google cloud pub sub, and to concatenate their queries so that only a single database call is needed for a batch.
--- Also, being a pure function means it's easier to test the request processing logic since we can unit test pure functions easily.
--- We can pass in a request, it's project cache object and inspect the generated sql and params.
-requestMsgToDumpAndEndpoint
-  :: Projects.ProjectCache
-  -> RequestMessages.RequestMessage
-  -> UTCTime
-  -> UUID.UUID
-  -> Either Text (Maybe Endpoints.Endpoint, Maybe Shapes.Shape, V.Vector Fields.Field, V.Vector Formats.Format, V.Vector RequestDumps.ATError)
-requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
-  -- TODO: User dumpID and msgID to get correct ID
-  let dumpID = fromMaybe dumpIDOriginal rM.msgId
-  let timestampUTC = zonedTimeToUTC rM.timestamp
-
-  let method = T.toUpper rM.method
-  let urlPath' = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method (fromMaybe "/" rM.urlPath)
-  let (urlPathDyn, pathParamsDyn, hasDyn) = ensureUrlParams urlPath'
-  let (urlPath, _pathParams) = if hasDyn then (urlPathDyn, pathParamsDyn) else (urlPath', rM.pathParams)
-  let !endpointHash = toXXHash $ UUID.toText rM.projectId <> fromMaybe "" rM.host <> method <> urlPath
-  let redactFieldsList = pjc.redactFieldslist V.++ V.fromList [".set-cookie", ".password"]
-  let redacted = redactJSON redactFieldsList
-  let sanitizeNullChars = encodeUtf8 . replaceNullChars . decodeUtf8
-  reqBodyB64 <- B64.decodeBase64Untyped $ encodeUtf8 rM.requestBody
-  respBodyB64 <- B64.decodeBase64Untyped $ encodeUtf8 rM.responseBody
-  let !reqBody = redacted $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars reqBodyB64
-      !respBody = redacted $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars respBodyB64
-      !pathParamFields = valueToFields $ redacted rM.pathParams
-      !queryParamFields = valueToFields $ redacted rM.queryParams
-      !reqHeaderFields = valueToFields $ redacted rM.requestHeaders
-      !respHeaderFields = valueToFields $ redacted rM.responseHeaders
-      !reqBodyFields = valueToFields reqBody
-      !respBodyFields = valueToFields respBody
-      !queryParamsKP = V.map fst queryParamFields
-      !requestHeadersKP = V.map fst reqHeaderFields
-      !responseHeadersKP = V.map fst respHeaderFields
-      !requestBodyKP = V.map fst reqBodyFields
-      !responseBodyKP = V.map fst respBodyFields
-
-  -- We calculate a hash that represents the request.
-  -- We skip the request headers from this hash, since the source of the request like browsers might add or skip headers at will,
-  -- which would make this process not deterministic anymore, and that's necessary for a hash.
-  let representativeKP = sortVector $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
-  let !combinedKeyPathStr = T.concat $ V.toList representativeKP
-  -- Include the endpoint hash and status code to make the shape hash unique by endpoint and status code.
-  let !shapeHash = endpointHash <> show rM.statusCode <> toXXHash combinedKeyPathStr
-  let projectId = Projects.ProjectId rM.projectId
-
-  let !pathParamsFieldsDTO = V.map (fieldsToFieldDTO Fields.FCPathParam projectId endpointHash) pathParamFields
-      !queryParamsFieldsDTO = V.map (fieldsToFieldDTO Fields.FCQueryParam projectId endpointHash) queryParamFields
-      !reqHeadersFieldsDTO = V.map (fieldsToFieldDTO Fields.FCRequestHeader projectId endpointHash) reqHeaderFields
-      !respHeadersFieldsDTO = V.map (fieldsToFieldDTO Fields.FCResponseHeader projectId endpointHash) respHeaderFields
-      !reqBodyFieldsDTO = V.map (fieldsToFieldDTO Fields.FCRequestBody projectId endpointHash) reqBodyFields
-      !respBodyFieldsDTO = V.map (fieldsToFieldDTO Fields.FCResponseBody projectId endpointHash) respBodyFields
-      !fieldsDTO =
-        pathParamsFieldsDTO
-          <> queryParamsFieldsDTO
-          <> reqHeadersFieldsDTO
-          <> respHeadersFieldsDTO
-          <> reqBodyFieldsDTO
-          <> respBodyFieldsDTO
-  let (fields, formats) = V.unzip fieldsDTO
-  let !fieldHashes = sortVector $ V.map (.hash) fields
-  -- let !formatHashes = sortVector $ V.map (.hash) formats
-
-  --- FIXME: why are we not using the actual url params?
-  -- Since it foes into the endpoint, maybe it should be the keys and their type? I'm unsure.
-  -- At the moment, if an endpoint exists, we don't insert it anymore. But then how do we deal with requests from new hosts?
-  let urlParams = AET.emptyObject
-  let endpoint
-        | endpointHash `elem` pjc.endpointHashes = Nothing -- We have the endpoint cache in our db already. Skill adding
-        | rM.statusCode == 404 = Nothing
-        | otherwise = Just $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash (isRequestOutgoing rM.sdkType)
-
-  let !shape
-        | shapeHash `elem` pjc.shapeHashes = Nothing
-        | rM.statusCode == 404 = Nothing
-        | otherwise =
-            -- A shape is a deterministic representation of a request-response combination for a given endpoint.
-            -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
-            -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.
-            Just
-              $ Shapes.Shape
-                { id = Shapes.ShapeId dumpID
-                , createdAt = timestampUTC
-                , updatedAt = now
-                , approvedOn = Nothing
-                , projectId = projectId
-                , endpointHash = endpointHash
-                , queryParamsKeypaths = queryParamsKP
-                , requestBodyKeypaths = requestBodyKP
-                , responseBodyKeypaths = responseBodyKP
-                , requestHeadersKeypaths = requestHeadersKP
-                , responseHeadersKeypaths = responseHeadersKP
-                , fieldHashes = fieldHashes
-                , hash = shapeHash
-                , statusCode = rM.statusCode
-                , responseDescription = ""
-                , requestDescription = ""
-                }
-
-  -- FIXME: simplify processErrors func
-  let !(errorsList, _, _) = V.unzip3 $ V.map (processErrors projectId rM.sdkType rM.method (fromMaybe "" rM.urlPath)) $ V.fromList $ fromMaybe [] rM.errors
-
-  -- Build all fields and formats, unzip them as separate lists and append them to query and params
-  -- We don't border adding them if their shape exists, as we asume that we've already seen such before.
-  let fields'
-        -- TODO: Replace this faulty logic with bloom  filter. See comment on formats for more.
-        -- \| shapeHash `elem` pjc.shapeHashes = ([], [])
-        | rM.statusCode == 404 = V.empty
-        | otherwise = fields
-
-  -- FIXME:
-  -- Instead of having examples as a column under formats, could we be better served by having an examples table?
-  -- How do we solve the problem of updating examples for formats if we never insert the format when the shape already exists?
-  -- Should we use some randomizer?
-  -- The original plan was that we could skip the shape from the input into this function, but then that would mean
-  -- also inserting the fields and the shape, when all we want to insert is just the example.
-  let formats'
-        -- TODO: Replace this redundancy check with a sort of bit vector or bloom filter that holds all the
-        -- existing formats or even just fields in the given project. So we don't insert existing fields
-        -- and formats over and over
-        -- \| shapeHash `elem` pjc.shapeHashes = ([], [])
-        | rM.statusCode == 404 = V.empty
-        | otherwise = formats
-
-  Right (endpoint, shape, fields', formats', errorsList)
-
-
-isRequestOutgoing :: RequestDumps.SDKTypes -> Bool
-isRequestOutgoing sdkType = T.isSuffixOf "Outgoing" (show sdkType)
-
-
-buildEndpoint :: RequestMessages.RequestMessage -> UTCTime -> UUID.UUID -> Projects.ProjectId -> Text -> Text -> AE.Value -> Text -> Bool -> Endpoints.Endpoint
-buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash outgoing =
-  Endpoints.Endpoint
-    { createdAt = zonedTimeToUTC rM.timestamp
-    , updatedAt = now
-    , id = Endpoints.EndpointId dumpID
-    , projectId = projectId
-    , urlPath = urlPath
-    , urlParams = urlParams
-    , method = method
-    , host = fromMaybe "" rM.host
-    , hash = endpointHash
-    , outgoing = outgoing
-    , description = "" :: Text
-    }
 
 
 -- valueToFields takes an aeson object and converts it into a vector of paths to

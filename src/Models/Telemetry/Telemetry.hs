@@ -766,8 +766,8 @@ instance ToRow OtelLogsAndSpans where
 bulkInsertOtelLogsAndSpansTF :: (DB :> es, Labeled "timefusion" DB :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
 bulkInsertOtelLogsAndSpansTF records = do
   updatedRecords <- updateIds records
-  _ <- bulkInsertSpansTS updatedRecords
   _ <- bulkInsertOtelLogsAndSpans updatedRecords
+  _ <- labeled @"timefusion" @DB $ bulkInsertOtelLogsAndSpans updatedRecords
   pass
   where
     updateIds :: UUIDEff :> es => V.Vector OtelLogsAndSpans -> Eff es (V.Vector OtelLogsAndSpans)
@@ -779,28 +779,11 @@ bulkInsertOtelLogsAndSpansTF records = do
           pure $ record & #id .~ newId
 
 
-bulkInsertSpansTS :: DB :> es => V.Vector OtelLogsAndSpans -> Eff es Int64
-bulkInsertSpansTS records = dbtToEff $ executeMany bulkInserSpansAndLogsQuery (V.toList records)
-
-
 -- Function to insert OtelLogsAndSpans records with all fields in flattened structure
 -- Using direct connection without transaction
-bulkInsertOtelLogsAndSpans :: Labeled "timefusion" DB :> es => V.Vector OtelLogsAndSpans -> Eff es Int64
--- bulkInsertOtelLogsAndSpansTF :: (IOE :> es, Effectful.Reader.Static.Reader AuthContext :> es) => V.Vector OtelLogsAndSpans -> Eff es Int64
-bulkInsertOtelLogsAndSpans records = labeled @"timefusion" @DB $ dbtToEff $ executeMany bulkInserSpansAndLogsQuery (V.toList records)
+bulkInsertOtelLogsAndSpans :: DB :> es => V.Vector OtelLogsAndSpans -> Eff es Int64
+bulkInsertOtelLogsAndSpans records = dbtToEff $ executeMany bulkInserSpansAndLogsQuery (V.toList records)
 
-
--- envCfg <- ask @AuthContext
--- -- liftIO $ withResource envCfg.timefusionPgPool \conn -> do
--- --   PG.executeMany conn q (V.toList records)
---
--- liftIO $ do
---   -- Create a direct connection instead of using the pool
---   -- postgresql://postgres:postgres@localhost:12345/postgres
---   conn <- DBUtils.connectPostgreSQL "postgresql://postgres:postgres@localhost:12345/postgres"
---   result <- PG.executeMany conn q (V.toList records)
---   PG.close conn
---   return result
 
 bulkInserSpansAndLogsQuery :: Query
 bulkInserSpansAndLogsQuery =
@@ -840,8 +823,6 @@ bulkInserSpansAndLogsQuery =
 
 removeDuplic :: Eq a => Eq e => [(a, e, b, c, d, q)] -> [(a, e, b, c, d, q)]
 removeDuplic = L.nubBy (\(a1, a2, _, _, _, _) (b1, b2, _, _, _, _) -> a1 == b1 && a2 == b2)
-
-
 
 
 getValsWithPrefix :: Text -> AE.Object -> AE.Value

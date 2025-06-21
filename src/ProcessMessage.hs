@@ -32,6 +32,7 @@ import Log qualified
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Formats qualified as Formats
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (Context (trace_state))
@@ -39,7 +40,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
-import RequestMessages (fieldsToFieldDTO, sortVector, valueToFields)
+import RequestMessages (fieldsToFieldDTO, sortVector, valueToFields, redactJSON, ensureUrlParams)
 import System.Config qualified as Config
 import Utils (b64ToJson, eitherStrToText, nestedJsonFromDotNotation, toXXHash)
 
@@ -150,50 +151,86 @@ jsonToMap _ = Nothing
 -- | Process a single span to extract entities
 processSpanToEntities :: Projects.ProjectCache -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, Maybe Shapes.Shape, V.Vector Fields.Field, V.Vector Formats.Format, V.Vector Text)
 processSpanToEntities pjc span dumpId =
-  let projectId = Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText span.project_id
+  let !projectId = Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText span.project_id
 
       -- Extract HTTP attributes from nested JSON structure
-      attributes = fromMaybe mempty span.attributes
-      attrValue = AE.Object $ AEKM.fromMapText attributes
+      !attributes = fromMaybe mempty span.attributes
+      !attrValue = AE.Object $ AEKM.fromMapText attributes
 
       -- Navigate nested JSON to extract values using lens
-      method = fromMaybe "GET" $ T.toUpper <$> attrValue ^? key "http" . key "request" . key "method" . _String
+      !method = T.toUpper $ fromMaybe "GET" $ attrValue ^? key "http" . key "request" . key "method" . _String
       
-      path = fromMaybe "/" $ attrValue ^? key "http" . key "request" . key "path" . _String
+      !rawPath = fromMaybe "/" $ attrValue ^? key "http" . key "request" . key "path" . _String
       
-      statusCode = fromMaybe 200 $ do
+      !statusCode = fromMaybe 200 $ do
         statusStr <- attrValue ^? key "http" . key "response" . key "status_code" . _String
         readMaybe $ T.unpack statusStr
       
-      host = fromMaybe "" $ attrValue ^? key "net" . key "host" . key "name" . _String
+      !host = fromMaybe "" $ attrValue ^? key "net" . key "host" . key "name" . _String
+
+      -- Extract SDK type from attributes (needed for URL normalization)
+      !sdkTypeStr = fromMaybe "unknown" $ attrValue ^? key "apitoolkit" . key "sdk_type" . _String
+      !sdkType = fromMaybe RequestDumps.SDKUnknown $ readMaybe $ T.unpack sdkTypeStr
+
+      -- URL normalization and dynamic path parameter extraction
+      !urlPath' = RequestDumps.normalizeUrlPath sdkType statusCode method rawPath
+      !(!urlPathDyn, !pathParamsDyn, !hasDyn) = ensureUrlParams urlPath'
+      !(!urlPath, !pathParams) = if hasDyn then (urlPathDyn, pathParamsDyn) else (urlPath', fromMaybe AE.emptyObject $ attrValue ^? key "http" . key "request" . key "path_params")
+
+      -- Extract query params and headers from attributes
+      !queryParams = fromMaybe AE.emptyObject $ attrValue ^? key "http" . key "request" . key "query_params"
+      !requestHeaders = fromMaybe AE.emptyObject $ extractHeaders "http.request.headers" attrValue
+      !responseHeaders = fromMaybe AE.emptyObject $ extractHeaders "http.response.headers" attrValue
+
+      -- Generate proper endpoint hash with project ID and host
+      !endpointHash = toXXHash $ projectId.toText <> host <> method <> urlPath
+
+      -- Set up redaction
+      !redactFieldsList = pjc.redactFieldslist V.++ V.fromList [".set-cookie", ".password"]
+      !redacted = redactJSON redactFieldsList
 
       -- Extract request/response bodies from span body
-      bodyValue = fromMaybe AE.Null span.body
-      requestBody = fromMaybe AE.Null $ bodyValue ^? key "request_body"
-      responseBody = fromMaybe AE.Null $ bodyValue ^? key "response_body"
+      !bodyValue = fromMaybe AE.Null span.body
+      !requestBody = redacted $ fromMaybe AE.Null $ bodyValue ^? key "request_body"
+      !responseBody = redacted $ fromMaybe AE.Null $ bodyValue ^? key "response_body"
 
-      -- Generate endpoint hash
-      endpointHash = toXXHash $ method <> path
+      -- Extract and process all field categories
+      !pathParamFields = valueToFields $ redacted pathParams
+      !queryParamFields = valueToFields $ redacted queryParams
+      !reqHeaderFields = valueToFields $ redacted requestHeaders
+      !respHeaderFields = valueToFields $ redacted responseHeaders
+      !reqBodyFields = valueToFields requestBody
+      !respBodyFields = valueToFields responseBody
 
-      -- Extract fields from bodies using existing valueToFields function
-      reqBodyFields = valueToFields requestBody
-      respBodyFields = valueToFields responseBody
+      -- Extract key paths for shape hash calculation
+      !queryParamsKP = V.map fst queryParamFields
+      !requestHeadersKP = V.map fst reqHeaderFields
+      !responseHeadersKP = V.map fst respHeaderFields
+      !requestBodyKP = V.map fst reqBodyFields
+      !responseBodyKP = V.map fst respBodyFields
 
-      -- Build shape hash
-      representativeKP = sortVector $ V.map fst reqBodyFields <> V.map fst respBodyFields
-      combinedKeyPathStr = T.concat $ V.toList representativeKP
-      shapeHash = endpointHash <> show statusCode <> toXXHash combinedKeyPathStr
+      -- Calculate shape hash (include query params and response headers like original)
+      !representativeKP = sortVector $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
+      !combinedKeyPathStr = T.concat $ V.toList representativeKP
+      !shapeHash = endpointHash <> show statusCode <> toXXHash combinedKeyPathStr
 
-      -- Convert to field DTOs
-      reqBodyFieldsDTO = V.map (fieldsToFieldDTO Fields.FCRequestBody projectId endpointHash) reqBodyFields
-      respBodyFieldsDTO = V.map (fieldsToFieldDTO Fields.FCResponseBody projectId endpointHash) respBodyFields
-      fieldsDTO = reqBodyFieldsDTO <> respBodyFieldsDTO
+      -- Convert all field categories to DTOs
+      !pathParamsFieldsDTO = V.map (fieldsToFieldDTO Fields.FCPathParam projectId endpointHash) pathParamFields
+      !queryParamsFieldsDTO = V.map (fieldsToFieldDTO Fields.FCQueryParam projectId endpointHash) queryParamFields
+      !reqHeadersFieldsDTO = V.map (fieldsToFieldDTO Fields.FCRequestHeader projectId endpointHash) reqHeaderFields
+      !respHeadersFieldsDTO = V.map (fieldsToFieldDTO Fields.FCResponseHeader projectId endpointHash) respHeaderFields
+      !reqBodyFieldsDTO = V.map (fieldsToFieldDTO Fields.FCRequestBody projectId endpointHash) reqBodyFields
+      !respBodyFieldsDTO = V.map (fieldsToFieldDTO Fields.FCResponseBody projectId endpointHash) respBodyFields
+      !fieldsDTO = pathParamsFieldsDTO <> queryParamsFieldsDTO <> reqHeadersFieldsDTO <> respHeadersFieldsDTO <> reqBodyFieldsDTO <> respBodyFieldsDTO
 
-      (fields, formats) = V.unzip fieldsDTO
-      fieldHashes = sortVector $ V.map (.hash) fields
+      !(!fields, !formats) = V.unzip fieldsDTO
+      !fieldHashes = sortVector $ V.map (.hash) fields
+
+      -- Determine if request is outgoing based on span kind
+      !outgoing = span.kind == Just "client"
 
       -- Build endpoint if not in cache
-      endpoint =
+      !endpoint =
         if endpointHash `elem` pjc.endpointHashes || statusCode == 404
           then Nothing
           else
@@ -203,17 +240,17 @@ processSpanToEntities pjc span dumpId =
                 , updatedAt = span.timestamp
                 , id = Endpoints.EndpointId dumpId
                 , projectId = projectId
-                , urlPath = path
-                , urlParams = AE.emptyObject
+                , urlPath = urlPath
+                , urlParams = AE.emptyObject -- TODO: Should this use pathParams?
                 , method = method
                 , host = host
                 , hash = endpointHash
-                , outgoing = span.kind == Just "client"
+                , outgoing = outgoing
                 , description = ""
                 }
 
       -- Build shape if not in cache
-      shape =
+      !shape =
         if shapeHash `elem` pjc.shapeHashes || statusCode == 404
           then Nothing
           else
@@ -225,11 +262,11 @@ processSpanToEntities pjc span dumpId =
                 , approvedOn = Nothing
                 , projectId = projectId
                 , endpointHash = endpointHash
-                , queryParamsKeypaths = V.empty
-                , requestBodyKeypaths = V.map fst reqBodyFields
-                , responseBodyKeypaths = V.map fst respBodyFields
-                , requestHeadersKeypaths = V.empty
-                , responseHeadersKeypaths = V.empty
+                , queryParamsKeypaths = queryParamsKP
+                , requestBodyKeypaths = requestBodyKP
+                , responseBodyKeypaths = responseBodyKP
+                , requestHeadersKeypaths = requestHeadersKP
+                , responseHeadersKeypaths = responseHeadersKP
                 , fieldHashes = fieldHashes
                 , hash = shapeHash
                 , statusCode = statusCode
@@ -237,11 +274,11 @@ processSpanToEntities pjc span dumpId =
                 , requestDescription = ""
                 }
 
-      fields' = if statusCode == 404 then V.empty else fields
-      formats' = if statusCode == 404 then V.empty else formats
+      !fields' = if statusCode == 404 then V.empty else fields
+      !formats' = if statusCode == 404 then V.empty else formats
 
       -- Collect hashes to update span with
-      hashes =
+      !hashes =
         V.fromList
           $ catMaybes
             [ Just endpointHash
@@ -249,6 +286,16 @@ processSpanToEntities pjc span dumpId =
             ]
             <> V.toList fieldHashes
    in (endpoint, shape, fields', formats', hashes)
+  where
+    -- Helper function to extract headers from nested attribute structure
+    extractHeaders :: Text -> AE.Value -> Maybe AE.Value
+    extractHeaders prefix obj = case obj of
+      AE.Object keyMap -> 
+        let headerPairs = [(T.drop (T.length prefix + 1) (AEK.toText k), v) | (k, v) <- AEKM.toList keyMap, T.isPrefixOf (prefix <> ".") (AEK.toText k)]
+        in if null headerPairs 
+           then Nothing 
+           else Just $ AE.Object $ AEKM.fromList [(AEK.fromText k, v) | (k, v) <- headerPairs]
+      _ -> Nothing
 
 
 convertRequestMessageToSpan :: RequestMessages.RequestMessage -> (UUID.UUID, Text) -> Telemetry.OtelLogsAndSpans

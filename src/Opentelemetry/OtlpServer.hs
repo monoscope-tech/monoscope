@@ -21,15 +21,12 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful
 import Effectful.Exception (onException)
-import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
-import Effectful.Time (Time)
 import Log qualified
-import Models.Apis.Anomalies qualified as Anomalies
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), Severity (..))
@@ -106,7 +103,7 @@ getMetricAttributeValue attribute rms = listToMaybe $ V.toList $ V.mapMaybe getR
 
 
 -- | Process a list of messages
-processList :: (DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" DB :> es, Log :> es, Time :> es, UUIDEff :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
+processList :: (DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs attrs = checkpoint "processList" $ process `onException` handleException
   where
@@ -131,7 +128,12 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
                   checkpoint "processList:logs:getProjectIds"
                     $ dbtToEff
                     $ ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
-                pure (ackId, join $ V.toList $ V.map (convertResourceLogsToOtelLogs projectIdsAndKeys) resourceLogs)
+                -- Fetch project caches for limit checking
+                projectCaches <- checkpoint "processList:logs:getProjectCaches" $ do
+                  let projectIds = [pid | (_, pid, _) <- V.toList projectIdsAndKeys]
+                  caches <- dbtToEff $ traverse Projects.projectCacheById projectIds
+                  pure $ HashMap.fromList [(pid, cache) | (pid, Just cache) <- zip projectIds caches]
+                pure (ackId, join $ V.toList $ V.map (convertResourceLogsToOtelLogs projectCaches projectIdsAndKeys) resourceLogs)
 
           let (ackIds, logs) = V.unzip results
               allLogs = V.fromList $ concat logs -- Flattens the list of lists
@@ -152,7 +154,12 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
                   checkpoint "processList:traces:getProjectIds"
                     $ dbtToEff
                     $ ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
-                let spans = convertResourceSpansToOtelLogs projectIdsAndKeys resourceSpans
+                -- Fetch project caches for limit checking
+                projectCaches <- checkpoint "processList:traces:getProjectCaches" $ do
+                  let projectIds = [pid | (_, pid, _) <- V.toList projectIdsAndKeys]
+                  caches <- dbtToEff $ traverse Projects.projectCacheById projectIds
+                  pure $ HashMap.fromList [(pid, cache) | (pid, Just cache) <- zip projectIds caches]
+                let spans = convertResourceSpansToOtelLogs projectCaches projectIdsAndKeys resourceSpans
                 pure (ackId, spans)
 
           let (ackIds, spans) = V.unzip results
@@ -173,7 +180,16 @@ processList msgs attrs = checkpoint "processList" $ process `onException` handle
                 pidM <- join <$> forM projectKey ProjectApiKeys.getProjectIdByApiKey
                 let pid2M = Projects.projectIdFromText =<< projectIdText
                 case pidM <|> pid2M of
-                  Just pid -> pure (ackId, convertResourceMetricsToMetricRecords pid resourceMetrics)
+                  Just pid -> do
+                    -- Fetch project cache for limit checking
+                    projectCacheM <- dbtToEff $ Projects.projectCacheById pid
+                    case projectCacheM of
+                      Just projectCache -> do
+                        let projectCaches = HashMap.singleton pid projectCache
+                        pure (ackId, convertResourceMetricsToMetricRecords projectCaches pid resourceMetrics)
+                      Nothing -> checkpoint "processList:metrics:no-cache" $ do
+                        Log.logAttention_ "processList:metrics: project cache not found"
+                        pure (ackId, [])
                   Nothing -> checkpoint "processList:metrics:missing-project-info" $ do
                     Log.logAttention_ "processList:metrics: project API Key and project ID not available in metrics"
                     pure (ackId, [])
@@ -364,17 +380,27 @@ parseSeverityLevel input = case T.toUpper input of
 
 
 -- | Convert ResourceLogs to OtelLogsAndSpans
-convertResourceLogsToOtelLogs :: V.Vector (Text, Projects.ProjectId, Integer) -> PL.ResourceLogs -> [OtelLogsAndSpans]
-convertResourceLogsToOtelLogs pids resourceLogs =
+convertResourceLogsToOtelLogs :: HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId, Integer) -> PL.ResourceLogs -> [OtelLogsAndSpans]
+convertResourceLogsToOtelLogs projectCaches pids resourceLogs =
   let projectKey = fromMaybe "" $ listToMaybe $ V.toList $ getLogAttributeValue "at-project-key" (V.singleton resourceLogs)
-      projectId = case find (\(k, _, count) -> k == projectKey) pids of
-        Just (_, v, count) -> if count >= freeTierDailyMaxEvents then Nothing else Just v
+      projectId = case find (\(k, _, _) -> k == projectKey) pids of
+        Just (_, v, _) -> Just v
         Nothing ->
           let pidText = fromMaybe "" $ listToMaybe $ V.toList $ getLogAttributeValue "at-project-id" (V.singleton resourceLogs)
               uId = UUID.fromText pidText
            in ((Just . Projects.ProjectId) =<< uId)
    in case projectId of
-        Just pid -> convertScopeLogsToOtelLogs pid (Just $ resourceLogs ^. PLF.resource) resourceLogs
+        Just pid -> 
+          case HashMap.lookup pid projectCaches of
+            Just cache -> 
+              -- Check if project has exceeded daily limit for free tier
+              let totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
+                  isFreeTier = cache.paymentPlan == "Free"
+                  hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
+               in if hasExceededLimit 
+                    then [] -- Discard events for projects that exceeded limits  
+                    else convertScopeLogsToOtelLogs pid (Just $ resourceLogs ^. PLF.resource) resourceLogs
+            Nothing -> [] -- No cache found, discard
         _ -> []
 
 
@@ -439,21 +465,31 @@ convertLogRecordToOtelLog pid resourceM scopeM logRecord =
 
 
 -- | Convert ResourceSpans to OtelLogsAndSpans
-convertResourceSpansToOtelLogs :: V.Vector (Text, Projects.ProjectId, Integer) -> V.Vector PT.ResourceSpans -> [OtelLogsAndSpans]
-convertResourceSpansToOtelLogs pids resourceSpans =
+convertResourceSpansToOtelLogs :: HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId, Integer) -> V.Vector PT.ResourceSpans -> [OtelLogsAndSpans]
+convertResourceSpansToOtelLogs projectCaches pids resourceSpans =
   join
     $ V.toList
     $ V.map
       ( \rs ->
           let projectKey = fromMaybe "" $ listToMaybe $ V.toList $ getSpanAttributeValue "at-project-key" (V.singleton rs)
-              projectId = case find (\(k, _, count) -> k == projectKey) pids of
-                Just (_, v, count) -> if count >= freeTierDailyMaxEvents then Nothing else Just v
+              projectId = case find (\(k, _, _) -> k == projectKey) pids of
+                Just (_, v, _) -> Just v
                 Nothing ->
                   let pidText = fromMaybe "" $ listToMaybe $ V.toList $ getSpanAttributeValue "at-project-id" (V.singleton rs)
                       uId = UUID.fromText pidText
                    in ((Just . Projects.ProjectId) =<< uId)
            in case projectId of
-                Just pid -> convertScopeSpansToOtelLogs pid (Just $ rs ^. PTF.resource) rs
+                Just pid -> 
+                  case HashMap.lookup pid projectCaches of
+                    Just cache -> 
+                      -- Check if project has exceeded daily limit for free tier
+                      let totalDailyEvents = toInteger cache.dailyEventCount + toInteger cache.dailyMetricCount
+                          isFreeTier = cache.paymentPlan == "Free"
+                          hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
+                       in if hasExceededLimit 
+                            then [] -- Discard events for projects that exceeded limits
+                            else convertScopeSpansToOtelLogs pid (Just $ rs ^. PTF.resource) rs
+                    Nothing -> [] -- No cache found, discard
                 _ -> []
       )
       resourceSpans
@@ -612,9 +648,18 @@ convertSpanToOtelLog pid resourceM scopeM pSpan =
 
 
 -- | Convert ResourceMetrics to MetricRecords
-convertResourceMetricsToMetricRecords :: Projects.ProjectId -> V.Vector PM.ResourceMetrics -> [Telemetry.MetricRecord]
-convertResourceMetricsToMetricRecords pid resourceMetrics =
-  join $ V.toList $ V.map (convertResourceMetricToMetricRecords pid) resourceMetrics
+convertResourceMetricsToMetricRecords :: HashMap Projects.ProjectId Projects.ProjectCache -> Projects.ProjectId -> V.Vector PM.ResourceMetrics -> [Telemetry.MetricRecord]
+convertResourceMetricsToMetricRecords projectCaches pid resourceMetrics =
+  case HashMap.lookup pid projectCaches of
+    Just cache -> 
+      -- Check if project has exceeded daily limit for free tier
+      let totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
+          isFreeTier = cache.paymentPlan == "Free"
+          hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
+       in if hasExceededLimit 
+            then [] -- Discard metrics for projects that exceeded limits
+            else join $ V.toList $ V.map (convertResourceMetricToMetricRecords pid) resourceMetrics
+    Nothing -> [] -- No cache found, discard
 
 
 -- | Convert a single ResourceMetrics to MetricRecords
@@ -716,11 +761,15 @@ traceServiceExport appLogger appCtx (Proto req) = do
       checkpoint "processList:traces:getProjectIds"
         $ dbtToEff
         $ ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
-    let spans = convertResourceSpansToOtelLogs projectIdsAndKeys resourceSpans
+    -- Fetch project caches for limit checking
+    projectCaches <- checkpoint "processList:traces:getProjectCaches" $ do
+      let projectIds = [pid | (_, pid, _) <- V.toList projectIdsAndKeys]
+      caches <- dbtToEff $ traverse Projects.projectCacheById projectIds
+      pure $ HashMap.fromList [(pid, cache) | (pid, Just cache) <- zip projectIds caches]
+    let spans = convertResourceSpansToOtelLogs projectCaches projectIdsAndKeys resourceSpans
         spans' = V.fromList spans
 
-    unless (null spans) do
-      Telemetry.bulkInsertOtelLogsAndSpansTF spans'
+    unless (V.null spans') $ Telemetry.bulkInsertOtelLogsAndSpansTF spans'
 
   -- Return an empty response
   pure defMessage
@@ -737,7 +786,13 @@ logsServiceExport appLogger appCtx (Proto req) = do
 
     projectIdsAndKeys <- dbtToEff $ ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
 
-    let logs = join $ V.toList $ V.map (convertResourceLogsToOtelLogs projectIdsAndKeys) resourceLogs
+    -- Fetch project caches for limit checking
+    projectCaches <- checkpoint "processList:logs:getProjectCaches" $ do
+      let projectIds = [pid | (_, pid, _) <- V.toList projectIdsAndKeys]
+      caches <- dbtToEff $ traverse Projects.projectCacheById projectIds
+      pure $ HashMap.fromList [(pid, cache) | (pid, Just cache) <- zip projectIds caches]
+
+    let logs = join $ V.toList $ V.map (convertResourceLogsToOtelLogs projectCaches projectIdsAndKeys) resourceLogs
 
     unless (null logs) do
       Telemetry.bulkInsertOtelLogsAndSpansTF (V.fromList logs)
@@ -762,10 +817,16 @@ metricsServiceExport appLogger appCtx (Proto req) = do
 
     case pidM of
       Just pid -> do
-        let metricRecords = convertResourceMetricsToMetricRecords pid resourceMetrics
+        -- Fetch project cache for limit checking
+        projectCacheM <- dbtToEff $ Projects.projectCacheById pid
+        case projectCacheM of
+          Just projectCache -> do
+            let projectCaches = HashMap.singleton pid projectCache
+                metricRecords = convertResourceMetricsToMetricRecords projectCaches pid resourceMetrics
 
-        unless (null metricRecords)
-          $ Telemetry.bulkInsertMetrics (V.fromList metricRecords)
+            unless (null metricRecords)
+              $ Telemetry.bulkInsertMetrics (V.fromList metricRecords)
+          Nothing -> Log.logAttention_ "Project cache not found"
       Nothing -> Log.logAttention_ "Project API Key and project ID not available in metrics"
 
   -- Return an empty response

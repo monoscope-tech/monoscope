@@ -7,7 +7,7 @@ import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.UUID qualified as UUID
 import Data.List qualified as L (intersect, union)
-import Data.List.Extra (chunksOf, groupBy)
+import Data.List.Extra (chunksOf)
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
@@ -18,7 +18,7 @@ import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Data.Vector.Algorithms qualified as VAA
 import Database.PostgreSQL.Entity.DBT (execute, query, withPool)
-import Database.PostgreSQL.Simple (Only (Only), SomePostgreSqlException)
+import Database.PostgreSQL.Simple (Only (Only), Query, SomePostgreSqlException)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact qualified as PTR
 import Effectful (Eff, (:>))
@@ -56,14 +56,16 @@ import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, creat
 import Pages.Reports qualified as RP
 import Pages.Specification.GenerateSwagger (generateSwagger)
 import Pkg.Mail (NotificationAlerts (EndpointAlert, RuntimeErrorAlert), sendDiscordAlert, sendDiscordNotif, sendPostmarkEmail, sendSlackAlert, sendSlackMessage)
+import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask, when)
 import Relude qualified
 import Relude.Unsafe qualified as Unsafe
-import ProcessMessage (processSpanToEntities)
+import RequestMessages qualified
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx, runBackground)
 import UnliftIO.Exception (try)
+import Utils (DBField)
 
 
 data BgJobs
@@ -91,6 +93,7 @@ data BgJobs
   | APITestFailed Projects.ProjectId Testing.CollectionId (V.Vector Testing.StepResult)
   | CleanupDemoProject
   | FiveMinuteSpanProcessing UTCTime
+  | OneMinuteErrorProcessing UTCTime
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -156,7 +159,7 @@ jobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs 
             "user_name": #{firstName},
             "project_name": #{projectTitle},
             "project_url": #{project_url}
-         }|]
+          }|]
           sendPostmarkEmail reciever (Just ("project-created", templateVars)) Nothing
       DeletedProject pid -> do
         users <- dbtToEff $ Projects.usersByProjectId pid
@@ -185,12 +188,16 @@ jobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs 
             -- Schedule each hourly job to run at the appropriate hour
             let scheduledTime = addUTCTime (fromIntegral $ hour * 3600) currentTime
             scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob scheduledTime hour) scheduledTime
-          
+
           -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
           forM_ [0 .. 287] \interval -> do
-            -- Schedule each 5-minute job to run at the appropriate time
             let scheduledTime = addUTCTime (fromIntegral $ interval * 300) currentTime
             scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteSpanProcessing scheduledTime) scheduledTime
+
+          -- Schedule 1-minute error processing jobs (1440 jobs per day = 24 hours * 60 per hour)
+          forM_ [0 .. 1439] \interval -> do
+            let scheduledTime = addUTCTime (fromIntegral $ interval * 60) currentTime
+            scheduleJob conn "background_jobs" (BackgroundJobs.OneMinuteErrorProcessing scheduledTime) scheduledTime
 
         -- Handle regular daily jobs for each project
         projects <- dbtToEff $ query [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
@@ -250,6 +257,7 @@ jobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs 
         _ <- withPool authCtx.pool $ PTR.execute [sql| DELETE FROM projects.project_api_keys WHERE project_id = ? AND title != 'Default API Key' |] (Only pid)
         pass
       FiveMinuteSpanProcessing scheduledTime -> processFiveMinuteSpans scheduledTime
+      OneMinuteErrorProcessing scheduledTime -> processOneMinuteErrors scheduledTime
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -294,53 +302,138 @@ processFiveMinuteSpans :: UTCTime -> ATBackgroundCtx ()
 processFiveMinuteSpans scheduledTime = do
   ctx <- ask @Config.AuthContext
   let fiveMinutesAgo = addUTCTime (-300) scheduledTime
-  
+
   -- Get HTTP spans from last 5 minutes
-  httpSpans <- dbtToEff $ query 
-    [sql| SELECT * FROM otel_logs_and_spans 
+  httpSpans <-
+    dbtToEff
+      $ query
+        [sql| SELECT * FROM otel_logs_and_spans 
           WHERE timestamp >= ? AND timestamp < ?
-          AND name LIKE '%http%' 
           AND kind IN ('server', 'client')
+          AND (name LIKE '%http%' 
+               OR attributes___http___request___method IS NOT NULL
+               OR attributes___http___response___status_code IS NOT NULL
+               OR attributes___url___full IS NOT NULL)   
           ORDER BY project_id |]
-    (fiveMinutesAgo, scheduledTime)
-  
+        (fiveMinutesAgo, scheduledTime)
+
   Log.logInfo "Processing HTTP spans from 5-minute window" (V.length httpSpans)
-  
+
   -- Group spans by project
-  let spansByProject = groupBy (\a b -> a.project_id == b.project_id) $ V.toList httpSpans
-  
-  -- Process each project's spans
-  forM_ spansByProject \projectSpans -> do
-    case projectSpans of
-      [] -> pass
-      (firstSpan:_) -> do
-        let pid = Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText firstSpan.project_id
-        processProjectSpans pid (V.fromList projectSpans)
-  
+  let spansByProject = V.groupBy (\a b -> a.project_id == b.project_id) httpSpans
+  forM_ spansByProject \projectSpans -> case V.uncons projectSpans of
+    Nothing -> pass
+    Just (firstSpan, _) -> do
+      let pid = Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText firstSpan.project_id
+      processProjectSpans pid projectSpans
+
   Log.logInfo "Completed 5-minute span processing" ()
+
+
+-- | Process errors from spans in the last minute
+processOneMinuteErrors :: UTCTime -> ATBackgroundCtx ()
+processOneMinuteErrors scheduledTime = do
+  ctx <- ask @Config.AuthContext
+  let oneMinuteAgo = addUTCTime (-60) scheduledTime
+
+  -- Get all spans with errors from last minute
+  -- Check for:
+  -- 1. Spans with error status
+  -- 2. Spans with exception events
+  -- 3. Spans with error attributes
+  spansWithErrors <-
+    dbtToEff
+      $ query
+        [sql| SELECT * FROM otel_logs_and_spans 
+          WHERE timestamp >= ? AND timestamp < ?
+          AND (
+            -- Check for error status
+            status_code = 'error' OR status_code = 'ERROR' OR status_code = '2'
+            -- Check for exception events
+            OR (
+              events IS NOT NULL
+              AND EXISTS (
+                SELECT 1 FROM jsonb_array_elements(events) AS event
+                WHERE event->>'event_name' = 'exception'
+                   OR event->>'event_name' ILIKE '%exception%' 
+                   OR event->>'event_name' ILIKE '%error%'
+              )
+            )
+            -- Check for error attributes
+            OR attributes->>'error' = 'true'
+            OR attributes->>'error.type' IS NOT NULL
+            OR attributes->>'exception.type' IS NOT NULL
+            OR attributes->>'exception.message' IS NOT NULL
+          )
+          ORDER BY project_id |]
+        (oneMinuteAgo, scheduledTime)
+
+  Log.logInfo "Processing spans with errors from 1-minute window" (V.length spansWithErrors)
+
+  -- Extract errors from all spans using the existing getAllATErrors function
+  let allErrors = Telemetry.getAllATErrors spansWithErrors
+
+  Log.logInfo "Found errors to process" (V.length allErrors)
+
+  -- Group errors by project
+  let errorsByProject = V.groupBy (\a b -> a.projectId == b.projectId) allErrors
+
+  forM_ errorsByProject \projectErrors -> case V.uncons projectErrors of
+    Nothing -> pass
+    Just (firstError, _) -> do
+      whenJust firstError.projectId \pid -> do
+        -- Process errors for this project
+        processProjectErrors pid projectErrors
+
+  Log.logInfo "Completed 1-minute error processing" ()
+
+
+-- | Process and insert errors for a specific project
+processProjectErrors :: Projects.ProjectId -> V.Vector RequestDumps.ATError -> ATBackgroundCtx ()
+processProjectErrors pid errors = do
+  -- Process each error, extracting HTTP fields if available
+  let processedErrors = V.map processError errors
+
+  -- Extract queries and params
+  let (_, queries, paramsList) = V.unzip3 processedErrors
+
+  -- Bulk insert errors
+  result <- try $ forM_ (V.zip queries paramsList) \(q, params) -> do
+    dbtToEff $ execute q params
+
+  case result of
+    Left (e :: SomePostgreSqlException) ->
+      Log.logAttention "Failed to insert errors" (show e)
+    Right _ ->
+      Log.logInfo "Successfully inserted errors for project" (pid.toText, V.length errors)
+  where
+    -- Process a single error - the error already has requestMethod and requestPath
+    -- set by getAllATErrors if it was extracted from span context
+    processError :: RequestDumps.ATError -> (RequestDumps.ATError, Query, [DBField])
+    processError err = RequestMessages.processErrors pid Nothing Nothing Nothing err
 
 
 -- | Process spans for a specific project
 processProjectSpans :: Projects.ProjectId -> V.Vector Telemetry.OtelLogsAndSpans -> ATBackgroundCtx ()
 processProjectSpans pid spans = do
   ctx <- ask @Config.AuthContext
-  
+
   -- Get project cache
   projectCacheVal <- liftIO $ Cache.fetchWithCache ctx.projectCache pid \pid' -> do
     mpjCache <- withPool ctx.jobsPool $ Projects.projectCacheById pid'
     pure $ fromMaybe projectCacheDefault mpjCache
-  
+
   -- Process each span to extract endpoints, shapes, fields, and formats
   results <- forM spans \span -> do
     spanId <- liftIO UUIDV4.nextRandom
     pure $ processSpanToEntities projectCacheVal span spanId
-  
+
   let (endpoints, shapes, fields, formats, spanUpdates) = V.unzip5 results
   let endpointsFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes $ V.toList endpoints
   let shapesFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes $ V.toList shapes
   let fieldsFinal = VAA.nubBy (comparing (.hash)) $ V.concat $ V.toList fields
   let formatsFinal = VAA.nubBy (comparing (.hash)) $ V.concat $ V.toList formats
-  
+
   -- Insert extracted entities
   result <- try $ Ki.scoped \scope -> do
     unless (null endpointsFinal) $ void $ Ki.fork scope $ Endpoints.bulkInsertEndpoints endpointsFinal
@@ -348,20 +441,21 @@ processProjectSpans pid spans = do
     unless (null fieldsFinal) $ void $ Ki.fork scope $ FieldsQ.bulkInsertFields fieldsFinal
     unless (null formatsFinal) $ void $ Ki.fork scope $ Formats.bulkInsertFormat formatsFinal
     Ki.atomically $ Ki.awaitAll scope
-  
+
   case result of
     Left (e :: SomePostgreSqlException) -> Log.logAttention "Postgres Exception during span processing" (show e)
     Right _ -> do
       -- Update span records with computed hashes
       forM_ (V.zip spans spanUpdates) \(span, hashes) -> do
         when (not $ V.null hashes) $ do
-          _ <- dbtToEff $ execute 
-            [sql| UPDATE otel_logs_and_spans 
+          _ <-
+            dbtToEff
+              $ execute
+                [sql| UPDATE otel_logs_and_spans 
                   SET hashes = ? 
                   WHERE id = ? |]
-            (hashes, span.id)
+                (hashes, span.id)
           pass
-  
   where
     projectCacheDefault :: Projects.ProjectCache
     projectCacheDefault =
@@ -370,11 +464,10 @@ processProjectSpans pid spans = do
         , endpointHashes = []
         , shapeHashes = []
         , redactFieldslist = []
-        , weeklyRequestCount = 0
+        , dailyEventCount = 0
+        , dailyMetricCount = 0
         , paymentPlan = ""
         }
-
-
 
 
 generateSwaggerForProject :: Projects.ProjectId -> Users.UserId -> Text -> ATBackgroundCtx ()
