@@ -34,20 +34,24 @@ import Data.Effectful.Wreq (
   postWith,
   responseBody,
  )
+import Data.List.Extra (nubOrd)
 import Data.Time qualified as Time
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Effectful (Eff, type (:>))
 import Effectful.Time qualified as Time
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
+import Pages.Log (curateCols)
 import Pkg.Components.Widget qualified as Widget
+import Pkg.Parser (parseQueryToAST)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400, err401)
 import System.Config (AuthContext (env, pool), EnvConfig (..))
 import System.Types (ATBaseCtx)
-import Utils (callOpenAIAPI, faSprite_, systemPrompt)
+import Utils (callOpenAIAPI, faSprite_, listToIndexHashMap, lookupVecIntByKey, lookupVecTextByKey, systemPrompt)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -118,21 +122,19 @@ linkProjectGetH pid slack_code onboardingM = do
       sendSlackMessage pid ("APItoolkit Bot has been linked to your project: " <> project'.title)
       case onboardingM of
         Just _ -> pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
-        Nothing -> pure $ addHeader "" $ SlackLinked $ PageCtx bwconf ()
+        Nothing -> pure $ addHeader "" $ BotLinked $ PageCtx bwconf "Slack"
     (_, _) -> pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoTokenFound $ PageCtx bwconf ()
 
 
 data SlackLink
-  = SlackLinked (PageCtx ())
-  | DiscordLinked (PageCtx ())
+  = BotLinked (PageCtx Text)
   | NoTokenFound (PageCtx ())
   | DiscordError (PageCtx ())
   | NoContent (PageCtx ())
 
 
 instance ToHtml SlackLink where
-  toHtml (SlackLinked (PageCtx bwconf ())) = toHtml $ PageCtx bwconf installedSuccess
-  toHtml (DiscordLinked (PageCtx bwconf ())) = toHtml $ PageCtx bwconf installedSuccessDisocrd
+  toHtml (BotLinked (PageCtx bwconf bot)) = toHtml $ PageCtx bwconf $ installedSuccess bot
   toHtml (DiscordError (PageCtx bwconf ())) = toHtml $ PageCtx bwconf discordError
   toHtml (NoTokenFound (PageCtx bwconf ())) = toHtml $ PageCtx bwconf noTokenFound
   toHtml (NoContent (PageCtx bwconf ())) = toHtml $ PageCtx bwconf ""
@@ -161,37 +163,46 @@ discordError = do
       "This could be due to not adding discord from the integrations page, click on add to discord on the integrations page to try again."
 
 
-installedSuccess :: Html ()
-installedSuccess = do
+installedSuccess :: Text -> Html ()
+installedSuccess botPlatform = do
   navBar
-  section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
-    div_ [class_ "flex flex-col border px-6 py-16 mt-16 rounded-2xl items-center"] do
-      faSprite_ "check" "regular" "h-10 w-10 text-green-500"
-      h3_ [class_ "text-3xl font-semibold my-8"] "APItoolkit Slack App Installed"
-      p_ [class_ "text-gray-600 text-center max-w-prose"] "APItoolkit Bot Slack app has been connected to your project successfully. You can now recieve notifications on slack."
-
-
-installedSuccessDisocrd :: Html ()
-installedSuccessDisocrd = do
-  navBar
-  section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
-    div_ [class_ "flex flex-col border px-6 py-16 mt-16 rounded-2xl items-center"] do
-      faSprite_ "check" "regular" "h-10 w-10 text-green-500"
-      h3_ [class_ "text-3xl font-semibold my-8"] "APItoolkit Discord Bot Installed"
-      p_
-        [class_ "text-gray-600 text-center max-w-prose mb-4"]
-        "APItoolkit Bot has been successfully added to your Discord server. You're all set to receive real-time alerts and interact with your API data — right from Discord!"
-
-      h4_ [class_ "text-xl font-semibold mt-8 mb-4"] "Available Slash Commands:"
-      ul_ [class_ "text-left text-gray-700 space-y-2"] do
-        li_ do
-          span_ [class_ "font-mono bg-gray-100 px-2 py-1 rounded"] "/ask"
-          span_ " – Ask any question about your project’s API behavior or errors."
-        li_ do
-          span_ [class_ "font-mono bg-gray-100 px-2 py-1 rounded"] "/here"
-          span_ " – Quickly link this channel to receive alerts. No more digging through logs."
-
-
+  section_ [class_ "min-h-screen  flex flex-col justify-center"] do
+    div_ [class_ "max-w-4xl mx-auto px-6"] do
+      div_ [class_ "bg-bgBase border border-strokeWeak rounded-3xl border border-fillWeak overflow-hidden"] do
+        div_ [class_ "bg-gradient-to-r from-green-400 to-blue-500 px-8 py-10 text-center"] do
+          div_ [class_ "inline-flex items-center justify-center w-16 h-16 bg-white rounded-full mb-4 shadow-lg"] do
+            faSprite_ "check" "regular" "h-8 w-8 text-green-500"
+          h1_ [class_ "text-3xl font-semibold text-white mb-4"] "Installation Complete!"
+          p_ [class_ "text-blue-100 font-semibold max-w-2xl mx-auto"] $ toHtml $ "APItoolkit Bot has been successfully added to your " <> botPlatform <> " server"
+        div_ [class_ "px-8 py-12"] do
+          div_ [class_ "text-center mb-12"] do
+            h2_ [class_ "font-semibold text-textStrong mb-4"] "You're All Set! 🚀"
+            p_ [class_ "text-textWeak text-sm mx-auto max-w-2xl "]  $ toHtml $  "Start receiving real-time alerts and interact with your API data directly from " <> botPlatform <> ". Your team can now stay on top of API performance without leaving your chat."
+          div_ [class_ "max-w-3xl mx-auto"] do
+            h3_ [class_ "font-semibold text-textStrong mb-8 text-center"] "Available Commands"
+            div_ [class_ "grid gap-6 md:grid-cols-2"] do
+              div_ [class_ "bg-gradient-to-br from-purple-50 to-blue-50 rounded-2xl p-6 border border-purple-100"] do
+                div_ [class_ "flex items-start space-x-4"] do
+                  div_ [class_ "flex-shrink-0"] do
+                    div_ [class_ "inline-flex items-center justify-center w-12 h-12 bg-purple-500 rounded-xl"] do
+                      span_ [class_ "text-white font-bold text-lg"] "?"
+                  div_ [class_ "flex-1"] do
+                    div_ [class_ "flex items-center space-x-2 mb-3"] do
+                      span_ [class_ "font-mono bg-purple-100 text-purple-800 px-3 py-1 rounded-lg font-semibold"] "/ask"
+                      span_ [class_ "bg-purple-500 text-white text-xs px-2 py-1 rounded-full"] "AI Powered"
+                    p_ [class_ "text-textStrong text-sm"]  $ toHtml $ "Ask questions about your API in natural language and get instant insights with logs and charts delivered right to " <> botPlatform <> "."
+              div_ [class_ "bg-gradient-to-br from-green-50 to-teal-50 rounded-2xl p-6 border border-green-100"] do
+                div_ [class_ "flex items-start space-x-4"] do
+                  div_ [class_ "flex-shrink-0"] do
+                    div_ [class_ "inline-flex items-center justify-center w-12 h-12 bg-green-500 rounded-xl"] do
+                      faSprite_ "bell" "regular" "h-6 w-6 text-white"
+                  div_ [class_ "flex-1"] do
+                    div_ [class_ "flex items-center space-x-2 mb-3"] do
+                      span_ [class_ "font-mono bg-green-100 text-green-800 px-3 py-1 rounded-lg font-semibold"] "/here"
+                      span_ [class_ "bg-green-500 text-white text-xs px-2 py-1 rounded-full"] "Alerts"
+                    p_ [class_ "text-textStrong text-sm"] $
+                      "Set up this channel to receive automated error reports, weekly summaries, and daily performance alerts."
+        
 linkDiscordGetH :: Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text] SlackLink)
 linkDiscordGetH pidM' codeM guildIdM = do
   envCfg <- asks env
@@ -210,9 +221,9 @@ linkDiscordGetH pidM' codeM guildIdM = do
       _ <- dbtToEff $ insertDiscordData pid guildId
       if isOnboarding
         then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
-        else pure $ addHeader "" $ DiscordLinked $ PageCtx def ()
+        else pure $ addHeader "" $  BotLinked $ PageCtx bwconf "Discord" 
     _ ->
-      pure $ addHeader "" $ DiscordError $ PageCtx def ()
+      pure $ addHeader "" $ BotLinked $ PageCtx bwconf "Discord"  -- DiscordError $ PageCtx def ()
 
 
 -- Discord interaction type
@@ -355,9 +366,93 @@ discordInteractionsH rawBody signatureM timestampM = do
               sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
               pure $ contentResponse "Generated query: "
             Nothing -> do
-              _ <- sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= ("Generated query: " <> query)])
-              pure $ AE.object []
+              let queryAST = parseQueryToAST query
+              case queryAST of
+                Left err -> do
+                  _ <- sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= ("Error parsing query: " <> err)])
+                  pure $ AE.object []
+                Right query' -> do
+                  tableAsVecE <- RequestDumps.selectLogTable discordData.projectId query' query Nothing (Nothing, Nothing) [] Nothing Nothing
+                  let content = handleTableResponse Discord tableAsVecE envCfg discordData.projectId query
+                  _ <- sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
+                  pure $ AE.object []
 
+
+handleTableResponse :: BotType -> Either Text (V.Vector (V.Vector AE.Value), [Text], Int) -> EnvConfig -> Projects.ProjectId -> Text -> AE.Value
+handleTableResponse target tableAsVecE envCfg projectId query =
+  case tableAsVecE of
+    Left err -> case target of
+      Discord -> AE.object ["content" AE..= "Error processing query"]
+      _ -> AE.object ["text" AE..= "Error processing query: "]
+    Right tableAsVec -> do
+      let (requestVecs, colNames, resultCount) = tableAsVec
+          colIdxMap = listToIndexHashMap colNames
+          tableData = recsVecToTableData requestVecs colIdxMap
+          url' = envCfg.hostUrl <> "p/" <> projectId.toText <> "/log_explorer?query=" <> (decodeUtf8 $ urlEncode True $ encodeUtf8 query)
+          explorerLink = "[Open in log explorer](" <> url' <> ")"
+          content = "**Total events (" <> show resultCount <> "**\n\n*Query used: " <> query <> "\n\n" <> tableData <> "\n\n" <> explorerLink
+       in case target of
+            Discord -> AE.object ["content" AE..= content]
+            _ ->
+              AE.object
+                [ "blocks"
+                    AE..= AE.Array
+                      ( V.fromList
+                          [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("Total events *(*" <> show resultCount <> "**)")]]
+                          , AE.object ["type" AE..= "context", "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Query used:* " <> query)]])]
+                          , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= content]]
+                          , AE.object
+                              [ "type" AE..= "actions"
+                              , "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 View in log explorer", "emoji" AE..= True], "url" AE..= url']])
+                              ]
+                          ]
+                      )
+                ]
+
+
+recsVecToTableData :: V.Vector (V.Vector AE.Value) -> (HashMap Text Int) -> Text
+recsVecToTableData recsVec colIdxMap =
+  formatSpans
+    $ map
+      ( \v ->
+          TableData
+            { timestamp = fromMaybe "" $ lookupVecTextByKey v colIdxMap "timestamp"
+            , servicename = fromMaybe "" $ lookupVecTextByKey v colIdxMap "servicename"
+            , spanname = fromMaybe "" $ lookupVecTextByKey v colIdxMap "spanname"
+            , duration = show $ lookupVecIntByKey v colIdxMap "duration"
+            }
+      )
+      (V.toList recsVec)
+
+
+-- Pad or truncate a string to a fixed width
+padRight :: Int -> Text -> Text
+padRight n s = T.take n (s <> T.replicate n " ")
+
+
+-- Format a single span row
+formatSpanRow :: TableData -> Text
+formatSpanRow spn = padRight 13 spn.timestamp <> " " <> padRight 15 spn.servicename <> " " <> padRight 20 spn.spanname <> " " <> padRight 8 spn.duration <> " " <> (if False then "❌" else "✅")
+
+
+-- Format the entire table
+formatSpans :: [TableData] -> Text
+formatSpans spans =
+  let hd = padRight 13 "TIME" <> " " <> padRight 15 "SERVICE" <> " " <> padRight 20 "SPAN NAME" <> " " <> padRight 8 "DURATION" <> " STATUS"
+      rows = map formatSpanRow spans
+   in "```md\n" <> unlines (hd : rows) <> "```"
+
+
+data TableData = TableData
+  { timestamp :: Text
+  , servicename :: Text
+  , spanname :: Text
+  , duration :: Text
+  }
+  deriving (Generic, Show)
+
+
+-- timestamp servicename spanname duration
 
 -- Helper functions
 buildPrompt :: InteractionData -> DiscordInteraction -> EnvConfig -> ATBaseCtx Text
@@ -402,8 +497,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-        <> [msgJson]
-        <> ["\n\nUser query: " <> question]
+          <> [msgJson]
+          <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
@@ -566,14 +661,14 @@ data SlackInteraction = SlackInteraction
   , command :: Text
   , text :: Text
   , response_url :: Text
-  , trigger_id :: Text
-  , api_app_id :: Text
-  , channel_id :: Text
+  , -- , trigger_id :: Text
+    -- , api_app_id :: Text
+    channel_id :: Text
   , channel_name :: Text
   , user_id :: Text
-  , enterprise_id :: Maybe Text
-  , enterprise_name :: Maybe Text
-  , team_domain :: Text
+  -- , enterprise_id :: Maybe Text
+  -- , enterprise_name :: Maybe Text
+  -- , team_domain :: Text
   }
   deriving (Generic, Show)
   deriving anyclass (AE.FromJSON, FromForm)
