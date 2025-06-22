@@ -2,7 +2,6 @@
 
 module Pages.SlackInstall (linkProjectGetH, linkDiscordGetH, discordInteractionsH, DiscordInteraction, SlackLink, slackInteractionsH, SlackInteraction) where
 
-import Control.Concurrent (forkIO)
 import Crypto.Error qualified as Crypto
 import Crypto.PubKey.Ed25519 qualified as Ed25519
 import Data.Aeson qualified as AE
@@ -13,6 +12,7 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Deriving.Aeson qualified as DAE
+import Effectful.Concurrent (forkIO)
 import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
@@ -50,8 +50,8 @@ import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400, err401)
 import System.Config (AuthContext (env, pool), EnvConfig (..))
-import System.Types (ATBaseCtx)
-import Utils (callOpenAIAPI, faSprite_, listToIndexHashMap, lookupVecIntByKey, lookupVecTextByKey, systemPrompt)
+import System.Types (ATBackgroundCtx, ATBaseCtx)
+import Utils (callOpenAIAPI, faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey, systemPrompt)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -177,7 +177,7 @@ installedSuccess botPlatform = do
         div_ [class_ "px-8 py-12"] do
           div_ [class_ "text-center mb-12"] do
             h2_ [class_ "font-semibold text-textStrong mb-4"] "You're All Set! 🚀"
-            p_ [class_ "text-textWeak text-sm mx-auto max-w-2xl "]  $ toHtml $  "Start receiving real-time alerts and interact with your API data directly from " <> botPlatform <> ". Your team can now stay on top of API performance without leaving your chat."
+            p_ [class_ "text-textWeak text-sm mx-auto max-w-2xl "] $ toHtml $ "Start receiving real-time alerts and interact with your API data directly from " <> botPlatform <> ". Your team can now stay on top of API performance without leaving your chat."
           div_ [class_ "max-w-3xl mx-auto"] do
             h3_ [class_ "font-semibold text-textStrong mb-8 text-center"] "Available Commands"
             div_ [class_ "grid gap-6 md:grid-cols-2"] do
@@ -190,7 +190,7 @@ installedSuccess botPlatform = do
                     div_ [class_ "flex items-center space-x-2 mb-3"] do
                       span_ [class_ "font-mono bg-purple-100 text-purple-800 px-3 py-1 rounded-lg font-semibold"] "/ask"
                       span_ [class_ "bg-purple-500 text-white text-xs px-2 py-1 rounded-full"] "AI Powered"
-                    p_ [class_ "text-textStrong text-sm"]  $ toHtml $ "Ask questions about your API in natural language and get instant insights with logs and charts delivered right to " <> botPlatform <> "."
+                    p_ [class_ "text-textStrong text-sm"] $ toHtml $ "Ask questions about your API in natural language and get instant insights with logs and charts delivered right to " <> botPlatform <> "."
               div_ [class_ "bg-gradient-to-br from-green-50 to-teal-50 rounded-2xl p-6 border border-green-100"] do
                 div_ [class_ "flex items-start space-x-4"] do
                   div_ [class_ "flex-shrink-0"] do
@@ -200,9 +200,10 @@ installedSuccess botPlatform = do
                     div_ [class_ "flex items-center space-x-2 mb-3"] do
                       span_ [class_ "font-mono bg-green-100 text-green-800 px-3 py-1 rounded-lg font-semibold"] "/here"
                       span_ [class_ "bg-green-500 text-white text-xs px-2 py-1 rounded-full"] "Alerts"
-                    p_ [class_ "text-textStrong text-sm"] $
-                      "Set up this channel to receive automated error reports, weekly summaries, and daily performance alerts."
-        
+                    p_ [class_ "text-textStrong text-sm"]
+                      $ "Set up this channel to receive automated error reports, weekly summaries, and daily performance alerts."
+
+
 linkDiscordGetH :: Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text] SlackLink)
 linkDiscordGetH pidM' codeM guildIdM = do
   envCfg <- asks env
@@ -221,9 +222,9 @@ linkDiscordGetH pidM' codeM guildIdM = do
       _ <- dbtToEff $ insertDiscordData pid guildId
       if isOnboarding
         then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
-        else pure $ addHeader "" $  BotLinked $ PageCtx bwconf "Discord" 
+        else pure $ addHeader "" $ BotLinked $ PageCtx bwconf "Discord"
     _ ->
-      pure $ addHeader "" $ BotLinked $ PageCtx bwconf "Discord"  -- DiscordError $ PageCtx def ()
+      pure $ addHeader "" $ BotLinked $ PageCtx bwconf "Discord" -- DiscordError $ PageCtx def ()
 
 
 -- Discord interaction type
@@ -390,7 +391,7 @@ handleTableResponse target tableAsVecE envCfg projectId query =
           tableData = recsVecToTableData requestVecs colIdxMap
           url' = envCfg.hostUrl <> "p/" <> projectId.toText <> "/log_explorer?query=" <> (decodeUtf8 $ urlEncode True $ encodeUtf8 query)
           explorerLink = "[Open in log explorer](" <> url' <> ")"
-          content = "**Total events (" <> show resultCount <> "**\n\n*Query used: " <> query <> "\n\n" <> tableData <> "\n\n" <> explorerLink
+          content = "**Total events (" <> show resultCount <> ")**\n**Query used:** " <> query <> "\n\n" <> tableData <> "\n" <> explorerLink
        in case target of
             Discord -> AE.object ["content" AE..= content]
             _ ->
@@ -398,15 +399,18 @@ handleTableResponse target tableAsVecE envCfg projectId query =
                 [ "blocks"
                     AE..= AE.Array
                       ( V.fromList
-                          [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("Total events *(*" <> show resultCount <> "**)")]]
+                          [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("Total events (*" <> show resultCount <> "*)")]]
                           , AE.object ["type" AE..= "context", "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Query used:* " <> query)]])]
-                          , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= content]]
+                          , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= tableData]]
                           , AE.object
                               [ "type" AE..= "actions"
                               , "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 View in log explorer", "emoji" AE..= True], "url" AE..= url']])
                               ]
                           ]
                       )
+                , "response_type" AE..= "in_channel"
+                , "replace_original" AE..= True
+                , "delete_original" AE..= True
                 ]
 
 
@@ -417,30 +421,28 @@ recsVecToTableData recsVec colIdxMap =
       ( \v ->
           TableData
             { timestamp = fromMaybe "" $ lookupVecTextByKey v colIdxMap "timestamp"
-            , servicename = fromMaybe "" $ lookupVecTextByKey v colIdxMap "servicename"
-            , spanname = fromMaybe "" $ lookupVecTextByKey v colIdxMap "spanname"
-            , duration = show $ lookupVecIntByKey v colIdxMap "duration"
+            , servicename = fromMaybe "" $ lookupVecTextByKey v colIdxMap "service"
+            , spanname = fromMaybe "" $ lookupVecTextByKey v colIdxMap "span_name"
+            , duration = toText $ getDurationNSMS $ fromIntegral $ lookupVecIntByKey v colIdxMap "duration"
+            , hasErrors = lookupVecBoolByKey v colIdxMap "errors"
             }
       )
-      (V.toList recsVec)
+      (V.toList (V.take 20 recsVec))
 
 
--- Pad or truncate a string to a fixed width
 padRight :: Int -> Text -> Text
 padRight n s = T.take n (s <> T.replicate n " ")
 
 
--- Format a single span row
 formatSpanRow :: TableData -> Text
-formatSpanRow spn = padRight 13 spn.timestamp <> " " <> padRight 15 spn.servicename <> " " <> padRight 20 spn.spanname <> " " <> padRight 8 spn.duration <> " " <> (if False then "❌" else "✅")
+formatSpanRow spn = padRight 18 spn.timestamp <> " " <> padRight 15 spn.servicename <> " " <> padRight 20 spn.spanname <> " " <> padRight 8 spn.duration <> " " <> (if spn.hasErrors then "❌" else "✅")
 
 
--- Format the entire table
 formatSpans :: [TableData] -> Text
 formatSpans spans =
-  let hd = padRight 13 "TIME" <> " " <> padRight 15 "SERVICE" <> " " <> padRight 20 "SPAN NAME" <> " " <> padRight 8 "DURATION" <> " STATUS"
+  let hd = padRight 20 "TIME" <> " " <> padRight 15 "SERVICE" <> " " <> padRight 20 "SPAN NAME" <> " " <> padRight 8 "DURATION" <> " STATUS"
       rows = map formatSpanRow spans
-   in "```md\n" <> unlines (hd : rows) <> "```"
+   in "```\n" <> unlines (hd : rows) <> "```"
 
 
 data TableData = TableData
@@ -448,6 +450,7 @@ data TableData = TableData
   , servicename :: Text
   , spanname :: Text
   , duration :: Text
+  , hasErrors :: Bool
   }
   deriving (Generic, Show)
 
@@ -617,13 +620,13 @@ slackInteractionsH interaction = do
     _ -> do
       slackDataM <- dbtToEff $ getSlackDataByTeamId interaction.team_id
       authCtx <- Effectful.Reader.Static.ask @AuthContext
-      void $ liftIO $ forkIO $ do
+      void $ forkIO $ do
         case slackDataM of
           Nothing -> sendSlackFollowupResponse interaction.response_url (AE.object ["text" AE..= "Error: something went wrong"])
           Just slackData -> handleAskCommand interaction slackData authCtx
-      pure $ AE.object ["response_type" AE..= "in_channel", "text" AE..= "apitoolkit is working...", "replace_original" AE..= True, "delete_original" AE..= True]
+      pure $ AE.object ["text" AE..= "apitoolkit is working...", "replace_original" AE..= True, "delete_original" AE..= True]
   where
-    handleAskCommand :: SlackInteraction -> SlackData -> AuthContext -> IO ()
+    handleAskCommand :: SlackInteraction -> SlackData -> AuthContext -> ATBaseCtx ()
     handleAskCommand inter slackData authCtx = do
       now <- Time.currentTime
       let envCfg = authCtx.env
@@ -631,8 +634,7 @@ slackInteractionsH interaction = do
           fullPrompt = systemPrompt <> "\n\nUser query: " <> question
       result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
       case result of
-        Left err ->
-          sendSlackFollowupResponse inter.response_url (AE.object ["text" AE..= "Error: something went wrong"])
+        Left err -> sendSlackFollowupResponse inter.response_url (AE.object ["text" AE..= "Error: something went wrong"])
         Right (query, vizTypeM) -> do
           case vizTypeM of
             Just vizType -> do
@@ -641,18 +643,23 @@ slackInteractionsH interaction = do
                   query_url = authCtx.env.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query))
                   content = getBotContent Slack query query_url opts authCtx.env.chartShotUrl now
 
-              sendSlackFollowupResponse inter.response_url content
+              _ <- sendSlackFollowupResponse inter.response_url content
               pass
             Nothing -> do
-              let content = AE.object ["response_type" AE..= "in_channel", "text" AE..= ("Generated query: " <> query)]
-              sendSlackFollowupResponse inter.response_url content
-
+              let queryAST = parseQueryToAST query
+              case queryAST of
+                Left err -> sendSlackFollowupResponse inter.response_url (AE.object ["text" AE..= "Error: something went wrong"])
+                Right query' -> do
+                  tableAsVecE <- RequestDumps.selectLogTable slackData.projectId query' query Nothing (Nothing, Nothing) [] Nothing Nothing
+                  let content = handleTableResponse Slack tableAsVecE envCfg slackData.projectId query
+                  _ <- sendSlackFollowupResponse inter.response_url content
+                  pass
       pass
 
 
-sendSlackFollowupResponse :: Text -> AE.Value -> IO ()
+sendSlackFollowupResponse :: Text -> AE.Value -> ATBaseCtx ()
 sendSlackFollowupResponse responseUrl content = do
-  _ <- Wreq.postWith (defaults & contentTypeHeader "application/json") (toString responseUrl) content
+  _ <- postWith (defaults & contentTypeHeader "application/json") (toString responseUrl) content
   pass
 
 
