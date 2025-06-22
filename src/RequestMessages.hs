@@ -11,6 +11,7 @@ module RequestMessages (
   sortVector,
   ensureUrlParams,
   processErrors,
+  replaceAllFormats,
 )
 where
 
@@ -41,10 +42,10 @@ import Models.Apis.Fields.Types qualified as Fields (
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
-import NeatInterpolation (text)
 import Relude
 import Relude.Unsafe as Unsafe (read)
-import Text.Regex.TDFA ((=~))
+import Text.RE.Replace (matched, replaceAll)
+import Text.RE.TDFA (RE, re, (*=~), (?=~))
 import Utils (DBField (), toXXHash)
 
 
@@ -207,9 +208,11 @@ valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToField
     valueToFields' v (!prefix, !acc) = (prefix, V.cons (prefix, v) acc)
 
     normalizeKey :: Text -> Text
-    normalizeKey key = case valueToFormatStr key of
-      Just result -> "{" <> result <> "}"
-      Nothing -> key
+    normalizeKey key =
+      let formatted = replaceAllFormats key
+       in if formatted == key
+            then fromMaybe key (valueToFormatStr key)
+            else formatted
 
 
 -- | Merge all fields in the vector of tuples by the first item in the tuple.
@@ -261,15 +264,93 @@ removeBlacklistedFields = V.map \(k, val) ->
 -- "float"
 --
 -- >>> valueToFormat (AET.String "22/02/2022")
--- "text"
+-- "mm/dd/yyyy"
 --
 valueToFormat :: AE.Value -> Text
-valueToFormat (AET.String val) = fromMaybe "text" $ valueToFormatStr val
+valueToFormat (AET.String val) = case valueToFormatStr val of
+  Just fmt -> T.drop 1 $ T.dropEnd 1 fmt  -- Remove the curly braces
+  Nothing -> "text"
 valueToFormat (AET.Number val) = valueToFormatNum val
 valueToFormat (AET.Bool _) = "bool"
 valueToFormat AET.Null = "null"
 valueToFormat (AET.Object _) = "object"
 valueToFormat (AET.Array _) = "array"
+
+
+-- | Common format patterns used by both replaceAllFormats and valueToFormatStr
+-- The order matters: more specific patterns should come before more general ones
+commonFormatPatterns :: [(RE, Text)]
+commonFormatPatterns =
+  [ ([re|\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b|], "{uuid}")
+  , ([re|\b[0-9a-fA-F]{24}\b|], "{uuid}")  -- Keep as uuid for backward compatibility
+  , ([re|\b[a-fA-F0-9]{64}\b|], "{sha256}")
+  , ([re|\b[a-fA-F0-9]{40}\b|], "{sha1}")
+  , ([re|\b[a-fA-F0-9]{32}\b|], "{md5}")
+  , ([re|\b[A-Za-z0-9+/]{20,}={0,2}\b|], "{base64}")
+  , ([re|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b|], "{jwt}")
+  , ([re|\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b|], "{email}")
+  , ([re|\bhttps?://[^\s/$.?#].[^\s]*\b|], "{url}")
+  , ([re|\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.|$)){4}/([0-9]|[12][0-9]|3[0-2])\b|], "{cidr}")
+  , ([re|\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.|$)){4}\b|], "{ip}")  -- Keep as ip for backward compatibility
+  , ([re|\b([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}\b|], "{ipv6}")
+  , ([re|\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b|], "{mac}")
+  , ([re|:\d{1,5}\b|], "{port}")
+  , ([re|\b[1-5][0-9]{2}\b|], "{http_status}")
+  , ([re|[A-Za-z]:\\[^\\/:*?"<>|\r\n]*|], "{file_path}")
+  , ([re|/[A-Za-z0-9._/-]+|], "{file_path}")
+  , ([re|\b(4[0-9]{12}([0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\b|], "{credit_card}")
+  , ([re|\b[A-Z]{2}[0-9]{2}[A-Za-z0-9]{4}[0-9]{7}[A-Za-z0-9]{0,16}\b|], "{iban}")
+  , ([re|\b\d{3}-\d{2}-\d{4}\b|], "{ssn}")
+  , ([re|\b\+?[0-9]{1,3}[-.\s]?(\([0-9]{1,4}\)|[0-9]{1,4})[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}\b|], "{phone}")
+  , ([re|\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s\d{1,2}\s(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s\d{4}\s\d{2}:\d{2}:\d{2}\s[+\-]\d{4}\b|], "{rfc2822}")
+  , ([re|\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+\-]\d{2}:\d{2})?\b|], "{YYYY-MM-DDThh:mm:ss.sTZD}")  -- ISO 8601
+  , ([re|\b\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\b|], "{YYYY-MM-DD HH:MM:SS}")  -- MySQL datetime
+  , ([re|\b\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}\b|], "{MM/DD/YYYY HH:MM:SS}")  -- US datetime
+  , ([re|\b\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2}\b|], "{MM-DD-YYYY HH:MM:SS}")
+  , ([re|\b\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2}\b|], "{DD.MM.YYYY HH:MM:SS}")  -- European datetime
+  , ([re|\b\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\b|], "{YYYY/MM/DD HH:MM:SS}")  -- Japanese datetime
+  , ([re|\b(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)\d\d$|], "{mm/dd/yyyy}")  -- US date
+  , ([re|\b(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])-(19|20)\d\d\b|], "{mm-dd-yyyy}")
+  , ([re|\b(0[1-9]|1[012])\.(0[1-9]|[12][0-9]|3[01])\.(19|20)\d\d\b|], "{mm.dd.yyyy}")
+  , ([re|\b(0[1-9]|[12][0-9]|3[01])[- /.](0[1-9]|1[012])[- /.](19|20)\d\d\b|], "{dd/mm/yyyy}")  -- European date
+  , ([re|\b(0[1-9]|[12][0-9]|3[01])-(0[1-9]|1[012])-(19|20)\d\d\b|], "{dd-mm-yyyy}")
+  , ([re|\b(0[1-9]|[12][0-9]|3[01])\.(0[1-9]|1[012])\.(19|20)\d\d\b|], "{dd.mm.yyyy}")
+  , ([re|\b\d{4}-\d{2}-\d{2}\b|], "{YYYY-MM-DD}")  -- ISO date
+  , ([re|\b\d{4}/\d{2}/\d{2}\b|], "{YYYY/MM/DD}")  -- Japanese date
+  , ([re|\b\d{8}\b|], "{YYYYMMDD}")  -- Compact date
+  , ([re|\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}, \d{4}\b|], "{Mon DD, YYYY}")  -- Long month
+  , ([re|\b\d{1,2}-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{4}\b|], "{DD-Mon-YYYY}")  -- Oracle date
+  , ([re|\b\d{2}:\d{2}:\d{2}\.\d{3}\b|], "{HH:MM:SS.mmm}")  -- Time with milliseconds
+  , ([re|\b\d{2}:\d{2}:\d{2}\b|], "{HH:MM:SS}")  -- Time only
+  , ([re|\b\d{1,2}:\d{2} (AM|PM|am|pm)\b|], "{H:MM AM/PM}")  -- 12-hour time
+  , ([re|\b1[0-9]{12}\b|], "{epoch_ms}")
+  , ([re|\b1[0-9]{9}\b|], "{epoch_s}")
+  , ([re|\b\d+(:\d{2}){1,2}(\.\d+)?\b|], "{duration}")
+  , ([re|^\s*at\s[^\s]+\([^\)]+:\d+\)\b|], "{stack_trace}")
+  , ([re|\bpid[:=]?\d+\b|], "{pid}")
+  , ([re|\btid[:=]?\d+\b|], "{tid}")
+  , ([re|\bThread-\d+\b|], "{thread}")
+  , ([re|\bsession_[A-Za-z0-9\-]{8,}\b|], "{session_id}")
+  , ([re|\b[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}\b|], "{hostname}")
+  , ([re|\b0x[0-9A-Fa-f]+\b|], "{hex}")
+  , ([re|\b[0-9]+\b|], "{integer}")
+  , ([re|\b[+-]?(\d+(\.\d*)?|\.\d+)\b|], "{float}")
+  ]
+
+
+-- | Replaces all format patterns in the input text with their format names
+-- This function applies all regex patterns and replaces matches until no more replacements are made
+--
+-- >>> replaceAllFormats "User 123 accessed endpoint c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd"
+-- "User {integer} accessed endpoint {uuid}"
+--
+-- >>> replaceAllFormats "Error at 192.168.0.1:8080 with status 404"
+-- "Error at {ipv4}{port} with status {http_status}"
+replaceAllFormats :: Text -> Text
+replaceAllFormats input = foldl' applyReplacement input commonFormatPatterns
+  where
+    applyReplacement txt (regex, replacement) =
+      replaceAll replacement (txt *=~ regex)
 
 
 -- valueToFormatStr will take a string and try to find a format which matches that string best.
@@ -285,88 +366,31 @@ valueToFormat (AET.Array _) = "array"
 -- Nothing
 --
 -- >>> valueToFormatStr "222"
--- Just "integer"
+-- Just "{integer}"
 --
 -- >>> valueToFormatStr "c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd"
--- Just "uuid"
+-- Just "{uuid}"
 --
 -- >>> valueToFormatStr "2023-10-14T10:29:38.64522Z"
--- Just "YYYY-MM-DDThh:mm:ss.sTZD"
+-- Just "{YYYY-MM-DDThh:mm:ss.sTZD}"
 --
 valueToFormatStr :: Text -> Maybe Text
-valueToFormatStr val
-  | val =~ ([text|^[0-9]+$|] :: Text) =
-      Just "integer" -- e.g. "12345"
-  | val =~ ([text|^[+-]?(\d+(\.\d*)?|\.\d+)$|] :: Text) =
-      Just "float" -- e.g. "3.1415"
-  | val =~ ([text|^0x[0-9A-Fa-f]+$|] :: Text) =
-      Just "hex_integer" -- e.g. "0xDEADBEEF"
-  | val =~ ([text|\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b|] :: Text) =
-      Just "uuid" -- e.g. "c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd"
-  | val =~ ([text|\b[0-9a-fA-F]{24}\b|] :: Text) =
-      Just "mongo_oid" -- e.g. "507f1f77bcf86cd799439011"
-  | val =~ ([text|\b[a-fA-F0-9]{32}\b|] :: Text) =
-      Just "md5" -- e.g. "d41d8cd98f00b204e9800998ecf8427e"
-  | val =~ ([text|\b[a-fA-F0-9]{40}\b|] :: Text) =
-      Just "sha1" -- e.g. "da39a3ee5e6b4b0d3255bfef95601890afd80709"
-  | val =~ ([text|\b[a-fA-F0-9]{64}\b|] :: Text) =
-      Just "sha256" -- e.g. "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  | val =~ ([text|(?<=\s|^)[A-Za-z0-9+/]{20,}={0,2}(?=\s|$)|] :: Text) =
-      Just "base64" -- e.g. "SGVsbG8gV29ybGQh"
-  | val =~ ([text|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b|] :: Text) =
-      Just "jwt" -- e.g. "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-  | val =~ ([text|\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b|] :: Text) =
-      Just "email" -- e.g. "foo.bar@example.com"
-  | val =~ ([text|\bhttps?://[^\s/$.?#].[^\s]*\b|] :: Text) =
-      Just "url" -- e.g. "https://example.com/path?query=1"
-  | val =~ ([text|\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}\b|] :: Text) =
-      Just "hostname" -- e.g. "my-server.local"
-  | val =~ ([text|\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.|$)){4}\b|] :: Text) =
-      Just "ipv4" -- e.g. "192.168.0.1"
-  | val =~ ([text|\b([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}\b|] :: Text) =
-      Just "ipv6" -- e.g. "fe80::1ff:fe23:4567:890a"
-  | val =~ ([text|\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.|$)){4}/([0-9]|[12][0-9]|3[0-2])\b|] :: Text) =
-      Just "cidr4" -- e.g. "10.0.0.0/24"
-  | val =~ ([text|\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b|] :: Text) =
-      Just "mac" -- e.g. "01:23:45:67:89:ab"
-  | val =~ ([text|:\d{1,5}\b|] :: Text) =
-      Just "port" -- e.g. ":8080"
-  | val =~ ([text|\b[1-5][0-9]{2}\b|] :: Text) =
-      Just "http_status" -- e.g. "404"
-  | val =~ ([text|(?:/[A-Za-z0-9._-]+)+/?|] :: Text) =
-      Just "file_path_unix" -- e.g. "/usr/local/bin/script.sh"
-  | val =~ ([text|[A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*|] :: Text) =
-      Just "file_path_windows" -- e.g. "C:\\Program Files\\App\\app.exe"
-  | val =~ ([text|\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\b|] :: Text) =
-      Just "credit_card" -- e.g. "4111111111111111"
-  | val =~ ([text|\b[A-Z]{2}[0-9]{2}[A-Za-z0-9]{4}[0-9]{7}(?:[A-Za-z0-9]?){0,16}\b|] :: Text) =
-      Just "iban" -- e.g. "DE89370400440532013000"
-  | val =~ ([text|\b\d{3}-\d{2}-\d{4}\b|] :: Text) =
-      Just "ssn_us" -- e.g. "123-45-6789"
-  | val =~ ([text|\b\+?[0-9]{1,3}[-.\s]?(\([0-9]{1,4}\)|[0-9]{1,4})[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}\b|] :: Text) =
-      Just "phone" -- e.g. "+1-800-555-1234"
-  | val =~ ([text|\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s\d{1,2}\s(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s\d{4}\s\d{2}:\d{2}:\d{2}\s[+\-]\d{4}\b|] :: Text) =
-      Just "rfc2822_date" -- e.g. "Fri, 21 Nov 1997 09:55:06 -0600"
-  | val =~ ([text|\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+\-]\d{2}:\d{2})?\b|] :: Text) =
-      Just "iso8601" -- e.g. "2023-10-14T10:29:38.64522Z"
-  | val =~ ([text|\b1[0-9]{12}\b|] :: Text) =
-      Just "epoch_ms" -- e.g. "1621255805123"
-  | val =~ ([text|\b1[0-9]{9}\b|] :: Text) =
-      Just "epoch_s" -- e.g. "1621255805"
-  | val =~ ([text|\b\d+(:\d{2}){1,2}(?:\.\d+)?\b|] :: Text) =
-      Just "duration" -- e.g. "01:02:03.456"
-  | val =~ ([text|^\s*at\s[^\s]+\([^\)]+:\d+\)\b|] :: Text) =
-      Just "java_stack" -- e.g. "at com.foo.Bar.method(Bar.java:123)"
-  | val =~ ([text|\bpid[:=]?\d+\b|] :: Text) =
-      Just "pid" -- e.g. "pid=1234"
-  | val =~ ([text|\btid[:=]?\d+\b|] :: Text) =
-      Just "tid" -- e.g. "tid:5678"
-  | val =~ ([text|\bThread-\d+\b|] :: Text) =
-      Just "thread" -- e.g. "Thread-1"
-  | val =~ ([text|\bsession_[A-Za-z0-9\-]{8,}\b|] :: Text) =
-      Just "session_id" -- e.g. "session_abcdef12"
-  | otherwise =
-      Nothing
+valueToFormatStr val = checkFormats formatChecks
+  where
+    checkFormats :: [(RE, Text)] -> Maybe Text
+    checkFormats [] = Nothing
+    checkFormats ((regex, format) : rest) =
+      if matched (val ?=~ regex)
+        then Just format
+        else checkFormats rest
+
+    -- Add patterns that are specific to valueToFormatStr (exact match patterns for path params)
+    formatChecks :: [(RE, Text)]
+    formatChecks = 
+      [ ([re|^[0-9]+$|], "{integer}")
+      , ([re|^[+-]?(\d+(\.\d*)?|\.\d+)$|], "{float}")
+      , ([re|^0x[0-9A-Fa-f]+$|], "{hex}")
+      ] ++ commonFormatPatterns
 
 
 ensureUrlParams :: Text -> (Text, AE.Value, Bool)
@@ -385,10 +409,12 @@ parseUrlSegments [] parsed = parsed
 parseUrlSegments (x : xs) (segs, vals) = case valueToFormatStr x of
   Nothing -> parseUrlSegments xs (segs ++ [x], vals)
   Just v
-    | v == "uuid" -> parseUrlSegments xs (addNewSegment segs "uuid", vals ++ [x])
-    | v == "mm/dd/yy" || v == "mm-dd-yy" || v == "mm.dd.yyy" -> parseUrlSegments xs (addNewSegment segs "date", vals ++ [x])
-    | v == "ip" -> parseUrlSegments xs (addNewSegment segs "ip_address", vals ++ [x])
-    | otherwise -> parseUrlSegments xs (addNewSegment segs "number", vals ++ [x])
+    | v == "{uuid}" -> parseUrlSegments xs (addNewSegment segs "uuid", vals ++ [x])
+    | v `elem` ["{mm/dd/yyyy}", "{mm-dd-yyyy}", "{mm.dd.yyyy}", "{dd/mm/yyyy}", "{dd-mm-yyyy}", "{dd.mm.yyyy}", 
+                "{YYYY-MM-DD}", "{YYYY/MM/DD}", "{YYYYMMDD}", "{YYYY-MM-DDThh:mm:ss.sTZD}"] -> parseUrlSegments xs (addNewSegment segs "date", vals ++ [x])
+    | v `elem` ["{ip}", "{ipv6}"] -> parseUrlSegments xs (addNewSegment segs "ip_address", vals ++ [x])
+    | v `elem` ["{integer}", "{float}", "{hex}"] -> parseUrlSegments xs (addNewSegment segs "number", vals ++ [x])
+    | otherwise -> parseUrlSegments xs (addNewSegment segs "param", vals ++ [x])
 
 
 addNewSegment :: [Text] -> Text -> [Text]

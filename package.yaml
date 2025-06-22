@@ -200,6 +200,7 @@ library:
     - postgresql-migration
     - postgresql-simple
     - regex-tdfa
+    - regex
     - resource-pool
     - resourcet
     - scientific

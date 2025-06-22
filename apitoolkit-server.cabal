@@ -315,6 +315,7 @@ library
     , pretty-simple
     , proto-lens
     , proto-lens-runtime
+    , regex
     , regex-tdfa
     , relude >=1.2.0.0
     , resource-pool
