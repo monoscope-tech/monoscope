@@ -19,9 +19,10 @@ cypress:
 
 live-reload:
 	# ghcid --command 'stack ghci apitoolkit-server --ghc-options=-w --with-compiler=ghc-9.8.2' --test ':run Start.startApp' --warnings
-	# ghcid --command 'stack ghci apitoolkit-server --ghc-options="-w -j4 +RTS -A128m -n2m -RTS"' --test ':run Start.startApp' --warnings
 	ghcid --command 'cabal repl --ghc-options="-w -j4 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=ghc-9.10.2' --test ':run Start.startApp' --warnings
 
+live-test-reload:
+	ghcid --command 'cabal repl apitoolkit-server:apitoolkit-server-test --ghc-options="-w -j4" --with-compiler=ghc-9.10.2' --test ':run Main.main' --warnings
 
 hot-reload:
 	livereload -f reload.trigger static/public/ & \
@@ -35,9 +36,6 @@ watch:
 	# ghciwatch --test-ghci Start.startApp --error-file errors.err  --before-startup-shell hpack --clear  --watch
 	ghciwatch --error-file errors.err  --before-startup-shell hpack --clear  --watch
 
-
-live-test-reload:
-	ghcid --command 'stack ghci apitoolkit-server:apitoolkit-server-test --ghc-options=-w' --test ':run Main.main' --warnings
 
 live-test-reload-stack:
 	stack test --ghc-options=-w --file-watch
