@@ -34,7 +34,6 @@ import Data.Effectful.Wreq (
   postWith,
   responseBody,
  )
-import Data.List.Extra (nubOrd)
 import Data.Time qualified as Time
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Effectful (Eff, type (:>))
@@ -43,14 +42,13 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Pages.Log (curateCols)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (parseQueryToAST)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400, err401)
 import System.Config (AuthContext (env, pool), EnvConfig (..))
-import System.Types (ATBackgroundCtx, ATBaseCtx)
+import System.Types (ATBaseCtx)
 import Utils (callOpenAIAPI, faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey, systemPrompt)
 import Web.FormUrlEncoded (FromForm)
 

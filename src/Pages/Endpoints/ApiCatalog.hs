@@ -10,11 +10,12 @@ import Lucid
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Pages.BodyWrapper (BWConfig (currProject, pageTitle, sessM), PageCtx (..), navTabs)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask, asks)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
+import Utils (checkFreeTierExceeded)
 
 
 apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (ItemsList.ItemsPage HostEventsVM)))
@@ -24,6 +25,7 @@ apiCatalogH pid sortM timeFilter requestTypeM = do
   let requestType = fromMaybe "Incoming" requestTypeM
 
   hostsAndEvents <- dbtToEff $ Endpoints.dependenciesAndEventsCount pid requestType (fromMaybe "events" sortM)
+  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
 
   currTime <- Time.currentTime
 
@@ -63,6 +65,7 @@ apiCatalogH pid sortM timeFilter requestTypeM = do
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "API Catalog"
+          , freeTierExceeded = freeTierExceeded
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline p-0  bg-fillWeak  text-textWeak border items-center border"] do
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Incoming", role_ "tab", class_ $ "tab " <> if requestType == "Incoming" then "tab-active text-textStrong border border-strokeStrong" else ""] "Incoming"
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Outgoing", role_ "tab", class_ $ "tab " <> if requestType == "Outgoing" then "tab-active text-textStrong border border-strokeStrong" else ""] "Outgoing"

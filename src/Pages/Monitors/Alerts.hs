@@ -38,7 +38,7 @@ import Pkg.THUtils qualified as THUtils
 import Relude
 import System.Types
 import Text.Slugify
-import Utils
+import Utils (checkFreeTierExceeded, faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -691,11 +691,14 @@ inputRadio_ name lbel = fieldset_ [class_ "fieldset"] $ label_ [class_ "label cu
 monitorCreatePostH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx MonitorCreate))
 monitorCreatePostH pid monitorType = do
   (sess, project) <- Sessions.sessionAndProject pid
+  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
+  
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Create Monitor"
+          , freeTierExceeded = freeTierExceeded
           , pageActions = Just $ Components.timepicker_ (Just "log_explorer_form") Nothing
           }
   case monitorType of

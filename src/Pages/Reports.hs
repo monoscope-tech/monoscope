@@ -37,11 +37,11 @@ import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Text.Printf (printf)
-import Utils (faSprite_)
+import Utils (checkFreeTierExceeded, faSprite_)
 
 
 data PerformanceReport = PerformanceReport
@@ -169,11 +169,13 @@ singleReportGetH :: Projects.ProjectId -> Reports.ReportId -> Maybe Text -> ATAu
 singleReportGetH pid rid hxRequestM = do
   (sess, project) <- Sessions.sessionAndProject pid
   report <- dbtToEff $ Reports.getReportById rid
+  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Report"
+          , freeTierExceeded = freeTierExceeded
           }
   case hxRequestM of
     Just _ -> addRespHeaders $ ReportsGetSingle' (pid, report)
@@ -187,6 +189,7 @@ reportsGetH pid page hxRequest hxBoosted = do
   let pg = fromMaybe 0 (readMaybe p :: Maybe Int)
 
   reports <- dbtToEff $ Reports.reportHistoryByProject pid pg
+  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
   let nextUrl = "/p/" <> show pid.unProjectId <> "/reports?page=" <> show (pg + 1)
   case (hxRequest, hxBoosted) of
     (Just "true", Nothing) -> addRespHeaders $ ReportsGetList pid reports nextUrl
@@ -196,6 +199,7 @@ reportsGetH pid page hxRequest hxBoosted = do
               { sessM = Just sess
               , currProject = Just project
               , pageTitle = "Reports"
+              , freeTierExceeded = freeTierExceeded
               }
       addRespHeaders $ ReportsGetMain $ PageCtx bwconf (pid, reports, nextUrl, project.dailyNotif, project.weeklyNotif)
 

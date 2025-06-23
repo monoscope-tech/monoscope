@@ -41,6 +41,7 @@ module Utils (
   getOtelLangVersion,
   lookupMapInt,
   freeTierLimitExceededBanner,
+  checkFreeTierExceeded,
   isDemoAndNotSudo,
   escapedQueryPartial,
   convertToDHMS,
@@ -82,6 +83,7 @@ import Langchain.LLM.OpenAI
 import Lucid
 import Lucid.Hyperscript (__)
 import Lucid.Svg qualified as Svg
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
@@ -480,6 +482,13 @@ freeTierLimitExceededBanner pid =
     strong_ "Daily cap reached."
     " Your free-tier events have run out; unlock more capacity. "
     a_ [class_ "underline underline-offset-2 link", href_ $ "/p/" <> pid <> "/manage_billing"] "See pricing"
+
+
+checkFreeTierExceeded :: Projects.ProjectId -> Text -> DBT IO Bool
+checkFreeTierExceeded pid paymentPlan =
+  if paymentPlan == "Free"
+    then (> fromIntegral freeTierDailyMaxEvents) <$> RequestDumps.getLast24hTotalRequest pid
+    else pure False
 
 
 serviceColors :: V.Vector Text

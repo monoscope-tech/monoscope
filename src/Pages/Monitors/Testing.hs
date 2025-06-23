@@ -37,7 +37,7 @@ import PyF qualified
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils
+import Utils (checkFreeTierExceeded, faSprite_, listToIndexHashMap, lookupVecTextByKey)
 
 
 testingGetH
@@ -55,6 +55,7 @@ testingGetH pid filterTM timeFilter = do
   currTime <- Time.currentTime
   colls <- dbtToEff $ Testing.getCollections pid tabStatus
   inactiveColsCount <- dbtToEff $ Testing.inactiveCollectionsCount pid
+  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
   let listCfg =
         ItemsList.ItemsListCfg
           { projectId = pid
@@ -87,7 +88,8 @@ testingGetH pid filterTM timeFilter = do
           , prePageTitle = Just "Monitors & Alerts"
           , menuItem = Just "Monitors & Alerts"
           , docsLink = Just "https://apitoolkit.io/docs/monitors/multistep-tests/"
-          , pageActions = Just $ a_ [href_ $ "/p/" <> pid.toText <> "/monitors/collection", class_ "btn btn-sm blue-outline-btn space-x-2"] $ Utils.faSprite_ "plus" "regular" "h-4" >> "new tests"
+          , freeTierExceeded = freeTierExceeded
+          , pageActions = Just $ a_ [href_ $ "/p/" <> pid.toText <> "/monitors/collection", class_ "btn btn-sm blue-outline-btn space-x-2"] $ faSprite_ "plus" "regular" "h-4" >> "new tests"
           , navTabs =
               Just
                 $ toHtml

@@ -47,7 +47,7 @@ import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import System.Types
 import Text.Slugify (slugify)
-import Utils (faSprite_)
+import Utils (checkFreeTierExceeded, faSprite_)
 import Utils qualified
 import Web.FormUrlEncoded (FromForm)
 
@@ -464,6 +464,8 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
 
   dash'' <- forOf (#widgets . traverse) dash' processWidgetWithDashboardId
 
+  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
+
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
@@ -471,6 +473,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
           , prePageTitle = Just "Dashboards"
           , pageTitle = if dashVM.title == "" then "Untitled" else dashVM.title
           , pageTitleModalId = Just "pageTitleModalId"
+          , freeTierExceeded = freeTierExceeded
           , pageActions = Just $ div_ [class_ "inline-flex gap-3 items-center leading-[0]"] do
               TimePicker.timepicker_ Nothing currentRange
               TimePicker.refreshButton_
@@ -812,11 +815,14 @@ dashboardsGetH pid embeddedM = do
     then -- For embedded mode, use a minimal BWConfig that will still work with ToHtml instance
       addRespHeaders $ PageCtx def $ DashboardsGet{dashboards, projectId = pid, embedded = True}
     else do
+      freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
+      
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
               , currProject = Just project
               , pageTitle = "Dashboards"
+              , freeTierExceeded = freeTierExceeded
               , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "leading-none rounded-xl shadow-sm p-3 cursor-pointer bg-fillBrand-strong text-white"] "New Dashboard"
               }
       addRespHeaders $ PageCtx bwconf $ DashboardsGet{dashboards, projectId = pid, embedded = False}

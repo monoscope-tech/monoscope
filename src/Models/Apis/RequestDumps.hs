@@ -12,6 +12,7 @@ module Models.Apis.RequestDumps (
   getRequestDumpForReports,
   getRequestDumpsForPreviousReportPeriod,
   getRequestType,
+  getLast24hTotalRequest,
   getLastSevenDaysTotalRequest,
   parseSDKType,
 )
@@ -470,11 +471,14 @@ queryCount :: DB :> es => Text -> Eff es (Maybe (Only Int))
 queryCount q = dbtToEff $ DBT.queryOne_ (Query $ encodeUtf8 q)
 
 
+getLast24hTotalRequest :: Projects.ProjectId -> DBT IO Int
+getLast24hTotalRequest = getRequestCountForInterval "1 day"
+
 getLastSevenDaysTotalRequest :: Projects.ProjectId -> DBT IO Int
-getLastSevenDaysTotalRequest pid = do
-  result <- queryOne q pid
-  case fromMaybe (Only 0) result of
-    (Only c) -> return c
+getLastSevenDaysTotalRequest = getRequestCountForInterval "7 days"
+
+getRequestCountForInterval :: Text -> Projects.ProjectId -> DBT IO Int
+getRequestCountForInterval interval pid = do
+  fromMaybe 0 . fmap (\(Only c) -> c) <$> queryOne q (pid, interval)
   where
-    q =
-      [sql| SELECT count(*) FROM otel_logs_and_spans WHERE project_id=? AND timestamp > NOW() - interval '1' day;|]
+    q = [sql| SELECT count(*) FROM otel_logs_and_spans WHERE project_id=? AND timestamp > NOW() - interval ?;|]

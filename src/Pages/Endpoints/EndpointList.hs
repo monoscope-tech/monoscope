@@ -20,6 +20,7 @@ import Pkg.Components.Widget qualified as Widget
 import PyF qualified
 import Relude hiding (ask, asks)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
+import Utils (checkFreeTierExceeded)
 import Utils qualified
 
 
@@ -49,6 +50,8 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
   let page = fromMaybe 0 $ readMaybe (toString $ fromMaybe "" pageM)
   endpointStats <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid ackd archived (Just host) sortM searchM page (fromMaybe "" requestTypeM)
   inboxCount <- dbtToEff $ Endpoints.countEndpointInbox pid host (fromMaybe "Incoming" requestTypeM)
+  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
+  
   let requestType = fromMaybe "Incoming" requestTypeM
   let currentURL = [PyF.fmt|/p/{pid.toText}/endpoints?layout={fromMaybe "false" layoutM}&filter={fromMaybe "" filterTM}&sort={fromMaybe "event" sortM}&request_type={requestType}&host={host}|]
   let bwconf =
@@ -57,6 +60,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
           , currProject = Just project
           , prePageTitle = Just "API Catalog"
           , pageTitle = "Endpoints for " <> host
+          , freeTierExceeded = freeTierExceeded
           , pageActions =
               Just
                 $ a_ [class_ "btn btn-sm btn-primary space-x-2", href_ $ "/p/" <> pid.toText <> "/documentation?host=" <> host] do

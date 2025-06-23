@@ -3,6 +3,7 @@ module Pages.Monitors.MetricMonitors (monitorCreateGetH, MonitorCreate, configur
 import Data.Default
 import Data.List qualified as L
 import Data.Vector qualified as V
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
 import Lucid.Htmx
 import Models.Apis.Monitors qualified as Monitors
@@ -19,7 +20,7 @@ import Pkg.THUtils qualified as THUtils
 import Relude
 import System.Types
 import Text.Slugify
-import Utils
+import Utils (checkFreeTierExceeded, faSprite_)
 
 
 data MonitorCreate
@@ -39,12 +40,15 @@ data MonitorType = MonitorType
 monitorCreateGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx MonitorCreate))
 monitorCreateGetH pid monitorType = do
   (sess, project) <- Sessions.sessionAndProject pid
+  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
+  
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Create Monitor"
           , prePageTitle = Just "Monitors & Alerts"
+          , freeTierExceeded = freeTierExceeded
           , pageActions = Just $ TimePicker.timepicker_ (Just "log_explorer_form") Nothing
           }
   case monitorType of

@@ -19,7 +19,7 @@ import Pkg.Components.Modals qualified as Components
 import Pkg.THUtils
 import PyF
 import Relude
-import Utils (faSprite_)
+import Utils (faSprite_, freeTierLimitExceededBanner)
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
@@ -62,6 +62,7 @@ data BWConfig = BWConfig
   , pageActions :: Maybe (Html ())
   , docsLink :: Maybe Text
   , isSettingsPage :: Bool
+  , freeTierExceeded :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -286,6 +287,7 @@ bodyWrapper bcfg child = do
                     loginBanner
                   unless bcfg.isSettingsPage $ navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
                   section_ [class_ "overflow-y-hidden h-full flex-1"] do
+                    when bcfg.freeTierExceeded $ maybe pass (\p -> freeTierLimitExceededBanner p.id.toText) bcfg.currProject
                     if bcfg.isSettingsPage
                       then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
                       else child

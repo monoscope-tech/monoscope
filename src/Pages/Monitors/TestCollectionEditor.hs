@@ -48,7 +48,7 @@ import Pkg.Components.ItemsList qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
-import Utils (faSprite_, getStatusColor, insertIfNotExist, jsonValueToHtmlTree)
+import Utils (checkFreeTierExceeded, faSprite_, getStatusColor, insertIfNotExist, jsonValueToHtmlTree)
 
 
 data CollectionVariableForm = CollectionVariableForm
@@ -200,6 +200,8 @@ pageTabs url ov = do
 collectionGetH :: Projects.ProjectId -> Maybe Testing.CollectionId -> ATAuthCtx (RespHeaders CollectionGet)
 collectionGetH pid colIdM = do
   (sess, project) <- Sessions.sessionAndProject pid
+  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
+  
   let editorUrl = "/p/" <> pid.toText <> "/monitors/collection/" <> maybe "" (\c -> "?col_id=" <> c.toText) colIdM
   let overviewUrl = (\c -> Just $ "/p/" <> pid.toText <> "/monitors/" <> c.toText <> "/overview") =<< colIdM
   let bwconf =
@@ -209,6 +211,7 @@ collectionGetH pid colIdM = do
           , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/"
           , pageTitle = "Testing"
           , prePageTitle = Just "Monitors & Alerts"
+          , freeTierExceeded = freeTierExceeded
           , navTabs = Just $ pageTabs editorUrl overviewUrl
           , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
               button_ [class_ "h-8 rounded-lg btn-primary text-sm text-white px-3 flex items-center", onclick_ "htmx.trigger('#stepsForm','submit')"] do

@@ -65,7 +65,7 @@ import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (pool))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (escapedQueryPartial, faSprite_)
+import Utils (checkFreeTierExceeded, escapedQueryPartial, faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -178,6 +178,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
 
   let pageInt = maybe 0 (Unsafe.read . toString) pageM
   issues <- dbtToEff $ Anomalies.selectIssues pid endpointM (Just ackd) (Just archived) sortM (Just fLimit) (pageInt * fLimit)
+  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
   currTime <- liftIO getCurrentTime
   let currentURL = mconcat ["/p/", pid.toText, "/anomalies?layout=", fromMaybe "false" layoutM, "&ackd=", show ackd, "&archived=", show archived]
       nextFetchUrl = case layoutM of
@@ -213,6 +214,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
           , currProject = Just project
           , pageTitle = "Issues: Changes, Alerts & Errors"
           , menuItem = Just "Changes & Errors"
+          , freeTierExceeded = freeTierExceeded
           , navTabs =
               Just
                 $ toHtml
@@ -376,11 +378,14 @@ anomalyDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (Res
 anomalyDetailsGetH pid targetHash hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   issueM <- dbtToEff $ Anomalies.selectIssueByHash pid targetHash
+  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
+  
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Anomaly Details"
+          , freeTierExceeded = freeTierExceeded
           }
   case issueM of
     Nothing -> addRespHeaders $ AnomalyDetailsNoFound $ PageCtx bwconf ()

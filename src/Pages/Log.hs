@@ -45,7 +45,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (callOpenAIAPI, faSprite_, freeTierLimitExceededBanner, getServiceColors, listToIndexHashMap, lookupVecTextByKey, onpointerdown_, prettyPrintCount, systemPrompt)
+import Utils (callOpenAIAPI, checkFreeTierExceeded, faSprite_, getServiceColors, listToIndexHashMap, lookupVecTextByKey, onpointerdown_, prettyPrintCount, systemPrompt)
 
 
 -- $setup
@@ -408,11 +408,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   -- Get facet summary for the time range specified
   facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
 
-  freeTierExceeded <-
-    dbtToEff
-      $ if project.paymentPlan == "Free"
-        then (> 1000) <$> RequestDumps.getLastSevenDaysTotalRequest pid
-        else pure False
+  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
 
   let bwconf =
         (def :: BWConfig)
@@ -420,6 +416,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           , currProject = Just project
           , pageTitle = "Explorer"
           , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/api-log-explorer/"
+          , freeTierExceeded = freeTierExceeded
           , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
               label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs"] do
                 input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
@@ -613,7 +610,6 @@ apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
   section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-hidden pb-2 group/pg", id_ "apiLogsPage"] do
     template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
-    when page.exceededFreeTier $ freeTierLimitExceededBanner page.pid.toText
     div_
       [ style_ "z-index:26"
       , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
@@ -722,7 +718,7 @@ apiLogsPage page = do
             input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked)"]
             script_ "document.getElementById('toggle-filters').checked = localStorage.getItem('toggle-filter-checked') === 'true';"
           span_ [class_ "text-strokeWeak "] "|"
-          div_ [class_ ""] $ span_ [class_ "text-textStrong"] (toHtml $ prettyPrintCount page.resultCount) >> span_ [class_ "text-textStrong"] (toHtml " rows found")
+          div_ [class_ ""] $ span_ [class_ "text-textStrong"] (toHtml $ prettyPrintCount page.resultCount) >> span_ [class_ "text-textStrong"] (toHtml " rows")
         div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-white transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
           whenJust page.showTrace \trId -> do
             let url = "/p/" <> page.pid.toText <> "/traces/" <> trId
