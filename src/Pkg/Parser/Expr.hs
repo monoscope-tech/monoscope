@@ -18,6 +18,13 @@ import Text.Megaparsec.Char (alphaNumChar, char, space, space1, string)
 import Text.Megaparsec.Char.Lexer qualified as L
 
 
+-- $setup
+-- >>> import Text.Megaparsec (parse, parseTest)
+-- >>> import Data.Text.Display (display)
+-- >>> :set -XOverloadedStrings
+-- >>> :set -XQuasiQuotes
+
+
 -- Values is an enum of the list of supported value types.
 -- Num is a text  that represents a float as float covers ints in a lot of cases. But its basically the json num type.
 -- Duration stores original unit and nanoseconds value for precise time comparisons

@@ -208,7 +208,7 @@ data CreateProject = CreateProject
 
 -- FIXME: We currently return an object with empty vectors when nothing was found.
 projectCacheById :: ProjectId -> DBT IO (Maybe ProjectCache)
-projectCacheById pid = queryOne q (pid, pid, pid, pid, pid)
+projectCacheById pid = queryOne q (pid, pid, pid, pid)
   where
     q =
       [sql| select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts,

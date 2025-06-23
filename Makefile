@@ -49,6 +49,9 @@ test:
 test-unit:
 	stack test apitoolkit-server:unit-tests --ghc-options=-w
 
+test-doctests:
+	stack test apitoolkit-server:doctests --ghc-options=-w --test-arguments --seed=2
+
 live-test-unit:
 	stack test apitoolkit-server:unit-tests --ghc-options=-w --file-watch
 

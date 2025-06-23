@@ -51,9 +51,12 @@ import Utils (DBField (), toXXHash)
 
 -- $setup
 -- >>> import Relude
--- >>> import Data.Vector qualified as Vector
+-- >>> import Data.Vector qualified as V
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import Data.Aeson
+-- >>> import Data.Aeson qualified as AE
+-- >>> :set -XOverloadedStrings
+-- >>> :set -XQuasiQuotes
 
 
 -- | RequestMessage represents a message for a single request pulled from pubsub.
@@ -291,7 +294,7 @@ commonFormatPatterns =
   , ([re|\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b|], "{email}")
   , ([re|\bhttps?://[^\s/$.?#].[^\s]*\b|], "{url}")
   , ([re|\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.|$)){4}/([0-9]|[12][0-9]|3[0-2])\b|], "{cidr}")
-  , ([re|\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.|$)){4}\b|], "{ip}")  -- Keep as ip for backward compatibility
+  , ([re|\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.|$)){4}\b|], "{ipv4}")  -- Changed to ipv4 for consistency
   , ([re|\b([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}\b|], "{ipv6}")
   , ([re|\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b|], "{mac}")
   , ([re|:\d{1,5}\b|], "{port}")
@@ -333,13 +336,19 @@ commonFormatPatterns =
   , ([re|\bsession_[A-Za-z0-9\-]{8,}\b|], "{session_id}")
   , ([re|\b[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}\b|], "{hostname}")
   , ([re|\b0x[0-9A-Fa-f]+\b|], "{hex}")
-  , ([re|\b[0-9]+\b|], "{integer}")
-  , ([re|\b[+-]?(\d+(\.\d*)?|\.\d+)\b|], "{float}")
+  , ([re|\b[+-]?\d+\.\d+\b|], "{float}")  -- More specific float pattern
+  , ([re|[0-9]+|], "{integer}")
   ]
 
 
 -- | Replaces all format patterns in the input text with their format names
 -- This function applies all regex patterns and replaces matches until no more replacements are made
+--
+-- >>> replaceAllFormats "123"
+-- "{integer}"
+--
+-- >>> replaceAllFormats "c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd"
+-- "{uuid}"
 --
 -- >>> replaceAllFormats "User 123 accessed endpoint c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd"
 -- "User {integer} accessed endpoint {uuid}"

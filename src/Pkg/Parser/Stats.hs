@@ -23,6 +23,11 @@ import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, space, string)
 
 
+-- $setup
+-- >>> import Text.Megaparsec (parse)
+-- >>> :set -XOverloadedStrings
+
+
 -- Default bin size for auto binning if not otherwise specified
 defaultBinSize :: Text
 defaultBinSize = "5 minutes"
