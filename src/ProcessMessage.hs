@@ -22,12 +22,9 @@ import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful
-import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
-import Effectful.Reader.Static qualified as Reader
-import Effectful.Time qualified as Time
 import Log qualified
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields
@@ -41,7 +38,6 @@ import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
 import RequestMessages (fieldsToFieldDTO, sortVector, valueToFields, redactJSON, ensureUrlParams)
-import System.Config qualified as Config
 import Utils (b64ToJson, eitherStrToText, nestedJsonFromDotNotation, toXXHash)
 
 
@@ -106,7 +102,7 @@ import Utils (b64ToJson, eitherStrToText, nestedJsonFromDotNotation, toXXHash)
  --}
 processMessages
   -- :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
-  :: (DB :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" DB :> es, Log :> es, Reader.Reader Config.AuthContext :> es, Time.Time :> es, UUIDEff :> es)
+  :: (DB :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es)
   => [(Text, ByteString)]
   -> HashMap Text Text
   -> Eff es [Text]
@@ -150,11 +146,11 @@ jsonToMap _ = Nothing
 
 -- | Process a single span to extract entities
 processSpanToEntities :: Projects.ProjectCache -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, Maybe Shapes.Shape, V.Vector Fields.Field, V.Vector Formats.Format, V.Vector Text)
-processSpanToEntities pjc span dumpId =
-  let !projectId = Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText span.project_id
+processSpanToEntities pjc otelSpan dumpId =
+  let !projectId = Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText otelSpan.project_id
 
       -- Extract HTTP attributes from nested JSON structure
-      !attributes = fromMaybe mempty span.attributes
+      !attributes = fromMaybe mempty otelSpan.attributes
       !attrValue = AE.Object $ AEKM.fromMapText attributes
 
       -- Navigate nested JSON to extract values using lens
@@ -190,7 +186,7 @@ processSpanToEntities pjc span dumpId =
       !redacted = redactJSON redactFieldsList
 
       -- Extract request/response bodies from span body
-      !bodyValue = fromMaybe AE.Null span.body
+      !bodyValue = fromMaybe AE.Null otelSpan.body
       !requestBody = redacted $ fromMaybe AE.Null $ bodyValue ^? key "request_body"
       !responseBody = redacted $ fromMaybe AE.Null $ bodyValue ^? key "response_body"
 
@@ -227,7 +223,7 @@ processSpanToEntities pjc span dumpId =
       !fieldHashes = sortVector $ V.map (.hash) fields
 
       -- Determine if request is outgoing based on span kind
-      !outgoing = span.kind == Just "client"
+      !outgoing = otelSpan.kind == Just "client"
 
       -- Build endpoint if not in cache
       !endpoint =
@@ -236,8 +232,8 @@ processSpanToEntities pjc span dumpId =
           else
             Just
               $ Endpoints.Endpoint
-                { createdAt = span.timestamp
-                , updatedAt = span.timestamp
+                { createdAt = otelSpan.timestamp
+                , updatedAt = otelSpan.timestamp
                 , id = Endpoints.EndpointId dumpId
                 , projectId = projectId
                 , urlPath = urlPath
@@ -257,8 +253,8 @@ processSpanToEntities pjc span dumpId =
             Just
               $ Shapes.Shape
                 { id = Shapes.ShapeId dumpId
-                , createdAt = span.timestamp
-                , updatedAt = span.timestamp
+                , createdAt = otelSpan.timestamp
+                , updatedAt = otelSpan.timestamp
                 , approvedOn = Nothing
                 , projectId = projectId
                 , endpointHash = endpointHash
