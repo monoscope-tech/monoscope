@@ -802,7 +802,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
                   , archivedAt = Nothing
                   }
             )
-            <$> errs
+          <$> errs
 
       forM_ project.notificationsChannel \case
         Projects.NSlack ->

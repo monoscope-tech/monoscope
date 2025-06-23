@@ -402,12 +402,15 @@ lookupVecTextByKey vec colIdxMap key = HM.lookup key colIdxMap >>= lookupVecText
 
 lookupVecBoolByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Bool
 lookupVecBoolByKey vec colIdxMap key =
-  case HM.lookup key colIdxMap >>= (\i ->
-         case vec V.!? i of
-           Just (AE.Bool b) -> Just b
-           _ -> Nothing) of
+  case HM.lookup key colIdxMap
+    >>= ( \i ->
+            case vec V.!? i of
+              Just (AE.Bool b) -> Just b
+              _ -> Nothing
+        ) of
     Just result -> result
     Nothing -> False
+
 
 lookupVecIntByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Int
 lookupVecIntByKey vec colIdxMap key = (HM.lookup key colIdxMap >>= Just . lookupVecInt vec) & fromMaybe 0
