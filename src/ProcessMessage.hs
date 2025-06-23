@@ -127,7 +127,6 @@ processMessages msgs attrs = do
         pure $ convertRequestMessageToSpan msg (spanId, trId)
       let spanVec = V.fromList spans
       unless (V.null spanVec)
-        $ void
         $ Telemetry.bulkInsertOtelLogsAndSpansTF spanVec
 
       pure $ map fst (rights msgs')
@@ -280,7 +279,7 @@ processSpanToEntities pjc otelSpan dumpId =
             [ Just endpointHash
             , if isJust shape then Just shapeHash else Nothing
             ]
-          <> V.toList fieldHashes
+            <> V.toList fieldHashes
    in (endpoint, shape, fields', formats', hashes)
   where
     -- Helper function to extract headers from nested attribute structure
@@ -375,16 +374,20 @@ createSpanAttributes rm =
       let
         -- Convert request headers using lens
         reqHeaders =
-          maybe (AE.object []) id $ rm.requestHeaders
-            ^? _Object >>= \obj ->
-              let pairs = [("http.request.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
-               in Just $ nestedJsonFromDotNotation pairs
+          maybe (AE.object []) id
+            $ rm.requestHeaders
+              ^? _Object
+              >>= \obj ->
+                let pairs = [("http.request.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
+                 in Just $ nestedJsonFromDotNotation pairs
 
         -- Convert response headers using lens
         respHeaders =
-          maybe (AE.object []) id $ rm.responseHeaders
-            ^? _Object >>= \obj ->
-              let pairs = [("http.response.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
-               in Just $ nestedJsonFromDotNotation pairs
+          maybe (AE.object []) id
+            $ rm.responseHeaders
+              ^? _Object
+              >>= \obj ->
+                let pairs = [("http.response.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
+                 in Just $ nestedJsonFromDotNotation pairs
        in
         reqHeaders `mergeJsonObjects` respHeaders

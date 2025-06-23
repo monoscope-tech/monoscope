@@ -13,7 +13,6 @@ import Effectful
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
-import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Foreign.C.String (peekCString, withCString)
 import Log qualified
@@ -24,7 +23,6 @@ import ProcessMessage qualified
 import Relude
 import RequestMessages (RequestMessage (..))
 import RustInterop (run_testkit)
-import System.Config qualified as Config
 
 
 methodPath :: Testing.CollectionStepData -> Maybe (Text, Text)

@@ -767,16 +767,13 @@ bulkInsertOtelLogsAndSpansTF :: (DB :> es, Labeled "timefusion" DB :> es, UUIDEf
 bulkInsertOtelLogsAndSpansTF records = do
   updatedRecords <- updateIds records
   _ <- bulkInsertOtelLogsAndSpans updatedRecords
-  _ <- labeled @"timefusion" @DB $ bulkInsertOtelLogsAndSpans updatedRecords
+  _ <- labeled @"timefusion" @DB $ pass -- bulkInsertOtelLogsAndSpans updatedRecords
   pass
   where
     updateIds :: UUIDEff :> es => V.Vector OtelLogsAndSpans -> Eff es (V.Vector OtelLogsAndSpans)
-    updateIds = V.mapM updateId
-      where
-        updateId :: UUIDEff :> es => OtelLogsAndSpans -> Eff es OtelLogsAndSpans
-        updateId record = do
-          newId <- genUUID
-          pure $ record & #id .~ newId
+    updateIds = V.mapM \record -> do
+      newId <- genUUID
+      pure $ record & #id .~ newId
 
 
 -- Function to insert OtelLogsAndSpans records with all fields in flattened structure
