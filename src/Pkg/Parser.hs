@@ -515,7 +515,8 @@ instance HasField "toColNames" QueryComponents [Text] where
 -- to triple-underscore notation (e.g., "attributes___http___request___method") used in the database schema
 replaceNestJsonWithColumns :: Text -> Text
 replaceNestJsonWithColumns =
-  T.replace "attributes.http.request.method" "attributes___http___request___method"
+  T.replace "url_path" "attributes___url___path"
+    . T.replace "attributes.http.request.method" "attributes___http___request___method"
     . T.replace "attributes.http.request.method_original" "attributes___http___request___method_original"
     . T.replace "attributes.http.response.status_code" "attributes___http___response___status_code"
     . T.replace "attributes.http.request.resend_count" "attributes___http___request___resend_count"

@@ -528,6 +528,7 @@ flattenedOtelAttributes =
 transformFlattenedAttribute :: T.Text -> T.Text
 transformFlattenedAttribute entire
   | entire `elem` flattenedOtelAttributes = T.replace "." "___" entire
+  | entire == "url_path" = "attributes___url___path"
   | otherwise = entire
 
 
