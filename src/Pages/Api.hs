@@ -188,7 +188,7 @@ keyRow pid i apiKey = do
         [class_ $ "mr-2 w-full " <> idx]
         $ toHtml
         $ T.take 8 apiKey.keyPrefix
-          <> T.replicate 20 "*"
+        <> T.replicate 20 "*"
       div_ [class_ "hidden group-hover:flex justify-between items-center gap-3"] do
         button_
           [ class_ "text-brand"

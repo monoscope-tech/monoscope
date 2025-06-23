@@ -6,12 +6,12 @@ module ProcessMessage (
 )
 where
 
+import Control.Lens ((^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Extra (lodashMerge)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
-import Data.Aeson.Lens (key, _String, _Object)
-import Control.Lens ((^?))
+import Data.Aeson.Lens (key, _Object, _String)
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.Aeson.Types qualified as AE
 import Data.ByteString.Lazy.Char8 qualified as BL
@@ -36,8 +36,8 @@ import Models.Telemetry.Telemetry (Context (trace_state))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
+import RequestMessages (ensureUrlParams, fieldsToFieldDTO, redactJSON, sortVector, valueToFields)
 import RequestMessages qualified
-import RequestMessages (fieldsToFieldDTO, sortVector, valueToFields, redactJSON, ensureUrlParams)
 import Utils (b64ToJson, eitherStrToText, nestedJsonFromDotNotation, toXXHash)
 
 
@@ -155,13 +155,13 @@ processSpanToEntities pjc otelSpan dumpId =
 
       -- Navigate nested JSON to extract values using lens
       !method = T.toUpper $ fromMaybe "GET" $ attrValue ^? key "http" . key "request" . key "method" . _String
-      
+
       !rawPath = fromMaybe "/" $ attrValue ^? key "http" . key "request" . key "path" . _String
-      
+
       !statusCode = fromMaybe 200 $ do
         statusStr <- attrValue ^? key "http" . key "response" . key "status_code" . _String
         readMaybe $ T.unpack statusStr
-      
+
       !host = fromMaybe "" $ attrValue ^? key "net" . key "host" . key "name" . _String
 
       -- Extract SDK type from attributes (needed for URL normalization)
@@ -280,17 +280,17 @@ processSpanToEntities pjc otelSpan dumpId =
             [ Just endpointHash
             , if isJust shape then Just shapeHash else Nothing
             ]
-            <> V.toList fieldHashes
+          <> V.toList fieldHashes
    in (endpoint, shape, fields', formats', hashes)
   where
     -- Helper function to extract headers from nested attribute structure
     extractHeaders :: Text -> AE.Value -> Maybe AE.Value
     extractHeaders prefix obj = case obj of
-      AE.Object keyMap -> 
+      AE.Object keyMap ->
         let headerPairs = [(T.drop (T.length prefix + 1) (AEK.toText k), v) | (k, v) <- AEKM.toList keyMap, T.isPrefixOf (prefix <> ".") (AEK.toText k)]
-        in if null headerPairs 
-           then Nothing 
-           else Just $ AE.Object $ AEKM.fromList [(AEK.fromText k, v) | (k, v) <- headerPairs]
+         in if null headerPairs
+              then Nothing
+              else Just $ AE.Object $ AEKM.fromList [(AEK.fromText k, v) | (k, v) <- headerPairs]
       _ -> Nothing
 
 
@@ -374,13 +374,17 @@ createSpanAttributes rm =
     headersObj =
       let
         -- Convert request headers using lens
-        reqHeaders = maybe (AE.object []) id $ rm.requestHeaders ^? _Object >>= \obj ->
-          let pairs = [("http.request.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
-           in Just $ nestedJsonFromDotNotation pairs
+        reqHeaders =
+          maybe (AE.object []) id $ rm.requestHeaders
+            ^? _Object >>= \obj ->
+              let pairs = [("http.request.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
+               in Just $ nestedJsonFromDotNotation pairs
 
         -- Convert response headers using lens
-        respHeaders = maybe (AE.object []) id $ rm.responseHeaders ^? _Object >>= \obj ->
-          let pairs = [("http.response.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
-           in Just $ nestedJsonFromDotNotation pairs
+        respHeaders =
+          maybe (AE.object []) id $ rm.responseHeaders
+            ^? _Object >>= \obj ->
+              let pairs = [("http.response.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
+               in Just $ nestedJsonFromDotNotation pairs
        in
         reqHeaders `mergeJsonObjects` respHeaders

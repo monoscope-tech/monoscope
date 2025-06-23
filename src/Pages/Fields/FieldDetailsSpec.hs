@@ -1,5 +1,8 @@
 module Pages.Fields.FieldDetailsSpec (spec) where
 
+import Data.Aeson qualified as AE
+import Data.ByteString.Lazy qualified as BL
+import Data.HashMap.Strict qualified as HashMap
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -9,9 +12,6 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.TestUtils
 import Relude
 import Test.Hspec
-import Data.HashMap.Strict qualified as HashMap
-import Data.Aeson qualified as AE
-import Data.ByteString.Lazy qualified as BL
 
 import Models.Apis.Formats qualified as Formats
 import Pages.Fields.FieldDetails qualified as FieldDetails

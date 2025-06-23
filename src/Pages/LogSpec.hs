@@ -1,5 +1,8 @@
 module Pages.LogSpec (spec) where
 
+import Data.Aeson qualified as AE
+import Data.ByteString.Lazy qualified as BL
+import Data.HashMap.Strict qualified as HashMap
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.Time.Clock (addUTCTime)
 import Data.UUID qualified as UUID
@@ -11,9 +14,6 @@ import ProcessMessage (processMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec
-import Data.HashMap.Strict qualified as HashMap
-import Data.Aeson qualified as AE
-import Data.ByteString.Lazy qualified as BL
 
 
 testPid :: Projects.ProjectId

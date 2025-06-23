@@ -1,5 +1,8 @@
 module MonitoringSpec (spec) where
 
+import Data.Aeson qualified as AE
+import Data.ByteString.Lazy qualified as BL
+import Data.HashMap.Strict qualified as HashMap
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (execute, withPool)
@@ -13,9 +16,6 @@ import ProcessMessageSpec (testAuthContext)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec
-import Data.HashMap.Strict qualified as HashMap
-import Data.Aeson qualified as AE
-import Data.ByteString.Lazy qualified as BL
 
 
 spec :: Spec

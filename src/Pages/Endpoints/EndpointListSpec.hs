@@ -16,12 +16,12 @@ import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
 
+import Data.Aeson qualified as AE
+import Data.ByteString.Lazy qualified as BL
+import Data.HashMap.Strict qualified as HashMap
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
-import Data.HashMap.Strict qualified as HashMap
-import Data.Aeson qualified as AE
-import Data.ByteString.Lazy qualified as BL
 import Utils (toXXHash)
 
 

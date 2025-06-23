@@ -1,5 +1,8 @@
 module Pages.Endpoints.ApiCatalogSpec (spec) where
 
+import Data.Aeson qualified as AE
+import Data.ByteString.Lazy qualified as BL
+import Data.HashMap.Strict qualified as HashMap
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -12,9 +15,6 @@ import ProcessMessage (processMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
-import Data.HashMap.Strict qualified as HashMap
-import Data.Aeson qualified as AE
-import Data.ByteString.Lazy qualified as BL
 
 
 testPid :: Projects.ProjectId

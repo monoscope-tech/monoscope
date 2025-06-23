@@ -181,7 +181,7 @@ data ProjectCache = ProjectCache
     redactFieldslist :: V.Vector Text
   , -- Daily count of events from otel_logs_and_spans table for the last 24 hours
     dailyEventCount :: Int
-  , -- Daily count of metrics for the last 24 hours  
+  , -- Daily count of metrics for the last 24 hours
     dailyMetricCount :: Int
   , paymentPlan :: Text
   }

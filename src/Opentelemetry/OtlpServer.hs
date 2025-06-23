@@ -390,15 +390,15 @@ convertResourceLogsToOtelLogs projectCaches pids resourceLogs =
               uId = UUID.fromText pidText
            in ((Just . Projects.ProjectId) =<< uId)
    in case projectId of
-        Just pid -> 
+        Just pid ->
           case HashMap.lookup pid projectCaches of
-            Just cache -> 
+            Just cache ->
               -- Check if project has exceeded daily limit for free tier
               let totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
                   isFreeTier = cache.paymentPlan == "Free"
                   hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
-               in if hasExceededLimit 
-                    then [] -- Discard events for projects that exceeded limits  
+               in if hasExceededLimit
+                    then [] -- Discard events for projects that exceeded limits
                     else convertScopeLogsToOtelLogs pid (Just $ resourceLogs ^. PLF.resource) resourceLogs
             Nothing -> [] -- No cache found, discard
         _ -> []
@@ -479,14 +479,14 @@ convertResourceSpansToOtelLogs projectCaches pids resourceSpans =
                       uId = UUID.fromText pidText
                    in ((Just . Projects.ProjectId) =<< uId)
            in case projectId of
-                Just pid -> 
+                Just pid ->
                   case HashMap.lookup pid projectCaches of
-                    Just cache -> 
+                    Just cache ->
                       -- Check if project has exceeded daily limit for free tier
                       let totalDailyEvents = toInteger cache.dailyEventCount + toInteger cache.dailyMetricCount
                           isFreeTier = cache.paymentPlan == "Free"
                           hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
-                       in if hasExceededLimit 
+                       in if hasExceededLimit
                             then [] -- Discard events for projects that exceeded limits
                             else convertScopeSpansToOtelLogs pid (Just $ rs ^. PTF.resource) rs
                     Nothing -> [] -- No cache found, discard
@@ -651,12 +651,12 @@ convertSpanToOtelLog pid resourceM scopeM pSpan =
 convertResourceMetricsToMetricRecords :: HashMap Projects.ProjectId Projects.ProjectCache -> Projects.ProjectId -> V.Vector PM.ResourceMetrics -> [Telemetry.MetricRecord]
 convertResourceMetricsToMetricRecords projectCaches pid resourceMetrics =
   case HashMap.lookup pid projectCaches of
-    Just cache -> 
+    Just cache ->
       -- Check if project has exceeded daily limit for free tier
       let totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
           isFreeTier = cache.paymentPlan == "Free"
           hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
-       in if hasExceededLimit 
+       in if hasExceededLimit
             then [] -- Discard metrics for projects that exceeded limits
             else join $ V.toList $ V.map (convertResourceMetricToMetricRecords pid) resourceMetrics
     Nothing -> [] -- No cache found, discard

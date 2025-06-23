@@ -271,7 +271,7 @@ removeBlacklistedFields = V.map \(k, val) ->
 --
 valueToFormat :: AE.Value -> Text
 valueToFormat (AET.String val) = case valueToFormatStr val of
-  Just fmt -> T.drop 1 $ T.dropEnd 1 fmt  -- Remove the curly braces
+  Just fmt -> T.drop 1 $ T.dropEnd 1 fmt -- Remove the curly braces
   Nothing -> "text"
 valueToFormat (AET.Number val) = valueToFormatNum val
 valueToFormat (AET.Bool _) = "bool"
@@ -285,7 +285,7 @@ valueToFormat (AET.Array _) = "array"
 commonFormatPatterns :: [(RE, Text)]
 commonFormatPatterns =
   [ ([re|\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b|], "{uuid}")
-  , ([re|\b[0-9a-fA-F]{24}\b|], "{uuid}")  -- Keep as uuid for backward compatibility
+  , ([re|\b[0-9a-fA-F]{24}\b|], "{uuid}") -- Keep as uuid for backward compatibility
   , ([re|\b[a-fA-F0-9]{64}\b|], "{sha256}")
   , ([re|\b[a-fA-F0-9]{40}\b|], "{sha1}")
   , ([re|\b[a-fA-F0-9]{32}\b|], "{md5}")
@@ -294,7 +294,7 @@ commonFormatPatterns =
   , ([re|\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b|], "{email}")
   , ([re|\bhttps?://[^\s/$.?#].[^\s]*\b|], "{url}")
   , ([re|\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.|$)){4}/([0-9]|[12][0-9]|3[0-2])\b|], "{cidr}")
-  , ([re|\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.|$)){4}\b|], "{ipv4}")  -- Changed to ipv4 for consistency
+  , ([re|\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.|$)){4}\b|], "{ipv4}") -- Changed to ipv4 for consistency
   , ([re|\b([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}\b|], "{ipv6}")
   , ([re|\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b|], "{mac}")
   , ([re|:\d{1,5}\b|], "{port}")
@@ -306,26 +306,26 @@ commonFormatPatterns =
   , ([re|\b\d{3}-\d{2}-\d{4}\b|], "{ssn}")
   , ([re|\b\+?[0-9]{1,3}[-.\s]?(\([0-9]{1,4}\)|[0-9]{1,4})[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}\b|], "{phone}")
   , ([re|\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s\d{1,2}\s(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s\d{4}\s\d{2}:\d{2}:\d{2}\s[+\-]\d{4}\b|], "{rfc2822}")
-  , ([re|\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+\-]\d{2}:\d{2})?\b|], "{YYYY-MM-DDThh:mm:ss.sTZD}")  -- ISO 8601
-  , ([re|\b\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\b|], "{YYYY-MM-DD HH:MM:SS}")  -- MySQL datetime
-  , ([re|\b\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}\b|], "{MM/DD/YYYY HH:MM:SS}")  -- US datetime
+  , ([re|\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+\-]\d{2}:\d{2})?\b|], "{YYYY-MM-DDThh:mm:ss.sTZD}") -- ISO 8601
+  , ([re|\b\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\b|], "{YYYY-MM-DD HH:MM:SS}") -- MySQL datetime
+  , ([re|\b\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}\b|], "{MM/DD/YYYY HH:MM:SS}") -- US datetime
   , ([re|\b\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2}\b|], "{MM-DD-YYYY HH:MM:SS}")
-  , ([re|\b\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2}\b|], "{DD.MM.YYYY HH:MM:SS}")  -- European datetime
-  , ([re|\b\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\b|], "{YYYY/MM/DD HH:MM:SS}")  -- Japanese datetime
-  , ([re|\b(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)\d\d$|], "{mm/dd/yyyy}")  -- US date
+  , ([re|\b\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2}\b|], "{DD.MM.YYYY HH:MM:SS}") -- European datetime
+  , ([re|\b\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\b|], "{YYYY/MM/DD HH:MM:SS}") -- Japanese datetime
+  , ([re|\b(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)\d\d$|], "{mm/dd/yyyy}") -- US date
   , ([re|\b(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])-(19|20)\d\d\b|], "{mm-dd-yyyy}")
   , ([re|\b(0[1-9]|1[012])\.(0[1-9]|[12][0-9]|3[01])\.(19|20)\d\d\b|], "{mm.dd.yyyy}")
-  , ([re|\b(0[1-9]|[12][0-9]|3[01])[- /.](0[1-9]|1[012])[- /.](19|20)\d\d\b|], "{dd/mm/yyyy}")  -- European date
+  , ([re|\b(0[1-9]|[12][0-9]|3[01])[- /.](0[1-9]|1[012])[- /.](19|20)\d\d\b|], "{dd/mm/yyyy}") -- European date
   , ([re|\b(0[1-9]|[12][0-9]|3[01])-(0[1-9]|1[012])-(19|20)\d\d\b|], "{dd-mm-yyyy}")
   , ([re|\b(0[1-9]|[12][0-9]|3[01])\.(0[1-9]|1[012])\.(19|20)\d\d\b|], "{dd.mm.yyyy}")
-  , ([re|\b\d{4}-\d{2}-\d{2}\b|], "{YYYY-MM-DD}")  -- ISO date
-  , ([re|\b\d{4}/\d{2}/\d{2}\b|], "{YYYY/MM/DD}")  -- Japanese date
-  , ([re|\b\d{8}\b|], "{YYYYMMDD}")  -- Compact date
-  , ([re|\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}, \d{4}\b|], "{Mon DD, YYYY}")  -- Long month
-  , ([re|\b\d{1,2}-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{4}\b|], "{DD-Mon-YYYY}")  -- Oracle date
-  , ([re|\b\d{2}:\d{2}:\d{2}\.\d{3}\b|], "{HH:MM:SS.mmm}")  -- Time with milliseconds
-  , ([re|\b\d{2}:\d{2}:\d{2}\b|], "{HH:MM:SS}")  -- Time only
-  , ([re|\b\d{1,2}:\d{2} (AM|PM|am|pm)\b|], "{H:MM AM/PM}")  -- 12-hour time
+  , ([re|\b\d{4}-\d{2}-\d{2}\b|], "{YYYY-MM-DD}") -- ISO date
+  , ([re|\b\d{4}/\d{2}/\d{2}\b|], "{YYYY/MM/DD}") -- Japanese date
+  , ([re|\b\d{8}\b|], "{YYYYMMDD}") -- Compact date
+  , ([re|\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}, \d{4}\b|], "{Mon DD, YYYY}") -- Long month
+  , ([re|\b\d{1,2}-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{4}\b|], "{DD-Mon-YYYY}") -- Oracle date
+  , ([re|\b\d{2}:\d{2}:\d{2}\.\d{3}\b|], "{HH:MM:SS.mmm}") -- Time with milliseconds
+  , ([re|\b\d{2}:\d{2}:\d{2}\b|], "{HH:MM:SS}") -- Time only
+  , ([re|\b\d{1,2}:\d{2} (AM|PM|am|pm)\b|], "{H:MM AM/PM}") -- 12-hour time
   , ([re|\b1[0-9]{12}\b|], "{epoch_ms}")
   , ([re|\b1[0-9]{9}\b|], "{epoch_s}")
   , ([re|\b\d+(:\d{2}){1,2}(\.\d+)?\b|], "{duration}")
@@ -336,7 +336,7 @@ commonFormatPatterns =
   , ([re|\bsession_[A-Za-z0-9\-]{8,}\b|], "{session_id}")
   , ([re|\b[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}\b|], "{hostname}")
   , ([re|\b0x[0-9A-Fa-f]+\b|], "{hex}")
-  , ([re|\b[+-]?\d+\.\d+\b|], "{float}")  -- More specific float pattern
+  , ([re|\b[+-]?\d+\.\d+\b|], "{float}") -- More specific float pattern
   , ([re|[0-9]+|], "{integer}")
   ]
 
@@ -395,11 +395,12 @@ valueToFormatStr val = checkFormats formatChecks
 
     -- Add patterns that are specific to valueToFormatStr (exact match patterns for path params)
     formatChecks :: [(RE, Text)]
-    formatChecks = 
+    formatChecks =
       [ ([re|^[0-9]+$|], "{integer}")
       , ([re|^[+-]?(\d+(\.\d*)?|\.\d+)$|], "{float}")
       , ([re|^0x[0-9A-Fa-f]+$|], "{hex}")
-      ] ++ commonFormatPatterns
+      ]
+        ++ commonFormatPatterns
 
 
 ensureUrlParams :: Text -> (Text, AE.Value, Bool)
@@ -419,8 +420,19 @@ parseUrlSegments (x : xs) (segs, vals) = case valueToFormatStr x of
   Nothing -> parseUrlSegments xs (segs ++ [x], vals)
   Just v
     | v == "{uuid}" -> parseUrlSegments xs (addNewSegment segs "uuid", vals ++ [x])
-    | v `elem` ["{mm/dd/yyyy}", "{mm-dd-yyyy}", "{mm.dd.yyyy}", "{dd/mm/yyyy}", "{dd-mm-yyyy}", "{dd.mm.yyyy}", 
-                "{YYYY-MM-DD}", "{YYYY/MM/DD}", "{YYYYMMDD}", "{YYYY-MM-DDThh:mm:ss.sTZD}"] -> parseUrlSegments xs (addNewSegment segs "date", vals ++ [x])
+    | v
+        `elem` [ "{mm/dd/yyyy}"
+               , "{mm-dd-yyyy}"
+               , "{mm.dd.yyyy}"
+               , "{dd/mm/yyyy}"
+               , "{dd-mm-yyyy}"
+               , "{dd.mm.yyyy}"
+               , "{YYYY-MM-DD}"
+               , "{YYYY/MM/DD}"
+               , "{YYYYMMDD}"
+               , "{YYYY-MM-DDThh:mm:ss.sTZD}"
+               ] ->
+        parseUrlSegments xs (addNewSegment segs "date", vals ++ [x])
     | v `elem` ["{ip}", "{ipv6}"] -> parseUrlSegments xs (addNewSegment segs "ip_address", vals ++ [x])
     | v `elem` ["{integer}", "{float}", "{hex}"] -> parseUrlSegments xs (addNewSegment segs "number", vals ++ [x])
     | otherwise -> parseUrlSegments xs (addNewSegment segs "param", vals ++ [x])

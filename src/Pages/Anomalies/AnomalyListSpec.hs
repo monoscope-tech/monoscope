@@ -3,6 +3,8 @@ module Pages.Anomalies.AnomalyListSpec (spec) where
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.ByteString.Base64 qualified as B64
+import Data.ByteString.Lazy qualified as BL
+import Data.HashMap.Strict qualified as HashMap
 import Data.Text qualified as T
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
@@ -18,8 +20,6 @@ import ProcessMessage (processMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages (RequestMessage (..), replaceNullChars, valueToFields)
-import Data.HashMap.Strict qualified as HashMap
-import Data.ByteString.Lazy qualified as BL
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
 import Utils (toXXHash)
 

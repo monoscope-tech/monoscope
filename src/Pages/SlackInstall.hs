@@ -386,7 +386,6 @@ buildPrompt cmdData interaction envCfg = do
 --       , Widget.query = Just query
 --       }
 
-
 contentResponse :: Text -> AE.Value
 contentResponse msg = AE.object ["type" AE..= (4 :: Int), "data" AE..= AE.object ["content" AE..= msg]]
 
