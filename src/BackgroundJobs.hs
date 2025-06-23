@@ -422,9 +422,9 @@ processProjectSpans pid spans = do
     pure $ fromMaybe projectCacheDefault mpjCache
 
   -- Process each span to extract endpoints, shapes, fields, and formats
-  results <- forM spans \span -> do
+  results <- forM spans \spn -> do
     spanId <- liftIO UUIDV4.nextRandom
-    pure $ processSpanToEntities projectCacheVal span spanId
+    pure $ processSpanToEntities projectCacheVal spn spanId
 
   let (endpoints, shapes, fields, formats, spanUpdates) = V.unzip5 results
   let endpointsFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes $ V.toList endpoints
@@ -444,7 +444,7 @@ processProjectSpans pid spans = do
     Left (e :: SomePostgreSqlException) -> Log.logAttention "Postgres Exception during span processing" (show e)
     Right _ -> do
       -- Update span records with computed hashes
-      forM_ (V.zip spans spanUpdates) \(span, hashes) -> do
+      forM_ (V.zip spans spanUpdates) \(spn, hashes) -> do
         Relude.when (not $ V.null hashes) $ do
           _ <-
             dbtToEff
@@ -452,7 +452,7 @@ processProjectSpans pid spans = do
                 [sql| UPDATE otel_logs_and_spans 
                   SET hashes = ? 
                   WHERE id = ? |]
-                (hashes, span.id)
+                (hashes, spn.id)
           pass
   where
     projectCacheDefault :: Projects.ProjectCache
@@ -802,7 +802,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
                   , archivedAt = Nothing
                   }
             )
-          <$> errs
+            <$> errs
 
       forM_ project.notificationsChannel \case
         Projects.NSlack ->

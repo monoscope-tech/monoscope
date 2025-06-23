@@ -87,7 +87,7 @@ runCollectionTest collection_steps col_vars cold_id = do
 
 
 logTest
-  :: (DB :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" DB :> es, Log :> es, Reader.Reader Config.AuthContext :> es, Time.Time :> es, UUIDEff :> es)
+  :: (DB :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, Time.Time :> es, UUIDEff :> es)
   => Projects.ProjectId
   -> Testing.CollectionId
   -> V.Vector Testing.CollectionStepData
