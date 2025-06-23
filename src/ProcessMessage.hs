@@ -134,7 +134,7 @@ processMessages msgs attrs = do
 
 -- Replace null characters in a Text
 replaceNullChars :: Text -> Text
-replaceNullChars = T.replace "\\u0000" ""
+replaceNullChars = T.replace "\NUL" ""
 
 
 -- Convert JSON value to Map
