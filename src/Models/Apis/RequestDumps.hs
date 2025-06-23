@@ -250,10 +250,10 @@ data ATError = ATError
   , technology :: Maybe SDKTypes
   , requestMethod :: Maybe Text
   , requestPath :: Maybe Text
-  , spanId :: Text
-  , traceId :: Text
-  , serviceName :: Text
-  , stack :: Text
+  , spanId :: Maybe Text
+  , traceId :: Maybe Text
+  , serviceName :: Maybe Text
+  , stack :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, NFData)

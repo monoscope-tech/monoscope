@@ -152,16 +152,16 @@ slackErrorAlert err project channelId projectUrl =
               , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> err.message <> "\n```")]]
               , AE.object
                   [ "type" AE..= "context"
-                  , "elements" AE..= AE.Array (V.fromList $ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Stack:* `" <> err.stack <> "`")] : [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Endpoint:* " <> enp)]])
+                  , "elements" AE..= AE.Array (V.fromList $ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Stack:* `" <> fromMaybe "" err.stack <> "`")] : [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Endpoint:* " <> enp)]])
                   ]
               , AE.object
                   [ "type" AE..= "context"
                   , "elements"
                       AE..= AE.Array
                         ( V.fromList
-                            [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Trace Id:* " <> err.traceId)]
-                            , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Span Id:* " <> err.spanId)]
-                            , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> err.serviceName)]
+                            [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Trace Id:* " <> fromMaybe "" err.traceId)]
+                            , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Span Id:* " <> fromMaybe "" err.spanId)]
+                            , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "" err.serviceName)]
                             ]
                         )
                   ]
@@ -243,9 +243,9 @@ discordErrorAlert err project projectUrl =
     enp = "`" <> method <> " " <> path <> "`"
     firstSeen = toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" err.when
     errorType = err.errorType
-    trId = err.traceId
-    spanId = err.spanId
-    serviceName = err.serviceName
+    trId = fromMaybe "" err.traceId
+    spanId = fromMaybe "" err.spanId
+    serviceName = fromMaybe "" err.serviceName
 
 
 discordNewEndpointAlert :: Text -> V.Vector Text -> Text -> Text -> AE.Value

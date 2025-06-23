@@ -962,11 +962,11 @@ extractATError spanObj (AE.Object o) = do
       , stackTrace = stack
       , hash = Just (toXXHash (spanObj.project_id <> fromMaybe "" serviceName <> fromMaybe "" spanObj.name <> typ <> msg))
       , technology = Nothing
-      , serviceName = fromMaybe "<Unknown>" serviceName
+      , serviceName = serviceName
       , requestMethod = method
       , requestPath = urlPath
-      , spanId = fromMaybe "" spanId
-      , traceId = fromMaybe "" trId
-      , stack = fromMaybe "" tech
+      , spanId = spanId
+      , traceId = trId
+      , stack = tech
       }
 extractATError _ _ = Nothing
