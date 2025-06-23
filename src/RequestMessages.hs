@@ -289,6 +289,7 @@ commonFormatPatterns =
   , ([re|\b[a-fA-F0-9]{64}\b|], "{sha256}")
   , ([re|\b[a-fA-F0-9]{40}\b|], "{sha1}")
   , ([re|\b[a-fA-F0-9]{32}\b|], "{md5}")
+  , ([re|\b[0-9A-Fa-f]{14,20}\b|], "{hex_id}") -- Match hex-like IDs that aren't UUIDs (common in DB-generated keys)
   , ([re|\b[A-Za-z0-9+/]{20,}={0,2}\b|], "{base64}")
   , ([re|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b|], "{jwt}")
   , ([re|\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b|], "{email}")
@@ -338,6 +339,9 @@ commonFormatPatterns =
   , ([re|\b0x[0-9A-Fa-f]+\b|], "{hex}")
   , ([re|\b[+-]?\d+\.\d+\b|], "{float}") -- More specific float pattern
   , ([re|[0-9]+|], "{integer}")
+  , ([re|'[^']{1,100}'|], "{quoted_value}") -- Match single-quoted values: 'value'
+  , ([re|"[^"]{1,100}"|], "{quoted_value}") -- Match double-quoted values: "value"
+  , ([re|`[^`]{1,100}`|], "{quoted_value}") -- Match backtick-quoted values: `value`
   ]
 
 
