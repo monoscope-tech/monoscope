@@ -107,7 +107,7 @@ getMetricAttributeValue !attribute !rms = listToMaybe $ V.toList $ V.mapMaybe ge
 -- | Process a list of messages
 processList :: (DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
-processList !msgs !attrs = checkpoint "processList" $ process `onException` handleException
+processList msgs !attrs = checkpoint "processList" $ process `onException` handleException
   where
     handleException = checkpoint "processList:exception" $ do
       Log.logAttention "processList: caught exception" (AE.object ["ce-type" AE..= HashMap.lookup "ce-type" attrs, "msg_count" AE..= length msgs, "attrs" AE..= attrs])
