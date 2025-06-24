@@ -286,128 +286,192 @@ valueToFormat (AET.Array _) = "array"
 -- The order matters: more specific patterns should come before more general ones
 commonFormatPatterns :: [(RE, Text)]
 commonFormatPatterns =
-  [ ([re|\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b|], "{uuid}")
-  , ([re|\b[0-9a-fA-F]{24}\b|], "{uuid}") -- Keep as uuid for backward compatibility
-  , ([re|\b[a-fA-F0-9]{64}\b|], "{sha256}")
-  , ([re|\b[a-fA-F0-9]{40}\b|], "{sha1}")
-  , ([re|\b[a-fA-F0-9]{32}\b|], "{md5}")
-  , ([re|\b[0-9A-Fa-f]{14,20}\b|], "{hex_id}") -- Match hex-like IDs that aren't UUIDs (common in DB-generated keys)
-  , ([re|\b[A-Za-z0-9+/]{20,}={0,2}\b|], "{base64}")
-  , ([re|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b|], "{jwt}")
-  , ([re|\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b|], "{email}")
-  , ([re|\bhttps?://[^\s/$.?#].[^\s]*\b|], "{url}")
-  , ([re|\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.|$)){4}/([0-9]|[12][0-9]|3[0-2])\b|], "{cidr}")
-  , ([re|\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.|$)){4}\b|], "{ipv4}") -- Changed to ipv4 for consistency
-  , ([re|\b([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}\b|], "{ipv6}")
-  , ([re|\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b|], "{mac}")
-  , ([re|:\d{1,5}\b|], "{port}")
-  , ([re|\b[1-5][0-9]{2}\b|], "{http_status}")
+  [ -- UUIDs and hashes (most specific hex patterns first)
+    ([re|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|], "{uuid}")
+  , ([re|[0-9a-fA-F]{24}|], "{uuid}") -- Keep as uuid for backward compatibility
+  , ([re|[a-fA-F0-9]{64}|], "{sha256}")
+  , ([re|[a-fA-F0-9]{40}|], "{sha1}")
+  , ([re|[a-fA-F0-9]{32}|], "{md5}")
+  , ([re|[0-9A-Fa-f]{14,20}|], "{hex_id}") -- Match hex-like IDs that aren't UUIDs
+  -- Authentication & encoding
+  , ([re|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|], "{jwt}")
+  , ([re|[A-Za-z0-9+/]{20,}={0,2}|], "{base64}")
+  -- Date patterns (before file paths to avoid conflicts)
+  , ([re|\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s[0-9]{1,2}\s(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s[0-9]{4}\s[0-9]{2}:[0-9]{2}:[0-9]{2}\s[+\-][0-9]{4}\b|], "{rfc2822}")
+  , ([re|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+\-][0-9]{2}:[0-9]{2})?|], "{YYYY-MM-DDThh:mm:ss.sTZD}") -- ISO 8601
+  , ([re|[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}|], "{YYYY-MM-DD HH:MM:SS}") -- MySQL datetime
+  , ([re|[0-9]{2}/[0-9]{2}/[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}|], "{MM/DD/YYYY HH:MM:SS}") -- US datetime
+  , ([re|[0-9]{2}-[0-9]{2}-[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}|], "{MM-DD-YYYY HH:MM:SS}")
+  , ([re|[0-9]{2}\.[0-9]{2}\.[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}|], "{DD.MM.YYYY HH:MM:SS}") -- European datetime
+  , ([re|[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}|], "{YYYY/MM/DD HH:MM:SS}") -- Japanese datetime
+  , ([re|\b(0[1-9]|[12][0-9]|3[01])[- /.](0[1-9]|1[012])[- /.](19|20)[0-9][0-9]\b|], "{dd/mm/yyyy}") -- European date
+  , ([re|\b(0[1-9]|[12][0-9]|3[01])-(0[1-9]|1[012])-(19|20)[0-9][0-9]\b|], "{dd-mm-yyyy}")
+  , ([re|\b(0[1-9]|[12][0-9]|3[01])\.(0[1-9]|1[012])\.(19|20)[0-9][0-9]\b|], "{dd.mm.yyyy}")
+  , ([re|\b(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)[0-9][0-9]\b|], "{mm/dd/yyyy}") -- US date
+  , ([re|\b(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])-(19|20)[0-9][0-9]\b|], "{mm-dd-yyyy}")
+  , ([re|\b(0[1-9]|1[012])\.(0[1-9]|[12][0-9]|3[01])\.(19|20)[0-9][0-9]\b|], "{mm.dd.yyyy}")
+  , ([re|[0-9]{4}-[0-9]{2}-[0-9]{2}|], "{YYYY-MM-DD}") -- ISO date
+  , ([re|[0-9]{4}/[0-9]{2}/[0-9]{2}|], "{YYYY/MM/DD}") -- Japanese date
+  , ([re|[0-9]{8}|], "{YYYYMMDD}") -- Compact date
+  , ([re|\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{1,2}, [0-9]{4}\b|], "{Mon DD, YYYY}") -- Long month
+  , ([re|\b[0-9]{1,2}-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-[0-9]{4}\b|], "{DD-Mon-YYYY}") -- Oracle date
+  -- Time patterns
+  , ([re|[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}|], "{HH:MM:SS.mmm}") -- Time with milliseconds
+  , ([re|[0-9]{2}:[0-9]{2}:[0-9]{2}|], "{HH:MM:SS}") -- Time only
+  , ([re|\b[0-9]{1,2}:[0-9]{2} (AM|PM|am|pm)\b|], "{H:MM AM/PM}") -- 12-hour time
+  -- Network patterns
+  , ([re|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|], "{email}")
+  , ([re|https?://[^\s/$.?#].[^\s]*|], "{url}")
+  , ([re|\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/([0-9]|[12][0-9]|3[0-2])\b|], "{cidr}")
+  , ([re|\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b|], "{ipv4}")
+  , ([re|([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|], "{ipv6}")
+  , ([re|([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}|], "{mac}")
+  , ([re|:[0-9]{1,5}|], "{port}")
+  , ([re|[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}|], "{hostname}")
+  -- File paths (after dates to avoid conflicts)
   , ([re|[A-Za-z]:\\[^\\/:*?"<>|\r\n]*|], "{file_path}")
   , ([re|/[A-Za-z0-9._/-]+|], "{file_path}")
+  -- Financial
   , ([re|\b(4[0-9]{12}([0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\b|], "{credit_card}")
-  , ([re|\b[A-Z]{2}[0-9]{2}[A-Za-z0-9]{4}[0-9]{7}[A-Za-z0-9]{0,16}\b|], "{iban}")
-  , ([re|\b\d{3}-\d{2}-\d{4}\b|], "{ssn}")
+  , ([re|[A-Z]{2}[0-9]{2}[A-Za-z0-9]{4}[0-9]{7}[A-Za-z0-9]{0,16}|], "{iban}")
+  -- Personal identifiers
+  , ([re|[0-9]{3}-[0-9]{2}-[0-9]{4}|], "{ssn}")
   , ([re|\b\+?[0-9]{1,3}[-.\s]?(\([0-9]{1,4}\)|[0-9]{1,4})[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}\b|], "{phone}")
-  , ([re|\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s\d{1,2}\s(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s\d{4}\s\d{2}:\d{2}:\d{2}\s[+\-]\d{4}\b|], "{rfc2822}")
-  , ([re|\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+\-]\d{2}:\d{2})?\b|], "{YYYY-MM-DDThh:mm:ss.sTZD}") -- ISO 8601
-  , ([re|\b\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\b|], "{YYYY-MM-DD HH:MM:SS}") -- MySQL datetime
-  , ([re|\b\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}\b|], "{MM/DD/YYYY HH:MM:SS}") -- US datetime
-  , ([re|\b\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2}\b|], "{MM-DD-YYYY HH:MM:SS}")
-  , ([re|\b\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2}\b|], "{DD.MM.YYYY HH:MM:SS}") -- European datetime
-  , ([re|\b\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\b|], "{YYYY/MM/DD HH:MM:SS}") -- Japanese datetime
-  , ([re|\b(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)\d\d$|], "{mm/dd/yyyy}") -- US date
-  , ([re|\b(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])-(19|20)\d\d\b|], "{mm-dd-yyyy}")
-  , ([re|\b(0[1-9]|1[012])\.(0[1-9]|[12][0-9]|3[01])\.(19|20)\d\d\b|], "{mm.dd.yyyy}")
-  , ([re|\b(0[1-9]|[12][0-9]|3[01])[- /.](0[1-9]|1[012])[- /.](19|20)\d\d\b|], "{dd/mm/yyyy}") -- European date
-  , ([re|\b(0[1-9]|[12][0-9]|3[01])-(0[1-9]|1[012])-(19|20)\d\d\b|], "{dd-mm-yyyy}")
-  , ([re|\b(0[1-9]|[12][0-9]|3[01])\.(0[1-9]|1[012])\.(19|20)\d\d\b|], "{dd.mm.yyyy}")
-  , ([re|\b\d{4}-\d{2}-\d{2}\b|], "{YYYY-MM-DD}") -- ISO date
-  , ([re|\b\d{4}/\d{2}/\d{2}\b|], "{YYYY/MM/DD}") -- Japanese date
-  , ([re|\b\d{8}\b|], "{YYYYMMDD}") -- Compact date
-  , ([re|\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}, \d{4}\b|], "{Mon DD, YYYY}") -- Long month
-  , ([re|\b\d{1,2}-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{4}\b|], "{DD-Mon-YYYY}") -- Oracle date
-  , ([re|\b\d{2}:\d{2}:\d{2}\.\d{3}\b|], "{HH:MM:SS.mmm}") -- Time with milliseconds
-  , ([re|\b\d{2}:\d{2}:\d{2}\b|], "{HH:MM:SS}") -- Time only
-  , ([re|\b\d{1,2}:\d{2} (AM|PM|am|pm)\b|], "{H:MM AM/PM}") -- 12-hour time
-  , ([re|\b1[0-9]{12}\b|], "{epoch_ms}")
-  , ([re|\b1[0-9]{9}\b|], "{epoch_s}")
-  , ([re|\b\d+(:\d{2}){1,2}(\.\d+)?\b|], "{duration}")
-  , ([re|^\s*at\s[^\s]+\([^\)]+:\d+\)\b|], "{stack_trace}")
-  , ([re|\bpid[:=]?\d+\b|], "{pid}")
-  , ([re|\btid[:=]?\d+\b|], "{tid}")
-  , ([re|\bThread-\d+\b|], "{thread}")
-  , ([re|\bsession_[A-Za-z0-9\-]{8,}\b|], "{session_id}")
-  , ([re|\b[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}\b|], "{hostname}")
-  , ([re|\b0x[0-9A-Fa-f]+\b|], "{hex}")
-  , ([re|\b[+-]?\d+\.\d+\b|], "{float}") -- More specific float pattern
-  , ([re|\b[0-9]+\b|], "{integer}")
-  , ([re|'[^']{1,100}'|], "{quoted_value}") -- Match single-quoted values: 'value'
-  , ([re|"[^"]{1,100}"|], "{quoted_value}") -- Match double-quoted values: "value"
-  , ([re|`[^`]{1,100}`|], "{quoted_value}") -- Match backtick-quoted values: `value`
+  -- Timestamps
+  , ([re|1[0-9]{12}|], "{epoch_ms}")
+  , ([re|1[0-9]{9}|], "{epoch_s}")
+  , ([re|[0-9]+(:[0-9]{2}){1,2}(\.[0-9]+)?|], "{duration}")
+  -- Process/thread identifiers
+  , ([re|^\s*at\s[^\s]+\([^\)]+:[0-9]+\)|], "{stack_trace}")
+  , ([re|pid[:=]?[0-9]+|], "{pid}")
+  , ([re|tid[:=]?[0-9]+|], "{tid}")
+  , ([re|Thread-[0-9]+|], "{thread}")
+  , ([re|session_[A-Za-z0-9\-]{8,}|], "{session_id}")
+  -- Numbers (last, as they're most general)
+  , ([re|[1-5][0-9]{2}|], "{http_status}")
+  , ([re|0x[0-9A-Fa-f]+|], "{hex}")
+  , ([re|[+-]?[0-9]+\.[0-9]+|], "{float}")
+  , ([re|[0-9]+|], "{integer}")
+  -- Quoted values
+  , ([re|'[^']{1,100}'|], "{quoted_value}")
+  , ([re|"[^"]{1,100}"|], "{quoted_value}")
+  , ([re|`[^`]{1,100}`|], "{quoted_value}")
   ]
 
 
 -- | Replaces all format patterns in the input text with their format names
 -- This function applies all regex patterns and replaces matches until no more replacements are made
 --
--- >>> replaceAllFormats "123"
--- "{integer}"
+-- >>> map replaceAllFormats ["123", "c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd", "550e8400-e29b-41d4-a716-446655440000", "507f1f77bcf86cd799439011"]
+-- ["{integer}","{uuid}","{uuid}","{uuid}"]
 --
--- >>> replaceAllFormats "c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd"
--- "{uuid}"
+-- >>> map replaceAllFormats ["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "356a192b7913b04c54574d18c28d46e6395428ab", "5d41402abc4b2a76b9719d911017c592"]
+-- ["{sha256}","{sha1}","{md5}"]
 --
 -- >>> replaceAllFormats "User 123 accessed endpoint c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd"
 -- "User {integer} accessed endpoint {uuid}"
 --
 -- >>> replaceAllFormats "Error at 192.168.0.1:8080 with status 404"
--- "Error at {integer}.{integer}.{integer}.{integer}:{integer} with status {integer}"
+-- "Error at {ipv4}{port} with status {integer}"
+--
+-- >>> map replaceAllFormats ["Server on :8080", "localhost:3000", "api.com:443", ":22"]
+-- ["Server on {port}","localhost{port}","api.com{port}","{port}"]
+--
+-- >>> replaceAllFormats "Connected to 10.0.0.1:443 and 192.168.1.100:22"
+-- "Connected to {ipv4}{port} and {ipv4}{port}"
+--
+-- >>> replaceAllFormats "Responses: 200, 301, 404, 500"
+-- "Responses: {integer}, {integer}, {integer}, {integer}"
+--
+-- >>> replaceAllFormats "GET /api/v2/users/123/orders/456 returned 200"
+-- "GET /api/v{integer}/users/{integer}/orders/{integer} returned {integer}"
+--
+-- >>> replaceAllFormats "User 550e8400-e29b-41d4-a716-446655440000 connected from 192.168.1.50:9876"
+-- "User {uuid} connected from {ipv4}{port}"
+--
+-- >>> replaceAllFormats "Hash: a94a8fe5ccb19ba61c4c0873d391e987982fbbd3, Status: 403, Port: :8443"
+-- "Hash: {sha1}, Status: {integer}, Port: {port}"
+--
+-- >>> replaceAllFormats "Processing request 123456 at 2023-10-15:3000"
+-- "Processing request {integer} at {integer}-{integer}-{integer}{port}"
+--
+-- >>> map replaceAllFormats ["Mixed: 192.168.1.1 123 :80 404", "0xDEADBEEF", "Values: 999, 1000, 1001"]
+-- ["Mixed: {ipv4} {integer} {port} {integer}","{hex}","Values: {integer}, {integer}, {integer}"]
+--
+-- >>> map replaceAllFormats ["10.0.0.1", "172.16.0.1", "192.168.1.1", "255.255.255.0"]
+-- ["{ipv4}","{ipv4}","{ipv4}","{ipv4}"]
+--
+-- >>> map replaceAllFormats ["Multiple formats: 123 abc def456789 :9000", "Log entry 404 at 10.0.0.1:8080"]
+-- ["Multiple formats: {integer} abc def{integer} {port}","Log entry {integer} at {ipv4}{port}"]
 replaceAllFormats :: Text -> Text
-replaceAllFormats input =
-  let (finalText, replacements) = processAllPatterns input commonFormatPatterns 0 []
-   in applyReplacements finalText replacements
+replaceAllFormats input = processPatterns input formatPatternsForReplacement
   where
-    -- Unique placeholder that won't appear in text or match any pattern
-    makePlaceholder :: Int -> Text
-    makePlaceholder n = "\x00PH" <> T.pack (show n) <> "\x00"
+    -- Process patterns in order, replacing matches as we go
+    processPatterns :: Text -> [(RE, Text)] -> Text
+    processPatterns txt [] = txt
+    processPatterns txt ((regex, replacement) : rest) =
+      let newTxt = replaceAll replacement (txt *=~ regex)
+       in processPatterns newTxt rest
 
-    -- Process all patterns, accumulating placeholder mappings
-    processAllPatterns :: Text -> [(RE, Text)] -> Int -> [(Text, Text)] -> (Text, [(Text, Text)])
-    processAllPatterns txt [] _ repls = (txt, repls)
-    processAllPatterns txt ((regex, replacement) : rest) counter repls =
-      let ph = makePlaceholder counter
-          newTxt = replaceAll ph (txt *=~ regex)
-          hasMatches = newTxt /= txt
-          newRepls = if hasMatches then (ph, replacement) : repls else repls
-          newCounter = if hasMatches then counter + 1 else counter
-       in processAllPatterns newTxt rest newCounter newRepls
-
-    -- Apply all replacements to restore placeholders
-    applyReplacements :: Text -> [(Text, Text)] -> Text
-    applyReplacements txt [] = txt
-    applyReplacements txt ((ph, repl) : rest) =
-      applyReplacements (T.replace ph repl txt) rest
+    -- Use a subset of patterns that should be replaced in text
+    -- Reorder to put more specific patterns first
+    formatPatternsForReplacement :: [(RE, Text)]
+    formatPatternsForReplacement =
+      [ -- UUIDs and hashes first (most specific)
+        ([re|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|], "{uuid}")
+      , ([re|[0-9a-fA-F]{24}|], "{uuid}")
+      , ([re|[a-fA-F0-9]{64}|], "{sha256}")
+      , ([re|[a-fA-F0-9]{40}|], "{sha1}")
+      , ([re|[a-fA-F0-9]{32}|], "{md5}")
+      , -- Network patterns
+        ([re|(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)|], "{ipv4}")
+      , ([re|:[0-9]{1,5}|], "{port}")
+      , -- Numbers (including HTTP status codes)
+        ([re|[0-9]+|], "{integer}")
+      ]
 
 
 -- valueToFormatStr will take a string and try to find a format which matches that string best.
 -- At the moment it takes a text and returns a generic mask that represents the format of that text
 --
--- >>> valueToFormatStr "22/02/2022"
--- Just "text"
+-- >>> map valueToFormatStr ["22/02/2022", "20-02-2022", "22.02.2022", "2023-10-14", "2023/10/14", "20231014"]
+-- [Just "{dd/mm/yyyy}",Just "{dd-mm-yyyy}",Just "{dd.mm.yyyy}",Just "{YYYY-MM-DD}",Just "{YYYY/MM/DD}",Just "{YYYYMMDD}"]
 --
--- >>> valueToFormatStr "20-02-2022"
--- Just "text"
+-- >>> map valueToFormatStr ["Oct 14, 2023", "14-Oct-2023", "2023-10-14T10:29:38.64522Z", "2023-10-14 10:29:38"]
+-- [Just "{Mon DD, YYYY}",Just "{DD-Mon-YYYY}",Just "{YYYY-MM-DDThh:mm:ss.sTZD}",Just "{YYYY-MM-DD HH:MM:SS}"]
 --
--- >>> valueToFormatStr "22.02.2022"
--- Nothing
+-- >>> map valueToFormatStr ["15:30:45", "15:30:45.123", "3:30 PM", "Mon, 14 Oct 2023 10:30:00 +0000"]
+-- [Just "{HH:MM:SS}",Just "{HH:MM:SS.mmm}",Just "{H:MM AM/PM}",Just "{rfc2822}"]
 --
--- >>> valueToFormatStr "222"
--- Just "{integer}"
+-- >>> map valueToFormatStr ["c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd", "507f1f77bcf86cd799439011", "abc123def456789"]
+-- [Just "{uuid}",Just "{uuid}",Nothing]
 --
--- >>> valueToFormatStr "c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd"
--- Just "{uuid}"
+-- >>> map valueToFormatStr ["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "356a192b7913b04c54574d18c28d46e6395428ab", "5d41402abc4b2a76b9719d911017c592"]
+-- [Just "{sha256}",Just "{sha1}",Just "{md5}"]
 --
--- >>> valueToFormatStr "2023-10-14T10:29:38.64522Z"
--- Just "{YYYY-MM-DDThh:mm:ss.sTZD}"
+-- >>> map valueToFormatStr ["123", "123.456", "-123.456", "0xDEADBEEF", "1634567890", "1634567890123"]
+-- [Just "{integer}",Just "{float}",Just "{float}",Just "{hex}",Just "{epoch_s}",Just "{epoch_ms}"]
+--
+-- >>> map valueToFormatStr ["192.168.1.1", "192.168.1.0/24", "2001:0db8:85a3:0000:0000:8a2e:0370:7334", "00:1B:44:11:3A:B7"]
+-- [Just "{ipv4}",Just "{cidr}",Just "{ipv6}",Just "{mac}"]
+--
+-- >>> map valueToFormatStr [":8080", "user@example.com", "https://api.example.com/v1/users", "api.example.com"]
+-- [Just "{port}",Just "{email}",Just "{url}",Just "{hostname}"]
+--
+-- >>> map valueToFormatStr ["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c", "dGVzdCBiYXNlNjQgZW5jb2Rpbmc="]
+-- [Just "{jwt}",Just "{base64}"]
+--
+-- >>> map valueToFormatStr ["/usr/local/bin/script.sh", "C:\\Users\\Admin\\Documents", "pid:12345", "tid:67890"]
+-- [Just "{file_path}",Just "{file_path}",Just "{pid}",Just "{tid}"]
+--
+-- >>> map valueToFormatStr ["Thread-42", "session_abc123def456", "4111111111111111", "GB82WEST12345698765432"]
+-- [Just "{thread}",Just "{session_id}",Just "{credit_card}",Just "{iban}"]
+--
+-- >>> map valueToFormatStr ["123-45-6789", "+1 (555) 123-4567", "200", "404", "500"]
+-- [Just "{ssn}",Just "{phone}",Just "{http_status}",Just "{http_status}",Just "{http_status}"]
+--
+-- >>> map valueToFormatStr ["plain text", "", "hello world", "test123test"]
+-- [Nothing,Nothing,Nothing,Nothing]
 --
 valueToFormatStr :: Text -> Maybe Text
 valueToFormatStr val = checkFormats formatChecks
@@ -419,14 +483,9 @@ valueToFormatStr val = checkFormats formatChecks
         then Just format
         else checkFormats rest
 
-    -- Add patterns that are specific to valueToFormatStr (exact match patterns for path params)
+    -- Use exact match patterns first, then fallback to common patterns
     formatChecks :: [(RE, Text)]
-    formatChecks =
-      commonFormatPatterns
-        ++ [ -- ([re|^[0-9]+$|], "{integer}")
-             -- , ([re|^[+-]?(\d+(\.\d*)?|\.\d+)$|], "{float}")
-             ([re|^0x[0-9A-Fa-f]+$|], "{hex}")
-           ]
+    formatChecks = commonFormatPatterns
 
 
 ensureUrlParams :: Text -> (Text, AE.Value, Bool)

@@ -428,16 +428,16 @@ processProjectSpans pid spans = do
 
   let (endpoints, shapes, fields, formats, spanUpdates) = V.unzip5 results
   let endpointsFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes $ V.toList endpoints
-  let shapesFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes $ V.toList shapes
-  let fieldsFinal = VAA.nubBy (comparing (.hash)) $ V.concat $ V.toList fields
-  let formatsFinal = VAA.nubBy (comparing (.hash)) $ V.concat $ V.toList formats
+  let _shapesFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes $ V.toList shapes
+  let _fieldsFinal = VAA.nubBy (comparing (.hash)) $ V.concat $ V.toList fields
+  let _formatsFinal = VAA.nubBy (comparing (.hash)) $ V.concat $ V.toList formats
 
   -- Insert extracted entities
   result <- try $ Ki.scoped \scope -> do
     unless (null endpointsFinal) $ void $ Ki.fork scope $ Endpoints.bulkInsertEndpoints endpointsFinal
-    unless (null shapesFinal) $ void $ Ki.fork scope $ Shapes.bulkInsertShapes shapesFinal
-    unless (null fieldsFinal) $ void $ Ki.fork scope $ FieldsQ.bulkInsertFields fieldsFinal
-    unless (null formatsFinal) $ void $ Ki.fork scope $ Formats.bulkInsertFormat formatsFinal
+    -- unless (null shapesFinal) $ void $ Ki.fork scope $ Shapes.bulkInsertShapes shapesFinal
+    -- unless (null fieldsFinal) $ void $ Ki.fork scope $ FieldsQ.bulkInsertFields fieldsFinal
+    -- unless (null formatsFinal) $ void $ Ki.fork scope $ Formats.bulkInsertFormat formatsFinal
     Ki.atomically $ Ki.awaitAll scope
 
   case result of
@@ -802,7 +802,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
                   , archivedAt = Nothing
                   }
             )
-          <$> errs
+            <$> errs
 
       forM_ project.notificationsChannel \case
         Projects.NSlack ->
