@@ -351,13 +351,13 @@ export class LogList extends LitElement {
 
   fetchData(url: string, isNewData = false, isRefresh = false) {
     if (isNewData) {
-      if(this.isLoadingRecent) return;
+      if (this.isLoadingRecent) return;
       this.isLoadingRecent = true;
     } else if (isRefresh) {
-      if(this.isLoadingReplace) return;
+      if (this.isLoadingReplace) return;
       this.isLoadingReplace = true;
     } else {
-      if(this.isLoading) return;
+      if (this.isLoading) return;
       this.isLoading = true;
     }
     fetch(url, {
@@ -721,8 +721,8 @@ export class LogList extends LitElement {
             ${k.toLowerCase() === 'server'
               ? renderIconWithTippy('w-4 ml-2', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
               : k.toLowerCase() === 'client'
-                ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
-                : nothing}
+              ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
+              : nothing}
             ${statusCode_ && statusCode_ !== 'UNSET' ? renderBadge(statusCls_, statusCode_, 'status code') : nothing}
             ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m, 'method') : nothing}
             ${url ? renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapCls, url, 'url') : nothing}
@@ -748,8 +748,8 @@ export class LogList extends LitElement {
             ${k.toLowerCase() === 'server'
               ? renderIconWithTippy('w-4 ml-2', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
               : k.toLowerCase() === 'client'
-                ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
-                : nothing}
+              ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
+              : nothing}
             ${rpcMethod ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', rpcMethod) : nothing}
           `;
         }
@@ -760,8 +760,8 @@ export class LogList extends LitElement {
         const errClas = hasErrors
           ? 'bg-fillError-strong text-white fill-white stroke-strokeError-strong'
           : childErrors
-            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
+          ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         return html`<div class="flex w-full ${wrapLines ? 'items-start' : 'items-center'} gap-1">
           ${this.view === 'tree'
             ? html`
@@ -788,8 +788,8 @@ export class LogList extends LitElement {
                         ${children}
                       </button>`
                     : depth === 0
-                      ? nothing
-                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                    ? nothing
+                    : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
                 </div>
               `
             : nothing}
@@ -837,17 +837,17 @@ export class LogList extends LitElement {
         ${this.isLiveStreaming
           ? html`<p>Live streaming latest data...</p>`
           : this.isLoadingRecent
-            ? html`<div class="loading loading-dots loading-md"></div>`
-            : html`
-                <button
-                  class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-                  @pointerdown=${() => {
-                    this.fetchData(this.recentFetchUrl, true);
-                  }}
-                >
-                  Check for recent data
-                </button>
-              `}
+          ? html`<div class="loading loading-dots loading-md"></div>`
+          : html`
+              <button
+                class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
+                @pointerdown=${() => {
+                  this.fetchData(this.recentFetchUrl, true);
+                }}
+              >
+                Check for recent data
+              </button>
+            `}
       </td>
     </tr>`;
   }
@@ -973,6 +973,7 @@ export class LogList extends LitElement {
     `;
   }
 
+  handleFlipDirection() {}
   options() {
     return html`
       <div class="w-full flex justify-end px-2 pb-1 gap-3 ">
@@ -1010,48 +1011,51 @@ export class LogList extends LitElement {
             <span class="sm:inline hidden">Options</span>
           </button>
           <div tabindex="0" class="dropdown-content space-y-2 bg-white border w-64 border-strokeWeak p-2 text-sm rounded shadow">
-            <button
-              class=${`flex items-center cursor-pointer  w-full gap-1 px-2 py-1 text-sm rounded ${
-                this.flipDirection ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-              }`}
-              @pointerdown=${() => {
-                this.flipDirection = !this.flipDirection;
-                this.spanListTree = this.buildSpanListTree(this.spanListTree.map((span) => span.data).reverse());
-                this.recentDataToBeAdded = this.buildSpanListTree(this.recentDataToBeAdded.map((span) => span.data).reverse());
-                this.spanListTree = [...this.spanListTree, ...this.recentDataToBeAdded];
-                this.recentDataToBeAdded = [];
-                this.requestUpdate();
-              }}
-            >
+            <label class="flex items-center cursor-pointer w-full gap-1 px-2 py-1 text-sm rounded text-textWeak hover:bg-gray-100">
+              <input
+                type="checkbox"
+                class="checkbox checkbox-xs checkbox-primary mr-1"
+                .checked=${this.flipDirection}
+                @change=${(e: any) => {
+                  this.flipDirection = e.target.checked;
+                  this.spanListTree = this.buildSpanListTree(this.spanListTree.map((span) => span.data).reverse());
+                  this.recentDataToBeAdded = this.buildSpanListTree(this.recentDataToBeAdded.map((span) => span.data).reverse());
+                  this.spanListTree = [...this.spanListTree, ...this.recentDataToBeAdded];
+                  this.recentDataToBeAdded = [];
+                  this.requestUpdate();
+                }}
+              />
               ${faSprite('flip-vertical', 'regular', 'h-4 w-4')}
               <span class="sm:inline hidden">Flip direction</span>
-            </button>
+            </label>
 
-            <button
-              class=${`flex items-center cursor-pointer w-full gap-1 px-2 py-1 text-sm rounded ${
-                this.wrapLines ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-              }`}
-              @pointerdown=${() => {
-                this.wrapLines = !this.wrapLines;
-                if (this.wrapLines) {
-                  let width = Number(
-                    window.getComputedStyle(document.getElementById('logs_list_container_inner')!).width.replace('px', '')
-                  );
-                  this.logsColumns.forEach((col) => {
-                    if (col !== 'summary' && this.columnMaxWidthMap[col]) {
-                      width -= this.columnMaxWidthMap[col] + 8;
-                    }
-                  });
-                  this.columnMaxWidthMap['summary'] = width - 20; // margin left and right and id width
-                } else {
-                  this.columnMaxWidthMap['summary'] = 450 * 8;
-                }
-                this.requestUpdate();
-              }}
-            >
+            <label class="flex items-center cursor-pointer w-full gap-1 px-2 py-1 text-sm rounded text-textWeak hover:bg-gray-100">
+              <input
+                type="checkbox"
+                .checked=${this.wrapLines}
+                class="checkbox checkbox-xs checkbox-primary mr-1"
+                @change=${(e: any) => {
+                  this.wrapLines = e.target.checked;
+                  if (this.wrapLines) {
+                    let width = Number(
+                      window.getComputedStyle(document.getElementById('logs_list_container_inner')!).width.replace('px', '')
+                    );
+                    this.logsColumns.forEach((col) => {
+                      if (col !== 'summary' && this.columnMaxWidthMap[col]) {
+                        width -= this.columnMaxWidthMap[col] + 8;
+                      }
+                    });
+                    this.columnMaxWidthMap['summary'] = width - 20;
+                  } else {
+                    this.columnMaxWidthMap['summary'] = 450 * 8;
+                  }
+                  this.requestUpdate();
+                }}
+              />
               ${faSprite('wrap-text', 'regular', 'h-4 w-4')}
               <span class="sm:inline hidden">Wrap lines</span>
-            </button>
+            </label>
+
             <columns-settings .columns=${this.logsColumns} @columns-changed=${this.handleColumnsChanged}></columns-settings>
           </div>
         </div>
