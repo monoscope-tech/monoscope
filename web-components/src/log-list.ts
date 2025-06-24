@@ -351,10 +351,13 @@ export class LogList extends LitElement {
 
   fetchData(url: string, isNewData = false, isRefresh = false) {
     if (isNewData) {
+      if(this.isLoadingRecent) return;
       this.isLoadingRecent = true;
     } else if (isRefresh) {
+      if(this.isLoadingReplace) return;
       this.isLoadingReplace = true;
     } else {
+      if(this.isLoading) return;
       this.isLoading = true;
     }
     fetch(url, {
