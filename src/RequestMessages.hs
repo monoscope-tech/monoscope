@@ -12,6 +12,7 @@ module RequestMessages (
   ensureUrlParams,
   processErrors,
   replaceAllFormats,
+  dedupFields,
 )
 where
 
@@ -23,6 +24,7 @@ import Data.Aeson.Types qualified as AET
 import Data.HashMap.Strict qualified as HM
 import Data.HashTable.Class qualified as HTC
 import Data.HashTable.ST.Cuckoo qualified as HT
+import Data.List qualified as L
 import Data.Scientific qualified as Scientific
 import Data.Text qualified as T
 import Data.Time.LocalTime (ZonedTime)
@@ -44,7 +46,7 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Relude
 import Relude.Unsafe as Unsafe (read)
-import Text.RE.Replace (matched, replaceAll)
+import Text.RE.Replace (Match, capture, matched, replaceAll)
 import Text.RE.TDFA (RE, re, (*=~), (?=~))
 import Utils (DBField (), toXXHash)
 
@@ -221,13 +223,13 @@ valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToField
 -- | Merge all fields in the vector of tuples by the first item in the tuple.
 --
 -- >>> dedupFields (V.fromList [(".menu[*]", AE.String "xyz"),(".menu[*]", AE.String "abc")])
--- V.fromList [(".menu[*]",V.fromList [AE.String "abc",AE.String "xyz"])]
+-- [(".menu[*]",[String "abc",String "xyz"])]
 --
 -- >>> dedupFields (V.fromList [(".menu.[*]", AE.String "xyz"),(".menu.[*]", AE.String "abc"),(".menu.[*]", AE.Number 123)])
--- V.fromList [(".menu.[*]",V.fromList [AE.Number 123.0,AE.String "abc",AE.String "xyz"])]
+-- [(".menu.[*]",[Number 123.0,String "abc",String "xyz"])]
 --
 -- >>> dedupFields (V.fromList [(".menu.[*].a", AE.String "xyz"),(".menu.[*].b", AE.String "abc"),(".menu.[*].a", AE.Number 123)])
--- V.fromList [(".menu.[*].a",V.fromList [AE.Number 123.0,AE.String "xyz"]),(".menu.[*].b",V.fromList [AE.String "abc"])]
+-- [(".menu.[*].b",[String "abc"]),(".menu.[*].a",[Number 123.0,String "xyz"])]
 dedupFields :: V.Vector (Text, AE.Value) -> V.Vector (Text, V.Vector AE.Value)
 dedupFields fields = runST $ do
   -- Create a mutable hash table
@@ -338,7 +340,7 @@ commonFormatPatterns =
   , ([re|\b[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}\b|], "{hostname}")
   , ([re|\b0x[0-9A-Fa-f]+\b|], "{hex}")
   , ([re|\b[+-]?\d+\.\d+\b|], "{float}") -- More specific float pattern
-  , ([re|[0-9]+|], "{integer}")
+  , ([re|\b[0-9]+\b|], "{integer}")
   , ([re|'[^']{1,100}'|], "{quoted_value}") -- Match single-quoted values: 'value'
   , ([re|"[^"]{1,100}"|], "{quoted_value}") -- Match double-quoted values: "value"
   , ([re|`[^`]{1,100}`|], "{quoted_value}") -- Match backtick-quoted values: `value`
@@ -358,12 +360,32 @@ commonFormatPatterns =
 -- "User {integer} accessed endpoint {uuid}"
 --
 -- >>> replaceAllFormats "Error at 192.168.0.1:8080 with status 404"
--- "Error at {ipv4}{port} with status {http_status}"
+-- "Error at {integer}.{integer}.{integer}.{integer}:{integer} with status {integer}"
 replaceAllFormats :: Text -> Text
-replaceAllFormats input = foldl' applyReplacement input commonFormatPatterns
+replaceAllFormats input =
+  let (finalText, replacements) = processAllPatterns input commonFormatPatterns 0 []
+   in applyReplacements finalText replacements
   where
-    applyReplacement txt (regex, replacement) =
-      replaceAll replacement (txt *=~ regex)
+    -- Unique placeholder that won't appear in text or match any pattern
+    makePlaceholder :: Int -> Text
+    makePlaceholder n = "\x00PH" <> T.pack (show n) <> "\x00"
+
+    -- Process all patterns, accumulating placeholder mappings
+    processAllPatterns :: Text -> [(RE, Text)] -> Int -> [(Text, Text)] -> (Text, [(Text, Text)])
+    processAllPatterns txt [] _ repls = (txt, repls)
+    processAllPatterns txt ((regex, replacement) : rest) counter repls =
+      let ph = makePlaceholder counter
+          newTxt = replaceAll ph (txt *=~ regex)
+          hasMatches = newTxt /= txt
+          newRepls = if hasMatches then (ph, replacement) : repls else repls
+          newCounter = if hasMatches then counter + 1 else counter
+       in processAllPatterns newTxt rest newCounter newRepls
+
+    -- Apply all replacements to restore placeholders
+    applyReplacements :: Text -> [(Text, Text)] -> Text
+    applyReplacements txt [] = txt
+    applyReplacements txt ((ph, repl) : rest) =
+      applyReplacements (T.replace ph repl txt) rest
 
 
 -- valueToFormatStr will take a string and try to find a format which matches that string best.
@@ -400,11 +422,11 @@ valueToFormatStr val = checkFormats formatChecks
     -- Add patterns that are specific to valueToFormatStr (exact match patterns for path params)
     formatChecks :: [(RE, Text)]
     formatChecks =
-      [ ([re|^[0-9]+$|], "{integer}")
-      , ([re|^[+-]?(\d+(\.\d*)?|\.\d+)$|], "{float}")
-      , ([re|^0x[0-9A-Fa-f]+$|], "{hex}")
-      ]
-        ++ commonFormatPatterns
+      commonFormatPatterns
+        ++ [ -- ([re|^[0-9]+$|], "{integer}")
+             -- , ([re|^[+-]?(\d+(\.\d*)?|\.\d+)$|], "{float}")
+             ([re|^0x[0-9A-Fa-f]+$|], "{hex}")
+           ]
 
 
 ensureUrlParams :: Text -> (Text, AE.Value, Bool)

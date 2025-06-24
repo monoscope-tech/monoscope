@@ -1,4 +1,4 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, FieldKey (..), pSquareBracketKey, pTerm, jsonPathQuery, display, pDuration, pNowFunction, pAgoFunction, pValues) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -21,6 +21,8 @@ import Text.Megaparsec.Char.Lexer qualified as L
 -- $setup
 -- >>> import Text.Megaparsec (parse, parseTest)
 -- >>> import Data.Text.Display (display)
+-- >>> import Pkg.Parser.Expr (Values(..), Subject(..), FieldKey(..), jsonPathQuery)
+-- >>> import Prelude (Bool(..))
 -- >>> :set -XOverloadedStrings
 -- >>> :set -XQuasiQuotes
 
@@ -351,6 +353,7 @@ pValues =
 -- Examples:
 --
 -- >>> parseTest pTerm "abc != \"GET\""
+-- NotEq (Subject "abc" "abc" []) (Str "GET")
 --
 -- Test new 'in' and '!in' operators:
 -- >>> parse pTerm "" "status in (\"success\", \"error\")"
@@ -390,7 +393,7 @@ pValues =
 -- >>> parse pTerm "" "url !endswith \".css\""
 -- Right (NotEndsWith (Subject "url" "url" []) (Str ".css"))
 --
--- >>> parse pTerm "" "email matches /.*@company\\.com/"
+-- >>> parse pTerm "" "email matches /.*@company\\\\.com/"
 -- Right (Matches (Subject "email" "email" []) ".*@company\\.com")
 pTerm :: Parser Expr
 pTerm =
@@ -647,16 +650,16 @@ instance Display Values where
 -- | Render the expr ast to a value. Start with Eq only, for supporting jsonpath
 --
 -- >>> display (Eq (Subject "" "request_body" [FieldKey "message"]) (Str "val"))
--- "request_body->>'message'='val'"
+-- "request_body->>'message' = 'val'"
 --
 -- >>> display (Eq (Subject "" "errors" [ArrayIndex "" 0, FieldKey "message"]) (Str "val"))
--- "errors->0->>'message'='val'"
+-- "errors->0->>'message' = 'val'"
 --
 -- >>> display (Eq (Subject "" "abc" [ArrayWildcard "",FieldKey "xyz"]) (Str "val"))
--- "jsonb_path_exists(abc, $$$[*].\"xyz\" ? (@ == \"val\")$$::jsonpath)"
+-- "jsonb_path_exists(to_jsonb(abc), $$$[*].\"xyz\" ? (@ == \"val\")$$::jsonpath)"
 --
 -- >>> display (Eq (Subject "" "errors" [ArrayWildcard "", ArrayIndex "message" 0, FieldKey "details"]) (Str "detailsVal"))
--- "jsonb_path_exists(errors, $$$[*].message[0].\"details\" ? (@ == \"detailsVal\")$$::jsonpath)"
+-- "jsonb_path_exists(to_jsonb(errors), $$$[*].message[0].\"details\" ? (@ == \"detailsVal\")$$::jsonpath)"
 --
 -- -- abc[*].xyz which should generate something else than what is generated.
 -- -- TODO: investigate and then FIXME
@@ -679,7 +682,7 @@ instance Display Values where
 -- "request_body->'message'->'tags'->>'name'"
 --
 -- >>> display (Regex (Subject "" "request_body" [FieldKey "msg"]) "^abc.*")
--- "jsonb_path_exists(request_body, $$$.\"msg\" ? (@ = \"^abc.*\")$$::jsonpath)"
+-- "jsonb_path_exists(to_jsonb(request_body), $$$.\"msg\" ? (@ like_regex \"^abc.*\" flag \"i\" )$$::jsonpath)"
 --
 -- Test new operators Display instances for SQL generation:
 --
@@ -797,27 +800,27 @@ displayExprHelper op prec sub val =
 -- Examples:
 --
 -- >>> jsonPathQuery "==" (Subject "" "data" [FieldKey "name"]) (Str "John Doe")
--- "jsonb_path_exists(data, $$$.\"name\" ? (@ == \"John Doe\")$$::jsonpath)"
+-- "jsonb_path_exists(to_jsonb(data), $$$.\"name\" ? (@ == \"John Doe\")$$::jsonpath)"
 --
 -- >>> jsonPathQuery "!=" (Subject "" "users" [ArrayIndex "" 1, FieldKey "age"]) (Num "30")
--- "jsonb_path_exists(users, $$$[1].\"age\" ? (@ != 30)$$::jsonpath)"
+-- "jsonb_path_exists(to_jsonb(users), $$$[1].\"age\" ? (@ != 30)$$::jsonpath)"
 --
 -- >>> jsonPathQuery "!=" (Subject "" "settings" [ArrayWildcard "", FieldKey "enabled"]) (Boolean True)
--- "jsonb_path_exists(settings, $$$[*].\"enabled\" ? (@ != true)$$::jsonpath)"
+-- "jsonb_path_exists(to_jsonb(settings), $$$[*].\"enabled\" ? (@ != true)$$::jsonpath)"
 --
 -- >>> jsonPathQuery "<" (Subject "" "user" [FieldKey "profile", FieldKey "address", FieldKey "zipcode"]) Null
--- "jsonb_path_exists(user, $$$.\"profile\".\"address\".\"zipcode\" ? (@ < null)$$::jsonpath)"
+-- "jsonb_path_exists(to_jsonb(user), $$$.\"profile\".\"address\".\"zipcode\" ? (@ < null)$$::jsonpath)"
 --
 -- >>> jsonPathQuery ">" (Subject "" "orders" [ArrayIndex "" 0, ArrayWildcard "val", FieldKey "status"]) (Str "pending")
--- "jsonb_path_exists(orders, $$$[0].val[*].\"status\" ? (@ > \"pending\")$$::jsonpath)"
+-- "jsonb_path_exists(to_jsonb(orders), $$$[0].val[*].\"status\" ? (@ > \"pending\")$$::jsonpath)"
 --
 -- >>> jsonPathQuery "like_regex" (Subject "" "request_body" [FieldKey "msg"]) (Str "^abc.*")
--- "jsonb_path_exists(request_body, $$$.\"msg\" ? (@ like_regex \"^abc.*\" flag \"i\" )$$::jsonpath)"
+-- "jsonb_path_exists(to_jsonb(request_body), $$$.\"msg\" ? (@ like_regex \"^abc.*\" flag \"i\" )$$::jsonpath)"
 --
 -- Test new operators with JSONPath (wildcard subjects):
 --
 -- >>> jsonPathQuery "IN" (Subject "" "users" [ArrayWildcard "", FieldKey "role"]) (List [Str "admin", Str "user"])
--- "jsonb_path_exists(to_jsonb(users), $$$[*].\"role\" ? (@ IN {\"admin\",\"user\"})$$::jsonpath)"
+-- "jsonb_path_exists(to_jsonb(users), $$$[*].\"role\" ? (@ IN ['admin','user'])$$::jsonpath)"
 --
 -- >>> jsonPathQuery "HAS" (Subject "" "logs" [ArrayWildcard "", FieldKey "message"]) (Str "error")
 -- "jsonb_path_exists(to_jsonb(logs), $$$[*].\"message\" ? (@ HAS \"error\")$$::jsonpath)"

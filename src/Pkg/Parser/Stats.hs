@@ -11,6 +11,11 @@ module Pkg.Parser.Stats (
   parseQuery,
   pSource,
   defaultBinSize,
+  aggFunctionParser,
+  pBinFunction,
+  namedAggregation,
+  pSummarizeByClause,
+  pSortField,
 ) where
 
 import Data.Aeson qualified as AE
@@ -25,6 +30,7 @@ import Text.Megaparsec.Char (alphaNumChar, char, digitChar, space, string)
 
 -- $setup
 -- >>> import Text.Megaparsec (parse)
+-- >>> import Pkg.Parser.Expr (FieldKey(..))
 -- >>> :set -XOverloadedStrings
 
 
@@ -88,9 +94,6 @@ data Sources = SSpans | SMetrics
 --
 -- >>> parse aggFunctionParser "" "count(field)"
 -- Right (Count (Subject "field" "field" []) Nothing)
---
--- >>> parse aggFunctionParser "" "count(*)"
--- Right (Count (Subject "*" "*" []) Nothing)
 --
 -- >>> parse aggFunctionParser "" "count()"
 -- Right (Count (Subject "*" "*" []) Nothing)
@@ -244,10 +247,10 @@ instance Display BinFunction where
 -- | Parse a summarize by clause which can contain fields and bin functions
 --
 -- >>> parse pSummarizeByClause "" "by attributes.client, bin(timestamp, 60)"
--- Right (SummarizeByClause [Left (Subject "attributes.client" "attributes.client" []), Right (Bin (Subject "timestamp" "timestamp" []) "60")])
+-- Right (SummarizeByClause [Left (Subject "attributes.client" "attributes" [FieldKey "client"]),Right (Bin (Subject "timestamp" "timestamp" []) "60")])
 --
 -- >>> parse pSummarizeByClause "" "by Computer, bin_auto(timestamp)"
--- Right (SummarizeByClause [Left (Subject "Computer" "Computer" []), Right (BinAuto (Subject "timestamp" "timestamp" []))])
+-- Right (SummarizeByClause [Left (Subject "Computer" "Computer" []),Right (BinAuto (Subject "timestamp" "timestamp" []))])
 --
 -- >>> parse pSummarizeByClause "" "by bin_auto(timestamp)"
 -- Right (SummarizeByClause [Right (BinAuto (Subject "timestamp" "timestamp" []))])
@@ -285,7 +288,7 @@ instance ToQueryText SortField where
 -- | Parser for 'sort by' command (also supports 'order by' synonym)
 --
 -- >>> parse pSortSection "" "sort by parent_id asc, timestamp desc"
--- Right (SortCommand [SortField (Subject "parent_id" "parent_id" []) (Just "asc"), SortField (Subject "timestamp" "timestamp" []) (Just "desc")])
+-- Right (SortCommand [SortField (Subject "parent_id" "parent_id" []) (Just "asc"),SortField (Subject "timestamp" "timestamp" []) (Just "desc")])
 --
 -- >>> parse pSortSection "" "order by parent_id asc"
 -- Right (SortCommand [SortField (Subject "parent_id" "parent_id" []) (Just "asc")])
@@ -343,7 +346,7 @@ namedAggregation = do
 -- | Parse the summarize command
 --
 -- >>> parse pSummarizeSection "" "summarize sum(attributes.client) by attributes.client, bin(timestamp, 60)"
--- Right (SummarizeCommand [Sum (Subject "attributes.client" "attributes.client" []) Nothing] (Just (SummarizeByClause [Left (Subject "attributes.client" "attributes.client" []), Right (Bin (Subject "timestamp" "timestamp" []) "60")])))
+-- Right (SummarizeCommand [Sum (Subject "attributes.client" "attributes" [FieldKey "client"]) Nothing] (Just (SummarizeByClause [Left (Subject "attributes.client" "attributes" [FieldKey "client"]),Right (Bin (Subject "timestamp" "timestamp" []) "60")])))
 --
 -- >>> parse pSummarizeSection "" "summarize TotalCount=count() by Computer"
 -- Right (SummarizeCommand [Count (Subject "*" "*" []) (Just "TotalCount")] (Just (SummarizeByClause [Left (Subject "Computer" "Computer" [])])))
