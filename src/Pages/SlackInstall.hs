@@ -216,13 +216,13 @@ linkDiscordGetH pidM' codeM guildIdM = do
           }
   case (pidM, codeM, guildIdM) of
     (Just pid, Just code, Just guildId) -> do
-      _ <- registerDiscordCommands envCfg.discordClientId envCfg.discordBotToken guildId
+      -- _ <- registerDiscordCommands envCfg.discordClientId envCfg.discordBotToken guildId
       _ <- dbtToEff $ insertDiscordData pid guildId
       if isOnboarding
         then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
         else pure $ addHeader "" $ BotLinked $ PageCtx bwconf "Discord"
     _ ->
-      pure $ addHeader "" $ BotLinked $ PageCtx bwconf "Discord" -- DiscordError $ PageCtx def ()
+      pure $ addHeader "" $  DiscordError $ PageCtx def ()
 
 
 -- Discord interaction type
