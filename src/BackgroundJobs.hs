@@ -90,8 +90,8 @@ data BgJobs
   | DeletedProject Projects.ProjectId
   | APITestFailed Projects.ProjectId Testing.CollectionId (V.Vector Testing.StepResult)
   | CleanupDemoProject
-  | FiveMinuteSpanProcessing UTCTime
-  | OneMinuteErrorProcessing UTCTime
+  -- \| FiveMinuteSpanProcessing UTCTime
+  -- \| OneMinuteErrorProcessing UTCTime
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -187,15 +187,15 @@ jobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs 
             let scheduledTime = addUTCTime (fromIntegral $ hour * 3600) currentTime
             scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob scheduledTime hour) scheduledTime
 
-          -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
-          forM_ [0 .. 287] \interval -> do
-            let scheduledTime = addUTCTime (fromIntegral $ interval * 300) currentTime
-            scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteSpanProcessing scheduledTime) scheduledTime
+        -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
+        -- forM_ [0 .. 287] \interval -> do
+        --   let scheduledTime = addUTCTime (fromIntegral $ interval * 300) currentTime
+        --   scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteSpanProcessing scheduledTime) scheduledTime
 
-          -- Schedule 1-minute error processing jobs (1440 jobs per day = 24 hours * 60 per hour)
-          forM_ [0 .. 1439] \interval -> do
-            let scheduledTime = addUTCTime (fromIntegral $ interval * 60) currentTime
-            scheduleJob conn "background_jobs" (BackgroundJobs.OneMinuteErrorProcessing scheduledTime) scheduledTime
+        -- Schedule 1-minute error processing jobs (1440 jobs per day = 24 hours * 60 per hour)
+        -- forM_ [0 .. 1439] \interval -> do
+        --   let scheduledTime = addUTCTime (fromIntegral $ interval * 60) currentTime
+        --   scheduleJob conn "background_jobs" (BackgroundJobs.OneMinuteErrorProcessing scheduledTime) scheduledTime
 
         -- Handle regular daily jobs for each project
         projects <- dbtToEff $ query [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
@@ -254,9 +254,10 @@ jobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs 
         -- DELETE API KEYS
         _ <- withPool authCtx.pool $ PTR.execute [sql| DELETE FROM projects.project_api_keys WHERE project_id = ? AND title != 'Default API Key' |] (Only pid)
         pass
-      FiveMinuteSpanProcessing scheduledTime -> processFiveMinuteSpans scheduledTime
-      OneMinuteErrorProcessing scheduledTime -> processOneMinuteErrors scheduledTime
 
+
+-- FiveMinuteSpanProcessing scheduledTime -> processFiveMinuteSpans scheduledTime
+-- OneMinuteErrorProcessing scheduledTime -> processOneMinuteErrors scheduledTime
 
 -- | Run hourly scheduled tasks for all projects
 runHourlyJob :: UTCTime -> Int -> ATBackgroundCtx ()
