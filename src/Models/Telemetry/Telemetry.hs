@@ -94,13 +94,28 @@ getNestedValue (k : ks) m = do
     _ -> Nothing
 
 
+-- Helper function to clean null bytes from text
+cleanNullBytes :: Text -> Text
+cleanNullBytes = T.filter (/= '\NUL')
+
+-- Helper function to clean null bytes from JSON values
+cleanNullBytesFromJSON :: AE.Value -> AE.Value
+cleanNullBytesFromJSON (AE.String t) = AE.String $ cleanNullBytes t
+cleanNullBytesFromJSON (AE.Object o) = AE.Object $ KEM.map cleanNullBytesFromJSON o
+cleanNullBytesFromJSON (AE.Array a) = AE.Array $ V.map cleanNullBytesFromJSON a
+cleanNullBytesFromJSON v = v
+
+-- Helper to clean a Map Text AE.Value
+cleanMapJSON :: Map Text AE.Value -> Map Text AE.Value
+cleanMapJSON = Map.map cleanNullBytesFromJSON
+
 -- Lens-like access helpers for Map Text AE.Value fields
 atMapText :: Text -> Maybe (Map Text AE.Value) -> Maybe Text
 atMapText key maybeMap = do
   m <- maybeMap
   val <- getNestedValue (T.split (== '.') key) m
   case val of
-    AE.String t -> Just t
+    AE.String t -> Just $ cleanNullBytes t
     AE.Number n -> Just $ show n
     _ -> Nothing
 
@@ -670,29 +685,29 @@ instance ToRow OtelLogsAndSpans where
     [ toField entry.timestamp -- timestamp
     , toField entry.observed_timestamp -- observed_timestamp
     , toField entry.id -- id
-    , toField entry.parent_id -- parent_id
-    , toField entry.hashes
-    , toField entry.name -- name
-    , toField entry.kind -- kind
-    , toField entry.status_code -- status_code
-    , toField entry.status_message -- status_message
-    , toField entry.level -- level
+    , toField $ fmap cleanNullBytes entry.parent_id -- parent_id
+    , toField $ V.map cleanNullBytes entry.hashes
+    , toField $ fmap cleanNullBytes entry.name -- name
+    , toField $ fmap cleanNullBytes entry.kind -- kind
+    , toField $ fmap cleanNullBytes entry.status_code -- status_code
+    , toField $ fmap cleanNullBytes entry.status_message -- status_message
+    , toField $ fmap cleanNullBytes entry.level -- level
     , toField $ fmap AE.toJSON entry.severity -- severity as JSON
     , toField $ parseSeverityText entry.severity -- severity___severity_text
     , toField $ parseSeverityNumber entry.severity -- severity___severity_number
-    , toField entry.body -- body as JSON
+    , toField $ fmap cleanNullBytesFromJSON entry.body -- body as JSON
     , toField entry.duration -- duration
     , toField entry.start_time -- start_time
     , toField entry.end_time -- end_time
-    , toField $ fmap AE.toJSON entry.context -- context as JSON
-    , toField $ entry.context >>= (.trace_id) -- context___trace_id
-    , toField $ entry.context >>= (.span_id) -- context___span_id
-    , toField $ entry.context >>= (.trace_state) -- context___trace_state
-    , toField $ entry.context >>= (.trace_flags) -- context___trace_flags
-    , toField $ entry.context >>= (.is_remote) -- context___is_remote
-    , toField entry.events -- events as JSON
-    , toField entry.links -- links
-    , toField $ fmap (AE.Object . KEM.fromMapText) entry.attributes -- attributes as JSON
+    , toField $ fmap (cleanNullBytesFromJSON . AE.toJSON) entry.context -- context as JSON
+    , toField $ fmap cleanNullBytes $ entry.context >>= (.trace_id) -- context___trace_id
+    , toField $ fmap cleanNullBytes $ entry.context >>= (.span_id) -- context___span_id
+    , toField $ fmap cleanNullBytes $ entry.context >>= (.trace_state) -- context___trace_state
+    , toField $ fmap cleanNullBytes $ entry.context >>= (.trace_flags) -- context___trace_flags
+    , toField $ fmap cleanNullBytes $ entry.context >>= (.is_remote) -- context___is_remote
+    , toField $ fmap cleanNullBytesFromJSON entry.events -- events as JSON
+    , toField $ fmap cleanNullBytes entry.links -- links
+    , toField $ fmap (cleanNullBytesFromJSON . AE.Object . KEM.fromMapText) entry.attributes -- attributes as JSON
     , toField $ atMapText "client.address" entry.attributes -- attributes___client___address
     , toField $ atMapInt "client.port" entry.attributes -- attributes___client___port
     , toField $ atMapText "server.address" entry.attributes -- attributes___server___address
@@ -742,7 +757,7 @@ instance ToRow OtelLogsAndSpans where
     , toField $ atMapText "user.full_name" entry.attributes -- attributes___user___full_name
     , toField $ atMapText "user.name" entry.attributes -- attributes___user___name
     , toField $ atMapText "user.hash" entry.attributes -- attributes___user___hash
-    , toField $ fmap (AE.Object . KEM.fromMapText) entry.resource -- resource as JSON
+    , toField $ fmap (cleanNullBytesFromJSON . AE.Object . KEM.fromMapText) entry.resource -- resource as JSON
     , toField $ atMapText "service.name" entry.resource -- resource___service___name
     , toField $ atMapText "service.version" entry.resource -- resource___service___version
     , toField $ atMapText "service.instance.id" entry.resource -- resource___service___instance___id
@@ -751,14 +766,14 @@ instance ToRow OtelLogsAndSpans where
     , toField $ atMapText "telemetry.sdk.name" entry.resource -- resource___telemetry___sdk___name
     , toField $ atMapText "telemetry.sdk.version" entry.resource -- resource___telemetry___sdk___version
     , toField $ atMapText "user_agent.original" entry.resource -- resource___user_agent___original
-    , toField entry.project_id -- project_id
+    , toField $ cleanNullBytes entry.project_id -- project_id
     , toField entry.date
     ]
     where
       -- Helper functions for severity fields
       parseSeverityText sev = do
         s <- sev
-        show <$> s.severity_text
+        cleanNullBytes . show <$> s.severity_text
 
       parseSeverityNumber = fmap (show . severity_number)
 
