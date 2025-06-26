@@ -96,7 +96,11 @@ getNestedValue (k : ks) m = do
 
 -- Helper function to clean null bytes from text
 cleanNullBytes :: Text -> Text
-cleanNullBytes = T.filter (/= '\NUL')
+cleanNullBytes !t =
+  if T.any (== '\NUL') t
+    then T.filter (/= '\NUL') t
+    else t
+
 
 -- Helper function to clean null bytes from JSON values
 cleanNullBytesFromJSON :: AE.Value -> AE.Value
@@ -105,9 +109,11 @@ cleanNullBytesFromJSON (AE.Object o) = AE.Object $ KEM.map cleanNullBytesFromJSO
 cleanNullBytesFromJSON (AE.Array a) = AE.Array $ V.map cleanNullBytesFromJSON a
 cleanNullBytesFromJSON v = v
 
+
 -- Helper to clean a Map Text AE.Value
 cleanMapJSON :: Map Text AE.Value -> Map Text AE.Value
 cleanMapJSON = Map.map cleanNullBytesFromJSON
+
 
 -- Lens-like access helpers for Map Text AE.Value fields
 atMapText :: Text -> Maybe (Map Text AE.Value) -> Maybe Text

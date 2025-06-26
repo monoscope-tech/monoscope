@@ -21,7 +21,6 @@ import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
 import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.Queue qualified as Queue
-import ProcessMessage (processMessages)
 import Relude
 import Servant (FromHttpApiData (..))
 import Servant qualified

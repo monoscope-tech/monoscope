@@ -131,28 +131,23 @@ getProjectIdByApiKey projectKey = do
     q = [sql| select project_id from projects.project_api_keys where key_prefix=?|]
 
 
-projectIdsByProjectApiKeys :: V.Vector Text -> DBT IO (V.Vector (Text, Projects.ProjectId, Integer))
-projectIdsByProjectApiKeys projectKeys = query q (Only projectKeys)
+projectIdsByProjectApiKeys :: (DB :> es, Effectful.Reader Config.AuthContext :> es, IOE :> es) => V.Vector Text -> Eff es (V.Vector (Text, Projects.ProjectId))
+projectIdsByProjectApiKeys projectKeys = do
+  pool <- getPool
+  appCtx <- Effectful.ask @Config.AuthContext
+  
+  -- Use the existing projectKeyCache to look up each key
+  results <- liftIO $ forM (V.toList projectKeys) $ \key -> do
+    maybeProjectId <- Cache.fetchWithCache appCtx.projectKeyCache key $ \k ->
+      withPool pool $ queryOne q (Only k)
+    
+    case maybeProjectId of
+      Nothing -> pure Nothing
+      Just projectId -> pure $ Just (key, projectId)
+  
+  pure $ V.fromList $ catMaybes results
   where
-    q =
-      [sql| 
-SELECT 
-  k.key_prefix, 
-  k.project_id, 
-  COALESCE(span_counts.daily_events_count, 0) AS daily_events_count
-FROM projects.project_api_keys k
-LEFT JOIN projects.projects p ON p.id = k.project_id
-LEFT JOIN (
-    SELECT 
-      e.project_id, 
-      COUNT(*) AS daily_events_count
-    FROM otel_logs_and_spans e
-    JOIN projects.projects p ON p.id = e.project_id::uuid
-    WHERE p.payment_plan = 'Free' 
-      AND e.timestamp > NOW() - INTERVAL '1 day'
-    GROUP BY e.project_id
-) span_counts ON span_counts.project_id::uuid = k.project_id
-WHERE k.key_prefix = ANY(?)|]
+    q = [sql| select project_id from projects.project_api_keys where key_prefix=?|]
 
 
 -- AES256 encryption

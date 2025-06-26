@@ -94,6 +94,8 @@ default-extensions:
   - TupleSections
   - ViewPatterns
   - DeriveGeneric
+  - StrictData
+  - BangPatterns
 
 description: Please see the README on GitHub at <https://github.com/githubuser/apitoolkit-server#readme>
 

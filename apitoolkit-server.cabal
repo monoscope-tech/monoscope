@@ -304,6 +304,7 @@ library
     , network-uri
     , nyan-interpolation
     , odd-jobs
+    , parallel
     , parser-combinators
     , pg-entity
     , pg-transact

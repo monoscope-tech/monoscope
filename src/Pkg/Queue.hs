@@ -14,7 +14,6 @@ import Data.Text qualified as T
 import Data.Text.Lazy.Encoding qualified as LT
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
-import Data.Vector qualified as V
 import Effectful
 import Gogol qualified as Google
 import Gogol.Auth.ApplicationDefault qualified as Google
@@ -60,8 +59,6 @@ pubsubService appLogger appCtx topics fn = checkpoint "pubsubService" do
                 Just (ackId, b64Msg)
         let firstAttrs = messages ^? L.folded . field @"message" . _Just . field @"attributes" . _Just . field @"additional"
 
-        traceShowM $ "in pubsubService " <> (show $ length msgsB64)
-
         msgIds <-
           tryAny (liftIO $ runBackground appLogger appCtx $ fn (catMaybes msgsB64) (maybeToMonoid firstAttrs)) >>= \case
             Left e -> do
@@ -104,7 +101,6 @@ kafkaService appLogger appCtx fn = checkpoint "kafkaService" do
               attributes = HM.insert "ce-type" ceType $ consumerRecordHeadersToHashMap rec
               allRecords = consumerRecordToTuple <$> rightRecords
 
-          traceShowM $ "in kafkaService " <> (show $ length allRecords)
           msgIds <-
             tryAny (runBackground appLogger appCtx $ fn allRecords attributes) >>= \case
               Left e -> do
