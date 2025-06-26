@@ -225,6 +225,7 @@ library:
     - witch
     - wreq
     - xxhash
+    - parallel
     - pretty-relative-time
     - indexed-traversable
     - nyan-interpolation

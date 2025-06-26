@@ -251,7 +251,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
         let dashId = fromMaybe "" widget._dashboardId
         li_
           $ a_
-            [ class_ "p-2 w-full text-left block"
+            [ class_ "p-2 w-full text-left block cursor-pointer"
             , data_ "tippy-content" "Copy this widget to another dashboard"
             , id_ $ wId <> "_copy_link"
             , term
@@ -270,16 +270,16 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
         when (isJust widget._dashboardId) do
           li_
             $ a_
-              [ class_ "p-2 w-full text-left block"
+              [ class_ "p-2 w-full text-left block cursor-pointer"
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                  <> maybeToMonoid (widget._projectId <&> (.toText))
-                  <> "/dashboards/"
-                  <> maybeToMonoid widget._dashboardId
-                  <> "/widgets/"
-                  <> wId
-                  <> "/duplicate"
+                    <> maybeToMonoid (widget._projectId <&> (.toText))
+                    <> "/dashboards/"
+                    <> maybeToMonoid widget._dashboardId
+                    <> "/widgets/"
+                    <> wId
+                    <> "/duplicate"
               , hxTrigger_ "click"
               , [__| on click set (the closest <details/>).open to false
                      on htmx:beforeSwap
@@ -297,7 +297,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               "Duplicate widget"
           li_
             $ button_
-              [ class_ "p-2 w-full text-left text-textError"
+              [ class_ "p-2 w-full text-left text-textError cursor-pointer"
               , data_ "tippy-content" "Permanently delete this widget"
               , onpointerdown_
                   [text|
@@ -330,7 +330,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ chartId <> "_bordered"
         ]
         do

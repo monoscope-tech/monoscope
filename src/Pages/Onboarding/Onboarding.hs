@@ -415,8 +415,8 @@ integrationsPage pid apikey =
         $ div_ [class_ "max-w-[550px]"]
         $ stepIndicator 5 "Instrument your apps or servers"
         $ "/p/"
-        <> pid.toText
-        <> "/onboarding?step=NotifChannel"
+          <> pid.toText
+          <> "/onboarding?step=NotifChannel"
       div_ [class_ "flex-col w-full gap-4 flex mt-4 px-12 overflow-y-auto flex-grow"] do
         p_ [class_ "text-textStrong"] do
           "Send Logs, Metrics or Traces. Select an item below for instructions. "
@@ -428,7 +428,7 @@ integrationsPage pid apikey =
           div_ [class_ "flex items-center gap-2"] do
             div_ [class_ "flex-1 font-mono bg-bgBase p-3 border border-[#001066]/10 rounded-lg overflow-x-auto", id_ "api-key-display"] $ toHtml apikey
             button_
-              [ class_ "px-4 py-2 bg-fillStrong rounded-xl text-white flex items-center gap-1 hover:bg-fillStronger"
+              [ class_ "px-4 py-2 bg-fillStrong rounded-xl text-white flex items-center gap-1 hover:bg-fillStronger cursor-pointer"
               , type_ "button"
               , onpointerdown_ "navigator.clipboard.writeText(document.getElementById('api-key-display').textContent); this.innerHTML = '<span>Copied!</span><svg class=\"h-4 w-4\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M5 13l4 4L19 7\"></path></svg>';"
               ]
@@ -520,7 +520,7 @@ integrationsPage pid apikey =
                           , hxSelect_ "#mainArticle"
                           , hxIndicator_ $ "#fw-indicator-" <> lang
                           ]
-                        <> [checked_ | idx == 0]
+                          <> [checked_ | idx == 0]
                       unless (T.null fwIcon) $ img_ [class_ "h-5 w-5", src_ $ "https://apitoolkit.io/assets/img/framework-logos/" <> fwIcon]
                       span_ $ toHtml fwName
 
@@ -746,7 +746,7 @@ inviteTeamMemberModal pid emails = do
                   $ div_ [class_ "flex flex-col gap-1 w-full"]
                   $ do
                     input_ [class_ "input input-sm w-full", placeholder_ "email@example.com", type_ "email", id_ "add-member-input"]
-                button_ [class_ "btn-primary rounded-xl px-4 py-2 justify-center items-center flex text-white text-sm", onpointerdown_ "appendMember()"] "invite"
+                button_ [class_ "btn-primary rounded-xl px-4 py-2 justify-center items-center flex text-white text-sm cursor-pointer", onpointerdown_ "appendMember()"] "invite"
               div_ [class_ "w-full"] $ do
                 div_ [class_ "w-full  text-textStrong text-sm font-semibold"] "Members"
                 div_ [class_ "w-full border-t border-weak"] $ do

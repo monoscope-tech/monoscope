@@ -182,11 +182,11 @@ expandedSpanItem pid sp aptSp leftM rightM = do
               div_ [id_ "http-content-container", class_ "flex flex-col gap-3 mt-2"] do
                 div_ [class_ "bg-fillWeak w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"] do
                   div_ [class_ "justify-start items-start flex text-sm"] do
-                    button_ [onpointerdown_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Res Body"
-                    button_ [onpointerdown_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Req Body"
-                    button_ [onpointerdown_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
-                    button_ [onpointerdown_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
-                    button_ [onpointerdown_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "http a-tab px-3 py-1 rounded-lg text-textWeak"] "Request Details"
+                    button_ [onpointerdown_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "http cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Res Body"
+                    button_ [onpointerdown_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "http cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Req Body"
+                    button_ [onpointerdown_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "http cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
+                    button_ [onpointerdown_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "http cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
+                    button_ [onpointerdown_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "http cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Request Details"
                 div_ [] do
                   div_ [id_ "raw_content", class_ "hidden a-tab-content http"] do
                     jsonValueToHtmlTree (AE.toJSON cSp) Nothing
