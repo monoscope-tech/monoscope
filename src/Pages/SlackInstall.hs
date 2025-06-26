@@ -216,13 +216,37 @@ linkDiscordGetH pidM' codeM guildIdM = do
           }
   case (pidM, codeM, guildIdM) of
     (Just pid, Just code, Just guildId) -> do
-      _ <- registerDiscordCommands envCfg.discordClientId envCfg.discordBotToken guildId
-      _ <- dbtToEff $ insertDiscordData pid guildId
-      if isOnboarding
-        then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
-        else pure $ addHeader "" $ BotLinked $ PageCtx bwconf "Discord"
+      r' <- exchangeCodeForTokenDiscord envCfg.discordClientId envCfg.discordClientSecret code envCfg.discordRedirectUri
+      case r' of
+        Just t -> do
+          _ <- dbtToEff $ insertDiscordData pid guildId
+          if isOnboarding
+            then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
+            else pure $ addHeader "" $ BotLinked $ PageCtx bwconf "Discord"
+        Nothing -> pure $ addHeader "" $ DiscordError $ PageCtx def ()
     _ ->
       pure $ addHeader "" $ DiscordError $ PageCtx def ()
+
+
+exchangeCodeForTokenDiscord :: HTTP :> es => Text -> Text -> Text -> Text -> Eff es (Maybe Text)
+exchangeCodeForTokenDiscord clientId clientSecret code redirectUri = do
+  let url = "https://discord.com/api/oauth2/token"
+  let body :: [FormParam]
+      body =
+        [ "client_id" Wreq.:= clientId
+        , "client_secret" Wreq.:= clientSecret
+        , "grant_type" Wreq.:= ("authorization_code" :: Text)
+        , "code" Wreq.:= code
+        , "redirect_uri" Wreq.:= redirectUri
+        ]
+      opts = defaults & header "Content-Type" .~ ["application/x-www-form-urlencoded"]
+
+  res <- postWith opts url body
+
+  let status = res ^. Wreq.responseStatus . Wreq.statusCode
+  if status >= 200 && status < 300
+    then pure (Just "success")
+    else pure Nothing
 
 
 -- Discord interaction type
@@ -465,22 +489,6 @@ buildPrompt cmdData interaction envCfg = do
       _ -> systemPrompt <> "\n\nUser query: " <> q
     _ -> ""
 
-
--- createWidgetJson :: Text -> Projects.ProjectId -> Text -> AE.Value
--- createWidgetJson vizType projectId query =
---   Widget.widgetToECharts
---     $ (def :: Widget.Widget)
---       { Widget.wType = Widget.mapChatTypeToWidgetType vizType
---       , Widget.standalone = Just True
---       , Widget.hideSubtitle = Just True
---       , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
---       , Widget.summarizeBy = Just Widget.SBMax
---       , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
---       , Widget.unit = Just "ms"
---       , Widget.hideLegend = Just True
---       , Widget._projectId = Just projectId
---       , Widget.query = Just query
---       }
 
 contentResponse :: Text -> AE.Value
 contentResponse msg = AE.object ["type" AE..= (4 :: Int), "data" AE..= AE.object ["content" AE..= msg]]
