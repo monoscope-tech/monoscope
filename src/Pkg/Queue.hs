@@ -1,9 +1,11 @@
 module Pkg.Queue (pubsubService, kafkaService) where
 
+import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Aeson qualified as AE
+import Data.Annotation (toAnnotation)
 import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy.Base64 qualified as LB64
 import Data.Generics.Product (field)
@@ -12,6 +14,7 @@ import Data.Text qualified as T
 import Data.Text.Lazy.Encoding qualified as LT
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
+import Data.Vector qualified as V
 import Effectful
 import Gogol qualified as Google
 import Gogol.Auth.ApplicationDefault qualified as Google
@@ -30,7 +33,7 @@ import UnliftIO.Exception (bracket, tryAny)
 -- then it calls the processMessage function to process the messages, and
 -- acknoleges the list message in one request.
 pubsubService :: Log.Logger -> AuthContext -> [Text] -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx [Text]) -> IO ()
-pubsubService appLogger appCtx topics fn = do
+pubsubService appLogger appCtx topics fn = checkpoint "pubsubService" do
   let envConfig = appCtx.config
   env <- case envConfig.googleServiceAccountB64 of
     "" -> Google.newEnv <&> (Google.envScopes L..~ pubSubScope)
@@ -46,7 +49,7 @@ pubsubService appLogger appCtx topics fn = do
   forever
     $ runResourceT
     $ forM topics \topic -> do
-      result <- tryAny do
+      result <- tryAny $ checkpoint (toAnnotation $ "pubsubTopic loop: " <> topic) do
         let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
         pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
         let messages = fromMaybe [] (pullResp L.^. field @"receivedMessages")
@@ -56,6 +59,8 @@ pubsubService appLogger appCtx topics fn = do
                 b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
                 Just (ackId, b64Msg)
         let firstAttrs = messages ^? L.folded . field @"message" . _Just . field @"attributes" . _Just . field @"additional"
+
+        traceShowM $ "in pubsubService " <> (show $ length msgsB64)
 
         msgIds <-
           tryAny (liftIO $ runBackground appLogger appCtx $ fn (catMaybes msgsB64) (maybeToMonoid firstAttrs)) >>= \case
@@ -81,7 +86,7 @@ pubsubService appLogger appCtx topics fn = do
 
 
 kafkaService :: Log.Logger -> AuthContext -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx [Text]) -> IO ()
-kafkaService appLogger appCtx fn = do
+kafkaService appLogger appCtx fn = checkpoint "kafkaService" do
   -- Generate unique client ID for logging/metrics
   instanceUuid <- UUID.toText <$> UUID.nextRandom
   let clientId = "apitoolkit-" <> T.take 8 instanceUuid
@@ -99,6 +104,7 @@ kafkaService appLogger appCtx fn = do
               attributes = HM.insert "ce-type" ceType $ consumerRecordHeadersToHashMap rec
               allRecords = consumerRecordToTuple <$> rightRecords
 
+          traceShowM $ "in kafkaService " <> (show $ length allRecords)
           msgIds <-
             tryAny (runBackground appLogger appCtx $ fn allRecords attributes) >>= \case
               Left e -> do
