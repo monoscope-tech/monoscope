@@ -216,7 +216,7 @@ linkDiscordGetH pidM' codeM guildIdM = do
           }
   case (pidM, codeM, guildIdM) of
     (Just pid, Just code, Just guildId) -> do
-      -- _ <- registerDiscordCommands envCfg.discordClientId envCfg.discordBotToken guildId
+      _ <- registerDiscordCommands envCfg.discordClientId envCfg.discordBotToken guildId
       _ <- dbtToEff $ insertDiscordData pid guildId
       if isOnboarding
         then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
@@ -498,8 +498,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-        <> [msgJson]
-        <> ["\n\nUser query: " <> question]
+          <> [msgJson]
+          <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
