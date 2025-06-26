@@ -575,8 +575,6 @@ getThreadStarterMessage interaction botToken = do
     Nothing -> pure Nothing
 
 
-
-
 sendDeferredResponse :: HTTP :> es => Text -> Text -> Text -> Eff es ()
 sendDeferredResponse interactionId interactionToken botToken = do
   let url = toString $ "https://discord.com/api/v10/interactions/" <> interactionId <> "/" <> interactionToken <> "/callback"
@@ -673,7 +671,7 @@ data SlackInteraction = SlackInteraction
 chartImageUrl :: Text -> Text -> Time.UTCTime -> Text
 chartImageUrl options baseUrl now =
   let timeMs = show $ floor (utcTimeToPOSIXSeconds now * 1000)
-   in baseUrl <> "?t=" <> timeMs <> options
+   in baseUrl <> "?time=" <> timeMs <> options
 
 
 data BotType = Slack | Discord
