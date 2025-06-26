@@ -37,6 +37,7 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), Severity (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Models.Telemetry.SummaryGenerator (generateSummary)
 import Network.GRPC.Common
 import Network.GRPC.Common.Protobuf
 import Network.GRPC.Server (SomeRpcHandler)
@@ -597,7 +598,7 @@ convertLogRecordToOtelLog !pid resourceM scopeM logRecord =
       !observedTimeNano = logRecord ^. PLF.observedTimeUnixNano
       !severityText = logRecord ^. PLF.severityText
       !severityNumber = fromEnum (logRecord ^. PLF.severityNumber)
-   in OtelLogsAndSpans
+      otelLog = OtelLogsAndSpans
         { project_id = pid.toText
         , id = UUID.nil -- Will be replaced in bulkInsertOtelLogsAndSpansTF
         , timestamp = if timeNano == 0 then nanosecondsToUTC observedTimeNano else nanosecondsToUTC timeNano
@@ -632,8 +633,10 @@ convertLogRecordToOtelLog !pid resourceM scopeM logRecord =
         , links = Nothing
         , name = Nothing
         , parent_id = Nothing
+        , summary = V.empty -- Will be populated after creation
         , date = if timeNano == 0 then nanosecondsToUTC observedTimeNano else nanosecondsToUTC timeNano
         }
+   in otelLog { summary = generateSummary otelLog }
 
 
 -- | Convert ResourceSpans to OtelLogsAndSpans
@@ -785,7 +788,7 @@ convertSpanToOtelLog !pid resourceM scopeM pSpan =
                      in newHttp
                   _ -> attributes
           else attributes
-   in OtelLogsAndSpans
+      otelSpan = OtelLogsAndSpans
         { project_id = pid.toText
         , id = UUID.nil -- Will be replaced in bulkInsertOtelLogsAndSpansTF
         , timestamp = nanosecondsToUTC startTimeNano
@@ -815,8 +818,10 @@ convertSpanToOtelLog !pid resourceM scopeM pSpan =
         , links = linksJson
         , name = Just $ pSpan ^. PTF.name
         , parent_id = parentId
+        , summary = V.empty -- Will be populated after creation
         , date = nanosecondsToUTC startTimeNano
         }
+   in otelSpan { summary = generateSummary otelSpan }
 
 
 -- | Convert ResourceMetrics to MetricRecords

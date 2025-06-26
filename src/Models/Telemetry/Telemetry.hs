@@ -898,6 +898,7 @@ data OtelLogsAndSpans = OtelLogsAndSpans
   , duration :: Maybe Int64
   , name :: Maybe Text
   , parent_id :: Maybe Text
+  , summary :: V.Vector Text
   , date :: UTCTime
   }
   deriving (Generic, Show)

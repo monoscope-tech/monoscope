@@ -35,6 +35,7 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (Context (trace_state))
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Models.Telemetry.SummaryGenerator (generateSummary)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages (ensureUrlParams, fieldsToFieldDTO, redactJSON, sortVector, valueToFields)
@@ -296,7 +297,7 @@ processSpanToEntities pjc otelSpan dumpId =
 
 convertRequestMessageToSpan :: RequestMessages.RequestMessage -> (UUID.UUID, Text) -> Telemetry.OtelLogsAndSpans
 convertRequestMessageToSpan rm (spanId, trId) =
-  Telemetry.OtelLogsAndSpans
+  let otelSpan = Telemetry.OtelLogsAndSpans
     { id = UUID.nil
     , project_id = UUID.toText rm.projectId
     , timestamp = zonedTimeToUTC rm.timestamp
@@ -327,8 +328,10 @@ convertRequestMessageToSpan rm (spanId, trId) =
             , ("telemetry.sdk.name", AE.String $ show rm.sdkType)
             ]
     , duration = Just $ fromIntegral rm.duration
+    , summary = V.empty -- Will be populated after creation
     , date = zonedTimeToUTC rm.timestamp
     }
+   in otelSpan { summary = generateSummary otelSpan }
 
 
 -- Using nestedJsonFromDotNotation from Utils module

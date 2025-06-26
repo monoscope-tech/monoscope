@@ -466,29 +466,11 @@ defaultSelectSqlQuery (Just SSpans) =
   [ "id"
   , timestampLogFmt "timestamp"
   , "context___trace_id as trace_id"
-  , "kind"
-  , "status_message as status"
-  , "name as span_name"
-  , "duration"
-  , "body"
-  , "level as severity_text"
-  , "resource___service___name as service"
   , "parent_id as parent_span_id"
   , "CAST(EXTRACT(EPOCH FROM (start_time)) * 1_000_000_000 AS BIGINT) as start_time_ns"
+  , "duration"
   , "EXISTS(SELECT 1 FROM jsonb_array_elements(events) elem  WHERE elem->>'event_name' = 'exception') as errors"
-  , [fmt|jsonb_build_object(
-          'method', COALESCE(attributes->'http'->>'method', attributes___http___request___method),
-          'url', COALESCE(attributes->'http'->>'route', attributes->'url'->>'path', attributes->'http'->>'target', attributes->'http'->>'url'),
-          'status_code', COALESCE(attributes->'http'->>'status_code', attributes->'http'->'response'->>'status_code')
-          ) as http_attributes |]
-  , [fmt| jsonb_build_object('system', attributes->'db'->'system','statement', coalesce(attributes->'db'->'query'->'text', attributes->'db'->'statement')) as db_attributes  |]
-  , [fmt| json_build_object('system', attributes->'rpc'->'system', 'method', attributes->'rpc'->'method') as rpc_attributes|]
-  , [fmt|LEFT(
-        CONCAT(
-            COALESCE(attributes::text, '')
-        ),
-        500
-    ) as summary|]
+  , "summary"
   , "context___span_id as latency_breakdown"
   ]
 

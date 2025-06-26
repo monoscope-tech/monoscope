@@ -66,6 +66,7 @@ library
       Models.Projects.Swaggers
       Models.Projects.SwaggersSpec
       Models.Telemetry.Schema
+      Models.Telemetry.SummaryGenerator
       Models.Telemetry.Telemetry
       Models.Tests.Testing
       Models.Tests.TestToDump

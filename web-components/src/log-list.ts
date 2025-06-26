@@ -611,6 +611,61 @@ export class LogList extends LitElement {
     return this;
   }
 
+  renderSummaryElements(summaryArray: string[], wrapLines: boolean): any {
+    if (!Array.isArray(summaryArray)) return nothing;
+    
+    return summaryArray.map(element => {
+      // Check if it's a structured element with format "field;style⇒value"
+      if (element.includes(';') && element.includes('⇒')) {
+        const [fieldAndStyle, value] = element.split('⇒');
+        const [field, style] = fieldAndStyle.split(';');
+        
+        // Map style to CSS classes
+        const styleClass = this.getStyleClass(style);
+        
+        // Special handling for different field types
+        switch (field) {
+          case 'request_type':
+            const icon = value === 'incoming' 
+              ? faSprite('arrow-down-left', 'solid', 'h-3 fill-slate-500')
+              : faSprite('arrow-up-right', 'solid', 'h-3 fill-blue-700');
+            return renderIconWithTippy('w-4', `${value} Request`, icon);
+          case 'kind':
+            if (value === 'internal') {
+              return renderIconWithTippy('w-4 ml-2', 'Internal span', faSprite('function', 'regular', 'h-3 w-3'));
+            }
+            return nothing;
+          case 'db.system':
+            return renderIconWithTippy('w-4 ml-2', value, faSprite('database', 'regular', 'h-3 w-3 fill-slate-500'));
+          default:
+            // Regular badge rendering
+            const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
+            return renderBadge(`cbadge-sm ${styleClass} ${wrapClass}`, value);
+        }
+      } else {
+        // Plain text element
+        const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
+        return html`<span class=${`fill-slate-700 ${wrapClass}`}>${element}</span>`;
+      }
+    });
+  }
+
+  getStyleClass(style: string): string {
+    const styleMap: Record<string, string> = {
+      'info-strong': 'badge-blue',
+      'info-weak': 'badge-neutral bg-fillWeak',
+      'error-strong': 'badge-error',
+      'error-weak': 'badge-4xx',
+      'warning-strong': 'text-yellow-700 bg-yellow-100',
+      'warning-weak': 'badge-3xx',
+      'success-strong': 'badge-success',
+      'success-weak': 'badge-2xx',
+      'neutral': 'badge-neutral bg-fillWeak',
+      'right': 'ml-auto badge-neutral bg-fillWeak'
+    };
+    return styleMap[style] || 'badge-neutral bg-fillWeak';
+  }
+
   logItemCol(rowData: any, key: string): any {
     const dataArr = rowData.data;
     const wrapLines = this.wrapLines;
@@ -637,46 +692,6 @@ export class LogList extends LitElement {
             >${displayTimestamp(timestamp)}</time
           >
         </div>`;
-      case 'status_code':
-        let statusCode = lookupVecTextByKey(dataArr, colIdxMap, 'status_code');
-        let statusCls = getStatusColor(statusCode);
-        return statusCode == 'UNSET' ? nothing : renderBadge(statusCls, statusCode, 'status code');
-      case 'method':
-        let method = lookupVecTextByKey(dataArr, colIdxMap, key);
-        let methodCls = getMethodColor(method);
-        return renderBadge('min-w-[4rem] cbadge ' + methodCls, method, 'method');
-      case 'request_type':
-        let requestType = lookupVecTextByKey(dataArr, colIdxMap, key);
-        if (requestType === 'Incoming')
-          return renderIconWithTippy('w-4', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'));
-        return renderIconWithTippy('w-4', 'Outgoing Request => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'));
-      case 'duration':
-        let dur = rowData.type === 'log' ? 'log' : getDurationNSMS(lookupVecTextByKey(dataArr, colIdxMap, key));
-        return renderBadge('cbadge-sm badge-neutral font-normal bg-fillWeak', dur, 'latency');
-      case 'severity_text':
-        let severity = lookupVecTextByKey(dataArr, colIdxMap, key) || 'UNSET';
-        let severityClass = getSeverityColor(severity);
-        return severity === 'UNSET' ? nothing : renderBadge('cbadge-sm cbadge ' + severityClass, severity);
-      case 'body':
-        let body = lookupVecTextByKey(dataArr, colIdxMap, key);
-        return renderBadge('space-x-2 ' + wrapClass, body);
-      case 'status':
-        let st = lookupVecTextByKey(dataArr, colIdxMap, key);
-        let statsCls = getSpanStatusColor(st);
-        return !st || st.toLowerCase() === 'unset' || st === 'ERROR' ? nothing : renderBadge(statsCls, st, 'status');
-      case 'span_name':
-        let spanName = lookupVecTextByKey(dataArr, colIdxMap, key);
-        return renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, spanName, 'span name');
-      case 'service':
-        let service = lookupVecTextByKey(dataArr, colIdxMap, key);
-        return html` <div class="w-[16ch]">
-          ${renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, service, 'service name')}
-        </div>`;
-      case 'kind':
-        let kind = lookupVecTextByKey(dataArr, colIdxMap, key);
-        return kind.toLowerCase() === 'internal'
-          ? renderIconWithTippy('w-4 ml-2', 'Internal span', faSprite('function', 'regular', 'h-3 w-3 '))
-          : nothing;
       case 'latency_breakdown':
         const { traceStart, traceEnd, startNs, duration, childrenTimeSpans, depth: d, hasErrors: hErrs } = rowData;
         const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'span_name')] || 'bg-black';
@@ -686,17 +701,31 @@ export class LogList extends LitElement {
           color: serviceColors[lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'bg-black',
         }));
         const width = columnMaxWidthMap['latency_breakdown'] || 200;
-        const db = lookupVecObjectByKey(dataArr, colIdxMap, 'db_attributes');
-        const http = lookupVecObjectByKey(dataArr, colIdxMap, 'http_attributes');
-        const rpc = lookupVecObjectByKey(dataArr, colIdxMap, 'rpc_attributes');
-        const errStatus = lookupVecTextByKey(dataArr, colIdxMap, 'status');
+        // Parse summary array to get additional info for latency breakdown
+        const summaryArr = lookupVecTextByKey(dataArr, colIdxMap, 'summary') || [];
+        let hasError = false;
+        let systemType = '';
+        
+        // Extract info from summary array
+        summaryArr.forEach((element: string) => {
+          if (element.includes(';') && element.includes('⇒')) {
+            const [fieldAndStyle, value] = element.split('⇒');
+            const [field, style] = fieldAndStyle.split(';');
+            if (field === 'status' && value === 'ERROR') hasError = true;
+            if (field === 'db.system') systemType = value;
+            if (field === 'rpc.method') systemType = 'rpc';
+          }
+        });
+        
+        const hasHttp = summaryArr.some((el: string) => el.includes('method;') || el.includes('status_code;'));
+        
         return html`
           <div class="flex justify-end items-center gap-1 text-textWeak" style="min-width:${width}px">
-            ${errStatus === 'ERROR' || hErrs ? renderBadge(getSpanStatusColor('ERROR'), 'ERROR') : nothing}
-            ${db.system ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', db.system) : nothing}
-            ${http.method && http.url ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', 'http') : nothing}
-            ${rpc.system ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', rpc.system) : nothing}
-            <div class="overflow-visible shrink-0 font-normal">${this.logItemCol(rowData, 'duration')}</div>
+            ${hasError || hErrs ? renderBadge(getSpanStatusColor('ERROR'), 'ERROR') : nothing}
+            ${systemType && systemType !== 'rpc' ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', systemType) : nothing}
+            ${hasHttp ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', 'http') : nothing}
+            ${systemType === 'rpc' ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', 'rpc') : nothing}
+            <div class="overflow-visible shrink-0 font-normal">${getDurationNSMS(duration)}</div>
             ${spanLatencyBreakdown({
               start: startNs - traceStart,
               depth: d,
@@ -709,53 +738,8 @@ export class LogList extends LitElement {
             <span class="w-1"></span>
           </div>
         `;
-      case 'http_attributes':
-        const attributes = lookupVecObjectByKey(dataArr, colIdxMap, key);
-        const { method: m, url, status_code: statusCode_ } = attributes;
-        if (m || url || statusCode_) {
-          let k = lookupVecTextByKey(dataArr, colIdxMap, 'kind');
-          let methodCls_ = getMethodColor(m);
-          let statusCls_ = getStatusColor(statusCode_);
-          let wrapCls = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
-          return html`
-            ${k.toLowerCase() === 'server'
-              ? renderIconWithTippy('w-4 ml-2', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
-              : k.toLowerCase() === 'client'
-              ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
-              : nothing}
-            ${statusCode_ && statusCode_ !== 'UNSET' ? renderBadge(statusCls_, statusCode_, 'status code') : nothing}
-            ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m, 'method') : nothing}
-            ${url ? renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapCls, url, 'url') : nothing}
-          `;
-        }
-        break;
-      case 'db_attributes':
-        const dbAttributes = lookupVecObjectByKey(dataArr, colIdxMap, key);
-        const { system, statement } = dbAttributes;
-        if (system || statement) {
-          return html`
-            ${renderIconWithTippy('w-4 ml-2', system, faSprite('database', 'regular', 'h-3 w-3 fill-slate-500'))}
-            ${statement ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', statement) : nothing}
-          `;
-        }
-        break;
-      case 'rpc_attributes':
-        const rpcAttributes = lookupVecObjectByKey(dataArr, colIdxMap, key);
-        const { system: rpcSystem, method: rpcMethod } = rpcAttributes;
-        let k = lookupVecTextByKey(dataArr, colIdxMap, 'kind');
-        if (rpcSystem || rpcMethod) {
-          return html`
-            ${k.toLowerCase() === 'server'
-              ? renderIconWithTippy('w-4 ml-2', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
-              : k.toLowerCase() === 'client'
-              ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
-              : nothing}
-            ${rpcMethod ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', rpcMethod) : nothing}
-          `;
-        }
-        break;
       case 'summary':
-        let val = lookupVecTextByKey(dataArr, colIdxMap, key);
+        const summaryArray = lookupVecTextByKey(dataArr, colIdxMap, key) || [];
         const { depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData;
         const errClas = hasErrors
           ? 'bg-fillError-strong text-white fill-white stroke-strokeError-strong'
@@ -794,12 +778,7 @@ export class LogList extends LitElement {
               `
             : nothing}
           <div class=${`flex items-center gap-1 ${wrapLines ? 'break-all flex-wrap' : 'overflow-hidden'}`}>
-            ${type === 'log'
-              ? ['severity_text', 'body'].map((k) => this.logItemCol(rowData, k))
-              : ['kind', 'http_attributes', 'db_attributes', 'rpc_attributes', 'status', 'span_name'].map((k) =>
-                  this.logItemCol(rowData, k)
-                )}
-            <span class=${'fill-slate-700 ' + wrapClass}>${val}</span>
+            ${this.renderSummaryElements(summaryArray, wrapLines)}
           </div>
         </div>`;
       default:
