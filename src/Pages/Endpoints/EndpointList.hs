@@ -51,7 +51,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
   endpointStats <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid ackd archived (Just host) sortM searchM page (fromMaybe "" requestTypeM)
   inboxCount <- dbtToEff $ Endpoints.countEndpointInbox pid host (fromMaybe "Incoming" requestTypeM)
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
-  
+
   let requestType = fromMaybe "Incoming" requestTypeM
   let currentURL = [PyF.fmt|/p/{pid.toText}/endpoints?layout={fromMaybe "false" layoutM}&filter={fromMaybe "" filterTM}&sort={fromMaybe "event" sortM}&request_type={requestType}&host={host}|]
   let bwconf =

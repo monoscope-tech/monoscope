@@ -474,8 +474,10 @@ queryCount q = dbtToEff $ DBT.queryOne_ (Query $ encodeUtf8 q)
 getLast24hTotalRequest :: Projects.ProjectId -> DBT IO Int
 getLast24hTotalRequest = getRequestCountForInterval "1 day"
 
+
 getLastSevenDaysTotalRequest :: Projects.ProjectId -> DBT IO Int
 getLastSevenDaysTotalRequest = getRequestCountForInterval "7 days"
+
 
 getRequestCountForInterval :: Text -> Projects.ProjectId -> DBT IO Int
 getRequestCountForInterval interval pid = do

@@ -135,16 +135,16 @@ projectIdsByProjectApiKeys :: (DB :> es, Effectful.Reader Config.AuthContext :> 
 projectIdsByProjectApiKeys projectKeys = do
   pool <- getPool
   appCtx <- Effectful.ask @Config.AuthContext
-  
+
   -- Use the existing projectKeyCache to look up each key
   results <- liftIO $ forM (V.toList projectKeys) $ \key -> do
     maybeProjectId <- Cache.fetchWithCache appCtx.projectKeyCache key $ \k ->
       withPool pool $ queryOne q (Only k)
-    
+
     case maybeProjectId of
       Nothing -> pure Nothing
       Just projectId -> pure $ Just (key, projectId)
-  
+
   pure $ V.fromList $ catMaybes results
   where
     q = [sql| select project_id from projects.project_api_keys where key_prefix=?|]

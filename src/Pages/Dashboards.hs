@@ -816,7 +816,7 @@ dashboardsGetH pid embeddedM = do
       addRespHeaders $ PageCtx def $ DashboardsGet{dashboards, projectId = pid, embedded = True}
     else do
       freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
-      
+
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess

@@ -379,7 +379,7 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   issueM <- dbtToEff $ Anomalies.selectIssueByHash pid targetHash
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
-  
+
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess

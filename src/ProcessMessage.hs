@@ -279,7 +279,7 @@ processSpanToEntities pjc otelSpan dumpId =
             [ Just endpointHash
             , if isJust shape then Just shapeHash else Nothing
             ]
-            <> V.toList fieldHashes
+          <> V.toList fieldHashes
    in (endpoint, shape, fields', formats', hashes)
   where
     -- Helper function to extract headers from nested attribute structure
@@ -376,7 +376,7 @@ createSpanAttributes rm =
         reqHeaders =
           maybe (AE.object []) id
             $ rm.requestHeaders
-              ^? _Object
+            ^? _Object
               >>= \obj ->
                 let pairs = [("http.request.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
                  in Just $ nestedJsonFromDotNotation pairs
@@ -385,7 +385,7 @@ createSpanAttributes rm =
         respHeaders =
           maybe (AE.object []) id
             $ rm.responseHeaders
-              ^? _Object
+            ^? _Object
               >>= \obj ->
                 let pairs = [("http.response.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
                  in Just $ nestedJsonFromDotNotation pairs

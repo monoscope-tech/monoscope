@@ -201,7 +201,7 @@ collectionGetH :: Projects.ProjectId -> Maybe Testing.CollectionId -> ATAuthCtx 
 collectionGetH pid colIdM = do
   (sess, project) <- Sessions.sessionAndProject pid
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
-  
+
   let editorUrl = "/p/" <> pid.toText <> "/monitors/collection/" <> maybe "" (\c -> "?col_id=" <> c.toText) colIdM
   let overviewUrl = (\c -> Just $ "/p/" <> pid.toText <> "/monitors/" <> c.toText <> "/overview") =<< colIdM
   let bwconf =

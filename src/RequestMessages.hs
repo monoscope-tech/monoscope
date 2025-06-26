@@ -296,8 +296,8 @@ commonFormatPatterns =
   -- Authentication & encoding
   , ([re|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|], "{jwt}")
   , ([re|[A-Za-z0-9+/]{20,}={0,2}|], "{base64}")
-  -- Date patterns (before file paths to avoid conflicts)
-  , ([re|\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s[0-9]{1,2}\s(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s[0-9]{4}\s[0-9]{2}:[0-9]{2}:[0-9]{2}\s[+\-][0-9]{4}\b|], "{rfc2822}")
+  , -- Date patterns (before file paths to avoid conflicts)
+    ([re|\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s[0-9]{1,2}\s(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s[0-9]{4}\s[0-9]{2}:[0-9]{2}:[0-9]{2}\s[+\-][0-9]{4}\b|], "{rfc2822}")
   , ([re|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+\-][0-9]{2}:[0-9]{2})?|], "{YYYY-MM-DDThh:mm:ss.sTZD}") -- ISO 8601
   , ([re|[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}|], "{YYYY-MM-DD HH:MM:SS}") -- MySQL datetime
   , ([re|[0-9]{2}/[0-9]{2}/[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}|], "{MM/DD/YYYY HH:MM:SS}") -- US datetime
@@ -328,32 +328,32 @@ commonFormatPatterns =
   , ([re|([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}|], "{mac}")
   , ([re|:[0-9]{1,5}|], "{port}")
   , ([re|[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}|], "{hostname}")
-  -- File paths (after dates to avoid conflicts)
-  , ([re|[A-Za-z]:\\[^\\/:*?"<>|\r\n]*|], "{file_path}")
+  , -- File paths (after dates to avoid conflicts)
+    ([re|[A-Za-z]:\\[^\\/:*?"<>|\r\n]*|], "{file_path}")
   , ([re|/[A-Za-z0-9._/-]+|], "{file_path}")
-  -- Financial
-  , ([re|\b(4[0-9]{12}([0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\b|], "{credit_card}")
+  , -- Financial
+    ([re|\b(4[0-9]{12}([0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\b|], "{credit_card}")
   , ([re|[A-Z]{2}[0-9]{2}[A-Za-z0-9]{4}[0-9]{7}[A-Za-z0-9]{0,16}|], "{iban}")
-  -- Personal identifiers
-  , ([re|[0-9]{3}-[0-9]{2}-[0-9]{4}|], "{ssn}")
+  , -- Personal identifiers
+    ([re|[0-9]{3}-[0-9]{2}-[0-9]{4}|], "{ssn}")
   , ([re|\b\+?[0-9]{1,3}[-.\s]?(\([0-9]{1,4}\)|[0-9]{1,4})[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}\b|], "{phone}")
-  -- Timestamps
-  , ([re|1[0-9]{12}|], "{epoch_ms}")
+  , -- Timestamps
+    ([re|1[0-9]{12}|], "{epoch_ms}")
   , ([re|1[0-9]{9}|], "{epoch_s}")
   , ([re|[0-9]+(:[0-9]{2}){1,2}(\.[0-9]+)?|], "{duration}")
-  -- Process/thread identifiers
-  , ([re|^\s*at\s[^\s]+\([^\)]+:[0-9]+\)|], "{stack_trace}")
+  , -- Process/thread identifiers
+    ([re|^\s*at\s[^\s]+\([^\)]+:[0-9]+\)|], "{stack_trace}")
   , ([re|pid[:=]?[0-9]+|], "{pid}")
   , ([re|tid[:=]?[0-9]+|], "{tid}")
   , ([re|Thread-[0-9]+|], "{thread}")
   , ([re|session_[A-Za-z0-9\-]{8,}|], "{session_id}")
-  -- Numbers (last, as they're most general)
-  , ([re|[1-5][0-9]{2}|], "{http_status}")
+  , -- Numbers (last, as they're most general)
+    ([re|[1-5][0-9]{2}|], "{http_status}")
   , ([re|0x[0-9A-Fa-f]+|], "{hex}")
   , ([re|[+-]?[0-9]+\.[0-9]+|], "{float}")
   , ([re|[0-9]+|], "{integer}")
-  -- Quoted values
-  , ([re|'[^']{1,100}'|], "{quoted_value}")
+  , -- Quoted values
+    ([re|'[^']{1,100}'|], "{quoted_value}")
   , ([re|"[^"]{1,100}"|], "{quoted_value}")
   , ([re|`[^`]{1,100}`|], "{quoted_value}")
   ]

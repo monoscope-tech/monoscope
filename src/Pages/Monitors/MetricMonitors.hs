@@ -41,7 +41,7 @@ monitorCreateGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders 
 monitorCreateGetH pid monitorType = do
   (sess, project) <- Sessions.sessionAndProject pid
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
-  
+
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess

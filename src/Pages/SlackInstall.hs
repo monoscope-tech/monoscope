@@ -222,7 +222,7 @@ linkDiscordGetH pidM' codeM guildIdM = do
         then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
         else pure $ addHeader "" $ BotLinked $ PageCtx bwconf "Discord"
     _ ->
-      pure $ addHeader "" $  DiscordError $ PageCtx def ()
+      pure $ addHeader "" $ DiscordError $ PageCtx def ()
 
 
 -- Discord interaction type
