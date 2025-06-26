@@ -55,7 +55,6 @@ import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (dateTime, statBox_)
-import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Pkg.Components.ItemsList (TabFilter (..), TabFilterOpt (..))
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget qualified as Widget
@@ -692,7 +691,7 @@ anomalyAcknowlegeButton pid aid acked host = do
   a_
     [ class_
         $ "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
-        <> (if acked then "bg-green-100 text-green-900" else "btn-primary")
+          <> (if acked then "bg-green-100 text-green-900" else "btn-primary")
     , term "data-tippy-content" "acknowlege anomaly"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -708,7 +707,7 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_
         $ "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
-        <> (if archived then " bg-green-100 text-green-900" else "btn-primary")
+          <> (if archived then " bg-green-100 text-green-900" else "btn-primary")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -769,11 +768,22 @@ subSubSection title fieldsM = whenJust fieldsM \fields -> do
                   span_ [class_ " text-slate-800 inline-flex items-center"] $ toHtml displayKey
                   span_ [class_ " text-slate-600 inline-flex items-center ml-4"] do
                     if "[*]" `T.isSuffixOf` key
-                      then EndpointComponents.fieldTypeToDisplay Fields.FTList
-                      else EndpointComponents.fieldTypeToDisplay Fields.FTObject
+                      then fieldTypeToDisplay Fields.FTList
+                      else fieldTypeToDisplay Fields.FTObject
           Just field -> do
             a_ [class_ "flex flex-row cursor-pointer", style_ depthPadding, term "data-depth" $ show depth] do
               faSprite_ "chevron-down" "light" "h-4 mr-3 mt-4 w-4 invisible"
               div_ [class_ "border-b flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] do
                 span_ [class_ "grow  text-slate-800 inline-flex items-center"] $ toHtml displayKey
-                span_ [class_ " text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay field.fieldType
+                span_ [class_ " text-slate-600 mx-12 inline-flex items-center"] $ fieldTypeToDisplay field.fieldType
+
+
+fieldTypeToDisplay :: Fields.FieldTypes -> Html ()
+fieldTypeToDisplay fieldType = case fieldType of
+  Fields.FTUnknown -> span_ [class_ "px-2 rounded-xl bg-red-100 red-800 monospace"] "unknown"
+  Fields.FTString -> span_ [class_ "px-2 rounded-xl bg-fillWeaker slate-800 monospace"] "abc"
+  Fields.FTNumber -> span_ [class_ "px-2 rounded-xl bg-blue-100 blue-800 monospace"] "123"
+  Fields.FTBool -> span_ [class_ "px-2 rounded-xl bg-gray-100 black-800 monospace"] "bool"
+  Fields.FTObject -> span_ [class_ "px-2 rounded-xl bg-orange-100 orange-800 monospace"] "{obj}"
+  Fields.FTList -> span_ [class_ "px-2 rounded-xl bg-stone-100 stone-800 monospace"] "[list]"
+  Fields.FTNull -> span_ [class_ "px-2 rounded-xl bg-red-100 red-800 monospace"] "null"

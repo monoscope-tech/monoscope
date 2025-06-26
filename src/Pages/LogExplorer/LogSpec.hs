@@ -1,4 +1,4 @@
-module Pages.LogSpec (spec) where
+module Pages.LogExplorer.LogSpec (spec) where
 
 import Data.Aeson qualified as AE
 import Data.ByteString.Lazy qualified as BL
@@ -8,7 +8,7 @@ import Data.Time.Clock (addUTCTime)
 import Data.UUID qualified as UUID
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
-import Pages.Log qualified as Log
+import Pages.LogExplorer.Log qualified as Log
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import Relude

@@ -86,15 +86,10 @@ library
       Pages.Dashboards
       Pages.Endpoints.ApiCatalog
       Pages.Endpoints.ApiCatalogSpec
-      Pages.Endpoints.EndpointComponents
-      Pages.Endpoints.EndpointList
-      Pages.Endpoints.EndpointListSpec
-      Pages.Fields.FieldDetails
-      Pages.Fields.FieldDetailsSpec
       Pages.LemonSqueezy
-      Pages.Log
+      Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
-      Pages.LogSpec
+      Pages.LogExplorer.LogSpec
       Pages.Monitors.Alerts
       Pages.Monitors.AlertsSpec
       Pages.Monitors.MetricMonitors

@@ -27,8 +27,8 @@ import Models.Users.Sessions qualified as Sessions
 import Network.URI (URIAuth (uriRegName), parseURI, uriAuthority)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (emptyState_, statBox_)
-import Pages.Log (ApiLogsPageData (isTestLog))
-import Pages.Log qualified as Log
+import Pages.LogExplorer.Log (ApiLogsPageData (isTestLog))
+import Pages.LogExplorer.Log qualified as Log
 import Pages.Monitors.TestCollectionEditor (castToStepResult)
 import Pkg.Components.ItemsList (TabFilter (..), TabFilterOpt (..))
 import Pkg.Components.ItemsList qualified as ItemsList

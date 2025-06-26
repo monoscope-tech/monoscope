@@ -12,7 +12,7 @@ import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Log qualified as LogList
+import Pages.LogExplorer.Log qualified as LogList
 import Pkg.Components.ItemsList qualified as Components
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..))
 import Pkg.Components.TimePicker qualified as TimePicker

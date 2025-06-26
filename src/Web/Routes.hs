@@ -44,7 +44,6 @@ import Web.Error
 -- Model imports
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields.Types qualified as Fields (FieldId)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Reports qualified as ReportsM
 import Models.Projects.Dashboards qualified as Dashboards
@@ -60,10 +59,8 @@ import Pages.BodyWrapper (PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
-import Pages.Endpoints.EndpointList qualified as EndpointList
-import Pages.Fields.FieldDetails qualified as FieldDetails
 import Pages.LemonSqueezy qualified as LemonSqueezy
-import Pages.Log qualified as Log
+import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors.Alerts qualified as Alerts
 import Pages.Monitors.MetricMonitors qualified as MetricMonitors
@@ -185,9 +182,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
     chartsDataGet :: mode :- "chart_data" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> ReqBody '[JSON] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
   , -- Endpoints and fields
-    endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> Get '[HTML] (RespHeaders EndpointList.EndpointRequestStatsVM)
+    endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> Get '[HTML] (RespHeaders ApiCatalog.EndpointRequestStatsVM)
   , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage ApiCatalog.HostEventsVM)))
-  , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (RespHeaders FieldDetails.FieldPut)
   , -- Slack/Discord integration
     reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" ReportsM.ReportId :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
@@ -401,12 +397,10 @@ cookieProtectedServer =
     , shareLinkPost = Share.shareLinkPostH
     , -- Swagger handlers
       swaggerGenerateGet = GenerateSwagger.generateGetH
-    , -- Field handlers
-      editField = FieldDetails.fieldPutH
     , -- Billing handlers
       manageBillingGet = LemonSqueezy.manageBillingGetH
     , -- Endpoint handlers
-      endpointListGet = EndpointList.endpointListGetH
+      endpointListGet = ApiCatalog.endpointListGetH
     , apiCatalogGet = ApiCatalog.apiCatalogH
     , -- Sub-route handlers
       projects = projectsServer

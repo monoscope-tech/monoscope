@@ -1,4 +1,4 @@
-module Pages.Log (
+module Pages.LogExplorer.Log (
   apiLogH,
   aiSearchH,
   LogsGet (..),
