@@ -19,7 +19,7 @@ import Models.Telemetry.Telemetry (SpanStatus (SSError))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.Components (dateTime)
-import Pages.Telemetry.Spans qualified as Spans
+import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Telemetry.Utils
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
@@ -73,7 +73,7 @@ data ServiceData = ServiceData {name :: Text, duration :: Integer}
 
 instance ToHtml TraceDetailsGet where
   toHtml (TraceDetails p) = toHtml $ tracePage p
-  toHtml (SpanDetails pid s aptSpn left right) = toHtml $ Spans.expandedSpanItem pid s aptSpn left right
+  toHtml (SpanDetails pid s aptSpn left right) = toHtml $ LogItem.expandedItemView pid s aptSpn left right
   toHtml (TraceDetailsNotFound msg) = toHtml msg
   toHtmlRaw = toHtml
 

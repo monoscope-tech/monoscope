@@ -1,3 +1,5 @@
+{-# LANGUAGE StrictData #-}
+
 module Opentelemetry.OtlpServer (processList, runServer) where
 
 import Control.Exception.Annotated (checkpoint)

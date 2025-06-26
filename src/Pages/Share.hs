@@ -1,6 +1,5 @@
 module Pages.Share (ReqForm (..), shareLinkPostH, shareLinkGetH, ShareLinkGet (..), ShareLinkPost (..)) where
 
-import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
@@ -15,10 +14,10 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Pages.Components (navBar)
-import Pages.Telemetry.Spans qualified as Spans
+import Pages.LogExplorer.LogItem qualified as LogItem
 import Relude
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_, jsonValueToHtmlTree, onpointerdown_)
+import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -97,13 +96,13 @@ shareLinkGetH sid = do
           "log" -> do
             logItem <- Telemetry.logRecordByProjectAndId pid createdAt eventId
             pure case logItem of
-              Just req -> Just $ apiLogItemView pid (AE.toJSON req)
+              Just req -> Just $ LogItem.expandedItemView pid req Nothing Nothing Nothing
               Nothing -> Nothing
           -- Also "span"
           _ -> do
             spanItem <- Telemetry.spanRecordByProjectAndId pid createdAt eventId
             pure case spanItem of
-              Just spn -> Just $ Spans.expandedSpanItem pid spn Nothing Nothing Nothing
+              Just spn -> Just $ LogItem.expandedItemView pid spn Nothing Nothing Nothing
               Nothing -> Nothing
       Nothing -> pure Nothing
 
@@ -136,13 +135,3 @@ sharePage req = do
         p_ [class_ "text-gray-500 text-xl"] "This shared request log URL does not exist or has expired"
 
 
-apiLogItemView :: Projects.ProjectId -> AE.Value -> Html ()
-apiLogItemView pid req = do
-  let reqJson = decodeUtf8 $ AE.encode req
-  button_
-    [ class_ "btn btn-sm bg-base-100"
-    , onpointerdown_ "window.downloadJson(event)"
-    , term "data-reqJson" reqJson
-    ]
-    (span_ [] "Download" >> faSprite_ "arrow-down-to-line" "regular" "h-3 w-3")
-  jsonValueToHtmlTree req Nothing

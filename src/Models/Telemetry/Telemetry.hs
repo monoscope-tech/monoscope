@@ -1,3 +1,5 @@
+{-# LANGUAGE StrictData #-}
+
 module Models.Telemetry.Telemetry (
   LogRecord (..),
   logRecordByProjectAndId,
@@ -108,11 +110,6 @@ cleanNullBytesFromJSON (AE.String t) = AE.String $ cleanNullBytes t
 cleanNullBytesFromJSON (AE.Object o) = AE.Object $ KEM.map cleanNullBytesFromJSON o
 cleanNullBytesFromJSON (AE.Array a) = AE.Array $ V.map cleanNullBytesFromJSON a
 cleanNullBytesFromJSON v = v
-
-
--- Helper to clean a Map Text AE.Value
-cleanMapJSON :: Map Text AE.Value -> Map Text AE.Value
-cleanMapJSON = Map.map cleanNullBytesFromJSON
 
 
 -- Lens-like access helpers for Map Text AE.Value fields

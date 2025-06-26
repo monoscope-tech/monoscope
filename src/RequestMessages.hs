@@ -24,7 +24,6 @@ import Data.Aeson.Types qualified as AET
 import Data.HashMap.Strict qualified as HM
 import Data.HashTable.Class qualified as HTC
 import Data.HashTable.ST.Cuckoo qualified as HT
-import Data.List qualified as L
 import Data.Scientific qualified as Scientific
 import Data.Text qualified as T
 import Data.Time.LocalTime (ZonedTime)
@@ -46,7 +45,7 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Relude
 import Relude.Unsafe as Unsafe (read)
-import Text.RE.Replace (Match, capture, matched, replaceAll)
+import Text.RE.Replace (matched, replaceAll)
 import Text.RE.TDFA (RE, re, (*=~), (?=~))
 import Utils (DBField (), toXXHash)
 

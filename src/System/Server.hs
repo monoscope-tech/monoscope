@@ -21,6 +21,7 @@ import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
 import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.Queue qualified as Queue
+import ProcessMessage (processMessages)
 import Relude
 import Servant (FromHttpApiData (..))
 import Servant qualified
@@ -81,11 +82,10 @@ runServer appLogger env tp = do
       $ concat @[]
         [ [async $ runSettings warpSettings wrappedServer]
         , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
-          -- [async $ Safe.withException (Queue.pubsubService appLogger env env.config.requestPubsubTopics processMessages) exceptionLogger | env.config.enablePubsubService]
-          [async $ Safe.withException bgJobWorker exceptionLogger | env.config.enableBackgroundJobs]
+          [async $ Safe.withException (Queue.pubsubService appLogger env env.config.requestPubsubTopics processMessages) exceptionLogger | env.config.enablePubsubService]
+        , [async $ Safe.withException bgJobWorker exceptionLogger | env.config.enableBackgroundJobs]
         , [async $ Safe.withException (OtlpServer.runServer appLogger env) exceptionLogger]
-        , -- , [async $ Safe.withException (Queue.pubsubService appLogger env env.config.otlpStreamTopics OtlpServer.processList) exceptionLogger | (not . any T.null) env.config.otlpStreamTopics]
-          [async $ Safe.withException (Queue.kafkaService appLogger env OtlpServer.processList) exceptionLogger | env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics]
+        , [async $ Safe.withException (Queue.kafkaService appLogger env OtlpServer.processList) exceptionLogger | env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics]
         , [async $ Safe.withException (Queue.kafkaService appLogger env OtlpServer.processList) exceptionLogger | env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics]
         , [async $ Safe.withException (Queue.kafkaService appLogger env OtlpServer.processList) exceptionLogger | env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics]
         ]

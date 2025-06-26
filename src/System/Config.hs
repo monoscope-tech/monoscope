@@ -40,7 +40,6 @@ data EnvConfig = EnvConfig
   , migrateAndInitializeOnStart :: Bool
   , requestPubsubTopics :: [Text]
   , enablePubsubService :: Bool
-  , otlpStreamTopics :: [Text]
   , kafkaBrokers :: [Text]
   , kafkaGroupId :: Text
   , kafkaTopics :: [Text]

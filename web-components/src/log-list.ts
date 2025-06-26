@@ -1405,7 +1405,7 @@ function emptyState(cols: number) {
 function requestDumpLogItemUrlPath(rd: any[], colIdxMap: ColIdxMap, source: string): [string, string, string] {
   const rdId = lookupVecTextByKey(rd, colIdxMap, 'id');
   const rdCreatedAt = lookupVecTextByKey(rd, colIdxMap, 'created_at') || lookupVecTextByKey(rd, colIdxMap, 'timestamp');
-  return [rdId, rdCreatedAt, source];
+  return [rdId, rdCreatedAt, source]; // Source parameter is preserved for future use
 }
 
 function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<string, boolean>, flipDirection: boolean) {

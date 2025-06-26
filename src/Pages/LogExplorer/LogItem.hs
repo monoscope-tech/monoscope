@@ -1,178 +1,60 @@
-module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', ApiItemDetailed (..)) where
+module Pages.LogExplorer.LogItem (
+  expandAPIlogItemH,
+  ApiItemDetailed (..),
+  expandedItemView,
+  spanLatencyBreakdown,
+) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.Text (encodeToLazyText)
-import Data.ByteString.Lazy qualified as BS
+import Data.HashMap.Strict qualified as HM
+import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
-import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.UUID qualified as UUID
+import Data.Vector qualified as V
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Network.URI (escapeURIString, isUnescapedInURI)
-import Pages.Components (dateTime, statBox_)
-import Pages.Telemetry.Spans qualified as Spans
-import Pages.Telemetry.Utils (atMapText, getRequestDetails)
+import Pages.Components (dateTime)
+import Pages.Telemetry.Utils
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_, getDurationNSMS, getMethodBorderColor, getMethodColor, getSeverityColor, getStatusBorderColor, getStatusColor, jsonValueToHtmlTree, onpointerdown_)
+import Utils
 
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiItemDetailed)
 expandAPIlogItemH pid rdId createdAt sourceM = do
   _ <- Sessions.sessionAndProject pid
-  let source = fromMaybe "requets" sourceM
-  case source of
-    "logs" -> do
-      logItem <- Telemetry.logRecordByProjectAndId pid createdAt rdId
-      addRespHeaders $ case logItem of
-        Just lg -> LogItemExpanded pid lg
-        Nothing -> ItemDetailedNotFound "Log not found"
-    _ -> do
-      spanItem <- Telemetry.spanRecordByProjectAndId pid createdAt rdId
-      case spanItem of
-        Just spn -> do
-          aptSpan <- case getRequestDetails spn.attributes of
+  -- sourceM parameter is preserved for future use but not used in current logic
+  -- Query the unified table using timestamp and id
+  item <- Telemetry.logRecordByProjectAndId pid createdAt rdId
+  case item of
+    Just record -> do
+      -- Determine if this is a log or span based on the kind field
+      case record.kind of
+        Just "log" -> addRespHeaders $ LogItemExpanded pid record
+        _ -> do
+          -- It's a span, check if we need to fetch the apitoolkit-http-span
+          aptSpan <- case getRequestDetails record.attributes of
             Just ("HTTP", _, _, _) -> do
-              let trIdM = spn.context >>= (.trace_id)
-              if spn.name /= Just "apitoolkit-http-span"
+              let trIdM = record.context >>= (.trace_id)
+              if record.name /= Just "apitoolkit-http-span"
                 then do
                   case trIdM of
-                    Just trId -> do
-                      Telemetry.spanRecordByName pid trId "apitoolkit-http-span"
+                    Just trId -> Telemetry.spanRecordByName pid trId "apitoolkit-http-span"
                     _ -> pure Nothing
                 else pure Nothing
             _ -> pure Nothing
-          addRespHeaders $ SpanItemExpanded pid spn aptSpan
-        Nothing -> addRespHeaders $ ItemDetailedNotFound "Span not found"
+          addRespHeaders $ SpanItemExpanded pid record aptSpan
+    Nothing -> addRespHeaders $ ItemDetailedNotFound "Record not found"
 
-
-expandAPIlogItem' :: Projects.ProjectId -> RequestDumps.RequestDumpLogItem -> Bool -> Html ()
-expandAPIlogItem' pid req modal = do
-  div_ [class_ "relative flex flex-col w-full px-4 gap-4 pb-[100px]"] do
-    span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
-    div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
-    div_ [class_ "w-full flex flex-col gap-4"] do
-      let methodColor = getMethodColor req.method
-          statusColor = getStatusColor req.statusCode
-          borderColor = getMethodBorderColor req.method
-          stBorder = getStatusBorderColor req.statusCode
-
-      div_ [class_ "flex  justify-between items-center gap-4"] do
-        div_ [class_ "flex items-center gap-4"] do
-          span_ [class_ $ "flex items-center rounded-lg px-2 py-1 border font-medium gap-2 " <> borderColor <> " " <> methodColor] $ toHtml req.method
-          span_ [class_ $ "flex items-center rounded-lg px-2 py-1 border font-medium gap-2 " <> stBorder <> " " <> statusColor] $ toHtml $ show req.statusCode
-
-        div_ [class_ "flex items-center gap-2"] do
-          dateTime (zonedTimeToUTC req.createdAt) Nothing
-          button_
-            [ class_ "ml-4 p-0 -mt-1 cursor-pointer"
-            , [__|on click add .hidden to #trace_expanded_view 
-            then put '0px' into  #log_details_container.style.width 
-            then put '100%' into #logs_list_container.style.width 
-            then add .hidden to #resizer-details_width
-            then call updateUrlState('details_width', '', 'delete')
-            then call updateUrlState('target_event', '0px', 'delete')
-            |]
-            ]
-            do
-              faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
-    -- url, endpoint, latency, request size, repsonse size
-    let path = toText $ escapeURIString isUnescapedInURI $ "url_path==\"" <> toString req.urlPath <> "\""
-        query = toText $ escapeURIString isUnescapedInURI $ "raw_url==\"" <> toString req.rawUrl <> "\""
-        rawUrl = "/p/" <> pid.toText <> "/log_explorer?query=" <> query
-        urlPath = "/p/" <> pid.toText <> "/log_explorer?query=" <> path
-    div_ [class_ "flex flex-col mt-4 justify-between w-full"] do
-      div_ [class_ "text-base mb-2 flex gap-6 items-center"] do
-        span_ [class_ "text-slate-500 font-medium w-16"] "Endpoint"
-        div_ [class_ "flex gap-1 items-center"] do
-          span_ [class_ "text-slate-800 text-sm truncate ellipsis urlPath", term "data-tippy" req.urlPath] $ toHtml req.urlPath
-          div_ [[__| install Copy(content:.urlPath )|]] do
-            faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-fillWeaker rounded-full p-2 text-slate-500"
-          a_ [href_ urlPath] do
-            faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 btn-primary rounded-full"
-      div_ [class_ "text-base flex items-center gap-6"] do
-        span_ [class_ "text-slate-500 font-medium w-16"] "URL"
-        div_ [class_ "flex gap-1 items-center"] do
-          span_ [class_ "text-slate-800 text-sm truncate ellipsis", term "data-tippy" req.rawUrl] $ toHtml req.rawUrl
-          div_ [[__| install Copy(content:.urlPath )|]] do
-            faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-fillWeaker rounded-full p-2 text-slate-500"
-          a_ [href_ rawUrl] do
-            faSprite_ "arrow-up-right" "regular" "h-8 w-8 p-2 btn-primary rounded-full"
-      div_ [class_ "flex gap-2 mt-4"] do
-        statBox_ Nothing (Just ("clock", "regular", "text-brand")) "Latency" "Latency" (toText $ getDurationNSMS req.durationNs) Nothing Nothing
-        let reqSize = BS.length $ AE.encode req.requestBody
-        statBox_ Nothing (Just ("upload", "regular", "text-brand")) "Request size" "Total request body size in bytes" (show (reqSize - 2)) Nothing Nothing
-        let respSize = BS.length $ AE.encode req.responseBody
-        statBox_ Nothing (Just ("download", "regular", "text-brand")) "Response size" "Total response body size in bytes" (show (respSize - 2)) Nothing Nothing
-        statBox_ Nothing (Just ("stack", "regular", "text-brand")) "Framework" "Framework used to handle this the request" (show req.sdkType) Nothing Nothing
-
-    -- errors
-    when (req.errorsCount > 0) $ div_ [class_ "mt-4"] do
-      div_ [class_ "flex w-full text-slate-950 font-medium gap-2 items-center"] do
-        p_ "Errors"
-        p_ [class_ " text-red-500 font-bold"] $ show req.errorsCount
-      div_ [class_ "p-4 rounded-lg border border-slate-200 text-gray-500"] do
-        jsonValueToHtmlTree req.errors Nothing
-
-    div_ [id_ "http-content-container", class_ "flex flex-col gap-3"] do
-      let json = selectiveReqToJson req
-      div_ [class_ "flex items-center gap-2"] do
-        button_
-          [ class_ "flex items-center gap-1 text-sm text-textBrand cursor-pointer"
-          , onpointerdown_ "window.buildCurlRequest(event)"
-          , term "data-reqjson" $ decodeUtf8 $ AE.encode json
-          ]
-          do
-            span_ [class_ "underline"] "Copy request as curl"
-            faSprite_ "copy" "regular" "w-2 h-2"
-        let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" req.createdAt
-        button_
-          [ class_ "flex items-center gap-2 text-textBrand text-sm underline cursor-pointer"
-          , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> UUID.toText req.id <> "/" <> createdAt <> "?event_type=request"
-          , hxSwap_ "innerHTML"
-          , hxTarget_ "#copy_share_link"
-          ]
-          do
-            "Get shareable link"
-            faSprite_ "link-simple" "regular" "w-3 h-3"
-
-      div_ [class_ "bg-fillWeak w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"] $ do
-        div_ [class_ "justify-start items-start flex text-sm"] $ do
-          button_ [onpointerdown_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Raw Details"
-          button_ [onpointerdown_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Req Body"
-          button_ [onpointerdown_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Res Body"
-          button_ [onpointerdown_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
-          button_ [onpointerdown_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
-      div_ [] do
-        div_ [id_ "raw_content", class_ "a-tab-content"] do
-          jsonValueToHtmlTree json Nothing
-        div_ [id_ "req_content", class_ "hidden a-tab-content"] do
-          jsonValueToHtmlTree req.requestBody Nothing
-        div_ [id_ "res_content", class_ "hidden a-tab-content"] do
-          jsonValueToHtmlTree req.responseBody Nothing
-        div_ [id_ "hed_content", class_ "hidden a-tab-content"] do
-          jsonValueToHtmlTree (AE.object ["request_headers" AE..= req.requestHeaders, "response_headers" AE..= req.responseHeaders]) Nothing
-        div_ [id_ "par_content", class_ "hidden a-tab-content"] do
-          jsonValueToHtmlTree (AE.object ["query_params" AE..= req.queryParams, "path_params" AE..= req.pathParams]) Nothing
-
-
--- outgoing request details
--- div_ [class_ "flex w-full flex-col gap-1"] do
---   p_ [class_ "font-medium text-slate-950 mb-2"] "Outgoing requests"
---   div_ [class_ "grow rounded-lg border border-slate-200 overflow-y-auto py-2 px-1 h-[150px] whitespace-nowrap  divide-y overflow-x-hidden"] do
---     let createdAt = toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt
---         escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString $ "parent_id==\"" <> UUID.toText req.id <> "\" AND " <> "created_at>=\"" <> createdAt <> "\""
---         events_url = "/p/" <> pid.toText <> "/log_explorer?layout=virtualTable&query=" <> escapedQueryPartial
---     div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
 data ApiItemDetailed
   = SpanItemExpanded Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Telemetry.OtelLogsAndSpans)
@@ -181,23 +63,37 @@ data ApiItemDetailed
 
 
 instance ToHtml ApiItemDetailed where
-  toHtml (SpanItemExpanded pid spn aptSpan) = toHtml $ Spans.expandedSpanItem pid spn aptSpan Nothing Nothing
-  toHtml (LogItemExpanded pid req) = toHtml $ apiLogItemView pid req
+  toHtml (SpanItemExpanded pid spn aptSpan) = toHtml $ expandedItemView pid spn aptSpan Nothing Nothing
+  toHtml (LogItemExpanded pid req) = toHtml $ expandedItemView pid req Nothing Nothing Nothing
   toHtml (ItemDetailedNotFound message) = div_ [] $ toHtml message
   toHtmlRaw = toHtml
 
 
-apiLogItemView :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Html ()
-apiLogItemView pid lg = do
-  div_ [class_ "w-full flex flex-col gap-2 px-2 pb-2 relative"] $ do
+spanBadge :: Text -> Text -> Html ()
+spanBadge val key = do
+  div_
+    [ class_ "flex gap-2 items-center text-textStrong bg-fillWeak border border-strokeWeak text-xs rounded-lg whitespace-nowrap px-2 py-1"
+    , term "data-tippy-content" key
+    ]
+    $ do
+      span_ [] $ toHtml val
+
+
+-- Unified view for both logs and spans
+expandedItemView :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> Maybe Text -> Maybe Text -> Html ()
+expandedItemView pid item aptSp leftM rightM = do
+  let isLog = item.kind == Just "log"
+      reqDetails = if isLog then Nothing else getRequestDetails item.attributes
+  div_ [class_ $ "w-full px-2 pb-2 relative" <> if isLog then " flex flex-col gap-2" else " pb-[50px]"] $ do
     div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
+    unless isLog $ span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "loading-span-list"] ""
     span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
     div_ [class_ "flex flex-col gap-4 bg-gray-50 py-2  px-2"] $ do
       div_ [class_ "flex justify-between items-center"] do
         div_ [class_ "flex items-center gap-4"] $ do
-          h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] "Trace Log"
+          h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] $ if isLog then "Trace Log" else "Trace Span"
         div_ [class_ "flex gap-4 items-center"] $ do
-          dateTime lg.timestamp Nothing
+          dateTime (if isLog then item.timestamp else item.start_time) Nothing
           div_ [class_ "flex gap-2 items-center"] do
             button_
               [ class_ "cursor-pointer"
@@ -214,25 +110,69 @@ apiLogItemView pid lg = do
               do
                 faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
     div_ [class_ "flex flex-col gap-4"] do
-      div_ [class_ "flex items-center gap-4"] do
-        let svTxt = maybe "UNSET" (\x -> maybe "UNSET" show x.severity_text) lg.severity
-            cls = getSeverityColor svTxt
-        span_ [class_ $ "rounded-lg border cbadge-sm text-sm px-2 py-1 shrink-0 " <> cls] $ toHtml $ T.toUpper svTxt
-        h4_ [class_ "text-slate-800 font-medium"] $ toHtml $ case lg.body of
-          Just (AE.String x) -> x
-          _ -> toStrict $ encodeToLazyText lg.body
+      if isLog
+        then div_ [class_ "flex items-center gap-4"] do
+          let svTxt = maybe "UNSET" (\x -> maybe "UNSET" show x.severity_text) item.severity
+              cls = getSeverityColor svTxt
+          span_ [class_ $ "rounded-lg border cbadge-sm text-sm px-2 py-1 shrink-0 " <> cls] $ toHtml $ T.toUpper svTxt
+          h4_ [class_ "text-slate-800 font-medium"] $ toHtml $ case item.body of
+            Just (AE.String x) -> x
+            _ -> toStrict $ encodeToLazyText item.body
+        else div_ [class_ "flex items-center gap-4 text-sm font-medium text-slate-950"] $ do
+          case reqDetails of
+            Just req -> do
+              div_ [class_ "flex flex-wrap items-center gap-2"] do
+                whenJust reqDetails $ \case
+                  ("HTTP", method, path, status) -> do
+                    let methodClass = getMethodColor method
+                        borderColor = getMethodBorderColor method
+                        extraClass = getStatusColor status
+                        stBorder = getStatusBorderColor status
+                    span_ [class_ $ "px-2 py-1 rounded-lg text-sm border " <> borderColor <> " " <> methodClass] $ toHtml method
+                    span_ [class_ $ "px-2 py-1 rounded-lg text-sm border " <> stBorder <> " " <> extraClass] $ toHtml $ T.take 3 $ show status
+                    div_ [class_ "flex items-center"] do
+                      span_ [class_ "shrink-1 px-2 py-1.5 max-w-96 truncate mr-2 urlPath"] $ toHtml path
+                      div_ [[__| install Copy(content:.urlPath )|]] do
+                        faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-fillWeaker rounded-full p-2 text-slate-500"
+                  (scheme, method, path, status) -> do
+                    div_ [class_ "flex flex-wrap items-center"] do
+                      span_ [class_ "flex gap-2 items-center text-textStrong bg-fillWeak border border-strokeWeak rounded-lg whitespace-nowrap px-2 py-1"] $ toHtml method
+                      span_ [class_ "px-2 py-1.5 max-w-96"] $ toHtml path
+                      let extraClass = getGrpcStatusColor status
+                      when (scheme /= "DB") $ span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
+            Nothing -> do
+              h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" item.name
 
       div_ [class_ "flex gap-2 flex-wrap"] $ do
-        spanBadge (fromMaybe "" $ atMapText "service.name" lg.resource) "Service"
-        spanBadge ("Spand ID: " <> maybe "" (\z -> fromMaybe "" z.span_id) lg.context) "Span ID"
-        spanBadge ("Trace ID: " <> maybe "" (\z -> fromMaybe "" z.trace_id) lg.context) "Trace ID"
+        if isLog
+          then do
+            spanBadge (fromMaybe "" $ atMapText "service.name" item.resource) "Service"
+            spanBadge ("Span ID: " <> maybe "" (\z -> fromMaybe "" z.span_id) item.context) "Span ID"
+            spanBadge ("Trace ID: " <> maybe "" (\z -> fromMaybe "" z.trace_id) item.context) "Trace ID"
+          else do
+            spanBadge (toText $ getDurationNSMS $ maybe 0 fromIntegral item.duration) "Span duration"
+            spanBadge (getServiceName item.resource) "Service"
+            spanBadge ("Span ID: " <> maybe "" (\c -> fromMaybe "" c.span_id) item.context) "Span ID"
+            spanBadge (fromMaybe "" item.kind) "Span Kind"
 
       div_ [class_ "flex gap-2 items-center text-textBrand font-medium text-xs"] do
-        whenJust lg.context $ \ctx -> do
+        unless isLog $ whenJust reqDetails $ \case
+          ("HTTP", _, _, _) -> do
+            let json = decodeUtf8 $ AE.encode $ AE.toJSON item
+            button_
+              [ class_ "cursor-pointer flex items-center gap-1"
+              , term "onpointerdown" "window.buildCurlRequest(event)"
+              , term "data-reqjson" json
+              ]
+              do
+                "Copy request as curl"
+                faSprite_ "copy" "regular" "w-3 h-3"
+          _ -> pass
+        whenJust item.context $ \ctx -> do
           whenJust ctx.trace_id $ \trId -> do
             let tracePath = "/p/" <> pid.toText <> "/traces/" <> trId <> "/"
             button_
-              [ class_ "flex items-end gap-1 cursor-pointer"
+              [ class_ $ "cursor-pointer flex items-end gap-1" <> if isLog then " cursor-pointer" else ""
               , term
                   "_"
                   [text|on click remove .hidden from #trace_expanded_view
@@ -246,11 +186,12 @@ apiLogItemView pid lg = do
               do
                 "View parent trace"
                 faSprite_ "cross-hair" "regular" "w-4 h-4"
-        let lg_id = UUID.toText lg.id
-        let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" lg.timestamp
+        let item_id = UUID.toText item.id
+        let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" item.timestamp
+        let eventType = if isLog then "log" else "span"
         button_
-          [ class_ "flex items-center gap-2 cursor-pointer"
-          , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> lg_id <> "/" <> createdAt <> "?event_type=log"
+          [ class_ $ "cursor-pointer flex items-center gap-2"
+          , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> item_id <> "/" <> createdAt <> "?event_type=" <> eventType
           , hxSwap_ "innerHTML"
           , hxTarget_ "#copy_share_link"
           ]
@@ -258,56 +199,130 @@ apiLogItemView pid lg = do
             "Generate shareable link"
             faSprite_ "link-simple" "regular" "w-3 h-3"
 
-      div_ [class_ "w-full mt-4", id_ "log-tabs-container"] do
-        div_ [class_ "flex", [__|on click halt|]] $ do
-          button_ [class_ "cursor-pointer a-tab border-b-2 border-b-slate-200 px-4 py-1.5 t-tab-active", onpointerdown_ "navigatable(this, '#att-content', '#log-tabs-container', 't-tab-active')"] "Attributes"
-          button_ [class_ "cursor-pointer a-tab border-b-2 border-b-slate-200 px-4 py-1.5 ", onpointerdown_ "navigatable(this, '#meta-content', '#log-tabs-container', 't-tab-active')"] "Process"
-          div_ [class_ "w-full border-b-2 border-b-slate-200"] pass
+    let tabContainerId = if isLog then "log-tabs-container" else "span-tabs-container"
+    div_ [class_ $ "w-full " <> if isLog then "mt-4" else "mt-8", id_ tabContainerId] do
+      let spanErrors = if isLog then [] else getSpanErrors $ fromMaybe AE.Null item.events
+          isHttp = case reqDetails of
+            Just ("HTTP", _, _, _) -> True
+            _ -> False
+          borderClass = if isLog then "border-b-slate-200" else "border-b-strokeWeak"
+      div_ [class_ "flex", [__|on click halt|]] $ do
+        when (not isLog && isHttp) $ button_ [class_ $ "a-tab cursor-pointer  border-b-2 " <> borderClass <> " px-4 py-1.5 t-tab-active", onpointerdown_ $ "navigatable(this, '#request-content', '#" <> tabContainerId <> "', 't-tab-active','.http')"] "Request"
+        button_ [class_ $ "cursor-pointer a-tab border-b-2 " <> borderClass <> " px-4 py-1.5 " <> if isLog || not isHttp then "t-tab-active" else "", onpointerdown_ $ "navigatable(this, '#att-content', '#" <> tabContainerId <> "', 't-tab-active'" <> if isLog then ")" else ",'.http')"] "Attributes"
+        button_ [class_ $ "cursor-pointer a-tab border-b-2 " <> borderClass <> " px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#meta-content', '#" <> tabContainerId <> "', 't-tab-active'" <> if isLog then ")" else ", '.http')"] "Process"
+        unless (isLog || null spanErrors) $ do
+          button_ [class_ $ "a-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 nowrap px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#errors-content', '#" <> tabContainerId <> "', 't-tab-active', '.http')"] do
+            "Errors"
+            div_ [class_ "badge badge-error badge-sm"] $ show $ length spanErrors
+        unless isLog $ button_ [class_ $ "a-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#logs-content', '#" <> tabContainerId <> "', 't-tab-active','.http')"] $ do
+          "Logs"
+          div_ [class_ "badge badge-ghost badge-sm"] $ show $ numberOfEvents $ fromMaybe AE.Null item.events
+        unless isLog $ button_ [class_ $ "a-tab cursor-pointer border-b-2 whitespace-nowrap " <> borderClass <> " px-4 py-1.5", onpointerdown_ $ "navigatable(this, '#m-raw-content', '#" <> tabContainerId <> "', 't-tab-active','.http')"] "Raw data"
+        div_ [class_ $ "w-full border-b-2 " <> borderClass] pass
 
-        div_ [class_ "grid my-4 text-slate-600 font"] $ do
-          div_ [class_ "a-tab-content", id_ "att-content"] $ do
-            jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) lg.attributes) Nothing
-          div_ [class_ "hidden a-tab-content", id_ "meta-content"] $ do
-            jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) lg.resource) Nothing
+      div_ [class_ "grid my-4 text-slate-600 font"] $ do
+        unless isLog $ div_ [class_ "hidden a-tab-content", id_ "m-raw-content"] $ do
+          jsonValueToHtmlTree (AE.toJSON item) Nothing
+        div_ [class_ $ "a-tab-content" <> if not isLog && isHttp then " hidden" else "", id_ "att-content"] $ do
+          jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) item.attributes) $ if isLog then Nothing else Just "attributes"
+        div_ [class_ "hidden a-tab-content", id_ "meta-content"] $ do
+          jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) item.resource) $ if isLog then Nothing else Just "resource"
+        unless isLog $ do
+          div_ [class_ "hidden a-tab-content", id_ "errors-content"] $ do
+            renderErrors spanErrors
+          div_ [class_ "hidden a-tab-content", id_ "logs-content"] $ do
+            jsonValueToHtmlTree (AE.toJSON item.events) Nothing
+
+        unless isLog $ whenJust reqDetails $ \case
+          ("HTTP", method, path, status) -> do
+            let cSp = fromMaybe item aptSp
+            div_ [class_ "a-tab-content nested-tab", id_ "request-content"] do
+              div_ [id_ "http-content-container", class_ "flex flex-col gap-3 mt-2"] do
+                div_ [class_ "bg-fillWeak w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"] do
+                  div_ [class_ "justify-start items-start flex text-sm"] do
+                    button_ [onpointerdown_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "http cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Res Body"
+                    button_ [onpointerdown_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "http cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Req Body"
+                    button_ [onpointerdown_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "http cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
+                    button_ [onpointerdown_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "http cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
+                    button_ [onpointerdown_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "http cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Request Details"
+                div_ [] do
+                  div_ [id_ "raw_content", class_ "hidden a-tab-content http"] do
+                    jsonValueToHtmlTree (AE.toJSON cSp) Nothing
+                  div_ [id_ "req_content", class_ "hidden a-tab-content http"] do
+                    let b = case cSp.body of
+                          Just (AE.Object bb) -> case KEM.lookup "request_body" bb of
+                            Just a -> a
+                            _ -> AE.object []
+                          _ -> AE.object []
+                    jsonValueToHtmlTree b $ Just "body.request_body"
+                  div_ [id_ "res_content", class_ "a-tab-content http"] do
+                    let b = case cSp.body of
+                          Just (AE.Object bb) -> case KEM.lookup "response_body" bb of
+                            Just a -> a
+                            _ -> AE.object []
+                          _ -> AE.object []
+                    jsonValueToHtmlTree b $ Just "body.response_body"
+                  div_ [id_ "hed_content", class_ "hidden a-tab-content http"] do
+                    let reqHeaders = case cSp.attributes >>= Map.lookup "http" of
+                          Just (AE.Object httpAtts) -> case KEM.lookup "request" httpAtts of
+                            Just (AE.Object reqAtts) -> KEM.lookup "header" reqAtts
+                            _ -> Nothing
+                          _ -> Nothing
+                        resHeaders = case cSp.attributes >>= Map.lookup "http" of
+                          Just (AE.Object httpAtts) -> case KEM.lookup "response" httpAtts of
+                            Just (AE.Object resAtts) -> KEM.lookup "header" resAtts
+                            _ -> Nothing
+                          _ -> Nothing
+                    jsonValueToHtmlTree (AE.object ["request_headers" AE..= fromMaybe AE.Null reqHeaders, "response_headers" AE..= fromMaybe AE.Null resHeaders]) Nothing
+                  div_ [id_ "par_content", class_ "hidden a-tab-content http"] do
+                    let queryParams = case cSp.attributes >>= Map.lookup "http" of
+                          Just (AE.Object httpAtts) -> case KEM.lookup "request" httpAtts of
+                            Just (AE.Object reqAtts) -> KEM.lookup "query_params" reqAtts
+                            _ -> Nothing
+                          _ -> Nothing
+                        pathParams = case cSp.attributes >>= Map.lookup "http" of
+                          Just (AE.Object httpAtts) -> case KEM.lookup "request" httpAtts of
+                            Just (AE.Object reqAtts) -> KEM.lookup "path_params" reqAtts
+                            _ -> Nothing
+                          _ -> Nothing
+                    jsonValueToHtmlTree (AE.object ["query_params" AE..= fromMaybe AE.Null queryParams, "path_params" AE..= fromMaybe AE.Null pathParams]) Nothing
+          _ -> pass
 
 
--- div_ [class_ "px-2 flex flex-col w-full items-center gap-2"] do
---   span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
---   jsonValueToHtmlTree req
+-- Helper functions
+renderErrors :: [AE.Value] -> Html ()
+renderErrors errs = div_ [class_ "flex flex-col gap-1"] $ do
+  forM_ errs $ \err -> do
+    let (tye, message, stacktrace) = getErrorDetails err
+    div_ [class_ "flex flex-col rounded-lg border overflow-hidden"] $ do
+      div_ [class_ "bg-red-100 text-red-600 px-4 py-2 flex gap-2 items-center"] do
+        span_ [class_ "font-bold"] $ toHtml (tye <> ":")
+        span_ [] $ toHtml message
+      div_ [] do
+        p_ [class_ "whitespace-nowrap px-4 py-2"] $ toHtml stacktrace
 
-spanBadge :: Text -> Text -> Html ()
-spanBadge val key = do
-  div_
-    [ class_ "flex gap-2 items-center text-textStrong bg-fillWeak border border-strokeWeak text-xs rounded-lg whitespace-nowrap px-2 py-1"
-    , term "data-tippy-content" key
-    ]
-    $ do
-      span_ [] $ toHtml val
+
+numberOfEvents :: AE.Value -> Int
+numberOfEvents (AE.Array obj) = length obj
+numberOfEvents _ = 0
 
 
--- Function to selectively convert RequestDumpLogItem to JSON
-selectiveReqToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
-selectiveReqToJson req =
-  AE.object
-    $ concat @[]
-      [ ["created_at" AE..= req.createdAt]
-      , ["duration_ns" AE..= req.durationNs]
-      , ["errors" AE..= req.errors]
-      , ["host" AE..= req.host]
-      , ["method" AE..= req.method]
-      , ["parent_id" AE..= req.parentId]
-      , ["path_params" AE..= req.pathParams]
-      , ["query_params" AE..= req.queryParams]
-      , ["raw_url" AE..= req.rawUrl]
-      , ["referer" AE..= req.referer]
-      , ["request_body" AE..= req.requestBody]
-      , ["request_headers" AE..= req.requestHeaders]
-      , ["request_type" AE..= req.requestType]
-      , ["response_body" AE..= req.responseBody]
-      , ["response_headers" AE..= req.responseHeaders]
-      , ["sdk_type" AE..= req.sdkType]
-      , ["service_version" AE..= req.serviceVersion]
-      , ["status_code" AE..= req.statusCode]
-      , ["tags" AE..= req.tags]
-      , ["url_path" AE..= req.urlPath]
-      ]
+-- Span latency breakdown visualization
+spanLatencyBreakdown :: V.Vector Telemetry.SpanRecord -> Html ()
+spanLatencyBreakdown spans = do
+  let colors = getServiceColors $ (.spanName) <$> spans
+  let totalDuration = sum $ (.spanDurationNs) <$> spans
+  div_ [class_ "flex h-6 w-[150px] "] $ do
+    forM_ (zip [0 ..] (V.toList spans)) \(i, sp) -> do
+      let wdth = (fromIntegral sp.spanDurationNs / fromIntegral totalDuration) * 150
+      let color = fromMaybe "bg-black" $ HM.lookup sp.spanName colors
+      let roundr = if i == length spans - 1 then "rounded-r " else ""
+          roundl = if i == 0 then "rounded-l " else ""
+      div_
+        [ class_ $ "h-full overflow-hidden  " <> roundl <> roundr <> color
+        , style_ $ "width:" <> show wdth <> "px;"
+        , term "data-tippy-content" $ "Span name: " <> sp.spanName <> " Duration: " <> toText (getDurationNSMS sp.spanDurationNs)
+        , title_ $ "Span name: " <> sp.spanName <> " Duration: " <> toText (getDurationNSMS sp.spanDurationNs)
+        ]
+        do
+          div_ [class_ "h-full w-full"] ""

@@ -4,7 +4,6 @@ module Pkg.Parser (parseQueryStringToWhereClause, queryASTToComponents, parseQue
 import Control.Error (hush)
 import Data.Default (Default (def))
 import Data.Text qualified as T
-import Data.Text.Display (display)
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 import Data.Time.Format.ISO8601 (iso8601Show)

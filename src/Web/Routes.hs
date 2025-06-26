@@ -80,7 +80,6 @@ import Pages.SlackInstall qualified as SlackInstall
 import Pages.Specification.Documentation qualified as Documentation
 import Pages.Specification.GenerateSwagger qualified as GenerateSwagger
 import Pages.Telemetry.Metrics qualified as Metrics
-import Pages.Telemetry.Spans qualified as Spans
 import Pages.Telemetry.Trace qualified as Trace
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget qualified as Widget
@@ -250,7 +249,6 @@ type TelemetryRoutes = NamedRoutes TelemetryRoutes'
 type TelemetryRoutes' :: Type -> Type
 data TelemetryRoutes' mode = TelemetryRoutes'
   { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPT "span_id" :> QPT "nav" :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
-  , spanGetH :: mode :- "spans" :> Capture "trace_id" Text :> Capture "span_id" Text :> Get '[HTML] (RespHeaders (Html ()))
   , metricsOVGetH :: mode :- "metrics" :> QPT "tab" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "metric_prefix" :> QPI "cursor" :> Get '[HTML] (RespHeaders Metrics.MetricsOverViewGet)
   , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Html ()))
   , metricBreakdownGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "breakdown" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
@@ -450,7 +448,6 @@ telemetryServer :: Projects.ProjectId -> Servant.ServerT TelemetryRoutes ATAuthC
 telemetryServer pid =
   TelemetryRoutes'
     { tracesGet = Trace.traceH pid
-    , spanGetH = Spans.spanGetH pid
     , metricsOVGetH = Metrics.metricsOverViewGetH pid
     , metricDetailsGetH = Metrics.metricDetailsGetH pid
     , metricBreakdownGetH = Metrics.metricBreakdownGetH pid

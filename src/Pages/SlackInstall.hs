@@ -567,23 +567,6 @@ getThreadStarterMessage interaction botToken = do
     Nothing -> pure Nothing
 
 
-registerDiscordCommands :: HTTP :> es => Text -> Text -> Text -> Eff es (Either Text ())
-registerDiscordCommands appId botToken guildId = do
-  let url = toString $ "https://discord.com/api/v10/applications/" <> appId <> "/guilds/" <> guildId <> "/commands"
-      askCommand =
-        AE.object
-          [ "name" AE..= ("ask" :: Text)
-          , "description" AE..= ("Ask a question about your project using natural language" :: Text)
-          , "type" AE..= 1
-          , "options" AE..= AE.Array (V.fromList [AE.object ["name" AE..= "question", "description" AE..= "Your question in natural language", "type" AE..= 3, "required" AE..= True]])
-          ]
-
-      hereCommand = AE.object ["name" AE..= "here", "description" AE..= "Channel for apitoolkit to send notifications", "type" AE..= 1]
-      opts = defaults & authHeader botToken & contentTypeHeader "application/json"
-
-  _ <- postWith opts url (AE.encode askCommand)
-  _ <- postWith opts url (AE.encode hereCommand)
-  pure $ Right ()
 
 
 sendDeferredResponse :: HTTP :> es => Text -> Text -> Text -> Eff es ()
