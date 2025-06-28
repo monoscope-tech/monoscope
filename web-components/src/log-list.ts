@@ -657,17 +657,24 @@ export class LogList extends LitElement {
   }
 
   getStyleClass(style: string): string {
+    // Direct badge classes - just return them as-is
+    if (style.startsWith('badge-')) {
+      return style;
+    }
+    
+    // Legacy style mappings for backward compatibility
     const styleMap: Record<string, string> = {
-      'info-strong': 'badge-blue',
+      'info-strong': 'badge-info',
       'info-weak': 'badge-neutral bg-fillWeak',
       'error-strong': 'badge-error',
       'error-weak': 'badge-4xx',
-      'warning-strong': 'text-yellow-700 bg-yellow-100',
+      'warning-strong': 'badge-warning',
       'warning-weak': 'badge-3xx',
       'success-strong': 'badge-success',
       'success-weak': 'badge-2xx',
-      neutral: 'badge-neutral bg-fillWeak',
-      right: 'ml-auto badge-neutral bg-fillWeak',
+      'neutral': 'badge-neutral bg-fillWeak',
+      'right': 'ml-auto badge-neutral bg-fillWeak',
+      'text-weak': '', // No badge styling for weak text
     };
     return styleMap[style] || 'badge-neutral bg-fillWeak';
   }
