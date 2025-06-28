@@ -1254,36 +1254,6 @@ const lookupVecTextByKey = (vec: any[], colIdxMap: ColIdxMap, key: string) => {
   return lookupVecText(vec, idx);
 };
 
-const lookupVecObjectByKey = (vec: any[], colIdxMap: ColIdxMap, key: string) => {
-  if (!Object.prototype.hasOwnProperty.call(colIdxMap, key)) {
-    return {};
-  }
-  const idx = colIdxMap[key];
-  return lookupVecText(vec, idx) || {};
-};
-
-function getStatusColor(status: number | string) {
-  const st = Number(status);
-  if (!Number.isNaN(st)) {
-    if (st < 200) return 'cbadge-sm badge-neutral';
-    if (st < 300) return 'cbadge-sm badge-2xx';
-    if (st < 400) return 'cbadge-sm badge-3xx';
-    if (st >= 400) return 'cbadge-sm badge-4xx';
-  }
-  return getSpanStatusColor(status as string);
-}
-
-function getMethodColor(method: string) {
-  const methodColors = {
-    POST: 'cbadge-sm badge-pink',
-    PUT: 'cbadge-sm badge-lime',
-    DELETE: 'cbadge-sm badge-error',
-    PATCH: 'cbadge-sm badge-cyan',
-    GET: 'cbadge-sm badge-blue',
-  };
-  return methodColors[method as keyof typeof methodColors] || 'cbadge-sm badge-neutral bg-fillWeak ';
-}
-
 function renderIconWithTippy(cls: string, tip: string, icon: TemplateResult<1>) {
   return html`<span class=${'shrink-0 inline-flex tooltip tooltip-right ' + cls} data-tip=${tip}>${icon}</span>`;
 }
