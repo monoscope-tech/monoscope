@@ -57,6 +57,7 @@ import Data.Generics.Labels ()
 import Data.List qualified as L (nubBy)
 import Data.Map qualified as Map
 import Data.Text qualified as T
+import Data.Text.Display (Display)
 import Data.Time (UTCTime, formatTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.UUID qualified as UUID
@@ -80,7 +81,7 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects (ProjectId (unProjectId))
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Pkg.DBUtils (WrappedEnum (..))
+import Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..))
 import Relude hiding (ask)
 import Utils (lookupValueText, toXXHash)
 
@@ -135,20 +136,23 @@ atMapInt key maybeMap = do
 
 data SeverityLevel = SLDebug | SLInfo | SLWarn | SLError | SLFatal
   deriving (Generic, Read, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
-  deriving (FromField, ToField) via WrappedEnum "SL" SeverityLevel
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "SL", DAE.CamelToSnake]] SeverityLevel
+  deriving (FromField, ToField, Display) via WrappedEnumSC "SL" SeverityLevel
 
 
 data SpanStatus = SSOk | SSError | SSUnset
   deriving (Eq, Generic, Read, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
-  deriving (FromField, ToField) via WrappedEnum "SS" SpanStatus
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "SS", DAE.CamelToSnake]] SpanStatus
+  deriving (FromField, ToField, Display) via WrappedEnumSC "SS" SpanStatus
 
 
 data SpanKind = SKInternal | SKServer | SKClient | SKProducer | SKConsumer | SKUnspecified
   deriving (Generic, Read, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
-  deriving (FromField, ToField) via WrappedEnum "SK" SpanKind
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "SK", DAE.CamelToSnake]] SpanKind
+  deriving (FromField, ToField, Display) via WrappedEnumSC "SK" SpanKind
 
 
 data Trace = Trace
@@ -464,7 +468,7 @@ logRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne q (createdAt, p
   where
     q =
       [sql|SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, date
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
              FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
@@ -474,7 +478,7 @@ getSpandRecordsByTraceId pid trId = dbtToEff $ query q (pid.toText, trId)
     q =
       [sql|
       SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, date
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
               FROM otel_logs_and_spans where project_id=? and context___trace_id=? ORDER BY start_time ASC;
     |]
 
@@ -484,7 +488,7 @@ spanRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne q (createdAt, 
   where
     q =
       [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, date
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
               FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
@@ -493,7 +497,7 @@ spanRecordById pid trId spanId = dbtToEff $ queryOne q (pid.toText, trId, spanId
   where
     q =
       [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, date
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
               FROM otel_logs_and_spans where project_id=? and context___trace_id = ? and context___span_id=? LIMIT 1|]
 
 
@@ -502,7 +506,7 @@ spanRecordByName pid trId spanName = dbtToEff $ queryOne q (pid.toText, trId, sp
   where
     q =
       [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, date
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
               FROM otel_logs_and_spans where project_id=? and context___trace_id = ? and name=? LIMIT 1|]
 
 
@@ -511,7 +515,7 @@ getChildSpans pid spanIds = dbtToEff $ query q (pid.toText, spanIds)
   where
     q =
       [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, date
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
               FROM otel_logs_and_spans where project_id =? AND parent_id=Any(?)|]
 
 
@@ -770,6 +774,7 @@ instance ToRow OtelLogsAndSpans where
     , toField $ atMapText "telemetry.sdk.version" entry.resource -- resource___telemetry___sdk___version
     , toField $ atMapText "user_agent.original" entry.resource -- resource___user_agent___original
     , toField $ cleanNullBytes entry.project_id -- project_id
+    , toField $ V.map cleanNullBytes entry.summary -- summary
     , toField entry.date
     ]
     where
@@ -829,10 +834,10 @@ bulkInserSpansAndLogsQuery =
        resource___service___instance___id, resource___service___namespace, 
        resource___telemetry___sdk___language, resource___telemetry___sdk___name,
        resource___telemetry___sdk___version, resource___user_agent___original,
-       project_id, date)
+       project_id, summary, date)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     |]
 
 
