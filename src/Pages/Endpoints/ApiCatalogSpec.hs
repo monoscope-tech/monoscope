@@ -5,8 +5,14 @@ import Data.ByteString.Lazy qualified as BL
 import Data.HashMap.Strict qualified as HashMap
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUID
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Models.Apis.Anomalies
+import Models.Apis.Endpoints
+import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
+import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
 import Pkg.Components.ItemsList qualified as ItemsList
@@ -15,6 +21,7 @@ import ProcessMessage (processMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
+import Utils (toXXHash)
 
 
 testPid :: Projects.ProjectId
@@ -46,3 +53,60 @@ spec = aroundAll withTestResources do
 
       PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents) <- toServantResponse trATCtx trSessAndHeader trLogger $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming")
       length hostsAndEvents `shouldBe` 1
+
+    it "should return an empty list" \TestResources{..} -> do
+      enpId <- Endpoints.EndpointId <$> UUID.nextRandom
+      enp <-
+        toServantResponse trATCtx trSessAndHeader trLogger $ ApiCatalog.endpointListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      case enp of
+        ApiCatalog.EndpointsListPage (PageCtx _ (ItemsList.ItemsPage _ enpList)) -> do
+          length enpList `shouldBe` 0
+        _ -> error "Unexpected response"
+    it "should return inbox endpoints list and acknowledge endpoints" \TestResources{..} -> do
+      currentTime <- getCurrentTime
+      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
+      let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
+      let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
+      let msgs =
+            concat
+              $ replicate
+                100
+                [ ("m1", BL.toStrict $ AE.encode reqMsg1)
+                , ("m2", BL.toStrict $ AE.encode reqMsg2)
+                ]
+      _ <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
+      _ <- runAllBackgroundJobs trATCtx
+      _ <- withPool trPool $ refreshMaterializedView "apis.endpoint_request_stats"
+
+      enp <-
+        toServantResponse trATCtx trSessAndHeader trLogger $ ApiCatalog.endpointListGetH testPid Nothing Nothing (Just "Inbox") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      case enp of
+        ApiCatalog.EndpointsListPage (PageCtx _ (ItemsList.ItemsPage _ enpList)) -> do
+          length enpList `shouldBe` 2
+          let enp1 = (\(ApiCatalog.EnpReqStatsVM a b c) -> c) <$> Unsafe.fromJust $ find (\(ApiCatalog.EnpReqStatsVM a b c) -> c.urlPath == "/") enpList
+          let enp2 = (\(ApiCatalog.EnpReqStatsVM a b c) -> c) <$> Unsafe.fromJust $ find (\(ApiCatalog.EnpReqStatsVM a b c) -> c.urlPath == "/api/v1/user/login") enpList
+          enp1.endpointHash `shouldBe` toXXHash (testPid.toText <> "172.31.29.11" <> "GET" <> "/")
+          enp2.endpointHash `shouldBe` toXXHash (testPid.toText <> "api.test.com" <> "POST" <> "/api/v1/user/login")
+          pg <-
+            toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+          case pg of
+            AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do
+              let endpointAnomalies = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.anomalyType == ATEndpoint) anomalies <&> (\(AnomalyList.IssueVM a b c issue) -> anomalyIdText issue.id)
+              let bulkFrm = AnomalyList.AnomalyBulk{anomalyId = V.toList endpointAnomalies}
+              _ <- toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.anomalyBulkActionsPostH testPid "acknowlege" bulkFrm
+              pass
+            _ -> error "Unexpected response"
+        _ -> error "Unexpected response"
+      pass
+
+    it "should return active endpoints list" \TestResources{..} -> do
+      evm <-
+        toServantResponse trATCtx trSessAndHeader trLogger $ ApiCatalog.endpointListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      case evm of
+        ApiCatalog.EndpointsListPage (PageCtx _ (ItemsList.ItemsPage _ enpList)) -> do
+          length enpList `shouldBe` 2
+          let enp1 = (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c) <$> Unsafe.fromJust $ find (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c.urlPath == "/") enpList
+          let enp2 = (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c) <$> Unsafe.fromJust $ find (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c.urlPath == "/api/v1/user/login") enpList
+          enp1.endpointHash `shouldBe` toXXHash (testPid.toText <> "172.31.29.11" <> "GET" <> "/")
+          enp2.endpointHash `shouldBe` toXXHash (testPid.toText <> "api.test.com" <> "POST" <> "/api/v1/user/login")
+        _ -> error "Unexpected response"

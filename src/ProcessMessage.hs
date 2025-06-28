@@ -33,7 +33,8 @@ import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry (Context (trace_state))
+import Models.Telemetry.SummaryGenerator (generateSummary)
+import Models.Telemetry.Telemetry (Context (trace_state), OtelLogsAndSpans (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -280,7 +281,7 @@ processSpanToEntities pjc otelSpan dumpId =
             [ Just endpointHash
             , if isJust shape then Just shapeHash else Nothing
             ]
-            <> V.toList fieldHashes
+          <> V.toList fieldHashes
    in (endpoint, shape, fields', formats', hashes)
   where
     -- Helper function to extract headers from nested attribute structure
@@ -296,39 +297,44 @@ processSpanToEntities pjc otelSpan dumpId =
 
 convertRequestMessageToSpan :: RequestMessages.RequestMessage -> (UUID.UUID, Text) -> Telemetry.OtelLogsAndSpans
 convertRequestMessageToSpan rm (spanId, trId) =
-  Telemetry.OtelLogsAndSpans
-    { id = UUID.nil
-    , project_id = UUID.toText rm.projectId
-    , timestamp = zonedTimeToUTC rm.timestamp
-    , parent_id = (Just . UUID.toText) =<< rm.parentId
-    , context = Just $ Telemetry.Context{trace_id = Just trId, span_id = Just $ UUID.toText spanId, trace_state = Nothing, trace_flags = Nothing, is_remote = Nothing}
-    , name = Just $ rm.method <> maybe "" (" " <>) rm.urlPath
-    , start_time = zonedTimeToUTC rm.timestamp
-    , end_time = Just $ addUTCTime (realToFrac (fromIntegral rm.duration / 1000000000)) (zonedTimeToUTC rm.timestamp)
-    , kind = Just $ if T.isSuffixOf "Outgoing" (show rm.sdkType) then "client" else "server"
-    , level = Nothing
-    , body = Just $ AE.object ["request_body" AE..= b64ToJson rm.requestBody, "response_body" AE..= b64ToJson rm.responseBody]
-    , severity = Nothing
-    , status_message = Just $ case rm.statusCode of
-        sc
-          | sc >= 400 -> "Error"
-          | otherwise -> "OK"
-    , status_code = Just $ show rm.statusCode
-    , hashes = []
-    , observed_timestamp = Just $ zonedTimeToUTC rm.timestamp
-    , attributes = jsonToMap $ createSpanAttributes rm
-    , events = Just $ AE.Array V.empty
-    , links = Just ""
-    , resource =
-        jsonToMap
-          $ nestedJsonFromDotNotation
-            [ ("service.name", AE.String $ fromMaybe "unknown" rm.host)
-            , ("telemetry.sdk.language", AE.String "apitoolkit")
-            , ("telemetry.sdk.name", AE.String $ show rm.sdkType)
-            ]
-    , duration = Just $ fromIntegral rm.duration
-    , date = zonedTimeToUTC rm.timestamp
-    }
+  let otelSpan =
+        Telemetry.OtelLogsAndSpans
+          { id = UUID.nil
+          , project_id = UUID.toText rm.projectId
+          , timestamp = zonedTimeToUTC rm.timestamp
+          , parent_id = (Just . UUID.toText) =<< rm.parentId
+          , context = Just $ Telemetry.Context{trace_id = Just trId, span_id = Just $ UUID.toText spanId, trace_state = Nothing, trace_flags = Nothing, is_remote = Nothing}
+          , name = Just $ rm.method <> maybe "" (" " <>) rm.urlPath
+          , start_time = zonedTimeToUTC rm.timestamp
+          , end_time = Just $ addUTCTime (realToFrac (fromIntegral rm.duration / 1000000000)) (zonedTimeToUTC rm.timestamp)
+          , kind = Just $ if T.isSuffixOf "Outgoing" (show rm.sdkType) then "client" else "server"
+          , level = Nothing
+          , body = Just $ AE.object ["request_body" AE..= b64ToJson rm.requestBody, "response_body" AE..= b64ToJson rm.responseBody]
+          , severity = Nothing
+          , status_message = Just $ case rm.statusCode of
+              sc
+                | sc >= 400 -> "Error"
+                | otherwise -> "OK"
+          , status_code = Just $ show rm.statusCode
+          , hashes = []
+          , observed_timestamp = Just $ zonedTimeToUTC rm.timestamp
+          , attributes = jsonToMap $ createSpanAttributes rm
+          , events = Just $ AE.Array V.empty
+          , links = Just ""
+          , resource =
+              jsonToMap
+                $ nestedJsonFromDotNotation
+                  [ ("service.name", AE.String $ fromMaybe "unknown" rm.host)
+                  , ("telemetry.sdk.language", AE.String "apitoolkit")
+                  , ("telemetry.sdk.name", AE.String $ show rm.sdkType)
+                  ]
+          , duration = Just $ fromIntegral rm.duration
+          , summary = V.empty -- Will be populated below
+          , date = zonedTimeToUTC rm.timestamp
+          }
+      -- Generate summary after all fields are set
+      finalSpan = otelSpan{summary = generateSummary otelSpan}
+   in finalSpan
 
 
 -- Using nestedJsonFromDotNotation from Utils module
@@ -354,7 +360,16 @@ createSpanAttributes rm =
           , ("http.route", maybe (AE.String (T.takeWhile (/= '?') rm.rawUrl)) AE.String rm.urlPath)
           , ("url.path", AE.String rm.rawUrl)
           ]
-   in baseAttrs
+      -- Add http object for summary generation compatibility
+      httpObj = AE.object
+        [ "method" AE..= rm.method
+        , "status_code" AE..= rm.statusCode
+        , "url" AE..= rm.rawUrl
+        ]
+      mergedAttrs = case baseAttrs of
+        AE.Object o -> AE.Object $ AEKM.insert "http" httpObj o
+        _ -> baseAttrs
+   in mergedAttrs
         `lodashMerge` refererObj
         `lodashMerge` errorsObj
         `lodashMerge` headersObj
@@ -375,18 +390,18 @@ createSpanAttributes rm =
       let
         -- Convert request headers using lens
         reqHeaders =
-          maybe (AE.object []) id
+          fromMaybe (AE.object [])
             $ rm.requestHeaders
-              ^? _Object
+            ^? _Object
               >>= \obj ->
                 let pairs = [("http.request.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
                  in Just $ nestedJsonFromDotNotation pairs
 
         -- Convert response headers using lens
         respHeaders =
-          maybe (AE.object []) id
+          fromMaybe (AE.object [])
             $ rm.responseHeaders
-              ^? _Object
+            ^? _Object
               >>= \obj ->
                 let pairs = [("http.response.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
                  in Just $ nestedJsonFromDotNotation pairs

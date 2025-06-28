@@ -520,6 +520,7 @@ export class LogList extends LitElement {
     this.recentDataToBeAdded = [];
   }
 
+  // Comment to allow classes be rendered.
   render() {
     const list: (EventLine | 'start' | 'end')[] = this.view === 'tree' ? this.spanListTree.filter((sp) => sp.show) : [...this.spanListTree];
     // end is used to render the load more button"
@@ -544,7 +545,7 @@ export class LogList extends LitElement {
             }
           }
         }}
-        class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-white w-full c-scroll pb-12 overflow-y-scroll"
+        class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-scroll"
         id="logs_list_container_inner"
       >
         ${this.recentDataToBeAdded.length > 0 && !this.flipDirection
@@ -611,6 +612,74 @@ export class LogList extends LitElement {
     return this;
   }
 
+  renderSummaryElements(summaryArray: string[], wrapLines: boolean): any {
+    if (!Array.isArray(summaryArray)) return nothing;
+
+    return summaryArray.map((element) => {
+      // Check if it's a structured element with format "field;style⇒value"
+      if (element.includes(';') && element.includes('⇒')) {
+        const [fieldAndStyle, value] = element.split('⇒');
+        const [field, style] = fieldAndStyle.split(';');
+
+        // Map style to CSS classes
+        const styleClass = this.getStyleClass(style);
+
+        // Special handling for different field types
+        switch (field) {
+          case 'request_type':
+            const icon =
+              value === 'incoming'
+                ? faSprite('arrow-down-left', 'solid', 'h-3 fill-slate-500')
+                : faSprite('arrow-up-right', 'solid', 'h-3 fill-blue-700');
+            return renderIconWithTippy('w-4', `${value} Request`, icon);
+          case 'kind':
+            if (value === 'internal') {
+              return renderIconWithTippy('w-4 ml-2', 'Internal span', faSprite('function', 'regular', 'h-3 w-3'));
+            }
+            return nothing;
+          case 'db.system':
+            return renderIconWithTippy('w-4 ml-2', value, faSprite('database', 'regular', 'h-3 w-3 fill-slate-500'));
+          default:
+            // Check if style is 'text-weak' or 'text-textWeak' - render as plain text instead of badge
+            if (style === 'text-weak' || style === 'text-textWeak') {
+              return html`<span class=${`text-textWeak `}>${value}</span>`;
+            }
+            // Regular badge rendering
+            const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
+            return renderBadge(`cbadge-sm ${styleClass} ${wrapClass}`, value);
+        }
+      } else {
+        // Plain text element
+        const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
+        return html`<span class=${`fill-slate-700 ${wrapClass}`}>${element}</span>`;
+      }
+    });
+  }
+
+  getStyleClass(style: string): string {
+    // Direct badge classes - just return them as-is
+    if (style.startsWith('badge-')) {
+      return style;
+    }
+
+    // Legacy style mappings for backward compatibility
+    const styleMap: Record<string, string> = {
+      'info-strong': 'badge-info',
+      'info-weak': 'badge-neutral bg-fillWeak',
+      'error-strong': 'badge-error',
+      'error-weak': 'badge-4xx',
+      'warning-strong': 'badge-warning',
+      'warning-weak': 'badge-3xx',
+      'success-strong': 'badge-success',
+      'success-weak': 'badge-2xx',
+      neutral: 'badge-neutral bg-fillWeak',
+      right: 'ml-auto badge-neutral bg-fillWeak',
+      'text-weak': '', // No badge styling for weak text
+      'text-textWeak': '', // No badge styling for text-textWeak
+    };
+    return styleMap[style] || 'badge-neutral bg-fillWeak';
+  }
+
   logItemCol(rowData: any, key: string): any {
     const dataArr = rowData.data;
     const wrapLines = this.wrapLines;
@@ -637,46 +706,6 @@ export class LogList extends LitElement {
             >${displayTimestamp(timestamp)}</time
           >
         </div>`;
-      case 'status_code':
-        let statusCode = lookupVecTextByKey(dataArr, colIdxMap, 'status_code');
-        let statusCls = getStatusColor(statusCode);
-        return statusCode == 'UNSET' ? nothing : renderBadge(statusCls, statusCode, 'status code');
-      case 'method':
-        let method = lookupVecTextByKey(dataArr, colIdxMap, key);
-        let methodCls = getMethodColor(method);
-        return renderBadge('min-w-[4rem] cbadge ' + methodCls, method, 'method');
-      case 'request_type':
-        let requestType = lookupVecTextByKey(dataArr, colIdxMap, key);
-        if (requestType === 'Incoming')
-          return renderIconWithTippy('w-4', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'));
-        return renderIconWithTippy('w-4', 'Outgoing Request => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'));
-      case 'duration':
-        let dur = rowData.type === 'log' ? 'log' : getDurationNSMS(lookupVecTextByKey(dataArr, colIdxMap, key));
-        return renderBadge('cbadge-sm badge-neutral font-normal bg-fillWeak', dur, 'latency');
-      case 'severity_text':
-        let severity = lookupVecTextByKey(dataArr, colIdxMap, key) || 'UNSET';
-        let severityClass = getSeverityColor(severity);
-        return severity === 'UNSET' ? nothing : renderBadge('cbadge-sm cbadge ' + severityClass, severity);
-      case 'body':
-        let body = lookupVecTextByKey(dataArr, colIdxMap, key);
-        return renderBadge('space-x-2 ' + wrapClass, body);
-      case 'status':
-        let st = lookupVecTextByKey(dataArr, colIdxMap, key);
-        let statsCls = getSpanStatusColor(st);
-        return !st || st.toLowerCase() === 'unset' || st === 'ERROR' ? nothing : renderBadge(statsCls, st, 'status');
-      case 'span_name':
-        let spanName = lookupVecTextByKey(dataArr, colIdxMap, key);
-        return renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, spanName, 'span name');
-      case 'service':
-        let service = lookupVecTextByKey(dataArr, colIdxMap, key);
-        return html` <div class="w-[16ch]">
-          ${renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, service, 'service name')}
-        </div>`;
-      case 'kind':
-        let kind = lookupVecTextByKey(dataArr, colIdxMap, key);
-        return kind.toLowerCase() === 'internal'
-          ? renderIconWithTippy('w-4 ml-2', 'Internal span', faSprite('function', 'regular', 'h-3 w-3 '))
-          : nothing;
       case 'latency_breakdown':
         const { traceStart, traceEnd, startNs, duration, childrenTimeSpans, depth: d, hasErrors: hErrs } = rowData;
         const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'span_name')] || 'bg-black';
@@ -686,17 +715,33 @@ export class LogList extends LitElement {
           color: serviceColors[lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'bg-black',
         }));
         const width = columnMaxWidthMap['latency_breakdown'] || 200;
-        const db = lookupVecObjectByKey(dataArr, colIdxMap, 'db_attributes');
-        const http = lookupVecObjectByKey(dataArr, colIdxMap, 'http_attributes');
-        const rpc = lookupVecObjectByKey(dataArr, colIdxMap, 'rpc_attributes');
-        const errStatus = lookupVecTextByKey(dataArr, colIdxMap, 'status');
+        // Parse summary array to get additional info for latency breakdown
+        const summaryArr = lookupVecTextByKey(dataArr, colIdxMap, 'summary') || [];
+        let hasError = false;
+        let systemType = '';
+
+        // Extract info from summary array
+        summaryArr.forEach((element: string) => {
+          if (element.includes(';') && element.includes('⇒')) {
+            const [fieldAndStyle, value] = element.split('⇒');
+            const [field, style] = fieldAndStyle.split(';');
+            if (field === 'status' && value === 'ERROR') hasError = true;
+            if (field === 'db.system') systemType = value;
+            if (field === 'rpc.method') systemType = 'rpc';
+          }
+        });
+
+        const hasHttp = summaryArr.some((el: string) => el.includes('method;') || el.includes('status_code;'));
+
         return html`
-          <div class="flex justify-end items-center gap-1 text-textWeak" style="min-width:${width}px">
-            ${errStatus === 'ERROR' || hErrs ? renderBadge(getSpanStatusColor('ERROR'), 'ERROR') : nothing}
-            ${db.system ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', db.system) : nothing}
-            ${http.method && http.url ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', 'http') : nothing}
-            ${rpc.system ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', rpc.system) : nothing}
-            <div class="overflow-visible shrink-0 font-normal">${this.logItemCol(rowData, 'duration')}</div>
+          <div class="flex justify-end items-center gap-1 text-textWeak pl-1 rounded-lg bg-bgBase " style="min-width:${width}px">
+            ${hasError || hErrs ? renderBadge(getSpanStatusColor('ERROR'), 'ERROR') : nothing}
+            ${systemType && systemType !== 'rpc'
+              ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', systemType)
+              : nothing}
+            ${hasHttp ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', 'http') : nothing}
+            ${systemType === 'rpc' ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', 'rpc') : nothing}
+            <span class="cbadge-sm badge-neutral bg-fillWeak tooltip tooltip-right">${getDurationNSMS(duration)}</span>
             ${spanLatencyBreakdown({
               start: startNs - traceStart,
               depth: d,
@@ -709,59 +754,14 @@ export class LogList extends LitElement {
             <span class="w-1"></span>
           </div>
         `;
-      case 'http_attributes':
-        const attributes = lookupVecObjectByKey(dataArr, colIdxMap, key);
-        const { method: m, url, status_code: statusCode_ } = attributes;
-        if (m || url || statusCode_) {
-          let k = lookupVecTextByKey(dataArr, colIdxMap, 'kind');
-          let methodCls_ = getMethodColor(m);
-          let statusCls_ = getStatusColor(statusCode_);
-          let wrapCls = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
-          return html`
-            ${k.toLowerCase() === 'server'
-              ? renderIconWithTippy('w-4 ml-2', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
-              : k.toLowerCase() === 'client'
-              ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
-              : nothing}
-            ${statusCode_ && statusCode_ !== 'UNSET' ? renderBadge(statusCls_, statusCode_, 'status code') : nothing}
-            ${m ? renderBadge('min-w-[4rem] text-center cbadge cbadge-sm ' + methodCls_, m, 'method') : nothing}
-            ${url ? renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapCls, url, 'url') : nothing}
-          `;
-        }
-        break;
-      case 'db_attributes':
-        const dbAttributes = lookupVecObjectByKey(dataArr, colIdxMap, key);
-        const { system, statement } = dbAttributes;
-        if (system || statement) {
-          return html`
-            ${renderIconWithTippy('w-4 ml-2', system, faSprite('database', 'regular', 'h-3 w-3 fill-slate-500'))}
-            ${statement ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', statement) : nothing}
-          `;
-        }
-        break;
-      case 'rpc_attributes':
-        const rpcAttributes = lookupVecObjectByKey(dataArr, colIdxMap, key);
-        const { system: rpcSystem, method: rpcMethod } = rpcAttributes;
-        let k = lookupVecTextByKey(dataArr, colIdxMap, 'kind');
-        if (rpcSystem || rpcMethod) {
-          return html`
-            ${k.toLowerCase() === 'server'
-              ? renderIconWithTippy('w-4 ml-2', 'Incoming Request => Server', faSprite('arrow-down-left', 'solid', ' h-3 fill-slate-500'))
-              : k.toLowerCase() === 'client'
-              ? renderIconWithTippy('w-4 ml-2', 'Outgoing Request  => Client', faSprite('arrow-up-right', 'solid', ' h-3 fill-blue-700'))
-              : nothing}
-            ${rpcMethod ? renderBadge('cbadge-sm badge-neutral bg-fillWeak', rpcMethod) : nothing}
-          `;
-        }
-        break;
       case 'summary':
-        let val = lookupVecTextByKey(dataArr, colIdxMap, key);
+        const summaryArray = lookupVecTextByKey(dataArr, colIdxMap, key) || [];
         const { depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData;
         const errClas = hasErrors
           ? 'bg-fillError-strong text-white fill-white stroke-strokeError-strong'
           : childErrors
-          ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
+            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         return html`<div class="flex w-full ${wrapLines ? 'items-start' : 'items-center'} gap-1">
           ${this.view === 'tree'
             ? html`
@@ -788,18 +788,13 @@ export class LogList extends LitElement {
                         ${children}
                       </button>`
                     : depth === 0
-                    ? nothing
-                    : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                      ? nothing
+                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
                 </div>
               `
             : nothing}
           <div class=${`flex items-center gap-1 ${wrapLines ? 'break-all flex-wrap' : 'overflow-hidden'}`}>
-            ${type === 'log'
-              ? ['severity_text', 'body'].map((k) => this.logItemCol(rowData, k))
-              : ['kind', 'http_attributes', 'db_attributes', 'rpc_attributes', 'status', 'span_name'].map((k) =>
-                  this.logItemCol(rowData, k)
-                )}
-            <span class=${'fill-slate-700 ' + wrapClass}>${val}</span>
+            ${this.renderSummaryElements(summaryArray, wrapLines)}
           </div>
         </div>`;
       default:
@@ -837,17 +832,17 @@ export class LogList extends LitElement {
         ${this.isLiveStreaming
           ? html`<p>Live streaming latest data...</p>`
           : this.isLoadingRecent
-          ? html`<div class="loading loading-dots loading-md"></div>`
-          : html`
-              <button
-                class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-                @pointerdown=${() => {
-                  this.fetchData(this.recentFetchUrl, true);
-                }}
-              >
-                Check for recent data
-              </button>
-            `}
+            ? html`<div class="loading loading-dots loading-md"></div>`
+            : html`
+                <button
+                  class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
+                  @pointerdown=${() => {
+                    this.fetchData(this.recentFetchUrl, true);
+                  }}
+                >
+                  Check for recent data
+                </button>
+              `}
       </td>
     </tr>`;
   }
@@ -860,7 +855,7 @@ export class LogList extends LitElement {
       case 'created_at':
         return this.tableHeadingWrapper('timestamp', column, 'w-[17ch] shrink-0');
       case 'latency_breakdown':
-        return this.tableHeadingWrapper('latency', column, 'sticky right-0 shrink-0 bg-fillError-strong');
+        return this.tableHeadingWrapper('latency', column, 'sticky right-0 shrink-0');
       case 'status_code':
         return this.tableHeadingWrapper('status', column, 'shrink-0 w-[12ch]');
       case 'method':
@@ -904,7 +899,7 @@ export class LogList extends LitElement {
             const tableDataWidth = getColumnWidth(column);
             let width = this.columnMaxWidthMap[column];
             return html`<td
-              class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-white relative ${
+              class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-bgBase relative ${
                 column === 'summary' ? '' : tableDataWidth
               }`}
               style=${width ? `width: ${width}px;` : ''}
@@ -914,7 +909,7 @@ export class LogList extends LitElement {
           })}
         ${this.logsColumns.includes('latency_breakdown')
           ? html`<td
-              class="bg-white sticky right-0 overflow-x-hidden"
+              class="sticky right-0 "
               style=${this.columnMaxWidthMap['latency_breakdown'] ? "width: ${this.columnMaxWidthMap['latency_breakdown']}px;" : ''}
             >
               ${this.logItemCol(rowData, 'latency_breakdown')}
@@ -932,7 +927,7 @@ export class LogList extends LitElement {
 
     return html`
       <td
-        class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-1 text-sm font-normal bg-white ${
+        class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-1 text-sm font-normal bg-bgBase ${
           classes ? classes : ''
         }`}
         style=${width ? `width: ${width}px` : ''}
@@ -946,7 +941,7 @@ export class LogList extends LitElement {
           </div>
           <ul
             tabindex="0"
-            class="dropdown-content z-1 flex flex-col font-normal bg-white border w-64 border-strokeWeak p-2 text-sm rounded shadow"
+            class="dropdown-content z-1 flex flex-col font-normal bg-bgBase border w-64 border-strokeWeak p-2 text-sm rounded shadow"
           >
             <li class="px-1 cursor-pointer hover:bg-fillWeak">
               <button class="cursor-pointer py-0.5" @pointerdown=${() => this.hideColumn(column)}>Hide column</button>
@@ -1010,7 +1005,7 @@ export class LogList extends LitElement {
             ${faSprite('gear', 'regular', `h-3 w-3 `)}
             <span class="sm:inline hidden">Options</span>
           </button>
-          <div tabindex="0" class="dropdown-content space-y-2 bg-white border w-64 border-strokeWeak p-2 text-sm rounded shadow">
+          <div tabindex="0" class="dropdown-content space-y-2 bg-bgBase border w-64 border-strokeWeak p-2 text-sm rounded shadow">
             <label class="flex items-center cursor-pointer w-full gap-1 px-2 py-1 text-sm rounded text-textWeak hover:bg-gray-100">
               <input
                 type="checkbox"
@@ -1104,7 +1099,7 @@ class ColumnsSettings extends LitElement {
 
   render() {
     return html`
-      <div tabindex="0" class="bg-white w-full border-t border-t-strokeWeak p-2 pt-4 text-sm mt-4">
+      <div tabindex="0" class="bg-bgBase w-full border-t border-t-strokeWeak p-2 pt-4 text-sm mt-4">
         <div class="relative mb-4">
           <span class="block mb-1 text-sm text-textStrong font-medium">Add column</span>
           <input

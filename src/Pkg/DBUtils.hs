@@ -3,6 +3,7 @@ module Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..), connectPostgreSQL) whe
 import Control.Exception
 import Data.IntMap qualified as IntMap
 import Data.Text qualified as T
+import Data.Text.Display (Display(..))
 import Database.PostgreSQL.LibPQ qualified as PQ
 import Database.PostgreSQL.Simple (Connection, ResultError (..))
 import Database.PostgreSQL.Simple.FromField (FromField (..), fromField, returnError)
@@ -41,6 +42,11 @@ instance (KnownSymbol prefix, Read a, Typeable a) => FromField (WrappedEnumSC pr
   fromField f = \case
     Nothing -> returnError UnexpectedNull f ""
     Just bss -> pure $ WrappedEnumSC (Unsafe.read $ symbolVal (Proxy @prefix) <> toString (T.toTitle (decodeUtf8 bss)))
+
+
+-- Display instance that shows the value in snake_case without prefix
+instance (KnownSymbol prefix, Show a) => Display (WrappedEnumSC prefix a) where
+  displayBuilder (WrappedEnumSC a) = fromString . quietSnake . drop (length $ symbolVal (Proxy @prefix)) . show $ a
 
 
 connectPostgreSQL :: ByteString -> IO Connection

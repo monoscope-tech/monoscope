@@ -30,7 +30,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Log qualified as LogList
+import Pages.LogExplorer.Log qualified as LogList
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..))
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.Parser (defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)

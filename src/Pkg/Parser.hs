@@ -120,7 +120,18 @@ sqlFromQueryComponents sqlCfg qc =
       -- Handle the Either error case correctly not hushing it.
       (_, selVec) = getProcessedColumns sqlCfg.projectedColsByUser sqlCfg.defaultSelect
       selectedCols = if null qc.select then selVec else qc.select
-      selectClause = T.intercalate "," $ colsNoAsClause selectedCols
+      -- When building json_build_array, we need to handle TEXT[] columns specially
+      -- Process each column to convert arrays to JSON
+      processedCols =
+        map
+          ( \col ->
+              if "summary" == col || "summary" `T.isSuffixOf` col
+                then "to_json(summary)"
+                else col
+          )
+          $ colsNoAsClause selectedCols
+      selectClause = T.intercalate "," processedCols
+
       -- Extract the raw where clause without the AND prefix
       rawWhere = fromMaybe "" qc.whereClause
       -- Use raw where with parentheses but NO AND prefix
@@ -483,12 +494,7 @@ defaultSelectSqlQuery (Just SSpans) =
           ) as http_attributes |]
   , [fmt| jsonb_build_object('system', attributes->'db'->'system','statement', coalesce(attributes->'db'->'query'->'text', attributes->'db'->'statement')) as db_attributes  |]
   , [fmt| json_build_object('system', attributes->'rpc'->'system', 'method', attributes->'rpc'->'method') as rpc_attributes|]
-  , [fmt|LEFT(
-        CONCAT(
-            COALESCE(attributes::text, '')
-        ),
-        500
-    ) as summary|]
+  , "summary"
   , "context___span_id as latency_breakdown"
   ]
 

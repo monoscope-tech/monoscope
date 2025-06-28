@@ -189,6 +189,43 @@ const chartWidget = (widgetData: WidGetData) => {
     resizeObserver.observe(chartEl);
   }
 
+  // Handle chart zoom events for log explorer page
+  if (isLogExlorerPage) {
+    chart.on('datazoom', (params: { batch?: { startValue: string; endValue: string }[] }) => {
+      const zoom = params.batch ? params.batch[0] : undefined;
+      if (!zoom) return;
+      let startValue = zoom.startValue;
+      let endValue = zoom.endValue;
+      if (startValue === undefined || endValue === undefined) return;
+      
+      startValue = new Date(startValue).toISOString();
+      endValue = new Date(endValue).toISOString();
+      
+      const p = new URLSearchParams(window.location.search);
+      p.set('from', startValue);
+      p.set('to', endValue);
+      p.delete('since');
+
+      const newUrl = `${window.location.pathname}?${p.toString()}${window.location.hash}`;
+      window.history.replaceState({}, '', newUrl);
+      
+      const rangeBox = document.getElementById('currentRange');
+      if (rangeBox) {
+        rangeBox.innerText = `${startValue} - ${endValue}`;
+      }
+
+      // Dispatch update-query event
+      window.dispatchEvent(
+        new CustomEvent('update-query', {
+          bubbles: true,
+          detail: {
+            ast: p.get('queryAST') || '',
+          },
+        })
+      );
+    });
+  }
+
   liveStreamCheckbox &&
     liveStreamCheckbox.addEventListener('change', () => {
       if (liveStreamCheckbox.checked) {

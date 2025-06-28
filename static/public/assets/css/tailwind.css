@@ -416,6 +416,46 @@ code, pre, .code, .monospace {
   @apply bg-cyan-100 text-cyan-600;
 }
 
+@utility badge-5xx {
+  @apply bg-red-200 text-red-900 font-medium;
+}
+
+@utility badge-neutral {
+  @apply bg-gray-100 text-gray-700;
+}
+
+@utility badge-info {
+  @apply bg-blue-100 text-blue-700;
+}
+
+@utility badge-warning {
+  @apply bg-yellow-100 text-yellow-700;
+}
+
+@utility badge-fatal {
+  @apply bg-red-300 text-red-900 font-bold;
+}
+
+@utility badge-GET {
+  @apply bg-blue-100 text-blue-700;
+}
+
+@utility badge-POST {
+  @apply bg-pink-100 text-pink-700;
+}
+
+@utility badge-PUT {
+  @apply bg-lime-100 text-lime-700;
+}
+
+@utility badge-DELETE {
+  @apply bg-red-100 text-red-700;
+}
+
+@utility badge-PATCH {
+  @apply bg-cyan-100 text-cyan-700;
+}
+
 @utility ctable {
   & :where(.table-pin-rows thead tr) {
     @apply sticky top-0 z-10 bg-bgBase;
