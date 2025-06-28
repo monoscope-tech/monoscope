@@ -520,6 +520,7 @@ export class LogList extends LitElement {
     this.recentDataToBeAdded = [];
   }
 
+  // Comment to allow classes be rendered.
   render() {
     const list: (EventLine | 'start' | 'end')[] = this.view === 'tree' ? this.spanListTree.filter((sp) => sp.show) : [...this.spanListTree];
     // end is used to render the load more button"
@@ -613,22 +614,23 @@ export class LogList extends LitElement {
 
   renderSummaryElements(summaryArray: string[], wrapLines: boolean): any {
     if (!Array.isArray(summaryArray)) return nothing;
-    
-    return summaryArray.map(element => {
+
+    return summaryArray.map((element) => {
       // Check if it's a structured element with format "field;style⇒value"
       if (element.includes(';') && element.includes('⇒')) {
         const [fieldAndStyle, value] = element.split('⇒');
         const [field, style] = fieldAndStyle.split(';');
-        
+
         // Map style to CSS classes
         const styleClass = this.getStyleClass(style);
-        
+
         // Special handling for different field types
         switch (field) {
           case 'request_type':
-            const icon = value === 'incoming' 
-              ? faSprite('arrow-down-left', 'solid', 'h-3 fill-slate-500')
-              : faSprite('arrow-up-right', 'solid', 'h-3 fill-blue-700');
+            const icon =
+              value === 'incoming'
+                ? faSprite('arrow-down-left', 'solid', 'h-3 fill-slate-500')
+                : faSprite('arrow-up-right', 'solid', 'h-3 fill-blue-700');
             return renderIconWithTippy('w-4', `${value} Request`, icon);
           case 'kind':
             if (value === 'internal') {
@@ -638,6 +640,10 @@ export class LogList extends LitElement {
           case 'db.system':
             return renderIconWithTippy('w-4 ml-2', value, faSprite('database', 'regular', 'h-3 w-3 fill-slate-500'));
           default:
+            // Check if style is 'text-weak' - render as plain text instead of badge
+            if (style === 'text-weak') {
+              return html`<span class=${`text-textWeak `}>${value}</span>`;
+            }
             // Regular badge rendering
             const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
             return renderBadge(`cbadge-sm ${styleClass} ${wrapClass}`, value);
@@ -660,8 +666,8 @@ export class LogList extends LitElement {
       'warning-weak': 'badge-3xx',
       'success-strong': 'badge-success',
       'success-weak': 'badge-2xx',
-      'neutral': 'badge-neutral bg-fillWeak',
-      'right': 'ml-auto badge-neutral bg-fillWeak'
+      neutral: 'badge-neutral bg-fillWeak',
+      right: 'ml-auto badge-neutral bg-fillWeak',
     };
     return styleMap[style] || 'badge-neutral bg-fillWeak';
   }
@@ -705,7 +711,7 @@ export class LogList extends LitElement {
         const summaryArr = lookupVecTextByKey(dataArr, colIdxMap, 'summary') || [];
         let hasError = false;
         let systemType = '';
-        
+
         // Extract info from summary array
         summaryArr.forEach((element: string) => {
           if (element.includes(';') && element.includes('⇒')) {
@@ -716,16 +722,18 @@ export class LogList extends LitElement {
             if (field === 'rpc.method') systemType = 'rpc';
           }
         });
-        
+
         const hasHttp = summaryArr.some((el: string) => el.includes('method;') || el.includes('status_code;'));
-        
+
         return html`
-          <div class="flex justify-end items-center gap-1 text-textWeak" style="min-width:${width}px">
+          <div class="flex justify-end items-center gap-1 text-textWeak pl-1 rounded-lg bg-bgBase " style="min-width:${width}px">
             ${hasError || hErrs ? renderBadge(getSpanStatusColor('ERROR'), 'ERROR') : nothing}
-            ${systemType && systemType !== 'rpc' ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', systemType) : nothing}
+            ${systemType && systemType !== 'rpc'
+              ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', systemType)
+              : nothing}
             ${hasHttp ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', 'http') : nothing}
             ${systemType === 'rpc' ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', 'rpc') : nothing}
-            <div class="overflow-visible shrink-0 font-normal">${getDurationNSMS(duration)}</div>
+            <span class="cbadge-sm badge-neutral bg-fillWeak tooltip tooltip-right">${getDurationNSMS(duration)}</span>
             ${spanLatencyBreakdown({
               start: startNs - traceStart,
               depth: d,
@@ -744,8 +752,8 @@ export class LogList extends LitElement {
         const errClas = hasErrors
           ? 'bg-fillError-strong text-white fill-white stroke-strokeError-strong'
           : childErrors
-          ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
+            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         return html`<div class="flex w-full ${wrapLines ? 'items-start' : 'items-center'} gap-1">
           ${this.view === 'tree'
             ? html`
@@ -772,8 +780,8 @@ export class LogList extends LitElement {
                         ${children}
                       </button>`
                     : depth === 0
-                    ? nothing
-                    : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                      ? nothing
+                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
                 </div>
               `
             : nothing}
@@ -816,17 +824,17 @@ export class LogList extends LitElement {
         ${this.isLiveStreaming
           ? html`<p>Live streaming latest data...</p>`
           : this.isLoadingRecent
-          ? html`<div class="loading loading-dots loading-md"></div>`
-          : html`
-              <button
-                class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-                @pointerdown=${() => {
-                  this.fetchData(this.recentFetchUrl, true);
-                }}
-              >
-                Check for recent data
-              </button>
-            `}
+            ? html`<div class="loading loading-dots loading-md"></div>`
+            : html`
+                <button
+                  class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
+                  @pointerdown=${() => {
+                    this.fetchData(this.recentFetchUrl, true);
+                  }}
+                >
+                  Check for recent data
+                </button>
+              `}
       </td>
     </tr>`;
   }
@@ -883,7 +891,7 @@ export class LogList extends LitElement {
             const tableDataWidth = getColumnWidth(column);
             let width = this.columnMaxWidthMap[column];
             return html`<td
-              class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-white relative ${
+              class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-bgBase relative ${
                 column === 'summary' ? '' : tableDataWidth
               }`}
               style=${width ? `width: ${width}px;` : ''}
@@ -893,7 +901,7 @@ export class LogList extends LitElement {
           })}
         ${this.logsColumns.includes('latency_breakdown')
           ? html`<td
-              class="bg-white sticky right-0 overflow-x-hidden"
+              class="sticky right-0 "
               style=${this.columnMaxWidthMap['latency_breakdown'] ? "width: ${this.columnMaxWidthMap['latency_breakdown']}px;" : ''}
             >
               ${this.logItemCol(rowData, 'latency_breakdown')}
