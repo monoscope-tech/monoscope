@@ -6,13 +6,9 @@ module Models.Telemetry.SummaryGenerator (
 ) where
 
 import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as KEM
-import Data.Aeson.Types qualified as AE
 import Data.ByteString.Lazy qualified as BSL
-import Data.Int (Int64)
 import Data.Map qualified as Map
 import Data.Text qualified as T
-import Data.Text.Display (display)
 import Data.Text.Encoding qualified as TE
 import Data.Vector qualified as V
 import Models.Telemetry.Telemetry (OtelLogsAndSpans(..), Severity(..), SeverityLevel(..), atMapText, atMapInt)
@@ -178,14 +174,6 @@ generateSpanSummary otel =
           _ -> Nothing
       ]
   in V.fromList elements
-
--- | Format duration from nanoseconds to human readable format
-formatDuration :: Int64 -> T.Text
-formatDuration ns
-  | ns >= 1000000000 = T.pack (show (ns `div` 1000000000)) <> "s"
-  | ns >= 1000000 = T.pack (show (ns `div` 1000000)) <> "ms"
-  | ns >= 1000 = T.pack (show (ns `div` 1000)) <> "μs"
-  | otherwise = T.pack (show ns) <> "ns"
 
 
 statusCodeStyle :: Int -> T.Text
