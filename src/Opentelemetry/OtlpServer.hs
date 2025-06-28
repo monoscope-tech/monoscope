@@ -35,9 +35,9 @@ import Effectful.Reader.Static qualified as Eff
 import Log qualified
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.SummaryGenerator (generateSummary)
 import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), Severity (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Models.Telemetry.SummaryGenerator (generateSummary)
 import Network.GRPC.Common
 import Network.GRPC.Common.Protobuf
 import Network.GRPC.Server (SomeRpcHandler)
@@ -598,45 +598,46 @@ convertLogRecordToOtelLog !pid resourceM scopeM logRecord =
       !observedTimeNano = logRecord ^. PLF.observedTimeUnixNano
       !severityText = logRecord ^. PLF.severityText
       !severityNumber = fromEnum (logRecord ^. PLF.severityNumber)
-      otelLog = OtelLogsAndSpans
-        { project_id = pid.toText
-        , id = UUID.nil -- Will be replaced in bulkInsertOtelLogsAndSpansTF
-        , timestamp = if timeNano == 0 then nanosecondsToUTC observedTimeNano else nanosecondsToUTC timeNano
-        , observed_timestamp = Just $ nanosecondsToUTC observedTimeNano
-        , context =
-            Just
-              $ Context
-                { trace_id = Just $ byteStringToHexText $ logRecord ^. PLF.traceId
-                , span_id = Just $ byteStringToHexText $ logRecord ^. PLF.spanId
-                , trace_state = Nothing
-                , trace_flags = Nothing
-                , is_remote = Nothing
-                }
-        , level = Just severityText
-        , severity =
-            Just
-              $ Severity
-                { severity_text = parseSeverityLevel severityText
-                , severity_number = severityNumber
-                }
-        , body = Just $ anyValueToJSON $ Just $ logRecord ^. PLF.body
-        , attributes = jsonToMap $ removeProjectId $ keyValueToJSON $ V.fromList $ logRecord ^. PLF.attributes
-        , resource = jsonToMap $ removeProjectId $ resourceToJSON resourceM
-        , hashes = V.empty
-        , kind = Just "log"
-        , status_code = Nothing
-        , status_message = Nothing
-        , duration = Nothing
-        , start_time = nanosecondsToUTC observedTimeNano
-        , end_time = Nothing
-        , events = Nothing
-        , links = Nothing
-        , name = Nothing
-        , parent_id = Nothing
-        , summary = V.empty -- Will be populated after creation
-        , date = if timeNano == 0 then nanosecondsToUTC observedTimeNano else nanosecondsToUTC timeNano
-        }
-   in otelLog { summary = generateSummary otelLog }
+      otelLog =
+        OtelLogsAndSpans
+          { project_id = pid.toText
+          , id = UUID.nil -- Will be replaced in bulkInsertOtelLogsAndSpansTF
+          , timestamp = if timeNano == 0 then nanosecondsToUTC observedTimeNano else nanosecondsToUTC timeNano
+          , observed_timestamp = Just $ nanosecondsToUTC observedTimeNano
+          , context =
+              Just
+                $ Context
+                  { trace_id = Just $ byteStringToHexText $ logRecord ^. PLF.traceId
+                  , span_id = Just $ byteStringToHexText $ logRecord ^. PLF.spanId
+                  , trace_state = Nothing
+                  , trace_flags = Nothing
+                  , is_remote = Nothing
+                  }
+          , level = Just severityText
+          , severity =
+              Just
+                $ Severity
+                  { severity_text = parseSeverityLevel severityText
+                  , severity_number = severityNumber
+                  }
+          , body = Just $ anyValueToJSON $ Just $ logRecord ^. PLF.body
+          , attributes = jsonToMap $ removeProjectId $ keyValueToJSON $ V.fromList $ logRecord ^. PLF.attributes
+          , resource = jsonToMap $ removeProjectId $ resourceToJSON resourceM
+          , hashes = V.empty
+          , kind = Just "log"
+          , status_code = Nothing
+          , status_message = Nothing
+          , duration = Nothing
+          , start_time = nanosecondsToUTC observedTimeNano
+          , end_time = Nothing
+          , events = Nothing
+          , links = Nothing
+          , name = Nothing
+          , parent_id = Nothing
+          , summary = V.empty -- Will be populated after creation
+          , date = if timeNano == 0 then nanosecondsToUTC observedTimeNano else nanosecondsToUTC timeNano
+          }
+   in otelLog{summary = generateSummary otelLog}
 
 
 -- | Convert ResourceSpans to OtelLogsAndSpans
@@ -788,40 +789,41 @@ convertSpanToOtelLog !pid resourceM scopeM pSpan =
                      in newHttp
                   _ -> attributes
           else attributes
-      otelSpan = OtelLogsAndSpans
-        { project_id = pid.toText
-        , id = UUID.nil -- Will be replaced in bulkInsertOtelLogsAndSpansTF
-        , timestamp = nanosecondsToUTC startTimeNano
-        , observed_timestamp = Just $ nanosecondsToUTC startTimeNano
-        , context =
-            Just
-              $ Context
-                { trace_id = Just $ byteStringToHexText $ pSpan ^. PTF.traceId
-                , span_id = Just $ byteStringToHexText $ pSpan ^. PTF.spanId
-                , trace_state = Just $ pSpan ^. PTF.traceState
-                , trace_flags = Nothing
-                , is_remote = Nothing
-                }
-        , level = Nothing
-        , severity = Nothing
-        , body
-        , attributes = newAttributes
-        , resource = jsonToMap $ removeProjectId $ resourceToJSON resourceM
-        , hashes = V.empty
-        , kind = spanKindText
-        , status_code = statusCodeText
-        , status_message = statusMsgText
-        , duration = Just $ fromIntegral durationNanos
-        , start_time = nanosecondsToUTC startTimeNano
-        , end_time = Just $ nanosecondsToUTC endTimeNano
-        , events = eventsJson
-        , links = linksJson
-        , name = Just $ pSpan ^. PTF.name
-        , parent_id = parentId
-        , summary = V.empty -- Will be populated after creation
-        , date = nanosecondsToUTC startTimeNano
-        }
-   in otelSpan { summary = generateSummary otelSpan }
+      otelSpan =
+        OtelLogsAndSpans
+          { project_id = pid.toText
+          , id = UUID.nil -- Will be replaced in bulkInsertOtelLogsAndSpansTF
+          , timestamp = nanosecondsToUTC startTimeNano
+          , observed_timestamp = Just $ nanosecondsToUTC startTimeNano
+          , context =
+              Just
+                $ Context
+                  { trace_id = Just $ byteStringToHexText $ pSpan ^. PTF.traceId
+                  , span_id = Just $ byteStringToHexText $ pSpan ^. PTF.spanId
+                  , trace_state = Just $ pSpan ^. PTF.traceState
+                  , trace_flags = Nothing
+                  , is_remote = Nothing
+                  }
+          , level = Nothing
+          , severity = Nothing
+          , body
+          , attributes = newAttributes
+          , resource = jsonToMap $ removeProjectId $ resourceToJSON resourceM
+          , hashes = V.empty
+          , kind = spanKindText
+          , status_code = statusCodeText
+          , status_message = statusMsgText
+          , duration = Just $ fromIntegral durationNanos
+          , start_time = nanosecondsToUTC startTimeNano
+          , end_time = Just $ nanosecondsToUTC endTimeNano
+          , events = eventsJson
+          , links = linksJson
+          , name = Just $ pSpan ^. PTF.name
+          , parent_id = parentId
+          , summary = V.empty -- Will be populated after creation
+          , date = nanosecondsToUTC startTimeNano
+          }
+   in otelSpan{summary = generateSummary otelSpan}
 
 
 -- | Convert ResourceMetrics to MetricRecords
