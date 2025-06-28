@@ -545,7 +545,7 @@ export class LogList extends LitElement {
             }
           }
         }}
-        class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-white w-full c-scroll pb-12 overflow-y-scroll"
+        class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-scroll"
         id="logs_list_container_inner"
       >
         ${this.recentDataToBeAdded.length > 0 && !this.flipDirection
@@ -640,8 +640,8 @@ export class LogList extends LitElement {
           case 'db.system':
             return renderIconWithTippy('w-4 ml-2', value, faSprite('database', 'regular', 'h-3 w-3 fill-slate-500'));
           default:
-            // Check if style is 'text-weak' - render as plain text instead of badge
-            if (style === 'text-weak') {
+            // Check if style is 'text-weak' or 'text-textWeak' - render as plain text instead of badge
+            if (style === 'text-weak' || style === 'text-textWeak') {
               return html`<span class=${`text-textWeak `}>${value}</span>`;
             }
             // Regular badge rendering
@@ -661,7 +661,7 @@ export class LogList extends LitElement {
     if (style.startsWith('badge-')) {
       return style;
     }
-    
+
     // Legacy style mappings for backward compatibility
     const styleMap: Record<string, string> = {
       'info-strong': 'badge-info',
@@ -672,9 +672,10 @@ export class LogList extends LitElement {
       'warning-weak': 'badge-3xx',
       'success-strong': 'badge-success',
       'success-weak': 'badge-2xx',
-      'neutral': 'badge-neutral bg-fillWeak',
-      'right': 'ml-auto badge-neutral bg-fillWeak',
+      neutral: 'badge-neutral bg-fillWeak',
+      right: 'ml-auto badge-neutral bg-fillWeak',
       'text-weak': '', // No badge styling for weak text
+      'text-textWeak': '', // No badge styling for text-textWeak
     };
     return styleMap[style] || 'badge-neutral bg-fillWeak';
   }
@@ -854,7 +855,7 @@ export class LogList extends LitElement {
       case 'created_at':
         return this.tableHeadingWrapper('timestamp', column, 'w-[17ch] shrink-0');
       case 'latency_breakdown':
-        return this.tableHeadingWrapper('latency', column, 'sticky right-0 shrink-0 bg-fillError-strong');
+        return this.tableHeadingWrapper('latency', column, 'sticky right-0 shrink-0');
       case 'status_code':
         return this.tableHeadingWrapper('status', column, 'shrink-0 w-[12ch]');
       case 'method':
@@ -926,7 +927,7 @@ export class LogList extends LitElement {
 
     return html`
       <td
-        class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-1 text-sm font-normal bg-white ${
+        class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-1 text-sm font-normal bg-bgBase ${
           classes ? classes : ''
         }`}
         style=${width ? `width: ${width}px` : ''}
@@ -940,7 +941,7 @@ export class LogList extends LitElement {
           </div>
           <ul
             tabindex="0"
-            class="dropdown-content z-1 flex flex-col font-normal bg-white border w-64 border-strokeWeak p-2 text-sm rounded shadow"
+            class="dropdown-content z-1 flex flex-col font-normal bg-bgBase border w-64 border-strokeWeak p-2 text-sm rounded shadow"
           >
             <li class="px-1 cursor-pointer hover:bg-fillWeak">
               <button class="cursor-pointer py-0.5" @pointerdown=${() => this.hideColumn(column)}>Hide column</button>
@@ -1004,7 +1005,7 @@ export class LogList extends LitElement {
             ${faSprite('gear', 'regular', `h-3 w-3 `)}
             <span class="sm:inline hidden">Options</span>
           </button>
-          <div tabindex="0" class="dropdown-content space-y-2 bg-white border w-64 border-strokeWeak p-2 text-sm rounded shadow">
+          <div tabindex="0" class="dropdown-content space-y-2 bg-bgBase border w-64 border-strokeWeak p-2 text-sm rounded shadow">
             <label class="flex items-center cursor-pointer w-full gap-1 px-2 py-1 text-sm rounded text-textWeak hover:bg-gray-100">
               <input
                 type="checkbox"
@@ -1098,7 +1099,7 @@ class ColumnsSettings extends LitElement {
 
   render() {
     return html`
-      <div tabindex="0" class="bg-white w-full border-t border-t-strokeWeak p-2 pt-4 text-sm mt-4">
+      <div tabindex="0" class="bg-bgBase w-full border-t border-t-strokeWeak p-2 pt-4 text-sm mt-4">
         <div class="relative mb-4">
           <span class="block mb-1 text-sm text-textStrong font-medium">Add column</span>
           <input

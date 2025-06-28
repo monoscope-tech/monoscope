@@ -43,6 +43,8 @@ module Models.Telemetry.Telemetry (
   getChildSpans,
   SpanEvent (..),
   SpanLink (..),
+  atMapText,
+  atMapInt,
 )
 where
 
@@ -138,21 +140,21 @@ data SeverityLevel = SLDebug | SLInfo | SLWarn | SLError | SLFatal
   deriving (Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "SL", DAE.CamelToSnake]] SeverityLevel
-  deriving (FromField, ToField, Display) via WrappedEnumSC "SL" SeverityLevel
+  deriving (Display, FromField, ToField) via WrappedEnumSC "SL" SeverityLevel
 
 
 data SpanStatus = SSOk | SSError | SSUnset
   deriving (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "SS", DAE.CamelToSnake]] SpanStatus
-  deriving (FromField, ToField, Display) via WrappedEnumSC "SS" SpanStatus
+  deriving (Display, FromField, ToField) via WrappedEnumSC "SS" SpanStatus
 
 
 data SpanKind = SKInternal | SKServer | SKClient | SKProducer | SKConsumer | SKUnspecified
   deriving (Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "SK", DAE.CamelToSnake]] SpanKind
-  deriving (FromField, ToField, Display) via WrappedEnumSC "SK" SpanKind
+  deriving (Display, FromField, ToField) via WrappedEnumSC "SK" SpanKind
 
 
 data Trace = Trace

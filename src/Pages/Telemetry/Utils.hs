@@ -1,4 +1,4 @@
-module Pages.Telemetry.Utils (getServiceName, getServiceColor, getRequestDetails, spanHasErrors, getSpanErrors, getErrorDetails, metricsTree, atMapText)
+module Pages.Telemetry.Utils (getServiceName, getServiceColor, getRequestDetails, spanHasErrors, getSpanErrors, getErrorDetails, metricsTree)
 where
 
 import Data.Aeson qualified as AE
@@ -28,16 +28,6 @@ getServiceName rs = case Map.lookup "service" (fromMaybe Map.empty rs) of
 
 getServiceColor :: Text -> HashMap Text Text -> Text
 getServiceColor s serviceColors = fromMaybe "bg-black" $ HM.lookup s serviceColors
-
-
-atMapText :: Text -> Maybe (Map Text AE.Value) -> Maybe Text
-atMapText key maybeMap = do
-  m <- maybeMap
-  v <- Map.lookup key m
-  case v of
-    AE.String t -> Just t
-    AE.Number n -> Just $ show n
-    _ -> Nothing
 
 
 getRequestDetails :: Maybe (Map Text AE.Value) -> Maybe (Text, Text, Text, Int)

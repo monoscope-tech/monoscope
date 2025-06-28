@@ -6,6 +6,7 @@ module Models.Telemetry.SummaryGenerator (
 ) where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.Types qualified as AE
 import Data.ByteString.Lazy qualified as BSL
 import Data.Int (Int64)
@@ -14,7 +15,7 @@ import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Text.Encoding qualified as TE
 import Data.Vector qualified as V
-import Models.Telemetry.Telemetry
+import Models.Telemetry.Telemetry (OtelLogsAndSpans(..), Severity(..), SeverityLevel(..), atMapText, atMapInt)
 import Relude
 
 
@@ -55,7 +56,7 @@ generateLogSummary otel =
                 truncated = if T.length attrText > 500 
                            then T.take 497 attrText <> "..."
                            else attrText
-            in Just $ "attributes;text-weak⇒" <> truncated
+            in Just $ "attributes;text-textWeak⇒" <> truncated
           _ -> Nothing
       ]
   where
@@ -78,102 +79,81 @@ generateLogSummary otel =
 generateSpanSummary :: OtelLogsAndSpans -> V.Vector T.Text
 generateSpanSummary otel =
   let
-    -- Extract HTTP attributes once to avoid repeated lookups
-    httpAttrs = case (otel.kind, otel.attributes) of
-      (Just k, Just attrs) | k `elem` ["server", "client"] ->
-        case Map.lookup "http" attrs of
-          Just (AE.Object httpObj) -> Just httpObj
-          _ -> Nothing
-      _ -> Nothing
+    -- Check if this span has HTTP attributes
+    hasHttp = case otel.attributes of
+      Just attrs -> isJust (atMapText "http.request.method" (Just attrs)) || 
+                    isJust (atMapInt "http.response.status_code" (Just attrs))
+      _ -> False
     
     -- Build elements in correct order
     elements = catMaybes $
       -- 1. Request type indicators (icons)
-      [ case (otel.kind, otel.attributes) of
-          -- HTTP server/client spans
-          (Just "server", Just attrs) | Map.member "http" attrs -> Just "request_type;neutral⇒incoming"
-          (Just "client", Just attrs) | Map.member "http" attrs -> Just "request_type;neutral⇒outgoing"
+      [ case (otel.kind, hasHttp, atMapText "component" otel.attributes) of
+          -- HTTP server/client spans (check kind first)
+          (Just "server", True, _) -> Just "request_type;neutral⇒incoming"
+          (Just "client", True, _) -> Just "request_type;neutral⇒outgoing"
+          -- If no kind but has component "proxy" and HTTP, it's likely incoming
+          (_, True, Just comp) | "proxy" `T.isInfixOf` comp -> Just "request_type;neutral⇒incoming"
+          -- If has HTTP attributes but no specific kind, default to outgoing for frontend
+          (_, True, Just "frontend") -> Just "request_type;neutral⇒outgoing"
+          -- Generic HTTP spans without clear direction
+          (_, True, _) -> Just "request_type;neutral⇒outgoing"
           -- RPC server/client spans
-          (Just "server", Just attrs) | Map.member "rpc" attrs -> Just "request_type;neutral⇒incoming"
-          (Just "client", Just attrs) | Map.member "rpc" attrs -> Just "request_type;neutral⇒outgoing"
+          (Just "server", _, _) | isJust (atMapText "rpc.method" otel.attributes) -> Just "request_type;neutral⇒incoming"
+          (Just "client", _, _) | isJust (atMapText "rpc.method" otel.attributes) -> Just "request_type;neutral⇒outgoing"
           -- Database spans
-          (_, Just attrs) | Map.member "db" attrs -> Just "kind;neutral⇒database"
+          (_, _, _) | isJust (atMapText "db.system" otel.attributes) -> Just "kind;neutral⇒database"
           -- Internal spans
-          (Just "internal", _) -> Just "kind;neutral⇒internal"
+          (Just "internal", _, _) -> Just "kind;neutral⇒internal"
           _ -> Nothing
       ]
       ++
       -- 2. HTTP Status code (comes before method)
-      [ case httpAttrs of
-          Just httpObj ->
-            case AE.parseMaybe (AE..: "status_code") httpObj of
-              Just (code :: Int) -> Just $ "status_code;" <> statusCodeStyle code <> "⇒" <> T.pack (show code)
-              _ -> Nothing
+      [ case atMapInt "http.response.status_code" otel.attributes of
+          Just code -> Just $ "status_code;" <> statusCodeStyle code <> "⇒" <> T.pack (show code)
           _ -> Nothing
       ]
       ++
       -- 3. HTTP Method
-      [ case httpAttrs of
-          Just httpObj ->
-            case AE.parseMaybe (AE..: "method") httpObj of
-              Just (method :: T.Text) -> Just $ "method;" <> methodStyle method <> "⇒" <> method
-              _ -> Nothing
+      [ case atMapText "http.request.method" otel.attributes of
+          Just method -> Just $ "method;" <> methodStyle method <> "⇒" <> method
           _ -> Nothing
       ]
       ++
       -- 4. URL or Route
-      [ case httpAttrs of
-          Just httpObj ->
-            case (AE.parseMaybe (AE..: "route") httpObj, AE.parseMaybe (AE..: "url") httpObj) of
-              (Just (route :: T.Text), _) -> Just $ "route;neutral⇒" <> route
-              (_, Just (url :: T.Text)) -> Just $ "url;neutral⇒" <> url
-              _ -> Nothing
+      [ case (atMapText "http.route" otel.attributes, atMapText "url.path" otel.attributes) of
+          (Just route, _) -> Just $ "route;neutral⇒" <> route
+          (_, Just url) -> Just $ "url;neutral⇒" <> url
           _ -> Nothing
       ]
       ++
       -- 5. Database attributes
-      ( case otel.attributes of
-          Just attrs ->
-            case Map.lookup "db" attrs of
-              Just (AE.Object dbObj) ->
-                [ -- Database type
-                  case AE.parseMaybe (AE..: "system") dbObj of
-                    Just (system :: T.Text) -> Just $ "db.system;neutral⇒" <> system
-                    _ -> Nothing
-                , -- Query
-                  case AE.parseMaybe (AE..: "statement") dbObj of
-                    Just (stmt :: T.Text) -> Just $ "db.statement;neutral⇒" <> T.take 200 stmt
-                    _ -> Nothing
-                ]
-              _ -> []
-          _ -> []
-      )
+      [ -- Database type
+        case atMapText "db.system" otel.attributes of
+          Just system -> Just $ "db.system;neutral⇒" <> system
+          _ -> Nothing
+      , -- Query
+        case atMapText "db.statement" otel.attributes of
+          Just stmt -> Just $ "db.statement;neutral⇒" <> T.take 200 stmt
+          _ -> Nothing
+      ]
       ++
       -- 6. RPC attributes
-      ( case (otel.kind, otel.attributes) of
-          (Just k, Just attrs) | k `elem` ["server", "client"] ->
-            case Map.lookup "rpc" attrs of
-              Just (AE.Object rpcObj) ->
-                [ -- RPC method
-                  case AE.parseMaybe (AE..: "method") rpcObj of
-                    Just (method :: T.Text) -> Just $ "rpc.method;neutral⇒" <> method
-                    _ -> Nothing
-                , -- RPC service
-                  case AE.parseMaybe (AE..: "service") rpcObj of
-                    Just (service :: T.Text) -> Just $ "rpc.service;neutral⇒" <> service
-                    _ -> Nothing
-                ]
-              _ -> []
-          _ -> []
-      )
+      [ -- RPC method
+        case atMapText "rpc.method" otel.attributes of
+          Just method -> Just $ "rpc.method;neutral⇒" <> method
+          _ -> Nothing
+      , -- RPC service
+        case atMapText "rpc.service" otel.attributes of
+          Just service -> Just $ "rpc.service;neutral⇒" <> service
+          _ -> Nothing
+      ]
       ++ 
       -- 7. Span name (if not HTTP with URL/route)
-      [ case (otel.name, httpAttrs) of
-          (Just n, Nothing) -> Just $ "span_name;neutral⇒" <> n
-          (Just n, Just httpObj) ->
+      [ case otel.name of
+          Just n ->
             -- Only show span name if no URL/route was shown
-            case (AE.parseMaybe (AE..: "route") httpObj :: Maybe T.Text, 
-                  AE.parseMaybe (AE..: "url") httpObj :: Maybe T.Text) of
+            case (atMapText "http.route" otel.attributes, atMapText "url.path" otel.attributes) of
               (Nothing, Nothing) -> Just $ "span_name;neutral⇒" <> n
               _ -> Nothing
           _ -> Nothing
@@ -194,7 +174,7 @@ generateSpanSummary otel =
                 truncated = if T.length attrText > 500 
                            then T.take 497 attrText <> "..."
                            else attrText
-            in Just $ "attributes;text-weak⇒" <> truncated
+            in Just $ "attributes;text-textWeak⇒" <> truncated
           _ -> Nothing
       ]
   in V.fromList elements
