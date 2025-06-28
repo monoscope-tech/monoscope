@@ -567,8 +567,6 @@ getThreadStarterMessage interaction botToken = do
     Nothing -> pure Nothing
 
 
-
-
 sendDeferredResponse :: HTTP :> es => Text -> Text -> Text -> Eff es ()
 sendDeferredResponse interactionId interactionToken botToken = do
   let url = toString $ "https://discord.com/api/v10/interactions/" <> interactionId <> "/" <> interactionToken <> "/callback"
