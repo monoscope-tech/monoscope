@@ -795,10 +795,6 @@ export class QueryEditorComponent extends LitElement {
     // Check if summarize includes bin_auto or bin with any field
     const hasBinFunction = /summarize.*by\s+.*bin(_auto)?\s*\(\s*\w+\s*[,)].*$/i.test(currentQuery);
 
-    console.log(`Visualization change: ${visualizationType}`);
-    console.log(`Current query: "${currentQuery}"`);
-    console.log(`Has summarize: ${hasSummarize}, Has bin function: ${hasBinFunction}`);
-
     let newQuery = '';
     switch (visualizationType) {
       case 'timeseries': // Bar chart
@@ -818,11 +814,9 @@ export class QueryEditorComponent extends LitElement {
               : `${summarizePrefix}bin_auto(timestamp)`;
             return updatedBy;
           });
-          console.log(`Adding bin_auto to existing summarize. New query: "${newQuery}"`);
         } else if (!hasSummarize) {
           // No summarize clause, add one with bin_auto(timestamp)
           newQuery = `${currentQuery ? currentQuery + ' ' : ''}| summarize count(*) by bin_auto(timestamp), status_code`;
-          console.log(`Adding new summarize clause. New query: "${newQuery}"`);
         }
         break;
       case 'table':
@@ -836,7 +830,6 @@ export class QueryEditorComponent extends LitElement {
         // For logs or default case (which is interpreted as logs), remove any summarize part
         if (hasSummarize) {
           newQuery = currentQuery.replace(/\|\s*summarize\s+[^|]*?(?=\||$)/i, '');
-          console.log(`Removing summarize for ${visualizationType === 'logs' ? 'logs' : 'default'} view. New query: "${newQuery}"`);
         } else {
           return; // No summarize to remove
         }

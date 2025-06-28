@@ -178,6 +178,7 @@ export class LogList extends LitElement {
   }
 
   handleChartZoom(params: { batch?: { startValue: string; endValue: string }[] }) {
+    console.log('handleChartZoom');
     const zoom = params.batch ? params.batch[0] : undefined;
     if (!zoom) return;
     let startValue = zoom.startValue;
@@ -370,6 +371,12 @@ export class LogList extends LitElement {
       .then((data) => {
         if (!data.error) {
           let { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap } = data;
+
+          // Validate required fields
+          if (!logsData || !Array.isArray(logsData)) {
+            console.error('Invalid response: missing or invalid logsData');
+            return;
+          }
           if (!isNewData) {
             this.hasMore = logsData.length > 0;
           }
@@ -410,10 +417,32 @@ export class LogList extends LitElement {
           }
 
           this.updateColumnMaxWidthMap(logsData);
+        } else {
+          // Handle server error response
+          console.error('Server returned error:', data.message || 'Unknown error');
+          // Show error message to user if this is a manual refresh
+          if (isRefresh && data.message) {
+            // Dispatch error toast event to body
+            const errorEvent = new CustomEvent('errorToast', {
+              detail: { value: [data.message] },
+              bubbles: true,
+              composed: true,
+            });
+            document.body.dispatchEvent(errorEvent);
+          }
         }
       })
       .catch((error) => {
         console.error('Error fetching logs:', error);
+        // Show network error to user
+        if (isRefresh) {
+          const errorEvent = new CustomEvent('errorToast', {
+            detail: { value: ['Network error: Unable to fetch logs'] },
+            bubbles: true,
+            composed: true,
+          });
+          document.body.dispatchEvent(errorEvent);
+        }
       })
       .finally(() => {
         if (isNewData) {

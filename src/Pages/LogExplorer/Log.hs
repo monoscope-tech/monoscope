@@ -482,14 +482,15 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
         (_, _, _, Just _) -> addRespHeaders $ LogsGetJson requestVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap
         _ -> addRespHeaders $ LogPage $ PageCtx bwconf page
     Nothing -> do
-      case (layoutM, hxRequestM, hxBoostedM) of
-        (Just "loadmore", Just "true", _) -> do
+      case (layoutM, hxRequestM, hxBoostedM, jsonM) of
+        (Just "loadmore", Just "true", _, _) -> do
           addErrorToast "Something went wrong" Nothing
           addRespHeaders $ LogsGetErrorSimple ""
-        (Just "resultTable", Just "true", _) -> addRespHeaders $ LogsGetErrorSimple "Something went wrong"
-        (Just "all", Just "true", _) -> do
+        (Just "resultTable", Just "true", _, _) -> addRespHeaders $ LogsGetErrorSimple "Something went wrong"
+        (Just "all", Just "true", _, _) -> do
           addErrorToast "Something went wrong" Nothing
           addRespHeaders $ LogsGetErrorSimple ""
+        (_, _, _, Just _) -> addRespHeaders $ LogsGetErrorSimple "Failed to fetch logs data"
         _ -> addRespHeaders $ LogsGetError $ PageCtx bwconf "Something went wrong"
 
 
@@ -516,7 +517,9 @@ instance ToHtml LogsGet where
 
 instance AE.ToJSON LogsGet where
   toJSON (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL cols colIdxMap) = AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL, "recentUrl" AE..= recentLogsURL, "cols" AE..= cols, "colIdxMap" AE..= colIdxMap]
-  toJSON _ = AE.object []
+  toJSON (LogsGetError _) = AE.object ["error" AE..= True, "message" AE..= ("Something went wrong" :: Text)]
+  toJSON (LogsGetErrorSimple msg) = AE.object ["error" AE..= True, "message" AE..= msg]
+  toJSON _ = AE.object ["error" AE..= True]
 
 
 -- This component has been moved to Pkg.Components.LogQueryBox

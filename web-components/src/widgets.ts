@@ -46,7 +46,6 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   if (!shouldFetch) return;
 
   const { query, querySQL, pid, chartId, summarizeBy, summarizeByPrefix } = widgetData;
-  console.log(JSON.stringify(widgetData));
   const loader = $(`${chartId}_loader`);
   // Show loader before fetch
   if (loader) loader.classList.remove('hidden');
@@ -187,43 +186,6 @@ const chartWidget = (widgetData: WidGetData) => {
   const resizeObserver = new ResizeObserver(() => requestAnimationFrame(() => (window as any).echarts.getInstanceByDom(chartEl).resize()));
   if (chartEl) {
     resizeObserver.observe(chartEl);
-  }
-
-  // Handle chart zoom events for log explorer page
-  if (isLogExlorerPage) {
-    chart.on('datazoom', (params: { batch?: { startValue: string; endValue: string }[] }) => {
-      const zoom = params.batch ? params.batch[0] : undefined;
-      if (!zoom) return;
-      let startValue = zoom.startValue;
-      let endValue = zoom.endValue;
-      if (startValue === undefined || endValue === undefined) return;
-      
-      startValue = new Date(startValue).toISOString();
-      endValue = new Date(endValue).toISOString();
-      
-      const p = new URLSearchParams(window.location.search);
-      p.set('from', startValue);
-      p.set('to', endValue);
-      p.delete('since');
-
-      const newUrl = `${window.location.pathname}?${p.toString()}${window.location.hash}`;
-      window.history.replaceState({}, '', newUrl);
-      
-      const rangeBox = document.getElementById('currentRange');
-      if (rangeBox) {
-        rangeBox.innerText = `${startValue} - ${endValue}`;
-      }
-
-      // Dispatch update-query event
-      window.dispatchEvent(
-        new CustomEvent('update-query', {
-          bubbles: true,
-          detail: {
-            ast: p.get('queryAST') || '',
-          },
-        })
-      );
-    });
   }
 
   liveStreamCheckbox &&
