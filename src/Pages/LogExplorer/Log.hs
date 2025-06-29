@@ -291,7 +291,7 @@ renderFacets facetSummary = do
                           [ type_ "checkbox"
                           , class_ "checkbox checkbox-sm"
                           , name_ key
-                          , onpointerdown_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
+                          , onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
                           , term "data-tippy-content" (T.replace "___" "." key <> " == \"" <> val <> "\"")
                           , term "data-field" (T.replace "___" "." key)
                           , term "data-value" val

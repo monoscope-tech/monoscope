@@ -68,7 +68,6 @@ export class LogList extends LitElement {
 
     ['submit', 'add-query', 'update-query'].forEach((ev) => {
       window.addEventListener(ev, (e) => {
-        this.isLoadingReplace = true;
         this.refetchLogs();
       });
     });
