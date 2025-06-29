@@ -281,7 +281,7 @@ processSpanToEntities pjc otelSpan dumpId =
             [ Just endpointHash
             , if isJust shape then Just shapeHash else Nothing
             ]
-          <> V.toList fieldHashes
+            <> V.toList fieldHashes
    in (endpoint, shape, fields', formats', hashes)
   where
     -- Helper function to extract headers from nested attribute structure
@@ -325,6 +325,7 @@ convertRequestMessageToSpan rm (spanId, trId) =
               jsonToMap
                 $ nestedJsonFromDotNotation
                   [ ("service.name", AE.String $ fromMaybe "unknown" rm.host)
+                  , ("service.version", maybe (AE.String "") AE.String rm.serviceVersion)
                   , ("telemetry.sdk.language", AE.String "apitoolkit")
                   , ("telemetry.sdk.name", AE.String $ show rm.sdkType)
                   ]
@@ -332,9 +333,7 @@ convertRequestMessageToSpan rm (spanId, trId) =
           , summary = V.empty -- Will be populated below
           , date = zonedTimeToUTC rm.timestamp
           }
-      -- Generate summary after all fields are set
-      finalSpan = otelSpan{summary = generateSummary otelSpan}
-   in finalSpan
+   in otelSpan{summary = generateSummary otelSpan}
 
 
 -- Using nestedJsonFromDotNotation from Utils module
@@ -350,40 +349,36 @@ createSpanAttributes rm =
   let baseAttrs =
         nestedJsonFromDotNotation
           [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
+          , ("http.method", AE.String rm.method)
           , ("http.request.method", AE.String rm.method)
-          , ("http.request.path_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.pathParams)
-          , ("http.request.query_params", AE.String $ Relude.decodeUtf8 $ AE.encode rm.queryParams)
+          , ("http.request.path_params", rm.pathParams)
+          , ("http.request.query_params", rm.queryParams)
+          , ("http.request.path", AE.String $ fromMaybe "/" rm.urlPath)
+          , ("http.response.status_code", AE.Number $ fromIntegral rm.statusCode)
+          , ("http.status_code", AE.Number $ fromIntegral rm.statusCode)
+          , ("http.route", AE.String $ fromMaybe (T.takeWhile (/= '?') rm.rawUrl) rm.urlPath)
+          , ("http.url", AE.String rm.rawUrl)
+          , ("url.path", AE.String $ fromMaybe "/" rm.urlPath)
+          , ("url.full", AE.String rm.rawUrl)
           , ("apitoolkit.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
           , ("apitoolkit.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
-          , ("http.response.status_code", AE.Number $ fromIntegral rm.statusCode)
           , ("apitoolkit.sdk_type", AE.String $ show rm.sdkType)
-          , ("http.route", maybe (AE.String (T.takeWhile (/= '?') rm.rawUrl)) AE.String rm.urlPath)
-          , ("url.path", AE.String rm.rawUrl)
+          , ("apitoolkit.errors", AE.String $ maybe "[]" (Relude.decodeUtf8 . AE.encode) rm.errors)
           ]
-      -- Add http object for summary generation compatibility
-      httpObj =
-        AE.object
-          [ "method" AE..= rm.method
-          , "status_code" AE..= rm.statusCode
-          , "url" AE..= rm.rawUrl
-          ]
-      mergedAttrs = case baseAttrs of
-        AE.Object o -> AE.Object $ AEKM.insert "http" httpObj o
-        _ -> baseAttrs
-   in mergedAttrs
+   in baseAttrs
         `lodashMerge` refererObj
-        `lodashMerge` errorsObj
         `lodashMerge` headersObj
+        `lodashMerge` tagsObj
   where
+    -- Process tags
+    tagsObj = case rm.tags of
+      Just tags -> nestedJsonFromDotNotation [("apitoolkit.tags", AE.Array $ V.fromList $ map AE.String tags)]
+      Nothing -> AE.object []
+    
     -- Process referer
     refererObj = case rm.referer of
       Just (Left text) -> nestedJsonFromDotNotation [("http.request.headers.referer", AE.String text)]
       Just (Right texts) -> nestedJsonFromDotNotation [("http.request.headers.referer", AE.String $ T.intercalate "," texts)]
-      Nothing -> AE.object []
-
-    -- Process errors
-    errorsObj = case rm.errors of
-      Just errs -> nestedJsonFromDotNotation [("apitoolkit.errors", AE.String $ Relude.decodeUtf8 $ AE.encode errs)]
       Nothing -> AE.object []
 
     -- Process headers
@@ -393,7 +388,7 @@ createSpanAttributes rm =
         reqHeaders =
           fromMaybe (AE.object [])
             $ rm.requestHeaders
-            ^? _Object
+              ^? _Object
               >>= \obj ->
                 let pairs = [("http.request.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
                  in Just $ nestedJsonFromDotNotation pairs
@@ -402,7 +397,7 @@ createSpanAttributes rm =
         respHeaders =
           fromMaybe (AE.object [])
             $ rm.responseHeaders
-            ^? _Object
+              ^? _Object
               >>= \obj ->
                 let pairs = [("http.response.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
                  in Just $ nestedJsonFromDotNotation pairs

@@ -108,78 +108,78 @@ generateSpanSummary otel =
             (Just "internal", _, _) -> Just "kind;neutral⇒internal"
             _ -> Nothing
         ]
-        ++
-        -- 2. HTTP Status code (comes before method)
-        [ case atMapInt "http.response.status_code" otel.attributes of
-            Just code -> Just $ "status_code;" <> statusCodeStyle code <> "⇒" <> T.pack (show code)
-            _ -> Nothing
-        ]
-        ++
-        -- 3. HTTP Method
-        [ case atMapText "http.request.method" otel.attributes of
-            Just method -> Just $ "method;" <> methodStyle method <> "⇒" <> method
-            _ -> Nothing
-        ]
-        ++
-        -- 4. URL or Route
-        [ case (atMapText "http.route" otel.attributes, atMapText "url.path" otel.attributes) of
-            (Just route, _) -> Just $ "route;neutral⇒" <> route
-            (_, Just url) -> Just $ "url;neutral⇒" <> url
-            _ -> Nothing
-        ]
-        ++
-        -- 5. Database attributes
-        [ -- Database type
-          case atMapText "db.system" otel.attributes of
-            Just system -> Just $ "db.system;neutral⇒" <> system
-            _ -> Nothing
-        , -- Query
-          case atMapText "db.statement" otel.attributes of
-            Just stmt -> Just $ "db.statement;neutral⇒" <> T.take 200 stmt
-            _ -> Nothing
-        ]
-        ++
-        -- 6. RPC attributes
-        [ -- RPC method
-          case atMapText "rpc.method" otel.attributes of
-            Just method -> Just $ "rpc.method;neutral⇒" <> method
-            _ -> Nothing
-        , -- RPC service
-          case atMapText "rpc.service" otel.attributes of
-            Just service -> Just $ "rpc.service;neutral⇒" <> service
-            _ -> Nothing
-        ]
-        ++
-        -- 7. Span name (if not HTTP with URL/route)
-        [ case otel.name of
-            Just n ->
-              -- Only show span name if no URL/route was shown
-              case (atMapText "http.route" otel.attributes, atMapText "url.path" otel.attributes) of
-                (Nothing, Nothing) -> Just $ "span_name;neutral⇒" <> n
-                _ -> Nothing
-            _ -> Nothing
-        ]
-        ++
-        -- 8. Status (ERROR only)
-        [ case otel.status_code of
-            Just "ERROR" -> Just "status;badge-error⇒ERROR"
-            Just "OK" -> Nothing -- Don't show OK status
-            _ -> Nothing
-        ]
-        ++
-        -- 9. Attributes (limited to avoid excessive length)
-        [ case otel.attributes of
-            Just attrs
-              | not (Map.null attrs) ->
-                  let attrText = TE.decodeUtf8 $ BSL.toStrict $ AE.encode attrs
-                      -- Limit attributes to 500 characters
-                      truncated =
-                        if T.length attrText > 500
-                          then T.take 497 attrText <> "..."
-                          else attrText
-                   in Just $ "attributes;text-textWeak⇒" <> truncated
-            _ -> Nothing
-        ]
+          ++
+          -- 2. HTTP Status code (comes before method)
+          [ case atMapInt "http.response.status_code" otel.attributes of
+              Just code -> Just $ "status_code;" <> statusCodeStyle code <> "⇒" <> T.pack (show code)
+              _ -> Nothing
+          ]
+          ++
+          -- 3. HTTP Method
+          [ case atMapText "http.request.method" otel.attributes of
+              Just method -> Just $ "method;" <> methodStyle method <> "⇒" <> method
+              _ -> Nothing
+          ]
+          ++
+          -- 4. URL or Route
+          [ case (atMapText "http.route" otel.attributes, atMapText "url.path" otel.attributes) of
+              (Just route, _) -> Just $ "route;neutral⇒" <> route
+              (_, Just url) -> Just $ "url;neutral⇒" <> url
+              _ -> Nothing
+          ]
+          ++
+          -- 5. Database attributes
+          [ -- Database type
+            case atMapText "db.system" otel.attributes of
+              Just system -> Just $ "db.system;neutral⇒" <> system
+              _ -> Nothing
+          , -- Query
+            case atMapText "db.statement" otel.attributes of
+              Just stmt -> Just $ "db.statement;neutral⇒" <> T.take 200 stmt
+              _ -> Nothing
+          ]
+          ++
+          -- 6. RPC attributes
+          [ -- RPC method
+            case atMapText "rpc.method" otel.attributes of
+              Just method -> Just $ "rpc.method;neutral⇒" <> method
+              _ -> Nothing
+          , -- RPC service
+            case atMapText "rpc.service" otel.attributes of
+              Just service -> Just $ "rpc.service;neutral⇒" <> service
+              _ -> Nothing
+          ]
+          ++
+          -- 7. Span name (if not HTTP with URL/route)
+          [ case otel.name of
+              Just n ->
+                -- Only show span name if no URL/route was shown
+                case (atMapText "http.route" otel.attributes, atMapText "url.path" otel.attributes) of
+                  (Nothing, Nothing) -> Just $ "span_name;neutral⇒" <> n
+                  _ -> Nothing
+              _ -> Nothing
+          ]
+          ++
+          -- 8. Status (ERROR only)
+          [ case otel.status_code of
+              Just "ERROR" -> Just "status;badge-error⇒ERROR"
+              Just "OK" -> Nothing -- Don't show OK status
+              _ -> Nothing
+          ]
+          ++
+          -- 9. Attributes (limited to avoid excessive length)
+          [ case otel.attributes of
+              Just attrs
+                | not (Map.null attrs) ->
+                    let attrText = TE.decodeUtf8 $ BSL.toStrict $ AE.encode attrs
+                        -- Limit attributes to 500 characters
+                        truncated =
+                          if T.length attrText > 500
+                            then T.take 497 attrText <> "..."
+                            else attrText
+                     in Just $ "attributes;text-textWeak⇒" <> truncated
+              _ -> Nothing
+          ]
    in
     V.fromList elements
 
