@@ -783,7 +783,9 @@ export class LogList extends LitElement {
           </div>
         `;
       case 'summary':
-        const summaryArray = lookupVecTextByKey(dataArr, colIdxMap, key) || [];
+        const summaryData = lookupVecTextByKey(dataArr, colIdxMap, key) || '';
+        // Check if summary is already an array, otherwise parse it
+        const summaryArray = Array.isArray(summaryData) ? summaryData : summaryData ? String(summaryData).split(',') : [];
         const { depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData;
         const errClas = hasErrors
           ? 'bg-fillError-strong text-white fill-white stroke-strokeError-strong'
@@ -825,9 +827,12 @@ export class LogList extends LitElement {
             ${this.renderSummaryElements(summaryArray, wrapLines)}
           </div>
         </div>`;
+      case 'service':
+        let serviceData = lookupVecTextByKey(dataArr, colIdxMap, key);
+        return renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, serviceData, key);
       default:
         let v = lookupVecTextByKey(dataArr, colIdxMap, key);
-        return renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, v, key);
+        return html`<span class=${wrapClass} title=${key}>${v}</span>`;
     }
   }
 
