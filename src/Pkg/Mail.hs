@@ -97,7 +97,27 @@ data NotificationAlerts
   = EndpointAlert {project :: Text, endpoints :: V.Vector Text, endpointHash :: Text}
   | RuntimeErrorAlert RequestDumps.ATError
   | ShapeAlert
+  | ReportAlert
+      { reportType :: Text
+      , startTime :: Text
+      , endTime :: Text
+      , totalErrors :: Int
+      , totalEvents :: Int
+      , breakDown :: V.Vector (Text, Int, Int)
+      , reportUrl :: Text
+      , allChartUrl :: Text
+      , errorChartUrl :: Text
+      }
 
+
+-- sendEmailAlert :: NotificationAlerts -> Projects.ProjectId -> Text -> ATBackgroundCtx ()
+-- sendEmailAlert alert pid pTitle = do
+--   appCtx <- ask @Config.AuthContext
+--   let envCfg = appCtx.env
+--   let projectUrl = envCfg.hostUrl <> "p/" <> pid.toText
+--   case alert of
+--     RuntimeErrorAlert a -> do
+--       let subject = "[API Toolkit] New Runtime Error in " <> pTitle
 
 sendDiscordAlert :: NotificationAlerts -> Projects.ProjectId -> Text -> ATBackgroundCtx ()
 sendDiscordAlert alert pid pTitle = do
@@ -110,6 +130,7 @@ sendDiscordAlert alert pid pTitle = do
       RuntimeErrorAlert a -> send $ discordErrorAlert a pTitle projectUrl
       EndpointAlert{..} -> send $ discordNewEndpointAlert project endpoints endpointHash projectUrl
       ShapeAlert -> pass
+      ReportAlert{..} -> send $ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
   where
     sendAlert :: Maybe Text -> AE.Value -> ATBackgroundCtx ()
     sendAlert channelId content = do
@@ -131,6 +152,7 @@ sendSlackAlert alert pid pTitle = do
       RuntimeErrorAlert a -> sendAlert $ slackErrorAlert a pTitle slackData.channelId projectUrl
       EndpointAlert{..} -> sendAlert $ slackNewEndpointsAlert project endpoints slackData.channelId endpointHash projectUrl
       ShapeAlert -> pass
+      ReportAlert{..} -> sendAlert $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle slackData.channelId reportUrl allChartUrl errorChartUrl
   where
     sendAlert :: AE.Value -> ATBackgroundCtx ()
     sendAlert content = do
@@ -140,6 +162,47 @@ sendSlackAlert alert pid pTitle = do
       let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> envCfg.slackBotToken]
       _ <- Wreq.postWith opts (toString url) content
       pass
+
+
+slackReportAlert :: Text -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> Text -> AE.Value
+slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown project channelId url allUrl errUrl =
+  AE.object
+    [ "blocks"
+        AE..= AE.Array
+          ( V.fromList
+              [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> url <> "|" <> reportType <> " Report for " <> project <> ">")]]
+              , AE.object
+                  [ "type" AE..= "context"
+                  , "elements" AE..= AE.Array (V.fromList $ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*From:* " <> startTime)] : [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*To:* " <> endTime)]])
+                  ]
+              , AE.object
+                  [ "type" AE..= "image"
+                  , "image_url" AE..= allUrl
+                  , "alt_text" AE..= "Graph"
+                  , "title"
+                      AE..= AE.object
+                        [ "type" AE..= "plain_text"
+                        , "text" AE..= ("Total Events: " <> toText (show totalEvents))
+                        ]
+                  ]
+              , AE.object
+                  [ "type" AE..= "image"
+                  , "image_url" AE..= errUrl
+                  , "alt_text" AE..= "Graph"
+                  , "title"
+                      AE..= AE.object
+                        [ "type" AE..= "plain_text"
+                        , "text" AE..= ("Total Errors: " <> toText (show totalErrors))
+                        ]
+                  ]
+              , AE.object ["type" AE..= "divider"]
+              , AE.object ["type" AE..= "context", "elements" AE..= AE.Array sumr]
+              ]
+          )
+    , "channel" AE..= channelId
+    ]
+  where
+    sumr = V.take 10 $ V.map (\(name, errCount, evCount) -> AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*" <> name <> ":* Errors-" <> toText (show errCount) <> ", Total-" <> toText (show evCount))]) breakDown
 
 
 slackErrorAlert :: RequestDumps.ATError -> Text -> Text -> Text -> AE.Value
@@ -213,6 +276,43 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
     query = urlEncode True $ encodeUtf8 $ "attributes.http.route in (" <> T.intercalate "," enp <> ")"
     explorerUrl = projectUrl <> "/log_explorer?query=" <> decodeUtf8 query
     enps = T.intercalate "\n\n" $ (\x -> "`" <> x <> "`") <$> V.toList endpoints
+
+
+discordReportAlert :: Text -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> AE.Value
+discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown project url allUrl errUrl =
+  AE.object
+    [ "embeds"
+        AE..= AE.Array
+          ( V.fromList
+              [ AE.object
+                  [ "type" AE..= "rich"
+                  , "color" AE..= "26879"
+                  , "title" AE..= ("📊 " <> reportType <> " Report for " <> project)
+                  , "description" AE..= ("**From:** " <> startTime <> "  **To:** " <> endTime)
+                  , "image" AE..= AE.object ["url" AE..= allUrl]
+                  , "url" AE..= url
+                  , "fields"
+                      AE..= AE.Array
+                        ( V.fromList
+                            [ AE.object ["name" AE..= ("Total Events (" <> show totalEvents <> ")"), "value" AE..= " ", "inline" AE..= True]
+                            , AE.object ["name" AE..= ("Total Errors (" <> show totalErrors <> ")"), "value" AE..= " ", "inline" AE..= True]
+                            ]
+                        )
+                  ]
+              , AE.object
+                  [ "type" AE..= "rich"
+                  , "image" AE..= AE.object ["url" AE..= errUrl]
+                  , "url" AE..= url
+                  ]
+              , AE.object
+                  [ "description" AE..= servicesStat
+                  ]
+              ]
+          )
+    ]
+  where
+    servicesStat =
+      T.intercalate "\n" $ V.toList $ V.map (\(name, errCount, evCount) -> "* **" <> name <> "**: Total errors-" <> show errCount <> ", Total events-" <> show evCount) breakDown
 
 
 discordErrorAlert :: RequestDumps.ATError -> Text -> Text -> AE.Value

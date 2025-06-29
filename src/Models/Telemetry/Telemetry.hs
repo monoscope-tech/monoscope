@@ -9,6 +9,7 @@ module Models.Telemetry.Telemetry (
   getTotalEventsToReport,
   SpanRecord (..),
   getAllATErrors,
+  getProjectStatsForReport,
   Trace (..),
   SeverityLevel (..),
   SpanStatus (..),
@@ -993,3 +994,15 @@ extractATError spanObj (AE.Object o) = do
       , stack = tech
       }
 extractATError _ _ = Nothing
+
+
+getProjectStatsForReport :: DB :> es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es (V.Vector (Text, Int, Int))
+getProjectStatsForReport projectId start end = dbtToEff $ query q (projectId, start, end)
+  where
+    q =
+      [sql| SELECT resource___service___name AS service_name,  COUNT(*) FILTER ( WHERE status_code = 'ERROR' OR attributes___exception___type IS NOT NULL) AS total_error_events, COUNT(*) AS total_events
+           FROM otel_logs_and_spans
+           WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
+           GROUP BY resource___service___name 
+           ORDER BY total_events DESC;
+        |]

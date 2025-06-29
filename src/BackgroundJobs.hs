@@ -10,7 +10,7 @@ import Data.List qualified as L (intersect, union)
 import Data.List.Extra (chunksOf)
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
+import Data.Time (DayOfWeek (Monday, Saturday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
@@ -49,12 +49,13 @@ import Models.Tests.TestToDump qualified as TestToDump
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Users qualified as Users
 import NeatInterpolation (trimming)
+import Network.HTTP.Types (urlEncode)
 import Network.Wreq (defaults, header, postWith)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
 import Pages.Reports qualified as RP
 import Pages.Specification.GenerateSwagger (generateSwagger)
-import Pkg.Mail (NotificationAlerts (EndpointAlert, RuntimeErrorAlert), sendDiscordAlert, sendDiscordNotif, sendPostmarkEmail, sendSlackAlert, sendSlackMessage)
+import Pkg.Mail (NotificationAlerts (EndpointAlert, ReportAlert, RuntimeErrorAlert), sendDiscordAlert, sendDiscordNotif, sendPostmarkEmail, sendSlackAlert, sendSlackMessage)
 import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask)
@@ -207,8 +208,8 @@ jobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs 
               $ BackgroundJobs.WeeklyReports p
             createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
       HourlyJob scheduledTime hour -> runHourlyJob scheduledTime hour
-      DailyReports pid -> dailyReportForProject pid
-      WeeklyReports pid -> weeklyReportForProject pid
+      DailyReports pid -> sendReportForProject pid DailyReport
+      WeeklyReports pid -> sendReportForProject pid WeeklyReport
       GenSwagger pid uid host -> generateSwaggerForProject pid uid host
       ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
         Relude.when (project.paymentPlan /= "Free" && project.paymentPlan /= "ONBOARDING") $ whenJust project.firstSubItemId \fSubId -> do
@@ -254,8 +255,8 @@ jobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs 
         -- DELETE API KEYS
         _ <- withPool authCtx.pool $ PTR.execute [sql| DELETE FROM projects.project_api_keys WHERE project_id = ? AND title != 'Default API Key' |] (Only pid)
         pass
-      FiveMinuteSpanProcessing scheduledTime -> processFiveMinuteSpans scheduledTime
-      OneMinuteErrorProcessing scheduledTime -> processOneMinuteErrors scheduledTime
+      FiveMinuteSpanProcessing scheduledTime -> pass -- processFiveMinuteSpans scheduledTime
+      OneMinuteErrorProcessing scheduledTime -> pass -- processOneMinuteErrors scheduledTime
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -563,81 +564,28 @@ jobsWorkerInit logger appCtx =
     -- jobLogger logLevel logEvent = print show (logLevel, logEvent) -- logger show (logLevel, logEvent)
 
 
-dailyReportForProject :: Projects.ProjectId -> ATBackgroundCtx ()
-dailyReportForProject pid = do
-  users <- dbtToEff $ Projects.usersByProjectId pid
-  projectM <- dbtToEff $ Projects.projectById pid
-  forM_ projectM \pr -> do
-    anomalies <- dbtToEff $ Anomalies.getReportAnomalies pid "daily"
-    total_anomalies <- dbtToEff $ Anomalies.countAnomalies pid "daily"
-    endpoint_rp <- dbtToEff $ RequestDumps.getRequestDumpForReports pid "daily"
-    previous_day <- dbtToEff $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "daily"
-    let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_day
-    currentTime <- liftIO getZonedTime
-    reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
-    let report =
-          Reports.Report
-            { id = reportId
-            , reportJson = rep_json
-            , createdAt = currentTime
-            , updatedAt = currentTime
-            , projectId = pid
-            , reportType = "daily"
-            }
-    _ <- dbtToEff $ Reports.addReport report
-    Relude.when pr.dailyNotif $ forM_ pr.notificationsChannel \case
-      Projects.NSlack ->
-        sendSlackMessage
-          pid
-          [fmtTrim| 🤖 *Daily Report for `{pr.title}`**
-
-<https://app.apitoolkit.io/p/{pid.toText}/reports/{show report.id.reportId}|View today's report>
-|]
-      Projects.NDiscord -> do
-        discordData <- getDiscordDataByProjectId pid
-        let projectUrl = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
-        whenJust discordData \d -> do
-          case d.notifsChannelId of
-            Just channelId -> sendDiscordNotif channelId [fmtTrim|**Daily REPORT**: [{pr.title}]({projectUrl})|]
-            Nothing -> pass
-      _ -> do
-        users & mapM_ \user -> do
-          let firstName = user.firstName
-              projectTitle = pr.title
-              userEmail = CI.original user.email
-              anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
-              perf = RP.getPerformanceEmailTemplate endpoint_rp previous_day
-              perf_count = V.length perf
-              perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else V.take 10 perf
-              rp_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
-              day = show $ localDay (zonedTimeToLocalTime currentTime)
-              templateVars =
-                [aesonQQ|{
-                 "user_name": #{firstName},
-                 "project_name": #{projectTitle},
-                 "anomalies_count": #{total_anomalies},
-                 "anomalies":  #{anmls},
-                 "report_url": #{rp_url},
-                 "performance_count": #{perf_count},
-                 "performance": #{perf_shrt},
-                 "start_date": #{day},
-                 "end_date": #{day}
-          }|]
-          sendPostmarkEmail userEmail (Just ("daily-report", templateVars)) Nothing
+data ReportType = DailyReport | WeeklyReport
+  deriving (Show)
 
 
-weeklyReportForProject :: Projects.ProjectId -> ATBackgroundCtx ()
-weeklyReportForProject pid = do
+sendReportForProject :: Projects.ProjectId -> ReportType -> ATBackgroundCtx ()
+sendReportForProject pid rType = do
   ctx <- ask @Config.AuthContext
   users <- dbtToEff $ Projects.usersByProjectId pid
+  currentTime <- Time.currentTime
+  let (prv, typTxt, intv) = case rType of
+        WeeklyReport -> (6 * 86400, "weekly", "1d")
+        _ -> (86400, "daily", "1h")
+
+  let startTime = addUTCTime (negate prv) currentTime
   projectM <- dbtToEff $ Projects.projectById pid
   forM_ projectM \pr -> do
-    anomalies <- dbtToEff $ Anomalies.getReportAnomalies pid "weekly"
-    endpoint_rp <- dbtToEff $ RequestDumps.getRequestDumpForReports pid "weekly"
-    total_anomalies <- dbtToEff $ Anomalies.countAnomalies pid "weekly"
-    previous_week <- dbtToEff $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
+    stats <- Telemetry.getProjectStatsForReport pid startTime currentTime
+    anomalies <- dbtToEff $ Anomalies.getReportAnomalies pid typTxt
+    endpoint_rp <- dbtToEff $ RequestDumps.getRequestDumpForReports pid typTxt
+    total_anomalies <- dbtToEff $ Anomalies.countAnomalies pid typTxt
+    previous_week <- dbtToEff $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid typTxt
     let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_week
-    currentTime <- liftIO getZonedTime
     timeZone <- liftIO getCurrentTimeZone
 
     reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
@@ -645,27 +593,28 @@ weeklyReportForProject pid = do
           Reports.Report
             { id = reportId
             , reportJson = rep_json
-            , createdAt = currentTime
-            , updatedAt = currentTime
+            , createdAt = utcToZonedTime timeZone currentTime
+            , updatedAt = utcToZonedTime timeZone currentTime
             , projectId = pid
-            , reportType = "weekly"
+            , reportType = typTxt
             }
     _ <- dbtToEff $ Reports.addReport report
-    Relude.when pr.weeklyNotif $ forM_ pr.notificationsChannel \case
-      Projects.NSlack ->
-        sendSlackMessage
-          pid
-          [trimming| 🤖 *Weekly Report for `{pr.title}`*
 
-<https://app.apitoolkit.io/p/{pid.toText}/reports/{show report.id.reportId}|View this week's report>
-                     |]
+    let totalErrors = sum $ map (\(_, x, _) -> x) (V.toList stats)
+        totalEvents = sum $ map (\(_, _, x) -> x) (V.toList stats)
+        stmTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" startTime
+        currentTimeTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" currentTime
+        reportUrl = (ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> show report.id.reportId)
+        chartShotUrl = ctx.env.chartShotUrl <> "?t=bar&p=" <> pid.toText <> "&from=" <> stmTxt <> "&to=" <> currentTimeTxt
+        allQ = chartShotUrl <> "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 "summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
+        errQ = chartShotUrl <> "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 "status_code == \"ERROR\" | summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
+        alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents stats reportUrl allQ errQ
+
+    Relude.when pr.weeklyNotif $ forM_ pr.notificationsChannel \case
       Projects.NDiscord -> do
-        let projectUrl = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
-        discordData <- getDiscordDataByProjectId pid
-        whenJust discordData \d -> do
-          case d.notifsChannelId of
-            Just channelId -> sendDiscordNotif channelId [fmtTrim|**WEEKLY REPORT**: [{pr.title}]({projectUrl})|]
-            Nothing -> pass
+        sendDiscordAlert alert pid pr.title
+      Projects.NSlack -> do
+        sendSlackAlert alert pid pr.title
       _ -> do
         totalRequest <- dbtToEff $ RequestDumps.getLastSevenDaysTotalRequest pid
         Relude.when (totalRequest > 0) do
@@ -678,9 +627,8 @@ weeklyReportForProject pid = do
                 perf_count = V.length perf
                 perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else V.take 10 perf
                 rp_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
-                dayEnd = show $ localDay (zonedTimeToLocalTime currentTime)
-                currentUTCTime = zonedTimeToUTC currentTime
-                sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentUTCTime
+                dayEnd = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone currentTime))
+                sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentTime
                 sevenDaysAgoZonedTime = utcToZonedTime timeZone sevenDaysAgoUTCTime
                 dayStart = show $ localDay (zonedTimeToLocalTime sevenDaysAgoZonedTime)
                 freeTierLimitExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
@@ -802,7 +750,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
                   , archivedAt = Nothing
                   }
             )
-          <$> errs
+            <$> errs
 
       forM_ project.notificationsChannel \case
         Projects.NSlack ->
