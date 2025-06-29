@@ -361,11 +361,12 @@ createSpanAttributes rm =
           , ("url.path", AE.String rm.rawUrl)
           ]
       -- Add http object for summary generation compatibility
-      httpObj = AE.object
-        [ "method" AE..= rm.method
-        , "status_code" AE..= rm.statusCode
-        , "url" AE..= rm.rawUrl
-        ]
+      httpObj =
+        AE.object
+          [ "method" AE..= rm.method
+          , "status_code" AE..= rm.statusCode
+          , "url" AE..= rm.rawUrl
+          ]
       mergedAttrs = case baseAttrs of
         AE.Object o -> AE.Object $ AEKM.insert "http" httpObj o
         _ -> baseAttrs

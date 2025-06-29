@@ -3,7 +3,7 @@ module Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..), connectPostgreSQL) whe
 import Control.Exception
 import Data.IntMap qualified as IntMap
 import Data.Text qualified as T
-import Data.Text.Display (Display(..))
+import Data.Text.Display (Display (..))
 import Database.PostgreSQL.LibPQ qualified as PQ
 import Database.PostgreSQL.Simple (Connection, ResultError (..))
 import Database.PostgreSQL.Simple.FromField (FromField (..), fromField, returnError)
