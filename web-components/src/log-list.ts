@@ -599,9 +599,13 @@ export class LogList extends LitElement {
 
         if (iconConfig[field]) return iconConfig[field]();
 
-        // Text or badge rendering
+        // Text rendering
         if (style === 'text-weak' || style === 'text-textWeak') {
           return html`<span class="text-textWeak">${value}</span>`;
+        }
+        
+        if (style === 'text-textStrong') {
+          return html`<span class="text-textStrong font-semibold">${value}</span>`;
         }
 
         return renderBadge(`cbadge-sm ${this.getStyleClass(style)} ${wrapClass}`, value);
@@ -625,6 +629,7 @@ export class LogList extends LitElement {
       right: 'ml-auto badge-neutral',
       'text-weak': '',
       'text-textWeak': '',
+      'text-textStrong': '',
     };
     return styleMap[style] || 'badge-neutral';
   }

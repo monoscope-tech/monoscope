@@ -134,7 +134,11 @@ generateSpanSummary otel =
           case atMapText "db.system" otel.attributes of
             Just system -> Just $ "db.system;neutral⇒" <> system
             _ -> Nothing
-        , -- Query
+        , -- Query text (if db.query.text exists for db types)
+          case (atMapText "db.system" otel.attributes, atMapText "db.query.text" otel.attributes) of
+            (Just _, Just queryText) -> Just $ "db.query.text;text-textStrong⇒" <> T.take 200 queryText
+            _ -> Nothing
+        , -- Query statement
           case atMapText "db.statement" otel.attributes of
             Just stmt -> Just $ "db.statement;neutral⇒" <> T.take 200 stmt
             _ -> Nothing

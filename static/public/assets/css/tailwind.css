@@ -456,53 +456,53 @@ code, pre, .code, .monospace {
   @apply bg-cyan-100 text-cyan-700;
 }
 
-/* Database-specific badges */
+/* Database-specific badges - neutral background with colored borders */
 .badge-postgres {
-  @apply bg-blue-600 text-white;
+  @apply bg-fillWeak text-textStrong border border-blue-600;
 }
 
 .badge-mysql {
-  @apply bg-orange-600 text-white;
+  @apply bg-fillWeak text-textStrong border border-orange-600;
 }
 
 .badge-redis {
-  @apply bg-red-600 text-white;
+  @apply bg-fillWeak text-textStrong border border-red-600;
 }
 
 .badge-mongo {
-  @apply bg-green-600 text-white;
+  @apply bg-fillWeak text-textStrong border border-green-600;
 }
 
 .badge-mongodb {
-  @apply bg-green-600 text-white;
+  @apply bg-fillWeak text-textStrong border border-green-600;
 }
 
 .badge-elastic {
-  @apply bg-yellow-500 text-black;
+  @apply bg-fillWeak text-textStrong border border-yellow-500;
 }
 
 .badge-elasticsearch {
-  @apply bg-yellow-500 text-black;
+  @apply bg-fillWeak text-textStrong border border-yellow-500;
 }
 
 .badge-cassandra {
-  @apply bg-teal-600 text-white;
+  @apply bg-fillWeak text-textStrong border border-teal-600;
 }
 
 .badge-dynamodb {
-  @apply bg-purple-600 text-white;
+  @apply bg-fillWeak text-textStrong border border-purple-600;
 }
 
 .badge-memcached {
-  @apply bg-indigo-600 text-white;
+  @apply bg-fillWeak text-textStrong border border-indigo-600;
 }
 
 .badge-sqlite {
-  @apply bg-gray-600 text-white;
+  @apply bg-fillWeak text-textStrong border border-gray-600;
 }
 
 .badge-clickhouse {
-  @apply bg-amber-600 text-white;
+  @apply bg-fillWeak text-textStrong border border-amber-600;
 }
 
 @utility ctable {
