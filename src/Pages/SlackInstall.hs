@@ -382,7 +382,7 @@ discordInteractionsH rawBody signatureM timestampM = do
           case vizTypeM of
             Just vizType -> do
               let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-                  query_url  = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> ("&query=" <> decodeUtf8 (urlEncode True $ encodeUtf8 query))
+                  query_url = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> ("&query=" <> decodeUtf8 (urlEncode True $ encodeUtf8 query))
                   opts = "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query)) <> "&p=" <> discordData.projectId.toText <> "&t=" <> chartType
                   question = case cmdData.options of
                     Just (InteractionOption{value = AE.String q} : _) -> q
@@ -509,8 +509,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-          <> [msgJson]
-          <> ["\n\nUser query: " <> question]
+        <> [msgJson]
+        <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
@@ -715,17 +715,17 @@ getBotContent target question query query_url chartOptions baseUrl now =
                     , "components"
                         AE..= AE.Array
                           ( V.fromList
-                              [ AE.object [ "type" AE..= 10 , "content" AE..= ("### " <> question) ]
+                              [ AE.object ["type" AE..= 10, "content" AE..= ("### " <> question)]
                               , AE.object
                                   [ "type" AE..= 12
                                   , "items"
-                                      AE..= AE.Array (V.singleton  $ AE.object[ "media"  AE..= AE.object [ "url" AE..= (chartImageUrl chartOptions baseUrl now)  ]])
+                                      AE..= AE.Array (V.singleton $ AE.object ["media" AE..= AE.object ["url" AE..= (chartImageUrl chartOptions baseUrl now)]])
                                   ]
-                              , AE.object[ "type" AE..= 10  , "content" AE..= ("**Query used:** " <> query)]
+                              , AE.object ["type" AE..= 10, "content" AE..= ("**Query used:** " <> query)]
                               , AE.object
                                   [ "type" AE..= 1
                                   , "components"
-                                      AE..= AE.Array (V.fromList [ AE.object [ "type" AE..= 2, "label" AE..= "Open explorer"  , "url" AE..= query_url, "style" AE..= 5] ])
+                                      AE..= AE.Array (V.fromList [AE.object ["type" AE..= 2, "label" AE..= "Open explorer", "url" AE..= query_url, "style" AE..= 5]])
                                   ]
                               ]
                           )
