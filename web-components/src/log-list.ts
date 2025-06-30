@@ -49,10 +49,19 @@ export class LogList extends LitElement {
     super();
 
     // Bind all methods at once
-    const methods = ['logItemRow', 'fetchData', 'expandTrace', 'renderLoadMore', 
-                    'updateTableData', 'handleChartZoom', 'updateColumnMaxWidthMap', 
-                    'addWithFlipDirection', 'toggleLogRow', 'logItemCol'];
-    methods.forEach(m => this[m] = this[m].bind(this));
+    const methods = [
+      'logItemRow',
+      'fetchData',
+      'expandTrace',
+      'renderLoadMore',
+      'updateTableData',
+      'handleChartZoom',
+      'updateColumnMaxWidthMap',
+      'addWithFlipDirection',
+      'toggleLogRow',
+      'logItemCol',
+    ];
+    methods.forEach((m) => (this[m] = this[m].bind(this)));
     const liveBtn = document.querySelector('#streamLiveData') as HTMLInputElement;
     if (liveBtn) {
       liveBtn.addEventListener('change', () => {
@@ -71,9 +80,7 @@ export class LogList extends LitElement {
       });
     }
 
-    ['submit', 'add-query', 'update-query'].forEach(ev => 
-      window.addEventListener(ev, () => this.refetchLogs())
-    );
+    ['submit', 'add-query', 'update-query'].forEach((ev) => window.addEventListener(ev, () => this.refetchLogs()));
 
     window.addEventListener('pagehide', () => {
       if (this.liveStreamInterval) clearInterval(this.liveStreamInterval);
@@ -114,62 +121,7 @@ export class LogList extends LitElement {
   }
 
   updateChartDataZoom(start: number, end: number) {
-    // let first = this.spanListTree[start]
-    // let last = this.spanListTree[end]
-    // if (first === 'start' || last === 'end') {
-    //   first = this.spanListTree[start + 1]
-    // }
-    // if (last === 'end' || last === 'start') {
-    //   last = this.spanListTree[end - 1]
-    // }
-    // let startTime, endTime
-    // startTime = new Date(first.data[this.colIdxMap['timestamp']]).getTime()
-    // endTime = new Date(last.data[this.colIdxMap['timestamp']]).getTime()
-    // if (this.barChart) {
-    //   const options = this.barChart.getOption()
-    //   options.series[0].markArea = {
-    //     silent: true,
-    //     itemStyle: {
-    //       opacity: 0.8,
-    //       color: 'red',
-    //     },
-    //     data: [
-    //       [
-    //         {
-    //           xAxis: new Date(1747555577663.2622),
-    //         },
-    //         {
-    //           xAxis: new Date(1748123258929.097).toISOString(),
-    //         },
-    //       ],
-    //     ],
-    //   }
-    //   this.barChart.setOption(options)
-    // }
-    // if (this.barChart) {
-    //   const option = this.barChart.getOption()
-    //   option.markArea.data = [[{ xAxis: startTime }], [{ xAxis: endTime }]]
-    //   this.barChart.setOption(option)
-    //   if (this.lineChart) {
-    //     const option = this.lineChart.getOption()
-    //     option.markArea.data = [[{ xAxis: startTime }], [{ xAxis: endTime }]]
-    //     this.lineChart.setOption(option)
-    //   }
-    // }
-  }
-
-  getTraceMaxMin(traceId: string, timeIndex: number, traceIdIndex: number, minMax = 'max') {
-    const startTimes = [];
-    const [start, end, step] = this.flipDirection ? [length - 1, 0, -1] : [0, length, 1];
-    for (let i = start; this.flipDirection ? i > -1 : i < end; i += step) {
-      const data = this.spanListTree[i].data;
-      if (data[traceIdIndex] === traceId) {
-        startTimes.push(data[timeIndex]);
-      } else if (startTimes.length > 0) {
-        break;
-      }
-    }
-    // if
+    // Chart data zoom functionality - currently disabled
   }
 
   async refetchLogs() {
@@ -212,8 +164,14 @@ export class LogList extends LitElement {
     // set from and to to the startValue and endValue in search params
   }
 
-  updateTableData = (ves: any[][], cols: string[], colIdxMap: ColIdxMap, 
-    serviceColors: Record<string, string>, nextFetchUrl: string, recentFetchUrl: string) => {
+  updateTableData = (
+    ves: any[][],
+    cols: string[],
+    colIdxMap: ColIdxMap,
+    serviceColors: Record<string, string>,
+    nextFetchUrl: string,
+    recentFetchUrl: string
+  ) => {
     Object.assign(this, {
       isLoadingReplace: false,
       logsColumns: [...cols],
@@ -222,7 +180,7 @@ export class LogList extends LitElement {
       serviceColors: { ...serviceColors },
       nextFetchUrl,
       recentFetchUrl,
-      spanListTree: this.buildSpanListTree(ves)
+      spanListTree: this.buildSpanListTree(ves),
     });
     this.updateColumnMaxWidthMap(ves);
   };
@@ -326,9 +284,9 @@ export class LogList extends LitElement {
     this.shouldScrollToBottom = false;
     this.expandedTraces[spanId] = !this.expandedTraces[spanId];
     const expanded = this.expandedTraces[spanId];
-    
-    const affectedSpans = this.spanListTree.filter(span => span.traceId === tracId);
-    affectedSpans.forEach(span => {
+
+    const affectedSpans = this.spanListTree.filter((span) => span.traceId === tracId);
+    affectedSpans.forEach((span) => {
       if (span.id === spanId) {
         span.expanded = expanded;
         span.show = true;
@@ -338,7 +296,7 @@ export class LogList extends LitElement {
         this.expandedTraces[span.id] = expanded;
       }
     });
-    
+
     this.requestUpdate();
   }
 
@@ -418,11 +376,13 @@ export class LogList extends LitElement {
   }
 
   showErrorToast(message: string) {
-    document.body.dispatchEvent(new CustomEvent('errorToast', {
-      detail: { value: [message] },
-      bubbles: true,
-      composed: true
-    }));
+    document.body.dispatchEvent(
+      new CustomEvent('errorToast', {
+        detail: { value: [message] },
+        bubbles: true,
+        composed: true,
+      })
+    );
   }
 
   hideColumn(column: string) {
@@ -436,22 +396,22 @@ export class LogList extends LitElement {
   updateColumnMaxWidthMap(recVecs: any[][]) {
     const columnDefaults = { summary: 450 * 8.5, latency_breakdown: 100 };
     const charWidths = { timestamp: 6.5, default: 8.5 };
-    
-    recVecs.forEach(vec => {
+
+    recVecs.forEach((vec) => {
       Object.entries(this.colIdxMap).forEach(([key, value]) => {
         if (key === 'id') return;
-        
+
         // Set defaults for special columns
         if (columnDefaults[key] && !this.columnMaxWidthMap[key]) {
           this.columnMaxWidthMap[key] = columnDefaults[key];
         }
-        
+
         // Skip if already set for special columns
         if ((key === 'latency_breakdown' || key === 'summary') && this.columnMaxWidthMap[key]) return;
-        
+
         const chPx = charWidths[key] || charWidths.default;
         const target = String(vec[value]).length * chPx;
-        
+
         this.columnMaxWidthMap[key] = Math.max(this.columnMaxWidthMap[key] || 12 * chPx, target);
       });
     });
@@ -537,14 +497,16 @@ export class LogList extends LitElement {
         class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-scroll"
         id="logs_list_container_inner"
       >
-        ${this.recentDataToBeAdded.length > 0 && !this.flipDirection ? html`
-          <div class="sticky left-1/2 -translate-y-1/2 top-[30px] z-50">
-            <button
-              class="cbadge-sm badge-neutral cursor-pointer bg-fillBrand-strong text-textInverse-strong shadow rounded-lg text-sm absolute"
-              @pointerdown=${this.handleRecentClick}>
-              ${this.recentDataToBeAdded.length} new
-            </button>
-          </div>` : nothing}
+        ${this.recentDataToBeAdded.length > 0 && !this.flipDirection
+          ? html` <div class="sticky left-1/2 -translate-y-1/2 top-[30px] z-50">
+              <button
+                class="cbadge-sm badge-neutral cursor-pointer bg-fillBrand-strong text-textInverse-strong shadow rounded-lg text-sm absolute"
+                @pointerdown=${this.handleRecentClick}
+              >
+                ${this.recentDataToBeAdded.length} new
+              </button>
+            </div>`
+          : nothing}
         ${this.isLoadingReplace
           ? html`<div class="absolute z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
               <span class="loading loading-dots"></span>
@@ -576,7 +538,7 @@ export class LogList extends LitElement {
         </table>
 
         ${!this.shouldScrollToBottom && this.flipDirection
-          ? html`<div style="position: sticky;bottom: 0px;overflow-anchor: none;">
+          ? html` <div style="position: sticky;bottom: 0px;overflow-anchor: none;">
               <button
                 @pointerdown=${() => {
                   this.shouldScrollToBottom = true;
@@ -590,7 +552,7 @@ export class LogList extends LitElement {
               >
                 ${faSprite('arrow-down', 'regular', 'h-6 w-6 fill-white stroke-white')}
               </button>
-            </div> `
+            </div>`
           : nothing}
       </div>
     `;
@@ -603,38 +565,45 @@ export class LogList extends LitElement {
     if (!Array.isArray(summaryArray)) return nothing;
 
     const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
-    
+
     return summaryArray
-      .filter(el => {
+      .filter((el) => {
         if (!el.includes(';') || !el.includes('⇒')) return true;
         const [, style] = el.split('⇒')[0].split(';');
         return !style.startsWith('right-');
       })
-      .map(element => {
+      .map((element) => {
         if (!element.includes(';') || !element.includes('⇒')) {
           return html`<span class=${`fill-textStrong ${wrapClass}`}>${element}</span>`;
         }
-        
+
         const [fieldAndStyle, value] = element.split('⇒');
         const [field, style] = fieldAndStyle.split(';');
-        
+
         // Special icon handling
         const iconConfig = {
-          request_type: () => renderIconWithTippy('w-4', `${value} Request`,
-            faSprite(value === 'incoming' ? 'arrow-down-left' : 'arrow-up-right', 
-                    'solid', value === 'incoming' ? 'h-3 fill-iconNeutral' : 'h-3 fill-blue-700')),
-          kind: () => value === 'internal' ? 
-            renderIconWithTippy('w-4 ml-2', 'Internal span', faSprite('function', 'regular', 'h-3 w-3')) : nothing,
-          'db.system': () => renderIconWithTippy('w-4 ml-2', value, faSprite('database', 'regular', 'h-3 w-3 fill-slate-500'))
+          request_type: () =>
+            renderIconWithTippy(
+              'w-4',
+              `${value} Request`,
+              faSprite(
+                value === 'incoming' ? 'arrow-down-left' : 'arrow-up-right',
+                'solid',
+                value === 'incoming' ? 'h-3 fill-iconNeutral' : 'h-3 fill-blue-700'
+              )
+            ),
+          kind: () =>
+            value === 'internal' ? renderIconWithTippy('w-4 ml-2', 'Internal span', faSprite('function', 'regular', 'h-3 w-3')) : nothing,
+          'db.system': () => renderIconWithTippy('w-4 ml-2', value, faSprite('database', 'regular', 'h-3 w-3 fill-slate-500')),
         };
-        
+
         if (iconConfig[field]) return iconConfig[field]();
-        
+
         // Text or badge rendering
         if (style === 'text-weak' || style === 'text-textWeak') {
           return html`<span class="text-textWeak">${value}</span>`;
         }
-        
+
         return renderBadge(`cbadge-sm ${this.getStyleClass(style)} ${wrapClass}`, value);
       });
   }
@@ -642,7 +611,7 @@ export class LogList extends LitElement {
   getStyleClass(style: string): string {
     if (style.startsWith('badge-')) return style;
     if (style.startsWith('right-')) return style.substring(6);
-    
+
     const styleMap = {
       'info-strong': 'badge-info',
       'info-weak': 'badge-neutral',
@@ -655,7 +624,7 @@ export class LogList extends LitElement {
       neutral: 'badge-neutral',
       right: 'ml-auto badge-neutral',
       'text-weak': '',
-      'text-textWeak': ''
+      'text-textWeak': '',
     };
     return styleMap[style] || 'badge-neutral';
   }
@@ -663,10 +632,10 @@ export class LogList extends LitElement {
   logItemCol(rowData: any, key: string): any {
     const { data: dataArr, depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData;
     const wrapClass = this.wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
-    
+
     switch (key) {
       case 'id':
-        let [status, errCount, errClass] = errorClass(dataArr, colIdxMap);
+        let [status, errCount, errClass] = errorClass(dataArr, this.colIdxMap);
         return html`
           <div class="flex items-center justify-between w-3">
             <span class="col-span-1 h-5 rounded-sm flex">
@@ -676,24 +645,24 @@ export class LogList extends LitElement {
         `;
       case 'created_at':
       case 'timestamp':
-        let timestamp = lookupVecTextByKey(dataArr, colIdxMap, key);
+        let timestamp = lookupVecTextByKey(dataArr, this.colIdxMap, key);
         return html`<div>
           <time class="monospace text-textStrong tooltip tooltip-right ${wrapClass}" data-tip="timestamp" datetime=${timestamp}
             >${displayTimestamp(timestamp)}</time
           >
         </div>`;
       case 'latency_breakdown':
-        const { traceStart, traceEnd, startNs, duration, childrenTimeSpans, depth: d, hasErrors: hErrs } = rowData;
-        const color = serviceColors[lookupVecTextByKey(dataArr, colIdxMap, 'span_name')] || 'bg-black';
+        const { traceStart, traceEnd, startNs, duration, childrenTimeSpans } = rowData;
+        const color = this.serviceColors[lookupVecTextByKey(dataArr, this.colIdxMap, 'span_name')] || 'bg-black';
         const chil = childrenTimeSpans.map(({ startNs, duration, data }: { startNs: number; duration: number; data: any }) => ({
           startNs: startNs - traceStart,
           duration,
-          color: serviceColors[lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'bg-black',
+          color: this.serviceColors[lookupVecTextByKey(data, this.colIdxMap, 'span_name')] || 'bg-black',
         }));
-        const width = columnMaxWidthMap['latency_breakdown'] || 200;
+        const width = this.columnMaxWidthMap['latency_breakdown'] || 200;
 
         // Extract right-aligned badges from summary array
-        const summaryArr = lookupVecTextByKey(dataArr, colIdxMap, 'summary') || [];
+        const summaryArr = lookupVecTextByKey(dataArr, this.colIdxMap, 'summary') || [];
         const rightAlignedBadges: TemplateResult[] = [];
 
         summaryArr.forEach((element: string) => {
@@ -714,7 +683,7 @@ export class LogList extends LitElement {
             ${rightAlignedBadges}
             ${spanLatencyBreakdown({
               start: startNs - traceStart,
-              depth: d,
+              depth,
               duration,
               traceEnd,
               color,
@@ -725,16 +694,15 @@ export class LogList extends LitElement {
           </div>
         `;
       case 'summary':
-        const summaryData = lookupVecTextByKey(dataArr, colIdxMap, key) || '';
+        const summaryData = lookupVecTextByKey(dataArr, this.colIdxMap, key) || '';
         // Check if summary is already an array, otherwise parse it
         const summaryArray = Array.isArray(summaryData) ? summaryData : summaryData ? String(summaryData).split(',') : [];
-        const { depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData;
         const errClas = hasErrors
           ? 'bg-fillError-strong text-white fill-white stroke-strokeError-strong'
           : childErrors
             ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
             : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
-        return html`<div class="flex w-full ${wrapLines ? 'items-start' : 'items-center'} gap-1">
+        return html`<div class="flex w-full ${this.wrapLines ? 'items-start' : 'items-center'} gap-1">
           ${this.view === 'tree'
             ? html`
                 <div class="flex items-center gap-1">
@@ -765,15 +733,15 @@ export class LogList extends LitElement {
                 </div>
               `
             : nothing}
-          <div class=${`flex items-center gap-1 ${wrapLines ? 'break-all flex-wrap' : 'overflow-hidden'}`}>
-            ${this.renderSummaryElements(summaryArray, wrapLines)}
+          <div class=${`flex items-center gap-1 ${this.wrapLines ? 'break-all flex-wrap' : 'overflow-hidden'}`}>
+            ${this.renderSummaryElements(summaryArray, this.wrapLines)}
           </div>
         </div>`;
       case 'service':
-        let serviceData = lookupVecTextByKey(dataArr, colIdxMap, key);
+        let serviceData = lookupVecTextByKey(dataArr, this.colIdxMap, key);
         return renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, serviceData, key);
       default:
-        let v = lookupVecTextByKey(dataArr, colIdxMap, key);
+        let v = lookupVecTextByKey(dataArr, this.colIdxMap, key);
         return html`<span class=${wrapClass} title=${key}>${v}</span>`;
     }
   }
@@ -824,7 +792,7 @@ export class LogList extends LitElement {
 
   logTableHeading(column: string) {
     if (column === 'id') return html`<td class="p-0 m-0 whitespace-nowrap w-3"></td>`;
-    
+
     const config = {
       timestamp: { title: 'timestamp', classes: 'w-[17ch] shrink-0' },
       created_at: { title: 'timestamp', classes: 'w-[17ch] shrink-0' },
@@ -834,9 +802,9 @@ export class LogList extends LitElement {
       raw_url: { title: column, classes: 'w-[25ch] shrink-0' },
       url_path: { title: column, classes: 'w-[25ch] shrink-0' },
       service: { title: 'service', classes: 'w-[16ch] shrink-0' },
-      summary: { title: 'summary', classes: 'w-[1400px] shrink-1' }
+      summary: { title: 'summary', classes: 'w-[1400px] shrink-1' },
     };
-    
+
     const { title = column, classes = 'w-[16ch] shrink-0' } = config[column] || {};
     return this.tableHeadingWrapper(title, column, classes);
   }
@@ -937,33 +905,36 @@ export class LogList extends LitElement {
     `;
   }
 
-  handleFlipDirection() {}
-  options() {
-    return html`
-      <div class="w-full flex justify-end px-2 pb-1 gap-3 ">
-        ${html`
-          <div class="tabs tabs-box tabs-md p-0 tabs-outline items-center border">
-            <button
-              @pointerdown=${() => (this.view = 'tree')}
-              class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
-                this.view === 'tree' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-              }`}
-            >
-              ${faSprite('tree', 'regular', 'h-4 w-4')}
-              <span class="sm:inline hidden">Tree</span>
-            </button>
+  renderCheckbox(label: string, icon: string, checked: boolean, onChange: (checked: boolean) => void) {
+    return html` <label class="flex items-center cursor-pointer w-full gap-1 px-2 py-1 text-sm rounded text-textWeak hover:bg-gray-100">
+      <input
+        type="checkbox"
+        class="checkbox checkbox-xs checkbox-primary mr-1"
+        .checked=${checked}
+        @change=${(e: any) => onChange(e.target.checked)}
+      />
+      ${faSprite(icon, 'regular', 'h-4 w-4')}
+      <span class="sm:inline hidden">${label}</span>
+    </label>`;
+  }
 
-            <button
-              @pointerdown=${() => (this.view = 'list')}
-              class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
-                this.view === 'list' ? 'bg-gray-200 text-gray-800' : 'text-textWeak  hover:bg-gray-100'
-              }`}
-            >
-              ${faSprite('list-view', 'regular', 'h-4 w-4')}
-              <span class="sm:inline hidden">List</span>
-            </button>
-          </div>
-        `}
+  options() {
+    const viewButton = (view: 'tree' | 'list', icon: string, label: string) =>
+      html` <button
+        @pointerdown=${() => (this.view = view)}
+        class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
+          this.view === view ? 'bg-gray-200 text-gray-800' : 'text-textWeak hover:bg-gray-100'
+        }`}
+      >
+        ${faSprite(icon, 'regular', 'h-4 w-4')}
+        <span class="sm:inline hidden">${label}</span>
+      </button>`;
+
+    return html`
+      <div class="w-full flex justify-end px-2 pb-1 gap-3">
+        <div class="tabs tabs-box tabs-md p-0 tabs-outline items-center border">
+          ${viewButton('tree', 'tree', 'Tree')} ${viewButton('list', 'list-view', 'List')}
+        </div>
 
         <div class="relative dropdown dropdown-end">
           <button
@@ -975,50 +946,29 @@ export class LogList extends LitElement {
             <span class="sm:inline hidden">Options</span>
           </button>
           <div tabindex="0" class="dropdown-content space-y-2 bg-bgBase border w-64 border-strokeWeak p-2 text-sm rounded shadow">
-            <label class="flex items-center cursor-pointer w-full gap-1 px-2 py-1 text-sm rounded text-textWeak hover:bg-gray-100">
-              <input
-                type="checkbox"
-                class="checkbox checkbox-xs checkbox-primary mr-1"
-                .checked=${this.flipDirection}
-                @change=${(e: any) => {
-                  this.flipDirection = e.target.checked;
-                  this.spanListTree = this.buildSpanListTree(this.spanListTree.map((span) => span.data).reverse());
-                  this.recentDataToBeAdded = this.buildSpanListTree(this.recentDataToBeAdded.map((span) => span.data).reverse());
-                  this.spanListTree = [...this.spanListTree, ...this.recentDataToBeAdded];
-                  this.recentDataToBeAdded = [];
-                  this.requestUpdate();
-                }}
-              />
-              ${faSprite('flip-vertical', 'regular', 'h-4 w-4')}
-              <span class="sm:inline hidden">Flip direction</span>
-            </label>
-
-            <label class="flex items-center cursor-pointer w-full gap-1 px-2 py-1 text-sm rounded text-textWeak hover:bg-gray-100">
-              <input
-                type="checkbox"
-                .checked=${this.wrapLines}
-                class="checkbox checkbox-xs checkbox-primary mr-1"
-                @change=${(e: any) => {
-                  this.wrapLines = e.target.checked;
-                  if (this.wrapLines) {
-                    let width = Number(
-                      window.getComputedStyle(document.getElementById('logs_list_container_inner')!).width.replace('px', '')
-                    );
-                    this.logsColumns.forEach((col) => {
-                      if (col !== 'summary' && this.columnMaxWidthMap[col]) {
-                        width -= this.columnMaxWidthMap[col] + 8;
-                      }
-                    });
-                    this.columnMaxWidthMap['summary'] = width - 20;
-                  } else {
-                    this.columnMaxWidthMap['summary'] = 450 * 8;
+            ${this.renderCheckbox('Flip direction', 'flip-vertical', this.flipDirection, (checked) => {
+              this.flipDirection = checked;
+              this.spanListTree = this.buildSpanListTree(this.spanListTree.map((span) => span.data).reverse());
+              this.recentDataToBeAdded = this.buildSpanListTree(this.recentDataToBeAdded.map((span) => span.data).reverse());
+              this.spanListTree = [...this.spanListTree, ...this.recentDataToBeAdded];
+              this.recentDataToBeAdded = [];
+              this.requestUpdate();
+            })}
+            ${this.renderCheckbox('Wrap lines', 'wrap-text', this.wrapLines, (checked) => {
+              this.wrapLines = checked;
+              if (this.wrapLines) {
+                let width = Number(window.getComputedStyle(document.getElementById('logs_list_container_inner')!).width.replace('px', ''));
+                this.logsColumns.forEach((col) => {
+                  if (col !== 'summary' && this.columnMaxWidthMap[col]) {
+                    width -= this.columnMaxWidthMap[col] + 8;
                   }
-                  this.requestUpdate();
-                }}
-              />
-              ${faSprite('wrap-text', 'regular', 'h-4 w-4')}
-              <span class="sm:inline hidden">Wrap lines</span>
-            </label>
+                });
+                this.columnMaxWidthMap['summary'] = width - 20;
+              } else {
+                this.columnMaxWidthMap['summary'] = 450 * 8;
+              }
+              this.requestUpdate();
+            })}
 
             <columns-settings .columns=${this.logsColumns} @columns-changed=${this.handleColumnsChanged}></columns-settings>
           </div>
@@ -1190,22 +1140,28 @@ const faSprite = (iconName: string, kind: string, classes: string) =>
 const displayTimestamp = (input: string) => {
   const date = new Date(input);
   if (!date.getTime()) return '';
-  
-  return date.toLocaleString('en-US', {
-    month: 'short', day: '2-digit', hour: '2-digit',
-    minute: '2-digit', second: '2-digit', hour12: false
-  }).replace(',', '') + `.${String(date.getUTCMilliseconds()).padStart(3, '0')}`;
+
+  return (
+    date
+      .toLocaleString('en-US', {
+        month: 'short',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      })
+      .replace(',', '') + `.${String(date.getUTCMilliseconds()).padStart(3, '0')}`
+  );
 };
 
 function renderBadge(classes: string, title: string, tippy = '') {
   return html`<span class=${`relative  ${classes} ${tippy ? 'tooltip tooltip-right' : ''}`} data-tip=${tippy}>${title}</span>`;
 }
 
-const lookupVecText = (vec: any[], idx: number) => 
-  Array.isArray(vec) && idx >= 0 && idx < vec.length ? vec[idx] : '';
+const lookupVecText = (vec: any[], idx: number) => (Array.isArray(vec) && idx >= 0 && idx < vec.length ? vec[idx] : '');
 
-const lookupVecTextByKey = (vec: any[], colIdxMap: ColIdxMap, key: string) => 
-  lookupVecText(vec, colIdxMap[key] ?? -1);
+const lookupVecTextByKey = (vec: any[], colIdxMap: ColIdxMap, key: string) => lookupVecText(vec, colIdxMap[key] ?? -1);
 
 function renderIconWithTippy(cls: string, tip: string, icon: TemplateResult<1>) {
   return html`<span class=${'shrink-0 inline-flex tooltip tooltip-right ' + cls} data-tip=${tip}>${icon}</span>`;
@@ -1216,10 +1172,10 @@ const getDurationNSMS = (durationS: string) => {
   const units = [
     { threshold: 1e9, divisor: 1e9, suffix: ' s' },
     { threshold: 1e6, divisor: 1e6, suffix: ' ms' },
-    { threshold: 1e3, divisor: 1e3, suffix: ' µs' }
+    { threshold: 1e3, divisor: 1e3, suffix: ' µs' },
   ];
-  
-  const unit = units.find(u => duration >= u.threshold);
+
+  const unit = units.find((u) => duration >= u.threshold);
   return unit ? (duration / unit.divisor).toFixed(1) + unit.suffix : duration.toFixed(1) + ' ns';
 };
 
@@ -1227,16 +1183,15 @@ const errorClass = (reqVec: any[], colIdxMap: ColIdxMap) => {
   const hasErrors = lookupVecTextByKey(reqVec, colIdxMap, 'errors');
   const status = lookupVecTextByKey(reqVec, colIdxMap, 'http_attributes')?.status_code || 0;
   const errStatus = lookupVecTextByKey(reqVec, colIdxMap, 'status');
-  
-  const errClass = hasErrors || errStatus === 'ERROR' ? 'w-1 bg-red-500' :
-                   status >= 400 ? 'w-1 bg-yellow-500' : 'w-1 bg-blue-200 status-indicator';
-  
+
+  const errClass =
+    hasErrors || errStatus === 'ERROR' ? 'w-1 bg-red-500' : status >= 400 ? 'w-1 bg-yellow-500' : 'w-1 bg-blue-200 status-indicator';
+
   return [status, hasErrors, errClass];
 };
 
-function getSeverityColor(severity: string | undefined) {
-  severity = severity ? severity.toLowerCase() : 'unset';
-  const cs = {
+const getSeverityColor = (severity: string | undefined) =>
+  ({
     debug: 'text-gray-500 bg-gray-100',
     info: 'text-brand bg-blue-100',
     warning: 'text-yellow-700 bg-yellow-100',
@@ -1244,17 +1199,13 @@ function getSeverityColor(severity: string | undefined) {
     critical: 'text-red-700 bg-red-200 font-bold',
     notice: 'text-green-500 bg-green-100',
     alert: 'text-orange-600 bg-orange-100 font-bold',
-  };
-  return cs[severity as keyof typeof cs] || 'text-black badge-neutral text-textWeak bg-fillWeak';
-}
+  })[severity?.toLowerCase() || 'unset'] || 'text-black badge-neutral text-textWeak bg-fillWeak';
 
-function getSpanStatusColor(status: string) {
-  const cs = {
+const getSpanStatusColor = (status: string) =>
+  ({
     ERROR: 'cbadge-sm badge-error',
     OK: 'cbadge-sm badge-success',
-  };
-  return cs[status as keyof typeof cs] || 'cbadge-sm badge-neutral bg-fillWeak';
-}
+  })[status] || 'cbadge-sm badge-neutral bg-fillWeak';
 function spanLatencyBreakdown({
   start,
   duration,
@@ -1374,16 +1325,16 @@ function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<
       children: [],
       parent: isLog ? null : parentSpanId,
       data: span,
-      type: isLog ? 'log' : 'span'
+      type: isLog ? 'log' : 'span',
     });
   });
 
   traceMap.forEach((traceData) => {
     const spanTree = new Map<string, APTEvent>();
     traceData.spans.forEach((span) => {
-      const parentId = span.type === 'log' ? span.id : (span.parent || '');
+      const parentId = span.type === 'log' ? span.id : span.parent || '';
       const parentSpan = traceData.spans.get(parentId);
-      
+
       if (parentSpan) {
         parentSpan.children.push(span);
         // Insertion sort to maintain order
@@ -1483,7 +1434,7 @@ const getColumnWidth = (column: string) => {
     status_code: 'w-[12ch] shrink-0',
     raw_url: 'w-[25ch] shrink-0 overflow-hidden',
     url_path: 'w-[25ch] shrink-0 overflow-hidden',
-    summary: 'w-3/4 shrink-1'
+    summary: 'w-3/4 shrink-1',
   };
   return widths[column] || (column === 'id' || column === 'service' ? '' : 'w-[16ch] shrink-0');
 };
