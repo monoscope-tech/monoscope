@@ -281,7 +281,7 @@ processSpanToEntities pjc otelSpan dumpId =
             [ Just endpointHash
             , if isJust shape then Just shapeHash else Nothing
             ]
-            <> V.toList fieldHashes
+          <> V.toList fieldHashes
    in (endpoint, shape, fields', formats', hashes)
   where
     -- Helper function to extract headers from nested attribute structure
@@ -374,7 +374,7 @@ createSpanAttributes rm =
     tagsObj = case rm.tags of
       Just tags -> nestedJsonFromDotNotation [("apitoolkit.tags", AE.Array $ V.fromList $ map AE.String tags)]
       Nothing -> AE.object []
-    
+
     -- Process referer
     refererObj = case rm.referer of
       Just (Left text) -> nestedJsonFromDotNotation [("http.request.headers.referer", AE.String text)]
@@ -388,7 +388,7 @@ createSpanAttributes rm =
         reqHeaders =
           fromMaybe (AE.object [])
             $ rm.requestHeaders
-              ^? _Object
+            ^? _Object
               >>= \obj ->
                 let pairs = [("http.request.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
                  in Just $ nestedJsonFromDotNotation pairs
@@ -397,7 +397,7 @@ createSpanAttributes rm =
         respHeaders =
           fromMaybe (AE.object [])
             $ rm.responseHeaders
-              ^? _Object
+            ^? _Object
               >>= \obj ->
                 let pairs = [("http.response.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
                  in Just $ nestedJsonFromDotNotation pairs
