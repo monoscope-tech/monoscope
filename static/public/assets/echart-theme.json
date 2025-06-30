@@ -1,0 +1,80 @@
+{
+    "roma":{
+        "color": [
+            "#E01F54",
+            "#001852",
+            "#f5e8c8",
+            "#b8d2c7",
+            "#c6b38e",
+            "#a4d8c2",
+            "#f3d999",
+            "#d3758f",
+            "#dcc392",
+            "#2e4783",
+            "#82b6e9",
+            "#ff6347",
+            "#a092f1",
+            "#0a915d",
+            "#eaf889",
+            "#6699FF",
+            "#ff6666",
+            "#3cb371",
+            "#d5b158",
+            "#38b6b6"
+          ],
+        "visualMap": {
+          "color": ["#e01f54", "#e7dbc3"],
+          "textStyle": {
+            "color": "#333"
+          }
+        },
+        "graph": {
+          "itemStyle": {
+            "color": "#a4d8c2"
+          },
+          "linkStyle": {
+            "color": "#f3d999"
+          }
+        }
+      },
+    "default": {
+        "color":[
+            "#1A74A8",
+            "#91cc75",
+            "#fac858",
+            "#ee6666",
+            "#73c0de",
+            "#3ba272",
+            "#fc8452",
+            "#9a60b4",
+            "#ea7ccc",
+            "#37a2da",
+            "#32c5e9",
+            "#67e0e3",
+            "#9fe6b8",
+            "#ffdb5c",
+            "#ff9f7f",
+            "#fb7293",
+            "#e062ae",
+            "#e690d1",
+            "#e7bcf3",
+            "#9d96f5"
+          ],
+        "visualMap": {
+          "color": ["#e01f54", "#e7dbc3"],
+          "textStyle": {
+            "color": "#333"
+          }
+        },
+        "graph": {
+          "itemStyle": {
+            "color": "#a4d8c2"
+          },
+          "linkStyle": {
+            "color": "#f3d999"
+          }
+        }
+      }
+  }
+
+  

@@ -10,7 +10,7 @@ import Data.ByteString.Base16 qualified as Base16
 import Data.Default (Default (def))
 import Data.Text qualified as T
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (withPool)
+import Database.PostgreSQL.Entity.DBT (query_, withPool)
 import Deriving.Aeson qualified as DAE
 import Effectful.Concurrent (forkIO)
 import Effectful.Error.Static (throwError)
@@ -332,7 +332,7 @@ discordInteractionsH rawBody signatureM timestampM = do
   interaction <- parseInteraction rawBody
 
   case interaction.interaction_type of
-    Ping -> pure $ AE.object ["type" AE..= (1 :: Int)]
+    Ping -> pure $ AE.object ["type" AE..= 1]
     ApplicationCommand -> handleApplicationCommand interaction envCfg authCtx
   where
     validateSignature envCfg (Just sig) (Just tme) body
@@ -382,10 +382,13 @@ discordInteractionsH rawBody signatureM timestampM = do
           case vizTypeM of
             Just vizType -> do
               let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-                  qUrl = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> ("&query=" <> decodeUtf8 (urlEncode True $ encodeUtf8 query))
-                  query_url = "[Open in log explorer](" <> qUrl <> ")"
+                  query_url  = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> ("&query=" <> decodeUtf8 (urlEncode True $ encodeUtf8 query))
                   opts = "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query)) <> "&p=" <> discordData.projectId.toText <> "&t=" <> chartType
-                  content = getBotContent Discord query query_url opts authCtx.env.chartShotUrl now
+                  question = case cmdData.options of
+                    Just (InteractionOption{value = AE.String q} : _) -> q
+                    _ -> "[?]"
+                  content = getBotContent Discord question query query_url opts authCtx.env.chartShotUrl now
+              traceShowM content
               sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
               pure $ contentResponse "Generated query: "
             Nothing -> do
@@ -491,7 +494,7 @@ buildPrompt cmdData interaction envCfg = do
 
 
 contentResponse :: Text -> AE.Value
-contentResponse msg = AE.object ["type" AE..= (4 :: Int), "data" AE..= AE.object ["content" AE..= msg]]
+contentResponse msg = AE.object ["type" AE..= 4, "data" AE..= AE.object ["content" AE..= msg]]
 
 
 threadsPrompt :: [DiscordMessage] -> Text -> Text
@@ -506,8 +509,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-        <> [msgJson]
-        <> ["\n\nUser query: " <> question]
+          <> [msgJson]
+          <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
@@ -578,7 +581,7 @@ getThreadStarterMessage interaction botToken = do
 sendDeferredResponse :: HTTP :> es => Text -> Text -> Text -> Eff es ()
 sendDeferredResponse interactionId interactionToken botToken = do
   let url = toString $ "https://discord.com/api/v10/interactions/" <> interactionId <> "/" <> interactionToken <> "/callback"
-      payload = AE.encode $ AE.object ["type" AE..= (5 :: Int)]
+      payload = AE.encode $ AE.object ["type" AE..= 5]
   _ <- postWith (defaults & authHeader botToken & contentTypeHeader "application/json") url payload
   pass
 
@@ -628,7 +631,7 @@ slackInteractionsH interaction = do
               let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
                   opts = "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query)) <> "&p=" <> slackData.projectId.toText <> "&t=" <> chartType
                   query_url = authCtx.env.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query))
-                  content = getBotContent Slack query query_url opts authCtx.env.chartShotUrl now
+                  content = getBotContent Slack question query query_url opts authCtx.env.chartShotUrl now
 
               _ <- sendSlackFollowupResponse inter.response_url content
               pass
@@ -677,8 +680,8 @@ chartImageUrl options baseUrl now =
 data BotType = Slack | Discord
 
 
-getBotContent :: BotType -> Text -> Text -> Text -> Text -> Time.UTCTime -> AE.Value
-getBotContent target query query_url chartOptions baseUrl now =
+getBotContent :: BotType -> Text -> Text -> Text -> Text -> Text -> Time.UTCTime -> AE.Value
+getBotContent target question query query_url chartOptions baseUrl now =
   case target of
     Slack ->
       AE.object
@@ -687,10 +690,9 @@ getBotContent target query query_url chartOptions baseUrl now =
               ( V.fromList
                   [ AE.object
                       [ "color" AE..= "#0068ff"
-                      , "title" AE..= "📊 Here is your chart"
+                      , "title" AE..= question
                       , "markdown_in" AE..= (AE.Array $ V.fromList ["text"])
                       , "title_link" AE..= query_url
-                      , "text" AE..= "This chart summarizes your query results."
                       , "image_url" AE..= chartImageUrl chartOptions baseUrl now
                       , "fields" AE..= AE.Array (V.fromList [AE.object ["title" AE..= "Query used", "value" AE..= query]])
                       , "actions" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "button", "text" AE..= "View in log explorer", "url" AE..= query_url]])
@@ -703,17 +705,30 @@ getBotContent target query query_url chartOptions baseUrl now =
         ]
     _ ->
       AE.object
-        [ "embeds"
+        [ "flags" AE..= 32768
+        , "components"
             AE..= AE.Array
-              ( V.fromList
-                  [ AE.object
-                      [ "type" AE..= "rich"
-                      , "color" AE..= "26879"
-                      , "title" AE..= "📊 Here is your chart"
-                      , "description" AE..= "This chart summarizes your query results."
-                      , "image" AE..= AE.object ["url" AE..= chartImageUrl chartOptions baseUrl now]
-                      , "fields" AE..= AE.Array (V.fromList [AE.object ["name" AE..= "Query used", "value" AE..= query, "inline" AE..= True], AE.object ["name" AE..= "Query URL", "value" AE..= query_url, "inline" AE..= True]])
-                      ]
-                  ]
+              ( V.singleton
+                  $ AE.object
+                    [ "type" AE..= 17
+                    , "accent_color" AE..= 26879
+                    , "components"
+                        AE..= AE.Array
+                          ( V.fromList
+                              [ AE.object [ "type" AE..= 10 , "content" AE..= ("### " <> question) ]
+                              , AE.object
+                                  [ "type" AE..= 12
+                                  , "items"
+                                      AE..= AE.Array (V.singleton  $ AE.object[ "media"  AE..= AE.object [ "url" AE..= (chartImageUrl chartOptions baseUrl now)  ]])
+                                  ]
+                              , AE.object[ "type" AE..= 10  , "content" AE..= ("**Query used:** " <> query)]
+                              , AE.object
+                                  [ "type" AE..= 1
+                                  , "components"
+                                      AE..= AE.Array (V.fromList [ AE.object [ "type" AE..= 2, "label" AE..= "Open explorer"  , "url" AE..= query_url, "style" AE..= 5] ])
+                                  ]
+                              ]
+                          )
+                    ]
               )
         ]

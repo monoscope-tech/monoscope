@@ -176,10 +176,7 @@ const chartWidget = (widgetData: WidGetData) => {
 
   opt.dataset.source = opt.dataset?.source?.map((row: any) => [row[0] * 1000, ...row.slice(1)]) ?? null;
 
-  const isLogExlorerPage = window.location.pathname.includes('/log_explorer');
-  if (isLogExlorerPage) {
-    (window as any)[`${chartType}Chart`] = chart;
-  }
+  (window as any)[`${chartType}Chart`] = chart;
 
   chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source));
 
