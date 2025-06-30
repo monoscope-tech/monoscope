@@ -13,6 +13,7 @@ import Data.Text.Encoding qualified as TE
 import Data.Vector qualified as V
 import Models.Telemetry.Telemetry (OtelLogsAndSpans (..), Severity (..), SeverityLevel (..), atMapInt, atMapText)
 import Relude
+import Utils (getDurationNSMS)
 
 
 -- | Generate summary array for an OtelLogsAndSpans record
@@ -178,6 +179,33 @@ generateSpanSummary otel =
                             then T.take 497 attrText <> "..."
                             else attrText
                      in Just $ "attributes;text-textWeak⇒" <> truncated
+              _ -> Nothing
+          ]
+          ++
+          -- 10. Right-aligned badges for latency breakdown
+          -- These use "right" style and will be extracted by frontend
+          [ -- Error status (if ERROR)
+            case otel.status_code of
+              Just "ERROR" -> Just "status;right-badge-error⇒ERROR"
+              _ -> Nothing
+          , -- Database system with brand colors
+            case atMapText "db.system" otel.attributes of
+              Just "postgresql" -> Just "db.system;right-badge-postgres⇒postgres"
+              Just "mysql" -> Just "db.system;right-badge-mysql⇒mysql"
+              Just "redis" -> Just "db.system;right-badge-redis⇒redis"
+              Just "mongodb" -> Just "db.system;right-badge-mongo⇒mongodb"
+              Just "elasticsearch" -> Just "db.system;right-badge-elastic⇒elastic"
+              Just system -> Just $ "db.system;right-badge-neutral⇒" <> system
+              _ -> Nothing
+          , -- HTTP indicator (if has HTTP attributes)
+            if hasHttp then Just "protocol;right-badge-neutral⇒http" else Nothing
+          , -- RPC indicator
+            case atMapText "rpc.method" otel.attributes of
+              Just _ -> Just "protocol;right-badge-neutral⇒rpc"
+              _ -> Nothing
+          , -- Duration (always show)
+            case otel.duration of
+              Just dur -> Just $ "duration;right-badge-neutral⇒" <> toText (getDurationNSMS (fromIntegral dur))
               _ -> Nothing
           ]
    in

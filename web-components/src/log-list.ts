@@ -5,6 +5,16 @@ import { customElement, state, query } from 'lit/decorators.js';
 import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, Trace, TraceDataMap } from './types/types';
 import { RangeChangedEvent, VisibilityChangedEvent } from '@lit-labs/virtualizer';
 
+// Ensure all badge classes are included in the final CSS build
+// prettier-ignore
+const _ensureBadgeClasses = html`
+  <span class="badge-postgres badge-mysql badge-redis badge-mongo badge-mongodb badge-elastic badge-elasticsearch badge-cassandra badge-dynamodb badge-memcached badge-sqlite badge-clickhouse"></span>
+  <span class="badge-2xx badge-3xx badge-4xx badge-5xx badge-error badge-success badge-warning badge-info badge-fatal badge-neutral"></span>
+  <span class="badge-GET badge-POST badge-PUT badge-DELETE badge-PATCH"></span>
+  <span class="cbadge cbadge-sm"></span>
+  <span class="bg-blue-600 bg-orange-600 bg-red-600 bg-green-600 bg-yellow-500 bg-teal-600 bg-purple-600 bg-indigo-600 bg-gray-600 bg-amber-600"></span>
+`;
+
 @customElement('log-list')
 export class LogList extends LitElement {
   @state() private expandedTraces: Record<string, boolean> = {};
@@ -690,22 +700,27 @@ export class LogList extends LitElement {
       return style;
     }
 
+    // Handle right-aligned badges (e.g., "right-badge-postgres")
+    if (style.startsWith('right-')) {
+      return style.substring(6); // Remove "right-" prefix and return the badge class
+    }
+
     // Legacy style mappings for backward compatibility
     const styleMap: Record<string, string> = {
       'info-strong': 'badge-info',
-      'info-weak': 'badge-neutral bg-fillWeak',
+      'info-weak': 'badge-neutral',
       'error-strong': 'badge-error',
       'error-weak': 'badge-4xx',
       'warning-strong': 'badge-warning',
       'warning-weak': 'badge-3xx',
       'success-strong': 'badge-success',
       'success-weak': 'badge-2xx',
-      neutral: 'badge-neutral bg-fillWeak',
-      right: 'ml-auto badge-neutral bg-fillWeak',
+      neutral: 'badge-neutral',
+      right: 'ml-auto badge-neutral',
       'text-weak': '', // No badge styling for weak text
       'text-textWeak': '', // No badge styling for text-textWeak
     };
-    return styleMap[style] || 'badge-neutral bg-fillWeak';
+    return styleMap[style] || 'badge-neutral';
   }
 
   logItemCol(rowData: any, key: string): any {
@@ -743,32 +758,30 @@ export class LogList extends LitElement {
           color: serviceColors[lookupVecTextByKey(data, colIdxMap, 'span_name')] || 'bg-black',
         }));
         const width = columnMaxWidthMap['latency_breakdown'] || 200;
-        // Parse summary array to get additional info for latency breakdown
-        const summaryArr = lookupVecTextByKey(dataArr, colIdxMap, 'summary') || [];
-        let hasError = false;
-        let systemType = '';
 
-        // Extract info from summary array
+        // Extract right-aligned badges from summary array
+        const summaryArr = lookupVecTextByKey(dataArr, colIdxMap, 'summary') || [];
+        const rightAlignedBadges: TemplateResult[] = [];
+
         summaryArr.forEach((element: string) => {
           if (element.includes(';') && element.includes('⇒')) {
             const [fieldAndStyle, value] = element.split('⇒');
             const [field, style] = fieldAndStyle.split(';');
-            if (field === 'status' && value === 'ERROR') hasError = true;
-            if (field === 'db.system') systemType = value;
-            if (field === 'rpc.method') systemType = 'rpc';
+
+            // Only process elements with styles starting with "right-"
+            if (style.startsWith('right-')) {
+              const badgeStyle = this.getStyleClass(style);
+              // Skip duration badge as we'll handle it separately at the end
+              if (field !== 'duration') {
+                rightAlignedBadges.push(renderBadge(`cbadge-sm ${badgeStyle}`, value));
+              }
+            }
           }
         });
 
-        const hasHttp = summaryArr.some((el: string) => el.includes('method;') || el.includes('status_code;'));
-
         return html`
           <div class="flex justify-end items-center gap-1 text-textWeak pl-1 rounded-lg bg-bgBase " style="min-width:${width}px">
-            ${hasError || hErrs ? renderBadge(getSpanStatusColor('ERROR'), 'ERROR') : nothing}
-            ${systemType && systemType !== 'rpc'
-              ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', systemType)
-              : nothing}
-            ${hasHttp ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', 'http') : nothing}
-            ${systemType === 'rpc' ? renderBadge('cbadge-sm badge-neutral bg-fillWeak border border-strokeWeak', 'rpc') : nothing}
+            ${rightAlignedBadges}
             <span class="cbadge-sm badge-neutral bg-fillWeak tooltip tooltip-right">${getDurationNSMS(duration)}</span>
             ${spanLatencyBreakdown({
               start: startNs - traceStart,

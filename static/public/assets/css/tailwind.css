@@ -421,7 +421,7 @@ code, pre, .code, .monospace {
 }
 
 @utility badge-neutral {
-  @apply bg-gray-100 text-gray-700;
+  @apply bg-fillWeak text-textStrong;
 }
 
 @utility badge-info {
@@ -454,6 +454,55 @@ code, pre, .code, .monospace {
 
 @utility badge-PATCH {
   @apply bg-cyan-100 text-cyan-700;
+}
+
+/* Database-specific badges */
+@utility badge-postgres {
+  @apply bg-blue-600 text-white;
+}
+
+@utility badge-mysql {
+  @apply bg-orange-600 text-white;
+}
+
+@utility badge-redis {
+  @apply bg-red-600 text-white;
+}
+
+@utility badge-mongo {
+  @apply bg-green-600 text-white;
+}
+
+@utility badge-mongodb {
+  @apply bg-green-600 text-white;
+}
+
+@utility badge-elastic {
+  @apply bg-yellow-500 text-black;
+}
+
+@utility badge-elasticsearch {
+  @apply bg-yellow-500 text-black;
+}
+
+@utility badge-cassandra {
+  @apply bg-teal-600 text-white;
+}
+
+@utility badge-dynamodb {
+  @apply bg-purple-600 text-white;
+}
+
+@utility badge-memcached {
+  @apply bg-indigo-600 text-white;
+}
+
+@utility badge-sqlite {
+  @apply bg-gray-600 text-white;
+}
+
+@utility badge-clickhouse {
+  @apply bg-amber-600 text-white;
 }
 
 @utility ctable {
