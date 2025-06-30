@@ -388,7 +388,6 @@ discordInteractionsH rawBody signatureM timestampM = do
                     Just (InteractionOption{value = AE.String q} : _) -> q
                     _ -> "[?]"
                   content = getBotContent Discord question query query_url opts authCtx.env.chartShotUrl now
-              traceShowM content
               sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
               pure $ contentResponse "Generated query: "
             Nothing -> do

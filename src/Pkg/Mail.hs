@@ -281,38 +281,34 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
 discordReportAlert :: Text -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> AE.Value
 discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown project url allUrl errUrl =
   AE.object
-    [ "embeds"
+    [ "flags" AE..= 32768
+    , "components"
         AE..= AE.Array
           ( V.fromList
-              [ AE.object
-                  [ "type" AE..= "rich"
-                  , "color" AE..= "26879"
-                  , "title" AE..= ("📊 " <> reportType <> " Report for " <> project)
-                  , "description" AE..= ("**From:** " <> startTime <> "  **To:** " <> endTime)
-                  , "image" AE..= AE.object ["url" AE..= allUrl]
-                  , "url" AE..= url
-                  , "fields"
+              [ AE.object ["type" AE..= 10, "content" AE..= ("## 📊 " <> (if reportType == "weekly" then "Weekly" else "Daily") <> " Report for " <> project)]
+              , AE.object ["type" AE..= 10, "content" AE..= ("**From:** " <> T.take 10 startTime <> "  **To:** " <> T.take 10 endTime)]
+              , AE.object ["type" AE..= 10, "content" AE..= ("Total Events: **" <> show totalEvents <> "**" <> (T.replicate 28 "  ") <> " Total Errors: **" <> show totalErrors <> "**")]
+              , AE.object
+                  [ "type" AE..= 12
+                  , "items"
                       AE..= AE.Array
                         ( V.fromList
-                            [ AE.object ["name" AE..= ("Total Events (" <> show totalEvents <> ")"), "value" AE..= " ", "inline" AE..= True]
-                            , AE.object ["name" AE..= ("Total Errors (" <> show totalErrors <> ")"), "value" AE..= " ", "inline" AE..= True]
+                            [ AE.object ["media" AE..= AE.object ["url" AE..= allUrl, "description" AE..= "Total events"]]
+                            , AE.object ["media" AE..= AE.object ["url" AE..= errUrl, "description" AE..= "Total errors"]]
                             ]
                         )
                   ]
+              , AE.object ["type" AE..= 10, "content" AE..= servicesStat]
               , AE.object
-                  [ "type" AE..= "rich"
-                  , "image" AE..= AE.object ["url" AE..= errUrl]
-                  , "url" AE..= url
-                  ]
-              , AE.object
-                  [ "description" AE..= servicesStat
+                  [ "type" AE..= 1
+                  , "components" AE..= AE.Array (V.fromList [AE.object ["type" AE..= 2, "label" AE..= "Open report", "url" AE..= url, "style" AE..= 5]])
                   ]
               ]
           )
     ]
   where
     servicesStat =
-      T.intercalate "\n" $ V.toList $ V.map (\(name, errCount, evCount) -> "* **" <> name <> "**: Total errors-" <> show errCount <> ", Total events-" <> show evCount) breakDown
+      T.intercalate "\n" $ V.toList $ V.take 10 $ V.map (\(name, errCount, evCount) -> "* **" <> name <> "**: Total errors-" <> show errCount <> ", Total events-" <> show evCount) breakDown
 
 
 discordErrorAlert :: RequestDumps.ATError -> Text -> Text -> AE.Value
