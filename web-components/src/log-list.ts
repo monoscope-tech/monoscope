@@ -771,10 +771,7 @@ export class LogList extends LitElement {
             // Only process elements with styles starting with "right-"
             if (style.startsWith('right-')) {
               const badgeStyle = this.getStyleClass(style);
-              // Skip duration badge as we'll handle it separately at the end
-              if (field !== 'duration') {
-                rightAlignedBadges.push(renderBadge(`cbadge-sm ${badgeStyle}`, value));
-              }
+              rightAlignedBadges.push(renderBadge(`cbadge-sm ${badgeStyle}`, value));
             }
           }
         });
@@ -782,7 +779,6 @@ export class LogList extends LitElement {
         return html`
           <div class="flex justify-end items-center gap-1 text-textWeak pl-1 rounded-lg bg-bgBase " style="min-width:${width}px">
             ${rightAlignedBadges}
-            <span class="cbadge-sm badge-neutral bg-fillWeak tooltip tooltip-right">${getDurationNSMS(duration)}</span>
             ${spanLatencyBreakdown({
               start: startNs - traceStart,
               depth: d,

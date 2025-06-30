@@ -457,51 +457,51 @@ code, pre, .code, .monospace {
 }
 
 /* Database-specific badges */
-@utility badge-postgres {
+.badge-postgres {
   @apply bg-blue-600 text-white;
 }
 
-@utility badge-mysql {
+.badge-mysql {
   @apply bg-orange-600 text-white;
 }
 
-@utility badge-redis {
+.badge-redis {
   @apply bg-red-600 text-white;
 }
 
-@utility badge-mongo {
+.badge-mongo {
   @apply bg-green-600 text-white;
 }
 
-@utility badge-mongodb {
+.badge-mongodb {
   @apply bg-green-600 text-white;
 }
 
-@utility badge-elastic {
+.badge-elastic {
   @apply bg-yellow-500 text-black;
 }
 
-@utility badge-elasticsearch {
+.badge-elasticsearch {
   @apply bg-yellow-500 text-black;
 }
 
-@utility badge-cassandra {
+.badge-cassandra {
   @apply bg-teal-600 text-white;
 }
 
-@utility badge-dynamodb {
+.badge-dynamodb {
   @apply bg-purple-600 text-white;
 }
 
-@utility badge-memcached {
+.badge-memcached {
   @apply bg-indigo-600 text-white;
 }
 
-@utility badge-sqlite {
+.badge-sqlite {
   @apply bg-gray-600 text-white;
 }
 
-@utility badge-clickhouse {
+.badge-clickhouse {
   @apply bg-amber-600 text-white;
 }
 
