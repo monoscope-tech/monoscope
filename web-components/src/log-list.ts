@@ -653,45 +653,55 @@ export class LogList extends LitElement {
   renderSummaryElements(summaryArray: string[], wrapLines: boolean): any {
     if (!Array.isArray(summaryArray)) return nothing;
 
-    return summaryArray.map((element) => {
-      // Check if it's a structured element with format "field;style⇒value"
-      if (element.includes(';') && element.includes('⇒')) {
-        const [fieldAndStyle, value] = element.split('⇒');
-        const [field, style] = fieldAndStyle.split(';');
-
-        // Map style to CSS classes
-        const styleClass = this.getStyleClass(style);
-
-        // Special handling for different field types
-        switch (field) {
-          case 'request_type':
-            const icon =
-              value === 'incoming'
-                ? faSprite('arrow-down-left', 'solid', 'h-3 fill-slate-500')
-                : faSprite('arrow-up-right', 'solid', 'h-3 fill-blue-700');
-            return renderIconWithTippy('w-4', `${value} Request`, icon);
-          case 'kind':
-            if (value === 'internal') {
-              return renderIconWithTippy('w-4 ml-2', 'Internal span', faSprite('function', 'regular', 'h-3 w-3'));
-            }
-            return nothing;
-          case 'db.system':
-            return renderIconWithTippy('w-4 ml-2', value, faSprite('database', 'regular', 'h-3 w-3 fill-slate-500'));
-          default:
-            // Check if style is 'text-weak' or 'text-textWeak' - render as plain text instead of badge
-            if (style === 'text-weak' || style === 'text-textWeak') {
-              return html`<span class=${`text-textWeak `}>${value}</span>`;
-            }
-            // Regular badge rendering
-            const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
-            return renderBadge(`cbadge-sm ${styleClass} ${wrapClass}`, value);
+    return summaryArray
+      .filter((element) => {
+        // Exclude elements with right- styles from summary column
+        if (element.includes(';') && element.includes('⇒')) {
+          const [fieldAndStyle] = element.split('⇒');
+          const [, style] = fieldAndStyle.split(';');
+          return !style.startsWith('right-');
         }
-      } else {
-        // Plain text element
-        const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
-        return html`<span class=${`fill-slate-700 ${wrapClass}`}>${element}</span>`;
-      }
-    });
+        return true;
+      })
+      .map((element) => {
+        // Check if it's a structured element with format "field;style⇒value"
+        if (element.includes(';') && element.includes('⇒')) {
+          const [fieldAndStyle, value] = element.split('⇒');
+          const [field, style] = fieldAndStyle.split(';');
+
+          // Map style to CSS classes
+          const styleClass = this.getStyleClass(style);
+
+          // Special handling for different field types
+          switch (field) {
+            case 'request_type':
+              const icon =
+                value === 'incoming'
+                  ? faSprite('arrow-down-left', 'solid', 'h-3 fill-iconNeutral')
+                  : faSprite('arrow-up-right', 'solid', 'h-3 fill-blue-700');
+              return renderIconWithTippy('w-4', `${value} Request`, icon);
+            case 'kind':
+              if (value === 'internal') {
+                return renderIconWithTippy('w-4 ml-2', 'Internal span', faSprite('function', 'regular', 'h-3 w-3'));
+              }
+              return nothing;
+            case 'db.system':
+              return renderIconWithTippy('w-4 ml-2', value, faSprite('database', 'regular', 'h-3 w-3 fill-slate-500'));
+            default:
+              // Check if style is 'text-weak' or 'text-textWeak' - render as plain text instead of badge
+              if (style === 'text-weak' || style === 'text-textWeak') {
+                return html`<span class=${`text-textWeak `}>${value}</span>`;
+              }
+              // Regular badge rendering
+              const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
+              return renderBadge(`cbadge-sm ${styleClass} ${wrapClass}`, value);
+          }
+        } else {
+          // Plain text element
+          const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
+          return html`<span class=${`fill-textStrong ${wrapClass}`}>${element}</span>`;
+        }
+      });
   }
 
   getStyleClass(style: string): string {
@@ -977,7 +987,7 @@ export class LogList extends LitElement {
         <div class="dropdown font-medium text-base" data-tippy-content=${title}>
           <div tabindex="0" role="button" class="py-1">
             ${title.split('•').reverse()[0]}
-            <span class="ml-1 p-0.5 border border-slate-200 rounded-sm inline-flex">
+            <span class="ml-1 p-0.5 border border-strokeWeak rounded-sm inline-flex">
               ${faSprite('chevron-down', 'regular', 'w-3 h-3')}
             </span>
           </div>
@@ -1397,7 +1407,7 @@ function emptyState(cols: number) {
         <div class="w-max mx-auto my-8 text-center p-5 sm:py-14 sm:px-24 flex flex-col gap-4">
           <div>${faSprite('empty', 'regular', 'h-24 w-24 mx-auto stroke-blue-500 fill-blue-500')}</div>
           <div class="flex flex-col gap-2">
-            <h2 class="text-xl text-slate-800 font-bold">${title}</h2>
+            <h2 class="text-xl text-textStrong font-bold">${title}</h2>
             <p class="text-sm max-w-4xl font-medium text-gray-500">${subText}</p>
             <a href="https://apitoolkit.io/docs/sdks/" target="_BLANK" class="btn text-sm w-max mx-auto btn-primary"
               >Read integration guides</a
