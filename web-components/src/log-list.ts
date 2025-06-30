@@ -48,16 +48,11 @@ export class LogList extends LitElement {
   constructor() {
     super();
 
-    this.logItemRow = this.logItemRow.bind(this);
-    this.fetchData = this.fetchData.bind(this);
-    this.expandTrace = this.expandTrace.bind(this);
-    this.renderLoadMore = this.renderLoadMore.bind(this);
-    this.updateTableData = this.updateTableData.bind(this);
-    this.handleChartZoom = this.handleChartZoom.bind(this);
-    this.updateColumnMaxWidthMap = this.updateColumnMaxWidthMap.bind(this);
-    this.addWithFlipDirection = this.addWithFlipDirection.bind(this);
-    this.toggleLogRow = this.toggleLogRow.bind(this);
-    this.logItemCol = this.logItemCol.bind(this);
+    // Bind all methods at once
+    const methods = ['logItemRow', 'fetchData', 'expandTrace', 'renderLoadMore', 
+                    'updateTableData', 'handleChartZoom', 'updateColumnMaxWidthMap', 
+                    'addWithFlipDirection', 'toggleLogRow', 'logItemCol'];
+    methods.forEach(m => this[m] = this[m].bind(this));
     const liveBtn = document.querySelector('#streamLiveData') as HTMLInputElement;
     if (liveBtn) {
       liveBtn.addEventListener('change', () => {
@@ -76,11 +71,9 @@ export class LogList extends LitElement {
       });
     }
 
-    ['submit', 'add-query', 'update-query'].forEach((ev) => {
-      window.addEventListener(ev, (e) => {
-        this.refetchLogs();
-      });
-    });
+    ['submit', 'add-query', 'update-query'].forEach(ev => 
+      window.addEventListener(ev, () => this.refetchLogs())
+    );
 
     window.addEventListener('pagehide', () => {
       if (this.liveStreamInterval) clearInterval(this.liveStreamInterval);
@@ -219,23 +212,19 @@ export class LogList extends LitElement {
     // set from and to to the startValue and endValue in search params
   }
 
-  updateTableData = (
-    ves: any[][],
-    cols: string[],
-    colIdxMap: ColIdxMap,
-    serviceColors: Record<string, string>,
-    nextFetchUrl: string,
-    recentFetchUrl: string
-  ) => {
-    this.isLoadingReplace = false;
-    this.logsColumns = [...cols];
-    this.colIdxMap = { ...colIdxMap };
-    this.hasMore = ves.length > 0;
-    this.serviceColors = { ...serviceColors };
-    this.nextFetchUrl = nextFetchUrl;
+  updateTableData = (ves: any[][], cols: string[], colIdxMap: ColIdxMap, 
+    serviceColors: Record<string, string>, nextFetchUrl: string, recentFetchUrl: string) => {
+    Object.assign(this, {
+      isLoadingReplace: false,
+      logsColumns: [...cols],
+      colIdxMap: { ...colIdxMap },
+      hasMore: ves.length > 0,
+      serviceColors: { ...serviceColors },
+      nextFetchUrl,
+      recentFetchUrl,
+      spanListTree: this.buildSpanListTree(ves)
+    });
     this.updateColumnMaxWidthMap(ves);
-    this.recentFetchUrl = recentFetchUrl;
-    this.spanListTree = this.buildSpanListTree(ves);
   };
 
   toggleWrapLines = () => {
@@ -335,41 +324,28 @@ export class LogList extends LitElement {
 
   expandTrace(tracId: string, spanId: string) {
     this.shouldScrollToBottom = false;
-    if (!this.expandedTraces[spanId]) {
-      this.expandedTraces[spanId] = false;
-    }
     this.expandedTraces[spanId] = !this.expandedTraces[spanId];
     const expanded = this.expandedTraces[spanId];
-    const affectedSpans = this.spanListTree.filter((span) => span.traceId === tracId);
-    affectedSpans.forEach((span) => {
+    
+    const affectedSpans = this.spanListTree.filter(span => span.traceId === tracId);
+    affectedSpans.forEach(span => {
       if (span.id === spanId) {
         span.expanded = expanded;
         span.show = true;
-      }
-      if (span.children > 0) {
-        affectedSpans.forEach((span) => {
-          if (span.parentIds.includes(spanId)) {
-            span.expanded = expanded;
-            span.show = expanded;
-            this.expandedTraces[span.id] = expanded;
-          }
-        });
+      } else if (span.parentIds.includes(spanId)) {
+        span.expanded = expanded;
+        span.show = expanded;
+        this.expandedTraces[span.id] = expanded;
       }
     });
+    
     this.requestUpdate();
   }
 
   fetchData(url: string, isNewData = false, isRefresh = false) {
-    if (isNewData) {
-      if (this.isLoadingRecent) return;
-      this.isLoadingRecent = true;
-    } else if (isRefresh) {
-      if (this.isLoadingReplace) return;
-      this.isLoadingReplace = true;
-    } else {
-      if (this.isLoading) return;
-      this.isLoading = true;
-    }
+    const loadingKey = isNewData ? 'isLoadingRecent' : isRefresh ? 'isLoadingReplace' : 'isLoading';
+    if (this[loadingKey]) return;
+    this[loadingKey] = true;
     fetch(url, {
       method: 'GET',
       headers: {
@@ -427,42 +403,26 @@ export class LogList extends LitElement {
 
           this.updateColumnMaxWidthMap(logsData);
         } else {
-          // Handle server error response
           console.error('Server returned error:', data.message || 'Unknown error');
-          // Show error message to user if this is a manual refresh
-          if (isRefresh && data.message) {
-            // Dispatch error toast event to body
-            const errorEvent = new CustomEvent('errorToast', {
-              detail: { value: [data.message] },
-              bubbles: true,
-              composed: true,
-            });
-            document.body.dispatchEvent(errorEvent);
-          }
+          if (isRefresh && data.message) this.showErrorToast(data.message);
         }
       })
       .catch((error) => {
         console.error('Error fetching logs:', error);
-        // Show network error to user
-        if (isRefresh) {
-          const errorEvent = new CustomEvent('errorToast', {
-            detail: { value: ['Network error: Unable to fetch logs'] },
-            bubbles: true,
-            composed: true,
-          });
-          document.body.dispatchEvent(errorEvent);
-        }
+        if (isRefresh) this.showErrorToast('Network error: Unable to fetch logs');
       })
       .finally(() => {
-        if (isNewData) {
-          this.isLoadingRecent = false;
-        } else if (isRefresh) {
-          this.isLoadingReplace = false;
-        } else {
-          this.isLoading = false;
-        }
+        this[loadingKey] = false;
         this.requestUpdate();
       });
+  }
+
+  showErrorToast(message: string) {
+    document.body.dispatchEvent(new CustomEvent('errorToast', {
+      detail: { value: [message] },
+      bubbles: true,
+      composed: true
+    }));
   }
 
   hideColumn(column: string) {
@@ -474,34 +434,25 @@ export class LogList extends LitElement {
     this.requestUpdate();
   }
   updateColumnMaxWidthMap(recVecs: any[][]) {
-    recVecs.forEach((vec) => {
+    const columnDefaults = { summary: 450 * 8.5, latency_breakdown: 100 };
+    const charWidths = { timestamp: 6.5, default: 8.5 };
+    
+    recVecs.forEach(vec => {
       Object.entries(this.colIdxMap).forEach(([key, value]) => {
-        let chPx = 8.5;
-
-        if (!['id'].includes(key)) {
-          if (key === 'timestamp') {
-            chPx = 6.5;
-          }
-          let target = String(vec[value]).length * chPx;
-
-          if (key === 'summary' && !this.columnMaxWidthMap[key]) {
-            target = 450 * chPx;
-            this.columnMaxWidthMap[key] = target;
-          }
-          if (key === 'latency_breakdown' && !this.columnMaxWidthMap[key]) {
-            target = 100;
-          }
-          if ((key === 'latency_breakdown' || key === 'summary') && this.columnMaxWidthMap[key]) {
-            return;
-          } else {
-            if (this.columnMaxWidthMap[key] === undefined) {
-              this.columnMaxWidthMap[key] = 12 * chPx;
-            }
-            if (this.columnMaxWidthMap[key] < target) {
-              this.columnMaxWidthMap[key] = target;
-            }
-          }
+        if (key === 'id') return;
+        
+        // Set defaults for special columns
+        if (columnDefaults[key] && !this.columnMaxWidthMap[key]) {
+          this.columnMaxWidthMap[key] = columnDefaults[key];
         }
+        
+        // Skip if already set for special columns
+        if ((key === 'latency_breakdown' || key === 'summary') && this.columnMaxWidthMap[key]) return;
+        
+        const chPx = charWidths[key] || charWidths.default;
+        const target = String(vec[value]).length * chPx;
+        
+        this.columnMaxWidthMap[key] = Math.max(this.columnMaxWidthMap[key] || 12 * chPx, target);
       });
     });
   }
@@ -586,16 +537,14 @@ export class LogList extends LitElement {
         class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-scroll"
         id="logs_list_container_inner"
       >
-        ${this.recentDataToBeAdded.length > 0 && !this.flipDirection
-          ? html` <div class="sticky left-1/2 -translate-y-1/2 top-[30px] z-50">
-              <button
-                class="cbadge-sm badge-neutral cursor-pointer bg-fillBrand-strong text-textInverse-strong shadow rounded-lg text-sm absolute"
-                @pointerdown=${this.handleRecentClick}
-              >
-                ${this.recentDataToBeAdded.length} new
-              </button>
-            </div>`
-          : nothing}
+        ${this.recentDataToBeAdded.length > 0 && !this.flipDirection ? html`
+          <div class="sticky left-1/2 -translate-y-1/2 top-[30px] z-50">
+            <button
+              class="cbadge-sm badge-neutral cursor-pointer bg-fillBrand-strong text-textInverse-strong shadow rounded-lg text-sm absolute"
+              @pointerdown=${this.handleRecentClick}>
+              ${this.recentDataToBeAdded.length} new
+            </button>
+          </div>` : nothing}
         ${this.isLoadingReplace
           ? html`<div class="absolute z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
               <span class="loading loading-dots"></span>
@@ -653,70 +602,48 @@ export class LogList extends LitElement {
   renderSummaryElements(summaryArray: string[], wrapLines: boolean): any {
     if (!Array.isArray(summaryArray)) return nothing;
 
+    const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
+    
     return summaryArray
-      .filter((element) => {
-        // Exclude elements with right- styles from summary column
-        if (element.includes(';') && element.includes('⇒')) {
-          const [fieldAndStyle] = element.split('⇒');
-          const [, style] = fieldAndStyle.split(';');
-          return !style.startsWith('right-');
-        }
-        return true;
+      .filter(el => {
+        if (!el.includes(';') || !el.includes('⇒')) return true;
+        const [, style] = el.split('⇒')[0].split(';');
+        return !style.startsWith('right-');
       })
-      .map((element) => {
-        // Check if it's a structured element with format "field;style⇒value"
-        if (element.includes(';') && element.includes('⇒')) {
-          const [fieldAndStyle, value] = element.split('⇒');
-          const [field, style] = fieldAndStyle.split(';');
-
-          // Map style to CSS classes
-          const styleClass = this.getStyleClass(style);
-
-          // Special handling for different field types
-          switch (field) {
-            case 'request_type':
-              const icon =
-                value === 'incoming'
-                  ? faSprite('arrow-down-left', 'solid', 'h-3 fill-iconNeutral')
-                  : faSprite('arrow-up-right', 'solid', 'h-3 fill-blue-700');
-              return renderIconWithTippy('w-4', `${value} Request`, icon);
-            case 'kind':
-              if (value === 'internal') {
-                return renderIconWithTippy('w-4 ml-2', 'Internal span', faSprite('function', 'regular', 'h-3 w-3'));
-              }
-              return nothing;
-            case 'db.system':
-              return renderIconWithTippy('w-4 ml-2', value, faSprite('database', 'regular', 'h-3 w-3 fill-slate-500'));
-            default:
-              // Check if style is 'text-weak' or 'text-textWeak' - render as plain text instead of badge
-              if (style === 'text-weak' || style === 'text-textWeak') {
-                return html`<span class=${`text-textWeak `}>${value}</span>`;
-              }
-              // Regular badge rendering
-              const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
-              return renderBadge(`cbadge-sm ${styleClass} ${wrapClass}`, value);
-          }
-        } else {
-          // Plain text element
-          const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
+      .map(element => {
+        if (!element.includes(';') || !element.includes('⇒')) {
           return html`<span class=${`fill-textStrong ${wrapClass}`}>${element}</span>`;
         }
+        
+        const [fieldAndStyle, value] = element.split('⇒');
+        const [field, style] = fieldAndStyle.split(';');
+        
+        // Special icon handling
+        const iconConfig = {
+          request_type: () => renderIconWithTippy('w-4', `${value} Request`,
+            faSprite(value === 'incoming' ? 'arrow-down-left' : 'arrow-up-right', 
+                    'solid', value === 'incoming' ? 'h-3 fill-iconNeutral' : 'h-3 fill-blue-700')),
+          kind: () => value === 'internal' ? 
+            renderIconWithTippy('w-4 ml-2', 'Internal span', faSprite('function', 'regular', 'h-3 w-3')) : nothing,
+          'db.system': () => renderIconWithTippy('w-4 ml-2', value, faSprite('database', 'regular', 'h-3 w-3 fill-slate-500'))
+        };
+        
+        if (iconConfig[field]) return iconConfig[field]();
+        
+        // Text or badge rendering
+        if (style === 'text-weak' || style === 'text-textWeak') {
+          return html`<span class="text-textWeak">${value}</span>`;
+        }
+        
+        return renderBadge(`cbadge-sm ${this.getStyleClass(style)} ${wrapClass}`, value);
       });
   }
 
   getStyleClass(style: string): string {
-    // Direct badge classes - just return them as-is
-    if (style.startsWith('badge-')) {
-      return style;
-    }
-
-    // Handle right-aligned badges (e.g., "right-badge-postgres")
-    if (style.startsWith('right-')) {
-      return style.substring(6); // Remove "right-" prefix and return the badge class
-    }
-
-    // Legacy style mappings for backward compatibility
-    const styleMap: Record<string, string> = {
+    if (style.startsWith('badge-')) return style;
+    if (style.startsWith('right-')) return style.substring(6);
+    
+    const styleMap = {
       'info-strong': 'badge-info',
       'info-weak': 'badge-neutral',
       'error-strong': 'badge-error',
@@ -727,20 +654,16 @@ export class LogList extends LitElement {
       'success-weak': 'badge-2xx',
       neutral: 'badge-neutral',
       right: 'ml-auto badge-neutral',
-      'text-weak': '', // No badge styling for weak text
-      'text-textWeak': '', // No badge styling for text-textWeak
+      'text-weak': '',
+      'text-textWeak': ''
     };
     return styleMap[style] || 'badge-neutral';
   }
 
   logItemCol(rowData: any, key: string): any {
-    const dataArr = rowData.data;
-    const wrapLines = this.wrapLines;
-    const columnMaxWidthMap = this.columnMaxWidthMap;
-    const serviceColors = this.serviceColors;
-    const colIdxMap = this.colIdxMap;
-
-    const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
+    const { data: dataArr, depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData;
+    const wrapClass = this.wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
+    
     switch (key) {
       case 'id':
         let [status, errCount, errClass] = errorClass(dataArr, colIdxMap);
@@ -900,28 +823,22 @@ export class LogList extends LitElement {
   }
 
   logTableHeading(column: string) {
-    switch (column) {
-      case 'id':
-        return html`<td class="p-0 m-0 whitespace-nowrap w-3"></td>`;
-      case 'timestamp':
-      case 'created_at':
-        return this.tableHeadingWrapper('timestamp', column, 'w-[17ch] shrink-0');
-      case 'latency_breakdown':
-        return this.tableHeadingWrapper('latency', column, 'sticky right-0 shrink-0');
-      case 'status_code':
-        return this.tableHeadingWrapper('status', column, 'shrink-0 w-[12ch]');
-      case 'method':
-        return this.tableHeadingWrapper('method', column, 'shrink-0 w-[12ch]');
-      case 'raw_url':
-      case 'url_path':
-        return this.tableHeadingWrapper(column, column, 'w-[25ch] shrink-0');
-      case 'service':
-        return this.tableHeadingWrapper('service', column, 'w-[16ch] shrink-0');
-      case 'summary':
-        return this.tableHeadingWrapper('summary', column, 'w-[1400px] shrink-1');
-      default:
-        return this.tableHeadingWrapper(column, column, 'w-[16ch] shrink-0');
-    }
+    if (column === 'id') return html`<td class="p-0 m-0 whitespace-nowrap w-3"></td>`;
+    
+    const config = {
+      timestamp: { title: 'timestamp', classes: 'w-[17ch] shrink-0' },
+      created_at: { title: 'timestamp', classes: 'w-[17ch] shrink-0' },
+      latency_breakdown: { title: 'latency', classes: 'sticky right-0 shrink-0' },
+      status_code: { title: 'status', classes: 'shrink-0 w-[12ch]' },
+      method: { title: 'method', classes: 'shrink-0 w-[12ch]' },
+      raw_url: { title: column, classes: 'w-[25ch] shrink-0' },
+      url_path: { title: column, classes: 'w-[25ch] shrink-0' },
+      service: { title: 'service', classes: 'w-[16ch] shrink-0' },
+      summary: { title: 'summary', classes: 'w-[1400px] shrink-1' }
+    };
+    
+    const { title = column, classes = 'w-[16ch] shrink-0' } = config[column] || {};
+    return this.tableHeadingWrapper(title, column, classes);
   }
 
   logItemRow(rowData: EventLine | 'end' | 'start') {
@@ -1270,78 +1187,52 @@ class ColumnsSettings extends LitElement {
 const faSprite = (iconName: string, kind: string, classes: string) =>
   html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`;
 
-function displayTimestamp(inputDateString: string) {
-  const date = new Date(inputDateString) || '';
-  if (typeof date === 'string' && date === '') return date;
-
-  const options = {
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  } as const;
-
-  const formatted = `${date.toLocaleString('en-US', options)}.${String(date.getUTCMilliseconds()).padStart(3, '0')}`;
-  return formatted.replace(',', '');
-}
+const displayTimestamp = (input: string) => {
+  const date = new Date(input);
+  if (!date.getTime()) return '';
+  
+  return date.toLocaleString('en-US', {
+    month: 'short', day: '2-digit', hour: '2-digit',
+    minute: '2-digit', second: '2-digit', hour12: false
+  }).replace(',', '') + `.${String(date.getUTCMilliseconds()).padStart(3, '0')}`;
+};
 
 function renderBadge(classes: string, title: string, tippy = '') {
   return html`<span class=${`relative  ${classes} ${tippy ? 'tooltip tooltip-right' : ''}`} data-tip=${tippy}>${title}</span>`;
 }
 
-const lookupVecText = (vec: any[], idx: number) => {
-  if (!Array.isArray(vec) || idx < 0 || idx >= vec.length) {
-    return '';
-  }
-  return vec[idx];
-};
+const lookupVecText = (vec: any[], idx: number) => 
+  Array.isArray(vec) && idx >= 0 && idx < vec.length ? vec[idx] : '';
 
-const lookupVecTextByKey = (vec: any[], colIdxMap: ColIdxMap, key: string) => {
-  if (!Object.prototype.hasOwnProperty.call(colIdxMap, key)) {
-    return '';
-  }
-  const idx = colIdxMap[key];
-  return lookupVecText(vec, idx);
-};
+const lookupVecTextByKey = (vec: any[], colIdxMap: ColIdxMap, key: string) => 
+  lookupVecText(vec, colIdxMap[key] ?? -1);
 
 function renderIconWithTippy(cls: string, tip: string, icon: TemplateResult<1>) {
   return html`<span class=${'shrink-0 inline-flex tooltip tooltip-right ' + cls} data-tip=${tip}>${icon}</span>`;
 }
 
-function getDurationNSMS(durationS: string) {
-  let duration = 0;
-  try {
-    duration = parseInt(durationS);
-  } catch (e) {
-    return '0 ns';
-  }
-  if (duration >= 1e9) {
-    return (duration / 1e9).toFixed(1) + ' s';
-  } else if (duration >= 1e6) {
-    return (duration / 1e6).toFixed(1) + ' ms';
-  } else if (duration >= 1e3) {
-    return (duration / 1e3).toFixed(1) + ' µs';
-  } else {
-    return duration.toFixed(1) + ' ns';
-  }
-}
+const getDurationNSMS = (durationS: string) => {
+  const duration = parseInt(durationS) || 0;
+  const units = [
+    { threshold: 1e9, divisor: 1e9, suffix: ' s' },
+    { threshold: 1e6, divisor: 1e6, suffix: ' ms' },
+    { threshold: 1e3, divisor: 1e3, suffix: ' µs' }
+  ];
+  
+  const unit = units.find(u => duration >= u.threshold);
+  return unit ? (duration / unit.divisor).toFixed(1) + unit.suffix : duration.toFixed(1) + ' ns';
+};
 
-function errorClass(reqVec: any[], colIdxMap: ColIdxMap) {
+const errorClass = (reqVec: any[], colIdxMap: ColIdxMap) => {
   const hasErrors = lookupVecTextByKey(reqVec, colIdxMap, 'errors');
-  const status = lookupVecTextByKey(reqVec, colIdxMap, 'http_attributes').status_code || 0;
-  const errStatus = lookupVecTextByKey(reqVec, colIdxMap, 'status') || 0;
-
-  let errClass = ' w-1 bg-blue-200 status-indicator ';
-  if (hasErrors || errStatus === 'ERROR') {
-    errClass = ' w-1 bg-red-500 ';
-  } else if (status >= 400) {
-    errClass = ' w-1 bg-yellow-500 ';
-  }
-
+  const status = lookupVecTextByKey(reqVec, colIdxMap, 'http_attributes')?.status_code || 0;
+  const errStatus = lookupVecTextByKey(reqVec, colIdxMap, 'status');
+  
+  const errClass = hasErrors || errStatus === 'ERROR' ? 'w-1 bg-red-500' :
+                   status >= 400 ? 'w-1 bg-yellow-500' : 'w-1 bg-blue-200 status-indicator';
+  
   return [status, hasErrors, errClass];
-}
+};
 
 function getSeverityColor(severity: string | undefined) {
   severity = severity ? severity.toLowerCase() : 'unset';
@@ -1474,58 +1365,35 @@ function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<
     }
     traceData.minStart = Math.min(traceData.minStart, startTime);
     traceData.duration = Math.max(traceData.duration, duration);
-    if (span[KIND_INDEX] === 'log') {
-      traceData.spans.set(id, {
-        id: spanId,
-        startNs: startTime,
-        children: [],
-        hasErrors: false,
-        duration: 0,
-        parent: null,
-        data: span,
-        type: 'log',
-      });
-    } else {
-      traceData.spans.set(spanId, {
-        id: spanId,
-        startNs: startTime,
-        hasErrors: span[ERROR_INDEX],
-        duration,
-        children: [],
-        parent: parentSpanId,
-        data: span,
-        type: 'span',
-      });
-    }
+    const isLog = span[KIND_INDEX] === 'log';
+    traceData.spans.set(isLog ? id : spanId, {
+      id: spanId,
+      startNs: startTime,
+      hasErrors: isLog ? false : span[ERROR_INDEX],
+      duration: isLog ? 0 : duration,
+      children: [],
+      parent: isLog ? null : parentSpanId,
+      data: span,
+      type: isLog ? 'log' : 'span'
+    });
   });
 
   traceMap.forEach((traceData) => {
     const spanTree = new Map<string, APTEvent>();
     traceData.spans.forEach((span) => {
-      if (span.type === 'log') {
-        const parentSpan = traceData.spans.get(span.id);
-        if (parentSpan) {
-          parentSpan.children.push(span);
-          let i = parentSpan.children.length - 1;
-          while (i > 0 && parentSpan.children[i].startNs < parentSpan.children[i - 1].startNs) {
-            [parentSpan.children[i], parentSpan.children[i - 1]] = [parentSpan.children[i - 1], parentSpan.children[i]];
-            i--;
-          }
-        } else {
-          spanTree.set(span.id, span);
+      const parentId = span.type === 'log' ? span.id : (span.parent || '');
+      const parentSpan = traceData.spans.get(parentId);
+      
+      if (parentSpan) {
+        parentSpan.children.push(span);
+        // Insertion sort to maintain order
+        let i = parentSpan.children.length - 1;
+        while (i > 0 && parentSpan.children[i].startNs < parentSpan.children[i - 1].startNs) {
+          [parentSpan.children[i], parentSpan.children[i - 1]] = [parentSpan.children[i - 1], parentSpan.children[i]];
+          i--;
         }
       } else {
-        const parentSpan = traceData.spans.get(span.parent || '');
-        if (parentSpan) {
-          parentSpan.children.push(span);
-          let i = parentSpan.children.length - 1;
-          while (i > 0 && parentSpan.children[i].startNs < parentSpan.children[i - 1].startNs) {
-            [parentSpan.children[i], parentSpan.children[i - 1]] = [parentSpan.children[i - 1], parentSpan.children[i]];
-            i--;
-          }
-        } else {
-          spanTree.set(span.id, span);
-        }
+        spanTree.set(span.id, span);
       }
     });
 
@@ -1608,22 +1476,17 @@ function flattenSpanTree(traceArr: Trace[], expandedTraces: Record<string, boole
   return result;
 }
 
-function getColumnWidth(column: string) {
-  if (!['summary', 'service', 'id', 'method', 'status_code', 'raw_url', 'url_path'].includes(column)) return 'w-[16ch] shrink-0';
-  switch (column) {
-    case 'status':
-    case 'method':
-    case 'status_code':
-      return 'w-[12ch] shrink-0';
-    case 'raw_url':
-    case 'url_path':
-      return 'w-[25ch] shrink-0 overflow-hidden';
-    case 'sumarry':
-      return 'w-3/4 shrink-1';
-    default:
-      return '';
-  }
-}
+const getColumnWidth = (column: string) => {
+  const widths = {
+    status: 'w-[12ch] shrink-0',
+    method: 'w-[12ch] shrink-0',
+    status_code: 'w-[12ch] shrink-0',
+    raw_url: 'w-[25ch] shrink-0 overflow-hidden',
+    url_path: 'w-[25ch] shrink-0 overflow-hidden',
+    summary: 'w-3/4 shrink-1'
+  };
+  return widths[column] || (column === 'id' || column === 'service' ? '' : 'w-[16ch] shrink-0');
+};
 
 function generateStrId() {
   return Math.random().toString(36).substring(2, 15);
