@@ -1,4 +1,5 @@
 {-# LANGUAGE PartialTypeSignatures #-}
+{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RankNTypes #-}
 
 module RequestMessages (
@@ -45,8 +46,8 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Relude
 import Relude.Unsafe as Unsafe (read)
-import Text.RE.Replace (matched, replaceAll)
-import Text.RE.TDFA (RE, re, (*=~), (?=~))
+import Text.RE.Replace (matched)
+import Text.RE.TDFA (RE, SearchReplace, ed, re, (*=~/), (?=~))
 import Utils (DBField (), toXXHash)
 
 
@@ -309,9 +310,9 @@ commonFormatPatterns =
   , ([re|\b(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)[0-9][0-9]\b|], "{mm/dd/yyyy}") -- US date
   , ([re|\b(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])-(19|20)[0-9][0-9]\b|], "{mm-dd-yyyy}")
   , ([re|\b(0[1-9]|1[012])\.(0[1-9]|[12][0-9]|3[01])\.(19|20)[0-9][0-9]\b|], "{mm.dd.yyyy}")
-  , ([re|[0-9]{4}-[0-9]{2}-[0-9]{2}|], "{YYYY-MM-DD}") -- ISO date
-  , ([re|[0-9]{4}/[0-9]{2}/[0-9]{2}|], "{YYYY/MM/DD}") -- Japanese date
-  , ([re|[0-9]{8}|], "{YYYYMMDD}") -- Compact date
+  , ([re|\b[0-9]{4}-[0-9]{2}-[0-9]{2}\b|], "{YYYY-MM-DD}") -- ISO date
+  , ([re|\b[0-9]{4}/[0-9]{2}/[0-9]{2}\b|], "{YYYY/MM/DD}") -- Japanese date
+  , ([re|\b[0-9]{8}\b|], "{YYYYMMDD}") -- Compact date
   , ([re|\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{1,2}, [0-9]{4}\b|], "{Mon DD, YYYY}") -- Long month
   , ([re|\b[0-9]{1,2}-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-[0-9]{4}\b|], "{DD-Mon-YYYY}") -- Oracle date
   -- Time patterns
@@ -403,30 +404,46 @@ commonFormatPatterns =
 -- >>> map replaceAllFormats ["Multiple formats: 123 abc def456789 :9000", "Log entry 404 at 10.0.0.1:8080"]
 -- ["Multiple formats: {integer} abc def{integer} {port}","Log entry {integer} at {ipv4}{port}"]
 replaceAllFormats :: Text -> Text
-replaceAllFormats input = processPatterns input formatPatternsForReplacement
+replaceAllFormats input = restorePlaceholders $ processPatterns input formatPatternsForReplacement
   where
-    -- Process patterns in order, replacing matches as we go
-    processPatterns :: Text -> [(RE, Text)] -> Text
+    -- Process patterns sequentially with (*=~/)
+    -- Use special Unicode characters as temporary placeholders to prevent re-matching
+    processPatterns :: Text -> [SearchReplace RE Text] -> Text
     processPatterns txt [] = txt
-    processPatterns txt ((regex, replacement) : rest) =
-      let newTxt = replaceAll replacement (txt *=~ regex)
+    processPatterns txt (sr : rest) =
+      let newTxt = txt *=~/ sr
        in processPatterns newTxt rest
 
+    -- Restore the Unicode placeholders to the final format
+    restorePlaceholders :: Text -> Text
+    restorePlaceholders txt =
+      txt
+        *=~/ [ed|〖×UUID×〗///{uuid}|]
+        *=~/ [ed|〖×SHA-TWO-FIVE-SIX×〗///{sha256}|]
+        *=~/ [ed|〖×SHA-ONE×〗///{sha1}|]
+        *=~/ [ed|〖×MD-FIVE×〗///{md5}|]
+        *=~/ [ed|〖×IPV-FOUR×〗///{ipv4}|]
+        *=~/ [ed|〖×PORT×〗///{port}|]
+        *=~/ [ed|〖×HEX×〗///{hex}|]
+        *=~/ [ed|〖×INTEGER×〗///{integer}|]
+
     -- Use a subset of patterns that should be replaced in text
-    -- Reorder to put more specific patterns first
-    formatPatternsForReplacement :: [(RE, Text)]
+    -- Using Unicode characters with no alphanumeric content that won't match any patterns
+    formatPatternsForReplacement :: [SearchReplace RE Text]
     formatPatternsForReplacement =
       [ -- UUIDs and hashes first (most specific)
-        ([re|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|], "{uuid}")
-      , ([re|[a-fA-F0-9]{64}|], "{sha256}")
-      , ([re|[a-fA-F0-9]{40}|], "{sha1}")
-      , ([re|[a-fA-F0-9]{32}|], "{md5}")
-      , ([re|[0-9a-fA-F]{24}|], "{uuid}")
+        [ed|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}///〖×UUID×〗|]
+      , [ed|[a-fA-F0-9]{64}///〖×SHA-TWO-FIVE-SIX×〗|]
+      , [ed|[a-fA-F0-9]{40}///〖×SHA-ONE×〗|]
+      , [ed|[a-fA-F0-9]{32}///〖×MD-FIVE×〗|]
+      , [ed|[0-9a-fA-F]{24}///〖×UUID×〗|]
       , -- Network patterns
-        ([re|(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)|], "{ipv4}")
-      , ([re|:[0-9]{1,5}|], "{port}")
+        [ed|(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)///〖×IPV-FOUR×〗|]
+      , [ed|:[0-9]{1,5}///〖×PORT×〗|]
+      , -- Hex numbers (must come before general integers)
+        [ed|0x[0-9A-Fa-f]+///〖×HEX×〗|]
       , -- Numbers (including HTTP status codes)
-        ([re|[0-9]+|], "{integer}")
+        [ed|[0-9]+///〖×INTEGER×〗|]
       ]
 
 
