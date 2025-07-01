@@ -4,7 +4,7 @@ GHC_VERSION := 9.10.2
 ARCH := $(shell uname -m | sed 's/arm64/aarch64/' | tr '[:upper:]' '[:lower:]')
 OS := $(shell uname -s | sed 's/Darwin/osx/' | tr '[:upper:]' '[:lower:]')
 OS_ARCH := $(ARCH)-$(OS)
-LINUX_HC_PATH := .stack-work/dist/x86_64-linux-tinfo6/ghc-$(GHC_VERSION)/build
+LINUX_HC_PATH := ./stack-work/dist/x86_64-linux/ghc-$(GHC_VERSION)/apitoolkit-server-0.1.0.0/build
 RUSTLIB := Crust_interop
 
 css-start:
@@ -12,13 +12,12 @@ css-start:
 post-css:
 	./node_modules/.bin/tailwindcss --postcss ./static/public/assets/css/tailwind.css  -o ./static/public/assets/css/tailwind.min.css
 run:
-	stack run
+	cabal run
 
 cypress:
 	npx cypress run --record --key 2a2372e2-4ba1-4cd5-8bed-f39f4f047b3e
 
 live-reload:
-	# ghcid --command 'stack ghci apitoolkit-server --ghc-options=-w --with-compiler=ghc-9.8.2' --test ':run Start.startApp' --warnings
 	ghcid --command 'cabal repl apitoolkit-server --ghc-options="-w -j4 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=ghc-9.10.2' --test ':run Start.startApp' --warnings
 
 live-test-reload:
@@ -43,24 +42,20 @@ watch:
 	ghciwatch --error-file errors.err  --before-startup-shell hpack --clear  --watch
 
 
-live-test-reload-stack:
-	stack test --ghc-options=-w --file-watch
-	# stack test --ghc-options=-w --ta='--match "SeedingConfig/should parse simple config to obj"' --file-watch
+live-test-reload-cabal:
+	ghcid --test 'cabal test --ghc-options="-w -j4" --test-show-details=streaming'
 
 test:
-	# stack test --ghc-options=-w
 	cabal test
 
 test-unit:
-	# stack test apitoolkit-server:unit-tests --ghc-options=-w
 	cabal test unit-tests
 
 test-doctests:
-	# stack test apitoolkit-server:doctests --ghc-options=-w --test-arguments --seed=2
 	cabal test doctests
 
 live-test-unit:
-	stack test apitoolkit-server:unit-tests --ghc-options=-w --file-watch
+	ghcid --test 'cabal test apitoolkit-server:unit-tests --ghc-options="-w -j4" --test-show-details=streaming'
 
 fmt:
 	fourmolu --mode inplace $$(find ./src/ -name '*.hs')

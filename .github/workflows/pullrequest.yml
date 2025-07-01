@@ -6,8 +6,8 @@ env:
   LANG: C.UTF-8
 
 jobs:
-  runhaskell:
-    name: Build and test
+  build:
+    name: Build
     runs-on: ubuntu-24.04
     permissions:
       contents: 'read'
@@ -54,5 +54,64 @@ jobs:
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
       - run: stack --no-terminal build --dependencies-only
-      - run: stack install --local-bin-path=. --ghc-options "-O0"
-      - run: stack test
+      - run: stack build --ghc-options "-O0"
+      
+      - name: Cache build artifacts
+        uses: actions/cache@v3
+        with:
+          path: |
+            .stack-work
+            ~/.stack
+            /usr/local/lib/libCrust_interop.so
+            /usr/local/lib/librust_interop.so
+            /usr/lib/libCrust_interop.so
+            /usr/lib/librust_interop.so
+          key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml', 'package.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-stack-
+
+  test:
+    name: Test ${{ matrix.test-suite }}
+    needs: build
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        test-suite: [doctests, unit-tests, integration-tests]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+      - uses: freckle/stack-cache-action@main
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: 9.10.2
+          enable-stack: true
+          stack-version: 'latest'
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev librdkafka-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev
+      
+      - name: Restore build artifacts
+        uses: actions/cache@v3
+        with:
+          path: |
+            .stack-work
+            ~/.stack
+            /usr/local/lib/libCrust_interop.so
+            /usr/local/lib/librust_interop.so
+            /usr/lib/libCrust_interop.so
+            /usr/lib/librust_interop.so
+          key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml', 'package.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-stack-
+            
+      - name: Restore Rust libraries
+        run: |
+          sudo mkdir -p /usr/local/lib
+          sudo mkdir -p /usr/lib
+          
+      - name: Run ${{ matrix.test-suite }}
+        run: stack test :${{ matrix.test-suite }}

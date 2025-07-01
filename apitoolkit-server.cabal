@@ -538,15 +538,11 @@ test-suite unit-tests
     , aeson-qq
     , apitoolkit-server
     , extra
-    , generic-lens
     , hs-opentelemetry-instrumentation-auto
     , hspec
     , hspec-expectations-json
     , neat-interpolation
-    , odd-jobs
     , relude >=1.2.0.0
-    , resource-pool
-    , time
     , uuid
     , vector
   default-language: GHC2021
