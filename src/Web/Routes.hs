@@ -147,6 +147,8 @@ data Routes mode = Routes
   , discordLinkProjectGet :: mode :- "discord" :> "oauth" :> "callback" :> QPT "state" :> QPT "code" :> QPT "guild_id" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] SlackInstall.SlackLink)
   , discordInteractions :: mode :- "discord" :> "interactions" :> ReqBody '[RawJSON] BS.ByteString :> Header "X-Signature-Ed25519" BS.ByteString :> Header "X-Signature-Timestamp" BS.ByteString :> Post '[JSON] AE.Value
   , slackInteractions :: mode :- "interactions" :> "slack" :> ReqBody '[FormUrlEncoded] SlackInstall.SlackInteraction :> Post '[JSON] AE.Value
+  , slackActionsPost :: mode :- "actions" :> "slack" :> ReqBody '[FormUrlEncoded] SlackInstall.SlackActionForm :> Post '[JSON] AE.Value
+  , externalOptionsGet :: mode :- "interactions" :> "external_options" :> ReqBody '[JSON] AE.Value :> Post '[JSON] AE.Value
   , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
   , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[JSON] LemonSqueezy.WebhookData :> Post '[HTML] (Html ())
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
@@ -347,6 +349,8 @@ server pool =
     , discordLinkProjectGet = SlackInstall.linkDiscordGetH
     , discordInteractions = SlackInstall.discordInteractionsH
     , slackInteractions = SlackInstall.slackInteractionsH
+    , slackActionsPost = SlackInstall.slackActionsH
+    , externalOptionsGet = SlackInstall.externalOptionsH
     , clientMetadata = ClientMetadata.clientMetadataH
     , lemonWebhook = LemonSqueezy.webhookPostH
     , chartsDataShot = Charts.queryMetrics

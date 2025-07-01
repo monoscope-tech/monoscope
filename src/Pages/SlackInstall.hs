@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pages.SlackInstall (linkProjectGetH, linkDiscordGetH, discordInteractionsH, DiscordInteraction, SlackLink, slackInteractionsH, SlackInteraction) where
+module Pages.SlackInstall (linkProjectGetH, linkDiscordGetH, discordInteractionsH, slackActionsH, SlackActionForm, DiscordInteraction, SlackLink, externalOptionsH, slackInteractionsH, SlackInteraction) where
 
 import Crypto.Error qualified as Crypto
 import Crypto.PubKey.Ed25519 qualified as Ed25519
@@ -17,7 +17,7 @@ import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
 import Lucid
-import Models.Apis.Slack (DiscordData (..), SlackData (..), getDiscordData, getSlackDataByTeamId, insertAccessToken, insertDiscordData, updateDiscordNotificationChannel, updateSlackNotificationChannel)
+import Models.Apis.Slack (DiscordData (..), SlackData (..), getDashboardsForSlack, getDiscordData, getSlackDataByTeamId, insertAccessToken, insertDiscordData, updateDiscordNotificationChannel, updateSlackNotificationChannel)
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Pages.Components (navBar)
@@ -25,6 +25,7 @@ import Pkg.Mail (sendSlackMessage)
 import Relude hiding (ask, asks)
 
 import Control.Lens ((.~), (^.))
+import Data.Aeson.QQ (aesonQQ)
 import Data.Effectful.Wreq (
   HTTP,
   Options,
@@ -39,6 +40,7 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Effectful (Eff, type (:>))
 import Effectful.Time qualified as Time
 import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Projects.Dashboards qualified as Dashboards
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
@@ -508,8 +510,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-        <> [msgJson]
-        <> ["\n\nUser query: " <> question]
+          <> [msgJson]
+          <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
@@ -602,13 +604,18 @@ sendJsonFollowupResponse appId interactionToken botToken content = do
 
 slackInteractionsH :: SlackInteraction -> ATBaseCtx AE.Value
 slackInteractionsH interaction = do
+  authCtx <- Effectful.Reader.Static.ask @AuthContext
   case interaction.command of
-    "here" -> do
+    "/here" -> do
       _ <- updateSlackNotificationChannel interaction.team_id interaction.channel_id
       pure $ AE.object ["response_type" AE..= "in_channel", "text" AE..= "Done, you'll be receiving project notifcations here going forward", "replace_original" AE..= True, "delete_original" AE..= True]
+    "/dashboard" -> do
+      dashboards <- getDashboardsForSlack interaction.team_id
+
+      triggerSlackModal authCtx.env.slackBotToken "open" $ (AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= (dashboardView $ V.fromList [(dashboardViewOne dashboards)])])
+      pure $ AE.object ["text" AE..= "modal opened", "replace_original" AE..= True, "delete_original" AE..= True]
     _ -> do
       slackDataM <- dbtToEff $ getSlackDataByTeamId interaction.team_id
-      authCtx <- Effectful.Reader.Static.ask @AuthContext
       void $ forkIO $ do
         case slackDataM of
           Nothing -> sendSlackFollowupResponse interaction.response_url (AE.object ["text" AE..= "Error: something went wrong"])
@@ -646,9 +653,118 @@ slackInteractionsH interaction = do
       pass
 
 
+data SlackActionForm = SlackActionForm {payload :: Text}
+  deriving (Generic, Show)
+  deriving anyclass (AE.FromJSON, FromForm)
+
+
+data ActionContainer = ActionContainer
+  { view_id :: Maybe Text
+  }
+  deriving (Generic, Show)
+  deriving anyclass (AE.FromJSON)
+
+
+data SlackAction = SlackAction
+  { type_ :: Text
+  , token :: Text
+  , trigger_id :: Text
+  , view :: AE.Value
+  , actions :: [SAction]
+  , container :: ActionContainer
+  }
+  deriving (Generic, Show)
+
+
+instance AE.FromJSON SlackAction where
+  parseJSON = AE.withObject "SlackAction" $ \o ->
+    SlackAction
+      <$> o AE..: "type"
+      <*> o AE..: "token"
+      <*> o AE..: "trigger_id"
+      <*> o AE..: "view"
+      <*> o AE..: "actions"
+      <*> o AE..: "container"
+
+
+data SlackOption = SlackOption
+  { text :: AE.Value
+  , value :: Text
+  }
+  deriving (Generic, Show)
+  deriving anyclass (AE.FromJSON)
+
+
+data SAction = SAction
+  { type_a :: Text
+  , action_id :: Text
+  , block_id :: Text
+  , selected_option :: Maybe SlackOption
+  , action_ts :: Text
+  }
+  deriving (Generic, Show)
+
+
+-- deriving anyclass (AE.FromJSON)
+
+instance AE.FromJSON SAction where
+  parseJSON = AE.withObject "SAction" $ \o ->
+    SAction
+      <$> o AE..: "type"
+      <*> o AE..: "action_id"
+      <*> o AE..: "block_id"
+      <*> o AE..: "selected_option"
+      <*> o AE..: "action_ts"
+
+
+slackActionsH :: SlackActionForm -> ATBaseCtx AE.Value
+slackActionsH action = do
+  authCtx <- Effectful.Reader.Static.ask @AuthContext
+  let result = AE.eitherDecode (encodeUtf8 action.payload) :: Either String SlackAction
+  case result of
+    Left err -> do
+      throwError err400{errBody = "Invalid action payload: " <> encodeUtf8 (T.pack err)}
+    Right slackAction -> do
+      case slackAction.type_ of
+        "block_actions" -> do
+          let actionTypeM = viaNonEmpty head $ slackAction.actions
+          case actionTypeM of
+            Nothing -> handleUnknownActionType
+            Just actionType -> do
+              case actionType.action_id of
+                "dashboard-select" -> do
+                  let selectedOption = actionType.selected_option
+                  case selectedOption of
+                    Just opt -> do
+                      let dashboardId = opt.value
+                      traceShowM dashboardId
+                      dashboardM <- Dashboards.getDashboardById dashboardId
+                      case dashboardM of
+                        Nothing -> pure $ AE.object []
+                        Just dashboard -> do
+                          _ <- triggerSlackModal authCtx.env.slackBotToken "update" $ (AE.object ["view_id" AE..= slackAction.container.view_id, "view" AE..= (dashboardView $ V.fromList [(dashboardViewOne V.empty), (dashboardViewTwo V.empty)])])
+                          pure $ AE.object ["text" AE..= ("Selected dashboard: " <> show opt.text), "replace_original" AE..= True, "delete_original" AE..= True]
+                    Nothing -> pure $ AE.object ["text" AE..= "No dashboard selected", "replace_original" AE..= True, "delete_original" AE..= True]
+                _ -> handleUnknownActionType
+        _ -> handleUnknownActionType
+  where
+    handleUnknownActionType = do
+      pure $ AE.object ["text" AE..= "Unknown action type", "replace_original" AE..= True, "delete_original" AE..= True]
+
+
+-- pure $ AE.object ["text" AE..= "apitoolkit is working...", "replace_original" AE..= True, "delete_original" AE..= True]
+
 sendSlackFollowupResponse :: Text -> AE.Value -> ATBaseCtx ()
 sendSlackFollowupResponse responseUrl content = do
   _ <- postWith (defaults & contentTypeHeader "application/json") (toString responseUrl) content
+  pass
+
+
+triggerSlackModal :: Text -> Text -> AE.Value -> ATBaseCtx ()
+triggerSlackModal token action content = do
+  let url = toString $ "https://slack.com/api/views." <> action
+  res <- postWith (defaults & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> token] & contentTypeHeader "application/json") url content
+  traceShowM res
   pass
 
 
@@ -657,8 +773,8 @@ data SlackInteraction = SlackInteraction
   , command :: Text
   , text :: Text
   , response_url :: Text
-  , -- , trigger_id :: Text
-    -- , api_app_id :: Text
+  , trigger_id :: Text
+  , -- , api_app_id :: Text
     channel_id :: Text
   , channel_name :: Text
   , user_id :: Text
@@ -731,3 +847,62 @@ getBotContent target question query query_url chartOptions baseUrl now =
                     ]
               )
         ]
+
+
+dashboardView :: V.Vector AE.Value -> AE.Value
+dashboardView blocks =
+  AE.object
+    [ "type" AE..= "modal"
+    , "callback_id" AE..= ""
+    , "title"
+        AE..= AE.object
+          [ "type" AE..= "plain_text"
+          , "text" AE..= "Share a dashboard widget"
+          ]
+    , "blocks"
+        AE..= AE.Array blocks
+    ]
+
+
+dashboardViewOne :: V.Vector (Text, Text) -> AE.Value
+dashboardViewOne options =
+  AE.object
+    [ "type" AE..= "section"
+    , "block_id" AE..= "dashboard-select"
+    , "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= "*Dashboard*"]
+    , "accessory"
+        AE..= AE.object
+          [ "action_id" AE..= "dashboard-select"
+          , "type" AE..= "static_select"
+          , "placeholder" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "Select a dashboard template"]
+          , "options" AE..= AE.Array (opts)
+          ]
+    ]
+  where
+    opts = V.map (\(text, value) -> AE.object ["text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= text], "value" AE..= value]) options
+
+
+dashboardViewTwo :: V.Vector (Text, Text) -> AE.Value
+dashboardViewTwo options =
+  AE.object
+    [ "type" AE..= "section"
+    , "block_id" AE..= "widget-select"
+    , "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= "*Dashboard*"]
+    , "accessory"
+        AE..= AE.object
+          [ "action_id" AE..= "widget-select"
+          , "type" AE..= "static_select"
+          , "placeholder" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "Select a dashboard template"]
+          , "options" AE..= AE.Array (opts)
+          ]
+    ]
+  where
+    opts = V.map (\(text, value) -> AE.object ["text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= text], "value" AE..= value]) options
+
+
+externalOptionsH :: AE.Value -> ATBaseCtx AE.Value
+externalOptionsH val = do
+  pure
+    $ AE.object
+      [ "options" AE..= AE.Array (V.fromList [AE.object ["text" AE..= "Option 1", "value" AE..= "option1"], AE.object ["text" AE..= "Option 2", "value" AE..= "option2"]])
+      ]

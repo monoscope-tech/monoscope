@@ -8,10 +8,13 @@ module Models.Apis.Slack (
   getDiscordDataByProjectId,
   getProjectSlackData,
   updateSlackNotificationChannel,
+  getDashboardsForSlack,
   getDiscordData,
 ) where
 
-import Database.PostgreSQL.Entity.DBT (execute, queryOne)
+import Data.Effectful.UUID qualified as UUID
+import Data.Vector qualified as V
+import Database.PostgreSQL.Entity.DBT (execute, query, queryOne)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (DBT)
@@ -101,3 +104,9 @@ updateSlackNotificationChannel :: DB :> es => Text -> Text -> Eff es Int64
 updateSlackNotificationChannel teamId channelId = dbtToEff $ execute q (channelId, teamId)
   where
     q = [sql|Update apis.slack SET channel_id =? WHERE team_id = ? |]
+
+
+getDashboardsForSlack :: DB :> es => Text -> Eff es (V.Vector (Text, Text))
+getDashboardsForSlack teamId = dbtToEff $ query q (Only teamId)
+  where
+    q = [sql|SELECT d.title, d.id::text FROM projects.dashboards d JOIN apis.slack s ON d.project_id = s.project_id WHERE  s.team_id = ?|]

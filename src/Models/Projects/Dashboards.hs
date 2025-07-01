@@ -1,4 +1,4 @@
-module Models.Projects.Dashboards (Dashboard (..), DashboardVM (..), DashboardId (..), Variable (..), VariableType (..), readDashboardsFromDirectory, readDashboardEndpoint, replaceQueryVariables) where
+module Models.Projects.Dashboards (Dashboard (..), DashboardVM (..), DashboardId (..), Variable (..), VariableType (..), getDashboardById, readDashboardsFromDirectory, readDashboardEndpoint, replaceQueryVariables) where
 
 import Control.Exception (try)
 import Control.Lens
@@ -19,15 +19,19 @@ import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField
+import Database.PostgreSQL.Simple.Types (Only (Only), Query (Query))
+import Database.PostgreSQL.Transact qualified as DBT
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
 import Effectful
 import Effectful.Error.Static (Error, throwError)
+import Effectful.PostgreSQL.Transact.Effect
 import GHC.Records (HasField (getField))
 import Language.Haskell.TH (Exp, Q, runIO)
 import Language.Haskell.TH.Syntax qualified as THS
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
+import NeatInterpolation (text)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DashboardUtils qualified as DashboardUtils
@@ -152,3 +156,9 @@ replaceQueryVariables pid mf mt allParams variable =
    in variable
         & #sql . _Just %~ DashboardUtils.replacePlaceholders mappng
         & #query . _Just %~ DashboardUtils.replacePlaceholders mappng
+
+
+getDashboardById :: DB :> es => Text -> Eff es (Maybe DashboardVM)
+getDashboardById did = dbtToEff $ DBT.queryOne (Query $ encodeUtf8 q) (Only did)
+  where
+    q = [text|SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title FROM projects.dashboards WHERE id = ?|]
