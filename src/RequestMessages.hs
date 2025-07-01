@@ -418,10 +418,10 @@ replaceAllFormats input = processPatterns input formatPatternsForReplacement
     formatPatternsForReplacement =
       [ -- UUIDs and hashes first (most specific)
         ([re|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|], "{uuid}")
-      , ([re|[0-9a-fA-F]{24}|], "{uuid}")
       , ([re|[a-fA-F0-9]{64}|], "{sha256}")
       , ([re|[a-fA-F0-9]{40}|], "{sha1}")
       , ([re|[a-fA-F0-9]{32}|], "{md5}")
+      , ([re|[0-9a-fA-F]{24}|], "{uuid}")
       , -- Network patterns
         ([re|(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)|], "{ipv4}")
       , ([re|:[0-9]{1,5}|], "{port}")

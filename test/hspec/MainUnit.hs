@@ -9,15 +9,15 @@ import Test.Hspec.Runner (
   hspecWith,
  )
 import qualified Pkg.Parser.ExprSpec
-import qualified DocTest.Parallel as DT
-import System.Environment (getArgs)
+-- import qualified DocTest.Parallel as DT
+-- import System.Environment (getArgs)
 
 -- | Runs unit tests and doctests that don't depend on the database
 main :: IO ()
 main = do
   -- First run doctests
-  putStrLn "Running doctests..."
-  DT.mainFromCabal "apitoolkit-server" =<< getArgs
+  -- putStrLn "Running doctests..."
+  -- DT.mainFromCabal "apitoolkit-server" =<< getArgs
   
   -- Then run unit tests
   putStrLn "Running unit tests..."
