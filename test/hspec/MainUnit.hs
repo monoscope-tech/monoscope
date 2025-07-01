@@ -1,4 +1,4 @@
-module Main (main) where
+module MainUnit (main) where
 
 import Relude
 import Test.Hspec

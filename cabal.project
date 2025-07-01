@@ -1,5 +1,6 @@
 packages: . ./rust-interop
 with-compiler: ghc-9.10.2
+multi-repl: True
 -- import: https://www.stackage.org/nightly-2025-01-20/cabal.config
 -- documentation: True
 

@@ -22,7 +22,13 @@ live-reload:
 	ghcid --command 'cabal repl --ghc-options="-w -j4 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=ghc-9.10.2' --test ':run Start.startApp' --warnings
 
 live-test-reload:
-	ghcid --command 'cabal repl apitoolkit-server:apitoolkit-server-test --ghc-options="-w -j4" --with-compiler=ghc-9.10.2' --test ':run Main.main' --warnings
+	ghcid --command 'cabal repl lib:apitoolkit-server test/unit/Main.hs --ghc-options="-w -j4" --with-compiler=ghc-9.10.2' --test ':run main' --warnings
+
+live-test-reload-unit:
+	ghcid --test 'cabal test apitoolkit-server:unit-tests --ghc-options="-w -j4" --test-show-details=streaming'
+
+live-test-reload-all:
+	ghcid --test 'cabal test apitoolkit-server:tests --ghc-options="-w -j4" --test-show-details=streaming'
 
 hot-reload:
 	livereload -f reload.trigger static/public/ & \
