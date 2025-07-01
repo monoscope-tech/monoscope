@@ -510,8 +510,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-          <> [msgJson]
-          <> ["\n\nUser query: " <> question]
+        <> [msgJson]
+        <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
@@ -679,12 +679,18 @@ data SlackAction = SlackAction
 instance AE.FromJSON SlackAction where
   parseJSON = AE.withObject "SlackAction" $ \o ->
     SlackAction
-      <$> o AE..: "type"
-      <*> o AE..: "token"
-      <*> o AE..: "trigger_id"
-      <*> o AE..: "view"
-      <*> o AE..: "actions"
-      <*> o AE..: "container"
+      <$> o
+      AE..: "type"
+      <*> o
+      AE..: "token"
+      <*> o
+      AE..: "trigger_id"
+      <*> o
+      AE..: "view"
+      <*> o
+      AE..: "actions"
+      <*> o
+      AE..: "container"
 
 
 data SlackOption = SlackOption
@@ -710,11 +716,16 @@ data SAction = SAction
 instance AE.FromJSON SAction where
   parseJSON = AE.withObject "SAction" $ \o ->
     SAction
-      <$> o AE..: "type"
-      <*> o AE..: "action_id"
-      <*> o AE..: "block_id"
-      <*> o AE..: "selected_option"
-      <*> o AE..: "action_ts"
+      <$> o
+      AE..: "type"
+      <*> o
+      AE..: "action_id"
+      <*> o
+      AE..: "block_id"
+      <*> o
+      AE..: "selected_option"
+      <*> o
+      AE..: "action_ts"
 
 
 slackActionsH :: SlackActionForm -> ATBaseCtx AE.Value
@@ -737,7 +748,6 @@ slackActionsH action = do
                   case selectedOption of
                     Just opt -> do
                       let dashboardId = opt.value
-                      traceShowM dashboardId
                       dashboardM <- Dashboards.getDashboardById dashboardId
                       case dashboardM of
                         Nothing -> pure $ AE.object []
@@ -763,8 +773,7 @@ sendSlackFollowupResponse responseUrl content = do
 triggerSlackModal :: Text -> Text -> AE.Value -> ATBaseCtx ()
 triggerSlackModal token action content = do
   let url = toString $ "https://slack.com/api/views." <> action
-  res <- postWith (defaults & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> token] & contentTypeHeader "application/json") url content
-  traceShowM res
+  _ <- postWith (defaults & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> token] & contentTypeHeader "application/json") url content
   pass
 
 

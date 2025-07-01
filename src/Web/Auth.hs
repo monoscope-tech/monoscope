@@ -189,10 +189,10 @@ loginRedirectH redirectToM = do
 loginH
   :: Maybe Text
   -> ATBaseCtx
-       ( Headers
-           '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-           NoContent
-       )
+      ( Headers
+          '[Header "Location" Text, Header "Set-Cookie" SetCookie]
+          NoContent
+      )
 loginH redirectToM = do
   envCfg <- asks env
   stateVar <- liftIO $ UUID.toText <$> UUIDV4.nextRandom
@@ -209,10 +209,10 @@ authCallbackH
   -> Maybe Text -- state variable from auth0
   -> Maybe Text
   -> ATBaseCtx
-       ( Headers
-           '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-           (Html ())
-       )
+      ( Headers
+          '[Header "Location" Text, Header "Set-Cookie" SetCookie]
+          (Html ())
+      )
 authCallbackH codeM _ redirectToM = do
   envCfg <- ask @AuthContext
   pool <- asks pool
