@@ -154,21 +154,21 @@ instance ToQueryText [AggFunction] where
 
 
 instance Display AggFunction where
-  displayPrec prec (Count sub alias) = displayBuilder $ "count(" <> display sub <> ")"
-  displayPrec prec (P50 sub alias) = displayBuilder $ "approx_percentile(0.50, percentile_agg(" <> display sub <> "))::int"
-  displayPrec prec (P75 sub alias) = displayBuilder $ "approx_percentile(0.75, percentile_agg(" <> display sub <> "))::int"
-  displayPrec prec (P90 sub alias) = displayBuilder $ "approx_percentile(0.90, percentile_agg(" <> display sub <> "))::int"
-  displayPrec prec (P95 sub alias) = displayBuilder $ "approx_percentile(0.95, percentile_agg(" <> display sub <> "))::int"
-  displayPrec prec (P99 sub alias) = displayBuilder $ "approx_percentile(0.99, percentile_agg(" <> display sub <> "))::int"
-  displayPrec prec (P100 sub alias) = displayBuilder $ "approx_percentile(1, percentile_agg(" <> display sub <> "))::int"
-  displayPrec prec (Sum sub alias) = displayBuilder $ "sum(" <> display sub <> ")"
-  displayPrec prec (Avg sub alias) = displayBuilder $ "avg(" <> display sub <> ")"
-  displayPrec prec (Min sub alias) = displayBuilder $ "min(" <> display sub <> ")"
-  displayPrec prec (Max sub alias) = displayBuilder $ "max(" <> display sub <> ")"
-  displayPrec prec (Median sub alias) = displayBuilder $ "median(" <> display sub <> ")"
-  displayPrec prec (Stdev sub alias) = displayBuilder $ "stdev(" <> display sub <> ")"
-  displayPrec prec (Range sub alias) = displayBuilder $ "range(" <> display sub <> ")"
-  displayPrec prec (Plain sub alias) = displayBuilder $ "" <> display sub <> ""
+  displayPrec _prec (Count sub _alias) = displayBuilder $ "count(" <> display sub <> ")"
+  displayPrec _prec (P50 sub _alias) = displayBuilder $ "approx_percentile(0.50, percentile_agg(" <> display sub <> "))::int"
+  displayPrec _prec (P75 sub _alias) = displayBuilder $ "approx_percentile(0.75, percentile_agg(" <> display sub <> "))::int"
+  displayPrec _prec (P90 sub _alias) = displayBuilder $ "approx_percentile(0.90, percentile_agg(" <> display sub <> "))::int"
+  displayPrec _prec (P95 sub _alias) = displayBuilder $ "approx_percentile(0.95, percentile_agg(" <> display sub <> "))::int"
+  displayPrec _prec (P99 sub _alias) = displayBuilder $ "approx_percentile(0.99, percentile_agg(" <> display sub <> "))::int"
+  displayPrec _prec (P100 sub _alias) = displayBuilder $ "approx_percentile(1, percentile_agg(" <> display sub <> "))::int"
+  displayPrec _prec (Sum sub _alias) = displayBuilder $ "sum(" <> display sub <> ")"
+  displayPrec _prec (Avg sub _alias) = displayBuilder $ "avg(" <> display sub <> ")"
+  displayPrec _prec (Min sub _alias) = displayBuilder $ "min(" <> display sub <> ")"
+  displayPrec _prec (Max sub _alias) = displayBuilder $ "max(" <> display sub <> ")"
+  displayPrec _prec (Median sub _alias) = displayBuilder $ "median(" <> display sub <> ")"
+  displayPrec _prec (Stdev sub _alias) = displayBuilder $ "stdev(" <> display sub <> ")"
+  displayPrec _prec (Range sub _alias) = displayBuilder $ "range(" <> display sub <> ")"
+  displayPrec _prec (Plain sub _alias) = displayBuilder $ "" <> display sub <> ""
 
 
 instance ToQueryText Section where
@@ -179,7 +179,7 @@ instance ToQueryText Section where
       <> T.intercalate "," (map toQText funcs)
       <> maybeToMonoid (toQText <$> byClauseM)
   toQText (SortCommand fields) = "sort by " <> T.intercalate ", " (map toQText fields)
-  toQText (TakeCommand limit) = "take " <> toText (show limit)
+  toQText (TakeCommand limit) = "take " <> toText (show (limit :: Int))
 
 
 ----------------------------------------------------------------------
@@ -238,10 +238,10 @@ instance ToQueryText BinFunction where
 
 
 instance Display BinFunction where
-  displayPrec prec (Bin subj interval) = displayBuilder $ "time_bucket('" <> kqlTimespanToTimeBucket interval <> "', " <> display subj <> ")"
+  displayPrec _prec (Bin subj interval) = displayBuilder $ "time_bucket('" <> kqlTimespanToTimeBucket interval <> "', " <> display subj <> ")"
   -- Use default bin size for auto binning (defined in Parser.hs)
   -- Don't include "as bin_timestamp" here as it causes syntax errors in GROUP BY
-  displayPrec prec (BinAuto subj) = displayBuilder $ "time_bucket('" <> defaultBinSize <> "', " <> display subj <> ")"
+  displayPrec _prec (BinAuto subj) = displayBuilder $ "time_bucket('" <> defaultBinSize <> "', " <> display subj <> ")"
 
 
 -- | Parse a summarize by clause which can contain fields and bin functions
@@ -322,7 +322,7 @@ pTakeSection = do
 -- Right (Count (Subject "*" "*" []) (Just "TotalCount"))
 namedAggregation :: Parser AggFunction
 namedAggregation = do
-  name <- toText <$> some (alphaNumChar <|> oneOf "_")
+  name <- toText <$> some (alphaNumChar <|> oneOf ("_" :: String))
   _ <- string "="
   func <- aggFunctionParser
   case func of
@@ -401,8 +401,8 @@ instance ToQueryText Sources where
 
 
 instance Display Sources where
-  displayPrec prec SSpans = "otel_logs_and_spans"
-  displayPrec prec SMetrics = "telemetry.metrics"
+  displayPrec _prec SSpans = "otel_logs_and_spans"
+  displayPrec _prec SMetrics = "telemetry.metrics"
 
 
 --- >>> parse parseQuery "" "method// = bla "

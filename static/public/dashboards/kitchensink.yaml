@@ -6,27 +6,27 @@ time_range:
   from: now-6h
   to: now
 variables:
-  - name: airport
-    type: query
-    label: "Airport"
+  - key: airport
+    _vType: query
+    title: "Airport"
     query: method == "GET" 
-    default: "JFK"
+    value: "JFK"
 
-  - name: airline
-    type: dropdown
-    label: "Airline"
-    options: ["AA", "DL", "UA", "SW"]
-    default: "AA"
+  - key: airline
+    _vType: values
+    title: "Airline"
+    options: [["AA"], ["DL"], ["UA"], ["SW"]]
+    value: "AA"
 
-  - name: start_time
-    type: datetime
-    label: "Start Time"
-    default: "now-6h"
+  - key: start_time
+    _vType: values
+    title: "Start Time"
+    value: "now-6h"
 
-  - name: end_time
-    type: datetime
-    label: "End Time"
-    default: "now"
+  - key: end_time
+    _vType: values
+    title: "End Time"
+    value: "now"
 
 widgets:
   - type: "timeseries_stat"
