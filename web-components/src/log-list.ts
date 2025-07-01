@@ -603,7 +603,7 @@ export class LogList extends LitElement {
         if (style === 'text-weak' || style === 'text-textWeak') {
           return html`<span class="text-textWeak">${value}</span>`;
         }
-        
+
         if (style === 'text-textStrong') {
           return html`<span class="text-textStrong font-semibold">${value}</span>`;
         }
@@ -710,15 +710,22 @@ export class LogList extends LitElement {
         return html`<div class="flex w-full ${this.wrapLines ? 'items-start' : 'items-center'} gap-1">
           ${this.view === 'tree'
             ? html`
-                <div class="flex items-center gap-1">
+                <div class="flex items-center">
                   ${depth > 1
                     ? new Array(depth - 1)
                         .fill(1)
-                        .map((_, i) => html`<div class=${`ml-[15px] w-4 h-5 shrink-0 ${siblingsArr[i] ? 'border-l' : ''}`}></div>`)
+                        .map(
+                          (_, i) =>
+                            html`<div class="w-8 h-5 shrink-0 flex items-center justify-center">
+                              ${siblingsArr[i] ? faSprite('tree-straight', 'regular', 'w-8 h-5 text-iconNeutral') : nothing}
+                            </div>`
+                        )
                     : nothing}
                   ${depth > 0
-                    ? html`<div class=${`border-l ml-[15px] w-4 ${isLastChild ? 'h-3' : 'h-5'} relative shrink-0`}>
-                        <span class=${`border-b w-full absolute left-0 ${isLastChild ? 'bottom-0' : 'top-1/2 -translate-y-1/2'}`}></span>
+                    ? html`<div class="w-8 h-5 shrink-0 flex items-center justify-center">
+                        ${isLastChild
+                          ? faSprite('tree-angle', 'regular', 'w-8 h-5 text-iconNeutral')
+                          : faSprite('tree-tee', 'regular', 'w-8 h-5 text-iconNeutral')}
                       </div>`
                     : nothing}
                   ${children > 0
@@ -744,7 +751,7 @@ export class LogList extends LitElement {
         </div>`;
       case 'service':
         let serviceData = lookupVecTextByKey(dataArr, this.colIdxMap, key);
-        return renderBadge('cbadge-sm badge-neutral bg-fillWeak ' + wrapClass, serviceData, key);
+        return renderBadge('cbadge-sm badge-neutral ' + wrapClass, serviceData, key);
       default:
         let v = lookupVecTextByKey(dataArr, this.colIdxMap, key);
         return html`<span class=${wrapClass} title=${key}>${v}</span>`;
@@ -1172,18 +1179,6 @@ function renderIconWithTippy(cls: string, tip: string, icon: TemplateResult<1>) 
   return html`<span class=${'shrink-0 inline-flex tooltip tooltip-right ' + cls} data-tip=${tip}>${icon}</span>`;
 }
 
-const getDurationNSMS = (durationS: string) => {
-  const duration = parseInt(durationS) || 0;
-  const units = [
-    { threshold: 1e9, divisor: 1e9, suffix: ' s' },
-    { threshold: 1e6, divisor: 1e6, suffix: ' ms' },
-    { threshold: 1e3, divisor: 1e3, suffix: ' µs' },
-  ];
-
-  const unit = units.find((u) => duration >= u.threshold);
-  return unit ? (duration / unit.divisor).toFixed(1) + unit.suffix : duration.toFixed(1) + ' ns';
-};
-
 const errorClass = (reqVec: any[], colIdxMap: ColIdxMap) => {
   const hasErrors = lookupVecTextByKey(reqVec, colIdxMap, 'errors');
   const status = lookupVecTextByKey(reqVec, colIdxMap, 'http_attributes')?.status_code || 0;
@@ -1204,7 +1199,7 @@ const getSeverityColor = (severity: string | undefined) =>
     critical: 'text-red-700 bg-red-200 font-bold',
     notice: 'text-green-500 bg-green-100',
     alert: 'text-orange-600 bg-orange-100 font-bold',
-  })[severity?.toLowerCase() || 'unset'] || 'text-black badge-neutral text-textWeak bg-fillWeak';
+  })[severity?.toLowerCase() || 'unset'] || 'badge-neutral ';
 
 const getSpanStatusColor = (status: string) =>
   ({

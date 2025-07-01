@@ -19,7 +19,7 @@ cypress:
 
 live-reload:
 	# ghcid --command 'stack ghci apitoolkit-server --ghc-options=-w --with-compiler=ghc-9.8.2' --test ':run Start.startApp' --warnings
-	ghcid --command 'cabal repl --ghc-options="-w -j4 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=ghc-9.10.2' --test ':run Start.startApp' --warnings
+	ghcid --command 'cabal repl apitoolkit-server --ghc-options="-w -j4 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=ghc-9.10.2' --test ':run Start.startApp' --warnings
 
 live-test-reload:
 	ghcid --command 'cabal repl lib:apitoolkit-server test/unit/Main.hs --ghc-options="-w -j4" --with-compiler=ghc-9.10.2' --test ':run main' --warnings

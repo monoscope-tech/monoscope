@@ -582,4 +582,21 @@
   <symbol id="not-equal" viewBox="0 0 448 512">
     <path d="M219.3 171.3L41 249.8c-16.7 7.3-25.3 25.9-18 42.6s25.9 25.3 42.6 18L232 238.4V288H120c-13.3 0-24 10.7-24 24s10.7 24 24 24H232v33.6L65.6 443.4c-16.7 7.3-25.3 25.9-18 42.6s25.9 25.3 42.6 18l178.3-78.4L444.4 504c15.9 8.9 35.9 3.2 44.7-12.8s3.2-35.9-12.8-44.7L320 393.6V336H432c13.3 0 24-10.7 24-24s-10.7-24-24-24H320V233.6l156.4-87c15.9-8.9 21.6-28.9 12.8-44.7s-28.9-21.6-44.7-12.8L268.7 171.3 90.4 93.4C74.5 84.5 54.5 90.2 45.6 106.1s-3.2 35.9 12.8 44.7L219.3 171.3zM320 233.6V288v48v57.6l-88-48.9-88 38.7V336 288 238.4l88-38.7 88 33.9z"/>
   </symbol>
+
+  <!-- Tree hierarchy shapes -->
+  <symbol id="tree-angle" viewBox="0 0 32 32">
+    <path d="M16 0 L16 16 L32 16" stroke="currentColor" stroke-width="2" fill="none"/>
+  </symbol>
+  
+  <symbol id="tree-straight" viewBox="0 0 32 32">
+    <path d="M16 0 L16 32" stroke="currentColor" stroke-width="2" fill="none"/>
+  </symbol>
+  
+  <symbol id="tree-tee" viewBox="0 0 32 32">
+    <path d="M16 0 L16 32 M16 16 L32 16" stroke="currentColor" stroke-width="2" fill="none"/>
+  </symbol>
+  
+  <symbol id="tree-corner" viewBox="0 0 32 32">
+    <path d="M0 16 L32 16" stroke="currentColor" stroke-width="2" fill="none"/>
+  </symbol>
 </svg>
