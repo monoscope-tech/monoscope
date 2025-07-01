@@ -64,7 +64,6 @@ library
       Models.Projects.Projects
       Models.Projects.ProjectsEmail
       Models.Projects.Swaggers
-      Models.Projects.SwaggersSpec
       Models.Telemetry.Schema
       Models.Telemetry.SummaryGenerator
       Models.Telemetry.Telemetry
@@ -72,47 +71,33 @@ library
       Models.Tests.TestToDump
       Models.Users.Sessions
       Models.Users.Users
-      MonitoringSpec
       Network.Wai.Middleware.Heartbeat
       Opentelemetry.OtlpMockValues
       Opentelemetry.OtlpServer
-      Opentelemetry.OtlpServerSpec
       Pages.Anomalies.AnomalyList
-      Pages.Anomalies.AnomalyListSpec
       Pages.Api
-      Pages.ApiSpec
       Pages.BodyWrapper
       Pages.Charts.Charts
       Pages.Components
       Pages.Dashboards
       Pages.Endpoints.ApiCatalog
-      Pages.Endpoints.ApiCatalogSpec
       Pages.LemonSqueezy
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
-      Pages.LogExplorer.LogSpec
       Pages.Monitors.Alerts
-      Pages.Monitors.AlertsSpec
       Pages.Monitors.MetricMonitors
       Pages.Monitors.TestCollectionEditor
       Pages.Monitors.Testing
-      Pages.Monitors.TestingSpec
       Pages.Onboarding.Onboarding
       Pages.Projects.CreateProject
       Pages.Projects.Integrations
       Pages.Projects.ListProjects
       Pages.Projects.ManageMembers
-      Pages.Projects.ManageMembersSpec
-      Pages.Projects.ProjectsSpec
       Pages.Reports
-      Pages.ReportsSpec
       Pages.Share
-      Pages.ShareSpec
       Pages.SlackInstall
       Pages.Specification.Documentation
-      Pages.Specification.DocumentationSpec
       Pages.Specification.GenerateSwagger
-      Pages.Specification.GenerateSwaggerSpec
       Pages.Telemetry.Metrics
       Pages.Telemetry.Trace
       Pages.Telemetry.Utils
@@ -130,17 +115,12 @@ library
       Pkg.Parser
       Pkg.Parser.Core
       Pkg.Parser.Expr
-      Pkg.Parser.ExprSpec
       Pkg.Parser.Stats
-      Pkg.ParserSpec
       Pkg.Queue
       Pkg.TestUtils
       Pkg.THUtils
       ProcessMessage
-      ProcessMessageSpec
       RequestMessages
-      RequestMessagesSpec
-      Spec
       Start
       System.Config
       System.Logging
@@ -149,7 +129,6 @@ library
       Utils
       Web.Auth
       Web.ClientMetadata
-      Web.ClientMetadataSpec
       Web.Error
       Web.Routes
       Proto.Opentelemetry.Proto.Common.V1.Common
@@ -445,13 +424,20 @@ test-suite doctests
     , rust-interop
   default-language: GHC2021
 
-test-suite tests
+test-suite integration-tests
   type: exitcode-stdio-1.0
   main-is: Main.hs
   other-modules:
-      MainUnit
+      Models.Projects.SwaggersSpec
+      MonitoringSpec
+      Opentelemetry.OtlpServerSpec
+      Pages.Anomalies.AnomalyListSpec
+      Pages.Endpoints.ApiCatalogSpec
+      ProcessMessageSpec
+      Spec
+      Web.ClientMetadataSpec
   hs-source-dirs:
-      test/hspec
+      test/integration
   default-extensions:
       BlockArguments
       DataKinds
@@ -480,25 +466,59 @@ test-suite tests
       ViewPatterns
       DeriveGeneric
       BangPatterns
-  ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors
+  ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -threaded -rtsopts -with-rtsopts=-N
   build-tool-depends:
       proto-lens-protoc:proto-lens-protoc
   build-depends:
-      apitoolkit-server
+      aeson
+    , aeson-qq
+    , apitoolkit-server
     , base
+    , base64
+    , cache
+    , clock
+    , data-default
     , doctest-parallel
+    , effectful
     , hiedb-plugin
     , hs-opentelemetry-instrumentation-auto
     , hspec
     , hspec-discover
+    , http-types
+    , neat-interpolation
+    , pg-entity
+    , pg-transact
+    , postgresql-simple
     , relude >=1.2.0.0
+    , resource-pool
     , rust-interop
+    , servant-server
+    , time
     , tmp-postgres
+    , uuid
+    , vector
+    , wai
+    , warp
   default-language: GHC2021
 
 test-suite unit-tests
   type: exitcode-stdio-1.0
   main-is: Main.hs
+  other-modules:
+      Pages.ApiSpec
+      Pages.LogExplorer.LogSpec
+      Pages.Monitors.AlertsSpec
+      Pages.Monitors.TestingSpec
+      Pages.Projects.ManageMembersSpec
+      Pages.Projects.ProjectsSpec
+      Pages.ReportsSpec
+      Pages.ShareSpec
+      Pages.Specification.DocumentationSpec
+      Pages.Specification.GenerateSwaggerSpec
+      Pkg.Parser.ExprSpec
+      Pkg.ParserSpec
+      RequestMessagesSpec
+      Spec
   hs-source-dirs:
       test/unit
   default-extensions:
@@ -529,16 +549,31 @@ test-suite unit-tests
       ViewPatterns
       DeriveGeneric
       BangPatterns
-  ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors
+  ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -threaded -rtsopts -with-rtsopts=-N
   build-tool-depends:
       proto-lens-protoc:proto-lens-protoc
   build-depends:
-      apitoolkit-server
+      aeson
+    , aeson-qq
+    , apitoolkit-server
     , base
+    , extra
+    , generic-lens
     , hiedb-plugin
     , hs-opentelemetry-instrumentation-auto
     , hspec
     , hspec-discover
+    , hspec-expectations-json
+    , http-types
+    , neat-interpolation
+    , odd-jobs
     , relude >=1.2.0.0
+    , resource-pool
     , rust-interop
+    , servant-server
+    , time
+    , uuid
+    , vector
+    , wai
+    , warp
   default-language: GHC2021

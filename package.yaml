@@ -299,9 +299,13 @@ tests:
       - relude >= 1.2.0.0
       - hspec
       - hspec-discover
-  tests:
+  integration-tests:
     main: Main.hs
-    source-dirs: test/hspec
+    source-dirs: test/integration
+    ghc-options:
+      - -threaded
+      - -rtsopts
+      - -with-rtsopts=-N
     dependencies:
       - base
       - apitoolkit-server
@@ -313,9 +317,32 @@ tests:
       - hspec-discover
       - doctest-parallel
       - relude >= 1.2.0.0
+      - aeson
+      - pg-entity
+      - postgresql-simple
+      - effectful
+      - servant-server
+      - resource-pool
+      - warp
+      - wai
+      - http-types
+      - aeson-qq
+      - neat-interpolation
+      - base64
+      - time
+      - uuid
+      - pg-transact
+      - vector
+      - cache
+      - data-default
+      - clock
   unit-tests:
     main: Main.hs
     source-dirs: test/unit
+    ghc-options:
+      - -threaded
+      - -rtsopts
+      - -with-rtsopts=-N
     dependencies:
       - base
       - apitoolkit-server
@@ -325,3 +352,18 @@ tests:
       - hspec
       - hspec-discover
       - relude >= 1.2.0.0
+      - aeson
+      - time
+      - uuid
+      - vector
+      - servant-server
+      - warp
+      - wai
+      - generic-lens
+      - odd-jobs
+      - resource-pool
+      - neat-interpolation
+      - aeson-qq
+      - http-types
+      - hspec-expectations-json
+      - extra

@@ -48,13 +48,16 @@ live-test-reload-stack:
 	# stack test --ghc-options=-w --ta='--match "SeedingConfig/should parse simple config to obj"' --file-watch
 
 test:
-	stack test --ghc-options=-w
+	# stack test --ghc-options=-w
+	cabal test
 
 test-unit:
-	stack test apitoolkit-server:unit-tests --ghc-options=-w
+	# stack test apitoolkit-server:unit-tests --ghc-options=-w
+	cabal test unit-tests
 
 test-doctests:
-	stack test apitoolkit-server:doctests --ghc-options=-w --test-arguments --seed=2
+	# stack test apitoolkit-server:doctests --ghc-options=-w --test-arguments --seed=2
+	cabal test doctests
 
 live-test-unit:
 	stack test apitoolkit-server:unit-tests --ghc-options=-w --file-watch
