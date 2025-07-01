@@ -302,6 +302,8 @@ tests:
       - effectful
       - servant-server
       - resource-pool
+      - generic-lens
+      - odd-jobs
       - warp
       - wai
       - http-types

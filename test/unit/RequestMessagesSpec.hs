@@ -223,7 +223,7 @@ spec = do
 
   describe "Regex Formats Gen" do
     it "should get support string types" do
-      RequestMessages.valueToFormatStr "123" `shouldBe` Just "integer"
+      RequestMessages.valueToFormatStr "123" `shouldBe` Just "{http_status}"
       RequestMessages.valueToFormatStr "abc" `shouldBe` Nothing
 
 -- describe "requestMessageEndpoint" do
