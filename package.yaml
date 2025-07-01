@@ -164,7 +164,6 @@ library:
     - safe-exceptions
     - annotated-exception
     - safe
-    - aeson-pretty
     - cryptonite
     - data-default
     - deriving-aeson
@@ -181,9 +180,7 @@ library:
     - gogol-core
     - gogol-pubsub
     - hw-kafka-client
-    - hspec
     - hashtables
-    - strict-containers
     - http-api-data
     - lens
     - lens-aeson
@@ -221,39 +218,30 @@ library:
     - vector
     - wai
     - warp
-    - witch
     - wreq
     - xxhash
     - parallel
     - pretty-relative-time
     - indexed-traversable
-    - nyan-interpolation
-    - pretty-simple
     - tmp-postgres
     - directory
     - githash
     - network-uri
-    - hspec-expectations-json
     - scotty
     - filepath
     - http-client
     - wai-middleware-static
     - template-haskell
     - cryptohash-md5
-    - hiedb-plugin
     - casing
     - yaml
     - hs-opentelemetry-sdk
-    - hs-opentelemetry-instrumentation-postgresql-simple
     - hs-opentelemetry-instrumentation-wai
-    - hs-opentelemetry-exporter-otlp
     - hs-opentelemetry-instrumentation-auto
     - postgresql-libpq
     - ki-effectful
     - grapesy
     - langchain-hs
-    - ed25519 >= 0.0.5
-    - memory
     - bytestring
     - base16-bytestring
 
@@ -272,8 +260,6 @@ executables:
       # - -fPIC
     dependencies:
       - apitoolkit-server
-      - rust-interop
-      - hiedb-plugin
       - hs-opentelemetry-instrumentation-auto
       - name: relude
         version: '>= 1.2.0.0'
@@ -292,13 +278,9 @@ tests:
     dependencies:
       - base
       - apitoolkit-server
-      - rust-interop
       - hs-opentelemetry-instrumentation-auto
-      - hiedb-plugin
       - doctest-parallel >= 0.1
       - relude >= 1.2.0.0
-      - hspec
-      - hspec-discover
   integration-tests:
     main: Main.hs
     source-dirs: test/integration
@@ -309,13 +291,10 @@ tests:
     dependencies:
       - base
       - apitoolkit-server
-      - rust-interop
       - hs-opentelemetry-instrumentation-auto
-      - hiedb-plugin
       - tmp-postgres
       - hspec
       - hspec-discover
-      - doctest-parallel
       - relude >= 1.2.0.0
       - aeson
       - pg-entity
@@ -344,26 +323,18 @@ tests:
       - -rtsopts
       - -with-rtsopts=-N
     dependencies:
-      - base
       - apitoolkit-server
-      - rust-interop
       - hs-opentelemetry-instrumentation-auto
-      - hiedb-plugin
       - hspec
-      - hspec-discover
       - relude >= 1.2.0.0
       - aeson
       - time
       - uuid
       - vector
-      - servant-server
-      - warp
-      - wai
       - generic-lens
       - odd-jobs
       - resource-pool
       - neat-interpolation
       - aeson-qq
-      - http-types
-      - hspec-expectations-json
       - extra
+      - hspec-expectations-json

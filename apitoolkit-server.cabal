@@ -210,7 +210,6 @@ library
     , Unique
     , aeson
     , aeson-extra
-    , aeson-pretty
     , aeson-qq
     , annotated-exception
     , async
@@ -231,7 +230,6 @@ library
     , deriving-aeson
     , directory
     , dotenv
-    , ed25519 >=0.0.5
     , effectful
     , effectful-core
     , envy
@@ -246,14 +244,9 @@ library
     , gogol-pubsub
     , grapesy
     , hashtables
-    , hiedb-plugin
-    , hs-opentelemetry-exporter-otlp
     , hs-opentelemetry-instrumentation-auto
-    , hs-opentelemetry-instrumentation-postgresql-simple
     , hs-opentelemetry-instrumentation-wai
     , hs-opentelemetry-sdk
-    , hspec
-    , hspec-expectations-json
     , http-api-data
     , http-client
     , http-types
@@ -271,13 +264,11 @@ library
     , lucid-hyperscript >=0.1.0.2
     , lucid-svg >=0.7.1.1
     , megaparsec
-    , memory
     , mmark
     , monad-time-effectful
     , mtl
     , neat-interpolation
     , network-uri
-    , nyan-interpolation
     , odd-jobs
     , parallel
     , parser-combinators
@@ -288,7 +279,6 @@ library
     , postgresql-migration
     , postgresql-simple
     , pretty-relative-time
-    , pretty-simple
     , proto-lens
     , proto-lens-runtime
     , regex
@@ -307,7 +297,6 @@ library
     , servant-lucid
     , servant-server
     , slugify
-    , strict-containers
     , template-haskell
     , text
     , text-builder-linear
@@ -324,7 +313,6 @@ library
     , wai-log
     , wai-middleware-static
     , warp
-    , witch
     , wreq
     , xxhash
     , yaml
@@ -367,10 +355,8 @@ executable apitoolkit-server-exe
       proto-lens-protoc:proto-lens-protoc
   build-depends:
       apitoolkit-server
-    , hiedb-plugin
     , hs-opentelemetry-instrumentation-auto
     , relude >=1.2.0.0
-    , rust-interop
   mixins:
       relude (Relude as Prelude)
     , relude 
@@ -416,12 +402,8 @@ test-suite doctests
       apitoolkit-server
     , base
     , doctest-parallel >=0.1
-    , hiedb-plugin
     , hs-opentelemetry-instrumentation-auto
-    , hspec
-    , hspec-discover
     , relude >=1.2.0.0
-    , rust-interop
   default-language: GHC2021
 
 test-suite integration-tests
@@ -478,9 +460,7 @@ test-suite integration-tests
     , cache
     , clock
     , data-default
-    , doctest-parallel
     , effectful
-    , hiedb-plugin
     , hs-opentelemetry-instrumentation-auto
     , hspec
     , hspec-discover
@@ -491,7 +471,6 @@ test-suite integration-tests
     , postgresql-simple
     , relude >=1.2.0.0
     , resource-pool
-    , rust-interop
     , servant-server
     , time
     , tmp-postgres
@@ -556,24 +535,16 @@ test-suite unit-tests
       aeson
     , aeson-qq
     , apitoolkit-server
-    , base
     , extra
     , generic-lens
-    , hiedb-plugin
     , hs-opentelemetry-instrumentation-auto
     , hspec
-    , hspec-discover
     , hspec-expectations-json
-    , http-types
     , neat-interpolation
     , odd-jobs
     , relude >=1.2.0.0
     , resource-pool
-    , rust-interop
-    , servant-server
     , time
     , uuid
     , vector
-    , wai
-    , warp
   default-language: GHC2021
