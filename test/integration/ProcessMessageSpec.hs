@@ -8,6 +8,7 @@ import Data.Pool (Pool)
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (execute, withPool)
+import Database.PostgreSQL.Transact qualified as PGT
 import Database.PostgreSQL.Simple (Connection)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Endpoints qualified as Endpoints
@@ -57,7 +58,7 @@ spec = aroundAll TestUtils.withSetup do
       resp `shouldBe` ["m1", "m2"]
 
     it "We should expect 2 endpoints, albeit unacknowleged." \pool -> do
-      _ <- withPool pool $ execute [sql|CALL apis.refresh_request_dump_views_every_5mins(0, '{}')|] ()
+      _ <- withPool pool $ PGT.execute [sql|CALL apis.refresh_request_dump_views_every_5mins(0, '{}'::jsonb)|] ()
       endpoints <- withPool pool $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0 "Incoming"
       length endpoints `shouldBe` 2 -- Two new endpoints from the last 2 requests
       forM_ endpoints \enp -> do
