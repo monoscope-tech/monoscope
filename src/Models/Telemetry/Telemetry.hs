@@ -514,7 +514,9 @@ spanRecordByName pid trId spanName = dbtToEff $ queryOne q (pid.toText, trId, sp
 
 
 getChildSpans :: DB :> es => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector OtelLogsAndSpans)
-getChildSpans pid spanIds = dbtToEff $ query q (pid.toText, spanIds)
+getChildSpans pid spanIds
+  | V.null spanIds = pure V.empty
+  | otherwise = dbtToEff $ query q (pid.toText, spanIds)
   where
     q =
       [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
@@ -571,7 +573,9 @@ valueToVector (Only val) = case val of
 
 
 queryToValues :: DB :> es => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector (Only AE.Value))
-queryToValues pid traceIds = dbtToEff $ V.fromList <$> DBT.query q (pid.toText, traceIds)
+queryToValues pid traceIds
+  | V.null traceIds = pure V.empty
+  | otherwise = dbtToEff $ V.fromList <$> DBT.query q (pid.toText, traceIds)
   where
     q =
       [sql|

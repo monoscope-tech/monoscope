@@ -148,6 +148,7 @@ updateProjectMembersPermissons vals = void $ executeMany q vals
 
 
 softDeleteProjectMembers :: [UUID.UUID] -> DBT IO ()
+softDeleteProjectMembers [] = pass
 softDeleteProjectMembers vals = void $ execute q (Only (V.fromList vals))
   where
     q =

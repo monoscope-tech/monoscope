@@ -247,13 +247,17 @@ endpointByHash pid hash = queryOne q (pid, hash)
 
 
 endpointsByHashes :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector Endpoint)
-endpointsByHashes pid hashes = query q (pid, hashes)
+endpointsByHashes pid hashes
+  | V.null hashes = pure V.empty
+  | otherwise = query q (pid, hashes)
   where
     q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description from apis.endpoints where project_id=? AND hash=ANY(?)|]
 
 
 getEndpointsByAnomalyTargetHash :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector Host)
-getEndpointsByAnomalyTargetHash pid hashes = query q (pid, prefixHashes)
+getEndpointsByAnomalyTargetHash pid hashes
+  | V.null hashes = pure V.empty
+  | otherwise = query q (pid, prefixHashes)
   where
     q = [sql|select distinct host from apis.endpoints where project_id=? AND hash LIKE ANY(?)|]
     prefixHashes = (<> "%") <$> hashes

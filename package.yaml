@@ -244,6 +244,7 @@ library:
     - langchain-hs
     - bytestring
     - base16-bytestring
+    - process
 
 executables:
   apitoolkit-server-exe:

@@ -279,6 +279,7 @@ library
     , postgresql-migration
     , postgresql-simple
     , pretty-relative-time
+    , process
     , proto-lens
     , proto-lens-runtime
     , regex

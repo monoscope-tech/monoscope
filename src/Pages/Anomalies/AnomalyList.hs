@@ -62,7 +62,7 @@ import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (pool))
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (checkFreeTierExceeded, escapedQueryPartial, faSprite_)
 import Web.FormUrlEncoded (FromForm)
@@ -136,20 +136,25 @@ anomalyBulkActionsPostH :: Projects.ProjectId -> Text -> AnomalyBulkForm -> ATAu
 anomalyBulkActionsPostH pid action items = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  _ <- case action of
-    "acknowlege" -> do
-      v <- dbtToEff $ Anomalies.acknowledgeAnomalies sess.user.id (V.fromList items.anomalyId)
-      _ <- dbtToEff $ Anomalies.acknowlegeCascade sess.user.id v
-      hosts <- dbtToEff $ Endpoints.getEndpointsByAnomalyTargetHash pid v
-      forM_ hosts \h -> do
-        _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" do BackgroundJobs.GenSwagger pid sess.user.id h.host
-        pass
-    "archive" -> do
-      _ <- dbtToEff $ execute [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ V.fromList items.anomalyId)
-      pass
-    _ -> error $ "unhandled anomaly bulk action state " <> action
-  addSuccessToast (action <> "d items Successfully") Nothing
-  addRespHeaders Bulk
+  if null items.anomalyId
+    then do
+      addErrorToast "No items selected" Nothing
+      addRespHeaders Bulk
+    else do
+      _ <- case action of
+        "acknowlege" -> do
+          v <- dbtToEff $ Anomalies.acknowledgeAnomalies sess.user.id (V.fromList items.anomalyId)
+          _ <- dbtToEff $ Anomalies.acknowlegeCascade sess.user.id v
+          hosts <- dbtToEff $ Endpoints.getEndpointsByAnomalyTargetHash pid v
+          forM_ hosts \h -> do
+            _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" do BackgroundJobs.GenSwagger pid sess.user.id h.host
+            pass
+        "archive" -> do
+          _ <- dbtToEff $ execute [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ V.fromList items.anomalyId)
+          pass
+        _ -> error $ "unhandled anomaly bulk action state " <> action
+      addSuccessToast (action <> "d items Successfully") Nothing
+      addRespHeaders Bulk
 
 
 anomalyListGetH
@@ -691,7 +696,7 @@ anomalyAcknowlegeButton pid aid acked host = do
   a_
     [ class_
         $ "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
-        <> (if acked then "bg-green-100 text-green-900" else "btn-primary")
+          <> (if acked then "bg-green-100 text-green-900" else "btn-primary")
     , term "data-tippy-content" "acknowlege anomaly"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -707,7 +712,7 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_
         $ "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
-        <> (if archived then " bg-green-100 text-green-900" else "btn-primary")
+          <> (if archived then " bg-green-100 text-green-900" else "btn-primary")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"

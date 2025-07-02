@@ -103,7 +103,9 @@ selectFields pid endpointHash = query q (pid, endpointHash)
 
 
 selectFieldsByHashes :: Projects.ProjectId -> V.Vector Text -> DBT IO (V.Vector Field)
-selectFieldsByHashes pid fieldHashes = query q (pid, fieldHashes)
+selectFieldsByHashes pid fieldHashes
+  | V.null fieldHashes = pure V.empty
+  | otherwise = query q (pid, fieldHashes)
   where
     q =
       [sql| SELECT id,created_at,updated_at,project_id,endpoint_hash,key,field_type,
@@ -133,7 +135,9 @@ deleteFieldByHash fieldHash dTime = do
 
 
 fieldsByEndpointHashes :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector SwField)
-fieldsByEndpointHashes pid hashes = query q (pid, hashes)
+fieldsByEndpointHashes pid hashes
+  | V.null hashes = pure V.empty
+  | otherwise = query q (pid, hashes)
   where
     q =
       [sql|

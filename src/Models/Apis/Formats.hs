@@ -103,7 +103,9 @@ data SwFormat = SwFormat
 
 
 formatsByFieldsHashes :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector SwFormat)
-formatsByFieldsHashes pid fieldHashes = query q (pid, fieldHashes)
+formatsByFieldsHashes pid fieldHashes
+  | V.null fieldHashes = pure V.empty
+  | otherwise = query q (pid, fieldHashes)
   where
     q =
       [sql|

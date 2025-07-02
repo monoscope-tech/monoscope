@@ -226,7 +226,9 @@ data AnomalyVM = AnomalyVM
 
 
 getAnomaliesVM :: Projects.ProjectId -> V.Vector Text -> DBT IO (V.Vector AnomalyVM)
-getAnomaliesVM pid hash = query q (pid, hash)
+getAnomaliesVM pid hash
+  | V.null hash = pure V.empty
+  | otherwise = query q (pid, hash)
   where
     q =
       [sql|
@@ -276,7 +278,9 @@ where
 
 
 getShapeParentAnomaliesVM :: Projects.ProjectId -> V.Vector Text -> DBT IO (V.Vector Text)
-getShapeParentAnomaliesVM pid hashes = query q (pid, hashes)
+getShapeParentAnomaliesVM pid hashes
+  | V.null hashes = pure V.empty
+  | otherwise = query q (pid, hashes)
   where
     q =
       [sql|SELECT target_hash
@@ -397,18 +401,22 @@ countAnomalies pid report_type = do
 
 
 acknowledgeAnomalies :: Users.UserId -> V.Vector Text -> DBT IO (V.Vector Text)
-acknowledgeAnomalies uid aids = do
-  _ <- query qIssues (uid, aids) :: DBT IO (V.Vector Text)
-  query q (uid, aids)
+acknowledgeAnomalies uid aids
+  | V.null aids = pure V.empty
+  | otherwise = do
+    _ <- query qIssues (uid, aids) :: DBT IO (V.Vector Text)
+    query q (uid, aids)
   where
     qIssues = [sql| update apis.issues set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
     q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
 
 
 acknowlegeCascade :: Users.UserId -> V.Vector Text -> DBT IO Int64
-acknowlegeCascade uid targets = do
-  _ <- execute qIssues (uid, hashes)
-  execute q (uid, hashes)
+acknowlegeCascade uid targets
+  | V.null targets = pure 0
+  | otherwise = do
+    _ <- execute qIssues (uid, hashes)
+    execute q (uid, hashes)
   where
     hashes = (<> "%") <$> targets
     qIssues = [sql| UPDATE apis.issues SET acknowleged_by = ?, acknowleged_at = NOW() WHERE target_hash=ANY (?); |]
@@ -674,7 +682,9 @@ errorByHash hash = selectOneByField [field| hash |] (Only hash)
 
 
 errorsByHashes :: Projects.ProjectId -> V.Vector Text -> DBT IO (V.Vector ATError)
-errorsByHashes pid hashes = query q (pid, hashes)
+errorsByHashes pid hashes
+  | V.null hashes = pure V.empty
+  | otherwise = query q (pid, hashes)
   where
     q =
       [sql| SELECT id, created_at, updated_at, project_id, hash, error_type, message, error_data

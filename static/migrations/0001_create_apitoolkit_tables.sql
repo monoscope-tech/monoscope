@@ -712,9 +712,9 @@ CREATE TABLE IF NOT EXISTS apis.share_events
     created_at         TIMESTAMP WITH       TIME           ZONE       NOT               NULL              DEFAULT current_timestamp,
     event_id           UUID      NOT        NULL,
     event_type         TEXT      NOT        NULL,
-    event_created_at   TIMESTAMP WITH TIME ZONE NOT NULL,
+    event_created_at   TIMESTAMP WITH TIME ZONE NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_apis_share_events_projectid_id ON apis.share_events(project_id)
+CREATE INDEX IF NOT EXISTS idx_apis_share_events_projectid_id ON apis.share_events(project_id);
 
 CREATE TABLE IF NOT EXISTS apis.slack
 (
@@ -771,7 +771,7 @@ ALTER TABLE tests.collections ADD COLUMN alert_message TEXT NOT NULL DEFAULT '';
 ALTER TABLE tests.collections ADD COLUMN alert_subject TEXT NOT NULL DEFAULT '';
 ALTER TABLE tests.collections ADD COLUMN notify_after Text NOT NULL DEFAULT '6hours';
 ALTER TABLE tests.collections ADD COLUMN notify_after_check BOOL NOT NULL DEFAULT 'f';
-ALTER TABLE tests.collections ADD COLUMN stop_after TEXT NOT NULL DEFAULT "0";
+ALTER TABLE tests.collections ADD COLUMN stop_after TEXT NOT NULL DEFAULT '0';
 ALTER TABLE tests.collections ADD COLUMN stop_after_check BOOL NOT NULL DEFAULT 'f';
 
 

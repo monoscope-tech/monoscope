@@ -40,20 +40,7 @@ import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
-import Relude (
-  Bool,
-  Eq,
-  Generic,
-  IO,
-  Int,
-  Int64,
-  Maybe,
-  NFData,
-  Ord,
-  Show,
-  Text,
-  (.),
- )
+import Relude
 import Servant (FromHttpApiData)
 
 
@@ -175,7 +162,9 @@ queryMonitorById id' = selectById @QueryMonitor (Only id')
 
 
 queryMonitorsById :: V.Vector QueryMonitorId -> DBT IO (V.Vector QueryMonitorEvaled)
-queryMonitorsById ids = query q (Only ids)
+queryMonitorsById ids
+  | V.null ids = pure V.empty
+  | otherwise = query q (Only ids)
   where
     q =
       [sql|

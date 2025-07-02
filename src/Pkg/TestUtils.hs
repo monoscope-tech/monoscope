@@ -18,7 +18,9 @@ module Pkg.TestUtils (
 where
 
 import BackgroundJobs (jobsRunner)
+import Control.Concurrent (threadDelay)
 import Control.Exception (bracket_, finally, mask, throwIO)
+import Control.Monad (void)
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache (Cache (..), newCache)
@@ -27,10 +29,12 @@ import Data.Effectful.UUID (runStaticUUID, runUUID)
 import Data.Effectful.Wreq (runHTTPGolden, runHTTPWreq)
 import Data.Either.Extra
 import Data.Pool (Pool, defaultPoolConfig, newPool)
+import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (query, withPool)
-import Database.PostgreSQL.Simple (Connection, close, connectPostgreSQL, execute, execute_)
+import Database.PostgreSQL.Entity.DBT (withPool)
+import Database.PostgreSQL.Entity.DBT qualified as DBT
+import Database.PostgreSQL.Simple (Connection, Only (..), close, connectPostgreSQL, execute, execute_, query)
 import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory, MigrationInitialization))
 import Database.PostgreSQL.Simple.Migration qualified as Migration
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -85,17 +89,109 @@ migrate db = do
 -- source: https://jfischoff.github.io/blog/keeping-database-tests-fast.html
 withSetup :: (Pool Connection -> IO ()) -> IO ()
 withSetup f = do
+  useExternalDB <- lookupEnv "USE_EXTERNAL_DB"
+  case useExternalDB of
+    Just "true" -> withExternalDBSetup f
+    _ -> withLocalSetup f
+
+
+-- Local setup using tmp-postgres
+withLocalSetup :: (Pool Connection -> IO ()) -> IO ()
+withLocalSetup f = do
   -- Helper to throw exceptions
   let throwE x = either throwIO pure =<< x
   throwE $ withDbCache $ \dbCache -> do
     let combinedConfig =
-          cacheConfig dbCache -- <> TmpPostgres.verboseConfig
+          cacheConfig dbCache
+            <> TmpPostgres.verboseConfig
             <> mempty
               { TmpPostgres.postgresConfigFile = [("shared_preload_libraries", "'timescaledb'")]
               }
     dirSize <- sum <$> (listDirectory migrationsDirr >>= mapM (getFileSize . (migrationsDirr <>)))
     migratedConfig <- throwE $ cacheAction ("./.tmp/postgres/" <> show dirSize) migrate combinedConfig
     withConfig migratedConfig $ \db -> f =<< newPool (defaultPoolConfig (connectPostgreSQL $ toConnectionString db) close 60 10)
+
+
+-- Clean all data from the database while preserving schema
+-- This function uses TRUNCATE CASCADE to efficiently remove all data
+cleanDatabase :: Connection -> IO ()
+cleanDatabase conn = do
+  -- Get all user-created tables from all schemas
+  tables <- query conn getAllTablesQuery ()
+
+  -- Truncate all tables with CASCADE to handle foreign keys
+  -- We do this in a transaction to ensure atomicity
+  unless (null tables) $ do
+    -- First, drop any materialized views that might prevent truncation
+    _ <- execute_ conn "BEGIN"
+
+    -- Get and drop all materialized views
+    matViews <- query conn getMatViewsQuery () :: IO [Only Text]
+    forM_ matViews $ \(Only viewName) -> do
+      let dropQuery = Query $ encodeUtf8 $ "DROP MATERIALIZED VIEW IF EXISTS " <> viewName <> " CASCADE"
+      execute_ conn dropQuery
+
+    -- Build TRUNCATE statement for all tables at once
+    let tableNames = map (\(schema, table) -> schema <> "." <> table) tables
+    let truncateQuery = Query $ encodeUtf8 $ "TRUNCATE TABLE " <> T.intercalate ", " tableNames <> " RESTART IDENTITY CASCADE"
+
+    _ <- execute_ conn truncateQuery
+
+    -- Also clean up the background_jobs table if it exists
+    _ <- execute_ conn "TRUNCATE TABLE IF EXISTS background_jobs RESTART IDENTITY CASCADE"
+
+    void $ execute_ conn "COMMIT"
+  where
+    getAllTablesQuery =
+      [sql|
+        SELECT table_schema, table_name 
+        FROM information_schema.tables 
+        WHERE table_schema IN ('users', 'projects', 'apis', 'monitors', 'tests')
+          AND table_type = 'BASE TABLE'
+        ORDER BY table_schema, table_name
+      |]
+
+    getMatViewsQuery =
+      [sql|
+        SELECT schemaname || '.' || matviewname
+        FROM pg_matviews
+        WHERE schemaname IN ('users', 'projects', 'apis', 'monitors', 'tests')
+      |]
+
+
+-- External database setup (assumes database is already running via make timescaledb-docker-tmp)
+withExternalDBSetup :: (Pool Connection -> IO ()) -> IO ()
+withExternalDBSetup f = do
+  let connStr = "host=localhost port=5432 user=postgres password=postgres dbname=apitoolkit"
+
+  -- Drop all schemas and migration tracking table for a complete clean slate
+  conn <- connectPostgreSQL connStr
+  let dropSchemas =
+        [sql| DROP SCHEMA IF EXISTS users CASCADE;
+              DROP SCHEMA IF EXISTS projects CASCADE;
+              DROP SCHEMA IF EXISTS apis CASCADE;
+              DROP SCHEMA IF EXISTS monitors CASCADE;
+              DROP SCHEMA IF EXISTS tests CASCADE;
+              DROP SCHEMA IF EXISTS telemetry CASCADE;
+              DROP TABLE IF EXISTS schema_migrations CASCADE;
+        |]
+  _ <- execute conn dropSchemas ()
+
+  -- Run migrations fresh
+  _ <- Migration.runMigration conn Migration.defaultOptions MigrationInitialization
+  _ <- Migration.runMigration conn Migration.defaultOptions $ MigrationDirectory migrationsDirr
+
+  -- Create test user and project
+  let q =
+        [sql| INSERT into users.users (id, first_name, last_name, email) VALUES ('00000000-0000-0000-0000-000000000000', 'FN', 'LN', 'test@apitoolkit.io');
+        insert into projects.project_api_keys (active, project_id, title, key_prefix) VALUES (True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV');
+        |]
+  _ <- execute conn q ()
+  close conn
+
+  -- Create pool and run tests
+  pool <- newPool (defaultPoolConfig (connectPostgreSQL connStr) close 60 10)
+  f pool
 
 
 -- throw away all db changes that happened within this abort block
@@ -292,7 +388,7 @@ runAllBackgroundJobs authCtx = do
 
 
 getBackgroundJobs :: PgT.DBT IO (V.Vector Job)
-getBackgroundJobs = query q ()
+getBackgroundJobs = DBT.query q ()
   where
     q = [sql|SELECT id, created_at, updated_at, run_at, status, payload,last_error, attempts, locked_at, locked_by FROM background_jobs|]
 

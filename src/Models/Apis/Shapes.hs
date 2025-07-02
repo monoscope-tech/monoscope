@@ -194,7 +194,9 @@ data SwShape = SwShape
 
 
 shapesByEndpointHashes :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector SwShape)
-shapesByEndpointHashes pid hashes = query q (pid, hashes)
+shapesByEndpointHashes pid hashes
+  | V.null hashes = pure V.empty
+  | otherwise = query q (pid, hashes)
   where
     q =
       [sql|

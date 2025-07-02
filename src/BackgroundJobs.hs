@@ -789,7 +789,9 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
 
 
 getUpdatedFieldFormats :: Projects.ProjectId -> V.Vector Text -> PTR.DBT IO (V.Vector Text)
-getUpdatedFieldFormats pid fieldHashes = query q (pid, fieldHashes)
+getUpdatedFieldFormats pid fieldHashes
+  | V.null fieldHashes = pure V.empty
+  | otherwise = query q (pid, fieldHashes)
   where
     q =
       [sql| select fm.hash from apis.formats fm JOIN apis.fields fd ON (fm.project_id=fd.project_id AND fd.hash=fm.field_hash) 
