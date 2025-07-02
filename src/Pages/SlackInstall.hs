@@ -25,7 +25,9 @@ import Pkg.Mail (sendSlackMessage)
 import Relude hiding (ask, asks)
 
 import Control.Lens ((.~), (^.))
+import Data.Aeson.Key qualified as KEM
 import Data.Aeson.QQ (aesonQQ)
+import Data.Aeson.Types (parseMaybe)
 import Data.Effectful.Wreq (
   HTTP,
   Options,
@@ -44,6 +46,7 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
+import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (parseQueryToAST)
 import Servant.API (Header)
@@ -510,8 +513,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-        <> [msgJson]
-        <> ["\n\nUser query: " <> question]
+          <> [msgJson]
+          <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
@@ -611,8 +614,7 @@ slackInteractionsH interaction = do
       pure $ AE.object ["response_type" AE..= "in_channel", "text" AE..= "Done, you'll be receiving project notifcations here going forward", "replace_original" AE..= True, "delete_original" AE..= True]
     "/dashboard" -> do
       dashboards <- getDashboardsForSlack interaction.team_id
-
-      triggerSlackModal authCtx.env.slackBotToken "open" $ (AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= (dashboardView $ V.fromList [(dashboardViewOne dashboards)])])
+      triggerSlackModal authCtx.env.slackBotToken "open" $ (AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= (dashboardView interaction.channel_id $ V.fromList [(dashboardViewOne dashboards)])])
       pure $ AE.object ["text" AE..= "modal opened", "replace_original" AE..= True, "delete_original" AE..= True]
     _ -> do
       slackDataM <- dbtToEff $ getSlackDataByTeamId interaction.team_id
@@ -658,8 +660,10 @@ data SlackActionForm = SlackActionForm {payload :: Text}
   deriving anyclass (AE.FromJSON, FromForm)
 
 
-data ActionContainer = ActionContainer
-  { view_id :: Maybe Text
+data SlackUser = SlackUser
+  { id :: Text
+  , username :: Text
+  , team_id :: Text
   }
   deriving (Generic, Show)
   deriving anyclass (AE.FromJSON)
@@ -669,28 +673,26 @@ data SlackAction = SlackAction
   { type_ :: Text
   , token :: Text
   , trigger_id :: Text
-  , view :: AE.Value
-  , actions :: [SAction]
-  , container :: ActionContainer
+  , view :: SlackView
+  , actions :: Maybe [SAction]
+  , user :: SlackUser
   }
   deriving (Generic, Show)
 
 
 instance AE.FromJSON SlackAction where
-  parseJSON = AE.withObject "SlackAction" $ \o ->
-    SlackAction
-      <$> o
-      AE..: "type"
-      <*> o
-      AE..: "token"
-      <*> o
-      AE..: "trigger_id"
-      <*> o
-      AE..: "view"
-      <*> o
-      AE..: "actions"
-      <*> o
-      AE..: "container"
+  parseJSON = AE.genericParseJSON AE.defaultOptions{AE.fieldLabelModifier = \f -> if f == "type_" then "type" else f}
+
+
+data SlackView = SlackView
+  { private_metadata :: Text
+  , blocks :: [AE.Value]
+  , id :: Text
+  , state :: Maybe AE.Value
+
+  }
+  deriving (Generic, Show)
+  deriving anyclass (AE.FromJSON)
 
 
 data SlackOption = SlackOption
@@ -714,18 +716,7 @@ data SAction = SAction
 -- deriving anyclass (AE.FromJSON)
 
 instance AE.FromJSON SAction where
-  parseJSON = AE.withObject "SAction" $ \o ->
-    SAction
-      <$> o
-      AE..: "type"
-      <*> o
-      AE..: "action_id"
-      <*> o
-      AE..: "block_id"
-      <*> o
-      AE..: "selected_option"
-      <*> o
-      AE..: "action_ts"
+  parseJSON = AE.genericParseJSON AE.defaultOptions{AE.fieldLabelModifier = \f -> if f == "type_a" then "type" else f}
 
 
 slackActionsH :: SlackActionForm -> ATBaseCtx AE.Value
@@ -735,34 +726,115 @@ slackActionsH action = do
   case result of
     Left err -> do
       throwError err400{errBody = "Invalid action payload: " <> encodeUtf8 (T.pack err)}
-    Right slackAction -> do
-      case slackAction.type_ of
-        "block_actions" -> do
-          let actionTypeM = viaNonEmpty head $ slackAction.actions
-          case actionTypeM of
-            Nothing -> handleUnknownActionType
-            Just actionType -> do
-              case actionType.action_id of
-                "dashboard-select" -> do
-                  let selectedOption = actionType.selected_option
-                  case selectedOption of
-                    Just opt -> do
-                      let dashboardId = opt.value
-                      dashboardM <- Dashboards.getDashboardById dashboardId
-                      case dashboardM of
-                        Nothing -> pure $ AE.object []
-                        Just dashboard -> do
-                          _ <- triggerSlackModal authCtx.env.slackBotToken "update" $ (AE.object ["view_id" AE..= slackAction.container.view_id, "view" AE..= (dashboardView $ V.fromList [(dashboardViewOne V.empty), (dashboardViewTwo V.empty)])])
-                          pure $ AE.object ["text" AE..= ("Selected dashboard: " <> show opt.text), "replace_original" AE..= True, "delete_original" AE..= True]
-                    Nothing -> pure $ AE.object ["text" AE..= "No dashboard selected", "replace_original" AE..= True, "delete_original" AE..= True]
-                _ -> handleUnknownActionType
-        _ -> handleUnknownActionType
+    Right slackAction -> handleSlackAction authCtx slackAction
   where
-    handleUnknownActionType = do
-      pure $ AE.object ["text" AE..= "Unknown action type", "replace_original" AE..= True, "delete_original" AE..= True]
+    handleSlackAction authCtx slackAction = case slackAction.type_ of
+      "block_actions" -> handleBlockActions authCtx slackAction
+      "view_submission" -> handleViewSubmission authCtx slackAction
+      _ -> handleUnknownActionType
+
+    handleBlockActions authCtx slackAction = do
+      let actionTypeM = viaNonEmpty head $ fromMaybe [] slackAction.actions
+      case actionTypeM of
+        Nothing -> handleUnknownActionType
+        Just actionType -> case actionType.action_id of
+          "dashboard-select" -> handleDashboardSelect authCtx slackAction actionType
+          "widget-select" -> handleWidgetSelect authCtx slackAction actionType
+          _ -> handleUnknownActionType
+
+    handleDashboardSelect authCtx slackAction actionType = do
+      let selectedOption = actionType.selected_option
+      case selectedOption of
+        Just opt -> do
+          let dashboardId = opt.value
+          dashboardVMM <- Dashboards.getDashboardById dashboardId
+          case dashboardVMM of
+            Nothing -> pure $ AE.object []
+            Just dashboardVM -> updateDashboardModal authCtx slackAction dashboardVM opt.text
+        Nothing -> pure $ AE.object ["text" AE..= "No dashboard selected", "replace_original" AE..= True, "delete_original" AE..= True]
+
+    handleWidgetSelect authCtx slackAction actionType = do
+      let selectedOption = actionType.selected_option
+      case selectedOption of
+        Just opt -> updateWidgetModal authCtx slackAction opt.value
+        Nothing -> handleUnknownActionType
+
+    handleViewSubmission authCtx slackAction = do
+      let view = slackAction.view
+          privateMeta = view.private_metadata
+          metas = T.splitOn "___" privateMeta
+          channelId = fromMaybe "" $ viaNonEmpty head metas
+          pid = fromMaybe "" $ viaNonEmpty head $ fromMaybe [] $ viaNonEmpty tail metas
+          image_url = fromMaybe "" $ viaNonEmpty last metas
+          dashBoardId =  slackAction.view.state >>= lookupSelectedValueByKey "dashboard-select"
+          widgetTitle =  slackAction.view.state >>= lookupSelectedValueByKey "widget-select"
+          url = authCtx.env.hostUrl <> "p/" <> pid <> "/dashboards/" <> fromMaybe "" dashBoardId
+          heading = "<" <> url <> "|" <> fromMaybe "" widgetTitle <> ">"
+
+          content =
+            AE.object
+              [ "channel" AE..= channelId
+              , "blocks"
+                  AE..= AE.Array
+                    ( V.fromList
+                        [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= heading]]
+                        , AE.object ["type" AE..= "context", "elements" AE..= AE.Array (V.singleton $ AE.object ["type" AE..= "plain_text", "text" AE..= ("Shared by @" <> slackAction.user.username <> " using /dashboard")])]
+                        , dashboardWidgetView image_url (fromMaybe "" widgetTitle)
+                        ]
+                    )
+              ]
+      sendSlackChatMessage authCtx.env.slackBotToken content
+      handleUnknownActionType
+
+    updateDashboardModal authCtx slackAction dashboardVM dashboardText = do
+      dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString $ fromMaybe "" dashboardVM.baseTemplate)
+      whenJust dashboardM $ \dashboard -> do
+        let widgets = V.fromList $ (\w -> (fromMaybe "Untitled-" w.title, fromMaybe "Untitled-" w.title)) <$> dashboard.widgets
+            channelId = fromMaybe "" $ viaNonEmpty head $ T.splitOn "___" slackAction.view.private_metadata
+            pMeta = channelId <> "___" <> dashboardVM.projectId.toText <> "___" <> fromMaybe "" dashboardVM.baseTemplate
+        _ <- triggerSlackModal authCtx.env.slackBotToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= (dashboardView pMeta $ V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets])]
+        pass
+      pure $ AE.object ["text" AE..= ("Selected dashboard: " <> show dashboardText), "replace_original" AE..= True, "delete_original" AE..= True]
+
+    updateWidgetModal authCtx slackAction widgetTitle = do
+      let metas = T.splitOn "___" slackAction.view.private_metadata
+          channelId = fromMaybe "" $ viaNonEmpty head metas
+          res = fromMaybe [] $ viaNonEmpty tail metas
+          pid = fromMaybe "" $ viaNonEmpty head res
+          res' = fromMaybe [] $ viaNonEmpty tail res
+          baseTemplate = fromMaybe "" $ viaNonEmpty head res'
+
+      dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString baseTemplate)
+      whenJust dashboardM $ \dashboard -> do
+        let widgets = V.fromList $ (\w -> (fromMaybe "Untitled-" w.title, fromMaybe "Untitled-" w.title)) <$> dashboard.widgets
+            widget = find (\w -> (fromMaybe "Untitled-" w.title) == widgetTitle) dashboard.widgets
+        whenJust widget $ \w -> do
+          now <- Time.currentTime
+          let query = w.query >>= (\x -> Just $ "&q=" <> decodeUtf8 (urlEncode True $ encodeUtf8 x))
+              sql = w.sql >>= (\x -> Just $ "&sql=" <> decodeUtf8 (urlEncode True $ encodeUtf8 x))
+              query' = fromMaybe (fromMaybe "" sql) query
+              vizType = Widget.mapWidgetTypeToChartType w.wType
+              chartUrl' = chartImageUrl (query' <> "&p=" <> pid <> "&t=" <> vizType) authCtx.env.chartShotUrl now
+              blocks = V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets, dashboardWidgetView chartUrl' widgetTitle]
+              privateMeta = channelId <> "___" <> pid <> "___" <> baseTemplate <> "___" <> chartUrl'
+          _ <- triggerSlackModal authCtx.env.slackBotToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView privateMeta blocks]
+          pass
+      handleUnknownActionType
+
+    handleUnknownActionType = pure $ AE.object []
 
 
--- pure $ AE.object ["text" AE..= "apitoolkit is working...", "replace_original" AE..= True, "delete_original" AE..= True]
+lookupSelectedValueByKey :: Text -> AE.Value -> Maybe Text
+lookupSelectedValueByKey key' val = parseMaybe parser val
+  where
+    key = KEM.fromText key'
+    parser = AE.withObject "state" $ \o -> do
+      values <- o AE..: "values"
+      inner <- values AE..: key
+      field <- inner AE..: key
+      selected <- field AE..: "selected_option"
+      selected AE..: "value"
+
 
 sendSlackFollowupResponse :: Text -> AE.Value -> ATBaseCtx ()
 sendSlackFollowupResponse responseUrl content = do
@@ -858,8 +930,8 @@ getBotContent target question query query_url chartOptions baseUrl now =
         ]
 
 
-dashboardView :: V.Vector AE.Value -> AE.Value
-dashboardView blocks =
+dashboardView :: Text -> V.Vector AE.Value -> AE.Value
+dashboardView privateData blocks =
   AE.object
     [ "type" AE..= "modal"
     , "callback_id" AE..= ""
@@ -870,6 +942,8 @@ dashboardView blocks =
           ]
     , "blocks"
         AE..= AE.Array blocks
+    , "private_metadata" AE..= privateData
+    , "submit" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "Send to channel"]
     ]
 
 
@@ -896,7 +970,7 @@ dashboardViewTwo options =
   AE.object
     [ "type" AE..= "section"
     , "block_id" AE..= "widget-select"
-    , "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= "*Dashboard*"]
+    , "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= "*Widget*"]
     , "accessory"
         AE..= AE.object
           [ "action_id" AE..= "widget-select"
@@ -909,9 +983,26 @@ dashboardViewTwo options =
     opts = V.map (\(text, value) -> AE.object ["text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= text], "value" AE..= value]) options
 
 
+dashboardWidgetView :: Text -> Text -> AE.Value
+dashboardWidgetView image_url widgetTitle =
+  AE.object
+    [ "type" AE..= "image"
+    , "image_url" AE..= image_url
+    , "alt_text" AE..= widgetTitle
+    ]
+
+
 externalOptionsH :: AE.Value -> ATBaseCtx AE.Value
 externalOptionsH val = do
   pure
     $ AE.object
       [ "options" AE..= AE.Array (V.fromList [AE.object ["text" AE..= "Option 1", "value" AE..= "option1"], AE.object ["text" AE..= "Option 2", "value" AE..= "option2"]])
       ]
+
+
+sendSlackChatMessage :: HTTP :> es => Text -> AE.Value -> Eff es ()
+sendSlackChatMessage token content = do
+  let url = "https://slack.com/api/chat.postMessage"
+  let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> token]
+  _ <- postWith opts (toString url) content
+  pass

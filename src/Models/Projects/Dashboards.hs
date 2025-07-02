@@ -1,4 +1,4 @@
-module Models.Projects.Dashboards (Dashboard (..), DashboardVM (..), DashboardId (..), Variable (..), VariableType (..), getDashboardById, readDashboardsFromDirectory, readDashboardEndpoint, replaceQueryVariables) where
+module Models.Projects.Dashboards (Dashboard (..), DashboardVM (..), DashboardId (..), readDashboardFile, Variable (..), VariableType (..), getDashboardById, readDashboardsFromDirectory, readDashboardEndpoint, replaceQueryVariables) where
 
 import Control.Exception (try)
 import Control.Lens
