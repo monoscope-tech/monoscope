@@ -513,8 +513,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-          <> [msgJson]
-          <> ["\n\nUser query: " <> question]
+        <> [msgJson]
+        <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
@@ -689,7 +689,6 @@ data SlackView = SlackView
   , blocks :: [AE.Value]
   , id :: Text
   , state :: Maybe AE.Value
-
   }
   deriving (Generic, Show)
   deriving anyclass (AE.FromJSON)
@@ -766,8 +765,8 @@ slackActionsH action = do
           channelId = fromMaybe "" $ viaNonEmpty head metas
           pid = fromMaybe "" $ viaNonEmpty head $ fromMaybe [] $ viaNonEmpty tail metas
           image_url = fromMaybe "" $ viaNonEmpty last metas
-          dashBoardId =  slackAction.view.state >>= lookupSelectedValueByKey "dashboard-select"
-          widgetTitle =  slackAction.view.state >>= lookupSelectedValueByKey "widget-select"
+          dashBoardId = slackAction.view.state >>= lookupSelectedValueByKey "dashboard-select"
+          widgetTitle = slackAction.view.state >>= lookupSelectedValueByKey "widget-select"
           url = authCtx.env.hostUrl <> "p/" <> pid <> "/dashboards/" <> fromMaybe "" dashBoardId
           heading = "<" <> url <> "|" <> fromMaybe "" widgetTitle <> ">"
 
