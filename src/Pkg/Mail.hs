@@ -5,7 +5,7 @@ module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendDiscordNotif, sendSlac
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
-import Data.Effectful.Wreq qualified as Wreq
+import Data.Effectful.Notify qualified as Notify
 import Data.Pool ()
 import Data.Text qualified as T
 import Data.Time
@@ -17,80 +17,38 @@ import Effectful (
  )
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
-import Effectful.Reader.Static (ask)
+import Effectful.Reader.Static (Reader, ask)
 import Log qualified
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Slack (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
-import Network.Wreq (defaults, header, postWith)
-import Relude hiding (ask)
+import Network.Wreq (defaults, header)
+import Relude hiding (Reader, ask)
 import System.Config (AuthContext (env))
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx)
 
 
-sendPostmarkEmail :: Text -> Maybe (Text, AE.Value) -> Maybe (Text, Text) -> ATBackgroundCtx ()
-sendPostmarkEmail reciever tmpOptionsM subMsg = do
-  appCtx <- ask @Config.AuthContext
-  let url = if isJust tmpOptionsM then "https://api.postmarkapp.com/email/withTemplate" else "https://api.postmarkapp.com/email"
-  let apiKey = encodeUtf8 appCtx.config.postmarkToken
-  let (subject, message) = fromMaybe ("", "") subMsg
-  let payload = case tmpOptionsM of
-        Just (template, templateVars) ->
-          [aesonQQ|
-            {
-        "From": "hello@apitoolkit.io",
-        "To": #{reciever},
-        "TemplateAlias": #{template},
-        "TemplateModel": #{templateVars}
-            }
-        |]
-        _ ->
-          [aesonQQ|
-            {
-        "From": "hello@apitoolkit.io",
-        "Subject": #{subject},
-        "To": #{reciever},
-        "TextBody": #{message},
-        "HtmlBody": "<p>#{message}</p>",
-        "MessageStream": "outbound"
-            }
-        |]
-  let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Accept" .~ ["application/json"] & header "X-Postmark-Server-Token" .~ [apiKey]
-  response <- liftIO $ postWith opts url payload
-  pass
+sendPostmarkEmail :: (Notify.Notify :> es) => Text -> Maybe (Text, AE.Value) -> Maybe (Text, Text) -> Eff es ()
+sendPostmarkEmail receiver tmpOptionsM subMsg = 
+  Notify.sendNotification $ Notify.emailNotification receiver tmpOptionsM subMsg
 
 
-sendSlackMessage :: (DB :> es, IOE :> es, Log :> es) => Projects.ProjectId -> Text -> Eff es ()
+sendSlackMessage :: (DB :> es, Log :> es, Notify.Notify :> es) => Projects.ProjectId -> Text -> Eff es ()
 sendSlackMessage pid message = do
   slackData <- getProjectSlackData pid
   case slackData of
-    Just s -> liftIO $ slackPostWebhook s.webhookUrl message
+    Just s -> do
+      let payload = [aesonQQ| {"text": #{message}, "type":"mrkdwn"} |]
+      Notify.sendNotification $ Notify.slackNotification s.webhookUrl payload
     Nothing -> Log.logAttention "sendSlackMessage is not configured. But was called" (pid, message)
 
 
-sendDiscordNotif :: Text -> Text -> ATBackgroundCtx ()
+sendDiscordNotif :: (Notify.Notify :> es) => Text -> Text -> Eff es ()
 sendDiscordNotif message channelId = do
-  appCtx <- ask @Config.AuthContext
   let msg = AE.object ["content" AE..= message]
-      url = toString $ "https://discord.com/api/v10/channels/" <> channelId <> "/messages"
-      opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bot " <> appCtx.config.discordBotToken]
-  response <- liftIO $ postWith opts url msg
-  pass
-
-
-slackPostWebhook :: Text -> Text -> IO ()
-slackPostWebhook webhookUrl message = do
-  let opts = defaults & header "Content-Type" .~ ["application/json"]
-  let payload =
-        [aesonQQ| {
-                "text": #{message},
-                "type":"mrkdwn"
-              }
-            |]
-  response <- liftIO $ postWith opts (toString webhookUrl) payload
-  pass
+  Notify.sendNotification $ Notify.discordNotification channelId msg
 
 
 data NotificationAlerts
@@ -110,16 +68,7 @@ data NotificationAlerts
       }
 
 
--- sendEmailAlert :: NotificationAlerts -> Projects.ProjectId -> Text -> ATBackgroundCtx ()
--- sendEmailAlert alert pid pTitle = do
---   appCtx <- ask @Config.AuthContext
---   let envCfg = appCtx.env
---   let projectUrl = envCfg.hostUrl <> "p/" <> pid.toText
---   case alert of
---     RuntimeErrorAlert a -> do
---       let subject = "[API Toolkit] New Runtime Error in " <> pTitle
-
-sendDiscordAlert :: NotificationAlerts -> Projects.ProjectId -> Text -> ATBackgroundCtx ()
+sendDiscordAlert :: (Notify.Notify :> es, DB :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Eff es ()
 sendDiscordAlert alert pid pTitle = do
   appCtx <- ask @Config.AuthContext
   discordDataM <- getDiscordDataByProjectId pid
@@ -132,36 +81,27 @@ sendDiscordAlert alert pid pTitle = do
       ShapeAlert -> pass
       ReportAlert{..} -> send $ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
   where
-    sendAlert :: Maybe Text -> AE.Value -> ATBackgroundCtx ()
-    sendAlert channelId content = do
-      appCtx <- ask @Config.AuthContext
-      let envCfg = appCtx.env
-      let url = toString $ "https://discord.com/api/v10/channels/" <> fromMaybe "" channelId <> "/messages"
-      let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bot " <> envCfg.discordBotToken]
-      _ <- Wreq.postWith opts url content
-      pass
+    sendAlert :: (Notify.Notify :> es) => Maybe Text -> AE.Value -> Eff es ()
+    sendAlert channelId content = 
+      whenJust channelId $ \cid -> 
+        Notify.sendNotification $ Notify.discordNotification cid content
 
 
-sendSlackAlert :: NotificationAlerts -> Projects.ProjectId -> Text -> ATBackgroundCtx ()
+sendSlackAlert :: (Notify.Notify :> es, DB :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Eff es ()
 sendSlackAlert alert pid pTitle = do
   appCtx <- ask @Config.AuthContext
   slackDataM <- getProjectSlackData pid
   whenJust slackDataM \slackData -> do
     let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
     case alert of
-      RuntimeErrorAlert a -> sendAlert $ slackErrorAlert a pTitle slackData.channelId projectUrl
-      EndpointAlert{..} -> sendAlert $ slackNewEndpointsAlert project endpoints slackData.channelId endpointHash projectUrl
+      RuntimeErrorAlert a -> sendAlert slackData.webhookUrl $ slackErrorAlert a pTitle slackData.channelId projectUrl
+      EndpointAlert{..} -> sendAlert slackData.webhookUrl $ slackNewEndpointsAlert project endpoints slackData.channelId endpointHash projectUrl
       ShapeAlert -> pass
-      ReportAlert{..} -> sendAlert $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle slackData.channelId reportUrl allChartUrl errorChartUrl
+      ReportAlert{..} -> sendAlert slackData.webhookUrl $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle slackData.channelId reportUrl allChartUrl errorChartUrl
   where
-    sendAlert :: AE.Value -> ATBackgroundCtx ()
-    sendAlert content = do
-      appCtx <- ask @Config.AuthContext
-      let envCfg = appCtx.env
-      let url = "https://slack.com/api/chat.postMessage"
-      let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> envCfg.slackBotToken]
-      _ <- Wreq.postWith opts (toString url) content
-      pass
+    sendAlert :: (Notify.Notify :> es) => Text -> AE.Value -> Eff es ()
+    sendAlert webhookUrl content = 
+      Notify.sendNotification $ Notify.slackNotification webhookUrl content
 
 
 slackReportAlert :: Text -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> Text -> AE.Value
