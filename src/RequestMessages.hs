@@ -151,8 +151,7 @@ processErrors pid maybeSdkType maybeMethod maybePath err = (normalizedError, q, 
         , RequestDumps.requestMethod = maybeMethod <|> err.requestMethod
         , RequestDumps.requestPath = maybePath <|> err.requestPath
         }
-    defaultHash = toXXHash (pid.toText <> err.errorType <> formattedMessage <> maybe "" show maybeSdkType)
-    formattedMessage = fromMaybe err.message (valueToFormatStr err.message)
+    defaultHash = toXXHash (pid.toText <> err.errorType <> replaceAllFormats err.message <> maybe "" show maybeSdkType)
 
 
 sortVector :: Ord a => V.Vector a -> V.Vector a
@@ -287,75 +286,74 @@ valueToFormat (AET.Array _) = "array"
 commonFormatPatterns :: [(RE, Text)]
 commonFormatPatterns =
   [ -- UUIDs and hashes (most specific hex patterns first)
-    ([re|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|], "{uuid}")
-  , ([re|[0-9a-fA-F]{24}|], "{uuid}") -- Keep as uuid for backward compatibility
-  , ([re|[a-fA-F0-9]{64}|], "{sha256}")
-  , ([re|[a-fA-F0-9]{40}|], "{sha1}")
-  , ([re|[a-fA-F0-9]{32}|], "{md5}")
-  , ([re|[0-9A-Fa-f]{14,20}|], "{hex_id}") -- Match hex-like IDs that aren't UUIDs
+    ([re|^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$|], "{uuid}")
+  , ([re|^[0-9a-fA-F]{24}$|], "{uuid}") -- Keep as uuid for backward compatibility
+  , ([re|^[a-fA-F0-9]{64}$|], "{sha256}")
+  , ([re|^[a-fA-F0-9]{40}$|], "{sha1}")
+  , ([re|^[a-fA-F0-9]{32}$|], "{md5}")
+  -- Financial (moved up before hex_id to catch credit cards first)
+  , ([re|^4[0-9]{15}$|], "{credit_card}") -- Visa 16 digits
+  , ([re|^4[0-9]{12}$|], "{credit_card}") -- Visa 13 digits
+  , ([re|^5[1-5][0-9]{14}$|], "{credit_card}") -- Mastercard
+  , ([re|^3[47][0-9]{13}$|], "{credit_card}") -- Amex
+  , ([re|^[0-9A-Fa-f]{14,20}$|], "{hex_id}") -- Match hex-like IDs that aren't UUIDs
   -- Authentication & encoding
-  , ([re|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|], "{jwt}")
-  , ([re|[A-Za-z0-9+/]{20,}={0,2}|], "{base64}")
+  , ([re|^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$|], "{jwt}")
+  -- IBAN (moved before base64)
+  , ([re|^[A-Z]{2}[0-9]{2}[A-Za-z0-9]{4}[0-9]{7}[A-Za-z0-9]{0,16}$|], "{iban}")
+  , ([re|^[A-Za-z0-9+/]{20,}={0,2}$|], "{base64}")
   , -- Date patterns (before file paths to avoid conflicts)
-    ([re|\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s[0-9]{1,2}\s(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s[0-9]{4}\s[0-9]{2}:[0-9]{2}:[0-9]{2}\s[+\-][0-9]{4}\b|], "{rfc2822}")
-  , ([re|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+\-][0-9]{2}:[0-9]{2})?|], "{YYYY-MM-DDThh:mm:ss.sTZD}") -- ISO 8601
-  , ([re|[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}|], "{YYYY-MM-DD HH:MM:SS}") -- MySQL datetime
-  , ([re|[0-9]{2}/[0-9]{2}/[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}|], "{MM/DD/YYYY HH:MM:SS}") -- US datetime
-  , ([re|[0-9]{2}-[0-9]{2}-[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}|], "{MM-DD-YYYY HH:MM:SS}")
-  , ([re|[0-9]{2}\.[0-9]{2}\.[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}|], "{DD.MM.YYYY HH:MM:SS}") -- European datetime
-  , ([re|[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}|], "{YYYY/MM/DD HH:MM:SS}") -- Japanese datetime
-  , ([re|\b(0[1-9]|[12][0-9]|3[01])[- /.](0[1-9]|1[012])[- /.](19|20)[0-9][0-9]\b|], "{dd/mm/yyyy}") -- European date
-  , ([re|\b(0[1-9]|[12][0-9]|3[01])-(0[1-9]|1[012])-(19|20)[0-9][0-9]\b|], "{dd-mm-yyyy}")
-  , ([re|\b(0[1-9]|[12][0-9]|3[01])\.(0[1-9]|1[012])\.(19|20)[0-9][0-9]\b|], "{dd.mm.yyyy}")
-  , ([re|\b(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)[0-9][0-9]\b|], "{mm/dd/yyyy}") -- US date
-  , ([re|\b(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])-(19|20)[0-9][0-9]\b|], "{mm-dd-yyyy}")
-  , ([re|\b(0[1-9]|1[012])\.(0[1-9]|[12][0-9]|3[01])\.(19|20)[0-9][0-9]\b|], "{mm.dd.yyyy}")
-  , ([re|\b[0-9]{4}-[0-9]{2}-[0-9]{2}\b|], "{YYYY-MM-DD}") -- ISO date
-  , ([re|\b[0-9]{4}/[0-9]{2}/[0-9]{2}\b|], "{YYYY/MM/DD}") -- Japanese date
-  , ([re|\b[0-9]{8}\b|], "{YYYYMMDD}") -- Compact date
-  , ([re|\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{1,2}, [0-9]{4}\b|], "{Mon DD, YYYY}") -- Long month
-  , ([re|\b[0-9]{1,2}-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-[0-9]{4}\b|], "{DD-Mon-YYYY}") -- Oracle date
+    ([re|^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), [0-9]{1,2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} [+\-][0-9]{4}$|], "{rfc2822}")
+  , ([re|^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+\-][0-9]{2}:[0-9]{2})?$|], "{YYYY-MM-DDThh:mm:ss.sTZD}") -- ISO 8601
+  , ([re|^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$|], "{YYYY-MM-DD HH:MM:SS}") -- MySQL datetime
+  , ([re|^[0-9]{2}/[0-9]{2}/[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}$|], "{MM/DD/YYYY HH:MM:SS}") -- US datetime
+  , ([re|^[0-9]{2}-[0-9]{2}-[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}$|], "{MM-DD-YYYY HH:MM:SS}")
+  , ([re|^[0-9]{2}\.[0-9]{2}\.[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}$|], "{DD.MM.YYYY HH:MM:SS}") -- European datetime
+  , ([re|^[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$|], "{YYYY/MM/DD HH:MM:SS}") -- Japanese datetime
+  , ([re|^(0[1-9]|[12][0-9]|3[01])[/](0[1-9]|1[012])[/](19|20)[0-9][0-9]$|], "{dd/mm/yyyy}") -- European date
+  , ([re|^(0[1-9]|[12][0-9]|3[01])-(0[1-9]|1[012])-(19|20)[0-9][0-9]$|], "{dd-mm-yyyy}")
+  , ([re|^(0[1-9]|[12][0-9]|3[01])\.(0[1-9]|1[012])\.(19|20)[0-9][0-9]$|], "{dd.mm.yyyy}")
+  , ([re|^(0[1-9]|1[012])[/](0[1-9]|[12][0-9]|3[01])[/](19|20)[0-9][0-9]$|], "{mm/dd/yyyy}") -- US date
+  , ([re|^(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])-(19|20)[0-9][0-9]$|], "{mm-dd-yyyy}")
+  , ([re|^(0[1-9]|1[012])\.(0[1-9]|[12][0-9]|3[01])\.(19|20)[0-9][0-9]$|], "{mm.dd.yyyy}")
+  , ([re|^[0-9]{4}-[0-9]{2}-[0-9]{2}$|], "{YYYY-MM-DD}") -- ISO date
+  , ([re|^[0-9]{4}/[0-9]{2}/[0-9]{2}$|], "{YYYY/MM/DD}") -- Japanese date
+  , ([re|^[0-9]{8}$|], "{YYYYMMDD}") -- Compact date
+  , ([re|^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{1,2}, [0-9]{4}$|], "{Mon DD, YYYY}") -- Long month
+  , ([re|^[0-9]{1,2}-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-[0-9]{4}$|], "{DD-Mon-YYYY}") -- Oracle date
   -- Time patterns
-  , ([re|[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}|], "{HH:MM:SS.mmm}") -- Time with milliseconds
-  , ([re|[0-9]{2}:[0-9]{2}:[0-9]{2}|], "{HH:MM:SS}") -- Time only
-  , ([re|\b[0-9]{1,2}:[0-9]{2} (AM|PM|am|pm)\b|], "{H:MM AM/PM}") -- 12-hour time
+  , ([re|^[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}$|], "{HH:MM:SS.mmm}") -- Time with milliseconds
+  , ([re|^[0-9]{2}:[0-9]{2}:[0-9]{2}$|], "{HH:MM:SS}") -- Time only
+  , ([re|^[0-9]{1,2}:[0-9]{2} (AM|PM|am|pm)$|], "{H:MM AM/PM}") -- 12-hour time
+  -- Personal identifiers
+  , ([re|^[0-9]{3}-[0-9]{2}-[0-9]{4}$|], "{ssn}")
+  , ([re|^\+1 \([0-9]{3}\) [0-9]{3}-[0-9]{4}$|], "{phone}")
   -- Network patterns
-  , ([re|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|], "{email}")
-  , ([re|https?://[^\s/$.?#].[^\s]*|], "{url}")
-  , ([re|\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/([0-9]|[12][0-9]|3[0-2])\b|], "{cidr}")
-  , ([re|\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b|], "{ipv4}")
-  , ([re|([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|], "{ipv6}")
-  , ([re|([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}|], "{mac}")
-  , ([re|:[0-9]{1,5}|], "{port}")
-  , ([re|[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}|], "{hostname}")
+  , ([re|^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/([0-9]|[12][0-9]|3[0-2])$|], "{cidr}")
+  , ([re|^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$|], "{ipv4}")
+  , ([re|^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$|], "{email}")
+  , ([re|^https?://[^\s]+$|], "{url}")
+  , ([re|^([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}$|], "{ipv6}")
+  , ([re|^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$|], "{mac}")
+  , ([re|^:[0-9]{1,5}$|], "{port}")
+  , ([re|^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$|], "{hostname}")
   , -- File paths (after dates to avoid conflicts)
-    ([re|[A-Za-z]:\\[^\\/:*?"<>|\r\n]*|], "{file_path}")
-  , ([re|/[A-Za-z0-9._/-]+|], "{file_path}")
-  , -- Financial
-    ([re|\b(4[0-9]{12}([0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\b|], "{credit_card}")
-  , ([re|[A-Z]{2}[0-9]{2}[A-Za-z0-9]{4}[0-9]{7}[A-Za-z0-9]{0,16}|], "{iban}")
-  , -- Personal identifiers
-    ([re|[0-9]{3}-[0-9]{2}-[0-9]{4}|], "{ssn}")
-  , ([re|\b\+?[0-9]{1,3}[-.\s]?(\([0-9]{1,4}\)|[0-9]{1,4})[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}\b|], "{phone}")
+    ([re|^[A-Za-z]:\\\\.*$|], "{file_path}") -- Windows path with double backslash
+  , ([re|^[A-Za-z]:\\.*$|], "{file_path}") -- Windows path with single backslash
+  , ([re|^/[A-Za-z0-9._/-]+$|], "{file_path}") -- Unix path
   , -- Timestamps
-    ([re|1[0-9]{12}|], "{epoch_ms}")
-  , ([re|1[0-9]{9}|], "{epoch_s}")
-  , ([re|[0-9]+(:[0-9]{2}){1,2}(\.[0-9]+)?|], "{duration}")
-  , -- Process/thread identifiers
-    ([re|^\s*at\s[^\s]+\([^\)]+:[0-9]+\)|], "{stack_trace}")
-  , ([re|pid[:=]?[0-9]+|], "{pid}")
-  , ([re|tid[:=]?[0-9]+|], "{tid}")
-  , ([re|Thread-[0-9]+|], "{thread}")
-  , ([re|session_[A-Za-z0-9\-]{8,}|], "{session_id}")
+    ([re|^1[0-9]{12}$|], "{epoch_ms}")
+  , ([re|^1[0-9]{9}$|], "{epoch_s}")
+  -- Process/thread identifiers
+  , ([re|^pid[:=]?[0-9]+$|], "{pid}")
+  , ([re|^tid[:=]?[0-9]+$|], "{tid}")
+  , ([re|^Thread-[0-9]+$|], "{thread}")
+  , ([re|^session_[A-Za-z0-9\-]{8,}$|], "{session_id}")
   , -- Numbers (last, as they're most general)
-    ([re|[1-5][0-9]{2}|], "{http_status}")
-  , ([re|0x[0-9A-Fa-f]+|], "{hex}")
-  , ([re|[+-]?[0-9]+\.[0-9]+|], "{float}")
-  , ([re|[0-9]+|], "{integer}")
-  , -- Quoted values
-    ([re|'[^']{1,100}'|], "{quoted_value}")
-  , ([re|"[^"]{1,100}"|], "{quoted_value}")
-  , ([re|`[^`]{1,100}`|], "{quoted_value}")
+    ([re|^[1-5][0-9]{2}$|], "{http_status}")
+  , ([re|^0x[0-9A-Fa-f]+$|], "{hex}")
+  , ([re|^[+-]?[0-9]+\.[0-9]+$|], "{float}")
+  , ([re|^[0-9]+$|], "{integer}")
   ]
 
 

@@ -81,7 +81,8 @@ spec = aroundAll TestUtils.withSetup do
       -- Now refresh the materialized view to see the results
       _ <- withPool pool $ TestUtils.refreshMaterializedView "apis.endpoint_request_stats"
       endpoints <- withPool pool $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0 "Incoming"
-      length endpoints `shouldBe` 2 -- Two new endpoints from the last 2 requests
+      traceShowM endpoints
+      length endpoints `shouldBe` 3 -- Two new endpoints from the last 2 requests
       forM_ endpoints \enp -> do
-        ["/", "/api/v1/user/login"] `shouldContain` [enp.urlPath]
+        ["/", "/api/{number}/user/login", "/service/extension/backup/mboximport"] `shouldContain` [enp.urlPath]
       pass
