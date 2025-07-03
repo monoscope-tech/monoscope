@@ -42,6 +42,7 @@ library
   exposed-modules:
       BackgroundJobs
       Data.Default.Instances
+      Data.Effectful.Notify
       Data.Effectful.UUID
       Data.Effectful.Wreq
       Devel
@@ -499,6 +500,7 @@ test-suite unit-tests
   type: exitcode-stdio-1.0
   main-is: Main.hs
   other-modules:
+      Data.Effectful.NotifySpec
       Pages.Specification.GenerateSwaggerSpec
       Pkg.Parser.ExprSpec
       Pkg.ParserSpec
@@ -541,10 +543,13 @@ test-suite unit-tests
       aeson
     , aeson-qq
     , apitoolkit-server
+    , effectful-core
     , extra
     , hs-opentelemetry-instrumentation-auto
     , hspec
     , hspec-expectations-json
+    , log-base
+    , log-effectful
     , neat-interpolation
     , relude >=1.2.0.0
     , uuid

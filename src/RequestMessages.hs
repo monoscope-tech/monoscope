@@ -489,6 +489,8 @@ replaceAllFormats input = restorePlaceholders $ processPatterns input formatPatt
 -- >>> map valueToFormatStr ["plain text", "", "hello world", "test123test"]
 -- [Nothing,Nothing,Nothing,Nothing]
 --
+-- >>> map valueToFormatStr ["v1"]
+--
 valueToFormatStr :: Text -> Maybe Text
 valueToFormatStr val = checkFormats formatChecks
   where

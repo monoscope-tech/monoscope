@@ -28,6 +28,7 @@ where
 
 import Control.Monad.Except qualified as Except
 import Data.Aeson qualified as AE
+import Data.Effectful.Notify qualified
 import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
 import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPWreq)
 import Data.Map qualified as Map
@@ -153,7 +154,8 @@ effToHandler computation = do
 type ATBackgroundCtx :: Type -> Type
 type ATBackgroundCtx =
   Effectful.Eff
-    '[ Effectful.Reader.Static.Reader AuthContext
+    '[ Data.Effectful.Notify.Notify
+     , Effectful.Reader.Static.Reader AuthContext
      , DB
      , Labeled "timefusion" DB
      , Time
@@ -168,6 +170,7 @@ type ATBackgroundCtx =
 runBackground :: Log.Logger -> AuthContext -> ATBackgroundCtx a -> IO a
 runBackground logger appCtx process =
   process
+    & Data.Effectful.Notify.runNotifyProduction
     & Effectful.Reader.Static.runReader appCtx
     & runDB appCtx.pool
     & runLabeled @"timefusion" (runDB appCtx.timefusionPgPool)

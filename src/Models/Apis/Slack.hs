@@ -12,7 +12,6 @@ module Models.Apis.Slack (
   getDiscordData,
 ) where
 
-import Data.Effectful.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (execute, query, queryOne)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)

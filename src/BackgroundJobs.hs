@@ -1,4 +1,4 @@
-module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..), runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, throwParsePayload) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -93,6 +93,7 @@ data BgJobs
   | CleanupDemoProject
   | FiveMinuteSpanProcessing UTCTime
   | OneMinuteErrorProcessing UTCTime
+  | SlackNotification Projects.ProjectId Text
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -112,7 +113,11 @@ sendMessageToDiscord msg = do
 jobsRunner :: Log.Logger -> Config.AuthContext -> Job -> IO ()
 jobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs $ do
   bgJob <- throwParsePayload job
-  void $ runBackground logger authCtx do
+  void $ runBackground logger authCtx (processBackgroundJob authCtx job bgJob)
+
+-- | Process a background job - extracted so it can be run with different effect interpreters
+processBackgroundJob :: Config.AuthContext -> Job -> BgJobs -> ATBackgroundCtx ()
+processBackgroundJob authCtx job bgJob = 
     case bgJob of
       GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
       QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds
@@ -257,6 +262,7 @@ jobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs 
         pass
       FiveMinuteSpanProcessing scheduledTime -> processFiveMinuteSpans scheduledTime
       OneMinuteErrorProcessing scheduledTime -> processOneMinuteErrors scheduledTime
+      SlackNotification pid message -> sendSlackMessage pid message
 
 
 -- | Run hourly scheduled tasks for all projects
