@@ -74,8 +74,8 @@ spec = aroundAll withTestResources do
       res <-
         toServantResponse trATCtx trSessAndHeader trLogger $ TestCollectionEditor.collectionStepsUpdateH testPid collection Nothing
       case res of
-        TestCollectionEditor.CollectionMutSuccess -> fail "Error"
-        _ -> do pass
+        TestCollectionEditor.CollectionMutSuccess -> pass
+        _ -> fail "Expected CollectionMutSuccess"
 
     it "should get inactive collections" \TestResources{..} -> do
       (PageCtx _ (ItemsList.ItemsPage _ collections)) <-

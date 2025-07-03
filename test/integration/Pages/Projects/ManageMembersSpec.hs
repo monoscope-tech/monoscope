@@ -2,6 +2,10 @@ module Pages.Projects.ManageMembersSpec (spec) where
 
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Database.PostgreSQL.Entity.DBT (withPool)
+import Database.PostgreSQL.Transact qualified as PGT
+import Database.PostgreSQL.Simple (Only(..))
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper
@@ -20,6 +24,9 @@ spec :: Spec
 spec = aroundAll withTestResources do
   describe "Members Creation, Update and Consumption" do
     it "Create member" \TestResources{..} -> do
+      -- Update project to a paid plan to allow multiple members
+      _ <- withPool trPool $ PGT.execute [sql|UPDATE projects.projects SET payment_plan = 'PAID' WHERE id = ?|] (Only testPid)
+      pass
       let member =
             ManageMembers.ManageMembersForm
               { emails = ["example@gmail.com"]

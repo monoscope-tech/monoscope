@@ -31,7 +31,7 @@ spec = aroundAll withTestResources do
         Log.LogPage (PageCtx _ content) -> do
           content.pid `shouldBe` testPid
           content.resultCount `shouldBe` 0
-          content.cols `shouldBe` ["id", "created_at", "rest"]
+          content.cols `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
         _ -> error "Unexpected response"
 
     it "should return log items" \TestResources{..} -> do
@@ -57,7 +57,7 @@ spec = aroundAll withTestResources do
         Log.LogPage (PageCtx _ content) -> do
           content.pid `shouldBe` testPid
           content.query `shouldBe` Nothing
-          content.cols `shouldBe` ["id", "created_at", "rest"]
+          content.cols `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
           length content.requestVecs `shouldBe` 200
 
         -- let cur = textToUTCTime $ fromMaybe "" content.cursor

@@ -404,8 +404,8 @@ acknowledgeAnomalies :: Users.UserId -> V.Vector Text -> DBT IO (V.Vector Text)
 acknowledgeAnomalies uid aids
   | V.null aids = pure V.empty
   | otherwise = do
-    _ <- query qIssues (uid, aids) :: DBT IO (V.Vector Text)
-    query q (uid, aids)
+      _ <- query qIssues (uid, aids) :: DBT IO (V.Vector Text)
+      query q (uid, aids)
   where
     qIssues = [sql| update apis.issues set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
     q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
@@ -415,8 +415,8 @@ acknowlegeCascade :: Users.UserId -> V.Vector Text -> DBT IO Int64
 acknowlegeCascade uid targets
   | V.null targets = pure 0
   | otherwise = do
-    _ <- execute qIssues (uid, hashes)
-    execute q (uid, hashes)
+      _ <- execute qIssues (uid, hashes)
+      execute q (uid, hashes)
   where
     hashes = (<> "%") <$> targets
     qIssues = [sql| UPDATE apis.issues SET acknowleged_by = ?, acknowleged_at = NOW() WHERE target_hash=ANY (?); |]

@@ -1,4 +1,4 @@
-module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..), runHourlyJob, generateOtelFacetsBatch) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..), runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -255,8 +255,8 @@ jobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs 
         -- DELETE API KEYS
         _ <- withPool authCtx.pool $ PTR.execute [sql| DELETE FROM projects.project_api_keys WHERE project_id = ? AND title != 'Default API Key' |] (Only pid)
         pass
-      FiveMinuteSpanProcessing scheduledTime -> pass -- processFiveMinuteSpans scheduledTime
-      OneMinuteErrorProcessing scheduledTime -> pass -- processOneMinuteErrors scheduledTime
+      FiveMinuteSpanProcessing scheduledTime -> processFiveMinuteSpans scheduledTime
+      OneMinuteErrorProcessing scheduledTime -> processOneMinuteErrors scheduledTime
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -306,7 +306,9 @@ processFiveMinuteSpans scheduledTime = do
   httpSpans <-
     dbtToEff
       $ query
-        [sql| SELECT * FROM otel_logs_and_spans 
+        [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+                     hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
+              FROM otel_logs_and_spans 
           WHERE timestamp >= ? AND timestamp < ?
           AND kind IN ('server', 'client')
           AND (name LIKE '%http%' 
@@ -343,7 +345,9 @@ processOneMinuteErrors scheduledTime = do
   spansWithErrors <-
     dbtToEff
       $ query
-        [sql| SELECT * FROM otel_logs_and_spans 
+        [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+                     hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
+              FROM otel_logs_and_spans 
           WHERE timestamp >= ? AND timestamp < ?
           AND (
             -- Check for error status

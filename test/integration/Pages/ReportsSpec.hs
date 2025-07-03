@@ -5,7 +5,7 @@ import Test.Hspec
 import OddJobs.Job (createJob)
 
 import Data.Pool (withResource)
-import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time (defaultTimeLocale, formatTime, getCurrentTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Models.Apis.Reports
 import Models.Projects.Projects qualified as Projects
@@ -13,6 +13,7 @@ import Pages.BodyWrapper (PageCtx (..))
 import Pages.Reports qualified as Reports
 
 import BackgroundJobs qualified
+import BackgroundJobs (processFiveMinuteSpans)
 import Data.Aeson qualified as AE
 import Data.ByteString.Lazy qualified as BL
 import Data.HashMap.Strict qualified as HashMap
@@ -54,6 +55,11 @@ spec = aroundAll withTestResources do
 
       let msgs = concat (replicate 100 [("m1", BL.toStrict $ AE.encode reqMsg1), ("m2", BL.toStrict $ AE.encode reqMsg2)]) ++ [("m3", BL.toStrict $ AE.encode reqMsg3), ("m4", BL.toStrict $ AE.encode reqMsg4)]
       _ <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
+      
+      -- Process the spans to generate endpoints and other data needed for reports
+      -- Use a time slightly after the messages to ensure they're captured
+      let processTime = addUTCTime 1 currentTime -- 1 second after the messages
+      _ <- runTestBackground trATCtx $ processFiveMinuteSpans processTime
 
       _ <- liftIO $ withResource trPool \conn -> do
         _ <- createJob conn "background_jobs" $ BackgroundJobs.DailyReports testPid

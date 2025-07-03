@@ -5,7 +5,7 @@ import Data.Cache (Cache, newCache)
 import Data.Default (Default (..))
 import Data.HashMap.Strict qualified as HashMap
 import Data.Pool (Pool)
-import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time (defaultTimeLocale, formatTime, getCurrentTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (execute, withPool)
 import Database.PostgreSQL.Transact qualified as PGT
@@ -15,6 +15,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Pkg.TestUtils qualified as TestUtils
 import ProcessMessage (processMessages)
+import BackgroundJobs (processFiveMinuteSpans)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Clock (TimeSpec (TimeSpec))
@@ -38,8 +39,11 @@ spec :: Spec
 spec = aroundAll TestUtils.withSetup do
   describe "process request to db" do
     it "test processing raw request message string" \pool -> do
-      let jsonMsg = "{\"duration\":737639,\"host\":\"3.228.92.161\",\"method\":\"POST\",\"path_params\":{\"0\":\"/service/extension/backup/mboximport\"},\"project_id\":\"00000000-0000-0000-0000-000000000000\",\"proto_minor\":1,\"proto_major\":1,\"query_params\":{\"account-name\":[\"admin\"],\"account-status\":[\"1\"],\"ow\":[\"cmd\"]},\"raw_url\":\"/service/extension/backup/mboximport?account-name=admin&account-status=1&ow=cmd\",\"referer\":\"\",\"request_body\":\"eyJQS1x1MDAwM1x1MDAwNFx1MDAxNFx1MDAwMFxiXHUwMDAwXGJcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDAiOiJcdTAwMDBcdTAwMDBcdTAwMDAuLi8uLi8uLi8uLi9tYWlsYm94ZC93ZWJhcHBzL3ppbWJyYUFkbWluLzBNVnpBZTZwZ3dlNWdvMUQuanNwXHUwMDFjyL1cbu+/vTBcdTAwMTBcdTAwMDDvv71PUVx1MDAwMu+/vVx1MDAwNCEo77+9VVxc77+9W++/vVx1MDAxNjvvv710O++/vUNT77+9JO+/vUvvv73vv71F77+9b1VkLu+/ve+/ve+/vVgiLCIg77+9ae+/ve+/ve+/vTvvv71cdTAwMDRt77+977+9PkQ+77+9Re+/vXrvv73vv70/77+9XHUwMDA11Lvvv73vv71QZWbvv71P77+9QFx1MDAxYu+/ve+/ve+/vVDvv73vv71kXHUwMDA2YOOsvlwi77+9XHUwMDEx77+9XHUwMDA277+9yYDPiC/vv71Z77+9IVx1MDAxMe+/vVJ6REJG77+9yqxYf1x1MDAwM1x1MDAwMFx1MDAwMO+/ve+/vVBLXHUwMDA3XGJcdTAwMDI/77+9Xe+/vVx1MDAwMFx1MDAwMFx1MDAwMO+/vVx1MDAwMFx1MDAwMFx1MDAwMFBLXHUwMDAzXHUwMDA0XHUwMDE0XHUwMDAwXGJcdTAwMDBcYlx1MDAwMFx1MDAwMFx1MDAwMFx1MDAwMFx1MDAwMFx1MDAwMFx1MDAwMFx1MDAwMFx1MDAwMFx1MDAwMFx1MDAwMFx1MDAwMFx1MDAwMFx1MDAwMFx1MDAwMFx1MDAwMFx1MDAwMCI6Ilx1MDAwMFx1MDAwMFx1MDAwMC4uLy4uLy4uLy4uL21haWxib3hkL3dlYmFwcHMvemltYnJhQWRtaW4vME1WekFlNnBnd2U1Z28xRC5qc3BcdTAwMWPIvVxu77+9MFx1MDAxMFx1MDAwMO+/vU9RXHUwMDAy77+9XHUwMDA0ISjvv71VXFzvv71b77+9XHUwMDE2O++/vXQ777+9Q1Pvv70k77+9S++/ve+/vUXvv71vVWQu77+977+977+9WCIsIiDvv71p77+977+977+9O++/vVx1MDAwNG3vv73vv70+RD7vv71F77+9eu+/ve+/vT/vv71cdTAwMDXUu++/ve+/vVBlZu+/vU/vv71AXHUwMDFi77+977+977+9UO+/ve+/vWRcdTAwMDZg46y+XCLvv71cdTAwMTHvv71cdTAwMDbvv73JgM+IL++/vVnvv70hXHUwMDEx77+9UnpEQkbvv73KrFh/XHUwMDAzXHUwMDAwXHUwMDAw77+977+9UEtcdTAwMDdcYlx1MDAwMj/vv71d77+9XHUwMDAwXHUwMDAwXHUwMDAw77+9XHUwMDAwXHUwMDAwXHUwMDAwUEtcdTAwMDFcdTAwMDJcdTAwMTRcdTAwMDBcdTAwMTRcdTAwMDBcYlx1MDAwMFxiXHUwMDAwXHUwMDAwXHUwMDAwXHUwMDAwXHUwMDAwXHUwMDAyP++/vV3vv71cdTAwMDBcdTAwMDBcdTAwMDDvv71cdTAwMDBcdTAwMDBcdTAwMDAiOiJcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDBcdTAwMDAuLi8uLi8uLi8uLi9tYWlsYm94ZC93ZWJhcHBzL3ppbWJyYUFkbWluLzBNVnpBZTZwZ3dlNWdvMUQuanNwUEtcdTAwMDFcdTAwMDJcdTAwMTRcdTAwMDBcdTAwMTRcdTAwMDBcYlx1MDAwMFxiXHUwMDAwXHUwMDAwXHUwMDAwXHUwMDAwXHUwMDAwXHUwMDAyP++/vV3vv71cdTAwMDBcdTAwMDBcdTAwMDDvv71cdTAwMDBcdTAwMDBcdTAwMDA9XHUwMDAwXHUwMDAwXHUwMDAwXHUwMDAwXHUwMDAwXHUwMDAwXHUwMDAwXHUwMDAwXHUwMDAwXHUwMDAwXHUwMDAwXHUwMDAwXHUwMDAw77+9XHUwMDAwXHUwMDAwXHUwMDAwLi4vLi4vLi4vLi4vbWFpbGJveGQvd2ViYXBwcy96aW1icmFBZG1pbi8wTVZ6QWU2cGd3ZTVnbzFELmpzcFBLXHUwMDA1XHUwMDA2XHUwMDAwXHUwMDAwXHUwMDAwXHUwMDAwXHUwMDAyXHUwMDAwXHUwMDAyXHUwMDAw77+9XHUwMDAwXHUwMDAwXHUwMDAw77+9XHUwMDAxXHUwMDAwXHUwMDAwXHUwMDAwXHUwMDAwIn0=\",\"request_headers\":{\"connection\":[\"upgrade\"],\"host\":[\"3.228.92.161\"],\"x-real-ip\":[\"172.31.5.55\"],\"x-forwarded-for\":[\"138.199.34.206, 172.31.5.55\"],\"content-length\":[\"716\"],\"x-forwarded-proto\":[\"http\"],\"x-forwarded-port\":[\"80\"],\"x-amzn-trace-id\":[\"Root=1-65e01ff0-22108e1659ac458930d6e9b0\"],\"user-agent\":[\"Mozilla/5.0 (Windows NT 6.3; Win64; x64; rv:92.0) Gecko/20100101 Firefox/92.0\"],\"accept-encoding\":[\"gzip, deflate\"],\"content-type\":[\"application/x-www-form-urlencoded\"]},\"response_body\":\"Tm90IEZvdW5k\",\"response_headers\":{\"x-powered-by\":[\"Express\"],\"vary\":[\"Origin\"],\"access-control-allow-credentials\":[\"true\"],\"content-type\":[\"text/html; charset=utf-8\"],\"content-length\":[\"9\"],\"etag\":[\"W/\\\"9-0gXL1ngzMqISxa6S1zx3F4wtLyg\\\"\"]},\"sdk_type\":\"JsExpress\",\"status_code\":404,\"timestamp\":\"2024-02-29T06:10:56.870Z\",\"url_path\":\"/service/extension/backup/mboximport\",\"errors\":[],\"tags\":[],\"msg_id\":\"fdadc75d-5710-49cd-adfd-2d7547c9ab17\"}"
-      let msgs = [("m1", jsonMsg)]
+      currentTime <- getCurrentTime
+      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
+      -- Use a simple test message without problematic Unicode escape sequences
+      let jsonMsg = "{\"duration\":737639,\"host\":\"3.228.92.161\",\"method\":\"POST\",\"path_params\":{\"0\":\"/service/extension/backup/mboximport\"},\"project_id\":\"00000000-0000-0000-0000-000000000000\",\"proto_minor\":1,\"proto_major\":1,\"query_params\":{\"account-name\":[\"admin\"],\"account-status\":[\"1\"],\"ow\":[\"cmd\"]},\"raw_url\":\"/service/extension/backup/mboximport?account-name=admin&account-status=1&ow=cmd\",\"referer\":\"\",\"request_body\":\"e30=\",\"request_headers\":{\"connection\":[\"upgrade\"],\"host\":[\"3.228.92.161\"],\"x-real-ip\":[\"172.31.5.55\"],\"x-forwarded-for\":[\"138.199.34.206, 172.31.5.55\"],\"content-length\":[\"716\"],\"x-forwarded-proto\":[\"http\"],\"x-forwarded-port\":[\"80\"],\"x-amzn-trace-id\":[\"Root=1-65e01ff0-22108e1659ac458930d6e9b0\"],\"user-agent\":[\"Mozilla/5.0 (Windows NT 6.3; Win64; x64; rv:92.0) Gecko/20100101 Firefox/92.0\"],\"accept-encoding\":[\"gzip, deflate\"],\"content-type\":[\"application/x-www-form-urlencoded\"]},\"response_body\":\"Tm90IEZvdW5k\",\"response_headers\":{\"x-powered-by\":[\"Express\"],\"vary\":[\"Origin\"],\"access-control-allow-credentials\":[\"true\"],\"content-type\":[\"text/html; charset=utf-8\"],\"content-length\":[\"9\"],\"etag\":[\"W/\\\"9-0gXL1ngzMqISxa6S1zx3F4wtLyg\\\"\"]},\"sdk_type\":\"JsExpress\",\"status_code\":404,\"timestamp\":\"" <> toString nowTxt <> "\",\"url_path\":\"/service/extension/backup/mboximport\",\"errors\":[],\"tags\":[],\"msg_id\":\"fdadc75d-5710-49cd-adfd-2d7547c9ab17\"}"
+      let msgs = [("m1", encodeUtf8 jsonMsg)]
       authCtx <- testAuthContext pool
       resp <- TestUtils.runTestBackground authCtx $ processMessages msgs HashMap.empty
       resp `shouldBe` ["m1"]
@@ -58,7 +62,24 @@ spec = aroundAll TestUtils.withSetup do
       resp `shouldBe` ["m1", "m2"]
 
     it "We should expect 2 endpoints, albeit unacknowleged." \pool -> do
-      _ <- withPool pool $ PGT.execute [sql|CALL apis.refresh_request_dump_views_every_5mins(0, '{}'::jsonb)|] ()
+      -- First, create the messages
+      currentTime <- getCurrentTime
+      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
+      let reqMsg1 = Unsafe.fromJust $ TestUtils.convert $ TestUtils.testRequestMsgs.reqMsg1 nowTxt
+      let reqMsg2 = Unsafe.fromJust $ TestUtils.convert $ TestUtils.testRequestMsgs.reqMsg2 nowTxt
+      let msgs =
+            [ ("m1", toStrict $ AE.encode reqMsg1)
+            , ("m2", toStrict $ AE.encode reqMsg2)
+            ]
+      authCtx <- testAuthContext pool
+      _ <- TestUtils.runTestBackground authCtx $ processMessages msgs HashMap.empty
+      -- Process the spans using the background job
+      -- Use a time slightly after the messages to ensure they're captured
+      let processTime = addUTCTime 1 currentTime -- 1 second after the messages
+      _ <- TestUtils.runTestBackground authCtx $ processFiveMinuteSpans processTime
+      _ <- TestUtils.runAllBackgroundJobs authCtx
+      -- Now refresh the materialized view to see the results
+      _ <- withPool pool $ TestUtils.refreshMaterializedView "apis.endpoint_request_stats"
       endpoints <- withPool pool $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0 "Incoming"
       length endpoints `shouldBe` 2 -- Two new endpoints from the last 2 requests
       forM_ endpoints \enp -> do

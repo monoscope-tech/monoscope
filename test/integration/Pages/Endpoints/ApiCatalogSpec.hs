@@ -3,7 +3,7 @@ module Pages.Endpoints.ApiCatalogSpec (spec) where
 import Data.Aeson qualified as AE
 import Data.ByteString.Lazy qualified as BL
 import Data.HashMap.Strict qualified as HashMap
-import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time (defaultTimeLocale, formatTime, getCurrentTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
@@ -18,6 +18,7 @@ import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
+import BackgroundJobs (processFiveMinuteSpans)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
@@ -48,7 +49,10 @@ spec = aroundAll withTestResources do
                 , ("m2", BL.toStrict $ AE.encode reqMsg2)
                 ]
       _ <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
-      _ <- runAllBackgroundJobs trATCtx
+      -- Process the spans using the background job
+      -- Use a time slightly after the messages to ensure they're captured
+      let processTime = addUTCTime 1 currentTime -- 1 second after the messages
+      _ <- runTestBackground trATCtx $ processFiveMinuteSpans processTime
       _ <- withPool trPool $ refreshMaterializedView "apis.endpoint_request_stats"
 
       PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents) <- toServantResponse trATCtx trSessAndHeader trLogger $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming")
@@ -75,7 +79,10 @@ spec = aroundAll withTestResources do
                 , ("m2", BL.toStrict $ AE.encode reqMsg2)
                 ]
       _ <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
-      _ <- runAllBackgroundJobs trATCtx
+      -- Process the spans using the background job
+      -- Use a time slightly after the messages to ensure they're captured
+      let processTime = addUTCTime 1 currentTime -- 1 second after the messages
+      _ <- runTestBackground trATCtx $ processFiveMinuteSpans processTime
       _ <- withPool trPool $ refreshMaterializedView "apis.endpoint_request_stats"
 
       enp <-

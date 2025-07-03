@@ -22,7 +22,7 @@ testPid = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "00000000-0000-
 spec :: Spec
 spec = aroundAll withTestResources do
   describe "Check Course Creation, Update and Consumption" do
-    it "Create Project" \TestResources{..} -> do
+    it "Cannot update demo project without sudo" \TestResources{..} -> do
       let createPForm =
             CreateProject.CreateProjectForm
               { title = "Test Project CI"
@@ -33,19 +33,18 @@ spec = aroundAll withTestResources do
               }
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger $ CreateProject.createProjectPostH testPid createPForm
+      -- Demo project update should be blocked, but form returns submitted values
       (pg.unwrapCreateProjectResp <&> (.form.title)) `shouldBe` Just @Text "Test Project CI"
       (pg.unwrapCreateProjectResp <&> (.form.description)) `shouldBe` Just "Test Description"
 
     it "Non empty project list" \TestResources{..} -> do
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger ListProjects.listProjectsGetH
-      length pg.unwrap.content `shouldBe` 2
-      -- default demo project created in migrations
-      (pg.unwrap.content V.! 1).id.toText `shouldBe` "00000000-0000-0000-0000-000000000000"
-      -- the project we actually created
-      (pg.unwrap.content V.! 0).id.toText `shouldBe` "00000000-0000-0000-0000-000000000001"
-      (pg.unwrap.content V.! 0).title `shouldBe` "Test Project CI"
-      (pg.unwrap.content V.! 0).description `shouldBe` "Test Description"
+      length pg.unwrap.content `shouldBe` 1
+      -- default demo project created in migrations (update was blocked)
+      (pg.unwrap.content V.! 0).id.toText `shouldBe` "00000000-0000-0000-0000-000000000000"
+      (pg.unwrap.content V.! 0).title `shouldBe` "Demo Project"
+      (pg.unwrap.content V.! 0).description `shouldBe` ""
     -- TODO: add more checks for the info we we display on list page
 
     it "Should update project with new details" \TestResources{..} -> do

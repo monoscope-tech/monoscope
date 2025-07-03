@@ -84,7 +84,7 @@ timescaledb-docker-tmp:
 		-e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=apitoolkit \
 		--mount type=tmpfs,destination=/var/lib/postgresql/data,tmpfs-size=1G \
 		docker.io/timescale/timescaledb-ha:pg16-all \
-		-c shared_preload_libraries='pg_stat_statements,timescaledb'
+		-c shared_preload_libraries='pg_stat_statements,timescaledb' -c max_connections=200
 
 update-service-worker:
 	npx workbox generateSW workbox-config.js

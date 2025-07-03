@@ -20,7 +20,7 @@ where
 import BackgroundJobs (jobsRunner)
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket_, finally, mask, throwIO)
-import Control.Monad (void)
+import Control.Monad (void, when)
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache (Cache (..), newCache)
@@ -28,9 +28,11 @@ import Data.Default (Default (..))
 import Data.Effectful.UUID (runStaticUUID, runUUID)
 import Data.Effectful.Wreq (runHTTPGolden, runHTTPWreq)
 import Data.Either.Extra
-import Data.Pool (Pool, defaultPoolConfig, newPool)
+import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool)
 import Data.Text qualified as T
+import Data.Time (getCurrentTime)
 import Data.UUID qualified as UUID
+import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
@@ -113,11 +115,14 @@ withLocalSetup f = do
           cacheConfig dbCache
             <> TmpPostgres.verboseConfig
             <> mempty
-              { TmpPostgres.postgresConfigFile = [("shared_preload_libraries", "'timescaledb'")]
+              { TmpPostgres.postgresConfigFile =
+                  [ ("shared_preload_libraries", "'timescaledb'")
+                  , ("max_connections", "200")
+                  ]
               }
     dirSize <- sum <$> (listDirectory migrationsDirr >>= mapM (getFileSize . (migrationsDirr <>)))
     migratedConfig <- throwE $ cacheAction ("./.tmp/postgres/" <> show dirSize) migrate combinedConfig
-    withConfig migratedConfig $ \db -> f =<< newPool (defaultPoolConfig (connectPostgreSQL $ toConnectionString db) close 60 10)
+    withConfig migratedConfig $ \db -> f =<< newPool (defaultPoolConfig (connectPostgreSQL $ toConnectionString db) close 60 50)
 
 
 -- Clean all data from the database while preserving schema
@@ -167,48 +172,170 @@ cleanDatabase conn = do
       |]
 
 
--- External database setup (assumes database is already running via make timescaledb-docker-tmp)
+-- External database setup using template database approach for better isolation and performance
 withExternalDBSetup :: (Pool Connection -> IO ()) -> IO ()
 withExternalDBSetup f = do
-  let connStr = "host=localhost port=5432 user=postgres password=postgres dbname=apitoolkit"
+  let masterConnStr = "host=localhost port=5432 user=postgres password=postgres dbname=postgres"
+      templateDbName = "apitoolkit_test_template"
 
-  -- Drop all schemas and migration tracking table for a complete clean slate
-  conn <- connectPostgreSQL connStr
-  let dropSchemas =
-        [sql| DROP TYPE IF EXISTS notification_channel_enum CASCADE;
-              DROP SCHEMA IF EXISTS users CASCADE;
-              DROP SCHEMA IF EXISTS projects CASCADE;
-              DROP SCHEMA IF EXISTS apis CASCADE;
-              DROP SCHEMA IF EXISTS monitors CASCADE;
-              DROP SCHEMA IF EXISTS tests CASCADE;
-              DROP SCHEMA IF EXISTS telemetry CASCADE;
-              DROP TABLE IF EXISTS schema_migrations CASCADE;
-        |]
-  _ <- execute conn dropSchemas ()
+  -- Create or update template database
+  ensureTemplateDatabase masterConnStr templateDbName
 
-  -- Run migrations fresh
-  _ <- Migration.runMigration conn Migration.defaultOptions MigrationInitialization
-  _ <- Migration.runMigration conn Migration.defaultOptions $ MigrationDirectory migrationsDirr
+  -- Generate unique test database name using UUID (replace hyphens with underscores)
+  uuid <- nextRandom
+  let testDbName = "apitoolkit_test_" <> T.replace "-" "_" (T.pack $ show uuid)
 
-  -- Create test user and project (with conflict handling)
-  let q =
-        [sql| INSERT into users.users (id, first_name, last_name, email) 
-              VALUES ('00000000-0000-0000-0000-000000000000', 'FN', 'LN', 'test@apitoolkit.io')
-              ON CONFLICT (id) DO NOTHING;
-              
-              INSERT into projects.project_api_keys (active, project_id, title, key_prefix) 
-              SELECT True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
-              WHERE NOT EXISTS (
-                SELECT 1 FROM projects.project_api_keys 
-                WHERE key_prefix = 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
-              );
-        |]
-  _ <- execute conn q ()
-  close conn
+  -- Create test database from template
+  masterConn <- connectPostgreSQL masterConnStr
+  _ <-
+    execute
+      masterConn
+      (Query $ encodeUtf8 $ "CREATE DATABASE " <> testDbName <> " TEMPLATE " <> templateDbName)
+      ()
+  close masterConn
 
-  -- Create pool and run tests
-  pool <- newPool (defaultPoolConfig (connectPostgreSQL connStr) close 60 10)
-  f pool
+  -- Connect to the new test database
+  let testConnStr = "host=localhost port=5432 user=postgres password=postgres dbname=" <> encodeUtf8 testDbName
+  pool <- newPool (defaultPoolConfig (connectPostgreSQL testConnStr) close 60 50)
+
+  -- Run tests and cleanup
+  finally (f pool) $ do
+    -- Close all connections in the pool
+    destroyAllResources pool
+
+    -- Drop the test database
+    masterConn' <- connectPostgreSQL masterConnStr
+    _ <-
+      execute
+        masterConn'
+        (Query $ encodeUtf8 $ "DROP DATABASE IF EXISTS " <> testDbName)
+        ()
+    close masterConn'
+
+
+-- Helper function to ensure template database exists and is up to date
+ensureTemplateDatabase :: ByteString -> Text -> IO ()
+ensureTemplateDatabase masterConnStr templateDbName = do
+  masterConn <- connectPostgreSQL masterConnStr
+
+  -- Check if template database exists
+  [Only exists] <-
+    query
+      masterConn
+      "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = ?)"
+      (Only templateDbName)
+
+  -- Get current migration directory checksum for cache invalidation
+  dirSize <- sum <$> (listDirectory migrationsDirr >>= mapM (getFileSize . (migrationsDirr <>)))
+  let migrationChecksum = show dirSize
+
+  -- Check if template needs updating
+  needsUpdate <-
+    if exists
+      then do
+        -- Try to connect to template and check a marker we'll set
+        let templateConnStr = "host=localhost port=5432 user=postgres password=postgres dbname=" <> encodeUtf8 templateDbName
+        templateConn <- connectPostgreSQL templateConnStr
+
+        -- Check if our migration checksum marker exists and matches
+        markerExists <-
+          query
+            templateConn
+            "SELECT EXISTS(SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'template_db_info')"
+            ()
+            :: IO [Only Bool]
+
+        needsUpdate' <- case markerExists of
+          [Only True] -> do
+            checksums <-
+              query
+                templateConn
+                "SELECT migration_checksum FROM template_db_info LIMIT 1"
+                ()
+                :: IO [Only Text]
+            close templateConn
+            pure $ case checksums of
+              [Only checksum] -> checksum /= T.pack migrationChecksum
+              _ -> True
+          _ -> do
+            close templateConn
+            pure True
+
+        pure needsUpdate'
+      else pure True
+
+  when needsUpdate $ do
+    -- Drop existing template if it exists
+    when exists $ do
+      -- First, terminate any connections to the template database
+      _ <-
+        execute
+          masterConn
+          [sql| SELECT pg_terminate_backend(pg_stat_activity.pid)
+              FROM pg_stat_activity
+              WHERE pg_stat_activity.datname = ?
+                AND pid <> pg_backend_pid() |]
+          (Only templateDbName)
+
+      _ <-
+        execute
+          masterConn
+          (Query $ encodeUtf8 $ "DROP DATABASE IF EXISTS " <> templateDbName)
+          ()
+      pure ()
+
+    -- Create fresh template database
+    _ <-
+      execute
+        masterConn
+        (Query $ encodeUtf8 $ "CREATE DATABASE " <> templateDbName)
+        ()
+
+    -- Connect to template database and set up schema
+    let templateConnStr = "host=localhost port=5432 user=postgres password=postgres dbname=" <> encodeUtf8 templateDbName
+    templateConn <- connectPostgreSQL templateConnStr
+
+    -- Run migrations
+    _ <- Migration.runMigration templateConn Migration.defaultOptions MigrationInitialization
+    _ <- Migration.runMigration templateConn Migration.defaultOptions $ MigrationDirectory migrationsDirr
+
+    -- Create test user and project
+    let setupData =
+          [sql| INSERT into users.users (id, first_name, last_name, email) 
+                VALUES ('00000000-0000-0000-0000-000000000000', 'FN', 'LN', 'test@apitoolkit.io')
+                ON CONFLICT (id) DO NOTHING;
+                
+                INSERT into projects.project_api_keys (active, project_id, title, key_prefix) 
+                SELECT True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM projects.project_api_keys 
+                  WHERE key_prefix = 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
+                );
+          |]
+    _ <- execute templateConn setupData ()
+
+    -- Create marker table with migration checksum
+    _ <-
+      execute_
+        templateConn
+        "CREATE TABLE IF NOT EXISTS template_db_info (migration_checksum TEXT)"
+    _ <-
+      execute
+        templateConn
+        "INSERT INTO template_db_info (migration_checksum) VALUES (?)"
+        (Only $ T.pack migrationChecksum)
+
+    close templateConn
+
+    -- Mark database as template
+    _ <-
+      execute
+        masterConn
+        (Query $ encodeUtf8 $ "ALTER DATABASE " <> templateDbName <> " is_template = true")
+        ()
+    pure ()
+
+  close masterConn
 
 
 -- throw away all db changes that happened within this abort block

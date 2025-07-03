@@ -47,7 +47,8 @@ data Swagger = Swagger
 addSwagger :: Swagger -> DBT IO ()
 addSwagger swagger = void $ execute q (swagger.id, swagger.projectId, swagger.createdBy, swagger.createdAt, swagger.updatedAt, swagger.swaggerJson, swagger.host)
   where
-    q = [sql| INSERT INTO apis.swagger_jsons (id, project_id, created_by, created_at, updated_at, swagger_json, host) 
+    q =
+      [sql| INSERT INTO apis.swagger_jsons (id, project_id, created_by, created_at, updated_at, swagger_json, host) 
               VALUES (?, ?, ?, ?, ?, ?, ?) |]
 
 
