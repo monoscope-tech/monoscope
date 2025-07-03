@@ -17,7 +17,7 @@ module Pkg.TestUtils (
 )
 where
 
-import BackgroundJobs (jobsRunner)
+import BackgroundJobs qualified
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket_, finally, mask, throwIO)
 import Control.Monad (void, when)
@@ -25,6 +25,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache (Cache (..), newCache)
 import Data.Default (Default (..))
+import Data.Effectful.Notify qualified
 import Data.Effectful.UUID (runStaticUUID, runUUID)
 import Data.Effectful.Wreq (runHTTPGolden, runHTTPWreq)
 import Data.Either.Extra
@@ -46,8 +47,12 @@ import Database.PostgreSQL.Transact qualified as PgT
 import Database.Postgres.Temp (cacheAction, cacheConfig, toConnectionString, withConfig, withDbCache)
 import Database.Postgres.Temp qualified as TmpPostgres
 import Effectful
+import Effectful.Concurrent.Async (runConcurrent)
 import Effectful.Error.Static (runErrorNoCallStack)
+import Effectful.Ki qualified as Ki
+import Effectful.Labeled (runLabeled)
 import Effectful.PostgreSQL.Transact.Effect qualified as DB
+import Effectful.Reader.Static qualified
 import Effectful.Time (runTime)
 import Log qualified
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
@@ -63,6 +68,7 @@ import System.Clock (TimeSpec (TimeSpec))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Config qualified as Config
 import System.Directory (getFileSize, listDirectory)
+import System.Logging qualified as Logging
 import System.Types (ATAuthCtx, ATBackgroundCtx, RespHeaders, atAuthToBase, effToServantHandlerTest, runBackground)
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
@@ -385,7 +391,27 @@ fromRightShow (Left a) = error $ "Unexpected Left value: " <> show a
 
 runTestBackground :: Config.AuthContext -> ATBackgroundCtx a -> IO a
 runTestBackground authCtx action = LogBulk.withBulkStdOutLogger \logger ->
-  runBackground logger authCtx action
+  runTestBackgroundWithLogger logger authCtx action
+
+runTestBackgroundWithLogger :: Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO a
+runTestBackgroundWithLogger logger appCtx process = do
+  (notifications, result) <- process
+    & Data.Effectful.Notify.runNotifyTest
+    & Effectful.Reader.Static.runReader appCtx
+    & DB.runDB appCtx.pool
+    & runLabeled @"timefusion" (DB.runDB appCtx.timefusionPgPool)
+    & runTime
+    & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
+    & runUUID
+    & runHTTPWreq
+    & Ki.runStructuredConcurrency
+    & Effectful.runEff
+  -- Log the notifications that would have been sent
+  forM_ notifications $ \notification ->
+    Log.logInfo "Test: Notification captured" notification
+      & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
+      & Effectful.runEff
+  pure result
 
 
 -- New type to hold all our resources
@@ -527,8 +553,14 @@ runAllBackgroundJobs :: AuthContext -> IO (V.Vector Job)
 runAllBackgroundJobs authCtx = do
   jobs <- withPool authCtx.pool getBackgroundJobs
   LogBulk.withBulkStdOutLogger \logger ->
-    V.forM_ jobs $ jobsRunner logger authCtx
+    V.forM_ jobs $ testJobsRunner logger authCtx
   pure jobs
+
+-- Test version of jobsRunner that uses the test notification runner
+testJobsRunner :: Log.Logger -> Config.AuthContext -> Job -> IO ()
+testJobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs $ do
+  bgJob <- BackgroundJobs.throwParsePayload job
+  void $ runTestBackgroundWithLogger logger authCtx (BackgroundJobs.processBackgroundJob authCtx job bgJob)
 
 
 getBackgroundJobs :: PgT.DBT IO (V.Vector Job)
