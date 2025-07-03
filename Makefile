@@ -80,8 +80,11 @@ timescaledb-docker:
 		docker.io/timescale/timescaledb-ha:pg16-all -c shared_preload_libraries='pg_stat_statements,timescaledb'
 
 timescaledb-docker-tmp:
-	docker run -it --rm --name=apitoolkit -p 5432:5432/tcp -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=apitoolkit \
-		docker.io/timescale/timescaledb-ha:pg16-all -c shared_preload_libraries='pg_stat_statements,timescaledb'
+	docker run -it --rm --name=apitoolkit -p 5432:5432/tcp \
+		-e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=apitoolkit \
+		--mount type=tmpfs,destination=/var/lib/postgresql/data,tmpfs-size=1G \
+		docker.io/timescale/timescaledb-ha:pg16-all \
+		-c shared_preload_libraries='pg_stat_statements,timescaledb'
 
 update-service-worker:
 	npx workbox generateSW workbox-config.js

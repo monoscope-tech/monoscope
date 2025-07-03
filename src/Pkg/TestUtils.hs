@@ -76,10 +76,18 @@ migrate db = do
   initializationRes <- Migration.runMigration conn Migration.defaultOptions MigrationInitialization
 
   migrationRes <- Migration.runMigration conn Migration.defaultOptions $ MigrationDirectory migrationsDirr
-  -- Create a nil user and projects to make subsequent tests easier
+  -- Create a nil user and projects to make subsequent tests easier (with conflict handling)
   let q =
-        [sql| INSERT into users.users (id, first_name, last_name, email) VALUES ('00000000-0000-0000-0000-000000000000', 'FN', 'LN', 'test@apitoolkit.io');
-        insert into projects.project_api_keys (active, project_id, title, key_prefix) VALUES (True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV');
+        [sql| INSERT into users.users (id, first_name, last_name, email) 
+              VALUES ('00000000-0000-0000-0000-000000000000', 'FN', 'LN', 'test@apitoolkit.io')
+              ON CONFLICT (id) DO NOTHING;
+              
+              INSERT into projects.project_api_keys (active, project_id, title, key_prefix) 
+              SELECT True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
+              WHERE NOT EXISTS (
+                SELECT 1 FROM projects.project_api_keys 
+                WHERE key_prefix = 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
+              );
         |]
   _ <- execute conn q ()
   pass
@@ -167,7 +175,8 @@ withExternalDBSetup f = do
   -- Drop all schemas and migration tracking table for a complete clean slate
   conn <- connectPostgreSQL connStr
   let dropSchemas =
-        [sql| DROP SCHEMA IF EXISTS users CASCADE;
+        [sql| DROP TYPE IF EXISTS notification_channel_enum CASCADE;
+              DROP SCHEMA IF EXISTS users CASCADE;
               DROP SCHEMA IF EXISTS projects CASCADE;
               DROP SCHEMA IF EXISTS apis CASCADE;
               DROP SCHEMA IF EXISTS monitors CASCADE;
@@ -181,10 +190,18 @@ withExternalDBSetup f = do
   _ <- Migration.runMigration conn Migration.defaultOptions MigrationInitialization
   _ <- Migration.runMigration conn Migration.defaultOptions $ MigrationDirectory migrationsDirr
 
-  -- Create test user and project
+  -- Create test user and project (with conflict handling)
   let q =
-        [sql| INSERT into users.users (id, first_name, last_name, email) VALUES ('00000000-0000-0000-0000-000000000000', 'FN', 'LN', 'test@apitoolkit.io');
-        insert into projects.project_api_keys (active, project_id, title, key_prefix) VALUES (True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV');
+        [sql| INSERT into users.users (id, first_name, last_name, email) 
+              VALUES ('00000000-0000-0000-0000-000000000000', 'FN', 'LN', 'test@apitoolkit.io')
+              ON CONFLICT (id) DO NOTHING;
+              
+              INSERT into projects.project_api_keys (active, project_id, title, key_prefix) 
+              SELECT True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
+              WHERE NOT EXISTS (
+                SELECT 1 FROM projects.project_api_keys 
+                WHERE key_prefix = 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
+              );
         |]
   _ <- execute conn q ()
   close conn
@@ -273,7 +290,7 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
               , convertkitApiKey = ""
               , convertkitApiSecret = ""
               , requestPubsubTopics = ["apitoolkit-prod-default"]
-              , enableBackgroundJobs = True
+              , enableBackgroundJobs = False
               }
           )
   f

@@ -30,12 +30,12 @@ CREATE TABLE IF NOT EXISTS telemetry.metrics (
     PRIMARY KEY(project_id, timestamp, id)
 );
 
-SELECT create_hypertable('telemetry.metrics', by_range('timestamp', INTERVAL '1 hours'), migrate_data => true);
+SELECT create_hypertable('telemetry.metrics', by_range('timestamp', INTERVAL '1 hours'), migrate_data => true, if_not_exists => true);
 
 SELECT add_retention_policy('telemetry.metrics', INTERVAL '30 days', true);
 
-CREATE INDEX idx_metrics_project_id_metric_name ON telemetry.metrics (project_id, metric_name, timestamp DESC);
-CREATE INDEX idx_metrics_project_id_resource_service_name ON telemetry.metrics (project_id, (resource->>'service.name'), timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_metrics_project_id_metric_name ON telemetry.metrics (project_id, metric_name, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_metrics_project_id_resource_service_name ON telemetry.metrics (project_id, (resource->>'service.name'), timestamp DESC);
 
 
 CREATE TABLE IF NOT EXISTS telemetry.metrics_meta (
@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS telemetry.metrics_meta (
       service_name TEXT NOT NULL,
       UNIQUE (project_id, metric_name, service_name)
 );
-CREATE INDEX idx_metrics_meta_project_id_metric_name ON telemetry.metrics_meta (project_id, metric_name, service_name);
+CREATE INDEX IF NOT EXISTS idx_metrics_meta_project_id_metric_name ON telemetry.metrics_meta (project_id, metric_name, service_name);
 SELECT manage_updated_at('telemetry.metrics_meta');
 
 -- =================================================================
@@ -70,9 +70,9 @@ CREATE TABLE IF NOT EXISTS projects.query_library (
   PRIMARY KEY (id)
 );
 SELECT manage_updated_at('projects.query_library');
-CREATE UNIQUE INDEX unique_user_query ON projects.query_library (user_id, query_type, query_text);
-CREATE INDEX idx_user_project_type_created ON projects.query_library (user_id, project_id, query_type, created_at DESC);
-CREATE INDEX idx_project_user_type_created ON projects.query_library (project_id, user_id, query_type, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS unique_user_query ON projects.query_library (user_id, query_type, query_text);
+CREATE INDEX IF NOT EXISTS idx_user_project_type_created ON projects.query_library (user_id, project_id, query_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_project_user_type_created ON projects.query_library (project_id, user_id, query_type, created_at DESC);
 
 -- ===================================================================
 -- Custom Dashboards
@@ -182,14 +182,14 @@ CREATE TABLE IF NOT EXISTS otel_logs_and_spans (
     resource___telemetry___sdk___name      TEXT,
     resource___telemetry___sdk___version   TEXT,
     resource___user_agent___original       TEXT,
-    summary NOT NULL                        TEXT[],
+    summary                        TEXT[] NOT NULL,
     date  TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
 );
-SELECT create_hypertable('otel_logs_and_spans', by_range('timestamp', INTERVAL '1 hours'), migrate_data => true);
+SELECT create_hypertable('otel_logs_and_spans', by_range('timestamp', INTERVAL '1 hours'), migrate_data => true, if_not_exists => true);
 SELECT add_retention_policy('otel_logs_and_spans',INTERVAL '14 days',true);
 
-CREATE INDEX idx_logs_and_spans_trace_id ON otel_logs_and_spans (project_id, context___trace_id);
-CREATE INDEX idx_logs_and_spans_span_id ON otel_logs_and_spans (project_id, context___span_id);
-CREATE INDEX idx_logs_and_spans_parent_id ON otel_logs_and_spans (project_id, parent_id);
-CREATE INDEX idx_logs_and_spans_service_name ON otel_logs_and_spans (project_id, resource___service___name);
+CREATE INDEX IF NOT EXISTS idx_logs_and_spans_trace_id ON otel_logs_and_spans (project_id, context___trace_id);
+CREATE INDEX IF NOT EXISTS idx_logs_and_spans_span_id ON otel_logs_and_spans (project_id, context___span_id);
+CREATE INDEX IF NOT EXISTS idx_logs_and_spans_parent_id ON otel_logs_and_spans (project_id, parent_id);
+CREATE INDEX IF NOT EXISTS idx_logs_and_spans_service_name ON otel_logs_and_spans (project_id, resource___service___name);
 

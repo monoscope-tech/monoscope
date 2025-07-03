@@ -8,8 +8,8 @@ CREATE TABLE IF NOT EXISTS apis.facet_summaries (
     UNIQUE (project_id, table_name)
 );
 
--- Add a compound index for faster lookups by project and table
-CREATE INDEX IF NOT EXISTS facet_summaries_project_table_idx ON apis.facet_summaries (project_id, table_name);
-
 -- Apply the updated_at trigger to our table
 SELECT manage_updated_at('apis.facet_summaries');
+
+-- Add a compound index for faster lookups by project and table
+CREATE INDEX IF NOT EXISTS facet_summaries_project_table_idx ON apis.facet_summaries (project_id, table_name);

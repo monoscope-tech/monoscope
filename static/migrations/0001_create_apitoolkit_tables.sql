@@ -58,17 +58,17 @@ END $$;
 
 CREATE TABLE IF NOT EXISTS users.users
 (
-  id                UUID         NOT  NULL DEFAULT gen_random_uuid() PRIMARY KEY,
-  created_at        TIMESTAMP    WITH TIME ZONE    NOT               NULL    DEFAULT current_timestamp,
-  updated_at        TIMESTAMP    WITH TIME ZONE    NOT               NULL    DEFAULT current_timestamp,
+  id                UUID         NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  created_at        TIMESTAMP    WITH TIME ZONE    NOT NULL    DEFAULT current_timestamp,
+  updated_at        TIMESTAMP    WITH TIME ZONE    NOT NULL    DEFAULT current_timestamp,
   deleted_at        TIMESTAMP    WITH TIME ZONE,
-  active            BOOL         NOT  NULL DEFAULT 't',
-  first_name        VARCHAR(100) NOT  NULL DEFAULT '',
-  last_name         VARCHAR(100) NOT  NULL DEFAULT '',
-  display_image_url TEXT         NOT  NULL DEFAULT '',
-  email             email        NOT  NULL UNIQUE,
+  active            BOOL         NOT NULL DEFAULT 't',
+  first_name        VARCHAR(100) NOT NULL DEFAULT '',
+  last_name         VARCHAR(100) NOT NULL DEFAULT '',
+  display_image_url TEXT         NOT NULL DEFAULT '',
+  email             email        NOT NULL UNIQUE,
   -- Is sudo is a rough work around to mark users who will be able to see and access all projects.
-  is_sudo           BOOL         NOT  NULL DEFAULT 'f',
+  is_sudo           BOOL         NOT NULL DEFAULT 'f',
   phone_number Text DEFAULT NULL
 );
 SELECT manage_updated_at('users.users');
@@ -447,7 +447,7 @@ CREATE TABLE IF NOT EXISTS apis.request_dumps
     PRIMARY KEY(project_id,created_at,id)
 );
 SELECT manage_updated_at('apis.request_dumps');
-SELECT create_hypertable('apis.request_dumps', by_range('created_at', INTERVAL '4 hours'), migrate_data => true);
+SELECT create_hypertable('apis.request_dumps', by_range('created_at', INTERVAL '4 hours'), migrate_data => true, if_not_exists => true);
 SELECT add_retention_policy('apis.request_dumps',INTERVAL '14 days',true);
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id ON apis.request_dumps(project_id, created_at DESC);
 ALTER TABLE apis.request_dumps SET (timescaledb.compress, timescaledb.compress_orderby = 'created_at DESC', timescaledb.compress_segmentby = 'project_id');
@@ -828,7 +828,10 @@ create or replace function eval(expression text) returns integer as $body$
 declare result integer;
 begin
   execute expression into result;
-  return result;
+  return COALESCE(result, 0);
+exception
+  when others then
+    return 0;
 end;
 $body$
 language plpgsql;
@@ -845,14 +848,16 @@ BEGIN
     FROM monitors.query_monitors
     WHERE alert_last_triggered IS NULL
       AND deactivated_at IS NULL
+      AND log_query_as_sql IS NOT NULL
+      AND log_query_as_sql != ''
       AND (
           (NOT trigger_less_than AND (
-               warning_threshold <= eval(log_query_as_sql)
+               (warning_threshold IS NOT NULL AND warning_threshold <= eval(log_query_as_sql))
                OR alert_threshold <= eval(log_query_as_sql)
            ))
           OR
           (trigger_less_than AND (
-               warning_threshold >= eval(log_query_as_sql)
+               (warning_threshold IS NOT NULL AND warning_threshold >= eval(log_query_as_sql))
                OR alert_threshold >= eval(log_query_as_sql)
            ))
       );
