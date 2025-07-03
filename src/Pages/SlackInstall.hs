@@ -513,8 +513,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-        <> [msgJson]
-        <> ["\n\nUser query: " <> question]
+          <> [msgJson]
+          <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
@@ -614,7 +614,7 @@ slackInteractionsH interaction = do
       pure $ AE.object ["response_type" AE..= "in_channel", "text" AE..= "Done, you'll be receiving project notifcations here going forward", "replace_original" AE..= True, "delete_original" AE..= True]
     "/dashboard" -> do
       dashboards <- getDashboardsForSlack interaction.team_id
-      triggerSlackModal authCtx.env.slackBotToken "open" $ (AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= (dashboardView interaction.channel_id $ V.fromList [(dashboardViewOne dashboards)])])
+      _ <- triggerSlackModal authCtx.env.slackBotToken "open" $ (AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= (dashboardView interaction.channel_id $ V.fromList [(dashboardViewOne dashboards)])])
       pure $ AE.object ["text" AE..= "modal opened", "replace_original" AE..= True, "delete_original" AE..= True]
     _ -> do
       slackDataM <- dbtToEff $ getSlackDataByTeamId interaction.team_id
@@ -809,11 +809,8 @@ slackActionsH action = do
             widget = find (\w -> (fromMaybe "Untitled-" w.title) == widgetTitle) dashboard.widgets
         whenJust widget $ \w -> do
           now <- Time.currentTime
-          let query = w.query >>= (\x -> Just $ "&q=" <> decodeUtf8 (urlEncode True $ encodeUtf8 x))
-              sql = w.sql >>= (\x -> Just $ "&sql=" <> decodeUtf8 (urlEncode True $ encodeUtf8 x))
-              query' = fromMaybe (fromMaybe "" sql) query
-              vizType = Widget.mapWidgetTypeToChartType w.wType
-              chartUrl' = chartImageUrl (query' <> "&p=" <> pid <> "&t=" <> vizType) authCtx.env.chartShotUrl now
+          let widgetQuery = "&widget=" <> decodeUtf8 (urlEncode True (toStrict $ AE.encode $ AE.toJSON w))
+              chartUrl' = chartImageUrl ("&p=" <> pid <> widgetQuery) authCtx.env.chartShotUrl now
               blocks = V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets, dashboardWidgetView chartUrl' widgetTitle]
               privateMeta = channelId <> "___" <> pid <> "___" <> baseTemplate <> "___" <> chartUrl'
           _ <- triggerSlackModal authCtx.env.slackBotToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView privateMeta blocks]

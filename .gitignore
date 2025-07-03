@@ -39,3 +39,4 @@ stack.yaml.local
 static/public/assets/web-components/dist/
 .ghc.environment.aarch64-darwin-9.10.2
 build.log
+.ghc.environment.*
