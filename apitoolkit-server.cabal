@@ -77,6 +77,8 @@ library
       Pages.Anomalies.AnomalyList
       Pages.Api
       Pages.BodyWrapper
+      Pages.Bots.Slack
+      Pages.Bots.Discord
       Pages.Charts.Charts
       Pages.Components
       Pages.Dashboards
@@ -95,7 +97,6 @@ library
       Pages.Projects.ManageMembers
       Pages.Reports
       Pages.Share
-      Pages.SlackInstall
       Pages.Specification.Documentation
       Pages.Specification.GenerateSwagger
       Pages.Telemetry.Metrics

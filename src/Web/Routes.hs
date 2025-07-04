@@ -56,6 +56,9 @@ import Models.Tests.Testing qualified as TestingM
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.Api qualified as Api
 import Pages.BodyWrapper (PageCtx (..))
+import Pages.Bots.Discord qualified as Discord
+import Pages.Bots.Slack qualified as Slack
+import Pages.Bots.Utils qualified as BotUtils
 import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
@@ -73,7 +76,6 @@ import Pages.Projects.ListProjects qualified as ListProjects
 import Pages.Projects.ManageMembers qualified as ManageMembers
 import Pages.Reports qualified as Reports
 import Pages.Share qualified as Share
-import Pages.SlackInstall qualified as SlackInstall
 import Pages.Specification.Documentation qualified as Documentation
 import Pages.Specification.GenerateSwagger qualified as GenerateSwagger
 import Pages.Telemetry.Metrics qualified as Metrics
@@ -143,11 +145,12 @@ data Routes mode = Routes
   , logout :: mode :- "logout" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
   , authCallback :: mode :- "auth_callback" :> QPT "code" :> QPT "state" :> QPT "redirect_to" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
   , shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] Share.ShareLinkGet
-  , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> QPT "onboarding" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] SlackInstall.SlackLink)
-  , discordLinkProjectGet :: mode :- "discord" :> "oauth" :> "callback" :> QPT "state" :> QPT "code" :> QPT "guild_id" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] SlackInstall.SlackLink)
+  , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> QPT "onboarding" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] BotUtils.BotResponse)
+  , discordLinkProjectGet :: mode :- "discord" :> "oauth" :> "callback" :> QPT "state" :> QPT "code" :> QPT "guild_id" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] BotUtils.BotResponse)
   , discordInteractions :: mode :- "discord" :> "interactions" :> ReqBody '[RawJSON] BS.ByteString :> Header "X-Signature-Ed25519" BS.ByteString :> Header "X-Signature-Timestamp" BS.ByteString :> Post '[JSON] AE.Value
-  , slackInteractions :: mode :- "interactions" :> "slack" :> ReqBody '[FormUrlEncoded] SlackInstall.SlackInteraction :> Post '[JSON] AE.Value
-  , slackActionsPost :: mode :- "actions" :> "slack" :> ReqBody '[FormUrlEncoded] SlackInstall.SlackActionForm :> Post '[JSON] AE.Value
+  , slackInteractions :: mode :- "interactions" :> "slack" :> ReqBody '[FormUrlEncoded] Slack.SlackInteraction :> Post '[JSON] AE.Value
+  , slackActionsPost :: mode :- "actions" :> "slack" :> ReqBody '[FormUrlEncoded] Slack.SlackActionForm :> Post '[JSON] AE.Value
+  , slackEventsPost :: mode :- "slack" :> "events" :> ReqBody '[JSON] Slack.SlackEventPayload :> Post '[JSON] AE.Value
   , externalOptionsGet :: mode :- "interactions" :> "external_options" :> ReqBody '[JSON] AE.Value :> Post '[JSON] AE.Value
   , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
   , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[JSON] LemonSqueezy.WebhookData :> Post '[HTML] (Html ())
@@ -345,12 +348,13 @@ server pool =
     , logout = Auth.logoutH
     , authCallback = Auth.authCallbackH
     , shareLinkGet = Share.shareLinkGetH
-    , slackLinkProjectGet = SlackInstall.linkProjectGetH
-    , discordLinkProjectGet = SlackInstall.linkDiscordGetH
-    , discordInteractions = SlackInstall.discordInteractionsH
-    , slackInteractions = SlackInstall.slackInteractionsH
-    , slackActionsPost = SlackInstall.slackActionsH
-    , externalOptionsGet = SlackInstall.externalOptionsH
+    , slackLinkProjectGet = Slack.linkProjectGetH
+    , discordLinkProjectGet = Discord.linkDiscordGetH
+    , discordInteractions = Discord.discordInteractionsH
+    , slackInteractions = Slack.slackInteractionsH
+    , slackActionsPost = Slack.slackActionsH
+    , slackEventsPost = Slack.slackEventsPostH
+    , externalOptionsGet = Slack.externalOptionsH
     , clientMetadata = ClientMetadata.clientMetadataH
     , lemonWebhook = LemonSqueezy.webhookPostH
     , chartsDataShot = Charts.queryMetrics
