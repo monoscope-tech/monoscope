@@ -1,4 +1,4 @@
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, throwParsePayload) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -115,34 +115,35 @@ jobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs 
   bgJob <- throwParsePayload job
   void $ runBackground logger authCtx (processBackgroundJob authCtx job bgJob)
 
+
 -- | Process a background job - extracted so it can be run with different effect interpreters
 processBackgroundJob :: Config.AuthContext -> Job -> BgJobs -> ATBackgroundCtx ()
-processBackgroundJob authCtx job bgJob = 
-    case bgJob of
-      GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
-      QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds
-      NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} -> newAnomalyJob projectId createdAt anomalyType anomalyAction (V.fromList targetHashes)
-      InviteUserToProject userId projectId reciever projectTitle' -> do
-        userM <- Users.userById userId
-        whenJust userM \user -> do
-          let firstName = user.firstName
-          let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
-          let templateVars =
-                [aesonQQ|{
+processBackgroundJob authCtx job bgJob =
+  case bgJob of
+    GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
+    QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds
+    NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} -> newAnomalyJob projectId createdAt anomalyType anomalyAction (V.fromList targetHashes)
+    InviteUserToProject userId projectId reciever projectTitle' -> do
+      userM <- Users.userById userId
+      whenJust userM \user -> do
+        let firstName = user.firstName
+        let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
+        let templateVars =
+              [aesonQQ|{
              "user_name": #{firstName},
              "project_name": #{projectTitle'},
              "project_url": #{project_url}
           }|]
-          sendPostmarkEmail reciever (Just ("project-invite", templateVars)) Nothing
-      SendDiscordData userId projectId fullName stack foundUsFrom -> whenJustM (dbtToEff $ Projects.projectById projectId) \project -> do
-        users <- dbtToEff $ Projects.usersByProjectId projectId
-        let stackString = intercalate ", " $ map toString stack
-        forM_ users \user -> do
-          let userEmail = CI.original user.email
-          let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
-          let project_title = project.title
-          let msg =
-                [fmtTrim|
+        sendPostmarkEmail reciever (Just ("project-invite", templateVars)) Nothing
+    SendDiscordData userId projectId fullName stack foundUsFrom -> whenJustM (dbtToEff $ Projects.projectById projectId) \project -> do
+      users <- dbtToEff $ Projects.usersByProjectId projectId
+      let stackString = intercalate ", " $ map toString stack
+      forM_ users \user -> do
+        let userEmail = CI.original user.email
+        let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
+        let project_title = project.title
+        let msg =
+              [fmtTrim|
   🎉 New project created on apitoolkit.io! 🎉
   - **User Full Name**: {fullName}
   - **User Email**: {userEmail}
@@ -152,117 +153,117 @@ processBackgroundJob authCtx job bgJob =
   - **Stack**: {stackString}
   - **Found us from**: {foundUsFrom}
   |]
-          sendMessageToDiscord msg
-      CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
-        userM <- Users.userById userId
-        whenJust userM \user -> do
-          let firstName = user.firstName
-          let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
-          let templateVars =
-                [aesonQQ|{
+        sendMessageToDiscord msg
+    CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
+      userM <- Users.userById userId
+      whenJust userM \user -> do
+        let firstName = user.firstName
+        let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
+        let templateVars =
+              [aesonQQ|{
             "user_name": #{firstName},
             "project_name": #{projectTitle},
             "project_url": #{project_url}
           }|]
-          sendPostmarkEmail reciever (Just ("project-created", templateVars)) Nothing
-      DeletedProject pid -> do
-        users <- dbtToEff $ Projects.usersByProjectId pid
-        projectM <- dbtToEff $ Projects.projectById pid
-        forM_ projectM \pr -> do
-          forM_ users \user -> do
-            let firstName = user.firstName
-            let projectTitle = pr.title
-            let userEmail = CI.original user.email
-            let templateVars =
-                  [aesonQQ|{
+        sendPostmarkEmail reciever (Just ("project-created", templateVars)) Nothing
+    DeletedProject pid -> do
+      users <- dbtToEff $ Projects.usersByProjectId pid
+      projectM <- dbtToEff $ Projects.projectById pid
+      forM_ projectM \pr -> do
+        forM_ users \user -> do
+          let firstName = user.firstName
+          let projectTitle = pr.title
+          let userEmail = CI.original user.email
+          let templateVars =
+                [aesonQQ|{
              "user_name": #{firstName},
              "project_name": #{projectTitle}
            }|]
-            sendPostmarkEmail userEmail (Just ("project-deleted", templateVars)) Nothing
-      DailyJob -> do
-        currentDay <- utctDay <$> Time.currentTime
-        currentTime <- Time.currentTime
+          sendPostmarkEmail userEmail (Just ("project-deleted", templateVars)) Nothing
+    DailyJob -> do
+      currentDay <- utctDay <$> Time.currentTime
+      currentTime <- Time.currentTime
 
-        -- Schedule all 24 hourly jobs in one batch
+      -- Schedule all 24 hourly jobs in one batch
+      liftIO $ withResource authCtx.jobsPool \conn -> do
+        -- background job to cleanup demo project
+        Relude.when (dayOfWeek currentDay == Monday) do
+          void $ createJob conn "background_jobs" $ BackgroundJobs.CleanupDemoProject
+        forM_ [0 .. 23] \hour -> do
+          -- Schedule each hourly job to run at the appropriate hour
+          let scheduledTime = addUTCTime (fromIntegral $ hour * 3600) currentTime
+          _ <- scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob scheduledTime hour) scheduledTime
+
+          -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
+          forM_ [0 .. 287] \interval -> do
+            let scheduledTime2 = addUTCTime (fromIntegral $ interval * 300) currentTime
+            scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteSpanProcessing scheduledTime2) scheduledTime2
+
+          -- Schedule 1-minute error processing jobs (1440 jobs per day = 24 hours * 60 per hour)
+          forM_ [0 .. 1439] \interval -> do
+            let scheduledTime3 = addUTCTime (fromIntegral $ interval * 60) currentTime
+            scheduleJob conn "background_jobs" (BackgroundJobs.OneMinuteErrorProcessing scheduledTime3) scheduledTime3
+
+      -- Handle regular daily jobs for each project
+      projects <- dbtToEff $ query [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
+      forM_ projects \p -> do
         liftIO $ withResource authCtx.jobsPool \conn -> do
-          -- background job to cleanup demo project
-          Relude.when (dayOfWeek currentDay == Monday) do
-            void $ createJob conn "background_jobs" $ BackgroundJobs.CleanupDemoProject
-          forM_ [0 .. 23] \hour -> do
-            -- Schedule each hourly job to run at the appropriate hour
-            let scheduledTime = addUTCTime (fromIntegral $ hour * 3600) currentTime
-            _ <- scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob scheduledTime hour) scheduledTime
-
-            -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
-            forM_ [0 .. 287] \interval -> do
-              let scheduledTime2 = addUTCTime (fromIntegral $ interval * 300) currentTime
-              scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteSpanProcessing scheduledTime2) scheduledTime2
-
-            -- Schedule 1-minute error processing jobs (1440 jobs per day = 24 hours * 60 per hour)
-            forM_ [0 .. 1439] \interval -> do
-              let scheduledTime3 = addUTCTime (fromIntegral $ interval * 60) currentTime
-              scheduleJob conn "background_jobs" (BackgroundJobs.OneMinuteErrorProcessing scheduledTime3) scheduledTime3
-
-        -- Handle regular daily jobs for each project
-        projects <- dbtToEff $ query [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
-        forM_ projects \p -> do
-          liftIO $ withResource authCtx.jobsPool \conn -> do
-            Relude.when (dayOfWeek currentDay == Monday)
-              $ void
-              $ createJob conn "background_jobs"
-              $ BackgroundJobs.WeeklyReports p
-            createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
-      HourlyJob scheduledTime hour -> runHourlyJob scheduledTime hour
-      DailyReports pid -> sendReportForProject pid DailyReport
-      WeeklyReports pid -> sendReportForProject pid WeeklyReport
-      GenSwagger pid uid host -> generateSwaggerForProject pid uid host
-      ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
-        Relude.when (project.paymentPlan /= "Free" && project.paymentPlan /= "ONBOARDING") $ whenJust project.firstSubItemId \fSubId -> do
-          currentTime <- liftIO getZonedTime
-          totalToReport <- Telemetry.getTotalEventsToReport pid project.usageLastReported
-          Relude.when (totalToReport > 0) do
-            liftIO $ reportUsageToLemonsqueezy fSubId totalToReport authCtx.config.lemonSqueezyApiKey
-            _ <- dbtToEff $ LemonSqueezy.addDailyUsageReport pid totalToReport
-            _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
-            pass
-      RunCollectionTests col_id -> do
-        now <- Time.currentTime
-        collectionM <- dbtToEff $ Testing.getCollectionById col_id
-        if job.jobRunAt > addUTCTime (-900) now -- Run time is less than 15 mins ago
-          then whenJust collectionM \collection -> Relude.when collection.isScheduled do
-            let (Testing.CollectionSteps colStepsV) = collection.collectionSteps
-                Testing.CollectionVariables colV = collection.collectionVariables
-            stepResultsE <- TestToDump.runCollectionTest colStepsV colV col_id
-            case stepResultsE of
-              Left e -> do
-                _ <- TestToDump.logTest collection.projectId col_id colStepsV (Left e)
+          Relude.when (dayOfWeek currentDay == Monday)
+            $ void
+            $ createJob conn "background_jobs"
+            $ BackgroundJobs.WeeklyReports p
+          createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
+    HourlyJob scheduledTime hour -> runHourlyJob scheduledTime hour
+    DailyReports pid -> sendReportForProject pid DailyReport
+    WeeklyReports pid -> sendReportForProject pid WeeklyReport
+    GenSwagger pid uid host -> generateSwaggerForProject pid uid host
+    ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
+      Relude.when (project.paymentPlan /= "Free" && project.paymentPlan /= "ONBOARDING") $ whenJust project.firstSubItemId \fSubId -> do
+        currentTime <- liftIO getZonedTime
+        totalToReport <- Telemetry.getTotalEventsToReport pid project.usageLastReported
+        Relude.when (totalToReport > 0) do
+          liftIO $ reportUsageToLemonsqueezy fSubId totalToReport authCtx.config.lemonSqueezyApiKey
+          _ <- dbtToEff $ LemonSqueezy.addDailyUsageReport pid totalToReport
+          _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
+          pass
+    RunCollectionTests col_id -> do
+      now <- Time.currentTime
+      collectionM <- dbtToEff $ Testing.getCollectionById col_id
+      if job.jobRunAt > addUTCTime (-900) now -- Run time is less than 15 mins ago
+        then whenJust collectionM \collection -> Relude.when collection.isScheduled do
+          let (Testing.CollectionSteps colStepsV) = collection.collectionSteps
+              Testing.CollectionVariables colV = collection.collectionVariables
+          stepResultsE <- TestToDump.runCollectionTest colStepsV colV col_id
+          case stepResultsE of
+            Left e -> do
+              _ <- TestToDump.logTest collection.projectId col_id colStepsV (Left e)
+              pass
+            Right stepResults -> do
+              let (_, failed) = Testing.getCollectionRunStatus stepResults
+              Relude.when (failed > 0) do
+                _ <- liftIO $ withResource authCtx.jobsPool \conn -> do
+                  createJob conn "background_jobs" $ BackgroundJobs.APITestFailed collection.projectId col_id stepResults
                 pass
-              Right stepResults -> do
-                let (_, failed) = Testing.getCollectionRunStatus stepResults
-                Relude.when (failed > 0) do
-                  _ <- liftIO $ withResource authCtx.jobsPool \conn -> do
-                    createJob conn "background_jobs" $ BackgroundJobs.APITestFailed collection.projectId col_id stepResults
-                  pass
-                _ <- TestToDump.logTest collection.projectId col_id colStepsV (Right stepResults)
-                pass
-          else Log.logAttention "RunCollectionTests failed.  Job was sheduled to run over 30 mins ago" $ collectionM <&> \c -> (c.title, c.id)
-      APITestFailed pid col_id stepResult -> do
-        -- collectionM <- dbtToEff $ Testing.getCollectionById col_id
-        -- whenJust collectionM \collection -> do
-        --   _ <- sendTestFailedAlert pid col_id collection stepResult
-        pass
-      CleanupDemoProject -> do
-        let pid = Projects.ProjectId{unProjectId = UUID.nil}
-        -- DELETE PROJECT members
-        _ <- withPool authCtx.pool $ PTR.execute [sql| DELETE FROM projects.project_members WHERE project_id = ? |] (Only pid)
-        -- SOFT DELETE test collections
-        _ <- withPool authCtx.pool $ PTR.execute [sql|DELETE FROM tests.collections  WHERE project_id = ? and title != 'Default Health check' |] (Only pid)
-        -- DELETE API KEYS
-        _ <- withPool authCtx.pool $ PTR.execute [sql| DELETE FROM projects.project_api_keys WHERE project_id = ? AND title != 'Default API Key' |] (Only pid)
-        pass
-      FiveMinuteSpanProcessing scheduledTime -> processFiveMinuteSpans scheduledTime
-      OneMinuteErrorProcessing scheduledTime -> processOneMinuteErrors scheduledTime
-      SlackNotification pid message -> sendSlackMessage pid message
+              _ <- TestToDump.logTest collection.projectId col_id colStepsV (Right stepResults)
+              pass
+        else Log.logAttention "RunCollectionTests failed.  Job was sheduled to run over 30 mins ago" $ collectionM <&> \c -> (c.title, c.id)
+    APITestFailed pid col_id stepResult -> do
+      -- collectionM <- dbtToEff $ Testing.getCollectionById col_id
+      -- whenJust collectionM \collection -> do
+      --   _ <- sendTestFailedAlert pid col_id collection stepResult
+      pass
+    CleanupDemoProject -> do
+      let pid = Projects.ProjectId{unProjectId = UUID.nil}
+      -- DELETE PROJECT members
+      _ <- withPool authCtx.pool $ PTR.execute [sql| DELETE FROM projects.project_members WHERE project_id = ? |] (Only pid)
+      -- SOFT DELETE test collections
+      _ <- withPool authCtx.pool $ PTR.execute [sql|DELETE FROM tests.collections  WHERE project_id = ? and title != 'Default Health check' |] (Only pid)
+      -- DELETE API KEYS
+      _ <- withPool authCtx.pool $ PTR.execute [sql| DELETE FROM projects.project_api_keys WHERE project_id = ? AND title != 'Default API Key' |] (Only pid)
+      pass
+    FiveMinuteSpanProcessing scheduledTime -> processFiveMinuteSpans scheduledTime
+    OneMinuteErrorProcessing scheduledTime -> processOneMinuteErrors scheduledTime
+    SlackNotification pid message -> sendSlackMessage pid message
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -543,8 +544,8 @@ queryMonitorsTriggered queryMonitorIds = do
       else do
         if Just True
           == ( monitorE.warningThreshold <&> \warningThreshold ->
-                (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
-                  || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
+                 (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
+                   || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
              )
           then handleQueryMonitorThreshold monitorE False
           else pass
@@ -760,7 +761,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
                   , archivedAt = Nothing
                   }
             )
-          <$> errs
+            <$> errs
 
       forM_ project.notificationsChannel \case
         Projects.NSlack ->

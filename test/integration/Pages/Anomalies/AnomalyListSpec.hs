@@ -23,6 +23,7 @@ import Relude.Unsafe qualified as Unsafe
 import RequestMessages (RequestMessage (..), replaceNullChars, valueToFields)
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
 import Utils (toXXHash)
+import BackgroundJobs (processOneMinuteErrors, processFiveMinuteSpans)
 
 
 testPid :: Projects.ProjectId
@@ -51,7 +52,10 @@ spec = aroundAll withTestResources do
             , ("m3", BL.toStrict $ AE.encode reqMsg1) -- same message
             , ("m4", BL.toStrict $ AE.encode reqMsg1) -- same message
             ]
-      res <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
+      res <- runTestBackground trATCtx do
+        _ <- processMessages msgs HashMap.empty
+        _ <- processOneMinuteErrors currentTime
+        processFiveMinuteSpans currentTime
       _ <- runAllBackgroundJobs trATCtx
 
       pg <-
@@ -95,7 +99,11 @@ spec = aroundAll withTestResources do
             , ("m3", BL.toStrict $ AE.encode reqMsg3)
             , ("m4", BL.toStrict $ AE.encode reqMsg2)
             ]
-      res <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
+
+      res <- runTestBackground trATCtx do
+        _ <- processMessages msgs HashMap.empty
+        _ <- processOneMinuteErrors currentTime 
+        processFiveMinuteSpans currentTime
       _ <- runAllBackgroundJobs trATCtx
 
       pg <-

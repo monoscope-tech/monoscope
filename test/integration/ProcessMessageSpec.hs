@@ -73,10 +73,7 @@ spec = aroundAll TestUtils.withSetup do
             ]
       authCtx <- testAuthContext pool
       _ <- TestUtils.runTestBackground authCtx $ processMessages msgs HashMap.empty
-      -- Process the spans using the background job
-      -- Use a time slightly after the messages to ensure they're captured
-      let processTime = addUTCTime 1 currentTime -- 1 second after the messages
-      _ <- TestUtils.runTestBackground authCtx $ processFiveMinuteSpans processTime
+      _ <- TestUtils.runTestBackground authCtx $ processFiveMinuteSpans currentTime
       _ <- TestUtils.runAllBackgroundJobs authCtx
       -- Now refresh the materialized view to see the results
       _ <- withPool pool $ TestUtils.refreshMaterializedView "apis.endpoint_request_stats"
@@ -84,5 +81,5 @@ spec = aroundAll TestUtils.withSetup do
       traceShowM endpoints
       length endpoints `shouldBe` 3 -- Two new endpoints from the last 2 requests
       forM_ endpoints \enp -> do
-        ["/", "/api/{number}/user/login", "/service/extension/backup/mboximport"] `shouldContain` [enp.urlPath]
+        ["/", "/api/v1/user/login", "/service/extension/backup/mboximport"] `shouldContain` [enp.urlPath]
       pass
