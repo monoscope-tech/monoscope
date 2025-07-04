@@ -381,7 +381,7 @@ BEGIN
   ELSE
     INSERT INTO background_jobs (run_at, status, payload)
     VALUES (
-      now() + INTERVAL '5 minutes',
+      now(),
       'queued',
       jsonb_build_object(
         'tag', 'NewAnomaly',

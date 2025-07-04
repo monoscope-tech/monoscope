@@ -18,7 +18,7 @@ import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
-import BackgroundJobs (processFiveMinuteSpans)
+import BackgroundJobs (processFiveMinuteSpans, processBackgroundJob, processOneMinuteErrors )
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
@@ -48,11 +48,11 @@ spec = aroundAll withTestResources do
                 [ ("m1", BL.toStrict $ AE.encode reqMsg1)
                 , ("m2", BL.toStrict $ AE.encode reqMsg2)
                 ]
-      _ <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
-      -- Process the spans using the background job
-      -- Use a time slightly after the messages to ensure they're captured
-      let processTime = addUTCTime 1 currentTime -- 1 second after the messages
-      _ <- runTestBackground trATCtx $ processFiveMinuteSpans processTime
+      res <- runTestBackground trATCtx do
+        _ <- processMessages msgs HashMap.empty
+        _ <- processOneMinuteErrors currentTime 
+        processFiveMinuteSpans currentTime 
+      _ <- runAllBackgroundJobs trATCtx
       _ <- withPool trPool $ refreshMaterializedView "apis.endpoint_request_stats"
 
       PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents) <- toServantResponse trATCtx trSessAndHeader trLogger $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming")
@@ -78,11 +78,11 @@ spec = aroundAll withTestResources do
                 [ ("m1", BL.toStrict $ AE.encode reqMsg1)
                 , ("m2", BL.toStrict $ AE.encode reqMsg2)
                 ]
-      _ <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
-      -- Process the spans using the background job
-      -- Use a time slightly after the messages to ensure they're captured
-      let processTime = addUTCTime 1 currentTime -- 1 second after the messages
-      _ <- runTestBackground trATCtx $ processFiveMinuteSpans processTime
+      res <- runTestBackground trATCtx do
+        _ <- processMessages msgs HashMap.empty
+        _ <- processOneMinuteErrors currentTime 
+        processFiveMinuteSpans currentTime 
+      _ <- runAllBackgroundJobs trATCtx
       _ <- withPool trPool $ refreshMaterializedView "apis.endpoint_request_stats"
 
       enp <-
