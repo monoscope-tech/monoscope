@@ -918,11 +918,12 @@ data OtelLogsAndSpans = OtelLogsAndSpans
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake OtelLogsAndSpans
 
+
 -- Custom FromRow instance that matches the column order in specific SELECT queries
 instance FromRow OtelLogsAndSpans where
   fromRow = do
     -- Order from SELECT queries in this file:
-    -- project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+    -- project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
     -- hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
     project_id' <- field
     id' <- field
@@ -947,31 +948,32 @@ instance FromRow OtelLogsAndSpans where
     parent_id' <- field
     summary' <- field
     date' <- field
-    return $ OtelLogsAndSpans
-      { id = id'
-      , project_id = project_id'
-      , timestamp = timestamp'
-      , parent_id = parent_id'
-      , observed_timestamp = observed_timestamp'
-      , hashes = hashes'
-      , name = name'
-      , kind = kind'
-      , status_code = status_code'
-      , status_message = status_message'
-      , level = level'
-      , severity = severity'
-      , body = body'
-      , duration = duration'
-      , start_time = start_time'
-      , end_time = end_time'
-      , context = context'
-      , events = events'
-      , links = links'
-      , attributes = attributes'
-      , resource = resource'
-      , summary = summary'
-      , date = date'
-      }
+    return
+      $ OtelLogsAndSpans
+        { id = id'
+        , project_id = project_id'
+        , timestamp = timestamp'
+        , parent_id = parent_id'
+        , observed_timestamp = observed_timestamp'
+        , hashes = hashes'
+        , name = name'
+        , kind = kind'
+        , status_code = status_code'
+        , status_message = status_message'
+        , level = level'
+        , severity = severity'
+        , body = body'
+        , duration = duration'
+        , start_time = start_time'
+        , end_time = end_time'
+        , context = context'
+        , events = events'
+        , links = links'
+        , attributes = attributes'
+        , resource = resource'
+        , summary = summary'
+        , date = date'
+        }
 
 
 getErrorEvents :: OtelLogsAndSpans -> V.Vector AE.Value

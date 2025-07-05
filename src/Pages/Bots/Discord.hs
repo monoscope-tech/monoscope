@@ -300,8 +300,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-          <> [msgJson]
-          <> ["\n\nUser query: " <> question]
+        <> [msgJson]
+        <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 

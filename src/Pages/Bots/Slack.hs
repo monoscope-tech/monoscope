@@ -516,12 +516,18 @@ instance AE.FromJSON SlackEventPayload where
         UrlVerification <$> v AE..: "token" <*> v AE..: "challenge"
       "event_callback" ->
         EventCallback
-          <$> v AE..: "token"
-          <*> v AE..: "team_id"
-          <*> v AE..: "api_app_id"
-          <*> v AE..: "event"
-          <*> v AE..: "event_id"
-          <*> v AE..: "event_time"
+          <$> v
+          AE..: "token"
+          <*> v
+          AE..: "team_id"
+          <*> v
+          AE..: "api_app_id"
+          <*> v
+          AE..: "event"
+          <*> v
+          AE..: "event_id"
+          <*> v
+          AE..: "event_time"
       other -> fail $ "Unsupported Slack event type: " ++ show other
 
 
@@ -650,7 +656,7 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-          <> [msgJson]
-          <> ["\n\nUser query: " <> question]
+        <> [msgJson]
+        <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
