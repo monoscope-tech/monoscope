@@ -79,6 +79,7 @@ library
       Pages.BodyWrapper
       Pages.Bots.Slack
       Pages.Bots.Discord
+      Pages.Bots.Utils 
       Pages.Charts.Charts
       Pages.Components
       Pages.Dashboards
@@ -102,6 +103,7 @@ library
       Pages.Telemetry.Metrics
       Pages.Telemetry.Trace
       Pages.Telemetry.Utils
+      Pkg.AI
       Pkg.Components.ExternalHeadScripts
       Pkg.Components.ItemsList
       Pkg.Components.LogQueryBox
