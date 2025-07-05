@@ -45,7 +45,9 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (callOpenAIAPI, checkFreeTierExceeded, faSprite_, getServiceColors, listToIndexHashMap, lookupVecTextByKey, onpointerdown_, prettyPrintCount, systemPrompt)
+import Utils (checkFreeTierExceeded, faSprite_, getServiceColors, listToIndexHashMap, lookupVecTextByKey, onpointerdown_, prettyPrintCount)
+
+import Pkg.AI (callOpenAIAPI, systemPrompt)
 
 
 -- $setup
