@@ -337,3 +337,6 @@ tests:
       - aeson-qq
       - extra
       - hspec-expectations-json
+      - effectful-core
+      - log-effectful
+      - log-base

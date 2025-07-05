@@ -147,7 +147,8 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
 
   let host = maybeToMonoid $ hostM >>= \t -> if t == "" then Nothing else Just t
   let page = fromMaybe 0 $ readMaybe (toString $ fromMaybe "" pageM)
-  endpointStats <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid ackd archived (Just host) sortM searchM page (fromMaybe "" requestTypeM)
+  let hostParam = hostM >>= \h -> if h == "" then Nothing else Just h
+  endpointStats <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid ackd archived hostParam sortM searchM page (fromMaybe "" requestTypeM)
   inboxCount <- dbtToEff $ Endpoints.countEndpointInbox pid host (fromMaybe "Incoming" requestTypeM)
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
 

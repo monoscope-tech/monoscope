@@ -1,13 +1,16 @@
 module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload) where
 
-import Control.Lens ((.~))
+import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as AEKM
+import Data.Aeson.Lens (key, _String)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.UUID qualified as UUID
 import Data.List qualified as L (intersect, union)
 import Data.List.Extra (chunksOf)
+import Data.Map qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (DayOfWeek (Monday, Saturday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
@@ -23,7 +26,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact qualified as PTR
 import Effectful (Eff, (:>))
 import Effectful.Ki qualified as Ki
-import Effectful.Log (Log)
+import Effectful.Log (Log, object)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
@@ -64,7 +67,7 @@ import RequestMessages qualified
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx, runBackground)
 import UnliftIO.Exception (try)
-import Utils (DBField)
+import Utils (DBField, toXXHash)
 
 
 data BgJobs
@@ -329,10 +332,14 @@ processFiveMinuteSpans scheduledTime = do
 
   -- Group spans by project
   let spansByProject = V.groupBy (\a b -> a.project_id == b.project_id) httpSpans
+
+  Log.logInfo "Grouped spans by project" (length spansByProject)
+
   forM_ spansByProject \projectSpans -> case V.uncons projectSpans of
     Nothing -> pass
     Just (firstSpan, _) -> do
       let pid = Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText firstSpan.project_id
+      Log.logInfo "Processing project spans" (pid.toText, V.length projectSpans)
       processProjectSpans pid projectSpans
 
   Log.logInfo "Completed 5-minute span processing" ()
@@ -436,20 +443,33 @@ processProjectSpans pid spans = do
   -- Process each span to extract endpoints, shapes, fields, and formats
   results <- forM spans \spn -> do
     spanId <- liftIO UUIDV4.nextRandom
-    pure $ processSpanToEntities projectCacheVal spn spanId
+    let result = processSpanToEntities projectCacheVal spn spanId
+    pure result
 
   let (endpoints, shapes, fields, formats, spanUpdates) = V.unzip5 results
   let endpointsFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes $ V.toList endpoints
-  let _shapesFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes $ V.toList shapes
-  let _fieldsFinal = VAA.nubBy (comparing (.hash)) $ V.concat $ V.toList fields
-  let _formatsFinal = VAA.nubBy (comparing (.hash)) $ V.concat $ V.toList formats
+  let shapesFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes $ V.toList shapes
+  let fieldsFinal = VAA.nubBy (comparing (.hash)) $ V.concat $ V.toList fields
+  let formatsFinal = VAA.nubBy (comparing (.hash)) $ V.concat $ V.toList formats
+
+  Log.logInfo
+    "Entities extracted"
+    ( object
+        [ "project_id" AE..= pid.toText
+        , "endpoints_count" AE..= V.length endpointsFinal
+        , "shapes_extracted" AE..= V.length shapes
+        , "shapes_final" AE..= V.length shapesFinal
+        , "fields_final" AE..= V.length fieldsFinal
+        , "formats_final" AE..= V.length formatsFinal
+        ]
+    )
 
   -- Insert extracted entities
   result <- try $ Ki.scoped \scope -> do
     unless (null endpointsFinal) $ void $ Ki.fork scope $ Endpoints.bulkInsertEndpoints endpointsFinal
-    -- unless (null shapesFinal) $ void $ Ki.fork scope $ Shapes.bulkInsertShapes shapesFinal
-    -- unless (null fieldsFinal) $ void $ Ki.fork scope $ FieldsQ.bulkInsertFields fieldsFinal
-    -- unless (null formatsFinal) $ void $ Ki.fork scope $ Formats.bulkInsertFormat formatsFinal
+    unless (null shapesFinal) $ void $ Ki.fork scope $ Shapes.bulkInsertShapes shapesFinal
+    unless (null fieldsFinal) $ void $ Ki.fork scope $ FieldsQ.bulkInsertFields fieldsFinal
+    unless (null formatsFinal) $ void $ Ki.fork scope $ Formats.bulkInsertFormat formatsFinal
     Ki.atomically $ Ki.awaitAll scope
 
   case result of
