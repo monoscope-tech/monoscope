@@ -169,7 +169,6 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
   now <- Time.currentTime
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   let mappng = DashboardUtils.variablePresets (maybe "" (.toText) pidM) fromD toD allParams
-  traceShowM queryM
   let parseQuery q = either (\err -> throwError err400{errBody = "Invalid signature; " <> show err}) pure (parseQueryToAST $ DashboardUtils.replacePlaceholders mappng q)
 
   sqlQuery <- case (queryM, querySQLM) of
@@ -217,7 +216,6 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx = do
           , rowsCount = 1
           }
     DTMetric -> do
-      traceShowM sqlQuery
       chartData <- withPool authCtx.pool $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
       let chartsDataV = V.fromList chartData
       let (hdrs, groupedData, rowsCount, rpm) = pivot' chartsDataV

@@ -33,10 +33,13 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Metrics"
-          , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-slate-200 text-slate-500"] do
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'requests')", role_ "tab", class_ "tab py-1.5 h-auto! tab-active"] "Overview"
-              a_ [onclick_ "window.setQueryParamAndReload('source', 'logs')", role_ "tab", class_ "tab py-1.5 h-auto! "] "Explorer"
-          , pageActions = Just $ TimePicker.timepicker_ Nothing currentRange
+          , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-md p-0 tabs-outline items-center border"] do
+              a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! "] "Events"
+              a_ [href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! tab-active text-textStrong"] "Metrics"
+          , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/metrics/"
+          , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
+              TimePicker.timepicker_ Nothing currentRange
+              TimePicker.refreshButton_
           }
   if tab == "datapoints"
     then do
@@ -76,7 +79,7 @@ instance ToHtml MetricsOverViewGet where
 overViewTabs :: Projects.ProjectId -> Text -> Html ()
 overViewTabs pid tab = do
   div_ [class_ "w-max mt-5"] do
-    div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-slate-200 text-slate-500"] do
+    div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center border"] do
       a_ [onclick_ "window.setQueryParamAndReload('tab', 'datapoints')", role_ "tab", class_ $ "tab py-1.5 h-auto!  " <> if tab == "datapoints" then "tab-active" else ""] "Datapoints"
       a_ [onclick_ "window.setQueryParamAndReload('tab', 'charts')", role_ "tab", class_ $ "tab py-1.5 h-auto! " <> if tab == "charts" then "tab-active" else ""] "Charts List"
 
@@ -97,9 +100,9 @@ chartsPage pid metricList sources source mFilter nextUrl = do
             option_ ([selected_ "all" | "all" == source] ++ [value_ "all"]) "Data Source"
             forM_ sources $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
         div_ [class_ "flex items-center gap-2 w-full rounded-xl px-3 h-12 border border-strokeWeak bg-fillWeaker"] do
-          faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-slate-500"
+          faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
           input_
-            [ class_ "w-full text-slate-950 bg-transparent hover:outline-hidden focus:outline-hidden"
+            [ class_ "w-full text-textStrong bg-transparent hover:outline-hidden focus:outline-hidden"
             , type_ "text"
             , placeholder_ "Search"
             , id_ "search-input"
@@ -160,7 +163,7 @@ dataPointsPage pid metrics = do
       [ class_ "w-full rounded-2xl mt-4 border flex flex-col"
       ]
       do
-        div_ [class_ "flex px-4 justify-between py-3 text-sm font-medium border-b text-slate-900"] $ do
+        div_ [class_ "flex px-4 justify-between py-3 text-sm font-medium border-b text-textStrong"] $ do
           div_ [class_ " w-[calc(40vw-46px)]"] "Metric"
           div_ [class_ "w-[10vw] "] "Sources"
           div_ [class_ "w-[8vw] ml-2"] "Datapoint"
@@ -204,9 +207,9 @@ metricsDetailsPage pid sources metric source currentRange = do
   div_ [class_ "flex flex-col gap-8 h-full"] do
     div_ [class_ "flex items-center w-full"] do
       div_ [class_ "flex flex-col gap-1"] do
-        span_ [class_ "text-slate-900 text-sm font-medium"] "Data source"
+        span_ [class_ "text-textStrong text-sm font-medium"] "Data source"
         select_
-          [ class_ "select select-sm bg-fillWeaker border border-slate-200 rounded-xl w-36 focus:outline-hidden"
+          [ class_ "select select-sm bg-fillWeaker border border-strokeWeak rounded-xl w-36 focus:outline-hidden"
           , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/"
           , name_ "metric_source"
           , hxTarget_ "#global-data-drawer-content"
@@ -215,7 +218,7 @@ metricsDetailsPage pid sources metric source currentRange = do
           do
             option_ ([selected_ "all" | "all" == source] ++ [value_ "all"]) "All"
             forM_ sources $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
-    div_ [class_ "w-full border  border-slate-200 rounded-2xl p-2 sticky z-50 bg-slate-50 top-4"] do
+    div_ [class_ "w-full border border-strokeWeak rounded-2xl p-2 sticky z-50 bg-bgBase top-4"] do
       div_ [class_ "flex items-center text-sm"] $ span_ [] $ toHtml metric.metricName
       div_ [class_ "h-64 w-full"]
         $ toHtml
@@ -232,35 +235,35 @@ metricsDetailsPage pid sources metric source currentRange = do
           , Widget.expandBtnFn = Nothing -- No expand button needed in detail view
           }
 
-    div_ [class_ "flex flex-col gap-2 rounded-2xl border border-slate-200", id_ "metric-tabs-container"] $ do
+    div_ [class_ "flex flex-col gap-2 rounded-2xl border border-strokeWeak", id_ "metric-tabs-container"] $ do
       div_ [class_ "flex", [__|on click halt|]] $ do
-        button_ [class_ "a-tab border-b border-b-slate-200 px-4 py-1.5 t-tab-active", onclick_ "navigatable(this, '#ov-content', '#metric-tabs-container', 't-tab-active')"] "Overview"
-        button_ [class_ "a-tab border-b border-b-slate-200 px-4 py-1.5 ", onclick_ "navigatable(this, '#br-content', '#metric-tabs-container', 't-tab-active')"] "Breakdown"
-        button_ [class_ "a-tab border-b w-max whitespace-nowrap border-b-slate-200 px-4 py-1.5 ", onclick_ "navigatable(this, '#rl-content', '#metric-tabs-container', 't-tab-active')"] "Related metrics"
-        div_ [class_ "w-full border-b border-b-slate-200"] pass
+        button_ [class_ "a-tab border-b border-b-strokeWeak px-4 py-1.5 t-tab-active", onclick_ "navigatable(this, '#ov-content', '#metric-tabs-container', 't-tab-active')"] "Overview"
+        button_ [class_ "a-tab border-b border-b-strokeWeak px-4 py-1.5 ", onclick_ "navigatable(this, '#br-content', '#metric-tabs-container', 't-tab-active')"] "Breakdown"
+        button_ [class_ "a-tab border-b w-max whitespace-nowrap border-b-strokeWeak px-4 py-1.5 ", onclick_ "navigatable(this, '#rl-content', '#metric-tabs-container', 't-tab-active')"] "Related metrics"
+        div_ [class_ "w-full border-b border-b-strokeWeak"] pass
 
-      div_ [class_ "grid px-4 pb-4 mt-2 text-slate-600 font-normal"] $ do
+      div_ [class_ "grid px-4 pb-4 mt-2 text-textWeak font-normal"] $ do
         div_ [class_ "a-tab-content", id_ "ov-content"] $ do
           div_ [class_ "flex flex-col gap-4"] do
             div_ [class_ "flex flex-col gap-1"] $ do
-              span_ [class_ "text-slate-900 font-medium"] "Description"
+              span_ [class_ "text-textStrong font-medium"] "Description"
               span_ [] $ toHtml $ if metric.metricDescription == "" then "No description" else metric.metricDescription
             div_ [class_ "flex flex-col gap-1"] $ do
-              span_ [class_ "text-slate-900 font-medium"] "Type"
+              span_ [class_ "text-textStrong font-medium"] "Type"
               span_ [] $ toHtml metric.metricType
             div_ [class_ "flex flex-col gap-1"] $ do
-              span_ [class_ "text-slate-900 font-medium"] "Unit"
+              span_ [class_ "text-textStrong font-medium"] "Unit"
               span_ [] $ toHtml if metric.metricUnit == "" then "No unit" else metric.metricUnit
             div_ [class_ "flex flex-col gap-1"] $ do
-              span_ [class_ "text-slate-900 font-medium"] "Labels"
+              span_ [class_ "text-textStrong font-medium"] "Labels"
               div_ [class_ "flex items-center"] do
-                forM_ metric.metricLabels $ \label -> span_ [class_ "badge badge-ghost text-slate-600"] $ toHtml label
+                forM_ metric.metricLabels $ \label -> span_ [class_ "badge badge-ghost text-textWeak"] $ toHtml label
         div_ [class_ "hidden a-tab-content", id_ "br-content"] do
           div_ [class_ "flex flex-col gap-4"] $ do
             div_ [class_ "flex flex-col gap-1"] do
-              span_ [class_ "text-slate-900 text-sm font-medium"] "By label"
+              span_ [class_ "text-textStrong text-sm font-medium"] "By label"
               select_
-                [ class_ "select select-sm bg-fillWeaker border border-slate-200 rounded-xl w-36 focus:outline-hidden"
+                [ class_ "select select-sm bg-fillWeaker border border-strokeWeak rounded-xl w-36 focus:outline-hidden"
                 , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/breakdown"
                 , name_ "label"
                 , hxTarget_ "#breakdown-container"
@@ -279,13 +282,13 @@ metricBreakdown :: Projects.ProjectId -> Maybe Text -> V.Vector Text -> Html ()
 metricBreakdown pid label values = do
   div_ [class_ "grid grid-cols-2 gap-2"] do
     forM_ values $ \v -> do
-      div_ [class_ "w-full flex flex-col gap-2 metric_filterble rounded-lg p-2 border border-slate-200"] do
+      div_ [class_ "w-full flex flex-col gap-2 metric_filterble rounded-lg p-2 border border-strokeWeak"] do
         div_ [class_ "w-full justify-between flex gap-2 items-center"] do
           div_ [class_ "flex gap-1 items-center"] do
             span_ [class_ "text-sm"] $ toHtml v
           button_
-            [ class_ "btn border border-slate-200 btn-xs btn-circle"
+            [ class_ "btn border border-strokeWeak btn-xs btn-circle"
             ]
             do
-              faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3 text-slate-500"
+              faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3 text-iconNeutral"
         div_ [class_ "h-48"] pass
