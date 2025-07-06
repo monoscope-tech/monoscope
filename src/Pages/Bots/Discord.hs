@@ -8,27 +8,17 @@ import Data.ByteString.Base16 qualified as Base16
 import Data.Default (Default (def))
 import Data.Text qualified as T
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (query_, withPool)
-import Deriving.Aeson qualified as DAE
-import Effectful.Concurrent (forkIO)
 import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
-import Lucid
-import Models.Apis.Slack (DiscordData (..), SlackData (..), getDashboardsForSlack, getDiscordData, getSlackDataByTeamId, insertAccessToken, insertDiscordData, updateDiscordNotificationChannel, updateSlackNotificationChannel)
+import Models.Apis.Slack (DiscordData (..), getDiscordData, insertDiscordData, updateDiscordNotificationChannel)
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
-import Pages.Components (navBar)
-import Pkg.Mail (sendSlackMessage)
 import Relude hiding (ask, asks)
 
 import Control.Lens ((.~), (^.))
-import Data.Aeson.Key qualified as KEM
-import Data.Aeson.QQ (aesonQQ)
-import Data.Aeson.Types (parseMaybe)
 import Data.Effectful.Wreq (
   HTTP,
-  Options,
   defaults,
   getWith,
   header,
@@ -36,26 +26,21 @@ import Data.Effectful.Wreq (
   responseBody,
  )
 import Data.Time qualified as Time
-import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Effectful (Eff, type (:>))
 import Effectful.Time qualified as Time
 import Models.Apis.RequestDumps qualified as RequestDumps
-import Models.Projects.Dashboards qualified as Dashboards
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import Pages.Bots.Utils (BotResponse (..), BotType (..), authHeader, chartImageUrl, contentTypeHeader, handleTableResponse)
 import Pkg.AI (callOpenAIAPI, systemPrompt)
-import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (parseQueryToAST)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400, err401)
-import System.Config (AuthContext (env, pool), EnvConfig (..))
+import System.Config (AuthContext (env), EnvConfig (..))
 import System.Types (ATBaseCtx)
-import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey)
-import Web.FormUrlEncoded (FromForm)
 
 
 linkDiscordGetH :: Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text] BotResponse)

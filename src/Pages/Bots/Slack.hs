@@ -3,19 +3,13 @@
 module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction) where
 
 import Control.Lens ((.~), (^.))
-import Crypto.Error qualified as Crypto
-import Crypto.PubKey.Ed25519 qualified as Ed25519
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as KEM
 import Data.Aeson.KeyMap qualified as KEMP
-import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types (parseMaybe)
-import Data.ByteString qualified as BS
-import Data.ByteString.Base16 qualified as Base16
 import Data.Default (Default (def))
 import Data.Effectful.Wreq (
   HTTP,
-  Options,
   defaults,
   getWith,
   header,
@@ -26,7 +20,7 @@ import Data.Text qualified as T
 import Data.Time qualified as Time
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (query_, withPool)
+import Database.PostgreSQL.Entity.DBT (withPool)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.Concurrent (forkIO)
@@ -34,9 +28,8 @@ import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
-import Lucid
 import Models.Apis.RequestDumps qualified as RequestDumps
-import Models.Apis.Slack (DiscordData (..), SlackData (..), getDashboardsForSlack, getDiscordData, getSlackDataByTeamId, insertAccessToken, insertDiscordData, updateDiscordNotificationChannel, updateSlackNotificationChannel)
+import Models.Apis.Slack (SlackData (..), getDashboardsForSlack, getSlackDataByTeamId, insertAccessToken, updateSlackNotificationChannel)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
@@ -44,19 +37,19 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Pages.Bots.Utils (BotResponse (..), BotType (..), contentTypeHeader, handleTableResponse)
-import Pages.Components (navBar)
 import Pkg.AI (callOpenAIAPI, systemPrompt)
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
-import Pkg.Mail (sendSlackMessage)
+import BackgroundJobs qualified as BgJobs
+import OddJobs.Job (createJob)
+import Data.Pool (withResource)
 import Pkg.Parser (parseQueryToAST)
 import Relude hiding (ask, asks)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
-import Servant.Server (ServerError (errBody), err400, err401)
+import Servant.Server (ServerError (errBody), err400)
 import System.Config (AuthContext (env, pool), EnvConfig (..))
 import System.Types (ATBaseCtx)
-import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -124,7 +117,9 @@ linkProjectGetH pid slack_code onboardingM = do
     (Just token', Just project') -> do
       n <- liftIO $ withPool pool do
         insertAccessToken pid token'.incomingWebhook.url token'.team.id token'.incomingWebhook.channelId
-      sendSlackMessage pid ("APItoolkit Bot has been linked to your project: " <> project'.title)
+      -- Create a background job to send the Slack notification
+      _ <- liftIO $ withResource pool $ \conn -> 
+        createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("APItoolkit Bot has been linked to your project: " <> project'.title)
       case onboardingM of
         Just _ -> pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
         Nothing -> pure $ addHeader "" $ BotLinked $ PageCtx bwconf "Slack"

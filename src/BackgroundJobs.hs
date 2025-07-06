@@ -1,21 +1,18 @@
 module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload) where
 
-import Control.Lens ((.~), (^?))
+import Control.Lens ((.~))
 import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as AEKM
-import Data.Aeson.Lens (key, _String)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.UUID qualified as UUID
 import Data.List qualified as L (intersect, union)
 import Data.List.Extra (chunksOf)
-import Data.Map qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (DayOfWeek (Monday, Saturday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
+import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
 import Data.Time.Format (defaultTimeLocale)
-import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
+import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -42,7 +39,6 @@ import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps (ATError (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
-import Models.Apis.Slack (DiscordData (..), getDiscordDataByProjectId)
 import Models.Projects.LemonSqueezy qualified as LemonSqueezy
 import Models.Projects.Projects (ProjectId (unProjectId))
 import Models.Projects.Projects qualified as Projects
@@ -51,14 +47,13 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Tests.TestToDump qualified as TestToDump
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Users qualified as Users
-import NeatInterpolation (trimming)
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq (defaults, header, postWith)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
 import Pages.Reports qualified as RP
 import Pages.Specification.GenerateSwagger (generateSwagger)
-import Pkg.Mail (NotificationAlerts (EndpointAlert, ReportAlert, RuntimeErrorAlert), sendDiscordAlert, sendDiscordNotif, sendPostmarkEmail, sendSlackAlert, sendSlackMessage)
+import Pkg.Mail (NotificationAlerts (EndpointAlert, ReportAlert, RuntimeErrorAlert), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage)
 import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask)
@@ -67,7 +62,7 @@ import RequestMessages qualified
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx, runBackground)
 import UnliftIO.Exception (try)
-import Utils (DBField, toXXHash)
+import Utils (DBField)
 
 
 data BgJobs

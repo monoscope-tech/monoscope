@@ -2,7 +2,6 @@
 
 module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendDiscordNotif, sendSlackAlert, NotificationAlerts (..), sendDiscordAlert) where
 
-import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Effectful.Notify qualified as Notify
@@ -12,7 +11,6 @@ import Data.Time
 import Data.Vector qualified as V
 import Effectful (
   Eff,
-  IOE,
   type (:>),
  )
 import Effectful.Log (Log)
@@ -23,11 +21,9 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Slack (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
-import Network.Wreq (defaults, header)
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (env))
 import System.Config qualified as Config
-import System.Types (ATBackgroundCtx)
 
 
 sendPostmarkEmail :: (Notify.Notify :> es) => Text -> Maybe (Text, AE.Value) -> Maybe (Text, Text) -> Eff es ()

@@ -27,9 +27,7 @@ where
 import BackgroundJobs qualified
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket_, finally, mask, throwIO)
-import Control.Monad (void, when)
 import Data.Aeson qualified as AE
-import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types (KeyValue(..))
@@ -40,7 +38,6 @@ import Data.Effectful.UUID (runStaticUUID, runUUID)
 import Data.Effectful.Wreq (runHTTPGolden, runHTTPWreq)
 import Data.Either.Extra
 import Data.HashMap.Strict qualified as HashMap
-import Data.Int (Int64)
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool)
 import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime)
@@ -59,7 +56,6 @@ import Database.PostgreSQL.Transact qualified as PgT
 import Database.Postgres.Temp (cacheAction, cacheConfig, toConnectionString, withConfig, withDbCache)
 import Database.Postgres.Temp qualified as TmpPostgres
 import Effectful
-import Effectful.Concurrent.Async (runConcurrent)
 import ProcessMessage qualified
 import Effectful.Error.Static (runErrorNoCallStack)
 import Effectful.Ki qualified as Ki
@@ -84,7 +80,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Config qualified as Config
 import System.Directory (getFileSize, listDirectory)
 import System.Logging qualified as Logging
-import System.Types (ATAuthCtx, ATBackgroundCtx, RespHeaders, atAuthToBase, effToServantHandlerTest, runBackground)
+import System.Types (ATAuthCtx, ATBackgroundCtx, RespHeaders, atAuthToBase, effToServantHandlerTest)
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 
@@ -146,51 +142,6 @@ withLocalSetup f = do
     withConfig migratedConfig $ \db -> f =<< newPool (defaultPoolConfig (connectPostgreSQL $ toConnectionString db) close 60 50)
 
 
--- Clean all data from the database while preserving schema
--- This function uses TRUNCATE CASCADE to efficiently remove all data
-cleanDatabase :: Connection -> IO ()
-cleanDatabase conn = do
-  -- Get all user-created tables from all schemas
-  tables <- query conn getAllTablesQuery ()
-
-  -- Truncate all tables with CASCADE to handle foreign keys
-  -- We do this in a transaction to ensure atomicity
-  unless (null tables) $ do
-    -- First, drop any materialized views that might prevent truncation
-    _ <- execute_ conn "BEGIN"
-
-    -- Get and drop all materialized views
-    matViews <- query conn getMatViewsQuery () :: IO [Only Text]
-    forM_ matViews $ \(Only viewName) -> do
-      let dropQuery = Query $ encodeUtf8 $ "DROP MATERIALIZED VIEW IF EXISTS " <> viewName <> " CASCADE"
-      execute_ conn dropQuery
-
-    -- Build TRUNCATE statement for all tables at once
-    let tableNames = map (\(schema, table) -> schema <> "." <> table) tables
-    let truncateQuery = Query $ encodeUtf8 $ "TRUNCATE TABLE " <> T.intercalate ", " tableNames <> " RESTART IDENTITY CASCADE"
-
-    _ <- execute_ conn truncateQuery
-
-    -- Also clean up the background_jobs table if it exists
-    _ <- execute_ conn "TRUNCATE TABLE IF EXISTS background_jobs RESTART IDENTITY CASCADE"
-
-    void $ execute_ conn "COMMIT"
-  where
-    getAllTablesQuery =
-      [sql|
-        SELECT table_schema, table_name 
-        FROM information_schema.tables 
-        WHERE table_schema IN ('users', 'projects', 'apis', 'monitors', 'tests')
-          AND table_type = 'BASE TABLE'
-        ORDER BY table_schema, table_name
-      |]
-
-    getMatViewsQuery =
-      [sql|
-        SELECT schemaname || '.' || matviewname
-        FROM pg_matviews
-        WHERE schemaname IN ('users', 'projects', 'apis', 'monitors', 'tests')
-      |]
 
 
 -- External database setup using template database approach for better isolation and performance
