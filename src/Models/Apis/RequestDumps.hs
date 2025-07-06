@@ -410,11 +410,18 @@ getRequestDumpForReports pid report_type = query (Query $ encodeUtf8 q) pid
     report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
     q =
       [text|
-     SELECT DISTINCT ON (endpoint_hash)
-        id, created_at, project_id, host, url_path, raw_url, method, endpoint_hash,
-        CAST (ROUND (AVG (duration_ns) OVER (PARTITION BY endpoint_hash)) AS BIGINT) AS average_duration
-     FROM apis.request_dumps
-     WHERE project_id = ? AND created_at > NOW() - interval $report_interval;
+     SELECT DISTINCT ON (hashes[1])
+        id, timestamp as created_at, project_id, 
+        COALESCE(attributes->>'net.host.name', attributes->>'http.host', '') as host,
+        COALESCE(attributes->>'url.path', attributes->>'http.request.path', '') as url_path,
+        COALESCE(attributes->>'url.full', attributes->>'http.url', '') as raw_url,
+        COALESCE(attributes->>'http.request.method', 'GET') as method,
+        hashes[1] as endpoint_hash,
+        CAST (ROUND (AVG (COALESCE(duration, 0)) OVER (PARTITION BY hashes[1])) AS BIGINT) AS average_duration
+     FROM otel_logs_and_spans
+     WHERE project_id = ?::text AND timestamp > NOW() - interval $report_interval
+       AND kind = 'SERVER' AND status_code IS NOT NULL
+       AND cardinality(hashes) > 0;
     |]
 
 
@@ -424,11 +431,13 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query (Query $ encodeUt
     (start, end) = if report_type == "daily" then ("'48 hours'" :: Text, "'24 hours'") else ("'14 days'", "'7 days'")
     q =
       [text|
-     SELECT  endpoint_hash,
-        CAST (ROUND (AVG (duration_ns)) AS BIGINT) AS average_duration
-     FROM apis.request_dumps
-     WHERE project_id = ? AND created_at > NOW() - interval $start AND created_at < NOW() - interval $end
-     GROUP BY endpoint_hash;
+     SELECT  hashes[1] as endpoint_hash,
+        CAST (ROUND (AVG (COALESCE(duration, 0))) AS BIGINT) AS average_duration
+     FROM otel_logs_and_spans
+     WHERE project_id = ?::text AND timestamp > NOW() - interval $start AND timestamp < NOW() - interval $end
+       AND kind = 'SERVER' AND status_code IS NOT NULL
+       AND cardinality(hashes) > 0
+     GROUP BY hashes[1];
     |]
 
 

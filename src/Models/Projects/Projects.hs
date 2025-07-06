@@ -247,8 +247,8 @@ selectProjectsForUser = query q
     q =
       [sql|
         SELECT pp.*,
-               (SELECT COUNT(*) > 0 FROM apis.request_dumps rd
-                WHERE rd.project_id = pp.id) has_integrated,
+               (SELECT COUNT(*) > 0 FROM otel_logs_and_spans ols
+                WHERE ols.project_id = pp.id::text) has_integrated,
                ARRAY_AGG(us.display_image_url) OVER (PARTITION BY pp.id)
         FROM projects.projects AS pp
         JOIN projects.project_members AS ppm ON (pp.id = ppm.project_id)

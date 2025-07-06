@@ -40,11 +40,11 @@ spec = aroundAll withTestResources do
     it "Non empty project list" \TestResources{..} -> do
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger ListProjects.listProjectsGetH
-      length pg.unwrap.content `shouldBe` 1
-      -- default demo project created in migrations (update was blocked)
-      (pg.unwrap.content V.! 0).id.toText `shouldBe` "00000000-0000-0000-0000-000000000000"
-      (pg.unwrap.content V.! 0).title `shouldBe` "Demo Project"
-      (pg.unwrap.content V.! 0).description `shouldBe` ""
+      length pg.unwrap.content `shouldBe` 2
+      -- Should have both demo project and test project created in testSessionHeader
+      let projectIds = map (.id.toText) (V.toList pg.unwrap.content)
+      projectIds `shouldContain` ["00000000-0000-0000-0000-000000000000"] -- demo project
+      projectIds `shouldContain` ["12345678-9abc-def0-1234-56789abcdef0"] -- test project from testSessionHeader
     -- TODO: add more checks for the info we we display on list page
 
     it "Should update project with new details" \TestResources{..} -> do

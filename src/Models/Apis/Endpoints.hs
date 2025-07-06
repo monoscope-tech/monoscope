@@ -333,7 +333,7 @@ getProjectHosts pid = query q (Only pid)
 
 
 dependenciesAndEventsCount :: Projects.ProjectId -> Text -> Text -> DBT IO (V.Vector HostEvents)
-dependenciesAndEventsCount pid requestType sortT = query (Query $ encodeUtf8 q) (pid, requestType, pid)
+dependenciesAndEventsCount pid requestType sortT = query (Query $ encodeUtf8 q) (pid, isOutgoing, pid)
   where
     orderBy = case sortT of
       "first_seen" -> "first_seen ASC;"
@@ -344,19 +344,23 @@ dependenciesAndEventsCount pid requestType sortT = query (Query $ encodeUtf8 q) 
       "Outgoing" -> "ep.outgoing = true"
       "Incoming" -> "ep.outgoing = false"
       _ -> "ep.outgoing =  false"
+    
+    isOutgoing = requestType == "Outgoing"
 
     q =
       [text|
 WITH filtered_requests AS (
-    SELECT rd.host,
+    SELECT COALESCE(attributes->>'net.host.name', attributes->>'http.host', '') AS host,
            COUNT(*) AS eventsCount,
-           MAX(rd.created_at) AS last_seen,
-           MIN(rd.created_at) AS first_seen
-    FROM apis.request_dumps rd
-    WHERE rd.project_id = ?
-      AND rd.created_at > NOW() - interval '14' day
-      AND rd.request_type = ?
-    GROUP BY rd.host
+           MAX(timestamp) AS last_seen,
+           MIN(timestamp) AS first_seen
+    FROM otel_logs_and_spans
+    WHERE project_id = ?
+      AND timestamp > NOW() - interval '14' day
+      AND kind = CASE WHEN ? THEN 'client' ELSE 'server' END
+      AND (attributes->>'http.request.method' IS NOT NULL 
+           OR attributes->>'http.response.status_code' IS NOT NULL)
+    GROUP BY 1
 )
 SELECT DISTINCT ep.host,
        COALESCE(fr.eventsCount, 0) eventsCount,

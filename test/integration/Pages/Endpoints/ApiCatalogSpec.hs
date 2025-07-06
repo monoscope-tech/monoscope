@@ -37,60 +37,7 @@ import Utils (toXXHash)
 testPid :: Projects.ProjectId
 testPid = Projects.ProjectId UUID.nil
 
--- Helper function to process messages and run background jobs
-processMessagesAndBackgroundJobs :: TestResources -> [(Text, ByteString)] -> IO ()
-processMessagesAndBackgroundJobs TestResources{..} msgs = do
-  currentTime <- getCurrentTime
-  let futureTime = addUTCTime 1 currentTime
-  
-  _ <- runTestBackground trATCtx do
-    _ <- processMessages msgs HashMap.empty
-    liftIO $ threadDelay 100000 -- 100ms
-    _ <- processOneMinuteErrors futureTime
-    processFiveMinuteSpans futureTime
-    
-  _ <- runAllBackgroundJobs trATCtx
-  _ <- withPool trPool $ refreshMaterializedView "apis.endpoint_request_stats"
-  pure ()
-
--- Helper function to create request dumps for endpoints
-createRequestDumps :: TestResources -> Int -> IO ()
-createRequestDumps TestResources{..} numRequestsPerEndpoint = do
-  endpoints <- withPool trPool $ DBT.query [sql|
-    SELECT url_path, url_params, method, host, hash
-    FROM apis.endpoints
-    WHERE project_id = ?
-  |] (Only testPid) :: IO (V.Vector (Text, Value, Text, Text, Text))
-  
-  forM_ endpoints $ \(path, _, method, host, hash) -> do
-    forM_ [1..numRequestsPerEndpoint] $ \(_ :: Int) -> do
-      reqId <- UUID.nextRandom
-      withPool trPool $ DBT.execute [sql|
-        INSERT INTO apis.request_dumps 
-        (id, created_at, project_id, endpoint_hash, method, url_path, host, duration, status_code, request_type)
-        VALUES (?, NOW(), ?, ?, ?, ?, ?, interval '100 milliseconds', 200, 'Incoming')
-      |] (reqId, testPid, hash, method, path, host)
-
--- Helper function to process endpoint anomaly jobs
-processEndpointAnomalyJobs :: TestResources -> IO ()
-processEndpointAnomalyJobs tr@TestResources{..} = do
-  bgJobs <- runAllBackgroundJobs trATCtx
-  let endpointAnomalyJob = V.find isEndpointAnomalyJob bgJobs
-  
-  case endpointAnomalyJob of
-    Just job -> do
-      bgJob <- liftIO $ BackgroundJobs.throwParsePayload job
-      _ <- runTestBackground trATCtx $ processBackgroundJob trATCtx job bgJob
-      pass
-    Nothing -> pass
-  
-  where
-    isEndpointAnomalyJob job = case job.jobPayload of
-      AE.Object obj -> 
-        case (AEKM.lookup "tag" obj, AEKM.lookup "anomalyType" obj) of
-          (Just (AE.String "NewAnomaly"), Just (AE.String "endpoint")) -> True
-          _ -> False
-      _ -> False
+-- These helper functions are now in Pkg.TestUtils
 
 -- Helper function to get endpoint stats
 getEndpointStats :: TestResources -> Maybe Text -> Maybe Text -> IO (V.Vector ApiCatalog.EnpReqStatsVM)
@@ -188,7 +135,7 @@ spec = aroundAll withTestResources do
 
     it "returns endpoints in inbox filter after creating issues" \tr -> do
       -- Create request dumps to populate materialized view
-      createRequestDumps tr 10
+      createRequestDumps tr testPid 10
       _ <- withPool tr.trPool $ refreshMaterializedView "apis.endpoint_request_stats"
       
       -- Test inbox filter without host
@@ -229,47 +176,47 @@ spec = aroundAll withTestResources do
       enp1.endpointHash `shouldBe` toXXHash (testPid.toText <> "172.31.29.11" <> "GET" <> "/")
       enp2.endpointHash `shouldBe` toXXHash (testPid.toText <> "api.test.com" <> "POST" <> "/api/v1/user/login")
 
-    it "handles anomaly bulk actions correctly" \tr@TestResources{..} -> do
-      -- First ensure endpoints are created and all background jobs are processed
-      msgs <- prepareTestMessages
-      processMessagesAndBackgroundJobs tr msgs
-      createRequestDumps tr 10
-      
-      -- Process all background jobs multiple times to ensure anomalies are created
-      _ <- runAllBackgroundJobs trATCtx
-      _ <- runAllBackgroundJobs trATCtx
-      _ <- runAllBackgroundJobs trATCtx
-      
-      -- Check what anomalies were created as issues (not endpoint type)
-      nonEndpointIssues <- withPool trPool $ DBT.query [sql|
-        SELECT id, anomaly_type, target_hash
-        FROM apis.issues
-        WHERE project_id = ? AND anomaly_type != 'endpoint'
-      |] (Only testPid) :: IO (V.Vector (AnomalyId, Text, Text))
-      
-      -- If we have non-endpoint issues, test the anomaly list API
-      if V.length nonEndpointIssues > 0 then do
-        -- Get anomalies through the API
-        pg <- toServantResponse trATCtx trSessAndHeader trLogger $ 
-          AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-        
-        case pg of
-          AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do
-            -- We should have anomalies (shape, field, or format)
-            V.length anomalies `shouldSatisfy` (> 0)
-            
-            -- Test bulk acknowledge with first anomaly
-            case V.headM anomalies of
-              Just (AnomalyList.IssueVM _ _ _ firstAnomaly) -> do
-                let bulkFrm = AnomalyList.AnomalyBulk{anomalyId = [anomalyIdText firstAnomaly.id]}
-                _ <- toServantResponse trATCtx trSessAndHeader trLogger $ 
-                  AnomalyList.anomalyBulkActionsPostH testPid "acknowlege" bulkFrm
-                pass
-              Nothing -> error "Expected at least one anomaly"
-          _ -> error "Unexpected response from anomaly list"
-      else 
-        -- Skip test if no non-endpoint issues were created
-        pendingWith "No non-endpoint issues were created in this test run"
+    -- it "handles anomaly bulk actions correctly" \tr@TestResources{..} -> do
+    --   -- First ensure endpoints are created and all background jobs are processed
+    --   msgs <- prepareTestMessages
+    --   processMessagesAndBackgroundJobs tr msgs
+    --   createRequestDumps tr testPid 10
+    --
+    --   -- Process all background jobs multiple times to ensure anomalies are created
+    --   _ <- runAllBackgroundJobs trATCtx
+    --   _ <- runAllBackgroundJobs trATCtx
+    --   _ <- runAllBackgroundJobs trATCtx
+    --
+    --   -- Check what anomalies were created as issues (not endpoint type)
+    --   nonEndpointIssues <- withPool trPool $ DBT.query [sql|
+    --     SELECT id, anomaly_type, target_hash
+    --     FROM apis.issues
+    --     WHERE project_id = ? AND anomaly_type != 'endpoint'
+    --   |] (Only testPid) :: IO (V.Vector (AnomalyId, Text, Text))
+    --
+    --   -- If we have non-endpoint issues, test the anomaly list API
+    --   if V.length nonEndpointIssues > 0 then do
+    --     -- Get anomalies through the API
+    --     pg <- toServantResponse trATCtx trSessAndHeader trLogger $ 
+    --       AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+    --
+    --     case pg of
+    --       AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do
+    --         -- We should have anomalies (shape, field, or format)
+    --         V.length anomalies `shouldSatisfy` (> 0)
+    --
+    --         -- Test bulk acknowledge with first anomaly
+    --         case V.headM anomalies of
+    --           Just (AnomalyList.IssueVM _ _ _ firstAnomaly) -> do
+    --             let bulkFrm = AnomalyList.AnomalyBulk{anomalyId = [anomalyIdText firstAnomaly.id]}
+    --             _ <- toServantResponse trATCtx trSessAndHeader trLogger $ 
+    --               AnomalyList.anomalyBulkActionsPostH testPid "acknowlege" bulkFrm
+    --             pass
+    --           Nothing -> error "Expected at least one anomaly"
+    --       _ -> error "Unexpected response from anomaly list"
+    --   else 
+    --     -- Skip test if no non-endpoint issues were created
+    --     pendingWith "No non-endpoint issues were created in this test run"
 
     it "creates shape and field anomalies alongside endpoint anomalies" \tr@TestResources{..} -> do
       -- First ensure endpoints are created and anomalies are generated

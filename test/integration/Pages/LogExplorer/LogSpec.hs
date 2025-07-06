@@ -50,15 +50,21 @@ spec = aroundAll withTestResources do
       let msgs = concat (replicate 100 [("m1", BL.toStrict $ AE.encode reqMsg1), ("m2", BL.toStrict $ AE.encode reqMsg2)]) ++ [("m3", BL.toStrict $ AE.encode reqMsg3), ("m4", BL.toStrict $ AE.encode reqMsg4)]
       res <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
       length res `shouldBe` 202
+      
+      -- Get time range that includes all messages (3 days ago to now)
+      let threeDaysAgo = addUTCTime (-259200) currentTime  -- 3 days in seconds
+      let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" threeDaysAgo
+      let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
+      
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         Log.LogPage (PageCtx _ content) -> do
           content.pid `shouldBe` testPid
           content.query `shouldBe` Nothing
           content.cols `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
-          length content.requestVecs `shouldBe` 200
+          length content.requestVecs `shouldBe` 150  -- API limits to 150 results per page
 
         -- let cur = textToUTCTime $ fromMaybe "" content.cursor
         -- json <-
