@@ -30,7 +30,7 @@ import Control.Exception (bracket_, finally, mask, throwIO)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
-import Data.Aeson.Types (KeyValue(..))
+import Data.Aeson.Types (KeyValue (..))
 import Data.Cache (Cache (..), newCache)
 import Data.Default (Default (..))
 import Data.Effectful.Notify qualified
@@ -56,7 +56,6 @@ import Database.PostgreSQL.Transact qualified as PgT
 import Database.Postgres.Temp (cacheAction, cacheConfig, toConnectionString, withConfig, withDbCache)
 import Database.Postgres.Temp qualified as TmpPostgres
 import Effectful
-import ProcessMessage qualified
 import Effectful.Error.Static (runErrorNoCallStack)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (runLabeled)
@@ -66,11 +65,12 @@ import Effectful.Time (runTime)
 import Log qualified
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Telemetry.SummaryGenerator qualified as SummaryGenerator
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import OddJobs.Job (Job (..))
+import ProcessMessage qualified
 import Relude
 import RequestMessages qualified
 import Servant qualified
@@ -140,8 +140,6 @@ withLocalSetup f = do
     dirSize <- sum <$> (listDirectory migrationsDirr >>= mapM (getFileSize . (migrationsDirr <>)))
     migratedConfig <- throwE $ cacheAction ("./.tmp/postgres/" <> show dirSize) migrate combinedConfig
     withConfig migratedConfig $ \db -> f =<< newPool (defaultPoolConfig (connectPostgreSQL $ toConnectionString db) close 60 50)
-
-
 
 
 -- External database setup using template database approach for better isolation and performance
@@ -339,22 +337,26 @@ testSessionHeader pool = do
       & runTime
       & runEff
       & liftIO
-  
+
   -- Create a test project and add it to the user's session
   let testProjectId = Projects.ProjectId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
-  _ <- withPool pool $ DBT.execute 
-    [sql|INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
+  _ <-
+    withPool pool
+      $ DBT.execute
+        [sql|INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
          VALUES (?, 'Test Project', 'FREE', true, NULL, true, true)
          ON CONFLICT (id) DO UPDATE SET payment_plan = 'FREE', active = true, deleted_at = NULL, weekly_notif = true, daily_notif = true|]
-    (Only testProjectId)
-  
+        (Only testProjectId)
+
   -- Add project member permissions
-  _ <- withPool pool $ DBT.execute
-    [sql|INSERT INTO projects.project_members (project_id, user_id, permission)
+  _ <-
+    withPool pool
+      $ DBT.execute
+        [sql|INSERT INTO projects.project_members (project_id, user_id, permission)
          VALUES (?, '00000000-0000-0000-0000-000000000001', 'admin')
          ON CONFLICT (project_id, user_id) DO UPDATE SET permission = 'admin'|]
-    (Only testProjectId)
-    
+        (Only testProjectId)
+
   Auth.sessionByID (Just pSessId) "requestID" False Nothing
     & runErrorNoCallStack @Servant.ServerError
     & DB.runDB pool
@@ -375,19 +377,21 @@ runTestBackground :: Config.AuthContext -> ATBackgroundCtx a -> IO a
 runTestBackground authCtx action = LogBulk.withBulkStdOutLogger \logger ->
   runTestBackgroundWithLogger logger authCtx action
 
+
 runTestBackgroundWithLogger :: Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO a
 runTestBackgroundWithLogger logger appCtx process = do
-  (notifications, result) <- process
-    & Data.Effectful.Notify.runNotifyTest
-    & Effectful.Reader.Static.runReader appCtx
-    & DB.runDB appCtx.pool
-    & runLabeled @"timefusion" (DB.runDB appCtx.timefusionPgPool)
-    & runTime
-    & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
-    & runUUID
-    & runHTTPWreq
-    & Ki.runStructuredConcurrency
-    & Effectful.runEff
+  (notifications, result) <-
+    process
+      & Data.Effectful.Notify.runNotifyTest
+      & Effectful.Reader.Static.runReader appCtx
+      & DB.runDB appCtx.pool
+      & runLabeled @"timefusion" (DB.runDB appCtx.timefusionPgPool)
+      & runTime
+      & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
+      & runUUID
+      & runHTTPWreq
+      & Ki.runStructuredConcurrency
+      & Effectful.runEff
   -- Log the notifications that would have been sent
   forM_ notifications $ \notification ->
     Log.logInfo "Test: Notification captured" notification
@@ -538,6 +542,7 @@ runAllBackgroundJobs authCtx = do
     V.forM_ jobs $ testJobsRunner logger authCtx
   pure jobs
 
+
 -- Test version of jobsRunner that uses the test notification runner
 testJobsRunner :: Log.Logger -> Config.AuthContext -> Job -> IO ()
 testJobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs $ do
@@ -568,13 +573,13 @@ processMessagesAndBackgroundJobs :: TestResources -> [(Text, ByteString)] -> IO 
 processMessagesAndBackgroundJobs TestResources{..} msgs = do
   currentTime <- getCurrentTime
   let futureTime = addUTCTime 1 currentTime
-  
+
   _ <- runTestBackground trATCtx do
     _ <- ProcessMessage.processMessages msgs HashMap.empty
     liftIO $ threadDelay 100000 -- 100ms
     _ <- BackgroundJobs.processOneMinuteErrors futureTime
     BackgroundJobs.processFiveMinuteSpans futureTime
-    
+
   _ <- runAllBackgroundJobs trATCtx
   _ <- withPool trPool $ refreshMaterializedView "apis.endpoint_request_stats"
   pure ()
@@ -583,76 +588,95 @@ processMessagesAndBackgroundJobs TestResources{..} msgs = do
 -- Helper function to create request dumps for endpoints
 createRequestDumps :: TestResources -> Projects.ProjectId -> Int -> IO ()
 createRequestDumps TestResources{..} projectId numRequestsPerEndpoint = do
-  endpoints <- withPool trPool $ DBT.query [sql|
+  endpoints <-
+    withPool trPool
+      $ DBT.query
+        [sql|
     SELECT url_path, url_params, method, host, hash
     FROM apis.endpoints
     WHERE project_id = ?
-  |] (Only projectId) :: IO (V.Vector (Text, AE.Value, Text, Text, Text))
-  
+  |]
+        (Only projectId)
+      :: IO (V.Vector (Text, AE.Value, Text, Text, Text))
+
   currentTime <- getCurrentTime
   forM_ endpoints $ \(path, _, method, host, hash) -> do
-    forM_ [1..numRequestsPerEndpoint] $ \(_ :: Int) -> do
+    forM_ [1 .. numRequestsPerEndpoint] $ \(_ :: Int) -> do
       spanId <- nextRandom
       traceIdVal <- nextRandom
-      let attributes = AE.object 
-            [ "http.request.method" .= method
-            , "http.request.path" .= path
-            , "http.response.status_code" .= (200 :: Int)
-            , "net.host.name" .= host
-            , "url.path" .= path
-            , "url.full" .= path
-            ]
-      let resource = AE.object
-            [ "service" .= AE.object ["name" .= ("test-service" :: Text)]
-            ]
-      let context = Telemetry.Context
-            { trace_id = Just $ UUID.toText traceIdVal
-            , span_id = Just $ UUID.toText spanId
-            , trace_state = Nothing
-            , trace_flags = Nothing
-            , is_remote = Nothing
-            }
+      let attributes =
+            AE.object
+              [ "http.request.method" .= method
+              , "http.request.path" .= path
+              , "http.response.status_code" .= (200 :: Int)
+              , "net.host.name" .= host
+              , "url.path" .= path
+              , "url.full" .= path
+              ]
+      let resource =
+            AE.object
+              [ "service" .= AE.object ["name" .= ("test-service" :: Text)]
+              ]
+      let context =
+            Telemetry.Context
+              { trace_id = Just $ UUID.toText traceIdVal
+              , span_id = Just $ UUID.toText spanId
+              , trace_state = Nothing
+              , trace_flags = Nothing
+              , is_remote = Nothing
+              }
       -- Create OtelLogsAndSpans record to generate summary
-      let otelRecord = Telemetry.OtelLogsAndSpans
-            { id = spanId
-            , project_id = projectId.toText
-            , timestamp = currentTime
-            , parent_id = Nothing
-            , observed_timestamp = Nothing
-            , hashes = V.singleton hash
-            , name = Just (method <> " " <> path)
-            , kind = Just "SERVER"
-            , status_code = Just "200"
-            , status_message = Nothing
-            , level = Nothing
-            , severity = Nothing
-            , body = Nothing
-            , duration = Just 100000000
-            , start_time = currentTime
-            , end_time = Nothing
-            , context = Just context
-            , events = Nothing
-            , links = Nothing
-            , attributes = case attributes of AE.Object km -> Just $ AEKM.toMapText km; _ -> Nothing
-            , resource = case resource of AE.Object km -> Just $ AEKM.toMapText km; _ -> Nothing
-            , date = currentTime
-            , summary = V.empty -- Will be generated
-            }
+      let otelRecord =
+            Telemetry.OtelLogsAndSpans
+              { id = spanId
+              , project_id = projectId.toText
+              , timestamp = currentTime
+              , parent_id = Nothing
+              , observed_timestamp = Nothing
+              , hashes = V.singleton hash
+              , name = Just (method <> " " <> path)
+              , kind = Just "SERVER"
+              , status_code = Just "200"
+              , status_message = Nothing
+              , level = Nothing
+              , severity = Nothing
+              , body = Nothing
+              , duration = Just 100000000
+              , start_time = currentTime
+              , end_time = Nothing
+              , context = Just context
+              , events = Nothing
+              , links = Nothing
+              , attributes = case attributes of AE.Object km -> Just $ AEKM.toMapText km; _ -> Nothing
+              , resource = case resource of AE.Object km -> Just $ AEKM.toMapText km; _ -> Nothing
+              , date = currentTime
+              , summary = V.empty -- Will be generated
+              }
       let summary = SummaryGenerator.generateSummary otelRecord
-      withPool trPool $ DBT.execute [sql|
+      withPool trPool
+        $ DBT.execute
+          [sql|
         INSERT INTO otel_logs_and_spans 
         (id, project_id, timestamp, start_time, name, kind, status_code, 
          duration, hashes, attributes, context, resource, resource___service___name, date, summary)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      |] ( spanId, projectId.toText, currentTime, currentTime
-         , Just (method <> " " <> path), Just "SERVER", Just "200"
-         , Just (100000000 :: Int64), V.singleton hash
-         , case attributes of AE.Object km -> Just $ AEKM.toMapText km; _ -> Nothing
-         , Just context
-         , case resource of AE.Object km -> Just $ AEKM.toMapText km; _ -> Nothing
-         , Just ("test-service" :: Text)
-         , currentTime, summary
-         )
+      |]
+          ( spanId
+          , projectId.toText
+          , currentTime
+          , currentTime
+          , Just (method <> " " <> path)
+          , Just "SERVER"
+          , Just "200"
+          , Just (100000000 :: Int64)
+          , V.singleton hash
+          , case attributes of AE.Object km -> Just $ AEKM.toMapText km; _ -> Nothing
+          , Just context
+          , case resource of AE.Object km -> Just $ AEKM.toMapText km; _ -> Nothing
+          , Just ("test-service" :: Text)
+          , currentTime
+          , summary
+          )
 
 
 -- Helper function to process endpoint anomaly jobs
@@ -660,17 +684,16 @@ processEndpointAnomalyJobs :: TestResources -> IO ()
 processEndpointAnomalyJobs tr@TestResources{..} = do
   bgJobs <- runAllBackgroundJobs trATCtx
   let endpointAnomalyJob = V.find isEndpointAnomalyJob bgJobs
-  
+
   case endpointAnomalyJob of
     Just job -> do
       bgJob <- liftIO $ BackgroundJobs.throwParsePayload job
       _ <- runTestBackground trATCtx $ BackgroundJobs.processBackgroundJob trATCtx job bgJob
       pass
     Nothing -> pass
-  
   where
     isEndpointAnomalyJob (Job{jobPayload}) = case jobPayload of
-      AE.Object obj -> 
+      AE.Object obj ->
         case (AEKM.lookup "tag" obj, AEKM.lookup "anomalyType" obj) of
           (Just (AE.String "NewAnomaly"), Just (AE.String "endpoint")) -> True
           _ -> False
@@ -691,17 +714,16 @@ processShapeAndFieldAnomalyJobs :: TestResources -> IO ()
 processShapeAndFieldAnomalyJobs tr@TestResources{..} = do
   bgJobs <- runAllBackgroundJobs trATCtx
   let anomalyJobs = V.filter isShapeOrFieldAnomalyJob bgJobs
-  
+
   forM_ anomalyJobs $ \job -> do
     bgJob <- liftIO $ BackgroundJobs.throwParsePayload job
     _ <- runTestBackground trATCtx $ BackgroundJobs.processBackgroundJob trATCtx job bgJob
     pass
-  
   where
     isShapeOrFieldAnomalyJob (Job{jobPayload}) = case jobPayload of
-      AE.Object obj -> 
+      AE.Object obj ->
         case (AEKM.lookup "tag" obj, AEKM.lookup "anomalyType" obj) of
-          (Just (AE.String "NewAnomaly"), Just (AE.String aType)) -> 
+          (Just (AE.String "NewAnomaly"), Just (AE.String aType)) ->
             aType == "shape" || aType == "field"
           _ -> False
       _ -> False
@@ -712,15 +734,14 @@ processFormatAnomalyJobs :: TestResources -> IO ()
 processFormatAnomalyJobs tr@TestResources{..} = do
   bgJobs <- runAllBackgroundJobs trATCtx
   let formatJobs = V.filter isFormatAnomalyJob bgJobs
-  
+
   forM_ formatJobs $ \job -> do
     bgJob <- liftIO $ BackgroundJobs.throwParsePayload job
     _ <- runTestBackground trATCtx $ BackgroundJobs.processBackgroundJob trATCtx job bgJob
     pass
-  
   where
     isFormatAnomalyJob (Job{jobPayload}) = case jobPayload of
-      AE.Object obj -> 
+      AE.Object obj ->
         case (AEKM.lookup "tag" obj, AEKM.lookup "anomalyType" obj) of
           (Just (AE.String "NewAnomaly"), Just (AE.String "format")) -> True
           _ -> False

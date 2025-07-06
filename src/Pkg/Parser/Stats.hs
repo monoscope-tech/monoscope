@@ -198,7 +198,7 @@ data SortField = SortField Subject (Maybe Text) -- field and optional direction 
 
 data Section
   = Search Expr
-  | WhereClause Expr  -- New constructor for where clause after pipe
+  | WhereClause Expr -- New constructor for where clause after pipe
   | SummarizeCommand [AggFunction] (Maybe SummarizeByClause)
   | SortCommand [SortField] -- sort by multiple fields
   | TakeCommand Int -- limit/take number of results
@@ -376,6 +376,7 @@ pWhereSection = do
   space
   WhereClause <$> pExpr
 
+
 pSection :: Parser Section
 pSection = do
   _ <- space
@@ -383,8 +384,8 @@ pSection = do
     [ pSummarizeSection
     , pSortSection
     , pTakeSection
-    , try pWhereSection  -- Try to parse 'where' clause first
-    , Search <$> pExpr   -- Fall back to bare expression for backward compatibility
+    , try pWhereSection -- Try to parse 'where' clause first
+    , Search <$> pExpr -- Fall back to bare expression for backward compatibility
     , Source <$> pSource
     ]
 

@@ -118,6 +118,13 @@ jobs:
           sudo mkdir -p /usr/local/lib
           sudo mkdir -p /usr/lib
           
+      - run: |
+          make prepare-rust-interop
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
+          
       - name: Run ${{ matrix.test-suite }}
         run: stack test :${{ matrix.test-suite }}
 

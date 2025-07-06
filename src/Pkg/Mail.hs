@@ -26,8 +26,8 @@ import System.Config (AuthContext (env))
 import System.Config qualified as Config
 
 
-sendPostmarkEmail :: (Notify.Notify :> es) => Text -> Maybe (Text, AE.Value) -> Maybe (Text, Text) -> Eff es ()
-sendPostmarkEmail receiver tmpOptionsM subMsg = 
+sendPostmarkEmail :: Notify.Notify :> es => Text -> Maybe (Text, AE.Value) -> Maybe (Text, Text) -> Eff es ()
+sendPostmarkEmail receiver tmpOptionsM subMsg =
   Notify.sendNotification $ Notify.emailNotification receiver tmpOptionsM subMsg
 
 
@@ -41,7 +41,7 @@ sendSlackMessage pid message = do
     Nothing -> Log.logAttention "sendSlackMessage is not configured. But was called" (pid, message)
 
 
-sendDiscordNotif :: (Notify.Notify :> es) => Text -> Text -> Eff es ()
+sendDiscordNotif :: Notify.Notify :> es => Text -> Text -> Eff es ()
 sendDiscordNotif message channelId = do
   let msg = AE.object ["content" AE..= message]
   Notify.sendNotification $ Notify.discordNotification channelId msg
@@ -64,7 +64,7 @@ data NotificationAlerts
       }
 
 
-sendDiscordAlert :: (Notify.Notify :> es, DB :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Eff es ()
+sendDiscordAlert :: (DB :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Eff es ()
 sendDiscordAlert alert pid pTitle = do
   appCtx <- ask @Config.AuthContext
   discordDataM <- getDiscordDataByProjectId pid
@@ -77,13 +77,13 @@ sendDiscordAlert alert pid pTitle = do
       ShapeAlert -> pass
       ReportAlert{..} -> send $ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
   where
-    sendAlert :: (Notify.Notify :> es) => Maybe Text -> AE.Value -> Eff es ()
-    sendAlert channelId content = 
-      whenJust channelId $ \cid -> 
+    sendAlert :: Notify.Notify :> es => Maybe Text -> AE.Value -> Eff es ()
+    sendAlert channelId content =
+      whenJust channelId $ \cid ->
         Notify.sendNotification $ Notify.discordNotification cid content
 
 
-sendSlackAlert :: (Notify.Notify :> es, DB :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Eff es ()
+sendSlackAlert :: (DB :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Eff es ()
 sendSlackAlert alert pid pTitle = do
   appCtx <- ask @Config.AuthContext
   slackDataM <- getProjectSlackData pid
@@ -95,8 +95,8 @@ sendSlackAlert alert pid pTitle = do
       ShapeAlert -> pass
       ReportAlert{..} -> sendAlert slackData.webhookUrl $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle slackData.channelId reportUrl allChartUrl errorChartUrl
   where
-    sendAlert :: (Notify.Notify :> es) => Text -> AE.Value -> Eff es ()
-    sendAlert webhookUrl content = 
+    sendAlert :: Notify.Notify :> es => Text -> AE.Value -> Eff es ()
+    sendAlert webhookUrl content =
       Notify.sendNotification $ Notify.slackNotification webhookUrl content
 
 

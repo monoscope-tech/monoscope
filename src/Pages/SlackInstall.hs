@@ -1,13 +1,16 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
 module Pages.SlackInstall (linkProjectGetH, linkDiscordGetH, discordInteractionsH, slackActionsH, SlackActionForm, DiscordInteraction, SlackLink, externalOptionsH, slackInteractionsH, SlackInteraction) where
 
+import BackgroundJobs qualified as BgJobs
 import Crypto.Error qualified as Crypto
 import Crypto.PubKey.Ed25519 qualified as Ed25519
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
 import Data.Default (Default (def))
+import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (query_, withPool)
@@ -19,12 +22,10 @@ import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Models.Apis.Slack (DiscordData (..), SlackData (..), getDashboardsForSlack, getDiscordData, getSlackDataByTeamId, insertAccessToken, insertDiscordData, updateDiscordNotificationChannel, updateSlackNotificationChannel)
 import Models.Projects.Projects qualified as Projects
+import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Pages.Components (navBar)
 import Relude hiding (ask, asks)
-import BackgroundJobs qualified as BgJobs
-import OddJobs.Job (createJob)
-import Data.Pool (withResource)
 
 import Control.Lens ((.~), (^.))
 import Data.Aeson.Key qualified as KEM
@@ -109,10 +110,10 @@ linkProjectGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATBaseCtx (
 linkProjectGetH pid slack_code onboardingM = do
   envCfg <- asks env
   pool <- asks pool
-  let client_id = envCfg.slackClientId
-  let client_secret = envCfg.slackClientSecret
-  let redirect_uri = envCfg.slackRedirectUri
-  token <- exchangeCodeForToken client_id client_secret (redirect_uri <> pid.toText <> if isJust onboardingM then "?onboarding=true" else "") (fromMaybe "" slack_code)
+  let client_id = envCfg . slackClientId
+  let client_secret = envCfg . slackClientSecret
+  let redirect_uri = envCfg . slackRedirectUri
+  token <- exchangeCodeForToken client_id client_secret (redirect_uri <> pid . toText <> if isJust onboardingM then "?onboarding=true" else "") (fromMaybe "" slack_code)
   let bwconf =
         (def :: BWConfig)
           { sessM = Nothing
@@ -123,14 +124,14 @@ linkProjectGetH pid slack_code onboardingM = do
   case (token, project) of
     (Just token', Just project') -> do
       n <- liftIO $ withPool pool do
-        insertAccessToken pid token'.incomingWebhook.url token'.team.id token'.incomingWebhook.channelId
+        insertAccessToken pid token' . incomingWebhook . url token' . team . id token' . incomingWebhook . channelId
       -- Create a background job to send the Slack notification
-      _ <- liftIO $ withResource pool $ \conn -> 
-        createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("APItoolkit Bot has been linked to your project: " <> project'.title)
+      _ <- liftIO $ withResource pool $ \conn ->
+        createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("APItoolkit Bot has been linked to your project: " <> project' . title)
       case onboardingM of
-        Just _ -> pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
+        Just _ -> pure $ addHeader ("/p/" <> pid . toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
         Nothing -> pure $ addHeader "" $ BotLinked $ PageCtx bwconf "Slack"
-    (_, _) -> pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoTokenFound $ PageCtx bwconf ()
+    (_, _) -> pure $ addHeader ("/p/" <> pid . toText <> "/onboarding?step=NotifChannel") $ NoTokenFound $ PageCtx bwconf ()
 
 
 data SlackLink
@@ -225,12 +226,12 @@ linkDiscordGetH pidM' codeM guildIdM = do
           }
   case (pidM, codeM, guildIdM) of
     (Just pid, Just code, Just guildId) -> do
-      r' <- exchangeCodeForTokenDiscord envCfg.discordClientId envCfg.discordClientSecret code envCfg.discordRedirectUri
+      r' <- exchangeCodeForTokenDiscord envCfg . discordClientId envCfg . discordClientSecret code envCfg . discordRedirectUri
       case r' of
         Just t -> do
           _ <- dbtToEff $ insertDiscordData pid guildId
           if isOnboarding
-            then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
+            then pure $ addHeader ("/p/" <> pid . toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
             else pure $ addHeader "" $ BotLinked $ PageCtx bwconf "Discord"
         Nothing -> pure $ addHeader "" $ DiscordError $ PageCtx def ()
     _ ->
@@ -335,17 +336,17 @@ data InteractionOption = InteractionOption
 discordInteractionsH :: BS.ByteString -> Maybe BS.ByteString -> Maybe BS.ByteString -> ATBaseCtx AE.Value
 discordInteractionsH rawBody signatureM timestampM = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
-  let envCfg = authCtx.env
+  let envCfg = authCtx . env
 
   validateSignature envCfg signatureM timestampM rawBody
   interaction <- parseInteraction rawBody
 
-  case interaction.interaction_type of
+  case interaction . interaction_type of
     Ping -> pure $ AE.object ["type" AE..= 1]
     ApplicationCommand -> handleApplicationCommand interaction envCfg authCtx
   where
     validateSignature envCfg (Just sig) (Just tme) body
-      | verifyDiscordSignature (encodeUtf8 envCfg.discordPublicKey) sig tme body = pass
+      | verifyDiscordSignature (encodeUtf8 envCfg . discordPublicKey) sig tme body = pass
       | otherwise = throwError err401{errBody = "Invalid signature"}
     validateSignature _ _ _ _ = throwError err401{errBody = "Invalid signature"}
 
@@ -354,7 +355,7 @@ discordInteractionsH rawBody signatureM timestampM = do
       cmdData <- case data_i interaction of
         Nothing -> throwError err400{errBody = "No command data provided"}
         Just cmd -> pure cmd
-      discordData <- getDiscordData (fromMaybe "" interaction.guild_id)
+      discordData <- getDiscordData (fromMaybe "" interaction . guild_id)
       case discordData of
         Nothing -> pure $ contentResponse "Sorry, there was an error processing your request"
         Just d -> handleCommand cmdData interaction envCfg authCtx d
@@ -367,10 +368,10 @@ discordInteractionsH rawBody signatureM timestampM = do
 
     handleCommand :: InteractionData -> DiscordInteraction -> EnvConfig -> AuthContext -> DiscordData -> ATBaseCtx AE.Value
     handleCommand cmdData interaction envCfg authCtx discordData =
-      case cmdData.name of
+      case cmdData . name of
         "ask" -> handleAskCommand cmdData interaction envCfg authCtx discordData
         "here" -> do
-          case (interaction.channel_id, interaction.guild_id) of
+          case (interaction . channel_id, interaction . guild_id) of
             (Just channelId, Just guildId) -> do
               _ <- updateDiscordNotificationChannel guildId channelId
               pure $ contentResponse "Got it, notifications and alerts on your project will now be sent to this channel"
@@ -380,35 +381,35 @@ discordInteractionsH rawBody signatureM timestampM = do
     handleAskCommand :: InteractionData -> DiscordInteraction -> EnvConfig -> AuthContext -> DiscordData -> ATBaseCtx AE.Value
     handleAskCommand cmdData interaction envCfg authCtx discordData = do
       now <- Time.currentTime
-      _ <- sendDeferredResponse interaction.id interaction.token envCfg.discordBotToken
+      _ <- sendDeferredResponse interaction . id interaction . token envCfg . discordBotToken
       fullPrompt <- buildPrompt cmdData interaction envCfg
-      result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
+      result <- liftIO $ callOpenAIAPI fullPrompt envCfg . openaiApiKey
       case result of
         Left err -> do
-          _ <- sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= "Sorry, there was an error processing your request"])
+          _ <- sendJsonFollowupResponse envCfg . discordClientId interaction . token envCfg . discordBotToken (AE.object ["content" AE..= "Sorry, there was an error processing your request"])
           pure $ AE.object []
         Right (query, vizTypeM) -> do
           case vizTypeM of
             Just vizType -> do
               let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-                  query_url = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> ("&query=" <> decodeUtf8 (urlEncode True $ encodeUtf8 query))
-                  opts = "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query)) <> "&p=" <> discordData.projectId.toText <> "&t=" <> chartType
-                  question = case cmdData.options of
+                  query_url = authCtx . env . hostUrl <> "p/" <> discordData . projectId . toText <> "/log_explorer?viz_type=" <> chartType <> ("&query=" <> decodeUtf8 (urlEncode True $ encodeUtf8 query))
+                  opts = "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query)) <> "&p=" <> discordData . projectId . toText <> "&t=" <> chartType
+                  question = case cmdData . options of
                     Just (InteractionOption{value = AE.String q} : _) -> q
                     _ -> "[?]"
-                  content = getBotContent Discord question query query_url opts authCtx.env.chartShotUrl now
-              sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
+                  content = getBotContent Discord question query query_url opts authCtx . env . chartShotUrl now
+              sendJsonFollowupResponse envCfg . discordClientId interaction . token envCfg . discordBotToken content
               pure $ contentResponse "Generated query: "
             Nothing -> do
               let queryAST = parseQueryToAST query
               case queryAST of
                 Left err -> do
-                  _ <- sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= ("Error parsing query: " <> err)])
+                  _ <- sendJsonFollowupResponse envCfg . discordClientId interaction . token envCfg . discordBotToken (AE.object ["content" AE..= ("Error parsing query: " <> err)])
                   pure $ AE.object []
                 Right query' -> do
-                  tableAsVecE <- RequestDumps.selectLogTable discordData.projectId query' query Nothing (Nothing, Nothing) [] Nothing Nothing
-                  let content = handleTableResponse Discord tableAsVecE envCfg discordData.projectId query
-                  _ <- sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
+                  tableAsVecE <- RequestDumps.selectLogTable discordData . projectId query' query Nothing (Nothing, Nothing) [] Nothing Nothing
+                  let content = handleTableResponse Discord tableAsVecE envCfg discordData . projectId query
+                  _ <- sendJsonFollowupResponse envCfg . discordClientId interaction . token envCfg . discordBotToken content
                   pure $ AE.object []
 
 
@@ -422,7 +423,7 @@ handleTableResponse target tableAsVecE envCfg projectId query =
       let (requestVecs, colNames, resultCount) = tableAsVec
           colIdxMap = listToIndexHashMap colNames
           tableData = recsVecToTableData requestVecs colIdxMap
-          url' = envCfg.hostUrl <> "p/" <> projectId.toText <> "/log_explorer?query=" <> (decodeUtf8 $ urlEncode True $ encodeUtf8 query)
+          url' = envCfg . hostUrl <> "p/" <> projectId . toText <> "/log_explorer?query=" <> (decodeUtf8 $ urlEncode True $ encodeUtf8 query)
           explorerLink = "[Open in log explorer](" <> url' <> ")"
           content = "**Total events (" <> show resultCount <> ")**\n**Query used:** " <> query <> "\n\n" <> tableData <> "\n" <> explorerLink
        in case target of
@@ -468,7 +469,7 @@ padRight n s = T.take n (s <> T.replicate n " ")
 
 
 formatSpanRow :: TableData -> Text
-formatSpanRow spn = padRight 18 spn.timestamp <> " " <> padRight 15 spn.servicename <> " " <> padRight 20 spn.spanname <> " " <> padRight 8 spn.duration <> " " <> (if spn.hasErrors then "❌" else "✅")
+formatSpanRow spn = padRight 18 spn . timestamp <> " " <> padRight 15 spn . servicename <> " " <> padRight 20 spn . spanname <> " " <> padRight 8 spn . duration <> " " <> (if spn . hasErrors then "❌" else "✅")
 
 
 formatSpans :: [TableData] -> Text
@@ -493,8 +494,8 @@ data TableData = TableData
 -- Helper functions
 buildPrompt :: InteractionData -> DiscordInteraction -> EnvConfig -> ATBaseCtx Text
 buildPrompt cmdData interaction envCfg = do
-  threadMsgs <- getThreadStarterMessage interaction envCfg.discordBotToken
-  pure $ case cmdData.options of
+  threadMsgs <- getThreadStarterMessage interaction envCfg . discordBotToken
+  pure $ case cmdData . options of
     Just (InteractionOption{value = AE.String q} : _) -> case threadMsgs of
       Just msgs -> threadsPrompt (reverse msgs) q
       _ -> systemPrompt <> "\n\nUser query: " <> q
@@ -508,7 +509,7 @@ contentResponse msg = AE.object ["type" AE..= 4, "data" AE..= AE.object ["conten
 threadsPrompt :: [DiscordMessage] -> Text -> Text
 threadsPrompt msgs question = prompt
   where
-    msgs' = (\x -> AE.object ["message" AE..= AE.object ["content" AE..= x.content, "embeds" AE..= x.embeds]]) <$> filter (\x -> x.author.username == "APItoolkit") msgs
+    msgs' = (\x -> AE.object ["message" AE..= AE.object ["content" AE..= x . content, "embeds" AE..= x . embeds]]) <$> filter (\x -> x . author . username == "APItoolkit") msgs
     msgJson = decodeUtf8 $ AE.encode $ AE.Array (V.fromList msgs')
     threadPrompt =
       unlines
@@ -565,8 +566,8 @@ data DiscordMessage = DiscordMessage
 
 getThreadStarterMessage :: HTTP :> es => DiscordInteraction -> Text -> Eff es (Maybe [DiscordMessage])
 getThreadStarterMessage interaction botToken = do
-  case interaction.channel_id of
-    Just channelId -> case interaction.channel of
+  case interaction . channel_id of
+    Just channelId -> case interaction . channel of
       Just Channel{type_ = 11, parent_id = Just pId} -> do
         let baseUrl = "https://discord.com/api/v10/channels/"
             url = toString $ baseUrl <> channelId <> "/messages?limit=50"
@@ -612,49 +613,49 @@ sendJsonFollowupResponse appId interactionToken botToken content = do
 slackInteractionsH :: SlackInteraction -> ATBaseCtx AE.Value
 slackInteractionsH interaction = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
-  case interaction.command of
+  case interaction . command of
     "/here" -> do
-      _ <- updateSlackNotificationChannel interaction.team_id interaction.channel_id
+      _ <- updateSlackNotificationChannel interaction . team_id interaction . channel_id
       pure $ AE.object ["response_type" AE..= "in_channel", "text" AE..= "Done, you'll be receiving project notifcations here going forward", "replace_original" AE..= True, "delete_original" AE..= True]
     "/dashboard" -> do
-      dashboards <- getDashboardsForSlack interaction.team_id
-      _ <- triggerSlackModal authCtx.env.slackBotToken "open" $ (AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= (dashboardView interaction.channel_id $ V.fromList [(dashboardViewOne dashboards)])])
+      dashboards <- getDashboardsForSlack interaction . team_id
+      _ <- triggerSlackModal authCtx . env . slackBotToken "open" $ (AE.object ["trigger_id" AE..= interaction . trigger_id, "view" AE..= (dashboardView interaction . channel_id $ V.fromList [(dashboardViewOne dashboards)])])
       pure $ AE.object ["text" AE..= "modal opened", "replace_original" AE..= True, "delete_original" AE..= True]
     _ -> do
-      slackDataM <- dbtToEff $ getSlackDataByTeamId interaction.team_id
+      slackDataM <- dbtToEff $ getSlackDataByTeamId interaction . team_id
       void $ forkIO $ do
         case slackDataM of
-          Nothing -> sendSlackFollowupResponse interaction.response_url (AE.object ["text" AE..= "Error: something went wrong"])
+          Nothing -> sendSlackFollowupResponse interaction . response_url (AE.object ["text" AE..= "Error: something went wrong"])
           Just slackData -> handleAskCommand interaction slackData authCtx
       pure $ AE.object ["text" AE..= "apitoolkit is working...", "replace_original" AE..= True, "delete_original" AE..= True]
   where
     handleAskCommand :: SlackInteraction -> SlackData -> AuthContext -> ATBaseCtx ()
     handleAskCommand inter slackData authCtx = do
       now <- Time.currentTime
-      let envCfg = authCtx.env
-      let question = inter.text
+      let envCfg = authCtx . env
+      let question = inter . text
           fullPrompt = systemPrompt <> "\n\nUser query: " <> question
-      result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
+      result <- liftIO $ callOpenAIAPI fullPrompt envCfg . openaiApiKey
       case result of
-        Left err -> sendSlackFollowupResponse inter.response_url (AE.object ["text" AE..= "Error: something went wrong"])
+        Left err -> sendSlackFollowupResponse inter . response_url (AE.object ["text" AE..= "Error: something went wrong"])
         Right (query, vizTypeM) -> do
           case vizTypeM of
             Just vizType -> do
               let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-                  opts = "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query)) <> "&p=" <> slackData.projectId.toText <> "&t=" <> chartType
-                  query_url = authCtx.env.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query))
-                  content = getBotContent Slack question query query_url opts authCtx.env.chartShotUrl now
+                  opts = "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query)) <> "&p=" <> slackData . projectId . toText <> "&t=" <> chartType
+                  query_url = authCtx . env . hostUrl <> "p/" <> slackData . projectId . toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query))
+                  content = getBotContent Slack question query query_url opts authCtx . env . chartShotUrl now
 
-              _ <- sendSlackFollowupResponse inter.response_url content
+              _ <- sendSlackFollowupResponse inter . response_url content
               pass
             Nothing -> do
               let queryAST = parseQueryToAST query
               case queryAST of
-                Left err -> sendSlackFollowupResponse inter.response_url (AE.object ["text" AE..= "Error: something went wrong"])
+                Left err -> sendSlackFollowupResponse inter . response_url (AE.object ["text" AE..= "Error: something went wrong"])
                 Right query' -> do
-                  tableAsVecE <- RequestDumps.selectLogTable slackData.projectId query' query Nothing (Nothing, Nothing) [] Nothing Nothing
-                  let content = handleTableResponse Slack tableAsVecE envCfg slackData.projectId query
-                  _ <- sendSlackFollowupResponse inter.response_url content
+                  tableAsVecE <- RequestDumps.selectLogTable slackData . projectId query' query Nothing (Nothing, Nothing) [] Nothing Nothing
+                  let content = handleTableResponse Slack tableAsVecE envCfg slackData . projectId query
+                  _ <- sendSlackFollowupResponse inter . response_url content
                   pass
       pass
 
@@ -725,53 +726,53 @@ instance AE.FromJSON SAction where
 slackActionsH :: SlackActionForm -> ATBaseCtx AE.Value
 slackActionsH action = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
-  let result = AE.eitherDecode (encodeUtf8 action.payload) :: Either String SlackAction
+  let result = AE.eitherDecode (encodeUtf8 action . payload) :: Either String SlackAction
   case result of
     Left err -> do
       throwError err400{errBody = "Invalid action payload: " <> encodeUtf8 (T.pack err)}
     Right slackAction -> handleSlackAction authCtx slackAction
   where
-    handleSlackAction authCtx slackAction = case slackAction.type_ of
+    handleSlackAction authCtx slackAction = case slackAction . type_ of
       "block_actions" -> handleBlockActions authCtx slackAction
       "view_submission" -> handleViewSubmission authCtx slackAction
       _ -> handleUnknownActionType
 
     handleBlockActions authCtx slackAction = do
-      let actionTypeM = viaNonEmpty head $ fromMaybe [] slackAction.actions
+      let actionTypeM = viaNonEmpty head $ fromMaybe [] slackAction . actions
       case actionTypeM of
         Nothing -> handleUnknownActionType
-        Just actionType -> case actionType.action_id of
+        Just actionType -> case actionType . action_id of
           "dashboard-select" -> handleDashboardSelect authCtx slackAction actionType
           "widget-select" -> handleWidgetSelect authCtx slackAction actionType
           _ -> handleUnknownActionType
 
     handleDashboardSelect authCtx slackAction actionType = do
-      let selectedOption = actionType.selected_option
+      let selectedOption = actionType . selected_option
       case selectedOption of
         Just opt -> do
-          let dashboardId = opt.value
+          let dashboardId = opt . value
           dashboardVMM <- Dashboards.getDashboardById dashboardId
           case dashboardVMM of
             Nothing -> pure $ AE.object []
-            Just dashboardVM -> updateDashboardModal authCtx slackAction dashboardVM opt.text
+            Just dashboardVM -> updateDashboardModal authCtx slackAction dashboardVM opt . text
         Nothing -> pure $ AE.object ["text" AE..= "No dashboard selected", "replace_original" AE..= True, "delete_original" AE..= True]
 
     handleWidgetSelect authCtx slackAction actionType = do
-      let selectedOption = actionType.selected_option
+      let selectedOption = actionType . selected_option
       case selectedOption of
-        Just opt -> updateWidgetModal authCtx slackAction opt.value
+        Just opt -> updateWidgetModal authCtx slackAction opt . value
         Nothing -> handleUnknownActionType
 
     handleViewSubmission authCtx slackAction = do
-      let view = slackAction.view
-          privateMeta = view.private_metadata
+      let view = slackAction . view
+          privateMeta = view . private_metadata
           metas = T.splitOn "___" privateMeta
           channelId = fromMaybe "" $ viaNonEmpty head metas
           pid = fromMaybe "" $ viaNonEmpty head $ fromMaybe [] $ viaNonEmpty tail metas
           image_url = fromMaybe "" $ viaNonEmpty last metas
-          dashBoardId = slackAction.view.state >>= lookupSelectedValueByKey "dashboard-select"
-          widgetTitle = slackAction.view.state >>= lookupSelectedValueByKey "widget-select"
-          url = authCtx.env.hostUrl <> "p/" <> pid <> "/dashboards/" <> fromMaybe "" dashBoardId
+          dashBoardId = slackAction . view . state >>= lookupSelectedValueByKey "dashboard-select"
+          widgetTitle = slackAction . view . state >>= lookupSelectedValueByKey "widget-select"
+          url = authCtx . env . hostUrl <> "p/" <> pid <> "/dashboards/" <> fromMaybe "" dashBoardId
           heading = "<" <> url <> "|" <> fromMaybe "" widgetTitle <> ">"
 
           content =
@@ -781,26 +782,26 @@ slackActionsH action = do
                   AE..= AE.Array
                     ( V.fromList
                         [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= heading]]
-                        , AE.object ["type" AE..= "context", "elements" AE..= AE.Array (V.singleton $ AE.object ["type" AE..= "plain_text", "text" AE..= ("Shared by @" <> slackAction.user.username <> " using /dashboard")])]
+                        , AE.object ["type" AE..= "context", "elements" AE..= AE.Array (V.singleton $ AE.object ["type" AE..= "plain_text", "text" AE..= ("Shared by @" <> slackAction . user . username <> " using /dashboard")])]
                         , dashboardWidgetView image_url (fromMaybe "" widgetTitle)
                         ]
                     )
               ]
-      sendSlackChatMessage authCtx.env.slackBotToken content
+      sendSlackChatMessage authCtx . env . slackBotToken content
       handleUnknownActionType
 
     updateDashboardModal authCtx slackAction dashboardVM dashboardText = do
-      dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString $ fromMaybe "" dashboardVM.baseTemplate)
+      dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString $ fromMaybe "" dashboardVM . baseTemplate)
       whenJust dashboardM $ \dashboard -> do
-        let widgets = V.fromList $ (\w -> (fromMaybe "Untitled-" w.title, fromMaybe "Untitled-" w.title)) <$> dashboard.widgets
-            channelId = fromMaybe "" $ viaNonEmpty head $ T.splitOn "___" slackAction.view.private_metadata
-            pMeta = channelId <> "___" <> dashboardVM.projectId.toText <> "___" <> fromMaybe "" dashboardVM.baseTemplate
-        _ <- triggerSlackModal authCtx.env.slackBotToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= (dashboardView pMeta $ V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets])]
+        let widgets = V.fromList $ (\w -> (fromMaybe "Untitled-" w . title, fromMaybe "Untitled-" w . title)) <$> dashboard . widgets
+            channelId = fromMaybe "" $ viaNonEmpty head $ T.splitOn "___" slackAction . view . private_metadata
+            pMeta = channelId <> "___" <> dashboardVM . projectId . toText <> "___" <> fromMaybe "" dashboardVM . baseTemplate
+        _ <- triggerSlackModal authCtx . env . slackBotToken "update" $ AE.object ["view_id" AE..= slackAction . view . id, "view" AE..= (dashboardView pMeta $ V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets])]
         pass
       pure $ AE.object ["text" AE..= ("Selected dashboard: " <> show dashboardText), "replace_original" AE..= True, "delete_original" AE..= True]
 
     updateWidgetModal authCtx slackAction widgetTitle = do
-      let metas = T.splitOn "___" slackAction.view.private_metadata
+      let metas = T.splitOn "___" slackAction . view . private_metadata
           channelId = fromMaybe "" $ viaNonEmpty head metas
           res = fromMaybe [] $ viaNonEmpty tail metas
           pid = fromMaybe "" $ viaNonEmpty head res
@@ -809,15 +810,15 @@ slackActionsH action = do
 
       dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString baseTemplate)
       whenJust dashboardM $ \dashboard -> do
-        let widgets = V.fromList $ (\w -> (fromMaybe "Untitled-" w.title, fromMaybe "Untitled-" w.title)) <$> dashboard.widgets
-            widget = find (\w -> (fromMaybe "Untitled-" w.title) == widgetTitle) dashboard.widgets
+        let widgets = V.fromList $ (\w -> (fromMaybe "Untitled-" w . title, fromMaybe "Untitled-" w . title)) <$> dashboard . widgets
+            widget = find (\w -> (fromMaybe "Untitled-" w . title) == widgetTitle) dashboard . widgets
         whenJust widget $ \w -> do
           now <- Time.currentTime
           let widgetQuery = "&widget=" <> decodeUtf8 (urlEncode True (toStrict $ AE.encode $ AE.toJSON w))
-              chartUrl' = chartImageUrl ("&p=" <> pid <> widgetQuery) authCtx.env.chartShotUrl now
+              chartUrl' = chartImageUrl ("&p=" <> pid <> widgetQuery) authCtx . env . chartShotUrl now
               blocks = V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets, dashboardWidgetView chartUrl' widgetTitle]
               privateMeta = channelId <> "___" <> pid <> "___" <> baseTemplate <> "___" <> chartUrl'
-          _ <- triggerSlackModal authCtx.env.slackBotToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView privateMeta blocks]
+          _ <- triggerSlackModal authCtx . env . slackBotToken "update" $ AE.object ["view_id" AE..= slackAction . view . id, "view" AE..= dashboardView privateMeta blocks]
           pass
       handleUnknownActionType
 

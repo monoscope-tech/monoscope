@@ -291,16 +291,16 @@ commonFormatPatterns =
   , ([re|^[a-fA-F0-9]{64}$|], "{sha256}")
   , ([re|^[a-fA-F0-9]{40}$|], "{sha1}")
   , ([re|^[a-fA-F0-9]{32}$|], "{md5}")
-  -- Financial (moved up before hex_id to catch credit cards first)
-  , ([re|^4[0-9]{15}$|], "{credit_card}") -- Visa 16 digits
+  , -- Financial (moved up before hex_id to catch credit cards first)
+    ([re|^4[0-9]{15}$|], "{credit_card}") -- Visa 16 digits
   , ([re|^4[0-9]{12}$|], "{credit_card}") -- Visa 13 digits
   , ([re|^5[1-5][0-9]{14}$|], "{credit_card}") -- Mastercard
   , ([re|^3[47][0-9]{13}$|], "{credit_card}") -- Amex
   , ([re|^[0-9A-Fa-f]{14,20}$|], "{hex_id}") -- Match hex-like IDs that aren't UUIDs
   -- Authentication & encoding
   , ([re|^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$|], "{jwt}")
-  -- IBAN (moved before base64)
-  , ([re|^[A-Z]{2}[0-9]{2}[A-Za-z0-9]{4}[0-9]{7}[A-Za-z0-9]{0,16}$|], "{iban}")
+  , -- IBAN (moved before base64)
+    ([re|^[A-Z]{2}[0-9]{2}[A-Za-z0-9]{4}[0-9]{7}[A-Za-z0-9]{0,16}$|], "{iban}")
   , ([re|^[A-Za-z0-9+/]{20,}={0,2}$|], "{base64}")
   , -- Date patterns (before file paths to avoid conflicts)
     ([re|^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), [0-9]{1,2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} [+\-][0-9]{4}$|], "{rfc2822}")
@@ -328,8 +328,8 @@ commonFormatPatterns =
   -- Personal identifiers
   , ([re|^[0-9]{3}-[0-9]{2}-[0-9]{4}$|], "{ssn}")
   , ([re|^\+1 \([0-9]{3}\) [0-9]{3}-[0-9]{4}$|], "{phone}")
-  -- Network patterns
-  , ([re|^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/([0-9]|[12][0-9]|3[0-2])$|], "{cidr}")
+  , -- Network patterns
+    ([re|^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/([0-9]|[12][0-9]|3[0-2])$|], "{cidr}")
   , ([re|^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$|], "{ipv4}")
   , ([re|^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$|], "{email}")
   , ([re|^https?://[^\s]+$|], "{url}")
@@ -344,8 +344,8 @@ commonFormatPatterns =
   , -- Timestamps
     ([re|^1[0-9]{12}$|], "{epoch_ms}")
   , ([re|^1[0-9]{9}$|], "{epoch_s}")
-  -- Process/thread identifiers
-  , ([re|^pid[:=]?[0-9]+$|], "{pid}")
+  , -- Process/thread identifiers
+    ([re|^pid[:=]?[0-9]+$|], "{pid}")
   , ([re|^tid[:=]?[0-9]+$|], "{tid}")
   , ([re|^Thread-[0-9]+$|], "{thread}")
   , ([re|^session_[A-Za-z0-9\-]{8,}$|], "{session_id}")

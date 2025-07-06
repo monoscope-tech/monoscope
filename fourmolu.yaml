@@ -18,3 +18,4 @@ sort-constraints: true
 sort-derived-classes: true
 sort-deriving-clauses: true
 trailing-section-operators: false
+ghc-lib-parser: true

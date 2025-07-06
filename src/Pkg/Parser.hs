@@ -43,7 +43,7 @@ sectionsToComponents = foldl' applySectionToComponent (def :: QueryComponents)
 
 applySectionToComponent :: QueryComponents -> Section -> QueryComponents
 applySectionToComponent qc (Search expr) = qc{whereClause = Just $ display expr}
-applySectionToComponent qc (WhereClause expr) = qc{whereClause = Just $ display expr}  -- Handle where clause same as Search
+applySectionToComponent qc (WhereClause expr) = qc{whereClause = Just $ display expr} -- Handle where clause same as Search
 applySectionToComponent qc (Source source) = qc{fromTable = Just $ display source}
 applySectionToComponent qc (SummarizeCommand aggs byClauseM) = applySummarizeByClauseToQC byClauseM $ qc{select = qc.select <> map display aggs}
 applySectionToComponent qc (SortCommand sortFields) = qc{sortFields = Just sortFields}

@@ -13,17 +13,17 @@ module Data.Effectful.Notify (
   Notify,
   sendNotification,
   getNotifications,
-  
+
   -- * Notification types
   Notification (..),
   EmailData (..),
   SlackData (..),
   DiscordData (..),
-  
+
   -- * Interpreters
   runNotifyProduction,
   runNotifyTest,
-  
+
   -- * Smart constructors
   emailNotification,
   slackNotification,
@@ -42,32 +42,40 @@ import Network.Wreq (defaults, header, postWith)
 import Relude hiding (Reader, State, ask, get, modify, put, runState)
 import System.Config qualified as Config
 
+
 -- Notification data types
 data EmailData = EmailData
   { receiver :: Text
   , templateOptions :: Maybe (Text, AE.Value)
   , subjectMessage :: Maybe (Text, Text)
-  } deriving stock (Show, Eq, Generic)
-    deriving anyclass (AE.ToJSON, AE.FromJSON)
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
 
 data SlackData = SlackData
   { webhookUrl :: Text
   , message :: AE.Value
-  } deriving stock (Show, Eq, Generic)
-    deriving anyclass (AE.ToJSON, AE.FromJSON)
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
 
 data DiscordData = DiscordData
   { channelId :: Text
   , content :: AE.Value
-  } deriving stock (Show, Eq, Generic)
-    deriving anyclass (AE.ToJSON, AE.FromJSON)
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
 
 data Notification
   = EmailNotification EmailData
   | SlackNotification SlackData
   | DiscordNotification DiscordData
-  deriving stock (Show, Eq, Generic)
-  deriving anyclass (AE.ToJSON, AE.FromJSON)
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
 
 -- Effect definition
 type role Notify phantom nominal
@@ -75,27 +83,34 @@ data Notify :: Effect where
   SendNotification :: Notification -> Notify m ()
   GetNotifications :: Notify m [Notification]
 
+
 type instance DispatchOf Notify = 'Dynamic
+
 
 -- Effect operations
 sendNotification :: Notify :> es => Notification -> Eff es ()
 sendNotification = send . SendNotification
 
+
 getNotifications :: Notify :> es => Eff es [Notification]
 getNotifications = send GetNotifications
 
+
 -- Smart constructors
 emailNotification :: Text -> Maybe (Text, AE.Value) -> Maybe (Text, Text) -> Notification
-emailNotification receiver templateOptions subjectMessage = 
+emailNotification receiver templateOptions subjectMessage =
   EmailNotification EmailData{..}
 
+
 slackNotification :: Text -> AE.Value -> Notification
-slackNotification webhookUrl message = 
+slackNotification webhookUrl message =
   SlackNotification SlackData{..}
 
+
 discordNotification :: Text -> AE.Value -> Notification
-discordNotification channelId content = 
+discordNotification channelId content =
   DiscordNotification DiscordData{..}
+
 
 -- Production interpreter
 runNotifyProduction :: (IOE :> es, Reader Config.AuthContext :> es) => Eff (Notify ': es) a -> Eff es a
@@ -126,35 +141,33 @@ runNotifyProduction = interpret $ \_ -> \case
       let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Accept" .~ ["application/json"] & header "X-Postmark-Server-Token" .~ [apiKey]
       _ <- liftIO $ postWith opts url payload
       pass
-      
     SlackNotification SlackData{..} -> do
       let opts = defaults & header "Content-Type" .~ ["application/json"]
       _ <- liftIO $ postWith opts (toString webhookUrl) message
       pass
-      
     DiscordNotification DiscordData{..} -> do
       appCtx <- ask @Config.AuthContext
       let url = toString $ "https://discord.com/api/v10/channels/" <> channelId <> "/messages"
       let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bot " <> appCtx.config.discordBotToken]
       _ <- liftIO $ postWith opts url content
       pass
-      
-  GetNotifications -> pure []  -- Production doesn't store notifications
+  GetNotifications -> pure [] -- Production doesn't store notifications
+
 
 -- Test interpreter
 runNotifyTest :: (IOE :> es, Log :> es) => Eff (Notify ': es) a -> Eff es ([Notification], a)
 runNotifyTest eff = do
   ref <- liftIO $ newIORef []
-  result <- interpret
-    ( \_ -> \case
-        SendNotification notification -> do
-          Log.logInfo "Test notification sent" notification
-          liftIO $ modifyIORef ref (notification :)
-          
-        GetNotifications -> do
-          notifications <- liftIO $ readIORef ref
-          pure (reverse notifications)
-    )
-    eff
+  result <-
+    interpret
+      ( \_ -> \case
+          SendNotification notification -> do
+            Log.logInfo "Test notification sent" notification
+            liftIO $ modifyIORef ref (notification :)
+          GetNotifications -> do
+            notifications <- liftIO $ readIORef ref
+            pure (reverse notifications)
+      )
+      eff
   notifications <- liftIO $ readIORef ref
   pure (reverse notifications, result)

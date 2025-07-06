@@ -2,6 +2,7 @@
 
 module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction) where
 
+import BackgroundJobs qualified as BgJobs
 import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as KEM
@@ -16,6 +17,7 @@ import Data.Effectful.Wreq (
   postWith,
   responseBody,
  )
+import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time qualified as Time
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -35,14 +37,12 @@ import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
+import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Pages.Bots.Utils (BotResponse (..), BotType (..), contentTypeHeader, handleTableResponse)
 import Pkg.AI (callOpenAIAPI, systemPrompt)
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
-import BackgroundJobs qualified as BgJobs
-import OddJobs.Job (createJob)
-import Data.Pool (withResource)
 import Pkg.Parser (parseQueryToAST)
 import Relude hiding (ask, asks)
 import Servant.API (Header)
@@ -118,7 +118,7 @@ linkProjectGetH pid slack_code onboardingM = do
       n <- liftIO $ withPool pool do
         insertAccessToken pid token'.incomingWebhook.url token'.team.id token'.incomingWebhook.channelId
       -- Create a background job to send the Slack notification
-      _ <- liftIO $ withResource pool $ \conn -> 
+      _ <- liftIO $ withResource pool $ \conn ->
         createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("APItoolkit Bot has been linked to your project: " <> project'.title)
       case onboardingM of
         Just _ -> pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()

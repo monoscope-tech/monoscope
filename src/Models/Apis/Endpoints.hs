@@ -344,7 +344,7 @@ dependenciesAndEventsCount pid requestType sortT = query (Query $ encodeUtf8 q) 
       "Outgoing" -> "ep.outgoing = true"
       "Incoming" -> "ep.outgoing = false"
       _ -> "ep.outgoing =  false"
-    
+
     isOutgoing = requestType == "Outgoing"
 
     q =
