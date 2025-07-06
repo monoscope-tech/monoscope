@@ -169,7 +169,8 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
   now <- Time.currentTime
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   let mappng = DashboardUtils.variablePresets (maybe "" (.toText) pidM) fromD toD allParams
-  let parseQuery q = either (\err -> throwError err400{errBody = "Invalid signature"}) pure (parseQueryToAST $ DashboardUtils.replacePlaceholders mappng q)
+  traceShowM queryM
+  let parseQuery q = either (\err -> throwError err400{errBody = "Invalid signature; " <> show err}) pure (parseQueryToAST $ DashboardUtils.replacePlaceholders mappng q)
 
   sqlQuery <- case (queryM, querySQLM) of
     (_, Just querySQL) -> do
@@ -199,14 +200,7 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
   liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx
 
 
-fetchMetricsData
-  :: DataType
-  -> Text
-  -> UTCTime
-  -> Maybe UTCTime
-  -> Maybe UTCTime
-  -> AuthContext
-  -> IO MetricsData
+fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> IO MetricsData
 fetchMetricsData respDataType sqlQuery now fromD toD authCtx = do
   let baseMetricsData =
         def
@@ -214,7 +208,7 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx = do
           , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
           }
 
-  checkpoint (toAnnotation sqlQuery) $ case respDataType of
+  checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
     DTFloat -> do
       chartData <- withPool authCtx.pool $ DBT.queryOne_ (Query $ encodeUtf8 sqlQuery)
       pure
@@ -223,6 +217,7 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx = do
           , rowsCount = 1
           }
     DTMetric -> do
+      traceShowM sqlQuery
       chartData <- withPool authCtx.pool $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
       let chartsDataV = V.fromList chartData
       let (hdrs, groupedData, rowsCount, rpm) = pivot' chartsDataV

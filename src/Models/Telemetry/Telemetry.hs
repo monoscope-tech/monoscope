@@ -591,24 +591,33 @@ getMetricData pid metricName = dbtToEff $ queryOne q (pid, metricName, pid, metr
     q =
       [sql|
       SELECT
-            metric_name,
-            metric_type,
-            metric_unit,
-            metric_description,
-            COUNT(*) AS data_points,
-            ARRAY_AGG(DISTINCT COALESCE(resource->>'service.name', 'unknown'))::text[] AS service_names,
-    COALESCE(
-        (SELECT ARRAY_AGG(DISTINCT key) 
-         FROM (
-             SELECT DISTINCT jsonb_object_keys(attributes) AS key 
-             FROM telemetry.metrics 
-             WHERE project_id = ? AND metric_name = ? AND attributes IS NOT NULL
-         ) AS unique_keys
-        ),
-        ARRAY[]::text[]
-    ) AS metric_labels      FROM telemetry.metrics
-      WHERE project_id = ? AND metric_name = ?
-      GROUP BY metric_name, metric_type, metric_unit, metric_description;
+            mm.metric_name,
+            mm.metric_type,
+            mm.metric_unit,
+            mm.metric_description,
+            COALESCE(m.data_points, 0) AS data_points,
+            COALESCE(m.service_names, ARRAY[mm.service_name]::text[]) AS service_names,
+            COALESCE(m.metric_labels, ARRAY[]::text[]) AS metric_labels
+      FROM telemetry.metrics_meta mm
+      LEFT JOIN LATERAL (
+          SELECT
+              COUNT(*) AS data_points,
+              ARRAY_AGG(DISTINCT COALESCE(resource->>'service.name', 'unknown'))::text[] AS service_names,
+              COALESCE(
+                  (SELECT ARRAY_AGG(DISTINCT key) 
+                   FROM (
+                       SELECT DISTINCT jsonb_object_keys(attributes) AS key 
+                       FROM telemetry.metrics 
+                       WHERE project_id = ? AND metric_name = ? AND attributes IS NOT NULL
+                   ) AS unique_keys
+                  ),
+                  ARRAY[]::text[]
+              ) AS metric_labels
+          FROM telemetry.metrics
+          WHERE project_id = mm.project_id AND metric_name = mm.metric_name
+      ) m ON true
+      WHERE mm.project_id = ? AND mm.metric_name = ?
+      LIMIT 1;
         |]
 
 

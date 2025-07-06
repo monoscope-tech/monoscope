@@ -43,6 +43,7 @@ sectionsToComponents = foldl' applySectionToComponent (def :: QueryComponents)
 
 applySectionToComponent :: QueryComponents -> Section -> QueryComponents
 applySectionToComponent qc (Search expr) = qc{whereClause = Just $ display expr}
+applySectionToComponent qc (WhereClause expr) = qc{whereClause = Just $ display expr}  -- Handle where clause same as Search
 applySectionToComponent qc (Source source) = qc{fromTable = Just $ display source}
 applySectionToComponent qc (SummarizeCommand aggs byClauseM) = applySummarizeByClauseToQC byClauseM $ qc{select = qc.select <> map display aggs}
 applySectionToComponent qc (SortCommand sortFields) = qc{sortFields = Just sortFields}
@@ -113,7 +114,8 @@ getProcessedColumns cols defaultSelect = (T.intercalate "," $ colsNoAsClause sel
 sqlFromQueryComponents :: SqlQueryCfg -> QueryComponents -> (Text, QueryComponents)
 sqlFromQueryComponents sqlCfg qc =
   let fmtTime = toText . iso8601Show
-      fromTable = "otel_logs_and_spans"
+      -- Use the table from query components if available, otherwise default to otel_logs_and_spans
+      fromTable = fromMaybe "otel_logs_and_spans" qc.fromTable
       timestampCol = "timestamp"
 
       -- Note: cursorT is now handled in the whereCondition computation

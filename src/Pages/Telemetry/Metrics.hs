@@ -138,12 +138,12 @@ chartList pid source metricList nextUrl = do
       div_ [class_ "h-52"]
         $ toHtml
         $ def
-          { Widget.wType = Widget.WTDistribution
+          { Widget.wType = Widget.WTTimeseriesLine
           , Widget.title = Just metric.metricName
-          , Widget.query = Just $ "metric_name = \"" <> metric.metricName <> "\""
+          , Widget.query = Just $ "metrics | where metric_name == \"" <> metric.metricName <> "\" | summarize avg(metric_value.contents.value) by bin_auto(timestamp),attributes"
           , Widget.layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
           , Widget.unit = Just metric.metricUnit
-          , Widget.hideLegend = Just True
+          , Widget.hideLegend = Nothing
           , Widget.eager = Just True
           , Widget._projectId = Just pid
           , Widget.expandBtnFn = Just expandBtn
@@ -217,7 +217,20 @@ metricsDetailsPage pid sources metric source currentRange = do
             forM_ sources $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
     div_ [class_ "w-full border  border-slate-200 rounded-2xl p-2 sticky z-50 bg-slate-50 top-4"] do
       div_ [class_ "flex items-center text-sm"] $ span_ [] $ toHtml metric.metricName
-      div_ [class_ "h-64 w-full"] pass
+      div_ [class_ "h-64 w-full"]
+        $ toHtml
+        $ def
+          { Widget.wType = Widget.WTTimeseriesLine
+          , Widget.title = Nothing -- Title already shown above
+          , Widget.query = Just $ "metrics | where metric_name == \"" <> metric.metricName <> "\" | summarize avg(metric_value.contents.value) by bin_auto(timestamp),attributes"
+          , Widget.layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
+          , Widget.unit = Just metric.metricUnit
+          , Widget.hideLegend = Nothing
+          , Widget.eager = Just True
+          , Widget._projectId = Just pid
+          , Widget.id = Just $ "details_" <> T.replace "." "_" metric.metricName -- Replace dots with underscores for valid HTML ID
+          , Widget.expandBtnFn = Nothing -- No expand button needed in detail view
+          }
 
     div_ [class_ "flex flex-col gap-2 rounded-2xl border border-slate-200", id_ "metric-tabs-container"] $ do
       div_ [class_ "flex", [__|on click halt|]] $ do

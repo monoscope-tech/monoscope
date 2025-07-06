@@ -87,3 +87,11 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', (
             [text|
       SELECT json_build_array( time_bucket('5 minutes', timestamp), count(*) ) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('5 minutes', timestamp) ORDER BY time_bucket('5 minutes', timestamp) DESC |]
       normT query `shouldBe` normT expected
+
+    it "query a metric" do 
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "telemetry.metrics | where metric_name == \"app_recommendations_counter\" | summarize count(*) by bin_auto(timestamp),attributes"
+      let expected =
+            [text|
+      SELECT json_build_array( time_bucket('5 minutes', timestamp), count(*) ) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('5 minutes', timestamp) ORDER BY time_bucket('5 minutes', timestamp) DESC |]
+      normT query `shouldBe` normT expected
+

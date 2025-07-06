@@ -155,25 +155,26 @@ instance ToQueryText [AggFunction] where
 
 instance Display AggFunction where
   displayPrec _prec (Count sub _alias) = displayBuilder $ "count(" <> display sub <> ")"
-  displayPrec _prec (P50 sub _alias) = displayBuilder $ "approx_percentile(0.50, percentile_agg(" <> display sub <> "))::int"
-  displayPrec _prec (P75 sub _alias) = displayBuilder $ "approx_percentile(0.75, percentile_agg(" <> display sub <> "))::int"
-  displayPrec _prec (P90 sub _alias) = displayBuilder $ "approx_percentile(0.90, percentile_agg(" <> display sub <> "))::int"
-  displayPrec _prec (P95 sub _alias) = displayBuilder $ "approx_percentile(0.95, percentile_agg(" <> display sub <> "))::int"
-  displayPrec _prec (P99 sub _alias) = displayBuilder $ "approx_percentile(0.99, percentile_agg(" <> display sub <> "))::int"
-  displayPrec _prec (P100 sub _alias) = displayBuilder $ "approx_percentile(1, percentile_agg(" <> display sub <> "))::int"
-  displayPrec _prec (Sum sub _alias) = displayBuilder $ "sum(" <> display sub <> ")"
-  displayPrec _prec (Avg sub _alias) = displayBuilder $ "avg(" <> display sub <> ")"
-  displayPrec _prec (Min sub _alias) = displayBuilder $ "min(" <> display sub <> ")"
-  displayPrec _prec (Max sub _alias) = displayBuilder $ "max(" <> display sub <> ")"
-  displayPrec _prec (Median sub _alias) = displayBuilder $ "median(" <> display sub <> ")"
-  displayPrec _prec (Stdev sub _alias) = displayBuilder $ "stdev(" <> display sub <> ")"
-  displayPrec _prec (Range sub _alias) = displayBuilder $ "range(" <> display sub <> ")"
+  displayPrec _prec (P50 sub _alias) = displayBuilder $ "approx_percentile(0.50, percentile_agg((" <> display sub <> ")::float))::int"
+  displayPrec _prec (P75 sub _alias) = displayBuilder $ "approx_percentile(0.75, percentile_agg((" <> display sub <> ")::float))::int"
+  displayPrec _prec (P90 sub _alias) = displayBuilder $ "approx_percentile(0.90, percentile_agg((" <> display sub <> ")::float))::int"
+  displayPrec _prec (P95 sub _alias) = displayBuilder $ "approx_percentile(0.95, percentile_agg((" <> display sub <> ")::float))::int"
+  displayPrec _prec (P99 sub _alias) = displayBuilder $ "approx_percentile(0.99, percentile_agg((" <> display sub <> ")::float))::int"
+  displayPrec _prec (P100 sub _alias) = displayBuilder $ "approx_percentile(1, percentile_agg((" <> display sub <> ")::float))::int"
+  displayPrec _prec (Sum sub _alias) = displayBuilder $ "sum((" <> display sub <> ")::float)"
+  displayPrec _prec (Avg sub _alias) = displayBuilder $ "avg((" <> display sub <> ")::float)"
+  displayPrec _prec (Min sub _alias) = displayBuilder $ "min((" <> display sub <> ")::float)"
+  displayPrec _prec (Max sub _alias) = displayBuilder $ "max((" <> display sub <> ")::float)"
+  displayPrec _prec (Median sub _alias) = displayBuilder $ "median((" <> display sub <> ")::float)"
+  displayPrec _prec (Stdev sub _alias) = displayBuilder $ "stdev((" <> display sub <> ")::float)"
+  displayPrec _prec (Range sub _alias) = displayBuilder $ "range((" <> display sub <> ")::float)"
   displayPrec _prec (Plain sub _alias) = displayBuilder $ "" <> display sub <> ""
 
 
 instance ToQueryText Section where
   toQText (Source source) = toQText source
   toQText (Search expr) = toQText expr
+  toQText (WhereClause expr) = "where " <> toQText expr
   toQText (SummarizeCommand funcs byClauseM) =
     "summarize "
       <> T.intercalate "," (map toQText funcs)
@@ -197,6 +198,7 @@ data SortField = SortField Subject (Maybe Text) -- field and optional direction 
 
 data Section
   = Search Expr
+  | WhereClause Expr  -- New constructor for where clause after pipe
   | SummarizeCommand [AggFunction] (Maybe SummarizeByClause)
   | SortCommand [SortField] -- sort by multiple fields
   | TakeCommand Int -- limit/take number of results
@@ -367,6 +369,13 @@ pSummarizeSection = do
   return $ SummarizeCommand funcs finalByClause
 
 
+-- | Parser for where clause section
+pWhereSection :: Parser Section
+pWhereSection = do
+  _ <- string "where"
+  space
+  WhereClause <$> pExpr
+
 pSection :: Parser Section
 pSection = do
   _ <- space
@@ -374,7 +383,8 @@ pSection = do
     [ pSummarizeSection
     , pSortSection
     , pTakeSection
-    , Search <$> pExpr
+    , try pWhereSection  -- Try to parse 'where' clause first
+    , Search <$> pExpr   -- Fall back to bare expression for backward compatibility
     , Source <$> pSource
     ]
 
@@ -391,7 +401,9 @@ pSource :: Parser Sources
 pSource =
   choice @[]
     [ SSpans <$ string "spans"
+    , SSpans <$ string "otlp_logs_and_spans"
     , SMetrics <$ string "metrics"
+    , SMetrics <$ string "telemetry.metrics"
     ]
 
 

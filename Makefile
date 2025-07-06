@@ -46,13 +46,16 @@ live-test-reload-cabal:
 	ghcid --test 'cabal test --ghc-options="-w -j4" --test-show-details=streaming'
 
 test:
-	cabal test
+	USE_EXTERNAL_DB=true  cabal test -test-show-details=streaming --test-options='--color '
 
 test-unit:
 	cabal test unit-tests
 
 test-doctests:
 	cabal test doctests
+
+test-integration:
+	USE_EXTERNAL_DB=true cabal test integration-tests --test-show-details=streaming --test-options='--color '
 
 live-test-unit:
 	ghcid --test 'cabal test apitoolkit-server:unit-tests --ghc-options="-w -j4" --test-show-details=streaming'
