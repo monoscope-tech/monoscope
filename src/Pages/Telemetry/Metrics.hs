@@ -32,6 +32,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
+          , prePageTitle = Just "Explorer"
           , pageTitle = "Metrics"
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-md p-0 tabs-outline items-center border"] do
               a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! "] "Events"
