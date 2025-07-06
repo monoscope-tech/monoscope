@@ -123,7 +123,7 @@ jobs:
 
   deploy:
     name: Deploy
-    needs: [build, test]
+    needs: build
     runs-on: ubuntu-24.04
     permissions:
       contents: 'read'
