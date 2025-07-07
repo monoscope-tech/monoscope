@@ -9,12 +9,14 @@ module Pages.Projects.Integrations (
 )
 where
 
+import Data.Aeson qualified as AE
 import Data.Default (Default (..))
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx
+import Lucid.Hyperscript (__)
 import Models.Apis.Slack (SlackData, getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
@@ -63,114 +65,145 @@ integrationsSettingsGetH pid = do
   slackInfo <- getProjectSlackData pid
 
   let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations", isSettingsPage = True}
-  addRespHeaders $ bodyWrapper bwconf $ integrationsBody sess.persistentSession appCtx.config True createProj (Just project.notificationsChannel) slackInfo
+  addRespHeaders $ bodyWrapper bwconf $ integrationsBody sess.persistentSession appCtx.config True createProj (Just project.notificationsChannel) project.whatsappNumbers slackInfo
 
 
 data NotifListForm = NotifListForm
   { notificationsChannel :: [Text]
-  , discordUrl :: Maybe Text
+  , phones :: [Text]
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromForm)
+  deriving anyclass (AE.FromJSON, FromForm)
 
 
 updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (RespHeaders (Html ()))
-updateNotificationsChannel pid NotifListForm{notificationsChannel, discordUrl} = do
-  let discordUrl' = if discordUrl == Just "" then Nothing else discordUrl
-  if "discord" `elem` notificationsChannel && isNothing discordUrl'
+updateNotificationsChannel pid NotifListForm{notificationsChannel, phones} = do
+  validationResult <- validateNotificationChannels pid notificationsChannel phones
+  case validationResult of
+    Left errorMessage -> do
+      addErrorToast errorMessage Nothing
+      addRespHeaders ""
+    Right () -> do
+      _ <- dbtToEff $ Projects.updateNotificationsChannel pid notificationsChannel phones
+      addSuccessToast "Updated Notification Channels Successfully" Nothing
+      addRespHeaders ""
+
+
+validateNotificationChannels :: Projects.ProjectId -> [Text] -> [Text] -> ATAuthCtx (Either Text ())
+validateNotificationChannels pid notificationsChannel phones = do
+  discordValidation <- validateDiscord pid notificationsChannel
+  slackValidation <- validateSlack pid notificationsChannel
+  let whatsappValidation = validateWhatsapp notificationsChannel phones
+  pure $ discordValidation *> slackValidation *> whatsappValidation
+
+
+validateDiscord :: Projects.ProjectId -> [Text] -> ATAuthCtx (Either Text ())
+validateDiscord pid notificationsChannel =
+  if "discord" `elem` notificationsChannel
     then do
       discordData <- getDiscordDataByProjectId pid
-      case discordData of
-        Just _ -> do
-          _ <- dbtToEff do Projects.updateNotificationsChannel pid notificationsChannel discordUrl'
-          addSuccessToast "Updated Notification Channels Successfully" Nothing
-          addRespHeaders ""
-        Nothing -> do
-          addErrorToast "You need to connect discord to this project first." Nothing
-          addRespHeaders ""
-    else do
-      if "slack" `elem` notificationsChannel
-        then do
-          slackData <- getProjectSlackData pid
-          case slackData of
-            Nothing -> do
-              addErrorToast "You need to connect slack to this project first." Nothing
-              addRespHeaders ""
-            Just _ -> do
-              _ <- dbtToEff do Projects.updateNotificationsChannel pid notificationsChannel discordUrl'
-              addSuccessToast "Updated Notification Channels Successfully" Nothing
-              addRespHeaders ""
-        else do
-          _ <- dbtToEff do Projects.updateNotificationsChannel pid notificationsChannel discordUrl'
-          addSuccessToast "Updated Notification Channels Successfully" Nothing
-          addRespHeaders ""
+      pure $ case discordData of
+        Just _ -> Right ()
+        Nothing -> Left "You need to connect Discord to this project first."
+    else pure $ Right ()
+
+
+validateSlack :: Projects.ProjectId -> [Text] -> ATAuthCtx (Either Text ())
+validateSlack pid notificationsChannel =
+  if "slack" `elem` notificationsChannel
+    then do
+      slackData <- getProjectSlackData pid
+      pure $ case slackData of
+        Just _ -> Right ()
+        Nothing -> Left "You need to connect Slack to this project first."
+    else pure $ Right ()
+
+
+validateWhatsapp :: [Text] -> [Text] -> Either Text ()
+validateWhatsapp notificationsChannel numbers = if "phone" `elem` notificationsChannel && null numbers then Left "Provide at least one whatsapp number" else Right ()
 
 
 ----------------------------------------------------------------------------------------------------------
 -- integrationsBody is the core html view
-integrationsBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> Maybe (V.Vector Projects.NotificationChannel) -> Maybe SlackData -> Html ()
-integrationsBody sess envCfg isUpdate cp notifChannel slackData = do
+
+integrationsBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> Maybe (V.Vector Projects.NotificationChannel) -> V.Vector Text -> Maybe SlackData -> Html ()
+integrationsBody sess envCfg isUpdate cp notifChannel phones slackData = do
   section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6 overflow-y-scroll h-full"] do
     div_ [class_ "mx-auto", style_ "max-width:1000px"] do
       let pid = cp.projectId
-      form_ [class_ "mt-10", hxPost_ [text|/p/$pid/notifications-channels|], hxSwap_ "none"] do
-        h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] "Project Notifications"
-        div_ [class_ "flex flex-col gap-4"] do
-          p_ [] "Select channels to receive updates on this project."
-          let notif = fromMaybe [] notifChannel
-          let isCheckedM = Projects.NEmail `elem` notif
-          div_ [class_ $ "bg-white rounded-lg border border-strokeWeak shadow-xs " <> if isCheckedM then "border-l-4 border-l-primary" else ""] $ do
-            div_ [class_ "p-6 pb-3"] $ do
-              div_ [class_ "flex items-center justify-between"] $ do
-                div_ [class_ "flex items-center gap-3"] $ do
-                  div_ [class_ "flex h-10 w-10 items-center justify-center rounded-full bg-fillWeak"]
-                    $ faSprite_ "envelope" "solid" "h-6 w-6"
-                  div_ [] $ do
-                    h3_ [class_ "text-lg font-semibold"] "Email Notifications"
-                    p_ [class_ "text-sm text-gray-500"] "Receive project updates via email"
-                label_ [class_ "relative inline-flex items-center cursor-pointer"] $ do
-                  input_ [type_ "checkbox", name_ "notificationsChannel", value_ "email", if isCheckedM then checked_ else title_ "Enable notification via email", class_ "toggle toggle-primary"]
-                  span_ [class_ "slider"] ("" :: Html ())
-            div_ [class_ "px-6 pb-6"]
-              $ p_ [class_ "text-sm text-gray-500"] "All users on this project will receive updates via email."
+      div_
+        [ class_ "mt-10"
+        , hxPost_ [text|/p/$pid/notifications-channels|]
+        , hxVals_ "js:{notificationsChannel: getChecked(), phones: getTags()}"
+        , hxSwap_ "none"
+        , id_ "notifsForm"
+        ]
+        do
+          h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] "Project Notifications"
+          div_ [class_ "flex flex-col gap-4", [__| on click halt |]] do
+            p_ [] "Select channels to receive updates on this project."
+            renderNotificationOption "Email Notifications" "Receive project updates via email" "email" Projects.NEmail notifChannel (faSprite_ "envelope" "solid" "h-6 w-6") ""
+            renderNotificationOption "Slack" "Send notifications to Slack channels" "slack" Projects.NSlack notifChannel (faSprite_ "slack" "solid" "h-6 w-6") (renderSlackIntegration envCfg pid slackData)
+            renderNotificationOption "Discord" "Send notifications to Discord servers" "discord" Projects.NDiscord notifChannel (faSprite_ "discord" "solid" "h-6 w-6") (renderDiscordIntegration envCfg pid)
+            renderNotificationOption "WhatsApp" "Send notificataoin via WhatsApp" "phone" Projects.NPhone notifChannel (faSprite_ "whatsapp" "solid" "h-6 w-6") renderWhatsappIntegration
+            button_ [class_ "btn btn-primary w-max", [__| on click htmx.trigger("#notifsForm", "click")|]] "Save Selections"
+  let tgs = decodeUtf8 $ AE.encode $ V.toList phones
+  script_
+    [text|
+     document.addEventListener('DOMContentLoaded', function() {
+      var inputElem = document.querySelector('#phones_input')
+      var tagify = new Tagify(inputElem)
+      tagify.addTags($tgs);
+      window.tagify = tagify
+    })
 
-          let isCheckedS = Projects.NSlack `elem` notif
-          div_ [class_ $ "bg-white rounded-lg border border-strokeWeak shadow-xs " <> if isCheckedS then "border-l-4 border-l-primary" else ""] $ do
-            div_ [class_ "p-6 pb-3"] $ do
-              div_ [class_ "flex items-center justify-between"] $ do
-                div_ [class_ "flex items-center gap-3"] $ do
-                  div_ [class_ "flex h-10 w-10 items-center justify-center rounded-full bg-fillWeak"] do
-                    faSprite_ "slack" "solid" "h-6 w-6"
-                  div_ $ do
-                    h3_ [class_ "text-lg font-semibold"] "Slack"
-                    p_ [class_ "text-sm text-gray-500"] "Send notifications to Slack channels"
-                label_ [class_ "relative inline-flex items-center cursor-pointer"] $ do
-                  input_ [type_ "checkbox", id_ "slack-toggle", if isCheckedS then checked_ else title_ "Enable notifications via slack", name_ "notificationsChannel", value_ "slack", class_ "toggle toggle-primary"]
-            div_ [class_ "px-6 pb-6"] $ do
-              case slackData of
-                Just s -> p_ [class_ "text-sm text-gray-500 mb-4 text-green-500"] "Already connected, but you can add again to change workspace or channel."
-                Nothing -> pass
-              a_ [target_ "_blank", class_ "", href_ $ "https://slack.com/oauth/v2/authorize?client_id=" <> envCfg.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:history,groups:history,im:history,mpim:history&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> pid] do
-                img_ [alt_ "Add to slack", height_ "40", width_ "139", src_ "https://platform.slack-edge.com/img/add_to_slack.png", term "srcSet" "https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"]
+   function getChecked() {
+     const checkedInputs = document.querySelectorAll('input[type="checkbox"]:checked');
+     const vals = Array.from(checkedInputs).map(input => input.value);
+     console.log(vals)
+     return vals
+   }
 
-          let isCheckedD = Projects.NDiscord `elem` notif
-          div_ [class_ $ "bg-white rounded-lg border border-strokeWeak shadow-xs " <> if isCheckedD then "border-l-4 border-l-primary" else ""] $ do
-            div_ [class_ "p-6 pb-6"] $ do
-              div_ [class_ "flex items-center justify-between "] $ do
-                div_ [class_ "flex items-center gap-3"] $ do
-                  div_ [class_ "flex h-10 w-10 items-center justify-center rounded-full bg-fillWeak"] do
-                    faSprite_ "discord" "solid" "h-6 w-6"
-                  div_ $ do
-                    h3_ [class_ "text-lg font-semibold"] "Discord"
-                    p_ [class_ "text-sm text-gray-500"] "Send notifications to Discord servers"
-                div_ [class_ "flex items-center gap-2"] do
-                  label_ [class_ "relative inline-flex items-center cursor-pointer"] do
-                    input_ [type_ "checkbox", name_ "notificationsChannel", value_ "discord", if isCheckedD then checked_ else title_ "Enable notification via discord", class_ "toggle toggle-primary"]
+|]
 
-            div_ [class_ "px-6 pb-6"] do
-              let addQueryParams = "&state=" <> pid <> "&redirect_uri=" <> envCfg.discordRedirectUri
-              a_ [target_ "_blank", class_ "flex items-center gap-2 border p-2 w-max border-strokeStrong rounded-lg", href_ $ "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> envCfg.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> addQueryParams] do
-                faSprite_ "discord" "solid" "h-6 w-6 text-textBrand"
-                span_ [class_ "text-sm text-textStrong font-semibold"] "Add to Discord"
 
-          button_ [class_ "btn btn-primary w-max"] "Save Selections"
+renderNotificationOption :: Text -> Text -> Text -> Projects.NotificationChannel -> Maybe (V.Vector Projects.NotificationChannel) -> Html () -> Html () -> Html ()
+renderNotificationOption title description value channel notifChannel icon extraContent = do
+  let isChecked = channel `elem` fromMaybe [] notifChannel
+  div_ [class_ $ "bg-white rounded-lg border border-strokeWeak shadow-xs " <> if isChecked then "border-l-4 border-l-primary" else ""] do
+    div_ [class_ "p-6 pb-3"] do
+      div_ [class_ "flex items-center justify-between"] do
+        div_ [class_ "flex items-center gap-3"] do
+          div_ [class_ "flex h-10 w-10 items-center justify-center rounded-full bg-fillWeak"] icon
+          div_ $ do
+            h3_ [class_ "text-lg font-semibold"] $ toHtml title
+            p_ [class_ "text-sm text-gray-500"] $ toHtml description
+        label_ [class_ "relative inline-flex items-center cursor-pointer"] do
+          input_ [type_ "checkbox", value_ value, if isChecked then checked_ else title_ $ "Enable notification via " <> toText value, class_ "toggle toggle-primary"]
+    div_ [class_ "px-6 pb-6"] do
+      extraContent
+
+
+renderWhatsappIntegration :: Html ()
+renderWhatsappIntegration = do
+  div_ [class_ "flex flex-col gap-2"] $ do
+    div_ [class_ "flex w-full items-center gap-1"] $ do
+      span_ [class_ "text-textStrong lowercase first-letter:uppercase"] "Add phone numbers"
+    input_ [class_ "input rounded-lg w-full border border-strokeStrong", term "pattern" "^\\+?[1-9]\\d{6,14}$", type_ "text", id_ "phones_input"]
+
+
+renderSlackIntegration :: EnvConfig -> Text -> Maybe SlackData -> Html ()
+renderSlackIntegration envCfg pid slackData = do
+  case slackData of
+    Just _ -> p_ [class_ "text-sm text-gray-500 mb-4 text-green-500"] "Already connected, but you can add again to change workspace or channel."
+    Nothing -> pass
+  a_ [target_ "_blank", href_ $ "https://slack.com/oauth/v2/authorize?client_id=" <> envCfg.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:history,groups:history,im:history,mpim:history&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> pid] do
+    img_ [alt_ "Add to slack", height_ "40", width_ "139", src_ "https://platform.slack-edge.com/img/add_to_slack.png", term "srcSet" "https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"]
+
+
+renderDiscordIntegration :: EnvConfig -> Text -> Html ()
+renderDiscordIntegration envCfg pid = do
+  let addQueryParams = "&state=" <> pid <> "&redirect_uri=" <> envCfg.discordRedirectUri
+  a_ [target_ "_blank", class_ "flex items-center gap-2 border p-2 w-max border-strokeStrong rounded-lg", href_ $ "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> envCfg.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> addQueryParams] do
+    faSprite_ "discord" "solid" "h-6 w-6 text-textBrand"
+    span_ [class_ "text-sm text-textStrong font-semibold"] "Add to Discord"

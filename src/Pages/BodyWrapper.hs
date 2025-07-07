@@ -165,8 +165,12 @@ bodyWrapper bcfg child = do
           }
 
           function getTags() {
+            console.log("here")
             const tag = window.tagify.value
-            return tag.map(tag => tag.value);
+            console.log(tag)
+            const values = tag.map(tag => tag.value);
+            console.log(values)
+            return values || []
           }
         |]
 
@@ -287,7 +291,7 @@ bodyWrapper bcfg child = do
                     loginBanner
                   unless bcfg.isSettingsPage $ navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
                   section_ [class_ "overflow-y-hidden h-full flex-1"] do
-                    when bcfg.freeTierExceeded $ maybe pass (\p -> freeTierLimitExceededBanner p.id.toText) bcfg.currProject
+                    when bcfg.freeTierExceeded $ whenJust bcfg.currProject (\p -> freeTierLimitExceededBanner p.id.toText)
                     if bcfg.isSettingsPage
                       then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
                       else child
@@ -448,7 +452,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , href_ $ "/p/" <> project.id.toText <> "/settings"
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-blue-100 text-brand leading-none "] (faSprite_ "gear" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
     a_
       [ class_ "hover:bg-blue-50 "
       , target_ "blank"
@@ -457,7 +461,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , href_ "https://apitoolkit.io/docs/"
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-blue-100 text-brand leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
     a_
       [ class_ "hover:bg-blue-50"
       , term "data-tippy-placement" "right"
@@ -466,7 +470,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , [__| on click js posthog.reset(); end |]
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center  rounded-full bg-red-100 text-red-600 leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 
 -- mapM_ renderNavBottomItem $ navBottomList project.id.toText

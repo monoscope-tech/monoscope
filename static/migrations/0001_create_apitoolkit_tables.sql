@@ -119,6 +119,7 @@ ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS billing_day TIMESTAMP WIT
 ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS onboarding_steps_completed TEXT[] DEFAULT ARRAY[]::TEXT[];
 ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS notify_phone_number TEXT DEFAULT NULL;
 ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS notify_emails TEXT[] DEFAULT ARRAY[]::TEXT[];
+ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS whatsapp_numbers TEXT[] DEFAULT ARRAY[]::TEXT[];
 
 
 -----------------------------------------------------------------------

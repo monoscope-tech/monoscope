@@ -121,6 +121,7 @@ data Project = Project
   , onboardingStepsCompleted :: V.Vector Text
   , notifyPhoneNumber :: Maybe Text
   , notifyEmails :: V.Vector Text
+  , whatsappNumbers :: V.Vector Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData)
@@ -158,6 +159,7 @@ data Project' = Project'
   , onboardingStepsCompleted :: V.Vector Text
   , notifyPhoneNumber :: Maybe Text
   , notifyEmails :: V.Vector Text
+  , whatsappNumbers :: V.Vector Text
   , hasIntegrated :: Bool
   , usersDisplayImages :: V.Vector Text
   }
@@ -307,11 +309,11 @@ deleteProject pid = do
       [sql| UPDATE projects.projects SET deleted_at=NOW(), active=False where id=?;|]
 
 
-updateNotificationsChannel :: ProjectId -> [Text] -> Maybe Text -> DBT IO Int64
-updateNotificationsChannel pid channels discordUrl = execute q (list, discordUrl, pid)
+updateNotificationsChannel :: ProjectId -> [Text] -> [Text] -> DBT IO Int64
+updateNotificationsChannel pid channels phones = execute q (list, V.fromList phones, pid)
   where
     list = V.fromList channels
-    q = [sql| UPDATE projects.projects SET notifications_channel=?::notification_channel_enum[], discord_url=? WHERE id=?;|]
+    q = [sql| UPDATE projects.projects SET notifications_channel=?::notification_channel_enum[], whatsapp_numbers=? WHERE id=?;|]
 
 
 updateOnboardingStepsCompleted :: ProjectId -> V.Vector Text -> DBT IO Int64
