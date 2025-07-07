@@ -870,8 +870,7 @@ convertMetricToMetricRecords pid resourceM scopeM metric =
            in V.toList
                 $ V.map
                   ( \point ->
-                      let !startTimeNano = point ^. PMF.startTimeUnixNano
-                          !timeNano = point ^. PMF.timeUnixNano
+                      let !timeNano = point ^. PMF.timeUnixNano
                           !value = case point ^. PMF.maybe'value of
                             Just (PM.NumberDataPoint'AsDouble d) -> d
                             Just (PM.NumberDataPoint'AsInt i) -> fromIntegral i
@@ -883,7 +882,7 @@ convertMetricToMetricRecords pid resourceM scopeM metric =
                             , metricName = metric ^. PMF.name
                             , metricDescription = metric ^. PMF.description
                             , metricUnit = metric ^. PMF.unit
-                            , timestamp = nanosecondsToUTC startTimeNano
+                            , timestamp = nanosecondsToUTC timeNano
                             , metricTime = nanosecondsToUTC timeNano
                             , resource = removeProjectId $ resourceToJSON resourceM
                             , instrumentationScope = case scopeM of

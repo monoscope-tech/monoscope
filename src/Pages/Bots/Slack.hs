@@ -430,7 +430,7 @@ dashboardViewOne options =
   AE.object
     [ "type" AE..= "section"
     , "block_id" AE..= "dashboard-select"
-    , "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= "*Dashboard*"]
+    , "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= "*Select dashboard*"]
     , "accessory"
         AE..= AE.object
           [ "action_id" AE..= "dashboard-select"
@@ -448,7 +448,7 @@ dashboardViewTwo options =
   AE.object
     [ "type" AE..= "section"
     , "block_id" AE..= "widget-select"
-    , "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= "*Widget*"]
+    , "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= "*Select widget*"]
     , "accessory"
         AE..= AE.object
           [ "action_id" AE..= "widget-select"
@@ -512,17 +512,17 @@ instance AE.FromJSON SlackEventPayload where
       "event_callback" ->
         EventCallback
           <$> v
-          AE..: "token"
+            AE..: "token"
           <*> v
-          AE..: "team_id"
+            AE..: "team_id"
           <*> v
-          AE..: "api_app_id"
+            AE..: "api_app_id"
           <*> v
-          AE..: "event"
+            AE..: "event"
           <*> v
-          AE..: "event_id"
+            AE..: "event_id"
           <*> v
-          AE..: "event_time"
+            AE..: "event_time"
       other -> fail $ "Unsupported Slack event type: " ++ show other
 
 
@@ -651,7 +651,7 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-        <> [msgJson]
-        <> ["\n\nUser query: " <> question]
+          <> [msgJson]
+          <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
