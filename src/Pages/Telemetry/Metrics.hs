@@ -373,11 +373,11 @@ buildTree_ pid sp level isLasChild dp = do
   let hasChildren = not $ null sp.children
   let paddingLeft = show (35 * level + 46) <> "px)" -- why 35 ? I have no clue
   div_ [class_ "flex items-start w-full relative span-filterble"] do
-    when (level /= 0) $ div_ [class_ "w-8 shrink-0 ml-2 h-[1px] mt-2 bg-slate-200"] pass
-    unless (level == 0) $ div_ [class_ "absolute -top-3 left-2 border-l h-5 border-l-slate-200"] pass
-    unless isLasChild $ div_ [class_ "absolute top-1 left-2 border-l h-full border-l-slate-200"] pass
-    div_ [class_ "flex flex-col w-full grow-1 shrink-1 border-slate-200 relative"] do
-      when hasChildren $ div_ [class_ "absolute top-1 left-2 border-l h-2 border-l-slate-200"] pass
+    when (level /= 0) $ div_ [class_ "w-8 shrink-0 ml-2 h-[1px] mt-2 bg-strokeWeak"] pass
+    unless (level == 0) $ div_ [class_ "absolute -top-3 left-2 border-l h-5 border-l-strokeWeak"] pass
+    unless isLasChild $ div_ [class_ "absolute top-1 left-2 border-l h-full border-l-strokeWeak"] pass
+    div_ [class_ "flex flex-col w-full grow-1 shrink-1 border-strokeWeak relative"] do
+      when hasChildren $ div_ [class_ "absolute top-1 left-2 border-l h-2 border-l-strokeWeak"] pass
       div_
         [ class_ "w-full cursor-pointer flex tree_opened justify-between max-w-full items-center h-5 hover:bg-fillWeaker"
         , [__| on click toggle .tree_opened on me|]
@@ -385,9 +385,9 @@ buildTree_ pid sp level isLasChild dp = do
         do
           div_ [class_ "flex w-full justify-between items-center overflow-x-hidden"] do
             div_ [class_ "flex items-center overflow-y-hidden", style_ $ "width: calc(40vw - " <> paddingLeft] do
-              when hasChildren $ faSprite_ "chevron-up" "regular" "toggler rotate-90 w-4 border border-slate-200 h-4 shadow-xs rounded-sm px-0.5 z-50 bg-slate-50 mr-1 shrink-0 text-slate-950"
-              unless (sp.spanRecord.parent == "___root___") $ span_ [class_ "text-slate-400"] $ toHtml $ sp.spanRecord.parent <> "."
-              span_ [class_ "text-slate-900 "] $ toHtml sp.spanRecord.current
+              when hasChildren $ faSprite_ "chevron-up" "regular" "toggler rotate-0 w-4 border border-strokeWeak h-4 shadow-xs rounded-sm px-0.5 z-50 bg-fillWeaker mr-1 shrink-0 text-textStrong"
+              unless (sp.spanRecord.parent == "___root___") $ span_ [class_ "text-textDisabled"] $ toHtml $ sp.spanRecord.parent <> "."
+              span_ [class_ "text-textStrong "] $ toHtml sp.spanRecord.current
               when hasChildren $ span_ [class_ "badge badge-ghost text-xs"] $ toHtml $ show $ length sp.children
             unless hasChildren $ do
               let fullPath = (if sp.spanRecord.parent == "___root___" then "" else sp.spanRecord.parent <> ".") <> sp.spanRecord.current

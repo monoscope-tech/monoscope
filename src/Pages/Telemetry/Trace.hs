@@ -1,4 +1,4 @@
-module Pages.Telemetry.Trace (traceH, TraceDetailsGet (..), getServiceName, getServiceColor, getRequestDetails, spanHasErrors) where
+module Pages.Telemetry.Trace (traceH, TraceDetailsGet (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
@@ -20,78 +20,10 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.Components (dateTime)
 import Pages.LogExplorer.LogItem qualified as LogItem
+import Pages.LogExplorer.LogItem (getServiceName, getServiceColor, getRequestDetails, spanHasErrors)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, getDurationNSMS, getServiceColors, onpointerdown_, utcTimeToNanoseconds)
-import Data.Aeson.KeyMap qualified as KEM
-import Data.Scientific (toBoundedInteger)
-
-
-getServiceName :: Maybe (Map Text AE.Value) -> Text
-getServiceName rs = case Map.lookup "service" (fromMaybe Map.empty rs) of
-  Just (AE.Object o) -> case KEM.lookup "name" o of
-    Just (AE.String s) -> s
-    _ -> "Unknown"
-  _ -> "Unknown"
-
-
-getServiceColor :: Text -> HashMap Text Text -> Text
-getServiceColor s serviceColors = fromMaybe "bg-black" $ HM.lookup s serviceColors
-
-
-getRequestDetails :: Maybe (Map Text AE.Value) -> Maybe (Text, Text, Text, Int)
-getRequestDetails spanRecord = do
-  m <- spanRecord
-  case Map.lookup "http" m of
-    Just (AE.Object o) ->
-      Just
-        ( "HTTP"
-        , case KEM.lookup "request" o of
-            Just (AE.Object r) -> getText "method" r
-            _ -> ""
-        , case getUrl o of
-            Just u -> u
-            Nothing -> case Map.lookup "url" m of
-              Just (AE.Object p) -> fromMaybe "/" $ getUrl p
-              _ -> "/"
-        , case KEM.lookup "response" o of
-            Just (AE.Object r) -> getStatus r
-            _ -> 0
-        )
-    _ -> case Map.lookup "rpc" m of
-      Just (AE.Object o) -> Just ("GRPC", getText "service" o, getText "method" o, getStatus o)
-      _ -> case Map.lookup "db" m of
-        Just (AE.Object o) -> Just ("DB", getText "system" o, if T.null query then statement else query, getStatus o)
-          where
-            statement = getText "statement" o
-            query = getText "query" o
-        _ -> Nothing
-  where
-    getText :: Text -> AE.Object -> Text
-    getText key v = case KEM.lookup (AEKey.fromText key) v of
-      Just (AE.String s) -> s
-      _ -> ""
-    getInt :: Text -> AE.Object -> Maybe Int
-    getInt key v = case KEM.lookup (AEKey.fromText key) v of
-      Just (AE.Number n) -> toBoundedInteger n
-      Just (AE.String s) -> readMaybe $ toString s
-      _ -> Nothing
-    getUrl :: AE.Object -> Maybe Text
-    getUrl v =
-      let opts = [getText "route" v, getText "path" v, getText "url" v, getText "target" v]
-       in viaNonEmpty head $ Relude.filter (not . T.null) opts
-    getStatus :: AE.Object -> Int
-    getStatus v = fromMaybe 0 $ getInt "status_code" v
-
-
-spanHasErrors :: Telemetry.SpanRecord -> Bool
-spanHasErrors spanRecord = case spanRecord.events of
-  AE.Array a ->
-    let hasExceptionEvent event = case event of
-          AE.Object obj -> KEM.lookup "event_name" obj == Just (AE.String "exception")
-          _ -> False
-     in Relude.any hasExceptionEvent (V.toList a)
-  _ -> False
 
 
 traceH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)
@@ -168,19 +100,19 @@ tracePage p = do
         div_ [role_ "tablist", class_ "w-full flex flex-col gap-2", id_ "trace-tabs"] $ do
           div_ [class_ "flex flex-col gap-2"] do
             div_ [class_ "flex justify-between mb-2"] do
-              div_ [class_ "flex items-center gap-2 text-slate-500 font-medium"] do
+              div_ [class_ "flex items-center gap-2 text-textWeak font-medium"] do
                 button_ [class_ "a-tab text-sm px-3 py-1.5 border-b-2 border-b-transparent t-tab-active", onpointerdown_ "navigatable(this, '#flame_graph', '#trace-tabs', 't-tab-active')"] "Flame Graph"
                 button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#water_fall', '#trace-tabs', 't-tab-active')"] "Waterfall"
                 button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Spans List"
               div_ [class_ "flex items-center gap-2"] do
                 stBox (show $ length p.spanRecords) Nothing
-                stBox (show $ length $ V.filter (\s -> s.status == Just SSError) p.spanRecords) $ Just (faSprite_ "alert-triangle" "regular" "w-3 h-3 text-red-500")
+                stBox (show $ length $ V.filter (\s -> s.status == Just SSError) p.spanRecords) $ Just (faSprite_ "alert-triangle" "regular" "w-3 h-3 text-textError")
                 stBox (toText $ getDurationNSMS traceItem.traceDurationNs) $ Just (faSprite_ "clock" "regular" "w-3 h-3 text-textWeak")
             div_ [class_ "flex gap-2 w-full items-center"] do
-              div_ [class_ "flex items-center gap-2 w-full rounded-xl px-3 grow-1 h-12 border border-slate-200 bg-fillWeaker"] do
-                faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-slate-500"
+              div_ [class_ "flex items-center gap-2 w-full rounded-xl px-3 grow-1 h-12 border border-strokeWeak bg-fillWeaker"] do
+                faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-textWeak"
                 input_
-                  [ class_ "w-full py text-slate-950 bg-transparent hover:outline-hidden focus:outline-hidden"
+                  [ class_ "w-full py text-textStrong bg-transparent hover:outline-hidden focus:outline-hidden"
                   , type_ "text"
                   , placeholder_ "Search"
                   , id_ "search-input"
@@ -189,18 +121,18 @@ tracePage p = do
                 let spanIds = decodeUtf8 $ AE.encode $ (.spanId) <$> p.spanRecords
                 div_ [class_ "flex items-center gap-1", id_ "currentSpanIndex", term "data-span" "0"] do
                   button_
-                    [ class_ "h-7 w-7 flex items-center justify-center bg-fillWeaker rounded-full font-bold border border-slate-200 text-slate-950  cursor-pointer"
+                    [ class_ "h-7 w-7 flex items-center justify-center bg-fillWeaker rounded-full font-bold border border-strokeWeak text-textStrong  cursor-pointer"
                     , onpointerdown_ [text|navigateSpans($spanIds, "prev")|]
                     ]
                     do
                       faSprite_ "chevron-up" "regular" "w-4 h-4"
                   button_
-                    [ class_ "h-7 w-7 flex items-center justify-center rounded-full bg-fillWeaker font-bold border border-slate-200 text-slate-950 cursor-pointer"
+                    [ class_ "h-7 w-7 flex items-center justify-center rounded-full bg-fillWeaker font-bold border border-strokeWeak text-textStrong cursor-pointer"
                     , onpointerdown_ [text|navigateSpans($spanIds, "next")|]
                     ]
                     do
                       faSprite_ "chevron-down" "regular" "h-4 w-4"
-              button_ [class_ "btn border border-slate-200 bg-fillWeaker h-12"] "Reset Zoom"
+              button_ [class_ "btn border border-strokeWeak bg-fillWeaker h-12"] "Reset Zoom"
           div_ [role_ "tabpanel", class_ "a-tab-content w-full", id_ "flame_graph"] do
             div_ [class_ "flex gap-2 w-full pt-2"] do
               div_
@@ -208,18 +140,18 @@ tracePage p = do
                 , id_ "flame-graph-container"
                 ]
                 do
-                  div_ [class_ "w-full sticky top-0 border-b border-b-gray-300 h-6 text-xs relative", id_ "time-container"] pass
+                  div_ [class_ "w-full sticky top-0 border-b border-b-strokeWeak h-6 text-xs relative", id_ "time-container"] pass
                   div_ [class_ "w-full overflow-x-hidden min-h-56 h-full relative", id_ $ "a" <> traceItem.traceId] pass
                   div_ [class_ "h-full top-0  absolute z-50 hidden", id_ "time-bar-indicator"] do
                     div_ [class_ "relative h-full"] do
                       div_ [class_ "text-xs top-[-18px] absolute -translate-x-1/2 whitespace-nowrap", id_ "line-time"] "2 ms"
-                      div_ [class_ "h-[calc(100%-24px)] mt-[24px] w-[1px] bg-gray-200"] pass
+                      div_ [class_ "h-[calc(100%-24px)] mt-[24px] w-[1px] bg-strokeWeak"] pass
 
               div_ [class_ "border rounded-lg w-[35%] overflow-x-hidden"] do
                 h3_ [class_ "w-full flex p-3 font-medium justify-between items-center text-sm border-b"] do
                   span_ [] "Services"
                   span_ [] "Exec Time %"
-                div_ [class_ "w-full overflow-x-hidden  text-gray-600", id_ $ "services-" <> traceItem.traceId] do
+                div_ [class_ "w-full overflow-x-hidden  text-textWeak", id_ $ "services-" <> traceItem.traceId] do
                   forM_ serviceNames $ \s -> do
                     let spans = filter (\x -> x.name == s) serviceData
                         duration = sum $ (.duration) <$> spans
@@ -232,24 +164,24 @@ tracePage p = do
                         span_ [class_ ""] $ toHtml s
                       div_ [class_ "flex gap-1 items-center"] $ do
                         span_ [class_ "text-xs max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
-                        div_ [class_ "w-[100px] h-3 bg-gray-200 rounded-sm overflow-hidden"]
+                        div_ [class_ "w-[100px] h-3 bg-fillWeak rounded-sm overflow-hidden"]
                           $ div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "water_fall"] do
-            div_ [class_ "border border-slate-200 flex w-full rounded-2xl min-h-[230px]  overflow-y-auto overflow-x-hidden "] do
+            div_ [class_ "border border-strokeWeak flex w-full rounded-2xl min-h-[230px]  overflow-y-auto overflow-x-hidden "] do
               div_ [class_ "w-full border-r overflow-x-hidden"] do
-                div_ [class_ "border-b h-10 border-b-slate-200"] pass
+                div_ [class_ "border-b h-10 border-b-strokeWeak"] pass
                 waterFallTree pid rootSpans traceItem.traceId serviceColors
               div_ [class_ "shrink-0 px-2"] do
                 div_
-                  [ class_ "w-[550px] sticky top-0 border-b border-b-slate-200 h-10 text-xs relative"
+                  [ class_ "w-[550px] sticky top-0 border-b border-b-strokeWeak h-10 text-xs relative"
                   , id_ "waterfall-time-container"
                   ]
                   pass
                 div_ [class_ "w-[550px] overflow-x-hidden py-2 relative flex flex-col gap-2", id_ $ "waterfall-" <> traceItem.traceId] pass
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "span_list"] do
-            div_ [class_ "border border-slate-200 w-full rounded-2xl min-h-[230px] overflow-x-hidden "] do
+            div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-x-hidden "] do
               renderSpanListTable serviceNames serviceColors p.spanRecords
 
   let spanJson = decodeUtf8 $ AE.encode $ p.spanRecords <&> getSpanJson
@@ -300,19 +232,19 @@ renderSpanRecordRow spanRecords colors service = do
   let listLen = V.length filterRecords
   let duration = sum $ (.spanDurationNs) <$> filterRecords
   tr_
-    [ class_ "w-full overflow-x-hidden p-2 cursor-pointer font-medium hover:bg-gray-100 border-b-2 last:border-b-0"
+    [ class_ "w-full overflow-x-hidden p-2 cursor-pointer font-medium hover:bg-fillWeaker border-b-2 last:border-b-0"
     , [__|on click toggle .hidden on next <tr/> then toggle .rotate-90 on the first <svg/> in the first <td/> in me|]
     ]
     do
-      td_ [class_ "ml-1 px-2 py-1 w-[600px] text-slate-950 truncate flex items-center gap-1 font-medium"] do
-        div_ [class_ "w-1 bg-blue-200 h-4"] pass
-        faSprite_ "chevron-right" "regular" "h-3 w-3 mr-2 text-gray-500"
+      td_ [class_ "ml-1 px-2 py-1 w-[600px] text-textStrong truncate flex items-center gap-1 font-medium"] do
+        div_ [class_ "w-1 bg-fillBrand-weak h-4"] pass
+        faSprite_ "chevron-right" "regular" "h-3 w-3 mr-2 text-textWeak"
         div_ [class_ $ "w-3 h-3 rounded-sm " <> getServiceColor service colors] pass
         span_ [] $ toHtml service
-      td_ [class_ "px-2 py-1 max-w-48 text-slate-500 truncate pl-4"] $ toHtml $ show listLen
-      td_ [class_ "px-2 py-1 max-w-48 text-slate-500 truncate pl-4"] $ toHtml $ getDurationNSMS $ duration `div` toInteger listLen
-      td_ [class_ "px-2 py-1 max-w-48 text-slate-500 truncate pl-4"] $ toHtml $ getDurationNSMS duration
-      td_ [class_ "px-2 py-1 max-w-48 text-slate-500 truncate pl-4"] $ toHtml $ show (duration * 100 `div` totalDuration) <> "%"
+      td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4"] $ toHtml $ show listLen
+      td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4"] $ toHtml $ getDurationNSMS $ duration `div` toInteger listLen
+      td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4"] $ toHtml $ getDurationNSMS duration
+      td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4"] $ toHtml $ show (duration * 100 `div` totalDuration) <> "%"
   tr_ [class_ "hidden p-0 m-0", [__|on click halt|]] do
     td_ [colspan_ "5", class_ "pl-[13px] overflow-x-hidden"] do
       spanTable filterRecords
@@ -334,9 +266,9 @@ renderSpanListTable services colors records =
 
 spanTable :: V.Vector Telemetry.SpanRecord -> Html ()
 spanTable records =
-  div_ [class_ "rounded-xl my-2 mx-3 border border-slate-200"] do
+  div_ [class_ "rounded-xl my-2 mx-3 border border-strokeWeak"] do
     table_ [class_ "table w-full"] do
-      thead_ [class_ "border-b border-slate-200"]
+      thead_ [class_ "border-b border-strokeWeak"]
         $ tr_ [class_ "p-2 border-b font-medium"]
         $ do
           td_ "Time"
@@ -451,11 +383,11 @@ buildTree_ pid sp trId level scol isLasChild = do
       serviceCol = getServiceColor sp.spanRecord.serviceName scol
   -- let str = "on click toggle .hidden on the next .children_container then toggle .collapsed on me then toggle .hidden on  #waterfall-child-" <> sp.spanRecord.spanId
   div_ [class_ "flex items-start w-full relative span-filterble"] do
-    when (level /= 0) $ div_ [class_ "w-4 shrink-0 ml-2 h-[1px] mt-2 bg-slate-200"] pass
-    unless (level == 0) $ div_ [class_ "absolute -top-3 left-2 border-l h-5 border-l-slate-200"] pass
-    unless isLasChild $ div_ [class_ "absolute top-1 left-2 border-l h-full border-l-slate-200"] pass
-    div_ [class_ "flex flex-col w-full grow-1 shrink-1 border-slate-200 relative"] do
-      when hasChildren $ div_ [class_ "absolute top-1 left-2 border-l h-2 border-l-slate-200"] pass
+    when (level /= 0) $ div_ [class_ "w-4 shrink-0 ml-2 h-[1px] mt-2 bg-strokeWeak"] pass
+    unless (level == 0) $ div_ [class_ "absolute -top-3 left-2 border-l h-5 border-l-strokeWeak"] pass
+    unless isLasChild $ div_ [class_ "absolute top-1 left-2 border-l h-full border-l-strokeWeak"] pass
+    div_ [class_ "flex flex-col w-full grow-1 shrink-1 border-strokeWeak relative"] do
+      when hasChildren $ div_ [class_ "absolute top-1 left-2 border-l h-2 border-l-strokeWeak"] pass
       let tme = fromString (formatShow iso8601Format sp.spanRecord.timestamp)
           spanId = UUID.toText sp.spanRecord.uSpanId
       div_
@@ -467,14 +399,14 @@ buildTree_ pid sp trId level scol isLasChild = do
         , id_ $ "trigger-span-" <> sp.spanRecord.spanId
         ]
         do
-          div_ [class_ "flex items-center w-[95%] gap-1 border-blue-300 rounded-lg overflow-x-hidden waterfall-item", [__|on click remove .border from .waterfall-item then add .border to me|]] do
+          div_ [class_ "flex items-center w-[95%] gap-1 border-strokeBrand-strong rounded-lg overflow-x-hidden waterfall-item", [__|on click remove .border from .waterfall-item then add .border to me|]] do
             when hasChildren $ do
-              div_ [class_ "border border-slate-200 w-7 flex justify-between gap-1 items-center rounded-sm p-0.5"] do
-                faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 font-bold text-slate-950 waterfall-item-tree-chevron"
+              div_ [class_ "border border-strokeWeak w-7 flex justify-between gap-1 items-center rounded-sm p-0.5"] do
+                faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 font-bold text-textStrong waterfall-item-tree-chevron"
                 span_ [class_ "text-xs"] $ toHtml $ show (length sp.children)
-            span_ [class_ "font-medium text-slate-950 "] $ toHtml sp.spanRecord.serviceName
-            faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-slate-950"
-            span_ [class_ "text-slate-500 text-sm whitespace-nowrap"] $ toHtml sp.spanRecord.spanName
+            span_ [class_ "font-medium text-textStrong "] $ toHtml sp.spanRecord.serviceName
+            faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-textStrong"
+            span_ [class_ "text-textWeak text-sm whitespace-nowrap"] $ toHtml sp.spanRecord.spanName
           span_ [class_ $ "w-1 rounded-sm h-5 shrink-0 " <> serviceCol] ""
       when hasChildren $ do
         div_ [class_ "flex flex-col children_container gap-2 mt-2", id_ $ "waterfall-tree-" <> sp.spanRecord.spanId] do
