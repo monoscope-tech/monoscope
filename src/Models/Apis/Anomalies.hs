@@ -14,6 +14,10 @@ module Models.Apis.Anomalies (
   NewFieldIssue (..),
   NewShapeIssue (..),
   NewFormatIssue (..),
+  PayloadChange (..),
+  ChangeType (..),
+  FieldChange (..),
+  FieldChangeKind (..),
   selectIssueByHash,
   bulkInsertErrors,
   insertErrorQueryAndParams,
@@ -578,9 +582,69 @@ data IssueL = IssueL
   , acknowlegedBy :: Maybe Users.UserId
   , archivedAt :: Maybe ZonedTime
   , eventsAgg :: IssueEventAgg
+  , -- New fields for enhanced UI
+    title :: Text
+  , service :: Text
+  , critical :: Bool
+  , breakingChanges :: Int
+  , incrementalChanges :: Int
+  , affectedPayloads :: Int
+  , affectedClients :: Int
+  , estimatedRequests :: Text
+  , migrationComplexity :: Text
+  , recommendedAction :: Text
+  , -- Payload changes data
+    requestPayloads :: Aeson [PayloadChange]
+  , responsePayloads :: Aeson [PayloadChange]
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData)
+
+
+-- NFData instance for Aeson wrapper (postgresql-simple doesn't provide it)
+instance NFData a => NFData (Aeson a) where
+  rnf (Aeson a) = rnf a
+
+
+-- Payload change data structures
+data PayloadChange = PayloadChange
+  { method :: Maybe Text
+  , statusCode :: Maybe Int
+  , statusText :: Maybe Text
+  , contentType :: Text
+  , changeType :: ChangeType
+  , description :: Text
+  , changes :: [FieldChange]
+  , exampleBefore :: Text
+  , exampleAfter :: Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
+
+
+data ChangeType = Breaking | Incremental | Safe
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
+
+
+data FieldChange = FieldChange
+  { fieldName :: Text
+  , changeKind :: FieldChangeKind
+  , breaking :: Bool
+  , path :: Text
+  , changeDescription :: Text
+  , oldType :: Maybe Text
+  , newType :: Maybe Text
+  , oldValue :: Maybe Text
+  , newValue :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
+
+
+data FieldChangeKind = Modified | Added | Removed
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
 
 
 -- Helper function to create IssuesData based on AnomalyType

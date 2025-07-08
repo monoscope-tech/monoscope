@@ -23,11 +23,12 @@ import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime, zonedTimeToUTC)
+import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime, parseTimeM, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (execute)
 import Database.PostgreSQL.Simple (Only (Only))
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
@@ -177,13 +178,182 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
         Just "Archived" -> (False, True, "Archived")
         _ -> (False, False, "Inbox")
 
-  let fLimit = 10
+  -- let fLimit = 10
   let filterV = fromMaybe "14d" timeFilter
 
   let pageInt = maybe 0 (Unsafe.read . toString) pageM
-  issues <- dbtToEff $ Anomalies.selectIssues pid endpointM (Just ackd) (Just archived) sortM (Just fLimit) (pageInt * fLimit)
+
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
   currTime <- liftIO getCurrentTime
+
+  -- Commented out original database query for anomalies/issues
+  -- issues <- dbtToEff $ Anomalies.selectIssues pid endpointM (Just ackd) (Just archived) sortM (Just fLimit) (pageInt * fLimit)
+
+  -- Mock data for new UI
+  let mockCreatedTime = utcToZonedTime utc currTime
+  let mockIssue =
+        Anomalies.IssueL
+          { id = Anomalies.AnomalyId $ UUID.fromString "00000000-0000-0000-0000-000000000001" & fromMaybe (error "Invalid UUID")
+          , createdAt = mockCreatedTime
+          , updatedAt = mockCreatedTime
+          , projectId = pid
+          , acknowlegedAt = Nothing
+          , anomalyType = Anomalies.ATShape
+          , targetHash = "hash123"
+          , issueData =
+              Anomalies.IDNewShapeIssue
+                $ Anomalies.NewShapeIssue
+                  { id = Shapes.ShapeId $ UUID.fromString "00000000-0000-0000-0000-000000000002" & fromMaybe (error "Invalid UUID")
+                  , endpointId = Endpoints.EndpointId $ UUID.fromString "00000000-0000-0000-0000-000000000003" & fromMaybe (error "Invalid UUID")
+                  , endpointMethod = "POST"
+                  , endpointUrlPath = "/api/v1/auth/login"
+                  , host = "api.example.com"
+                  , newUniqueFields = V.fromList ["mfa_token", "device_fingerprint", "password"]
+                  , deletedFields = V.empty
+                  , updatedFieldFormats = V.fromList ["password"]
+                  }
+          , endpointId = Nothing
+          , acknowlegedBy = Nothing
+          , archivedAt = Nothing
+          , eventsAgg =
+              Anomalies.IssueEventAgg
+                { count = 8
+                , lastSeen = currTime
+                }
+          , -- New fields
+            title = "User Authentication Schema Update"
+          , service = "auth-service"
+          , critical = True
+          , breakingChanges = 5
+          , incrementalChanges = 3
+          , affectedPayloads = 4
+          , affectedClients = 342
+          , estimatedRequests = "~50K/day"
+          , migrationComplexity = "high"
+          , recommendedAction = "Implement graceful fallback for legacy clients and schedule migration timeline"
+          , -- Payload changes
+            requestPayloads =
+              Aeson
+                [ Anomalies.PayloadChange
+                    { method = Just "POST"
+                    , statusCode = Nothing
+                    , statusText = Nothing
+                    , contentType = "application/json"
+                    , changeType = Anomalies.Breaking
+                    , description = "Authentication flow updated with enhanced security requirements"
+                    , changes =
+                        [ Anomalies.FieldChange
+                            { fieldName = "password"
+                            , changeKind = Anomalies.Modified
+                            , breaking = True
+                            , path = "credentials.password"
+                            , changeDescription = "Minimum length increased, special character requirement added"
+                            , oldType = Just "string (min: 6)"
+                            , newType = Just "string (min: 12, requires: special char)"
+                            , oldValue = Just "{\n  \"minLength\": 6,\n  \"pattern\": null\n}"
+                            , newValue = Just "{\n  \"minLength\": 12,\n  \"pattern\": \"^(?=.*[!@#$%^&*])\",\n  \"required\": true\n}"
+                            }
+                        , Anomalies.FieldChange
+                            { fieldName = "mfa_token"
+                            , changeKind = Anomalies.Added
+                            , breaking = True
+                            , path = "credentials.mfa_token"
+                            , changeDescription = "Multi-factor authentication token now required for high-privilege accounts"
+                            , oldType = Nothing
+                            , newType = Just "string (conditional)"
+                            , oldValue = Nothing
+                            , newValue = Just "{\n  \"type\": \"string\",\n  \"required\": \"conditional\",\n  \"condition\": \"user.role === 'admin'\"\n}"
+                            }
+                        , Anomalies.FieldChange
+                            { fieldName = "device_fingerprint"
+                            , changeKind = Anomalies.Added
+                            , breaking = False
+                            , path = "metadata.device_fingerprint"
+                            , changeDescription = "Optional device identification for security analytics"
+                            , oldType = Nothing
+                            , newType = Just "object"
+                            , oldValue = Nothing
+                            , newValue = Just "{\n  \"browser\": \"string\",\n  \"os\": \"string\",\n  \"screen\": \"string\",\n  \"timezone\": \"string\"\n}"
+                            }
+                        ]
+                    , exampleBefore = "{\n  \"email\": \"user@example.com\",\n  \"password\": \"pass123\",\n  \"remember_me\": true\n}"
+                    , exampleAfter = "{\n  \"email\": \"user@example.com\",\n  \"password\": \"SecureP@ss123!\",\n  \"mfa_token\": \"123456\",\n  \"remember_me\": true,\n  \"device_fingerprint\": {\n    \"browser\": \"Chrome/122.0\",\n    \"os\": \"macOS 14.2\",\n    \"screen\": \"1920x1080\",\n    \"timezone\": \"America/New_York\"\n  }\n}"
+                    }
+                ]
+          , responsePayloads =
+              Aeson
+                [ Anomalies.PayloadChange
+                    { method = Nothing
+                    , statusCode = Just 200
+                    , statusText = Just "OK"
+                    , contentType = "application/json"
+                    , changeType = Anomalies.Incremental
+                    , description = "Successful authentication response"
+                    , changes =
+                        [ Anomalies.FieldChange
+                            { fieldName = "access_token"
+                            , changeKind = Anomalies.Modified
+                            , breaking = False
+                            , path = "data.access_token"
+                            , changeDescription = "Token format updated to JWT with enhanced claims"
+                            , oldType = Just "string (opaque)"
+                            , newType = Just "string (JWT)"
+                            , oldValue = Just "abc123xyz789..."
+                            , newValue = Just "eyJhbGciOiJIUzI1NiIs..."
+                            }
+                        , Anomalies.FieldChange
+                            { fieldName = "session_info"
+                            , changeKind = Anomalies.Added
+                            , breaking = False
+                            , path = "data.session_info"
+                            , changeDescription = "Enhanced session metadata for client applications"
+                            , oldType = Nothing
+                            , newType = Just "object"
+                            , oldValue = Nothing
+                            , newValue = Just "{\n  \"expires_at\": \"2024-12-31T23:59:59Z\",\n  \"permissions\": [\"read\", \"write\"],\n  \"session_id\": \"uuid\"\n}"
+                            }
+                        ]
+                    , exampleBefore = "{\n  \"success\": true,\n  \"data\": {\n    \"access_token\": \"abc123xyz789random\",\n    \"user_id\": \"12345\",\n    \"expires_in\": 3600\n  }\n}"
+                    , exampleAfter = "{\n  \"success\": true,\n  \"data\": {\n    \"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...\",\n    \"user_id\": \"12345\",\n    \"expires_in\": 3600,\n    \"session_info\": {\n      \"expires_at\": \"2024-12-31T23:59:59Z\",\n      \"permissions\": [\"read\", \"write\", \"admin\"],\n      \"session_id\": \"550e8400-e29b-41d4-a716-446655440000\"\n    }\n  }\n}"
+                    }
+                , Anomalies.PayloadChange
+                    { method = Nothing
+                    , statusCode = Just 401
+                    , statusText = Just "Unauthorized"
+                    , contentType = "application/json"
+                    , changeType = Anomalies.Breaking
+                    , description = "Authentication failed"
+                    , changes =
+                        [ Anomalies.FieldChange
+                            { fieldName = "error_code"
+                            , changeKind = Anomalies.Modified
+                            , breaking = True
+                            , path = "error.code"
+                            , changeDescription = "More specific error codes for different failure types"
+                            , oldType = Just "string (generic)"
+                            , newType = Just "string (specific)"
+                            , oldValue = Just "INVALID_CREDENTIALS"
+                            , newValue = Just "PASSWORD_TOO_WEAK | MFA_REQUIRED | ACCOUNT_LOCKED"
+                            }
+                        , Anomalies.FieldChange
+                            { fieldName = "retry_after"
+                            , changeKind = Anomalies.Added
+                            , breaking = False
+                            , path = "error.retry_after"
+                            , changeDescription = "Suggests when client should retry after rate limiting"
+                            , oldType = Nothing
+                            , newType = Just "number (seconds)"
+                            , oldValue = Nothing
+                            , newValue = Just "300"
+                            }
+                        ]
+                    , exampleBefore = "{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"INVALID_CREDENTIALS\",\n    \"message\": \"Login failed\"\n  }\n}"
+                    , exampleAfter = "{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"MFA_REQUIRED\",\n    \"message\": \"Multi-factor authentication required for this account\",\n    \"retry_after\": 0,\n    \"mfa_methods\": [\"sms\", \"totp\", \"email\"]\n  }\n}"
+                    }
+                ]
+          }
+  let issues = V.singleton mockIssue
+
   let currentURL = mconcat ["/p/", pid.toText, "/anomalies?layout=", fromMaybe "false" layoutM, "&ackd=", show ackd, "&archived=", show archived]
       nextFetchUrl = case layoutM of
         Just "slider" -> Nothing
@@ -640,47 +810,236 @@ instance ToHtml IssueVM where
 
 renderIssue :: Bool -> UTCTime -> Text -> Anomalies.IssueL -> Html ()
 renderIssue hideByDefault currTime timeFilter issue = do
-  let (issueTitle, icon) = issueDisplayConfig issue
-  case issue.issueData of
-    Anomalies.IDNewEndpointIssue issueD -> do
-      let endpointTitle = issueD.endpointMethod <> "  " <> issueD.endpointUrlPath
-      issueItem hideByDefault currTime issue timeFilter icon issueTitle endpointTitle Nothing Nothing
-    Anomalies.IDNewShapeIssue issueD -> do
-      let endpointTitle = issueD.endpointMethod <> "  " <> issueD.endpointUrlPath
-          delF = length issueD.deletedFields
-          updF = length issueD.updatedFieldFormats
-          shapeContent = shapeParameterStats_ (length issueD.newUniqueFields) delF (length issueD.updatedFieldFormats)
-          fs = formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" issue.createdAt
-          ls = formatTime defaultTimeLocale "%b. %d, %Y %I:%M:%S %p" issue.eventsAgg.lastSeen
-          tippy = toText $ "First seen: " <> fs <> " <> Last seen: " <> ls
-          anButton :: Html ()
-          anButton =
-            if delF > 0 || updF > 0
-              then span_ [class_ "h-6 flex items-center px-2 py-1 rounded-lg bg-fillStrong text-textInverse-strong", term "data-tippy-content" tippy] "Breaking"
-              else span_ [class_ "h-6 flex items-center px-2 py-1 rounded-lg bg-fillWeak border text-textStrong border-strokeWeak", term "data-tippy-content" tippy] "Incremental"
+  let issueId = Anomalies.anomalyIdText issue.id
+  let timeSinceString = prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
 
-      issueItem hideByDefault currTime issue timeFilter icon issueTitle endpointTitle (Just shapeContent) (Just anButton)
-    Anomalies.IDNewFormatIssue issueD -> do
-      let endpointTitle = issueD.endpointMethod <> "  " <> issueD.endpointUrlPath
-          formatContent = div_ [class_ "block"] do
-            div_ [class_ ""] do
-              div_ do
-                small_ "current format: "
-                span_ $ toHtml issueD.formatType.toText
-              div_ do
-                small_ "previous formats: "
-                span_ "" -- TODO: Should be comma separated list of formats for that field.
-              div_ do
-                small_ "examples: "
-                small_ $ toHtml $ maybe "" (T.intercalate ", " . V.toList) issueD.examples
-      issueItem hideByDefault currTime issue timeFilter icon issueTitle endpointTitle (Just formatContent) Nothing
-    Anomalies.IDNewRuntimeExceptionIssue issueD -> do
-      let endpointTitle = fromMaybe "" $ issueD.requestMethod <> Just "  " <> issueD.requestPath
-          body = div_ [class_ "block"] $ p_ [] $ toHtml issueD.message
-          anBtn = span_ [class_ "h-6 flex items-center px-2 py-1 rounded-lg bg-fillError-strong text-textInverse-strong"] "Error"
+  div_ [class_ $ "flex flex-col py-4 gap-4 itemsListItem border border-strokeWeak rounded-lg p-6 " <> if hideByDefault then "card-round" else "", style_ (if hideByDefault then "display:none" else ""), id_ issueId] do
+    -- Main section with title, badges, and metadata
+    div_ [class_ "flex-1 min-w-0"] do
+      -- Title and badges row
+      div_ [class_ "flex items-center gap-3 mb-3 flex-wrap"] do
+        h3_ [class_ "font-semibold text-textStrong text-base"] $ toHtml issue.title
 
-      issueItem hideByDefault currTime issue timeFilter icon issueTitle endpointTitle (Just body) (Just anBtn)
-    _ -> error "Anomalies.ATField issue should never show up in practice "
+        -- Breaking badge if applicable
+        when (issue.breakingChanges > 0) do
+          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-strong text-fillWhite shadow-sm"] do
+            faSprite_ "exclamation-triangle" "regular" "h-3 w-3"
+            "BREAKING"
+
+        -- Critical badge
+        when issue.critical do
+          span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
+
+        -- Breaking changes gradient badge
+        when (issue.breakingChanges > 0) do
+          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-gradient-to-r from-fillError-strong to-fillWarning-strong text-fillWhite shadow-sm border-l-4 border-l-fillError-strong"] do
+            faSprite_ "exclamation-triangle" "regular" "h-3 w-3 mr-1"
+            "Breaking Changes"
+
+      -- Metadata row (method, endpoint, service, time)
+      div_ [class_ "flex items-center gap-4 text-sm text-textWeak mb-3 flex-wrap"] do
+        case issue.issueData of
+          Anomalies.IDNewShapeIssue issueD -> do
+            div_ [class_ "flex items-center gap-2"] do
+              span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillSuccess-strong text-fillWhite shadow-sm"] $ toHtml issueD.endpointMethod
+              span_ [class_ "font-mono bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml issueD.endpointUrlPath
+          _ -> pass
+
+        span_ [class_ "flex items-center gap-1"] do
+          div_ [class_ "w-3 h-3 bg-fillYellow rounded-sm"] ""
+          span_ [class_ "text-textStrong"] $ toHtml issue.service
+
+        span_ [class_ "text-textWeak"] $ toHtml timeSinceString
+
+      -- Description
+      p_ [class_ "text-sm text-textWeak mb-4 bg-fillWeak p-3 rounded leading-relaxed"] "Authentication flow updated with enhanced security requirements"
+
+      -- Statistics row
+      div_ [class_ "flex items-center gap-4 text-sm mb-4 p-3 bg-fillWeak rounded-lg"] do
+        span_ [class_ "text-textWeak"] do
+          strong_ [class_ "text-textStrong"] $ toHtml $ show issue.eventsAgg.count
+          " total changes"
+
+        div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+
+        span_ [class_ "text-textWeak"] do
+          strong_ [class_ "text-fillError-strong"] $ toHtml $ show issue.breakingChanges
+          " breaking"
+          span_ [class_ "text-xs ml-1 bg-fillError-weak text-fillError-strong px-1.5 py-0.5 rounded"] do
+            toHtml $ show (round (fromIntegral issue.breakingChanges / fromIntegral issue.eventsAgg.count * 100 :: Float) :: Int) <> "%"
+
+        div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+
+        span_ [class_ "text-textWeak"] do
+          strong_ [class_ "text-fillSuccess-strong"] $ toHtml $ show issue.incrementalChanges
+          " incremental"
+
+        div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+
+        span_ [class_ "text-textWeak"] do
+          strong_ [class_ "text-textBrand"] $ toHtml $ show issue.affectedPayloads
+          " payloads affected"
+
+      -- Impact warning box
+      div_ [class_ "mb-4 p-4 border-l-4 border-l-fillWarning-strong bg-fillWarning-weak rounded-lg"] do
+        div_ [class_ "flex items-start gap-3"] do
+          faSprite_ "exclamation-circle" "regular" "h-5 w-5 text-fillWarning-strong mt-0.5 flex-shrink-0"
+          div_ [class_ "flex-1"] do
+            div_ [class_ "flex items-center gap-3 mb-2 flex-wrap"] do
+              span_ [class_ "font-medium text-fillWarning-strong"] $ "Impact: " <> toHtml (show issue.affectedClients) <> " clients, " <> toHtml issue.estimatedRequests
+              span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] $ toHtml issue.migrationComplexity <> " complexity"
+            p_ [class_ "text-sm text-fillWarning-strong leading-relaxed font-medium"] $ toHtml issue.recommendedAction
+
+      -- Collapsible payload changes using details/summary
+      details_ [class_ "group mb-4"] do
+        summary_ [class_ "inline-flex items-center cursor-pointer whitespace-nowrap text-sm font-medium transition-all rounded-md gap-1.5 text-textBrand hover:text-textBrand/80 list-none"] do
+          faSprite_ "chevron-right" "regular" "h-4 w-4 mr-1 transition-transform group-open:rotate-90"
+          "View detailed payload changes"
+
+        -- Payload details content
+        div_ [class_ "mt-4 border border-strokeWeak rounded-lg overflow-hidden bg-fillWhite"] do
+          renderPayloadChanges issue
+
+      -- Action buttons
+      div_ [class_ "flex items-center gap-3 mt-4 pt-4 border-t border-strokeWeak"] do
+        button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 text-textBrand hover:text-textBrand/80 hover:bg-fillBrand-weak"] do
+          faSprite_ "eye" "regular" "w-4 h-4 mr-1"
+          "view related logs"
+
+        button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-fillWarning-strong border-strokeWarning-strong hover:bg-fillWarning-weak"] do
+          faSprite_ "exclamation-triangle" "regular" "h-4 w-4 mr-1"
+          "Review Impact"
+
+        button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-textBrand border-strokeBrand-strong hover:bg-fillBrand-weak"] do
+          faSprite_ "code" "regular" "w-4 h-4 mr-1"
+          "View Full Schema"
+
+
+-- Render payload changes section
+renderPayloadChanges :: Anomalies.IssueL -> Html ()
+renderPayloadChanges issue = do
+  let requestPayloads = getAeson issue.requestPayloads
+  let responsePayloads = getAeson issue.responsePayloads
+
+  -- Tabs for request/response payloads
+  div_ [class_ "tabs tabs-boxed tabs-outline", role_ "tablist"] do
+    -- Response tab (default selected)
+    input_ [type_ "radio", name_ $ "payload-tabs-" <> Anomalies.anomalyIdText issue.id, class_ "tab", checked_, Aria.label_ $ "Response Payloads (" <> show (length responsePayloads) <> ")"]
+    div_ [class_ "tab-content p-4 space-y-4"] do
+      forM_ responsePayloads $ renderPayloadChange
+
+    -- Request tab
+    input_ [type_ "radio", name_ $ "payload-tabs-" <> Anomalies.anomalyIdText issue.id, class_ "tab", Aria.label_ $ "Request Payloads (" <> show (length requestPayloads) <> ")"]
+    div_ [class_ "tab-content p-4 space-y-4"] do
+      forM_ requestPayloads $ renderPayloadChange
+
+
+-- Render individual payload change
+renderPayloadChange :: Anomalies.PayloadChange -> Html ()
+renderPayloadChange payload = do
+  div_ [class_ "border border-strokeWeak rounded-lg p-4 bg-fillWeak"] do
+    -- Header with status/method badges
+    div_ [class_ "flex items-center gap-3 mb-3 flex-wrap"] do
+      -- Status code badge
+      case payload.statusCode of
+        Just code -> do
+          let (bgClass, textClass) = case code of
+                200 -> ("bg-fillSuccess-strong", "text-fillWhite")
+                401 -> ("bg-fillWarning-strong", "text-fillWhite")
+                422 -> ("bg-fillWarning-strong", "text-fillWhite")
+                _ -> ("bg-fillWeak", "text-textStrong")
+          span_ [class_ $ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 shadow-sm " <> bgClass <> " " <> textClass] do
+            toHtml $ show code <> " " <> fromMaybe "" payload.statusText
+        Nothing -> whenJust payload.method $ \method ->
+          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillSuccess-strong text-fillWhite shadow-sm"] $ toHtml method
+
+      -- Content type badge
+      span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-strokeWeak text-textWeak bg-fillWhite"] $ toHtml payload.contentType
+
+      -- Change type badge
+      case payload.changeType of
+        Anomalies.Breaking -> span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillError-strong text-fillWhite shadow-sm"] do
+          faSprite_ "circle-x" "regular" "h-3 w-3 mr-1"
+          "Breaking"
+        Anomalies.Safe -> span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillSuccess-strong text-fillWhite shadow-sm"] do
+          faSprite_ "circle-check" "regular" "h-3 w-3 mr-1"
+          "Safe"
+        Anomalies.Incremental -> span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillInformation-weak text-fillInformation-strong border-strokeInformation-strong"] "Incremental"
+
+    -- Description
+    p_ [class_ "text-sm text-textWeak mb-4 leading-relaxed"] $ toHtml payload.description
+
+    -- Changes section
+    when (not $ null payload.changes) do
+      div_ [class_ "space-y-3"] do
+        div_ [class_ "flex items-center gap-2 pb-2 border-b border-strokeWeak"] do
+          faSprite_ "code" "regular" "h-4 w-4 text-iconNeutral"
+          span_ [class_ "font-medium text-textStrong"] $ toHtml $ maybe "Changes" (\code -> show code <> " Response Changes") payload.statusCode
+          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-xs border-strokeWeak text-textWeak bg-fillWeak"] $ toHtml payload.contentType
+
+        -- Individual field changes
+        div_ [class_ "space-y-3"] do
+          forM_ payload.changes $ renderFieldChange
+
+    -- Example payloads
+    div_ [class_ "mt-4 space-y-3"] do
+      span_ [class_ "text-sm font-medium text-textStrong"] "Example Payloads:"
+      div_ [class_ "grid grid-cols-2 gap-4"] do
+        -- Before
+        div_ [] do
+          span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "Before:"
+          pre_ [class_ "bg-fillError-weak text-fillError-strong p-3 rounded text-xs overflow-x-auto border border-strokeError-weak"] $ toHtml payload.exampleBefore
+        -- After
+        div_ [] do
+          span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "After:"
+          pre_ [class_ "bg-fillSuccess-weak text-fillSuccess-strong p-3 rounded text-xs overflow-x-auto border border-strokeSuccess-weak"] $ toHtml payload.exampleAfter
+
+
+-- Render individual field change
+renderFieldChange :: Anomalies.FieldChange -> Html ()
+renderFieldChange change = do
+  div_ [class_ "border border-strokeWeak rounded-lg p-4 bg-fillWhite"] do
+    -- Field name and badges
+    div_ [class_ "flex items-start justify-between gap-4 mb-3"] do
+      div_ [class_ "flex items-center gap-2 flex-wrap"] do
+        span_ [class_ "font-mono text-sm bg-fillWeak px-2 py-1 rounded text-textStrong"] $ toHtml change.path
+
+        -- Change kind badge
+        case change.changeKind of
+          Anomalies.Modified -> span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-fillInformation-strong border-strokeInformation-strong bg-fillInformation-weak"] "modified"
+          Anomalies.Added -> span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-fillSuccess-strong border-strokeSuccess-strong bg-fillSuccess-weak"] "added"
+          Anomalies.Removed -> span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-fillError-strong border-strokeError-strong bg-fillError-weak"] "removed"
+
+        -- Breaking badge if applicable
+        when change.breaking do
+          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillError-strong text-fillWhite shadow-sm"] do
+            faSprite_ "exclamation-triangle" "regular" "h-3 w-3 mr-1"
+            "Breaking"
+
+    -- Description
+    p_ [class_ "text-sm text-textWeak mb-3 leading-relaxed"] $ toHtml change.changeDescription
+
+    -- Type/Value changes
+    div_ [class_ "space-y-3"] do
+      -- Types (if changed)
+      when (isJust change.oldType || isJust change.newType) do
+        div_ [class_ "grid grid-cols-2 gap-4"] do
+          whenJust change.oldType $ \oldType -> div_ [] do
+            span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "Previous Type:"
+            code_ [class_ "block bg-fillError-weak text-fillError-strong px-3 py-2 rounded text-xs border border-strokeError-weak"] $ toHtml oldType
+          whenJust change.newType $ \newType -> div_ [] do
+            span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "New Type:"
+            code_ [class_ "block bg-fillSuccess-weak text-fillSuccess-strong px-3 py-2 rounded text-xs border border-strokeSuccess-weak"] $ toHtml newType
+
+      -- Values (if changed)
+      when (isJust change.oldValue || isJust change.newValue) do
+        div_ [class_ "grid grid-cols-2 gap-4"] do
+          whenJust change.oldValue $ \oldVal -> div_ [] do
+            span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "Previous Value:"
+            code_ [class_ "block bg-fillError-weak text-fillError-strong px-3 py-2 rounded text-xs font-mono whitespace-pre-wrap border border-strokeError-weak"] $ toHtml oldVal
+          whenJust change.newValue $ \newVal -> div_ [] do
+            span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "New Value:"
+            code_ [class_ "block bg-fillSuccess-weak text-fillSuccess-strong px-3 py-2 rounded text-xs font-mono whitespace-pre-wrap border border-strokeSuccess-weak"] $ toHtml newVal
 
 
 anomalyActionButtons :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Bool -> Text -> Html ()
@@ -696,7 +1055,7 @@ anomalyAcknowlegeButton pid aid acked host = do
   a_
     [ class_
         $ "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
-        <> (if acked then "bg-green-100 text-green-900" else "btn-primary")
+          <> (if acked then "bg-green-100 text-green-900" else "btn-primary")
     , term "data-tippy-content" "acknowlege anomaly"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -712,7 +1071,7 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_
         $ "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
-        <> (if archived then " bg-green-100 text-green-900" else "btn-primary")
+          <> (if archived then " bg-green-100 text-green-900" else "btn-primary")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"

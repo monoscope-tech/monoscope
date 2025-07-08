@@ -599,4 +599,25 @@
   <symbol id="tree-corner" viewBox="0 0 32 32">
     <path d="M0 16 L32 16" stroke="currentColor" stroke-width="2" fill="none"/>
   </symbol>
+  
+  <!-- Missing icons for anomaly list -->
+  <symbol id="exclamation-triangle" viewBox="0 0 512 512">
+    <!--!Font Awesome Free 6.5.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2024 Fonticons, Inc.-->
+    <path d="M248.4 84.3c1.6-2.7 4.5-4.3 7.6-4.3s6 1.6 7.6 4.3L461.9 410c1.4 2.3 2.1 4.9 2.1 7.5c0 8-6.5 14.5-14.5 14.5H62.5c-8 0-14.5-6.5-14.5-14.5c0-2.7 .7-5.3 2.1-7.5L248.4 84.3zm-41-25L9.1 385c-6 9.8-9.1 21-9.1 32.5C0 443.9 21.6 465.5 48 465.5H464c26.4 0 48-21.6 48-48c0-11.5-3.1-22.7-9.1-32.5L304.6 59.3C294.3 42.4 275.9 32 256 32s-38.3 10.4-48.6 27.3zM288 368a32 32 0 1 0 -64 0 32 32 0 1 0 64 0zm-8-184c0-13.3-10.7-24-24-24s-24 10.7-24 24v96c0 13.3 10.7 24 24 24s24-10.7 24-24V184z"/>
+  </symbol>
+  
+  <symbol id="exclamation-circle" viewBox="0 0 512 512">
+    <!--!Font Awesome Free 6.5.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2024 Fonticons, Inc.-->
+    <path d="M256 48a208 208 0 1 1 0 416 208 208 0 1 1 0-416zm0 464A256 256 0 1 0 256 0a256 256 0 1 0 0 512zm0-384c-13.3 0-24 10.7-24 24V264c0 13.3 10.7 24 24 24s24-10.7 24-24V152c0-13.3-10.7-24-24-24zM224 352a32 32 0 1 0 64 0 32 32 0 1 0 -64 0z"/>
+  </symbol>
+  
+  <symbol id="circle-x" viewBox="0 0 512 512">
+    <!--!Font Awesome Free 6.5.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2024 Fonticons, Inc.-->
+    <path d="M256 48a208 208 0 1 1 0 416 208 208 0 1 1 0-416zm0 464A256 256 0 1 0 256 0a256 256 0 1 0 0 512zM175 175c-9.4 9.4-9.4 24.6 0 33.9l47 47-47 47c-9.4 9.4-9.4 24.6 0 33.9s24.6 9.4 33.9 0l47-47 47 47c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-47-47 47-47c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0l-47 47-47-47c-9.4-9.4-24.6-9.4-33.9 0z"/>
+  </symbol>
+  
+  <symbol id="code" viewBox="0 0 640 512">
+    <!--!Font Awesome Free 6.5.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2024 Fonticons, Inc.-->
+    <path d="M228.9 182.6c-9.3-9.7-24.5-10-34.2-.7L41 319c-12.1 11.8-12.1 31.3 0 43L194.7 499c9.7 9.3 24.9 9 34.2-.7s9-24.9-.7-34.2L95 337l133.1-127.1c9.7-9.3 10-24.5 .7-34.2zM445.3 181.9c-9.7-9.3-24.9-9-34.2 .7s-10 24.5-.7 34.2L545 337 411.1 464.1c-9.7 9.3-10 24.5-.7 34.2s24.5 10 34.2 .7L599 362c12.1-11.8 12.1-31.3 0-43L445.3 181.9z"/>
+  </symbol>
 </svg>
