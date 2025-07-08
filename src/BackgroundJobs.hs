@@ -19,6 +19,7 @@ import Data.Vector qualified as V
 import Data.Vector.Algorithms qualified as VAA
 import Database.PostgreSQL.Entity.DBT (execute, query, withPool)
 import Database.PostgreSQL.Simple (Only (Only), Query, SomePostgreSqlException)
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact qualified as PTR
 import Effectful (Eff, (:>))
@@ -694,6 +695,13 @@ emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email u
 --     Apitoolkit team
 --               |]
 
+-- Group anomalies by endpoint and aggregate metrics
+groupAnomaliesByEndpoint :: V.Vector Anomalies.Issue -> V.Vector Anomalies.Issue
+groupAnomaliesByEndpoint issues = 
+  let grouped = V.groupBy (\a b -> a.endpointHash == b.endpointHash) issues
+      merged = V.map Anomalies.mergeIssues grouped
+  in merged
+
 convertAnomaliesToIssues :: V.Vector Anomalies.AnomalyVM -> V.Vector Endpoints.Endpoint -> V.Vector Anomalies.Issue
 convertAnomaliesToIssues ans ens = V.catMaybes $ (\e -> V.find (\a -> e.hash `T.isPrefixOf` a.targetHash) ans >>= Anomalies.convertAnomalyToIssue (Just e.host)) <$> ens
 
@@ -708,9 +716,22 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
       users <- dbtToEff $ Projects.usersByProjectId pid
       project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
       let endpointsPaths = (\e -> e.method <> " " <> e.urlPath) <$> endpoints
-          anIssues = convertAnomaliesToIssues anomaliesVM endpoints
+          anIssues = groupAnomaliesByEndpoint $ convertAnomaliesToIssues anomaliesVM endpoints
           targetHash = fromMaybe "" $ viaNonEmpty head (V.toList targetHashes)
-      _ <- dbtToEff $ Anomalies.insertIssues anIssues
+      -- Process each grouped issue
+      forM_ anIssues \issue -> do
+        existingIssueM <- dbtToEff $ Anomalies.findOpenIssueForEndpoint pid issue.endpointHash
+        case existingIssueM of
+          Just existingIssue -> do
+            -- Update existing issue with new anomaly data
+            let Aeson reqPayloads = issue.requestPayloads
+                Aeson respPayloads = issue.responsePayloads
+            _ <- dbtToEff $ Anomalies.updateIssueWithNewAnomaly existingIssue issue.anomalyHashes reqPayloads respPayloads
+            pass
+          Nothing -> do
+            -- Create new issue
+            _ <- dbtToEff $ Anomalies.insertIssues (V.singleton issue)
+            pass
       let alert = EndpointAlert project.title endpointsPaths targetHash
       forM_ project.notificationsChannel \case
         Projects.NSlack -> sendSlackAlert alert pid project.title
@@ -745,7 +766,21 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
         -- users <- dbtToEff $ Projects.usersByProjectId pid
         project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
         pure anomaly{Anomalies.anomalyType = anomalyType, Anomalies.shapeDeletedFields = V.fromList deletedFields, Anomalies.shapeUpdatedFieldFormats = updatedFieldFormats, Anomalies.shapeNewUniqueFields = V.fromList newFields}
-      _ <- dbtToEff $ Anomalies.insertIssues $ convertAnomaliesToIssues anomalies endpoints
+      let anIssues = groupAnomaliesByEndpoint $ convertAnomaliesToIssues anomalies endpoints
+      -- Process each grouped issue
+      forM_ anIssues \issue -> do
+        existingIssueM <- dbtToEff $ Anomalies.findOpenIssueForEndpoint pid issue.endpointHash
+        case existingIssueM of
+          Just existingIssue -> do
+            -- Update existing issue with new anomaly data
+            let Aeson reqPayloads = issue.requestPayloads
+                Aeson respPayloads = issue.responsePayloads
+            _ <- dbtToEff $ Anomalies.updateIssueWithNewAnomaly existingIssue issue.anomalyHashes reqPayloads respPayloads
+            pass
+          Nothing -> do
+            -- Create new issue
+            _ <- dbtToEff $ Anomalies.insertIssues (V.singleton issue)
+            pass
       pass
     Anomalies.ATFormat -> do
       -- pass
@@ -754,7 +789,21 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
       endpoints <- dbtToEff $ Endpoints.endpointsByHashes pid $ T.take 8 <$> targetHashes
       anomaliesVM <- dbtToEff $ Anomalies.getAnomaliesVM pid targetHashes
       project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-      _ <- dbtToEff $ Anomalies.insertIssues $ convertAnomaliesToIssues anomaliesVM endpoints
+      let anIssues = groupAnomaliesByEndpoint $ convertAnomaliesToIssues anomaliesVM endpoints
+      -- Process each grouped issue
+      forM_ anIssues \issue -> do
+        existingIssueM <- dbtToEff $ Anomalies.findOpenIssueForEndpoint pid issue.endpointHash
+        case existingIssueM of
+          Just existingIssue -> do
+            -- Update existing issue with new anomaly data
+            let Aeson reqPayloads = issue.requestPayloads
+                Aeson respPayloads = issue.responsePayloads
+            _ <- dbtToEff $ Anomalies.updateIssueWithNewAnomaly existingIssue issue.anomalyHashes reqPayloads respPayloads
+            pass
+          Nothing -> do
+            -- Create new issue
+            _ <- dbtToEff $ Anomalies.insertIssues (V.singleton issue)
+            pass
       pass
     Anomalies.ATRuntimeException -> do
       users <- dbtToEff $ Projects.usersByProjectId pid
@@ -765,7 +814,9 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
         dbtToEff
           $ Anomalies.insertIssues
           $ ( \err ->
-                Anomalies.Issue
+                let errorType = err.errorData.errorType
+                    rootError = if T.null err.errorData.rootErrorType then errorType else err.errorData.rootErrorType
+                in Anomalies.Issue
                   { id = issueId
                   , createdAt = err.createdAt
                   , updatedAt = err.updatedAt
@@ -777,6 +828,22 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
                   , acknowlegedBy = Nothing
                   , endpointId = Nothing
                   , archivedAt = Nothing
+                  -- Enhanced fields for runtime exceptions
+                  , title = rootError <> " - " <> errorType
+                  , service = Anomalies.detectService Nothing err.errorData.requestPath
+                  , critical = True  -- Runtime exceptions are always critical
+                  , breakingChanges = 0  -- Not applicable for runtime errors
+                  , incrementalChanges = 0
+                  , affectedPayloads = 0
+                  , affectedClients = 0
+                  , estimatedRequests = "N/A"
+                  , migrationComplexity = "low"
+                  , recommendedAction = "Investigate error cause and implement fix. Check stack trace for details."
+                  , requestPayloads = Aeson []
+                  , responsePayloads = Aeson []
+                  -- New fields for anomaly grouping
+                  , anomalyHashes = V.singleton err.hash
+                  , endpointHash = ""  -- Runtime exceptions don't group by endpoint
                   }
             )
             <$> errs
