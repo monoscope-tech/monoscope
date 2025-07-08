@@ -23,7 +23,8 @@ import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime, parseTimeM, utc, utcToZonedTime, zonedTimeToUTC)
+import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime, parseTimeM, utc, utcToZonedTime)
+import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (execute)
@@ -47,7 +48,7 @@ import Models.Apis.Fields.Types (
  )
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.RequestDumps qualified as RequestDumps
-import Models.Apis.Shapes (getShapeFields)
+import Models.Apis.Shapes (ShapeId(..), getShapeFields)
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -187,8 +188,181 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
   currTime <- liftIO getCurrentTime
 
   let fLimit = 10
-  -- Fetch real data from database
-  issues <- dbtToEff $ Anomalies.selectIssues pid endpointM (Just ackd) (Just archived) sortM (Just fLimit) (pageInt * fLimit)
+  -- Toggle between mock data and real database queries
+  let useMockData = True  -- Set to False to use real database data
+  
+  issues <- if useMockData
+    then do
+      -- Mock data for new UI
+      let mockCreatedTime = utcToZonedTime utc currTime
+      let mockIssue =
+        Anomalies.IssueL
+          { id = Anomalies.AnomalyId $ UUID.fromString "00000000-0000-0000-0000-000000000001" & fromMaybe (error "Invalid UUID")
+          , createdAt = mockCreatedTime
+          , updatedAt = mockCreatedTime
+          , projectId = pid
+          , acknowlegedAt = Nothing
+          , anomalyType = Anomalies.ATShape
+          , targetHash = "hash123"
+          , issueData =
+              Anomalies.IDNewShapeIssue
+                $ Anomalies.NewShapeIssue
+                  { id = Shapes.ShapeId $ UUID.fromString "00000000-0000-0000-0000-000000000002" & fromMaybe (error "Invalid UUID")
+                  , endpointId = Endpoints.EndpointId $ UUID.fromString "00000000-0000-0000-0000-000000000003" & fromMaybe (error "Invalid UUID")
+                  , endpointMethod = "POST"
+                  , endpointUrlPath = "/api/v1/auth/login"
+                  , host = "api.example.com"
+                  , newUniqueFields = V.fromList ["mfa_token", "device_fingerprint", "password"]
+                  , deletedFields = V.empty
+                  , updatedFieldFormats = V.fromList ["password"]
+                  }
+          , endpointId = Nothing
+          , acknowlegedBy = Nothing
+          , archivedAt = Nothing
+          , eventsAgg =
+              Anomalies.IssueEventAgg
+                { count = 8
+                , lastSeen = currTime
+                }
+          , -- New fields
+            title = "User Authentication Schema Update"
+          , service = "auth-service"
+          , critical = True
+          , breakingChanges = 5
+          , incrementalChanges = 3
+          , affectedPayloads = 4
+          , affectedClients = 342
+          , estimatedRequests = "~50K/day"
+          , migrationComplexity = "high"
+          , recommendedAction = "Implement graceful fallback for legacy clients and schedule migration timeline"
+          , -- New grouping fields
+            anomalyHashes = V.fromList ["hash123", "hash456", "hash789"]
+          , endpointHash = "endpoint123"
+          , -- Payload changes
+            requestPayloads =
+              Aeson
+                [ Anomalies.PayloadChange
+                    { method = Just "POST"
+                    , statusCode = Nothing
+                    , statusText = Nothing
+                    , contentType = "application/json"
+                    , changeType = Anomalies.Breaking
+                    , description = "Authentication flow updated with enhanced security requirements"
+                    , changes =
+                        [ Anomalies.FieldChange
+                            { fieldName = "password"
+                            , changeKind = Anomalies.Modified
+                            , breaking = True
+                            , path = "credentials.password"
+                            , changeDescription = "Minimum length increased, special character requirement added"
+                            , oldType = Just "string (min: 6)"
+                            , newType = Just "string (min: 12, requires: special char)"
+                            , oldValue = Just "{\n  \"minLength\": 6,\n  \"pattern\": null\n}"
+                            , newValue = Just "{\n  \"minLength\": 12,\n  \"pattern\": \"^(?=.*[!@#$%^&*])\",\n  \"required\": true\n}"
+                            }
+                        , Anomalies.FieldChange
+                            { fieldName = "mfa_token"
+                            , changeKind = Anomalies.Added
+                            , breaking = True
+                            , path = "credentials.mfa_token"
+                            , changeDescription = "Multi-factor authentication token now required for high-privilege accounts"
+                            , oldType = Nothing
+                            , newType = Just "string (conditional)"
+                            , oldValue = Nothing
+                            , newValue = Just "{\n  \"type\": \"string\",\n  \"required\": \"conditional\",\n  \"condition\": \"user.role === 'admin'\"\n}"
+                            }
+                        , Anomalies.FieldChange
+                            { fieldName = "device_fingerprint"
+                            , changeKind = Anomalies.Added
+                            , breaking = False
+                            , path = "metadata.device_fingerprint"
+                            , changeDescription = "Optional device identification for security analytics"
+                            , oldType = Nothing
+                            , newType = Just "object"
+                            , oldValue = Nothing
+                            , newValue = Just "{\n  \"browser\": \"string\",\n  \"os\": \"string\",\n  \"screen\": \"string\",\n  \"timezone\": \"string\"\n}"
+                            }
+                        ]
+                    , exampleBefore = "{\n  \"email\": \"user@example.com\",\n  \"password\": \"pass123\",\n  \"remember_me\": true\n}"
+                    , exampleAfter = "{\n  \"email\": \"user@example.com\",\n  \"password\": \"SecureP@ss123!\",\n  \"mfa_token\": \"123456\",\n  \"remember_me\": true,\n  \"device_fingerprint\": {\n    \"browser\": \"Chrome/122.0\",\n    \"os\": \"macOS 14.2\",\n    \"screen\": \"1920x1080\",\n    \"timezone\": \"America/New_York\"\n  }\n}"
+                    }
+                ]
+          , responsePayloads =
+              Aeson
+                [ Anomalies.PayloadChange
+                    { method = Nothing
+                    , statusCode = Just 200
+                    , statusText = Just "OK"
+                    , contentType = "application/json"
+                    , changeType = Anomalies.Incremental
+                    , description = "Successful authentication response"
+                    , changes =
+                        [ Anomalies.FieldChange
+                            { fieldName = "access_token"
+                            , changeKind = Anomalies.Modified
+                            , breaking = False
+                            , path = "data.access_token"
+                            , changeDescription = "Token format updated to JWT with enhanced claims"
+                            , oldType = Just "string (opaque)"
+                            , newType = Just "string (JWT)"
+                            , oldValue = Just "abc123xyz789..."
+                            , newValue = Just "eyJhbGciOiJIUzI1NiIs..."
+                            }
+                        , Anomalies.FieldChange
+                            { fieldName = "session_info"
+                            , changeKind = Anomalies.Added
+                            , breaking = False
+                            , path = "data.session_info"
+                            , changeDescription = "Enhanced session metadata for client applications"
+                            , oldType = Nothing
+                            , newType = Just "object"
+                            , oldValue = Nothing
+                            , newValue = Just "{\n  \"expires_at\": \"2024-12-31T23:59:59Z\",\n  \"permissions\": [\"read\", \"write\"],\n  \"session_id\": \"uuid\"\n}"
+                            }
+                        ]
+                    , exampleBefore = "{\n  \"success\": true,\n  \"data\": {\n    \"access_token\": \"abc123xyz789random\",\n    \"user_id\": \"12345\",\n    \"expires_in\": 3600\n  }\n}"
+                    , exampleAfter = "{\n  \"success\": true,\n  \"data\": {\n    \"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...\",\n    \"user_id\": \"12345\",\n    \"expires_in\": 3600,\n    \"session_info\": {\n      \"expires_at\": \"2024-12-31T23:59:59Z\",\n      \"permissions\": [\"read\", \"write\", \"admin\"],\n      \"session_id\": \"550e8400-e29b-41d4-a716-446655440000\"\n    }\n  }\n}"
+                    }
+                , Anomalies.PayloadChange
+                    { method = Nothing
+                    , statusCode = Just 401
+                    , statusText = Just "Unauthorized"
+                    , contentType = "application/json"
+                    , changeType = Anomalies.Breaking
+                    , description = "Authentication failed"
+                    , changes =
+                        [ Anomalies.FieldChange
+                            { fieldName = "error_code"
+                            , changeKind = Anomalies.Modified
+                            , breaking = True
+                            , path = "error.code"
+                            , changeDescription = "More specific error codes for different failure types"
+                            , oldType = Just "string (generic)"
+                            , newType = Just "string (specific)"
+                            , oldValue = Just "INVALID_CREDENTIALS"
+                            , newValue = Just "PASSWORD_TOO_WEAK | MFA_REQUIRED | ACCOUNT_LOCKED"
+                            }
+                        , Anomalies.FieldChange
+                            { fieldName = "retry_after"
+                            , changeKind = Anomalies.Added
+                            , breaking = False
+                            , path = "error.retry_after"
+                            , changeDescription = "Suggests when client should retry after rate limiting"
+                            , oldType = Nothing
+                            , newType = Just "number (seconds)"
+                            , oldValue = Nothing
+                            , newValue = Just "300"
+                            }
+                        ]
+                    , exampleBefore = "{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"INVALID_CREDENTIALS\",\n    \"message\": \"Login failed\"\n  }\n}"
+                    , exampleAfter = "{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"MFA_REQUIRED\",\n    \"message\": \"Multi-factor authentication required for this account\",\n    \"retry_after\": 0,\n    \"mfa_methods\": [\"sms\", \"totp\", \"email\"]\n  }\n}"
+                    }
+                ]
+          }
+      pure $ V.singleton mockIssue
+    else
+      -- Fetch real data from database
+      dbtToEff $ Anomalies.selectIssues pid endpointM (Just ackd) (Just archived) sortM (Just fLimit) (pageInt * fLimit)
 
   let currentURL = mconcat ["/p/", pid.toText, "/anomalies?layout=", fromMaybe "false" layoutM, "&ackd=", show ackd, "&archived=", show archived]
       nextFetchUrl = case layoutM of
