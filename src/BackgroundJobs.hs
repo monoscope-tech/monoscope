@@ -699,7 +699,7 @@ emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email u
 groupAnomaliesByEndpoint :: V.Vector Anomalies.Issue -> V.Vector Anomalies.Issue
 groupAnomaliesByEndpoint issues = 
   let grouped = V.groupBy (\a b -> a.endpointHash == b.endpointHash) issues
-      merged = V.map Anomalies.mergeIssues grouped
+      merged = V.fromList $ map (Anomalies.mergeIssues . V.fromList) grouped
   in merged
 
 convertAnomaliesToIssues :: V.Vector Anomalies.AnomalyVM -> V.Vector Endpoints.Endpoint -> V.Vector Anomalies.Issue
