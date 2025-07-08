@@ -78,6 +78,13 @@ data EnvConfig = EnvConfig
   , chartShotUrl :: Text
   , hostUrl :: Text
   , apitoolkitPusherServiceAccountB64 :: Text
+  , twilioAccountSid :: Text
+  , twilioAuthToken :: Text
+  , whatsappFromNumber :: Text
+  , whatsappErrorTemplate :: Text
+  , whatsappEndpointTemplate :: Text
+  , whatsappAllReportTemplate :: Text
+  , whatsappErrorReportTemplate :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)

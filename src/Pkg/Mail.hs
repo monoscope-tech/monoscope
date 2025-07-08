@@ -1,8 +1,9 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendDiscordNotif, sendSlackAlert, NotificationAlerts (..), sendDiscordAlert) where
+module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendWhatsAppAlert, sendDiscordNotif, sendSlackAlert, NotificationAlerts (..), sendDiscordAlert) where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Effectful.Notify qualified as Notify
 import Data.Pool ()
@@ -98,6 +99,47 @@ sendSlackAlert alert pid pTitle = do
     sendAlert :: Notify.Notify :> es => Text -> AE.Value -> Eff es ()
     sendAlert webhookUrl content =
       Notify.sendNotification $ Notify.slackNotification webhookUrl content
+
+
+sendWhatsAppAlert :: (Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> V.Vector Text -> Eff es ()
+sendWhatsAppAlert alert pid pTitle tos = do
+  appCtx <- ask @Config.AuthContext
+  case alert of
+    RuntimeErrorAlert err -> do
+      let template = appCtx.config.whatsappErrorTemplate
+          url = pid.toText <> "/anomalies/by_hash/" <> fromMaybe "" err.hash
+          contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= ("*" <>err.errorType <> "*"), "3" AE..= ("`" <> err.message <> "`"), "4" AE..= url]
+      sendAlert template contentVars
+      pass
+    EndpointAlert{..} -> do
+      let template = appCtx.config.whatsappEndpointTemplate
+          url = pid.toText <> "/anomalies/by_hash/" <> endpointHash
+          contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= T.intercalate "." ((\x-> "`" <> x <> "`") <$> V.toList endpoints), "3" AE..= url]
+      sendAlert template contentVars
+      pass
+    ReportAlert{..} -> do
+      let template = appCtx.config.whatsappAllReportTemplate
+          templateErr = appCtx.config.whatsappErrorReportTemplate
+          urlVar = fromMaybe "" $ viaNonEmpty last $ T.splitOn "/p/" reportUrl
+          cUrl = fromMaybe "" $ viaNonEmpty last $ T.splitOn "?" allChartUrl
+          eUrl = fromMaybe "" $ viaNonEmpty last $ T.splitOn "?" errorChartUrl
+          contentVars =
+            KEM.fromList
+              [ "1" AE..= reportType
+              , "2" AE..= ("*" <> pTitle <> "*")
+              , "4" AE..= ("`" <> T.take 10 startTime <> "`")
+              , "5" AE..= ("`" <> T.take 10 endTime <> "`")
+              , "7" AE..= urlVar
+              ]
+      sendAlert template (AE.Object $ contentVars <> KEM.fromList ["3" AE..= ("*" <> show totalEvents <> "*"), "6" AE..= cUrl])
+      sendAlert templateErr (AE.Object $ contentVars <> KEM.fromList ["3" AE..= ("*" <> show totalErrors <> "*"), "6" AE..= eUrl])
+      pass
+    ShapeAlert -> pass
+  where
+    sendAlert :: Notify.Notify :> es => Text -> AE.Value -> Eff es ()
+    sendAlert template vars =
+      forM_ tos $ \to ->
+        Notify.sendNotification $ Notify.whatsappNotification template to vars
 
 
 slackReportAlert :: Text -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> Text -> AE.Value

@@ -27,18 +27,22 @@ module Data.Effectful.Notify (
   -- * Smart constructors
   emailNotification,
   slackNotification,
+  whatsappNotification,
   discordNotification,
 ) where
 
 import Control.Lens ((.~))
+import Control.Lens.Setter ((?~))
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
+import Data.ByteString.Lazy qualified as BL
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Log qualified
-import Network.Wreq (defaults, header, postWith)
+import Network.Wreq (FormParam ((:=)), auth, basicAuth, defaults, header, postWith)
+import Network.Wreq.Types (FormParam)
 import Relude hiding (Reader, State, ask, get, modify, put, runState)
 import System.Config qualified as Config
 
@@ -69,10 +73,20 @@ data DiscordData = DiscordData
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
+data WhatsAppData = WhatsAppData
+  { template :: Text
+  , contentVariables :: AE.Value
+  , to :: Text
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
 data Notification
   = EmailNotification EmailData
   | SlackNotification SlackData
   | DiscordNotification DiscordData
+  | WhatsAppNotification WhatsAppData
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -110,6 +124,11 @@ slackNotification webhookUrl message =
 discordNotification :: Text -> AE.Value -> Notification
 discordNotification channelId content =
   DiscordNotification DiscordData{..}
+
+
+whatsappNotification :: Text -> Text -> AE.Value -> Notification
+whatsappNotification template to contentVariables =
+  WhatsAppNotification WhatsAppData{..}
 
 
 -- Production interpreter
@@ -150,6 +169,23 @@ runNotifyProduction = interpret $ \_ -> \case
       let url = toString $ "https://discord.com/api/v10/channels/" <> channelId <> "/messages"
       let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bot " <> appCtx.config.discordBotToken]
       _ <- liftIO $ postWith opts url content
+      pass
+    WhatsAppNotification WhatsAppData{template, to, contentVariables} -> do
+      appCtx <- ask @Config.AuthContext
+      let from = appCtx.config.whatsappFromNumber
+          accountSid = appCtx.config.twilioAccountSid
+          token = appCtx.config.twilioAuthToken
+          opts = defaults & header "Content-Type" .~ ["application/x-www-form-urlencoded"] & auth ?~ basicAuth (encodeUtf8 accountSid) (encodeUtf8 token)
+          url = toString $ "https://api.twilio.com/2010-04-01/Accounts/" <> accountSid <> "/Messages.json"
+          variables = toStrict $ AE.encode contentVariables
+          payload =
+            [ "To" := ("whatsapp:" <> to)
+            , "From" := ("whatsapp:" <> from)
+            , "ContentSid" := template
+            , "ContentVariables" := variables
+            ]
+              :: [FormParam]
+      resp <- liftIO $ postWith opts url payload
       pass
   GetNotifications -> pure [] -- Production doesn't store notifications
 

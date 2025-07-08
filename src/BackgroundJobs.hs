@@ -53,7 +53,7 @@ import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
 import Pages.Reports qualified as RP
 import Pages.Specification.GenerateSwagger (generateSwagger)
-import Pkg.Mail (NotificationAlerts (EndpointAlert, ReportAlert, RuntimeErrorAlert), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage)
+import Pkg.Mail (NotificationAlerts (EndpointAlert, ReportAlert, RuntimeErrorAlert), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
 import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask)
@@ -182,31 +182,13 @@ processBackgroundJob authCtx job bgJob =
       currentDay <- utctDay <$> Time.currentTime
       currentTime <- Time.currentTime
 
-      -- Schedule all 24 hourly jobs in one batch
-      liftIO $ withResource authCtx.jobsPool \conn -> do
-        -- background job to cleanup demo project
-        Relude.when (dayOfWeek currentDay == Monday) do
-          void $ createJob conn "background_jobs" $ BackgroundJobs.CleanupDemoProject
-        forM_ [0 .. 23] \hour -> do
-          -- Schedule each hourly job to run at the appropriate hour
-          let scheduledTime = addUTCTime (fromIntegral $ hour * 3600) currentTime
-          _ <- scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob scheduledTime hour) scheduledTime
-
-          -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
-          forM_ [0 .. 287] \interval -> do
-            let scheduledTime2 = addUTCTime (fromIntegral $ interval * 300) currentTime
-            scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteSpanProcessing scheduledTime2) scheduledTime2
-
-          -- Schedule 1-minute error processing jobs (1440 jobs per day = 24 hours * 60 per hour)
-          forM_ [0 .. 1439] \interval -> do
-            let scheduledTime3 = addUTCTime (fromIntegral $ interval * 60) currentTime
-            scheduleJob conn "background_jobs" (BackgroundJobs.OneMinuteErrorProcessing scheduledTime3) scheduledTime3
+ 
 
       -- Handle regular daily jobs for each project
       projects <- dbtToEff $ query [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
       forM_ projects \p -> do
         liftIO $ withResource authCtx.jobsPool \conn -> do
-          Relude.when (dayOfWeek currentDay == Monday)
+          Relude.when (True ) --(dayOfWeek currentDay == Monday)
             $ void
             $ createJob conn "background_jobs"
             $ BackgroundJobs.WeeklyReports p
@@ -630,7 +612,7 @@ sendReportForProject pid rType = do
         totalEvents = sum $ map (\(_, _, x) -> x) (V.toList stats)
         stmTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" startTime
         currentTimeTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" currentTime
-        reportUrl = (ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> show report.id.reportId)
+        reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> show report.id.reportId
         chartShotUrl = ctx.env.chartShotUrl <> "?t=bar&p=" <> pid.toText <> "&from=" <> stmTxt <> "&to=" <> currentTimeTxt
         allQ = chartShotUrl <> "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 "summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
         errQ = chartShotUrl <> "&theme=roma" <> "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 "status_code == \"ERROR\" | summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
@@ -641,6 +623,8 @@ sendReportForProject pid rType = do
         sendDiscordAlert alert pid pr.title
       Projects.NSlack -> do
         sendSlackAlert alert pid pr.title
+      Projects.NPhone -> do
+        sendWhatsAppAlert alert pid pr.title pr.whatsappNumbers
       _ -> do
         totalRequest <- dbtToEff $ RequestDumps.getLastSevenDaysTotalRequest pid
         Relude.when (totalRequest > 0) do
@@ -713,7 +697,8 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
       forM_ project.notificationsChannel \case
         Projects.NSlack -> sendSlackAlert alert pid project.title
         Projects.NDiscord -> sendDiscordAlert alert pid project.title
-        _ -> do
+        Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
+        Projects.NEmail -> do
           forM_ users \u -> do
             let templateVars =
                   AE.object
@@ -776,13 +761,16 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
                   , archivedAt = Nothing
                   }
             )
-          <$> errs
+            <$> errs
 
       forM_ project.notificationsChannel \case
         Projects.NSlack ->
           forM_ errs \err -> do sendSlackAlert (RuntimeErrorAlert err.errorData) pid project.title
         Projects.NDiscord ->
           forM_ errs \err -> do sendDiscordAlert (RuntimeErrorAlert err.errorData) pid project.title
+        Projects.NPhone ->
+          forM_ errs \err -> do
+            sendWhatsAppAlert (RuntimeErrorAlert err.errorData) pid project.title project.whatsappNumbers
         _ ->
           forM_ users \u -> do
             let errosJ =
