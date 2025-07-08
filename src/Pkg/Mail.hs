@@ -108,7 +108,7 @@ sendWhatsAppAlert alert pid pTitle tos = do
     RuntimeErrorAlert err -> do
       let template = appCtx.config.whatsappErrorTemplate
           url = pid.toText <> "/anomalies/by_hash/" <> fromMaybe "" err.hash
-          contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= ("*" <>err.errorType <> "*"), "3" AE..= ("`" <> err.message <> "`"), "4" AE..= url]
+          contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= ("*" <> err.errorType <> "*"), "3" AE..= ("`" <> err.message <> "`"), "4" AE..= url]
       sendAlert template contentVars
       pass
     EndpointAlert{..} -> do

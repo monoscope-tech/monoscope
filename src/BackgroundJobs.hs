@@ -182,13 +182,31 @@ processBackgroundJob authCtx job bgJob =
       currentDay <- utctDay <$> Time.currentTime
       currentTime <- Time.currentTime
 
- 
+      -- Schedule all 24 hourly jobs in one batch
+      liftIO $ withResource authCtx.jobsPool \conn -> do
+        -- background job to cleanup demo project
+        Relude.when (dayOfWeek currentDay == Monday) do
+          void $ createJob conn "background_jobs" $ BackgroundJobs.CleanupDemoProject
+        forM_ [0 .. 23] \hour -> do
+          -- Schedule each hourly job to run at the appropriate hour
+          let scheduledTime = addUTCTime (fromIntegral $ hour * 3600) currentTime
+          _ <- scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob scheduledTime hour) scheduledTime
+
+          -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
+          forM_ [0 .. 287] \interval -> do
+            let scheduledTime2 = addUTCTime (fromIntegral $ interval * 300) currentTime
+            scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteSpanProcessing scheduledTime2) scheduledTime2
+
+          -- Schedule 1-minute error processing jobs (1440 jobs per day = 24 hours * 60 per hour)
+          forM_ [0 .. 1439] \interval -> do
+            let scheduledTime3 = addUTCTime (fromIntegral $ interval * 60) currentTime
+            scheduleJob conn "background_jobs" (BackgroundJobs.OneMinuteErrorProcessing scheduledTime3) scheduledTime3
 
       -- Handle regular daily jobs for each project
       projects <- dbtToEff $ query [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
       forM_ projects \p -> do
         liftIO $ withResource authCtx.jobsPool \conn -> do
-          Relude.when (True ) --(dayOfWeek currentDay == Monday)
+          Relude.when (dayOfWeek currentDay == Monday)
             $ void
             $ createJob conn "background_jobs"
             $ BackgroundJobs.WeeklyReports p
