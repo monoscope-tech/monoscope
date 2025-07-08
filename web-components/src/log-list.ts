@@ -605,7 +605,7 @@ export class LogList extends LitElement {
         }
 
         if (style === 'text-textStrong') {
-          return html`<span class="text-textStrong font-semibold">${value}</span>`;
+          return html`<span class="text-textStrong">${value}</span>`;
         }
 
         return renderBadge(`cbadge-sm ${this.getStyleClass(style)} ${wrapClass}`, value);
