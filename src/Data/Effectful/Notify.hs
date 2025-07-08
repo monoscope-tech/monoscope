@@ -77,7 +77,6 @@ data WhatsAppData = WhatsAppData
   { template :: Text
   , contentVariables :: AE.Value
   , to :: Text
-  , body :: Maybe Text
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
