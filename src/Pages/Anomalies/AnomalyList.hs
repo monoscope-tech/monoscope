@@ -19,11 +19,12 @@ module Pages.Anomalies.AnomalyList (
 where
 
 import BackgroundJobs qualified
+import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime, parseTimeM, utc, utcToZonedTime)
+import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime, parseTimeM, utc, utcToZonedTime, utctDayTime)
 import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -48,7 +49,7 @@ import Models.Apis.Fields.Types (
  )
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.RequestDumps qualified as RequestDumps
-import Models.Apis.Shapes (ShapeId(..), getShapeFields)
+import Models.Apis.Shapes (ShapeId (..), getShapeFields)
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -189,180 +190,414 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
 
   let fLimit = 10
   -- Toggle between mock data and real database queries
-  let useMockData = True  -- Set to False to use real database data
-  
-  issues <- if useMockData
-    then do
-      -- Mock data for new UI
-      let mockCreatedTime = utcToZonedTime utc currTime
-      let mockIssue =
-        Anomalies.IssueL
-          { id = Anomalies.AnomalyId $ UUID.fromString "00000000-0000-0000-0000-000000000001" & fromMaybe (error "Invalid UUID")
-          , createdAt = mockCreatedTime
-          , updatedAt = mockCreatedTime
-          , projectId = pid
-          , acknowlegedAt = Nothing
-          , anomalyType = Anomalies.ATShape
-          , targetHash = "hash123"
-          , issueData =
-              Anomalies.IDNewShapeIssue
-                $ Anomalies.NewShapeIssue
-                  { id = Shapes.ShapeId $ UUID.fromString "00000000-0000-0000-0000-000000000002" & fromMaybe (error "Invalid UUID")
-                  , endpointId = Endpoints.EndpointId $ UUID.fromString "00000000-0000-0000-0000-000000000003" & fromMaybe (error "Invalid UUID")
-                  , endpointMethod = "POST"
-                  , endpointUrlPath = "/api/v1/auth/login"
-                  , host = "api.example.com"
-                  , newUniqueFields = V.fromList ["mfa_token", "device_fingerprint", "password"]
-                  , deletedFields = V.empty
-                  , updatedFieldFormats = V.fromList ["password"]
-                  }
-          , endpointId = Nothing
-          , acknowlegedBy = Nothing
-          , archivedAt = Nothing
-          , eventsAgg =
-              Anomalies.IssueEventAgg
-                { count = 8
-                , lastSeen = currTime
+  let useMockData = True -- Set to False to use real database data
+  issues <-
+    if useMockData
+      then do
+        -- Mock data for new UI
+        let mockCreatedTime = utcToZonedTime utc currTime
+        let mockIssue1 =
+              Anomalies.IssueL
+                { id = Anomalies.AnomalyId $ UUID.fromString "00000000-0000-0000-0000-000000000001" & fromMaybe (error "Invalid UUID")
+                , createdAt = mockCreatedTime
+                , updatedAt = mockCreatedTime
+                , projectId = pid
+                , acknowlegedAt = Nothing
+                , anomalyType = Anomalies.ATShape
+                , targetHash = "hash123"
+                , issueData =
+                    Anomalies.IDNewShapeIssue
+                      $ Anomalies.NewShapeIssue
+                        { id = Shapes.ShapeId $ UUID.fromString "00000000-0000-0000-0000-000000000002" & fromMaybe (error "Invalid UUID")
+                        , endpointId = Endpoints.EndpointId $ UUID.fromString "00000000-0000-0000-0000-000000000003" & fromMaybe (error "Invalid UUID")
+                        , endpointMethod = "POST"
+                        , endpointUrlPath = "/api/v1/auth/login"
+                        , host = "api.example.com"
+                        , newUniqueFields = V.fromList ["mfa_token", "device_fingerprint", "password"]
+                        , deletedFields = V.empty
+                        , updatedFieldFormats = V.fromList ["password"]
+                        }
+                , endpointId = Nothing
+                , acknowlegedBy = Nothing
+                , archivedAt = Nothing
+                , eventsAgg =
+                    Anomalies.IssueEventAgg
+                      { count = 8
+                      , lastSeen = currTime
+                      }
+                , -- New fields
+                  title = "User Authentication Schema Update"
+                , service = "auth-service"
+                , critical = True
+                , breakingChanges = 5
+                , incrementalChanges = 3
+                , affectedPayloads = 4
+                , affectedClients = 342
+                , estimatedRequests = "~50K/day"
+                , migrationComplexity = "high"
+                , recommendedAction = "Implement graceful fallback for legacy clients and schedule migration timeline"
+                , -- New grouping fields
+                  anomalyHashes = V.fromList ["hash123", "hash456", "hash789"]
+                , endpointHash = "endpoint123"
+                , -- Payload changes
+                  requestPayloads =
+                    Aeson
+                      [ Anomalies.PayloadChange
+                          { method = Just "POST"
+                          , statusCode = Nothing
+                          , statusText = Nothing
+                          , contentType = "application/json"
+                          , changeType = Anomalies.Breaking
+                          , description = "Authentication flow updated with enhanced security requirements"
+                          , changes =
+                              [ Anomalies.FieldChange
+                                  { fieldName = "password"
+                                  , changeKind = Anomalies.Modified
+                                  , breaking = True
+                                  , path = "credentials.password"
+                                  , changeDescription = "Minimum length increased, special character requirement added"
+                                  , oldType = Just "string (min: 6)"
+                                  , newType = Just "string (min: 12, requires: special char)"
+                                  , oldValue = Just "{\n  \"minLength\": 6,\n  \"pattern\": null\n}"
+                                  , newValue = Just "{\n  \"minLength\": 12,\n  \"pattern\": \"^(?=.*[!@#$%^&*])\",\n  \"required\": true\n}"
+                                  }
+                              , Anomalies.FieldChange
+                                  { fieldName = "mfa_token"
+                                  , changeKind = Anomalies.Added
+                                  , breaking = True
+                                  , path = "credentials.mfa_token"
+                                  , changeDescription = "Multi-factor authentication token now required for high-privilege accounts"
+                                  , oldType = Nothing
+                                  , newType = Just "string (conditional)"
+                                  , oldValue = Nothing
+                                  , newValue = Just "{\n  \"type\": \"string\",\n  \"required\": \"conditional\",\n  \"condition\": \"user.role === 'admin'\"\n}"
+                                  }
+                              , Anomalies.FieldChange
+                                  { fieldName = "device_fingerprint"
+                                  , changeKind = Anomalies.Added
+                                  , breaking = False
+                                  , path = "metadata.device_fingerprint"
+                                  , changeDescription = "Optional device identification for security analytics"
+                                  , oldType = Nothing
+                                  , newType = Just "object"
+                                  , oldValue = Nothing
+                                  , newValue = Just "{\n  \"browser\": \"string\",\n  \"os\": \"string\",\n  \"screen\": \"string\",\n  \"timezone\": \"string\"\n}"
+                                  }
+                              ]
+                          , exampleBefore = "{\n  \"email\": \"user@example.com\",\n  \"password\": \"pass123\",\n  \"remember_me\": true\n}"
+                          , exampleAfter = "{\n  \"email\": \"user@example.com\",\n  \"password\": \"SecureP@ss123!\",\n  \"mfa_token\": \"123456\",\n  \"remember_me\": true,\n  \"device_fingerprint\": {\n    \"browser\": \"Chrome/122.0\",\n    \"os\": \"macOS 14.2\",\n    \"screen\": \"1920x1080\",\n    \"timezone\": \"America/New_York\"\n  }\n}"
+                          }
+                      ]
+                , responsePayloads =
+                    Aeson
+                      [ Anomalies.PayloadChange
+                          { method = Nothing
+                          , statusCode = Just 200
+                          , statusText = Just "OK"
+                          , contentType = "application/json"
+                          , changeType = Anomalies.Incremental
+                          , description = "Successful authentication response"
+                          , changes =
+                              [ Anomalies.FieldChange
+                                  { fieldName = "access_token"
+                                  , changeKind = Anomalies.Modified
+                                  , breaking = False
+                                  , path = "data.access_token"
+                                  , changeDescription = "Token format updated to JWT with enhanced claims"
+                                  , oldType = Just "string (opaque)"
+                                  , newType = Just "string (JWT)"
+                                  , oldValue = Just "abc123xyz789..."
+                                  , newValue = Just "eyJhbGciOiJIUzI1NiIs..."
+                                  }
+                              , Anomalies.FieldChange
+                                  { fieldName = "session_info"
+                                  , changeKind = Anomalies.Added
+                                  , breaking = False
+                                  , path = "data.session_info"
+                                  , changeDescription = "Enhanced session metadata for client applications"
+                                  , oldType = Nothing
+                                  , newType = Just "object"
+                                  , oldValue = Nothing
+                                  , newValue = Just "{\n  \"expires_at\": \"2024-12-31T23:59:59Z\",\n  \"permissions\": [\"read\", \"write\"],\n  \"session_id\": \"uuid\"\n}"
+                                  }
+                              ]
+                          , exampleBefore = "{\n  \"success\": true,\n  \"data\": {\n    \"access_token\": \"abc123xyz789random\",\n    \"user_id\": \"12345\",\n    \"expires_in\": 3600\n  }\n}"
+                          , exampleAfter = "{\n  \"success\": true,\n  \"data\": {\n    \"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...\",\n    \"user_id\": \"12345\",\n    \"expires_in\": 3600,\n    \"session_info\": {\n      \"expires_at\": \"2024-12-31T23:59:59Z\",\n      \"permissions\": [\"read\", \"write\", \"admin\"],\n      \"session_id\": \"550e8400-e29b-41d4-a716-446655440000\"\n    }\n  }\n}"
+                          }
+                      , Anomalies.PayloadChange
+                          { method = Nothing
+                          , statusCode = Just 401
+                          , statusText = Just "Unauthorized"
+                          , contentType = "application/json"
+                          , changeType = Anomalies.Breaking
+                          , description = "Authentication failed"
+                          , changes =
+                              [ Anomalies.FieldChange
+                                  { fieldName = "error_code"
+                                  , changeKind = Anomalies.Modified
+                                  , breaking = True
+                                  , path = "error.code"
+                                  , changeDescription = "More specific error codes for different failure types"
+                                  , oldType = Just "string (generic)"
+                                  , newType = Just "string (specific)"
+                                  , oldValue = Just "INVALID_CREDENTIALS"
+                                  , newValue = Just "PASSWORD_TOO_WEAK | MFA_REQUIRED | ACCOUNT_LOCKED"
+                                  }
+                              , Anomalies.FieldChange
+                                  { fieldName = "retry_after"
+                                  , changeKind = Anomalies.Added
+                                  , breaking = False
+                                  , path = "error.retry_after"
+                                  , changeDescription = "Suggests when client should retry after rate limiting"
+                                  , oldType = Nothing
+                                  , newType = Just "number (seconds)"
+                                  , oldValue = Nothing
+                                  , newValue = Just "300"
+                                  }
+                              ]
+                          , exampleBefore = "{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"INVALID_CREDENTIALS\",\n    \"message\": \"Login failed\"\n  }\n}"
+                          , exampleAfter = "{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"MFA_REQUIRED\",\n    \"message\": \"Multi-factor authentication required for this account\",\n    \"retry_after\": 0,\n    \"mfa_methods\": [\"sms\", \"totp\", \"email\"]\n  }\n}"
+                          }
+                      ]
                 }
-          , -- New fields
-            title = "User Authentication Schema Update"
-          , service = "auth-service"
-          , critical = True
-          , breakingChanges = 5
-          , incrementalChanges = 3
-          , affectedPayloads = 4
-          , affectedClients = 342
-          , estimatedRequests = "~50K/day"
-          , migrationComplexity = "high"
-          , recommendedAction = "Implement graceful fallback for legacy clients and schedule migration timeline"
-          , -- New grouping fields
-            anomalyHashes = V.fromList ["hash123", "hash456", "hash789"]
-          , endpointHash = "endpoint123"
-          , -- Payload changes
-            requestPayloads =
-              Aeson
-                [ Anomalies.PayloadChange
-                    { method = Just "POST"
-                    , statusCode = Nothing
-                    , statusText = Nothing
-                    , contentType = "application/json"
-                    , changeType = Anomalies.Breaking
-                    , description = "Authentication flow updated with enhanced security requirements"
-                    , changes =
-                        [ Anomalies.FieldChange
-                            { fieldName = "password"
-                            , changeKind = Anomalies.Modified
-                            , breaking = True
-                            , path = "credentials.password"
-                            , changeDescription = "Minimum length increased, special character requirement added"
-                            , oldType = Just "string (min: 6)"
-                            , newType = Just "string (min: 12, requires: special char)"
-                            , oldValue = Just "{\n  \"minLength\": 6,\n  \"pattern\": null\n}"
-                            , newValue = Just "{\n  \"minLength\": 12,\n  \"pattern\": \"^(?=.*[!@#$%^&*])\",\n  \"required\": true\n}"
-                            }
-                        , Anomalies.FieldChange
-                            { fieldName = "mfa_token"
-                            , changeKind = Anomalies.Added
-                            , breaking = True
-                            , path = "credentials.mfa_token"
-                            , changeDescription = "Multi-factor authentication token now required for high-privilege accounts"
-                            , oldType = Nothing
-                            , newType = Just "string (conditional)"
-                            , oldValue = Nothing
-                            , newValue = Just "{\n  \"type\": \"string\",\n  \"required\": \"conditional\",\n  \"condition\": \"user.role === 'admin'\"\n}"
-                            }
-                        , Anomalies.FieldChange
-                            { fieldName = "device_fingerprint"
-                            , changeKind = Anomalies.Added
-                            , breaking = False
-                            , path = "metadata.device_fingerprint"
-                            , changeDescription = "Optional device identification for security analytics"
-                            , oldType = Nothing
-                            , newType = Just "object"
-                            , oldValue = Nothing
-                            , newValue = Just "{\n  \"browser\": \"string\",\n  \"os\": \"string\",\n  \"screen\": \"string\",\n  \"timezone\": \"string\"\n}"
-                            }
-                        ]
-                    , exampleBefore = "{\n  \"email\": \"user@example.com\",\n  \"password\": \"pass123\",\n  \"remember_me\": true\n}"
-                    , exampleAfter = "{\n  \"email\": \"user@example.com\",\n  \"password\": \"SecureP@ss123!\",\n  \"mfa_token\": \"123456\",\n  \"remember_me\": true,\n  \"device_fingerprint\": {\n    \"browser\": \"Chrome/122.0\",\n    \"os\": \"macOS 14.2\",\n    \"screen\": \"1920x1080\",\n    \"timezone\": \"America/New_York\"\n  }\n}"
-                    }
-                ]
-          , responsePayloads =
-              Aeson
-                [ Anomalies.PayloadChange
-                    { method = Nothing
-                    , statusCode = Just 200
-                    , statusText = Just "OK"
-                    , contentType = "application/json"
-                    , changeType = Anomalies.Incremental
-                    , description = "Successful authentication response"
-                    , changes =
-                        [ Anomalies.FieldChange
-                            { fieldName = "access_token"
-                            , changeKind = Anomalies.Modified
-                            , breaking = False
-                            , path = "data.access_token"
-                            , changeDescription = "Token format updated to JWT with enhanced claims"
-                            , oldType = Just "string (opaque)"
-                            , newType = Just "string (JWT)"
-                            , oldValue = Just "abc123xyz789..."
-                            , newValue = Just "eyJhbGciOiJIUzI1NiIs..."
-                            }
-                        , Anomalies.FieldChange
-                            { fieldName = "session_info"
-                            , changeKind = Anomalies.Added
-                            , breaking = False
-                            , path = "data.session_info"
-                            , changeDescription = "Enhanced session metadata for client applications"
-                            , oldType = Nothing
-                            , newType = Just "object"
-                            , oldValue = Nothing
-                            , newValue = Just "{\n  \"expires_at\": \"2024-12-31T23:59:59Z\",\n  \"permissions\": [\"read\", \"write\"],\n  \"session_id\": \"uuid\"\n}"
-                            }
-                        ]
-                    , exampleBefore = "{\n  \"success\": true,\n  \"data\": {\n    \"access_token\": \"abc123xyz789random\",\n    \"user_id\": \"12345\",\n    \"expires_in\": 3600\n  }\n}"
-                    , exampleAfter = "{\n  \"success\": true,\n  \"data\": {\n    \"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...\",\n    \"user_id\": \"12345\",\n    \"expires_in\": 3600,\n    \"session_info\": {\n      \"expires_at\": \"2024-12-31T23:59:59Z\",\n      \"permissions\": [\"read\", \"write\", \"admin\"],\n      \"session_id\": \"550e8400-e29b-41d4-a716-446655440000\"\n    }\n  }\n}"
-                    }
-                , Anomalies.PayloadChange
-                    { method = Nothing
-                    , statusCode = Just 401
-                    , statusText = Just "Unauthorized"
-                    , contentType = "application/json"
-                    , changeType = Anomalies.Breaking
-                    , description = "Authentication failed"
-                    , changes =
-                        [ Anomalies.FieldChange
-                            { fieldName = "error_code"
-                            , changeKind = Anomalies.Modified
-                            , breaking = True
-                            , path = "error.code"
-                            , changeDescription = "More specific error codes for different failure types"
-                            , oldType = Just "string (generic)"
-                            , newType = Just "string (specific)"
-                            , oldValue = Just "INVALID_CREDENTIALS"
-                            , newValue = Just "PASSWORD_TOO_WEAK | MFA_REQUIRED | ACCOUNT_LOCKED"
-                            }
-                        , Anomalies.FieldChange
-                            { fieldName = "retry_after"
-                            , changeKind = Anomalies.Added
-                            , breaking = False
-                            , path = "error.retry_after"
-                            , changeDescription = "Suggests when client should retry after rate limiting"
-                            , oldType = Nothing
-                            , newType = Just "number (seconds)"
-                            , oldValue = Nothing
-                            , newValue = Just "300"
-                            }
-                        ]
-                    , exampleBefore = "{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"INVALID_CREDENTIALS\",\n    \"message\": \"Login failed\"\n  }\n}"
-                    , exampleAfter = "{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"MFA_REQUIRED\",\n    \"message\": \"Multi-factor authentication required for this account\",\n    \"retry_after\": 0,\n    \"mfa_methods\": [\"sms\", \"totp\", \"email\"]\n  }\n}"
-                    }
-                ]
-          }
-      pure $ V.singleton mockIssue
-    else
-      -- Fetch real data from database
-      dbtToEff $ Anomalies.selectIssues pid endpointM (Just ackd) (Just archived) sortM (Just fLimit) (pageInt * fLimit)
+        let mockIssue2 =
+              Anomalies.IssueL
+                { id = Anomalies.AnomalyId $ UUID.fromString "00000000-0000-0000-0000-000000000004" & fromMaybe (error "Invalid UUID")
+                , createdAt = utcToZonedTime utc $ currTime{utctDayTime = utctDayTime currTime - 21600} -- 6 hours ago
+                , updatedAt = utcToZonedTime utc $ currTime{utctDayTime = utctDayTime currTime - 21600}
+                , projectId = pid
+                , acknowlegedAt = Nothing
+                , anomalyType = Anomalies.ATShape
+                , targetHash = "hash456"
+                , issueData =
+                    Anomalies.IDNewShapeIssue
+                      $ Anomalies.NewShapeIssue
+                        { id = Shapes.ShapeId $ UUID.fromString "00000000-0000-0000-0000-000000000005" & fromMaybe (error "Invalid UUID")
+                        , endpointId = Endpoints.EndpointId $ UUID.fromString "00000000-0000-0000-0000-000000000006" & fromMaybe (error "Invalid UUID")
+                        , endpointMethod = "GET"
+                        , endpointUrlPath = "/api/v2/products/{productId}"
+                        , host = "api.example.com"
+                        , newUniqueFields = V.fromList ["sustainability_score", "sustainability_metrics", "manufacturer_details", "description"]
+                        , deletedFields = V.empty
+                        , updatedFieldFormats = V.empty
+                        }
+                , endpointId = Nothing
+                , acknowlegedBy = Nothing
+                , archivedAt = Nothing
+                , eventsAgg =
+                    Anomalies.IssueEventAgg
+                      { count = 12
+                      , lastSeen = currTime
+                      }
+                , -- Incremental issue fields
+                  title = "Product Catalog API Enhancement"
+                , service = "catalog-service"
+                , critical = False
+                , breakingChanges = 0
+                , incrementalChanges = 12
+                , affectedPayloads = 2
+                , affectedClients = 89
+                , estimatedRequests = "~200K/day"
+                , migrationComplexity = "low"
+                , recommendedAction = "Clients can adopt new fields gradually as they become available"
+                , -- New grouping fields
+                  anomalyHashes = V.fromList ["hash456", "hash457", "hash458"]
+                , endpointHash = "endpoint456"
+                , -- Payload changes for incremental issue
+                  requestPayloads = Aeson []
+                , responsePayloads =
+                    Aeson
+                      [ Anomalies.PayloadChange
+                          { method = Nothing
+                          , statusCode = Just 200
+                          , statusText = Just "OK"
+                          , contentType = "application/json"
+                          , changeType = Anomalies.Incremental
+                          , description = "Product details with enhanced information"
+                          , changes =
+                              [ Anomalies.FieldChange
+                                  { fieldName = "sustainability_score"
+                                  , changeKind = Anomalies.Added
+                                  , breaking = False
+                                  , path = "data.sustainability.score"
+                                  , changeDescription = "Environmental impact rating from 1-100"
+                                  , oldType = Nothing
+                                  , newType = Just "number (1-100)"
+                                  , oldValue = Nothing
+                                  , newValue = Just "{\n  \"type\": \"number\",\n  \"minimum\": 1,\n  \"maximum\": 100,\n  \"description\": \"Higher is better\"\n}"
+                                  }
+                              , Anomalies.FieldChange
+                                  { fieldName = "sustainability_metrics"
+                                  , changeKind = Anomalies.Added
+                                  , breaking = False
+                                  , path = "data.sustainability.metrics"
+                                  , changeDescription = "Detailed environmental impact breakdown"
+                                  , oldType = Nothing
+                                  , newType = Just "object"
+                                  , oldValue = Nothing
+                                  , newValue = Just "{\n  \"carbon_footprint\": \"kg CO2\",\n  \"recyclability\": \"percentage\",\n  \"water_usage\": \"liters\",\n  \"certifications\": [\"array of strings\"]\n}"
+                                  }
+                              , Anomalies.FieldChange
+                                  { fieldName = "manufacturer_details"
+                                  , changeKind = Anomalies.Added
+                                  , breaking = False
+                                  , path = "data.manufacturer"
+                                  , changeDescription = "Enhanced manufacturer information"
+                                  , oldType = Nothing
+                                  , newType = Just "object"
+                                  , oldValue = Nothing
+                                  , newValue = Just "{\n  \"name\": \"string\",\n  \"location\": \"country_code\",\n  \"certifications\": [\"ISO9001\", \"etc\"],\n  \"contact\": \"object\"\n}"
+                                  }
+                              , Anomalies.FieldChange
+                                  { fieldName = "description"
+                                  , changeKind = Anomalies.Modified
+                                  , breaking = False
+                                  , path = "data.description"
+                                  , changeDescription = "Extended maximum length for richer content"
+                                  , oldType = Just "string (max: 500)"
+                                  , newType = Just "string (max: 2000)"
+                                  , oldValue = Just "maxLength: 500"
+                                  , newValue = Just "maxLength: 2000, supports markdown"
+                                  }
+                              ]
+                          , exampleBefore = "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"prod_123\",\n    \"name\": \"Water Bottle\",\n    \"description\": \"Simple water bottle\",\n    \"price\": 29.99\n  }\n}"
+                          , exampleAfter = "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"prod_123\",\n    \"name\": \"Eco-Friendly Water Bottle\",\n    \"description\": \"# Premium Stainless Steel Water Bottle\\n\\nMade from 100% recycled materials...\",\n    \"price\": 29.99,\n    \"sustainability\": {\n      \"score\": 87,\n      \"metrics\": {\n        \"carbon_footprint\": \"2.3 kg CO2\",\n        \"recyclability\": \"95%\",\n        \"water_usage\": \"15 liters\",\n        \"certifications\": [\"Carbon Neutral\", \"Fair Trade\"]\n      }\n    },\n    \"manufacturer\": {\n      \"name\": \"EcoBottle Co.\",\n      \"location\": \"USA\",\n      \"certifications\": [\"ISO14001\", \"B-Corp\"],\n      \"contact\": {\n        \"website\": \"https://ecobottle.com\",\n        \"support_email\": \"support@ecobottle.com\"\n      }\n    }\n  }\n}"
+                          }
+                      , Anomalies.PayloadChange
+                          { method = Nothing
+                          , statusCode = Just 404
+                          , statusText = Just "Not Found"
+                          , contentType = "application/json"
+                          , changeType = Anomalies.Incremental
+                          , description = "Product not found"
+                          , changes =
+                              [ Anomalies.FieldChange
+                                  { fieldName = "suggestions"
+                                  , changeKind = Anomalies.Added
+                                  , breaking = False
+                                  , path = "error.suggestions"
+                                  , changeDescription = "Suggested alternative products when item is not found"
+                                  , oldType = Nothing
+                                  , newType = Just "array of objects"
+                                  , oldValue = Nothing
+                                  , newValue = Just "[{\"id\": \"string\", \"name\": \"string\", \"similarity\": \"number\"}]"
+                                  }
+                              ]
+                          , exampleBefore = "{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"PRODUCT_NOT_FOUND\",\n    \"message\": \"Product with ID 'prod_123' was not found\"\n  }\n}"
+                          , exampleAfter = "{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"PRODUCT_NOT_FOUND\",\n    \"message\": \"Product with ID 'prod_123' was not found\",\n    \"suggestions\": [\n      {\n        \"id\": \"prod_124\",\n        \"name\": \"Similar Eco Water Bottle\",\n        \"similarity\": 0.89\n      },\n      {\n        \"id\": \"prod_125\",\n        \"name\": \"Stainless Steel Bottle Pro\",\n        \"similarity\": 0.76\n      }\n    ]\n  }\n}"
+                          }
+                      ]
+                }
+        -- Mock issue 3: Payment Processing Error (Runtime Exception)
+        let mockIssue3 =
+              Anomalies.IssueL
+                { id = Anomalies.AnomalyId $ UUID.fromString "00000000-0000-0000-0000-000000000007" & fromMaybe (error "Invalid UUID")
+                , createdAt = utcToZonedTime utc $ currTime{utctDayTime = utctDayTime currTime - 3600} -- 1 hour ago
+                , updatedAt = utcToZonedTime utc $ currTime{utctDayTime = utctDayTime currTime - 3600}
+                , projectId = pid
+                , acknowlegedAt = Nothing
+                , anomalyType = Anomalies.ATRuntimeException
+                , targetHash = "hash789"
+                , issueData =
+                    Anomalies.IDNewRuntimeExceptionIssue
+                      $ RequestDumps.ATError
+                        { projectId = Just pid
+                        , when = currTime
+                        , errorType = "TypeError"
+                        , rootErrorType = "TypeError"
+                        , message = "Cannot read property 'amount' of undefined"
+                        , rootErrorMessage = "Cannot read property 'amount' of undefined"
+                        , stackTrace = "TypeError: Cannot read property 'amount' of undefined in validatePayment(payment.details.amount) at line 247\n\nStack trace:\n- validatePayment (payment-validator.js:247)\n- processPayment (payment-processor.js:89)\n- POST /api/v1/payments/process (payment-handler.js:34)"
+                        , hash = Just "hash789"
+                        , technology = Just RequestDumps.JsExpress
+                        , requestMethod = Just "POST"
+                        , requestPath = Just "/api/v1/payments/process"
+                        , spanId = Nothing
+                        , traceId = Nothing
+                        , serviceName = Just "payment-service"
+                        , stack = Nothing
+                        }
+                , endpointId = Nothing
+                , acknowlegedBy = Nothing
+                , archivedAt = Nothing
+                , eventsAgg =
+                    Anomalies.IssueEventAgg
+                      { count = 1247
+                      , lastSeen = currTime
+                      }
+                , -- Error issue fields
+                  title = "Payment Processing Error"
+                , service = "payment-service"
+                , critical = True
+                , breakingChanges = 0
+                , incrementalChanges = 0
+                , affectedPayloads = 0
+                , affectedClients = 1247
+                , estimatedRequests = "~15K/day"
+                , migrationComplexity = "high"
+                , recommendedAction = "Immediate hotfix deployed - validate payment.details exists before accessing amount property"
+                , anomalyHashes = V.fromList ["hash789"]
+                , endpointHash = "endpoint789"
+                , requestPayloads = Aeson []
+                , responsePayloads = Aeson []
+                }
+        -- Mock issue 4: High Error Rate Alert
+        let mockIssue4 =
+              Anomalies.IssueL
+                { id = Anomalies.AnomalyId $ UUID.fromString "00000000-0000-0000-0000-000000000009" & fromMaybe (error "Invalid UUID")
+                , createdAt = utcToZonedTime utc $ currTime{utctDayTime = utctDayTime currTime - 1800} -- 30 minutes ago
+                , updatedAt = utcToZonedTime utc $ currTime{utctDayTime = utctDayTime currTime - 1800}
+                , projectId = pid
+                , acknowlegedAt = Nothing
+                , anomalyType = Anomalies.ATRuntimeException
+                , targetHash = "hash1011"
+                , issueData =
+                    Anomalies.IDNewRuntimeExceptionIssue
+                      $ RequestDumps.ATError
+                        { projectId = Just pid
+                        , when = currTime
+                        , errorType = "High Error Rate Alert"
+                        , rootErrorType = "Alert"
+                        , message = "Error rate threshold exceeded"
+                        , rootErrorMessage = "Error rate threshold exceeded"
+                        , stackTrace = "error_rate > 5% OR status_code >= 500 OR (method == \"POST\" AND response_time > 2000ms) within last 15min"
+                        , hash = Just "hash1011"
+                        , technology = Just RequestDumps.JsExpress
+                        , requestMethod = Just "ALL"
+                        , requestPath = Just "/api/v1/orders/*"
+                        , spanId = Nothing
+                        , traceId = Nothing
+                        , serviceName = Just "order-service"
+                        , stack = Nothing
+                        }
+                , endpointId = Nothing
+                , acknowlegedBy = Nothing
+                , archivedAt = Nothing
+                , eventsAgg =
+                    Anomalies.IssueEventAgg
+                      { count = 567
+                      , lastSeen = currTime
+                      }
+                , -- Alert issue fields
+                  title = "High Error Rate Alert"
+                , service = "order-service"
+                , critical = False
+                , breakingChanges = 0
+                , incrementalChanges = 0
+                , affectedPayloads = 0
+                , affectedClients = 567
+                , estimatedRequests = "~80K/day"
+                , migrationComplexity = "medium"
+                , recommendedAction = "Investigating database connection pool exhaustion - scaling database read replicas"
+                , anomalyHashes = V.fromList ["hash1011"]
+                , endpointHash = "endpoint1011"
+                , requestPayloads = Aeson []
+                , responsePayloads = Aeson []
+                }
+        pure $ V.fromList [mockIssue1, mockIssue2, mockIssue3, mockIssue4]
+      else
+        -- Fetch real data from database
+        dbtToEff $ Anomalies.selectIssues pid endpointM (Just ackd) (Just archived) sortM (Just fLimit) (pageInt * fLimit)
 
   let currentURL = mconcat ["/p/", pid.toText, "/anomalies?layout=", fromMaybe "false" layoutM, "&ackd=", show ackd, "&archived=", show archived]
       nextFetchUrl = case layoutM of
@@ -541,6 +776,30 @@ issueItem hideByDefault currTime issue timeFilter icon title endpoint content an
           $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"]
           $ show issue.eventsAgg.count
         let issueQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
+        let mockChartData = if hideByDefault -- Only provide mock data for slider view
+              then case issue.targetHash of
+                "hash123" -> Just $ AE.Array $ V.fromList 
+                  [ AE.Array $ V.fromList [AE.Number 1735689600000, AE.Number 3]  -- timestamp, count
+                  , AE.Array $ V.fromList [AE.Number 1735693200000, AE.Number 5]
+                  , AE.Array $ V.fromList [AE.Number 1735696800000, AE.Number 8]
+                  , AE.Array $ V.fromList [AE.Number 1735700400000, AE.Number 12]
+                  , AE.Array $ V.fromList [AE.Number 1735704000000, AE.Number 15]
+                  , AE.Array $ V.fromList [AE.Number 1735707600000, AE.Number 10]
+                  , AE.Array $ V.fromList [AE.Number 1735711200000, AE.Number 8]
+                  , AE.Array $ V.fromList [AE.Number 1735714800000, AE.Number 5]
+                  ]
+                "hash456" -> Just $ AE.Array $ V.fromList 
+                  [ AE.Array $ V.fromList [AE.Number 1735689600000, AE.Number 2]
+                  , AE.Array $ V.fromList [AE.Number 1735693200000, AE.Number 4]
+                  , AE.Array $ V.fromList [AE.Number 1735696800000, AE.Number 7]
+                  , AE.Array $ V.fromList [AE.Number 1735700400000, AE.Number 11]
+                  , AE.Array $ V.fromList [AE.Number 1735704000000, AE.Number 15]
+                  , AE.Array $ V.fromList [AE.Number 1735707600000, AE.Number 18]
+                  , AE.Array $ V.fromList [AE.Number 1735711200000, AE.Number 12]
+                  , AE.Array $ V.fromList [AE.Number 1735714800000, AE.Number 8]
+                  ]
+                _ -> Nothing
+              else Nothing
         div_ [class_ "flex items-center justify-center "]
           $ div_ [class_ "w-56 h-12 px-3"]
           $ Widget.widget_
@@ -555,6 +814,15 @@ issueItem hideByDefault currTime issue timeFilter icon title endpoint content an
             , Widget.query = Just $ issueQueryPartial <> "\" | summarize count(*) by bin(timestamp, 1h)"
             , Widget._projectId = Just issue.projectId
             , Widget.hideLegend = Just True
+            , Widget.eager = if isJust mockChartData then Just True else Nothing -- Enable eager mode when we have mock data
+            , Widget.dataset = mockChartData >>= \chartData -> Just Widget.WidgetDataset
+                { Widget.source = chartData
+                , Widget.rowsPerMin = Nothing
+                , Widget.value = Nothing
+                , Widget.from = Nothing
+                , Widget.to = Nothing
+                , Widget.stats = Nothing
+                }
             }
 
 
@@ -828,28 +1096,42 @@ renderIssue hideByDefault currTime timeFilter issue = do
     div_ [class_ $ "h-4 flex space-x-3 w-8 items-center justify-center " <> if hideByDefault then "hidden" else ""] do
       a_ [class_ $ anomalyAccentColor (isJust issue.acknowlegedAt) (isJust issue.archivedAt) <> " w-2 h-full"] ""
       input_ [term "aria-label" "Select Issue", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "anomalyId", value_ issueId]
-    
+
     -- Main section with title, badges, and metadata
     div_ [class_ "flex-1 min-w-0"] do
       -- Title and badges row
       div_ [class_ "flex items-center gap-3 mb-3 flex-wrap"] do
         h3_ [class_ "font-semibold text-textStrong text-base"] $ toHtml issue.title
 
-        -- Breaking badge if applicable
-        when (issue.breakingChanges > 0) do
-          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-strong text-fillWhite shadow-sm"] do
-            faSprite_ "exclamation-triangle" "regular" "h-3 w-3"
-            "BREAKING"
+        -- Breaking, Incremental, Error, or Alert badge
+        case issue.issueData of
+          Anomalies.IDNewRuntimeExceptionIssue err -> 
+            if err.errorType == "High Error Rate Alert"
+              then span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-strong text-fillWhite shadow-sm"] do
+                faSprite_ "zap" "regular" "h-3 w-3"
+                "above threshold"
+              else span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-strong text-fillWhite shadow-sm"] do
+                faSprite_ "triangle-alert" "regular" "h-3 w-3"
+                "ERROR"
+          _ ->
+            if issue.breakingChanges > 0
+              then span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-strong text-fillWhite shadow-sm"] do
+                faSprite_ "exclamation-triangle" "regular" "h-3 w-3"
+                "BREAKING"
+              else when (issue.incrementalChanges > 0) do
+                span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillInformation-strong text-fillWhite shadow-sm"] do
+                  faSprite_ "info" "regular" "h-3 w-3"
+                  "Incremental"
 
-        -- Critical badge
-        when issue.critical do
-          span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
-
-        -- Breaking changes gradient badge
-        when (issue.breakingChanges > 0) do
-          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-gradient-to-r from-fillError-strong to-fillWarning-strong text-fillWhite shadow-sm border-l-4 border-l-fillError-strong"] do
-            faSprite_ "exclamation-triangle" "regular" "h-3 w-3 mr-1"
-            "Breaking Changes"
+        -- Critical or severity badge
+        case issue.issueData of
+          Anomalies.IDNewRuntimeExceptionIssue err -> 
+            if err.errorType == "High Error Rate Alert"
+              then span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "MEDIUM"
+              else when issue.critical do
+                span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
+          _ -> when issue.critical do
+            span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
 
       -- Metadata row (method, endpoint, service, time)
       div_ [class_ "flex items-center gap-4 text-sm text-textWeak mb-3 flex-wrap"] do
@@ -858,6 +1140,14 @@ renderIssue hideByDefault currTime timeFilter issue = do
             div_ [class_ "flex items-center gap-2"] do
               span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillSuccess-strong text-fillWhite shadow-sm"] $ toHtml issueD.endpointMethod
               span_ [class_ "font-mono bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml issueD.endpointUrlPath
+          Anomalies.IDNewRuntimeExceptionIssue err -> do
+            div_ [class_ "flex items-center gap-2"] do
+              let methodBadgeClass = if fromMaybe "" err.requestMethod == "ALL" 
+                    then "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWeak text-textStrong border border-strokeWeak"
+                    else "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillSuccess-strong text-fillWhite shadow-sm"
+              span_ [class_ methodBadgeClass] $ toHtml $ fromMaybe "GET" err.requestMethod
+              -- Use the requestPath from the error
+              span_ [class_ "font-mono bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml $ fromMaybe "" err.requestPath
           _ -> pass
 
         span_ [class_ "flex items-center gap-1"] do
@@ -866,54 +1156,89 @@ renderIssue hideByDefault currTime timeFilter issue = do
 
         span_ [class_ "text-textWeak"] $ toHtml timeSinceString
 
-      -- Description
-      p_ [class_ "text-sm text-textWeak mb-4 bg-fillWeak p-3 rounded leading-relaxed"] "Authentication flow updated with enhanced security requirements"
+      -- Description or Error Details
+      case issue.issueData of
+        Anomalies.IDNewRuntimeExceptionIssue err -> do
+          -- For runtime exceptions, show the error/alert query in a special box
+          when (err.errorType == "High Error Rate Alert") do
+            div_ [class_ "mb-4"] do
+              span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
+              div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"] 
+                $ toHtml err.stackTrace
+          -- For actual errors, show the stack trace
+          when (err.errorType /= "High Error Rate Alert") do
+            div_ [class_ "bg-fillError-weak border border-strokeError-weak rounded-lg p-4 text-sm font-mono text-fillError-strong mb-4"] do
+              pre_ [class_ "whitespace-pre-wrap"] $ toHtml err.stackTrace
+        _ -> 
+          -- For shape issues, show the description
+          p_ [class_ "text-sm text-textWeak mb-4 bg-fillWeak p-3 rounded leading-relaxed"]
+            $ toHtml
+            $ case issue.issueData of
+              Anomalies.IDNewShapeIssue issueD ->
+                if issue.breakingChanges > 0
+                  then "Authentication flow updated with enhanced security requirements"
+                  else
+                    if issue.incrementalChanges > 0
+                      then "Enhanced product information with sustainability and manufacturer data"
+                      else "New fields detected in API response"
+              _ -> "API structure has changed"
 
-      -- Statistics row
-      div_ [class_ "flex items-center gap-4 text-sm mb-4 p-3 bg-fillWeak rounded-lg"] do
-        span_ [class_ "text-textWeak"] do
-          strong_ [class_ "text-textStrong"] $ toHtml $ show issue.eventsAgg.count
-          " total changes"
+      -- Statistics row (only for shape issues)
+      unless (case issue.issueData of { Anomalies.IDNewRuntimeExceptionIssue _ -> True; _ -> False }) do
+        div_ [class_ "flex items-center gap-4 text-sm mb-4 p-3 bg-fillWeak rounded-lg"] do
+          span_ [class_ "text-textWeak"] do
+            strong_ [class_ "text-textStrong"] $ toHtml $ show issue.eventsAgg.count
+            " total changes"
 
-        div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+          div_ [class_ "w-px h-4 bg-strokeWeak"] ""
 
-        span_ [class_ "text-textWeak"] do
-          strong_ [class_ "text-fillError-strong"] $ toHtml $ show issue.breakingChanges
-          " breaking"
-          span_ [class_ "text-xs ml-1 bg-fillError-weak text-fillError-strong px-1.5 py-0.5 rounded"] do
-            toHtml $ show (round (fromIntegral issue.breakingChanges / fromIntegral issue.eventsAgg.count * 100 :: Float) :: Int) <> "%"
+          span_ [class_ "text-textWeak"] do
+            strong_ [class_ "text-fillError-strong"] $ toHtml $ show issue.breakingChanges
+            " breaking"
+            when (issue.breakingChanges > 0) do
+              span_ [class_ "text-xs ml-1 bg-fillError-weak text-fillError-strong px-1.5 py-0.5 rounded"] do
+                toHtml $ show (round (fromIntegral issue.breakingChanges / fromIntegral issue.eventsAgg.count * 100 :: Float) :: Int) <> "%"
 
-        div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+          div_ [class_ "w-px h-4 bg-strokeWeak"] ""
 
-        span_ [class_ "text-textWeak"] do
-          strong_ [class_ "text-fillSuccess-strong"] $ toHtml $ show issue.incrementalChanges
-          " incremental"
+          span_ [class_ "text-textWeak"] do
+            strong_ [class_ "text-fillSuccess-strong"] $ toHtml $ show issue.incrementalChanges
+            " incremental"
 
-        div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+          div_ [class_ "w-px h-4 bg-strokeWeak"] ""
 
-        span_ [class_ "text-textWeak"] do
-          strong_ [class_ "text-textBrand"] $ toHtml $ show issue.affectedPayloads
-          " payloads affected"
+          span_ [class_ "text-textWeak"] do
+            strong_ [class_ "text-textBrand"] $ toHtml $ show issue.affectedPayloads
+            " payloads affected"
 
-      -- Impact warning box
-      div_ [class_ "hidden mb-4 p-4 border-l-4 border-l-fillWarning-strong bg-fillWarning-weak rounded-lg"] do
-        div_ [class_ "flex items-start gap-3"] do
-          faSprite_ "exclamation-circle" "regular" "h-5 w-5 text-fillWarning-strong mt-0.5 flex-shrink-0"
-          div_ [class_ "flex-1"] do
-            div_ [class_ "flex items-center gap-3 mb-2 flex-wrap"] do
-              span_ [class_ "font-medium text-fillWarning-strong"] $ "Impact: " <> toHtml (show issue.affectedClients) <> " clients, " <> toHtml issue.estimatedRequests
-              span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] $ toHtml issue.migrationComplexity <> " complexity"
-            p_ [class_ "text-sm text-fillWarning-strong leading-relaxed font-medium"] $ toHtml issue.recommendedAction
+      -- Impact warning box (hidden for now - not yet supported)
+      when False do -- (issue.affectedClients > 0) do
+        div_ [class_ "mb-4 p-4 border-l-4 border-l-fillWarning-strong bg-fillWarning-weak rounded-lg"] do
+          div_ [class_ "flex items-start gap-3"] do
+            faSprite_ "circle-alert" "regular" "h-5 w-5 text-fillWarning-strong mt-0.5 flex-shrink-0"
+            div_ [class_ "flex-1"] do
+              div_ [class_ "flex items-center gap-3 mb-2 flex-wrap"] do
+                span_ [class_ "font-medium text-fillWarning-strong"] $ "Impact: " <> toHtml (show issue.affectedClients) <> " clients, " <> toHtml issue.estimatedRequests
+                span_
+                  [ class_
+                      $ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 shadow-sm "
+                        <> if issue.migrationComplexity == "high"
+                          then "bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong"
+                          else "bg-fillSuccess-strong text-fillWhite"
+                  ]
+                  $ toHtml issue.migrationComplexity <> " complexity"
+              p_ [class_ "text-sm text-fillWarning-strong leading-relaxed font-medium"] $ toHtml issue.recommendedAction
 
-      -- Collapsible payload changes using details/summary
-      details_ [class_ "group mb-4"] do
-        summary_ [class_ "inline-flex items-center cursor-pointer whitespace-nowrap text-sm font-medium transition-all rounded-md gap-1.5 text-textBrand hover:text-textBrand/80 list-none"] do
-          faSprite_ "chevron-right" "regular" "h-4 w-4 mr-1 transition-transform group-open:rotate-90"
-          "View detailed payload changes"
+      -- Collapsible payload changes using details/summary (only for shape issues)
+      unless (case issue.issueData of { Anomalies.IDNewRuntimeExceptionIssue _ -> True; _ -> False }) do
+        details_ [class_ "group mb-4"] do
+          summary_ [class_ "inline-flex items-center cursor-pointer whitespace-nowrap text-sm font-medium transition-all rounded-md gap-1.5 text-textBrand hover:text-textBrand/80 list-none"] do
+            faSprite_ "chevron-right" "regular" "h-4 w-4 mr-1 transition-transform group-open:rotate-90"
+            "View detailed payload changes"
 
-        -- Payload details content
-        div_ [class_ "mt-4 border border-strokeWeak rounded-lg overflow-hidden bg-fillWhite"] do
-          renderPayloadChanges issue
+          -- Payload details content
+          div_ [class_ "mt-4 border border-strokeWeak rounded-lg overflow-hidden bg-fillWhite"] do
+            renderPayloadChanges issue
 
       -- Action buttons
       div_ [class_ "flex items-center gap-3 mt-4 pt-4 border-t border-strokeWeak"] do
@@ -921,21 +1246,67 @@ renderIssue hideByDefault currTime timeFilter issue = do
           faSprite_ "eye" "regular" "w-4 h-4 mr-1"
           "view related logs"
 
-        button_ [class_ "hidden inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-fillWarning-strong border-strokeWarning-strong hover:bg-fillWarning-weak"] do
-          faSprite_ "exclamation-triangle" "regular" "h-4 w-4 mr-1"
-          "Review Impact"
+        -- Review Impact button (hidden for now - not yet supported)
+        when False do
+          button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-fillWarning-strong border-strokeWarning-strong hover:bg-fillWarning-weak"] do
+            faSprite_ "exclamation-triangle" "regular" "h-4 w-4 mr-1"
+            "Review Impact"
 
         button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-textBrand border-strokeBrand-strong hover:bg-fillBrand-weak"] do
           faSprite_ "code" "regular" "w-4 h-4 mr-1"
           "View Full Schema"
-    
+
     -- Events count
     div_ [class_ "w-36 flex items-start justify-center"]
       $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"]
       $ show issue.eventsAgg.count
-    
+
     -- Chart widget
     let issueQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
+    let mockChartData = if hideByDefault -- Only provide mock data for slider view
+          then case issue.targetHash of
+            "hash123" -> Just $ AE.Array $ V.fromList 
+              [ AE.Array $ V.fromList [AE.Number 1735689600000, AE.Number 3]  -- timestamp, count
+              , AE.Array $ V.fromList [AE.Number 1735693200000, AE.Number 5]
+              , AE.Array $ V.fromList [AE.Number 1735696800000, AE.Number 8]
+              , AE.Array $ V.fromList [AE.Number 1735700400000, AE.Number 12]
+              , AE.Array $ V.fromList [AE.Number 1735704000000, AE.Number 15]
+              , AE.Array $ V.fromList [AE.Number 1735707600000, AE.Number 10]
+              , AE.Array $ V.fromList [AE.Number 1735711200000, AE.Number 8]
+              , AE.Array $ V.fromList [AE.Number 1735714800000, AE.Number 5]
+              ]
+            "hash456" -> Just $ AE.Array $ V.fromList 
+              [ AE.Array $ V.fromList [AE.Number 1735689600000, AE.Number 2]
+              , AE.Array $ V.fromList [AE.Number 1735693200000, AE.Number 4]
+              , AE.Array $ V.fromList [AE.Number 1735696800000, AE.Number 7]
+              , AE.Array $ V.fromList [AE.Number 1735700400000, AE.Number 11]
+              , AE.Array $ V.fromList [AE.Number 1735704000000, AE.Number 15]
+              , AE.Array $ V.fromList [AE.Number 1735707600000, AE.Number 18]
+              , AE.Array $ V.fromList [AE.Number 1735711200000, AE.Number 12]
+              , AE.Array $ V.fromList [AE.Number 1735714800000, AE.Number 8]
+              ]
+            "hash789" -> Just $ AE.Array $ V.fromList  -- Payment error spike
+              [ AE.Array $ V.fromList [AE.Number 1735689600000, AE.Number 5]
+              , AE.Array $ V.fromList [AE.Number 1735693200000, AE.Number 3]
+              , AE.Array $ V.fromList [AE.Number 1735696800000, AE.Number 8]
+              , AE.Array $ V.fromList [AE.Number 1735700400000, AE.Number 45]  -- Spike
+              , AE.Array $ V.fromList [AE.Number 1735704000000, AE.Number 120] -- Big spike
+              , AE.Array $ V.fromList [AE.Number 1735707600000, AE.Number 85]
+              , AE.Array $ V.fromList [AE.Number 1735711200000, AE.Number 20]
+              , AE.Array $ V.fromList [AE.Number 1735714800000, AE.Number 10]
+              ]
+            "hash1011" -> Just $ AE.Array $ V.fromList  -- High error rate
+              [ AE.Array $ V.fromList [AE.Number 1735689600000, AE.Number 10]
+              , AE.Array $ V.fromList [AE.Number 1735693200000, AE.Number 15]
+              , AE.Array $ V.fromList [AE.Number 1735696800000, AE.Number 25]
+              , AE.Array $ V.fromList [AE.Number 1735700400000, AE.Number 40]
+              , AE.Array $ V.fromList [AE.Number 1735704000000, AE.Number 65]
+              , AE.Array $ V.fromList [AE.Number 1735707600000, AE.Number 90]  -- Peak
+              , AE.Array $ V.fromList [AE.Number 1735711200000, AE.Number 75]
+              , AE.Array $ V.fromList [AE.Number 1735714800000, AE.Number 60]
+              ]
+            _ -> Nothing
+          else Nothing
     div_ [class_ "flex items-start justify-center "]
       $ div_ [class_ "w-56 h-12 px-3"]
       $ Widget.widget_
@@ -950,6 +1321,15 @@ renderIssue hideByDefault currTime timeFilter issue = do
         , Widget.query = Just $ issueQueryPartial <> "\" | summarize count(*) by bin(timestamp, 1h)"
         , Widget._projectId = Just issue.projectId
         , Widget.hideLegend = Just True
+        , Widget.eager = if isJust mockChartData then Just True else Nothing -- Enable eager mode when we have mock data
+        , Widget.dataset = mockChartData >>= \chartData -> Just Widget.WidgetDataset
+            { Widget.source = chartData
+            , Widget.rowsPerMin = Nothing
+            , Widget.value = Nothing
+            , Widget.from = Nothing
+            , Widget.to = Nothing
+            , Widget.stats = Nothing
+            }
         }
 
 
