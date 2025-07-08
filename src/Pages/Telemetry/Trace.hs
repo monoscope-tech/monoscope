@@ -1,4 +1,4 @@
-module Pages.Telemetry.Trace (traceH, TraceDetailsGet (..)) where
+module Pages.Telemetry.Trace (traceH, TraceDetailsGet (..), getServiceName, getServiceColor, getRequestDetails, spanHasErrors) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
