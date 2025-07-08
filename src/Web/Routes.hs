@@ -59,6 +59,7 @@ import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils qualified as BotUtils
+import Pages.Bots.Whatsapp qualified as Whatsapp
 import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
@@ -152,6 +153,7 @@ data Routes mode = Routes
   , slackActionsPost :: mode :- "actions" :> "slack" :> ReqBody '[FormUrlEncoded] Slack.SlackActionForm :> Post '[JSON] AE.Value
   , slackEventsPost :: mode :- "slack" :> "events" :> ReqBody '[JSON] Slack.SlackEventPayload :> Post '[JSON] AE.Value
   , externalOptionsGet :: mode :- "interactions" :> "external_options" :> ReqBody '[JSON] AE.Value :> Post '[JSON] AE.Value
+  , whatsappIncomingPost :: mode :- "whatsapp" :> "incoming" :> ReqBody '[FormUrlEncoded] Whatsapp.TwilioWhatsAppMessage :> Post '[JSON] AE.Value
   , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
   , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[JSON] LemonSqueezy.WebhookData :> Post '[HTML] (Html ())
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
@@ -355,6 +357,7 @@ server pool =
     , slackActionsPost = Slack.slackActionsH
     , slackEventsPost = Slack.slackEventsPostH
     , externalOptionsGet = Slack.externalOptionsH
+    , whatsappIncomingPost = Whatsapp.whatsappIncomingPostH
     , clientMetadata = ClientMetadata.clientMetadataH
     , lemonWebhook = LemonSqueezy.webhookPostH
     , chartsDataShot = Charts.queryMetrics

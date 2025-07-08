@@ -85,6 +85,8 @@ data EnvConfig = EnvConfig
   , whatsappEndpointTemplate :: Text
   , whatsappAllReportTemplate :: Text
   , whatsappErrorReportTemplate :: Text
+  , whatsappBotChart :: Text
+  , whatsappBotText :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)

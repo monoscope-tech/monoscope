@@ -18,7 +18,7 @@ import System.Config (EnvConfig (..))
 import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey)
 
 
-data BotType = Discord | Slack
+data BotType = Discord | Slack | WhatsApp
   deriving (Eq, Show)
 
 
@@ -50,17 +50,19 @@ handleTableResponse target tableAsVecE envCfg projectId query =
   case tableAsVecE of
     Left err -> case target of
       Discord -> AE.object ["content" AE..= "Error processing query"]
-      _ -> AE.object ["text" AE..= "Error processing query: "]
+      WhatsApp -> AE.object ["body" AE..= "Error processing query"]
+      Slack -> AE.object ["text" AE..= "Error processing query: "]
     Right tableAsVec -> do
       let (requestVecs, colNames, resultCount) = tableAsVec
           colIdxMap = listToIndexHashMap colNames
           tableData = recsVecToTableData requestVecs colIdxMap
-          url' = envCfg.hostUrl <> "p/" <> projectId.toText <> "/log_explorer?query=" <> (decodeUtf8 $ urlEncode True $ encodeUtf8 query)
-          explorerLink = "[Open in log explorer](" <> url' <> ")"
-          content = "**Total events (" <> show resultCount <> ")**\n**Query used:** " <> query <> "\n\n" <> tableData <> "\n" <> explorerLink
+          url' =   envCfg.hostUrl <> "p/" <> projectId.toText <> "/log_explorer?query=" <> (decodeUtf8 $ urlEncode True $ encodeUtf8 query)
+          explorerLink = "[Open in log explorer]("  <> url' <> ")"
+          content = "**Total events (" <> show resultCount <> ")**\n**Query used:** " <> query <> "\n\n" <> tableData <> "\n"
        in case target of
-            Discord -> AE.object ["content" AE..= content]
-            _ ->
+            Discord -> AE.object ["content" AE..= (content  <> explorerLink)]
+            WhatsApp -> AE.object ["body" AE..= (content  <> url')]
+            Slack ->
               AE.object
                 [ "blocks"
                     AE..= AE.Array
@@ -93,7 +95,7 @@ recsVecToTableData recsVec colIdxMap =
             , hasErrors = lookupVecBoolByKey v colIdxMap "errors"
             }
       )
-      (V.toList (V.take 20 recsVec))
+      (V.toList (V.take 15 recsVec))
 
 
 padRight :: Int -> Text -> Text

@@ -11,6 +11,7 @@ module Models.Projects.Projects (
   userByProjectId,
   selectProjectsForUser,
   updateOnboardingStepsCompleted,
+  getProjectByPhoneNumber,
   updateProject,
   deleteProject,
   updateProjectPricing,
@@ -241,6 +242,12 @@ projectById :: ProjectId -> DBT IO (Maybe Project)
 projectById = queryOne q
   where
     q = [sql| select p.* from projects.projects p where id=?|]
+
+
+getProjectByPhoneNumber :: Text -> DBT IO (Maybe Project)
+getProjectByPhoneNumber number = queryOne q (Only number)
+  where
+    q = [sql| select p.* from projects.projects p where ?=Any(p.whatsapp_numbers) |]
 
 
 selectProjectsForUser :: Users.UserId -> DBT IO (V.Vector Project')
