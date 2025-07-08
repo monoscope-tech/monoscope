@@ -47,6 +47,7 @@ import Data.ByteString.Char8 qualified as BSC
 import Data.Default (Default, def)
 import Data.Text qualified as T
 import Data.Time
+import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
@@ -420,8 +421,8 @@ acknowledgeAnomalies uid aids
   | V.null aids = pure V.empty
   | otherwise = do
       -- Get anomaly hashes from the issues being acknowledged
-      anomalyHashesResult <- query qGetHashes aids :: DBT IO (V.Vector (V.Vector Text))
-      let allAnomalyHashes = V.concat $ V.toList anomalyHashesResult
+      anomalyHashesResult <- query qGetHashes (Only aids) :: DBT IO (V.Vector (Only (V.Vector Text)))
+      let allAnomalyHashes = V.concat $ V.toList $ V.map (\(Only hashes) -> hashes) anomalyHashesResult
       -- Update issues
       _ <- query qIssues (uid, aids) :: DBT IO (V.Vector Text)
       -- Update anomalies - both directly referenced and those tracked by the issues
@@ -1090,7 +1091,7 @@ mergeIssues issues = case V.uncons issues of
       , affectedClients = max base.affectedClients new.affectedClients
       , requestPayloads = mergePayloadLists base.requestPayloads new.requestPayloads
       , responsePayloads = mergePayloadLists base.responsePayloads new.responsePayloads
-      , updatedAt = max base.updatedAt new.updatedAt
+      , updatedAt = if zonedTimeToUTC base.updatedAt > zonedTimeToUTC new.updatedAt then base.updatedAt else new.updatedAt
       , critical = base.critical || new.critical
       }
     
