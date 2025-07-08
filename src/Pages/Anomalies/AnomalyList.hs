@@ -813,7 +813,12 @@ renderIssue hideByDefault currTime timeFilter issue = do
   let issueId = Anomalies.anomalyIdText issue.id
   let timeSinceString = prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
 
-  div_ [class_ $ "flex flex-col py-4 gap-4 itemsListItem border border-strokeWeak rounded-lg p-6 " <> if hideByDefault then "card-round" else "", style_ (if hideByDefault then "display:none" else ""), id_ issueId] do
+  div_ [class_ $ "flex py-4 gap-8 items-start itemsListItem border border-strokeWeak rounded-lg p-6 " <> if hideByDefault then "card-round" else "", style_ (if hideByDefault then "display:none" else ""), id_ issueId] do
+    -- Checkbox and accent color
+    div_ [class_ $ "h-4 flex space-x-3 w-8 items-center justify-center " <> if hideByDefault then "hidden" else ""] do
+      a_ [class_ $ anomalyAccentColor (isJust issue.acknowlegedAt) (isJust issue.archivedAt) <> " w-2 h-full"] ""
+      input_ [term "aria-label" "Select Issue", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "anomalyId", value_ issueId]
+    
     -- Main section with title, badges, and metadata
     div_ [class_ "flex-1 min-w-0"] do
       -- Title and badges row
@@ -881,7 +886,7 @@ renderIssue hideByDefault currTime timeFilter issue = do
           " payloads affected"
 
       -- Impact warning box
-      div_ [class_ "mb-4 p-4 border-l-4 border-l-fillWarning-strong bg-fillWarning-weak rounded-lg"] do
+      div_ [class_ "hidden mb-4 p-4 border-l-4 border-l-fillWarning-strong bg-fillWarning-weak rounded-lg"] do
         div_ [class_ "flex items-start gap-3"] do
           faSprite_ "exclamation-circle" "regular" "h-5 w-5 text-fillWarning-strong mt-0.5 flex-shrink-0"
           div_ [class_ "flex-1"] do
@@ -906,13 +911,36 @@ renderIssue hideByDefault currTime timeFilter issue = do
           faSprite_ "eye" "regular" "w-4 h-4 mr-1"
           "view related logs"
 
-        button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-fillWarning-strong border-strokeWarning-strong hover:bg-fillWarning-weak"] do
+        button_ [class_ "hidden inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-fillWarning-strong border-strokeWarning-strong hover:bg-fillWarning-weak"] do
           faSprite_ "exclamation-triangle" "regular" "h-4 w-4 mr-1"
           "Review Impact"
 
         button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-textBrand border-strokeBrand-strong hover:bg-fillBrand-weak"] do
           faSprite_ "code" "regular" "w-4 h-4 mr-1"
           "View Full Schema"
+    
+    -- Events count
+    div_ [class_ "w-36 flex items-start justify-center"]
+      $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"]
+      $ show issue.eventsAgg.count
+    
+    -- Chart widget
+    let issueQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
+    div_ [class_ "flex items-start justify-center "]
+      $ div_ [class_ "w-56 h-12 px-3"]
+      $ Widget.widget_
+      $ (def :: Widget.Widget)
+        { Widget.standalone = Just True
+        , Widget.id = Just issue.targetHash
+        , Widget.title = Just issue.targetHash
+        , Widget.showTooltip = Just False
+        , Widget.naked = Just True
+        , Widget.xAxis = Just (def{Widget.showAxisLabel = Just False})
+        , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
+        , Widget.query = Just $ issueQueryPartial <> "\" | summarize count(*) by bin(timestamp, 1h)"
+        , Widget._projectId = Just issue.projectId
+        , Widget.hideLegend = Just True
+        }
 
 
 -- Render payload changes section
