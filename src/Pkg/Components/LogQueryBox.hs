@@ -76,7 +76,7 @@ logQueryBox_ config = do
                   on keydown[key=='Space' and shiftKey] from document set #ai-search-chkbox.checked to true
                   |]
               ]
-            <> [checked_ | isJust config.targetWidgetPreview]
+              <> [checked_ | isJust config.targetWidgetPreview]
           script_
             [text|
             document.addEventListener('keydown', function(e) {
@@ -89,7 +89,9 @@ logQueryBox_ config = do
               }
             });
             window.handleVisualizationUpdate = function(vizType, widgetId) {
+              console.log("handleVisualizationUpdate => ", vizType);
               window.requestAnimationFrame(() => {
+                console.log("handleVisualizationUpdate => ", vizType);
                 updateVizTypeInUrl(vizType);
                 document.querySelector(`#visualizationTabs input[value='$${vizType}']`).checked = true;
                 window.widgetJSON.type = vizType;
@@ -122,12 +124,11 @@ logQueryBox_ config = do
                    on htmx:afterRequest 
                      if event.detail.successful 
                        then 
-                         call JSON.parse(event.detail.xhr.responseText) set result to it
-                         if result.query then call #filterElement.handleAddQuery(result.query, true) end
-                          log result.query then
-                         if result.visualization_type
+                         call JSON.parse(event.detail.xhr.responseText) set :result to it
+                         if :result.query then call #filterElement.handleAddQuery(:result.query, true) end
+                         if :result.visualization_type
                            then
-                             set vizType to result.visualization_type
+                             set vizType to :result.visualization_type
                              set widgetId to (@data-container-id or 'visualization-widget-container')
                              call window.handleVisualizationUpdate(vizType, widgetId)
                          end
@@ -223,7 +224,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId =
                     end
                  |]
           ]
-        <> [checked_ | vizType == defaultVizType]
+          <> [checked_ | vizType == defaultVizType]
       span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
       span_ [] $ toHtml label
 

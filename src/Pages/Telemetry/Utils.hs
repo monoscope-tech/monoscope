@@ -15,7 +15,7 @@ import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Relude
-import Utils (faSprite_)
+import Utils (faSprite_, prettyPrintCount)
 
 
 getServiceName :: Maybe (Map Text AE.Value) -> Text
@@ -211,7 +211,7 @@ buildTree_ pid sp level isLasChild dp = do
               whenJust target $ \t -> do
                 span_ [class_ "w-[10vw] truncate"] $ toHtml $ T.intercalate ", " $ V.toList t.serviceNames
                 div_ [class_ "w-[8vw]"] do
-                  span_ [class_ "badge badge-ghost"] $ show t.dataPointsCount
+                  span_ [class_ "badge badge-ghost"] $ toHtml $ prettyPrintCount t.dataPointsCount
             div_ [class_ "flex w-[10vw] items-center text-xs"] do
               div_ [class_ "flex gap-1 items-center badge badge-ghost"] do
                 faSprite_ "dashboard" "regular" "w-4 h-4"

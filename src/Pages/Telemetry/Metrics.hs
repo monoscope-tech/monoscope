@@ -26,7 +26,7 @@ metricsOverViewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe T
 metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
-  let tab = maybe "datapoints" (\t -> if t == "datapoints" then t else "charts") tabM
+  let tab = maybe "charts" (\t -> if t == "charts" then t else "datapoints") tabM
   let (from, to, currentRange) = parseTime fromM toM sinceM now
       bwconf =
         (def :: BWConfig)
@@ -81,8 +81,8 @@ overViewTabs :: Projects.ProjectId -> Text -> Html ()
 overViewTabs pid tab = do
   div_ [class_ "w-max mt-5"] do
     div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center border"] do
+      a_ [onclick_ "window.setQueryParamAndReload('tab', 'charts')", role_ "tab", class_ $ "tab py-1.5 h-auto! " <> if tab == "charts" then "tab-active" else ""] "Overview"
       a_ [onclick_ "window.setQueryParamAndReload('tab', 'datapoints')", role_ "tab", class_ $ "tab py-1.5 h-auto!  " <> if tab == "datapoints" then "tab-active" else ""] "Datapoints"
-      a_ [onclick_ "window.setQueryParamAndReload('tab', 'charts')", role_ "tab", class_ $ "tab py-1.5 h-auto! " <> if tab == "charts" then "tab-active" else ""] "Charts List"
 
 
 chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> V.Vector Text -> Text -> Text -> Text -> Html ()
