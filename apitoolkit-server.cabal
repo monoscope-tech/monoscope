@@ -81,6 +81,7 @@ library
       Pages.Bots.Discord
       Pages.Bots.Slack
       Pages.Bots.Utils
+      Pages.Bots.Whatsapp
       Pages.Charts.Charts
       Pages.Components
       Pages.Dashboards
