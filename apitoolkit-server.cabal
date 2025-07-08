@@ -78,9 +78,9 @@ library
       Pages.Anomalies.AnomalyList
       Pages.Api
       Pages.BodyWrapper
-      Pages.Bots.Slack
       Pages.Bots.Discord
-      Pages.Bots.Utils 
+      Pages.Bots.Slack
+      Pages.Bots.Utils
       Pages.Charts.Charts
       Pages.Components
       Pages.Dashboards
@@ -103,7 +103,6 @@ library
       Pages.Specification.GenerateSwagger
       Pages.Telemetry.Metrics
       Pages.Telemetry.Trace
-      Pages.Telemetry.Utils
       Pkg.AI
       Pkg.Components.ExternalHeadScripts
       Pkg.Components.ItemsList

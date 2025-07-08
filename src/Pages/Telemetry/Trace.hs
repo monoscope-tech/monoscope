@@ -20,10 +20,78 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.Components (dateTime)
 import Pages.LogExplorer.LogItem qualified as LogItem
-import Pages.Telemetry.Utils
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, getDurationNSMS, getServiceColors, onpointerdown_, utcTimeToNanoseconds)
+import Data.Aeson.KeyMap qualified as KEM
+import Data.Scientific (toBoundedInteger)
+
+
+getServiceName :: Maybe (Map Text AE.Value) -> Text
+getServiceName rs = case Map.lookup "service" (fromMaybe Map.empty rs) of
+  Just (AE.Object o) -> case KEM.lookup "name" o of
+    Just (AE.String s) -> s
+    _ -> "Unknown"
+  _ -> "Unknown"
+
+
+getServiceColor :: Text -> HashMap Text Text -> Text
+getServiceColor s serviceColors = fromMaybe "bg-black" $ HM.lookup s serviceColors
+
+
+getRequestDetails :: Maybe (Map Text AE.Value) -> Maybe (Text, Text, Text, Int)
+getRequestDetails spanRecord = do
+  m <- spanRecord
+  case Map.lookup "http" m of
+    Just (AE.Object o) ->
+      Just
+        ( "HTTP"
+        , case KEM.lookup "request" o of
+            Just (AE.Object r) -> getText "method" r
+            _ -> ""
+        , case getUrl o of
+            Just u -> u
+            Nothing -> case Map.lookup "url" m of
+              Just (AE.Object p) -> fromMaybe "/" $ getUrl p
+              _ -> "/"
+        , case KEM.lookup "response" o of
+            Just (AE.Object r) -> getStatus r
+            _ -> 0
+        )
+    _ -> case Map.lookup "rpc" m of
+      Just (AE.Object o) -> Just ("GRPC", getText "service" o, getText "method" o, getStatus o)
+      _ -> case Map.lookup "db" m of
+        Just (AE.Object o) -> Just ("DB", getText "system" o, if T.null query then statement else query, getStatus o)
+          where
+            statement = getText "statement" o
+            query = getText "query" o
+        _ -> Nothing
+  where
+    getText :: Text -> AE.Object -> Text
+    getText key v = case KEM.lookup (AEKey.fromText key) v of
+      Just (AE.String s) -> s
+      _ -> ""
+    getInt :: Text -> AE.Object -> Maybe Int
+    getInt key v = case KEM.lookup (AEKey.fromText key) v of
+      Just (AE.Number n) -> toBoundedInteger n
+      Just (AE.String s) -> readMaybe $ toString s
+      _ -> Nothing
+    getUrl :: AE.Object -> Maybe Text
+    getUrl v =
+      let opts = [getText "route" v, getText "path" v, getText "url" v, getText "target" v]
+       in viaNonEmpty head $ Relude.filter (not . T.null) opts
+    getStatus :: AE.Object -> Int
+    getStatus v = fromMaybe 0 $ getInt "status_code" v
+
+
+spanHasErrors :: Telemetry.SpanRecord -> Bool
+spanHasErrors spanRecord = case spanRecord.events of
+  AE.Array a ->
+    let hasExceptionEvent event = case event of
+          AE.Object obj -> KEM.lookup "event_name" obj == Just (AE.String "exception")
+          _ -> False
+     in Relude.any hasExceptionEvent (V.toList a)
+  _ -> False
 
 
 traceH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)

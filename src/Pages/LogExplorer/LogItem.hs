@@ -24,10 +24,92 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.Components (dateTime)
-import Pages.Telemetry.Utils
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils
+import Data.Aeson.Key qualified as AEKey
+import Data.Scientific (toBoundedInteger)
+
+
+getServiceName :: Maybe (Map Text AE.Value) -> Text
+getServiceName rs = case Map.lookup "service" (fromMaybe Map.empty rs) of
+  Just (AE.Object o) -> case KEM.lookup "name" o of
+    Just (AE.String s) -> s
+    _ -> "Unknown"
+  _ -> "Unknown"
+
+
+getRequestDetails :: Maybe (Map Text AE.Value) -> Maybe (Text, Text, Text, Int)
+getRequestDetails spanRecord = do
+  m <- spanRecord
+  case Map.lookup "http" m of
+    Just (AE.Object o) ->
+      Just
+        ( "HTTP"
+        , case KEM.lookup "request" o of
+            Just (AE.Object r) -> getText "method" r
+            _ -> ""
+        , case getUrl o of
+            Just u -> u
+            Nothing -> case Map.lookup "url" m of
+              Just (AE.Object p) -> fromMaybe "/" $ getUrl p
+              _ -> "/"
+        , case KEM.lookup "response" o of
+            Just (AE.Object r) -> getStatus r
+            _ -> 0
+        )
+    _ -> case Map.lookup "rpc" m of
+      Just (AE.Object o) -> Just ("GRPC", getText "service" o, getText "method" o, getStatus o)
+      _ -> case Map.lookup "db" m of
+        Just (AE.Object o) -> Just ("DB", getText "system" o, if T.null query then statement else query, getStatus o)
+          where
+            statement = getText "statement" o
+            query = getText "query" o
+        _ -> Nothing
+  where
+    getText :: Text -> AE.Object -> Text
+    getText key v = case KEM.lookup (AEKey.fromText key) v of
+      Just (AE.String s) -> s
+      _ -> ""
+    getInt :: Text -> AE.Object -> Maybe Int
+    getInt key v = case KEM.lookup (AEKey.fromText key) v of
+      Just (AE.Number n) -> toBoundedInteger n
+      Just (AE.String s) -> readMaybe $ toString s
+      _ -> Nothing
+    getUrl :: AE.Object -> Maybe Text
+    getUrl v =
+      let opts = [getText "route" v, getText "path" v, getText "url" v, getText "target" v]
+       in viaNonEmpty head $ Relude.filter (not . T.null) opts
+    getStatus :: AE.Object -> Int
+    getStatus v = fromMaybe 0 $ getInt "status_code" v
+
+
+getSpanErrors :: AE.Value -> [AE.Value]
+getSpanErrors evs = case evs of
+  AE.Array a ->
+    let events = V.toList a
+        hasExceptionEvent :: AE.Value -> Bool
+        hasExceptionEvent event = case event of
+          AE.Object obj -> KEM.lookup "event_name" obj == Just (AE.String "exception")
+          _ -> False
+     in Relude.filter hasExceptionEvent events
+  _ -> []
+
+
+getErrorDetails :: AE.Value -> (Text, Text, Text)
+getErrorDetails ae = case ae of
+  AE.Object obj -> case KEM.lookup "event_attributes" obj of
+    Just (AE.Object jj) -> case KEM.lookup "exception" jj of
+      Just (AE.Object j) -> (fromMaybe "" $ getText "type" j, fromMaybe "" $ getText "message" j, fromMaybe "" $ getText "stacktrace" j)
+      _ -> ("", "", "")
+    _ -> ("", "", "")
+  _ -> ("", "", "")
+  where
+    getText :: Text -> AE.Object -> Maybe Text
+    getText key v = case KEM.lookup (AEKey.fromText key) v of
+      Just (AE.String s) -> Just s
+      Just vl -> Just $ show vl
+      _ -> Nothing
 
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiItemDetailed)
