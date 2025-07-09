@@ -517,6 +517,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS apis.endpoint_request_stats AS
 CREATE INDEX IF NOT EXISTS idx_apis_endpoint_request_stats_project_id ON apis.endpoint_request_stats(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_endpoint_request_stats_endpoint_id ON apis.endpoint_request_stats(endpoint_id);
 
+CREATE TYPE apis.issue_type AS ENUM ('api_change', 'runtime_exception', 'query_alert');
 CREATE TABLE IF NOT EXISTS apis.issues
 (
   id              UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -606,8 +607,8 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS apis.project_request_stats AS
   anomalies_stats AS (
       SELECT
           project_id,
-          count(*) FILTER (WHERE anomaly_type != 'field' AND acknowleged_at IS NULL) as total_anomalies,
-          count(*) FILTER (WHERE created_at < NOW()::DATE - 7 AND anomaly_type != 'field' AND acknowleged_at IS NULL) as total_anomalies_last_week
+          count(*) FILTER (WHERE issue_type != 'api_change' AND acknowledged_at IS NULL) as total_anomalies,
+          count(*) FILTER (WHERE created_at < NOW()::DATE - 7 AND issue_type != 'api_change' AND acknowledged_at IS NULL) as total_anomalies_last_week
       FROM apis.issues
       GROUP BY project_id
   )
