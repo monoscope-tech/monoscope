@@ -517,6 +517,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS apis.endpoint_request_stats AS
 CREATE INDEX IF NOT EXISTS idx_apis_endpoint_request_stats_project_id ON apis.endpoint_request_stats(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_endpoint_request_stats_endpoint_id ON apis.endpoint_request_stats(endpoint_id);
 
+CREATE TYPE apis.issue_type AS ENUM ('api_change', 'runtime_exception', 'query_alert');
 CREATE TABLE IF NOT EXISTS apis.issues
 (
   id              UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -529,11 +530,34 @@ CREATE TABLE IF NOT EXISTS apis.issues
   issue_data      JSONB NOT NULL DEFAULT '{}',
   endpoint_id     UUID,
   acknowleged_by  UUID,
-  archived_at    TIMESTAMP           WITH       TIME        ZONE
+  archived_at     TIMESTAMP WITH TIME ZONE,
+  -- Enhanced UI fields from migration 0004
+  title           TEXT DEFAULT '',
+  service         TEXT DEFAULT '',
+  critical        BOOLEAN DEFAULT FALSE,
+  breaking_changes INTEGER DEFAULT 0,
+  incremental_changes INTEGER DEFAULT 0,
+  affected_payloads INTEGER DEFAULT 0,
+  affected_clients INTEGER DEFAULT 0,
+  estimated_requests TEXT DEFAULT '',
+  migration_complexity TEXT DEFAULT 'low',
+  recommended_action TEXT DEFAULT '',
+  request_payloads JSONB DEFAULT '[]'::jsonb,
+  response_payloads JSONB DEFAULT '[]'::jsonb,
+  -- Anomaly grouping fields from migration 0005
+  anomaly_hashes  TEXT[] DEFAULT '{}',
+  endpoint_hash   TEXT DEFAULT ''
 );
 SELECT manage_updated_at('apis.issues');
 CREATE INDEX IF NOT EXISTS idx_apis_issues_project_id ON apis.issues(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_issues_project_id_target_hash ON apis.issues(project_id, target_hash);
+-- Indexes from migration 0004
+CREATE INDEX IF NOT EXISTS idx_issues_critical ON apis.issues (critical) WHERE critical = TRUE;
+CREATE INDEX IF NOT EXISTS idx_issues_breaking_changes ON apis.issues (breaking_changes) WHERE breaking_changes > 0;
+CREATE INDEX IF NOT EXISTS idx_issues_service ON apis.issues (service);
+-- Indexes from migration 0005
+CREATE INDEX IF NOT EXISTS idx_issues_endpoint_hash_open ON apis.issues (project_id, endpoint_hash) WHERE acknowleged_at IS NULL AND archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_issues_anomaly_hashes ON apis.issues USING GIN (anomaly_hashes);
 
 
 -- Create a view that tracks project request related statistic points from the request dump table.
@@ -583,8 +607,8 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS apis.project_request_stats AS
   anomalies_stats AS (
       SELECT
           project_id,
-          count(*) FILTER (WHERE anomaly_type != 'field' AND acknowleged_at IS NULL) as total_anomalies,
-          count(*) FILTER (WHERE created_at < NOW()::DATE - 7 AND anomaly_type != 'field' AND acknowleged_at IS NULL) as total_anomalies_last_week
+          count(*) FILTER (WHERE issue_type != 'api_change' AND acknowledged_at IS NULL) as total_anomalies,
+          count(*) FILTER (WHERE created_at < NOW()::DATE - 7 AND issue_type != 'api_change' AND acknowledged_at IS NULL) as total_anomalies_last_week
       FROM apis.issues
       GROUP BY project_id
   )

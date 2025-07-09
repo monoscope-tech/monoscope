@@ -7,7 +7,7 @@ import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.UUID qualified as UUID
 import Data.List qualified as L (intersect, union)
-import Data.List.Extra (chunksOf)
+import Data.List.Extra (chunksOf, groupBy)
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
@@ -17,8 +17,10 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Data.Vector.Algorithms qualified as VAA
+import Data.Aeson.QQ (aesonQQ)
 import Database.PostgreSQL.Entity.DBT (execute, query, withPool)
 import Database.PostgreSQL.Simple (Only (Only), Query, SomePostgreSqlException)
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact qualified as PTR
 import Effectful (Eff, (:>))
@@ -29,7 +31,9 @@ import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Log qualified
 import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Issues.Enhancement qualified as Enhancement
 import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.Fields.Query qualified as FieldsQ
 import Models.Apis.Fields.Types qualified as Fields
@@ -92,6 +96,8 @@ data BgJobs
   | FiveMinuteSpanProcessing UTCTime
   | OneMinuteErrorProcessing UTCTime
   | SlackNotification Projects.ProjectId Text
+  | EnhanceIssuesWithLLM Projects.ProjectId (V.Vector Issues.IssueId)
+  | ProcessIssuesEnhancement UTCTime
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -202,6 +208,11 @@ processBackgroundJob authCtx job bgJob =
             let scheduledTime3 = addUTCTime (fromIntegral $ interval * 60) currentTime
             scheduleJob conn "background_jobs" (BackgroundJobs.OneMinuteErrorProcessing scheduledTime3) scheduledTime3
 
+          -- Schedule issue enhancement processing every hour
+          forM_ [0 .. 23] \hr -> do
+            let scheduledTime4 = addUTCTime (fromIntegral $ hr * 3600) currentTime
+            scheduleJob conn "background_jobs" (BackgroundJobs.ProcessIssuesEnhancement scheduledTime4) scheduledTime4
+
       -- Handle regular daily jobs for each project
       projects <- dbtToEff $ query [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
       forM_ projects \p -> do
@@ -262,6 +273,8 @@ processBackgroundJob authCtx job bgJob =
     FiveMinuteSpanProcessing scheduledTime -> processFiveMinuteSpans scheduledTime
     OneMinuteErrorProcessing scheduledTime -> processOneMinuteErrors scheduledTime
     SlackNotification pid message -> sendSlackMessage pid message
+    EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
+    ProcessIssuesEnhancement scheduledTime -> processIssuesEnhancement scheduledTime
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -570,6 +583,23 @@ handleQueryMonitorThreshold :: Monitors.QueryMonitorEvaled -> Bool -> ATBackgrou
 handleQueryMonitorThreshold monitorE isAlert = do
   Log.logAttention "Query Monitors Triggered " monitorE
   _ <- dbtToEff $ Monitors.updateQMonitorTriggeredState monitorE.id isAlert
+  
+  -- Create query alert issue
+  let thresholdType = if monitorE.triggerLessThan then "below" else "above"
+      threshold = fromIntegral monitorE.alertThreshold
+  
+  issue <- liftIO $ Issues.createQueryAlertIssue 
+    monitorE.projectId 
+    (show monitorE.id)
+    monitorE.alertConfig.title
+    monitorE.logQuery
+    threshold
+    (fromIntegral monitorE.evalResult :: Double)
+    thresholdType
+  
+  dbtToEff $ Issues.insertIssue issue
+  
+  -- Send notifications
   Relude.when monitorE.alertConfig.emailAll do
     users <- dbtToEff $ Projects.usersByProjectId monitorE.projectId
     forM_ users \u -> emailQueryMonitorAlert monitorE u.email (Just u)
@@ -607,7 +637,8 @@ sendReportForProject pid rType = do
   projectM <- dbtToEff $ Projects.projectById pid
   forM_ projectM \pr -> do
     stats <- Telemetry.getProjectStatsForReport pid startTime currentTime
-    anomalies <- dbtToEff $ Anomalies.getReportAnomalies pid typTxt
+    -- TODO: Replace with Issues.selectIssues when fully migrated
+    anomalies <- dbtToEff $ Issues.selectIssues pid Nothing Nothing Nothing 100 0
     endpoint_rp <- dbtToEff $ RequestDumps.getRequestDumpForReports pid typTxt
     total_anomalies <- dbtToEff $ Anomalies.countAnomalies pid typTxt
     previous_week <- dbtToEff $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid typTxt
@@ -694,102 +725,45 @@ emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email u
 --     Apitoolkit team
 --               |]
 
-convertAnomaliesToIssues :: V.Vector Anomalies.AnomalyVM -> V.Vector Endpoints.Endpoint -> V.Vector Anomalies.Issue
-convertAnomaliesToIssues ans ens = V.catMaybes $ (\e -> V.find (\a -> e.hash `T.isPrefixOf` a.targetHash) ans >>= Anomalies.convertAnomalyToIssue (Just e.host)) <$> ens
 
 
 newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> V.Vector Text -> ATBackgroundCtx ()
 newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
+  authCtx <- ask @Config.AuthContext
   let anomalyType = fromMaybe (error "parseAnomalyTypes returned Nothing") $ Anomalies.parseAnomalyTypes anomalyTypesT
+  
   case anomalyType of
-    Anomalies.ATEndpoint -> do
-      anomaliesVM <- dbtToEff $ Anomalies.getAnomaliesVM pid targetHashes
-      endpoints <- dbtToEff $ Endpoints.endpointsByHashes pid targetHashes
-      users <- dbtToEff $ Projects.usersByProjectId pid
-      project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-      let endpointsPaths = (\e -> e.method <> " " <> e.urlPath) <$> endpoints
-          anIssues = convertAnomaliesToIssues anomaliesVM endpoints
-          targetHash = fromMaybe "" $ viaNonEmpty head (V.toList targetHashes)
-      _ <- dbtToEff $ Anomalies.insertIssues anIssues
-      let alert = EndpointAlert project.title endpointsPaths targetHash
-      forM_ project.notificationsChannel \case
-        Projects.NSlack -> sendSlackAlert alert pid project.title
-        Projects.NDiscord -> sendDiscordAlert alert pid project.title
-        Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
-        Projects.NEmail -> do
-          forM_ users \u -> do
-            let templateVars =
-                  AE.object
-                    [ "user_name" AE..= u.firstName
-                    , "project_name" AE..= project.title
-                    , "anomaly_url" AE..= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
-                    , "endpoint_name" AE..= endpointsPaths
-                    ]
-            sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing
-
-      pass
-    Anomalies.ATShape -> do
-      anomaliesVM <- dbtToEff $ Anomalies.getAnomaliesVM pid targetHashes
-      endpoints <- dbtToEff $ Endpoints.endpointsByHashes pid $ T.take 8 <$> targetHashes
-      anomalies <- forM anomaliesVM \anomaly -> do
-        let targetHash = anomaly.targetHash
-            getShapesQuery = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
-        shapes <- dbtToEff $ query getShapesQuery (pid, T.take 8 targetHash)
-        let targetFields = maybe [] (V.toList . snd) $ V.find (\a -> fst a == targetHash) shapes
-        let otherFields = toList <$> toList (snd $ V.unzip $ V.filter (\a -> fst a /= targetHash) shapes)
-        updatedFieldFormats <- dbtToEff $ getUpdatedFieldFormats pid (V.fromList targetFields)
-        let newFields = filter (`notElem` foldl' L.union [] otherFields) targetFields
-        let deletedFields = filter (`notElem` targetFields) $ foldl' L.intersect (head $ [] :| otherFields) (tail $ [] :| otherFields)
-        _ <- dbtToEff $ updateShapeCounts pid targetHash (V.fromList newFields) (V.fromList deletedFields) updatedFieldFormats
-        -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
-        -- users <- dbtToEff $ Projects.usersByProjectId pid
-        project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-        pure anomaly{Anomalies.anomalyType = anomalyType, Anomalies.shapeDeletedFields = V.fromList deletedFields, Anomalies.shapeUpdatedFieldFormats = updatedFieldFormats, Anomalies.shapeNewUniqueFields = V.fromList newFields}
-      _ <- dbtToEff $ Anomalies.insertIssues $ convertAnomaliesToIssues anomalies endpoints
-      pass
-    Anomalies.ATFormat -> do
-      -- pass
-      -- -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
-      -- hasEndpointAnomaly <- dbtToEff $ Anomalies.getFormatParentAnomaliesVM pid targetHashes
-      endpoints <- dbtToEff $ Endpoints.endpointsByHashes pid $ T.take 8 <$> targetHashes
-      anomaliesVM <- dbtToEff $ Anomalies.getAnomaliesVM pid targetHashes
-      project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-      _ <- dbtToEff $ Anomalies.insertIssues $ convertAnomaliesToIssues anomaliesVM endpoints
-      pass
+    -- API Change anomalies (endpoint, shape, format) - group into single issue per endpoint
+    Anomalies.ATEndpoint -> processAPIChangeAnomalies pid targetHashes
+    Anomalies.ATShape -> processAPIChangeAnomalies pid targetHashes  
+    Anomalies.ATFormat -> processAPIChangeAnomalies pid targetHashes
+    
+    -- Runtime exceptions get individual issues
     Anomalies.ATRuntimeException -> do
-      users <- dbtToEff $ Projects.usersByProjectId pid
+      errors <- dbtToEff $ Anomalies.errorsByHashes pid targetHashes
       project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-      errs <- dbtToEff $ Anomalies.errorsByHashes pid targetHashes
-      issueId <- liftIO $ Anomalies.AnomalyId <$> UUIDV4.nextRandom
-      _ <-
-        dbtToEff
-          $ Anomalies.insertIssues
-          $ ( \err ->
-                Anomalies.Issue
-                  { id = issueId
-                  , createdAt = err.createdAt
-                  , updatedAt = err.updatedAt
-                  , projectId = pid
-                  , anomalyType = Anomalies.ATRuntimeException
-                  , targetHash = err.hash
-                  , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
-                  , acknowlegedAt = Nothing
-                  , acknowlegedBy = Nothing
-                  , endpointId = Nothing
-                  , archivedAt = Nothing
-                  }
-            )
-            <$> errs
-
+      users <- dbtToEff $ Projects.usersByProjectId pid
+      
+      -- Create one issue per error
+      forM_ errors \err -> do
+        issue <- liftIO $ Issues.createRuntimeExceptionIssue pid err.errorData
+        dbtToEff $ Issues.insertIssue issue
+        
+        -- Queue enhancement job
+        _ <- liftIO $ withResource authCtx.jobsPool \conn -> 
+          createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
+        pass
+      
+      -- Send notifications
       forM_ project.notificationsChannel \case
         Projects.NSlack ->
-          forM_ errs \err -> do sendSlackAlert (RuntimeErrorAlert err.errorData) pid project.title
+          forM_ errors \err -> do sendSlackAlert (RuntimeErrorAlert err.errorData) pid project.title
         Projects.NDiscord ->
-          forM_ errs \err -> do sendDiscordAlert (RuntimeErrorAlert err.errorData) pid project.title
+          forM_ errors \err -> do sendDiscordAlert (RuntimeErrorAlert err.errorData) pid project.title
         Projects.NPhone ->
-          forM_ errs \err -> do
+          forM_ errors \err -> do
             sendWhatsAppAlert (RuntimeErrorAlert err.errorData) pid project.title project.whatsappNumbers
-        _ ->
+        Projects.NEmail ->
           forM_ users \u -> do
             let errosJ =
                   ( \ee ->
@@ -806,9 +780,9 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
                             , "root_error_type" AE..= e.rootErrorType
                             ]
                   )
-                    <$> errs
+                    <$> errors
                 title = project.title
-                errors_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/"
+                errors_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/issues/"
                 templateVars =
                   [aesonQQ|{
                         "project_name": #{title},
@@ -816,8 +790,87 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
                         "errors": #{errosJ}
                    }|]
             sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
-    Anomalies.ATField -> pass
-    Anomalies.ATUnknown -> pass
+    -- Ignore other anomaly types
+    _ -> pass
+
+
+-- | Process API change anomalies (endpoint, shape, format) into unified APIChange issues
+processAPIChangeAnomalies :: Projects.ProjectId -> V.Vector Text -> ATBackgroundCtx ()
+processAPIChangeAnomalies pid targetHashes = do
+  authCtx <- ask @Config.AuthContext
+  
+  -- Get all anomalies
+  anomaliesVM <- dbtToEff $ Anomalies.getAnomaliesVM pid targetHashes
+  
+  -- Group by endpoint hash
+  let anomaliesByEndpoint = groupAnomaliesByEndpointHash anomaliesVM
+  
+  -- Process each endpoint group
+  forM_ anomaliesByEndpoint \(endpointHash, anomalies) -> do
+    -- Check for existing open issue
+    existingIssueM <- dbtToEff $ Issues.findOpenIssueForEndpoint pid endpointHash
+    
+    case existingIssueM of
+      Just existingIssue -> do
+        -- Update existing issue
+        let apiChangeData = Issues.APIChangeData
+              { endpointMethod = fromMaybe "UNKNOWN" $ viaNonEmpty head $ V.toList $ V.mapMaybe (.endpointMethod) anomalies
+              , endpointPath = fromMaybe "/" $ viaNonEmpty head $ V.toList $ V.mapMaybe (.endpointUrlPath) anomalies
+              , endpointHost = "Unknown"
+              , anomalyHashes = V.map (.targetHash) anomalies
+              , shapeChanges = V.empty -- Simplified for now
+              , formatChanges = V.empty -- Simplified for now
+              , newFields = V.concatMap (.shapeNewUniqueFields) anomalies
+              , deletedFields = V.concatMap (.shapeDeletedFields) anomalies
+              , modifiedFields = V.concatMap (.shapeUpdatedFieldFormats) anomalies
+              }
+        dbtToEff $ Issues.updateIssueWithNewAnomaly existingIssue.id apiChangeData
+        
+      Nothing -> do
+        -- Create new issue
+        issue <- liftIO $ Issues.createAPIChangeIssue pid endpointHash anomalies
+        dbtToEff $ Issues.insertIssue issue
+        
+        -- Queue enhancement job
+        _ <- liftIO $ withResource authCtx.jobsPool \conn -> 
+          createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
+        pass
+  
+  -- Send notifications
+  projectM <- dbtToEff $ Projects.projectById pid
+  whenJust projectM \project -> do
+    users <- dbtToEff $ Projects.usersByProjectId pid
+    let endpointInfo = map (\(_, anoms) -> 
+          let firstAnom = V.head anoms
+          in fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath) anomaliesByEndpoint
+    let alert = EndpointAlert project.title (V.fromList endpointInfo) (fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes)
+    
+    forM_ project.notificationsChannel \case
+      Projects.NSlack -> sendSlackAlert alert pid project.title
+      Projects.NDiscord -> sendDiscordAlert alert pid project.title  
+      Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
+      Projects.NEmail -> do
+        forM_ users \u -> do
+          let templateVars = AE.object
+                [ "user_name" AE..= u.firstName
+                , "project_name" AE..= project.title
+                , "anomaly_url" AE..= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/issues")
+                , "endpoint_name" AE..= endpointInfo
+                ]
+          sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing
+
+
+-- | Group anomalies by endpoint hash
+groupAnomaliesByEndpointHash :: V.Vector Anomalies.AnomalyVM -> [(Text, V.Vector Anomalies.AnomalyVM)]
+groupAnomaliesByEndpointHash anomalies =
+  let getEndpointHash a = case a.anomalyType of
+        Anomalies.ATEndpoint -> a.targetHash
+        _ -> T.take 8 a.targetHash
+      sorted = sortOn getEndpointHash $ V.toList anomalies
+      grouped = groupBy (\a b -> getEndpointHash a == getEndpointHash b) sorted
+  in mapMaybe (\grp -> case viaNonEmpty head grp of
+       Just h -> Just (getEndpointHash h, V.fromList grp)
+       Nothing -> Nothing) grouped
 
 
 getUpdatedFieldFormats :: Projects.ProjectId -> V.Vector Text -> PTR.DBT IO (V.Vector Text)
@@ -834,3 +887,77 @@ updateShapeCounts :: Projects.ProjectId -> Text -> V.Vector Text -> V.Vector Tex
 updateShapeCounts pid shapeHash newFields deletedFields updatedFields = execute q (newFields, deletedFields, updatedFields, pid, shapeHash)
   where
     q = [sql| update apis.shapes SET new_unique_fields=?, deleted_fields=?, updated_field_formats=? where project_id=? and hash=?|]
+
+
+-- | Process issues enhancement job - finds issues that need LLM enhancement
+processIssuesEnhancement :: UTCTime -> ATBackgroundCtx ()
+processIssuesEnhancement scheduledTime = do
+  ctx <- ask @Config.AuthContext
+  let oneHourAgo = addUTCTime (-3600) scheduledTime
+  
+  -- Find issues created in the last hour that haven't been enhanced yet
+  issuesToEnhance <- 
+    dbtToEff 
+      $ query 
+        [sql| SELECT id, project_id
+              FROM apis.issues 
+              WHERE created_at >= ? AND created_at < ?
+                AND llm_enhanced_at IS NULL
+                AND acknowledged_at IS NULL
+                AND archived_at IS NULL
+              ORDER BY project_id
+              LIMIT 100 |]
+        (oneHourAgo, scheduledTime)
+  
+  Log.logInfo "Found issues to enhance with LLM" (V.length issuesToEnhance)
+  
+  -- Group issues by project
+  let issuesByProject = V.groupBy (\a b -> snd a == snd b) issuesToEnhance
+  
+  -- Create enhancement jobs for each project
+  liftIO $ withResource ctx.jobsPool \conn ->
+    forM_ issuesByProject \projectIssues -> case V.uncons projectIssues of
+      Nothing -> pass
+      Just ((_, pid), _) -> do
+        let issueIds = V.map (Issues.IssueId . fst) projectIssues
+        void $ createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid issueIds
+
+
+-- | Enhance issues with LLM-generated titles and descriptions
+enhanceIssuesWithLLM :: Projects.ProjectId -> V.Vector Issues.IssueId -> ATBackgroundCtx ()
+enhanceIssuesWithLLM pid issueIds = do
+  ctx <- ask @Config.AuthContext
+  
+  -- Check if OpenAI API key is configured
+  if T.null ctx.config.openaiApiKey
+    then Log.logAttention "OpenAI API key not configured, skipping issue enhancement" pid
+    else do
+      Log.logInfo "Enhancing issues with LLM" (pid.toText, V.length issueIds)
+      
+      -- Process each issue
+      forM_ issueIds \issueId -> do
+        issueM <- dbtToEff $ Issues.selectIssueById issueId
+        case issueM of
+          Nothing -> Log.logAttention "Issue not found for enhancement" issueId
+          Just issue -> do
+            -- Call LLM to enhance the issue based on type
+            enhancementResult <- liftIO $ Enhancement.enhanceIssueWithLLM ctx issue
+            case enhancementResult of
+              Left err -> Log.logAttention "Failed to enhance issue with LLM" (issueId, err)
+              Right enhancement -> do
+                -- Update the issue with enhanced data
+                _ <- dbtToEff $ Issues.updateIssueEnhancement 
+                       enhancement.issueId 
+                       enhancement.enhancedTitle 
+                       enhancement.recommendedAction 
+                       enhancement.migrationComplexity
+                
+                -- Also classify and update criticality
+                criticalityResult <- liftIO $ Enhancement.classifyIssueCriticality ctx issue
+                case criticalityResult of
+                  Left err -> Log.logAttention "Failed to classify issue criticality" (issueId, err)
+                  Right (isCritical, breakingCount, incrementalCount) -> do
+                    _ <- dbtToEff $ Enhancement.updateIssueClassification issue.id isCritical breakingCount incrementalCount
+                    Log.logInfo "Successfully enhanced and classified issue" (issueId, isCritical, breakingCount)
+                
+                Log.logInfo "Successfully enhanced issue" issueId

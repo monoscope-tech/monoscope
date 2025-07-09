@@ -26,6 +26,7 @@ import Lucid
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxPatch_, hxPost_, hxPut_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -286,7 +287,7 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
       then do
         case widget.wType of
           Widget.WTAnomalies -> do
-            issues <- dbtToEff $ Anomalies.selectIssues pid Nothing (Just False) (Just False) Nothing (Just 2) 0
+            issues <- dbtToEff $ Issues.selectIssues pid Nothing (Just False) (Just False) 2 0
             let issuesVM = V.map (AnomalyList.IssueVM False now "24h") issues
             pure
               $ widget
