@@ -759,6 +759,24 @@ renderIssue hideByDefault currTime timeFilter issue = do
 
       -- Metadata row (method, endpoint, service, time)
       div_ [class_ "flex items-center gap-4 text-sm text-textWeak mb-3 flex-wrap"] do
+        -- Method and endpoint (for API changes)
+        when (issue.issueType == Issues.APIChange) do
+          case AE.fromJSON (getAeson issue.issueData) of
+            AE.Success (apiData :: Issues.APIChangeData) -> do
+              div_ [class_ "flex items-center gap-2"] do
+                -- Method badge
+                let methodClass = case apiData.endpointMethod of
+                      "GET" -> "bg-fillInformation-strong"
+                      "POST" -> "bg-fillSuccess-strong"
+                      "PUT" -> "bg-fillWarning-strong"
+                      "DELETE" -> "bg-fillError-strong"
+                      _ -> "bg-fillInformation-strong"
+                span_ [class_ $ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent " <> methodClass <> " text-fillWhite shadow-sm"] do
+                  toHtml apiData.endpointMethod
+                -- Endpoint path
+                span_ [class_ "font-mono bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml apiData.endpointPath
+            _ -> pass
+
         -- Service badge
         span_ [class_ "flex items-center gap-1"] do
           div_ [class_ "w-3 h-3 bg-fillYellow rounded-sm"] ""
@@ -776,7 +794,7 @@ renderIssue hideByDefault currTime timeFilter issue = do
         let incrementalChanges = length $ filter (\c -> c.changeType == Anomalies.Incremental) allChanges
         let totalChanges = length allChanges
         let affectedPayloads = if null requestChanges then length responseChanges else if null responseChanges then length requestChanges else length requestChanges + length responseChanges
-        
+
         div_ [class_ "flex items-center gap-4 text-sm mb-4 p-3 bg-fillWeak rounded-lg"] do
           span_ [class_ "text-textWeak"] do
             strong_ [class_ "text-textStrong"] $ toHtml $ show totalChanges
@@ -942,82 +960,194 @@ renderIssue hideByDefault currTime timeFilter issue = do
 renderPayloadChanges :: Issues.IssueL -> Html ()
 renderPayloadChanges issue =
   when (issue.issueType == Issues.APIChange) do
-    let requestChanges = getAeson issue.requestPayloads
-    let responseChanges = getAeson issue.responsePayloads
+    let requestChanges = getAeson issue.requestPayloads :: [Anomalies.PayloadChange]
+    let responseChanges = getAeson issue.responsePayloads :: [Anomalies.PayloadChange]
 
     when (not (null requestChanges) || not (null responseChanges)) do
-      div_ [class_ "mt-8 space-y-6"] do
-        h4_ [class_ "text-lg font-medium text-textStrong border-b pb-2"] "Payload Changes"
+      div_ [class_ "border border-strokeWeak rounded-lg overflow-hidden bg-fillWhite group/payloadtabs"] do
+        div_ [class_ "flex flex-col gap-2"] do
+          -- Tab navigation using radio buttons
+          div_ [role_ "tablist", Aria.orientation_ "horizontal", class_ "text-muted-foreground h-9 items-center justify-center rounded-xl p-[3px] w-full grid grid-cols-2 bg-fillWeak"] do
+            -- Response tab (default active)
+            label_
+              [ role_ "tab"
+              , class_ "h-[calc(100%-1px)] flex-1 justify-center rounded-xl border border-transparent px-2 py-1 text-sm font-medium whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer has-[:checked]:bg-fillWhite has-[:checked]:text-textStrong bg-transparent text-textWeak"
+              ]
+              do
+                input_ [type_ "radio", name_ ("payload-tab-" <> Issues.issueIdText issue.id), class_ "hidden payload-tab-response", checked_]
+                faSprite_ "arrow-right" "regular" "w-4 h-4"
+                span_ [] $ "Response Payloads (" <> show (length responseChanges) <> ")"
 
-        when (not (null requestChanges)) do
-          div_ [class_ "space-y-4"] do
-            h5_ [class_ "font-medium text-textStrong"] "Request Payload Changes"
-            forM_ requestChanges renderPayloadChange
+            -- Request tab
+            label_
+              [ role_ "tab"
+              , class_ "h-[calc(100%-1px)] flex-1 justify-center rounded-xl border border-transparent px-2 py-1 text-sm font-medium whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer has-[:checked]:bg-fillWhite has-[:checked]:text-textStrong bg-transparent text-textWeak"
+              ]
+              do
+                input_ [type_ "radio", name_ ("payload-tab-" <> Issues.issueIdText issue.id), class_ "hidden payload-tab-request"]
+                faSprite_ "arrow-right" "regular" "w-4 h-4 rotate-180"
+                span_ [] $ "Request Payloads (" <> show (length requestChanges) <> ")"
 
-        when (not (null responseChanges)) do
-          div_ [class_ "space-y-4"] do
-            h5_ [class_ "font-medium text-textStrong"] "Response Payload Changes"
-            forM_ responseChanges renderPayloadChange
+          -- Tab panels
+          -- Response panel (visible when response tab is selected)
+          div_
+            [ role_ "tabpanel"
+            , class_ "flex-1 outline-none p-4 space-y-4 hidden group-has-[.payload-tab-response:checked]/payloadtabs:block"
+            ]
+            do
+              if null responseChanges
+                then div_ [class_ "text-center py-8 text-textWeak"] "No response payload changes"
+                else forM_ responseChanges (renderPayloadChange True)
+
+          -- Request panel (visible when request tab is selected)
+          div_
+            [ role_ "tabpanel"
+            , class_ "flex-1 outline-none p-4 space-y-4 hidden group-has-[.payload-tab-request:checked]/payloadtabs:block"
+            ]
+            do
+              if null requestChanges
+                then div_ [class_ "text-center py-8 text-textWeak"] "No request payload changes"
+                else forM_ requestChanges (renderPayloadChange False)
 
 
 -- Render individual payload change
-renderPayloadChange :: Anomalies.PayloadChange -> Html ()
-renderPayloadChange change =
-  div_ [class_ "border rounded-lg p-4 space-y-3"] do
-    -- Change type badge
-    div_ [class_ "flex items-center gap-2"] do
+renderPayloadChange :: Bool -> Anomalies.PayloadChange -> Html ()
+renderPayloadChange isResponse change =
+  div_ [class_ "border border-strokeWeak rounded-lg p-4 bg-fillWeak"] do
+    -- Status code/method badges and info
+    div_ [class_ "flex items-center gap-3 mb-3 flex-wrap"] do
+      -- Status code or method badge
+      case (change.statusCode, change.method) of
+        (Just statusCode, _) -> do
+          let statusClass = case statusCode of
+                200 -> "bg-fillSuccess-strong text-fillWhite shadow-sm"
+                401 -> "bg-fillWarning-strong text-fillWhite shadow-sm"
+                422 -> "bg-fillWarning-strong text-fillWhite shadow-sm"
+                404 -> "bg-fillWarning-strong text-fillWhite shadow-sm"
+                500 -> "bg-fillError-strong text-fillWhite shadow-sm"
+                _ -> "bg-fillInformation-strong text-fillWhite shadow-sm"
+          span_ [class_ $ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent " <> statusClass] do
+            toHtml $ show statusCode <> " " <> fromMaybe "" change.statusText
+        (_, Just method) ->
+          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillInformation-strong text-fillWhite shadow-sm"] do
+            toHtml method
+        _ -> pass
+
+      -- Content type badge
+      span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-strokeWeak text-textWeak bg-fillWhite"] do
+        toHtml change.contentType
+
+      -- Change type badge
       case change.changeType of
         Anomalies.Breaking ->
-          span_ [class_ "px-2 py-1 rounded text-xs font-medium bg-fillError-weak text-fillError-strong"] "BREAKING"
+          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillError-strong text-fillWhite shadow-sm"] do
+            faSprite_ "circle-x" "regular" "w-3 h-3 mr-1"
+            "Breaking"
         Anomalies.Incremental ->
-          span_ [class_ "px-2 py-1 rounded text-xs font-medium bg-fillWarning-weak text-fillWarning-strong"] "INCREMENTAL"
+          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillInformation-strong text-fillWhite shadow-sm"] do
+            faSprite_ "info" "regular" "w-3 h-3 mr-1"
+            "Incremental"
         Anomalies.Safe ->
-          span_ [class_ "px-2 py-1 rounded text-xs font-medium bg-fillSuccess-weak text-fillSuccess-strong"] "SAFE"
+          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillSuccess-strong text-fillWhite shadow-sm"] do
+            faSprite_ "circle-check" "regular" "w-3 h-3 mr-1"
+            "Safe"
 
-      -- Display content type
-      span_ [class_ "font-mono text-sm text-textWeak"] $ toHtml change.contentType
+    -- Description
+    when (T.length change.description > 0) do
+      p_ [class_ "text-sm text-textWeak mb-4 leading-relaxed"] $ toHtml change.description
 
-    -- Field changes
+    -- Field changes section
     when (not (null change.changes)) do
-      div_ [class_ "ml-4 space-y-2"] do
-        forM_ change.changes renderFieldChange
+      div_ [class_ "space-y-3"] do
+        -- Section header
+        div_ [class_ "flex items-center gap-2 pb-2 border-b border-strokeWeak"] do
+          faSprite_ "code" "regular" "w-4 h-4 text-iconNeutral"
+          span_ [class_ "font-medium text-textStrong"]
+            $ case (change.statusCode, change.statusText) of
+              (Just code, Just text) -> toHtml $ show code <> " Response Changes"
+              _ -> "Payload Changes"
+          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-xs border-strokeWeak text-textWeak bg-fillWeak"] do
+            toHtml change.contentType
 
-    -- Examples (if available)
+        -- Individual field changes
+        div_ [class_ "space-y-3"] do
+          forM_ change.changes renderFieldChange
+
+    -- Examples section
     when (T.length change.exampleBefore > 0 || T.length change.exampleAfter > 0) do
-      div_ [class_ "bg-fillWeak rounded p-3 space-y-2"] do
-        when (T.length change.exampleBefore > 0) do
-          div_ do
-            div_ [class_ "text-sm font-medium text-textWeak"] "Before:"
-            code_ [class_ "block text-xs font-mono text-textStrong"] $ toHtml change.exampleBefore
-        when (T.length change.exampleAfter > 0) do
-          div_ do
-            div_ [class_ "text-sm font-medium text-textWeak"] "After:"
-            code_ [class_ "block text-xs font-mono text-textStrong"] $ toHtml change.exampleAfter
+      div_ [class_ "mt-4 space-y-3"] do
+        span_ [class_ "text-sm font-medium text-textStrong"] "Example Payloads:"
+        div_ [class_ "grid grid-cols-2 gap-4"] do
+          when (T.length change.exampleBefore > 0) do
+            div_ [] do
+              span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "Before:"
+              pre_ [class_ "bg-fillError-weak text-fillError-strong p-3 rounded text-xs overflow-x-auto border border-strokeError-weak"] do
+                toHtml change.exampleBefore
+          when (T.length change.exampleAfter > 0) do
+            div_ [] do
+              span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "After:"
+              pre_ [class_ "bg-fillSuccess-weak text-fillSuccess-strong p-3 rounded text-xs overflow-x-auto border border-strokeSuccess-weak"] do
+                toHtml change.exampleAfter
 
 
 -- Render individual field change
 renderFieldChange :: Anomalies.FieldChange -> Html ()
 renderFieldChange fieldChange =
-  div_ [class_ "flex items-start gap-3 text-sm"] do
-    -- Field name and path
-    div_ [class_ "min-w-[200px]"] do
-      span_ [class_ "font-mono font-medium"] $ toHtml fieldChange.fieldName
-      when (T.length fieldChange.path > 0) do
-        div_ [class_ "text-xs text-textWeak font-mono"] $ toHtml fieldChange.path
+  div_ [class_ "border border-strokeWeak rounded-lg p-4 bg-fillWhite"] do
+    -- Field name and change kind badges
+    div_ [class_ "flex items-start justify-between gap-4 mb-3"] do
+      div_ [class_ "flex items-center gap-2 flex-wrap"] do
+        -- Field path in monospace
+        span_ [class_ "font-mono text-sm bg-fillWeak px-2 py-1 rounded text-textStrong"] $ toHtml fieldChange.path
 
-    -- Change kind
-    case fieldChange.changeKind of
-      Anomalies.Modified -> do
-        span_ [class_ "text-textWeak"] "Type changed:"
-        span_ [class_ "font-mono"] $ toHtml $ fromMaybe "" fieldChange.oldType <> " → " <> fromMaybe "" fieldChange.newType
-      Anomalies.Added -> do
-        span_ [class_ "text-fillSuccess-strong"] "New field"
-        whenJust fieldChange.newType $ \t ->
-          span_ [class_ "font-mono text-textWeak"] $ "(" <> toHtml t <> ")"
-      Anomalies.Removed -> do
-        span_ [class_ "text-fillError-strong"] "Field removed"
-        whenJust fieldChange.oldType $ \t ->
-          span_ [class_ "font-mono text-textWeak"] $ "(" <> toHtml t <> ")"
+        -- Change kind badge
+        case fieldChange.changeKind of
+          Anomalies.Modified ->
+            span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-fillInformation-strong border-strokeInformation-strong bg-fillInformation-weak"] "modified"
+          Anomalies.Added ->
+            span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-fillSuccess-strong border-strokeSuccess-strong bg-fillSuccess-weak"] "added"
+          Anomalies.Removed ->
+            span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-fillError-strong border-strokeError-strong bg-fillError-weak"] "removed"
+
+        -- Breaking badge if applicable
+        when fieldChange.breaking do
+          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillError-strong text-fillWhite shadow-sm"] do
+            faSprite_ "triangle-alert" "regular" "w-3 h-3 mr-1"
+            "Breaking"
+
+    -- Change description
+    when (T.length fieldChange.changeDescription > 0) do
+      p_ [class_ "text-sm text-textWeak mb-3 leading-relaxed"] $ toHtml fieldChange.changeDescription
+
+    -- Type and value changes
+    div_ [class_ "space-y-3"] do
+      -- Type changes (if modified)
+      when (fieldChange.changeKind == Anomalies.Modified || fieldChange.changeKind == Anomalies.Added || fieldChange.changeKind == Anomalies.Removed) do
+        div_ [class_ "grid grid-cols-2 gap-4"] do
+          when (isJust fieldChange.oldType) do
+            div_ [] do
+              span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "Previous Type:"
+              code_ [class_ "block bg-fillError-weak text-fillError-strong px-3 py-2 rounded text-xs border border-strokeError-weak"] do
+                toHtml $ fromMaybe "" fieldChange.oldType
+          when (isJust fieldChange.newType) do
+            div_ [] do
+              span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "New Type:"
+              code_ [class_ "block bg-fillSuccess-weak text-fillSuccess-strong px-3 py-2 rounded text-xs border border-strokeSuccess-weak"] do
+                toHtml $ fromMaybe "" fieldChange.newType
+
+      -- Value examples (if available)
+      when (isJust fieldChange.oldValue || isJust fieldChange.newValue) do
+        div_ [class_ "grid grid-cols-2 gap-4"] do
+          when (isJust fieldChange.oldValue) do
+            div_ [] do
+              span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "Previous Value:"
+              code_ [class_ "block bg-fillError-weak text-fillError-strong px-3 py-2 rounded text-xs font-mono whitespace-pre-wrap border border-strokeError-weak"] do
+                toHtml $ fromMaybe "" fieldChange.oldValue
+          when (isJust fieldChange.newValue) do
+            div_ [] do
+              span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "New Value:"
+              code_ [class_ "block bg-fillSuccess-weak text-fillSuccess-strong px-3 py-2 rounded text-xs font-mono whitespace-pre-wrap border border-strokeSuccess-weak"] do
+                toHtml $ fromMaybe "" fieldChange.newValue
 
 
 anomalyActionButtons :: Projects.ProjectId -> Issues.IssueId -> Bool -> Bool -> Text -> Html ()
