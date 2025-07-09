@@ -1,6 +1,5 @@
 module Pages.Anomalies.AnomalyList (
   anomalyListGetH,
-  anomalyDetailsGetH,
   anomalyBulkActionsPostH,
   escapedQueryPartial,
   acknowlegeAnomalyGetH,
@@ -13,7 +12,6 @@ module Pages.Anomalies.AnomalyList (
   anomalyAcknowlegeButton,
   anomalyArchiveButton,
   AnomalyAction (..),
-  AnomalyDetails,
   IssueVM (..),
 )
 where
@@ -691,222 +689,11 @@ anomalyListSlider currTime _ _ (Just issues) = do
       $ mapM_ toHtml issues
 
 
-shapeParameterStats_ :: Int -> Int -> Int -> Html ()
-shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "flex items-center gap-2"] do
-  span_ [] "Fields:"
-  div_ [class_ "flex items-center gap-2 "] do
-    fieldStats newF "new" "text-green-600"
-    fieldStats updatedFF "updated" "text-brand"
-    fieldStats deletedF "deleted" "text-red-500"
-
-
-fieldStats :: Int -> Text -> Text -> Html ()
-fieldStats newF field cls = div_ [class_ "flex items-center gap-2 "] do
-  div_ [class_ $ "text-center text-lg font-medium " <> cls] do
-    toHtml @String $ show newF
-    small_ [class_ "ml-2 text-slate-500"] $ toHtml field
-  when (field /= "deleted") $ do
-    small_ [class_ "text-slate-200 "] "|"
-
-
 -- anomalyAccentColor isAcknowleged isArchived
 anomalyAccentColor :: Bool -> Bool -> Text
 anomalyAccentColor _ True = "bg-slate-400"
 anomalyAccentColor True False = "bg-green-200"
 anomalyAccentColor False False = "bg-red-800"
-
-
-anomalyDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders AnomalyDetails)
-anomalyDetailsGetH pid targetHash hxBoostedM = do
-  (sess, project) <- Sessions.sessionAndProject pid
-  -- For now, still use old function until we have a replacement
-  issueM <- dbtToEff $ Anomalies.selectIssueByHash pid targetHash
-  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
-
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , pageTitle = "Issue Details"
-          , freeTierExceeded = freeTierExceeded
-          }
-  case issueM of
-    Nothing -> addRespHeaders $ AnomalyDetailsNoFound $ PageCtx bwconf ()
-    Just oldIssue -> do
-      currTime <- liftIO getCurrentTime
-      -- Convert old issue to new format for display
-      let issue = convertOldIssueToNew oldIssue
-      -- For now, return simplified view - can be enhanced later with actual data fetching
-      case hxBoostedM of
-        Just _ -> addRespHeaders $ AnomalyDetailsBoosted (issue, Nothing, Nothing, Nothing, currTime, Nothing, True)
-        Nothing -> addRespHeaders $ AnomalyDetailsMain $ PageCtx bwconf (issue, Nothing, Nothing, Nothing, currTime, Nothing, False)
-  where
-    convertOldIssueToNew oldIssue =
-      Issues.IssueL
-        { id = Issues.IssueId oldIssue.id.unAnomalyId
-        , createdAt = oldIssue.createdAt
-        , updatedAt = oldIssue.updatedAt
-        , projectId = oldIssue.projectId
-        , issueType = case oldIssue.anomalyType of
-            Anomalies.ATShape -> Issues.APIChange
-            Anomalies.ATFormat -> Issues.APIChange
-            Anomalies.ATEndpoint -> Issues.APIChange
-            Anomalies.ATRuntimeException -> Issues.RuntimeException
-            _ -> Issues.APIChange
-        , endpointHash = oldIssue.endpointHash
-        , acknowledgedAt = oldIssue.acknowlegedAt
-        , acknowledgedBy = oldIssue.acknowlegedBy
-        , archivedAt = oldIssue.archivedAt
-        , title = oldIssue.title
-        , service = oldIssue.service
-        , critical = oldIssue.critical
-        , severity = if oldIssue.critical then "critical" else "warning"
-        , affectedRequests = oldIssue.affectedClients
-        , affectedClients = oldIssue.affectedClients
-        , errorRate = Nothing
-        , recommendedAction = oldIssue.recommendedAction
-        , migrationComplexity = oldIssue.migrationComplexity
-        , issueData = Aeson AE.Null -- Simplified for now
-        , requestPayloads = Aeson []
-        , responsePayloads = Aeson []
-        , llmEnhancedAt = Nothing
-        , llmEnhancementVersion = Nothing
-        , eventCount = oldIssue.eventsAgg.count
-        , lastSeen = oldIssue.eventsAgg.lastSeen
-        }
-
-
-data AnomalyDetails
-  = AnomalyDetailsMain (PageCtx (Issues.IssueL, Maybe (V.Vector Shapes.ShapeWithFields), Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]), Maybe (V.Vector Text), UTCTime, Maybe Text, Bool))
-  | AnomalyDetailsBoosted (Issues.IssueL, Maybe (V.Vector Shapes.ShapeWithFields), Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]), Maybe (V.Vector Text), UTCTime, Maybe Text, Bool)
-  | AnomalyDetailsNoFound (PageCtx ())
-
-
-instance ToHtml AnomalyDetails where
-  toHtml (AnomalyDetailsMain (PageCtx bwconf (issue, shapesWithFieldsMap, fields, prvFormatsM, currTime, timeFilter, modal))) = toHtml $ PageCtx bwconf $ anomalyDetailsPageM issue shapesWithFieldsMap fields prvFormatsM currTime modal timeFilter
-  toHtml (AnomalyDetailsBoosted (issue, shapesWithFieldsMap, fields, prvFormatsM, currTime, timeFilter, modal)) = toHtml $ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFilter modal
-  toHtml (AnomalyDetailsNoFound (PageCtx bwconf ())) = toHtml $ PageCtx bwconf notFoundPage
-  toHtmlRaw = toHtml
-
-
-notFoundPage :: Html ()
-notFoundPage = do
-  h4_ [] "ANOMALY NOT FOUND"
-
-
-anomalyDetailsPageM :: Issues.IssueL -> Maybe (V.Vector Shapes.ShapeWithFields) -> Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Maybe (V.Vector Text) -> UTCTime -> Bool -> Maybe Text -> Html ()
-anomalyDetailsPageM issue shapesWithFieldsMap fields prvFormatsM currTime modal timeFilter = do
-  div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
-    h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
-    anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFilter modal
-
-
-anomalyDetailsPage :: Issues.IssueL -> Maybe (V.Vector Shapes.ShapeWithFields) -> Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Maybe (V.Vector Text) -> UTCTime -> Maybe Text -> Bool -> Html ()
-anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime timeFilter modal = do
-  let filterV = fromMaybe "14d" timeFilter
-  --   statBox_ (Just pid) Nothing "Passed" "Total number of steps passed in the last test run" (fmt (commaizeF passed)) Nothing
-
-  div_ [class_ "w-full "] do
-    div_ [class_ "w-full"] do
-      case issue.issueType of
-        Issues.APIChange -> do
-          let content = div_ [class_ "flex gap-6 shrink-1"] do
-                statBox_ Nothing Nothing "Breaking" "Breaking changes detected" (show $ if issue.critical then 1 else 0) Nothing (Just "text-red-600")
-                statBox_ Nothing Nothing "Incremental" "Non-breaking changes" (show $ issue.affectedRequests) Nothing (Just "text-green-500")
-              anButton :: Html ()
-              anButton =
-                if issue.critical
-                  then button_ [class_ "h-6 flex items-center px-2 py-1 rounded-lg bg-fillStrong text-textInverse-strong"] "Breaking"
-                  else button_ [class_ "h-6 flex items-center px-2 py-1 rounded-lg bg-fillWeak border text-textStrong border-strokeWeak"] "Incremental"
-          detailsHeader "API Change" "GET" 200 issue currTime filterV (Just content) (Just anButton)
-        Issues.RuntimeException -> do
-          detailsHeader "Runtime Exception" "ERROR" 500 issue currTime filterV Nothing Nothing
-        Issues.QueryAlert -> do
-          detailsHeader "Query Alert" "ALERT" 200 issue currTime filterV Nothing Nothing
-
-    div_ [class_ "mt-6 space-y-4"] do
-      div_ [class_ "tabs tabs-bordered border rounded-3xl overflow-hidden", role_ "tablist"] do
-        input_ [type_ "radio", name_ $ "anomaly-events-tabs-" <> issue.endpointHash, role_ "tab", class_ "tab", Aria.label_ "Overview", checked_]
-        div_ [role_ "tabpanel", class_ "tab-content p-4 w-full bg-base-100 rounded-lg overflow-x-hidden", id_ "overview_content"] do
-          case issue.issueType of
-            Issues.APIChange ->
-              case AE.fromJSON (getAeson issue.issueData) of
-                AE.Success (apiData :: Issues.APIChangeData) ->
-                  apiChangeOverview apiData
-                _ -> ""
-            Issues.RuntimeException ->
-              case AE.fromJSON (getAeson issue.issueData) of
-                AE.Success (errorData :: Issues.RuntimeExceptionData) ->
-                  runtimeExceptionOverview errorData
-                _ -> ""
-            Issues.QueryAlert ->
-              case AE.fromJSON (getAeson issue.issueData) of
-                AE.Success (alertData :: Issues.QueryAlertData) ->
-                  queryAlertOverview alertData
-                _ -> ""
-
-        input_ [type_ "radio", name_ $ "anomaly-events-tabs-" <> issue.endpointHash, role_ "tab", class_ "tab", Aria.label_ "Events"]
-        div_ [role_ "tabpanel", class_ "tab-content grow whitespace-nowrap py-2 divide-y overflow-x-hidden ", id_ "events_content"] do
-          let anomalyQueryPartial = "" -- Simplified for now
-              events_url = "/p/" <> UUID.toText (Projects.unProjectId issue.projectId) <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial anomalyQueryPartial
-          div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
-
-      -- Add payload changes section for API changes
-      renderPayloadChanges issue
-
-
-detailsHeader :: Text -> Text -> Int -> Issues.IssueL -> UTCTime -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
-detailsHeader title method statusCode issue currTime filterV content anBtn = do
-  let anomalyQueryPartial = "" -- Simplified for now
-  div_ [class_ "flex flex-col w-full"] do
-    div_ [class_ "flex justify-between"] do
-      div_ [class_ "flex items-center gap-4"] do
-        span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-blue-300 bg-blue-100 text-brand"] $ toHtml method
-        span_ [class_ "flex items-center rounded-lg px-2 py-1 font-medium gap-2 border border-green-300 bg-green-100 text-green-500"] $ toHtml $ show statusCode
-        dateTime (zonedTimeToUTC issue.createdAt) Nothing
-      anomalyActionButtons issue.projectId issue.id (isJust issue.acknowledgedAt) (isJust issue.archivedAt) ""
-    span_ [class_ "font-medium text-2xl text-slate-600 mt-6"] $ toHtml title
-    div_ [class_ "flex justify-between items-center gap-4 mt-8"] do
-      let currentURL' = "/charts_html?pid=" <> issue.projectId.toText <> ("&query=" <> escapedQueryPartial [fmt|{anomalyQueryPartial} | summarize count(*) by bin(timestamp, 1d)|])
-      div_ [class_ "flex flex-col gap-4"] do
-        div_ [class_ "flex items-center w-full gap-9 border border-slate-200 rounded-2xl px-10 py-4"] do
-          stBox "Events" (show issue.eventCount)
-          stBox "First seen" $ toText $ prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
-          stBox "Last seen" $ toText $ prettyTimeAuto currTime issue.lastSeen
-        whenJust content Relude.id
-      div_ [class_ "flex flex-col gap-1"] do
-        div_ [class_ "flex justify-end"] do
-          div_ [class_ "rounded-lg border grid grid-cols-2 w-max h-7 bg-slate-200 overflow-hidden"] do
-            a_
-              [ class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded-sm " <> (if filterV == "24h" then "bg-white" else "")
-              , hxGet_ $ currentURL' <> "&since=24h"
-              , hxTarget_ "#reqsChartsEC"
-              , hxSwap_ "innerHTML"
-              ]
-              "24h"
-            a_
-              [ class_ $ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded-sm " <> (if filterV == "14d" then "bg-white" else "")
-              , hxGet_ $ currentURL' <> "&since=14d"
-              , hxTarget_ "#reqsChartsEC"
-              , hxSwap_ "innerHTML"
-              ]
-              "14d"
-
-        div_
-          [ id_ "reqsChartsEC"
-          , class_ "w-[550px] mt-4 shrink-0 h-[180px]"
-          , hxGet_ $ currentURL' <> "&since=" <> (if filterV == "14d" then "14D" else "24h")
-          , hxTrigger_ "intersect"
-          , hxSwap_ "innerHTML"
-          ]
-          ""
-
-
-stBox :: Text -> Text -> Html ()
-stBox title value =
-  div_ [class_ "flex flex-col items-center py-4 gap-2"] do
-    span_ [class_ "text-slate-950 text-sm font-medium"] $ toHtml value
-    span_ [class_ "font-medium text-slate-500 text-xs"] $ toHtml title
 
 
 buildQueryForAnomaly :: Anomalies.AnomalyTypes -> Text -> Text
@@ -916,71 +703,6 @@ buildQueryForAnomaly Anomalies.ATFormat hash = "hashes[*]==\"" <> hash <> "\""
 buildQueryForAnomaly Anomalies.ATField hash = "hashes[*]==\"" <> hash <> "\""
 buildQueryForAnomaly Anomalies.ATRuntimeException hash = "hashes[*]==\"" <> hash <> "\""
 buildQueryForAnomaly Anomalies.ATUnknown hash = ""
-
-
-endpointOverview :: Maybe (V.Vector Shapes.ShapeWithFields) -> Html ()
-endpointOverview shapesWithFieldsMap =
-  div_ [] do
-    whenJust shapesWithFieldsMap \s -> do
-      reqResSection "Request" True (V.toList s)
-      reqResSection "Response" False (V.toList s)
-
-
-requestShapeOverview :: Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Html ()
-requestShapeOverview fieldChanges = div_ [class_ "flex flex-col gap-6"] do
-  whenJust fieldChanges \(fs, sn, th) -> do
-    shapeOSection_ "New Unique Fields" "text-green-800" fs
-    shapeOSection_ "Updated Fields" "text-slate-800" sn
-    shapeOSection_ "Deleted Fields" "text-red-800" th
-  where
-    shapeOSection_ :: Text -> Text -> Map Fields.FieldCategoryEnum [Field] -> Html ()
-    shapeOSection_ title color fields = div_ [class_ "flex flex-col"] do
-      h3_ [class_ $ color <> " py-1 w-fit font-semibold border-b border-b-" <> color <> "-500 mb-2"] (toHtml title)
-      div_ [class_ "px-2"] do
-        p_ [class_ "hidden last:block"] ("No " <> toHtml title)
-        subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam fields)
-        subSubSection "Request Query Params" (Map.lookup Fields.FCQueryParam fields)
-        subSubSection "Request Headers" (Map.lookup Fields.FCRequestHeader fields)
-        subSubSection "Request Body" (Map.lookup Fields.FCRequestBody fields)
-        subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader fields)
-        subSubSection "Response Body" (Map.lookup Fields.FCResponseBody fields)
-
-
-anomalyFormatOverview :: Anomalies.NewFormatIssue -> V.Vector Text -> Html ()
-anomalyFormatOverview formatData prevFormats =
-  section_ [class_ "space-y-10"] do
-    div_ [class_ "flex items-center gap-6"] do
-      -- div_ do
-      --   h6_ [class_ " text-slate-800"] "FIELD NAME"
-      --   h3_ [class_ "text-base text-slate-800"] $ toHtml $ formatData.fieldKey
-      div_ do
-        h6_ [class_ " text-slate-800 "] "FIELD PATH"
-        h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml formatData.fieldKeyPath
-    -- div_ do
-    --   h6_ [class_ " text-slate-800"] "FIELD CATEGORY"
-    --   h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldCategoryToDisplay $ fromMaybe FCRequestBody an.fieldCategory
-    div_ [class_ "flex items-center gap-6"] do
-      div_ do
-        h5_ [class_ " text-slate-800"] "NEW FIELD FORMAT"
-        h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml $ fieldTypeToText formatData.formatType
-      div_ do
-        h5_ [class_ " text-slate-800"] "PREVIOUS FIELD FORMATS"
-        ul_ [class_ "list-disc"] do
-          prevFormats & mapM_ \f -> do
-            li_ [class_ "ml-10 text-slate-800 "] $ toHtml f
-    div_ do
-      h6_ [class_ "text-slate-600 mt-4 "] "EXAMPLE VALUES"
-      ul_ [class_ "list-disc"] do
-        formatData.examples & mapM_ \exs -> do
-          forM_ exs \ex -> do
-            li_ [class_ "ml-10 text-slate-800 "] $ toHtml ex
-
-
-issueDisplayConfig :: Issues.IssueL -> (Text, Text)
-issueDisplayConfig issue = case issue.issueType of
-  Issues.APIChange -> ("API Change", "/public/assets/svgs/anomalies/fields.svg")
-  Issues.RuntimeException -> ("Runtime Exception", "/public/assets/svgs/anomalies/fields.svg")
-  Issues.QueryAlert -> ("Query Alert", "/public/assets/svgs/anomalies/fields.svg")
 
 
 data IssueVM = IssueVM Bool UTCTime Text Issues.IssueL
@@ -1047,39 +769,72 @@ renderIssue hideByDefault currTime timeFilter issue = do
 
       -- Statistics row (only for API changes)
       when (issue.issueType == Issues.APIChange) do
+        let requestChanges = getAeson issue.requestPayloads :: [Anomalies.PayloadChange]
+        let responseChanges = getAeson issue.responsePayloads :: [Anomalies.PayloadChange]
+        let allChanges = requestChanges ++ responseChanges
+        let breakingChanges = length $ filter (\c -> c.changeType == Anomalies.Breaking) allChanges
+        let incrementalChanges = length $ filter (\c -> c.changeType == Anomalies.Incremental) allChanges
+        let totalChanges = length allChanges
+        let affectedPayloads = if null requestChanges then length responseChanges else if null responseChanges then length requestChanges else length requestChanges + length responseChanges
+        
         div_ [class_ "flex items-center gap-4 text-sm mb-4 p-3 bg-fillWeak rounded-lg"] do
           span_ [class_ "text-textWeak"] do
-            strong_ [class_ "text-textStrong"] $ toHtml $ show issue.eventCount
-            " total events"
+            strong_ [class_ "text-textStrong"] $ toHtml $ show totalChanges
+            " total changes"
 
           div_ [class_ "w-px h-4 bg-strokeWeak"] ""
 
           span_ [class_ "text-textWeak"] do
-            strong_ [class_ "text-textStrong"] $ toHtml $ show issue.affectedRequests
-            " affected requests"
+            strong_ [class_ "text-fillError-strong"] $ toHtml $ show breakingChanges
+            " breaking"
+            when (breakingChanges > 0 && totalChanges > 0) do
+              span_ [class_ "text-xs ml-1 bg-fillError-weak text-fillError-strong px-1.5 py-0.5 rounded"] do
+                toHtml $ show (round (fromIntegral breakingChanges / fromIntegral totalChanges * 100 :: Float) :: Int) <> "%"
 
           div_ [class_ "w-px h-4 bg-strokeWeak"] ""
 
           span_ [class_ "text-textWeak"] do
-            strong_ [class_ "text-textBrand"] $ toHtml $ show issue.affectedClients
-            " affected clients"
+            strong_ [class_ "text-fillSuccess-strong"] $ toHtml $ show incrementalChanges
+            " incremental"
+
+          div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+
+          span_ [class_ "text-textWeak"] do
+            strong_ [class_ "text-textBrand"] $ toHtml $ show affectedPayloads
+            " payloads affected"
+
+      -- Stack trace for runtime exceptions or Query for alerts
+      case issue.issueType of
+        Issues.RuntimeException -> do
+          case AE.fromJSON (getAeson issue.issueData) of
+            AE.Success (exceptionData :: Issues.RuntimeExceptionData) -> do
+              div_ [class_ "bg-fillError-weak border border-strokeError-weak rounded-lg p-4 text-sm font-mono text-fillError-strong mb-4"] do
+                pre_ [class_ "whitespace-pre-wrap"] $ toHtml exceptionData.stackTrace
+            _ -> pass
+        Issues.QueryAlert -> do
+          case AE.fromJSON (getAeson issue.issueData) of
+            AE.Success (alertData :: Issues.QueryAlertData) -> do
+              div_ [class_ "mb-4"] do
+                span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
+                div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"]
+                  $ toHtml alertData.queryExpression
+            _ -> pass
+        _ -> pass
 
       -- Recommended action
       div_ [class_ "border-l-4 border-strokeBrand pl-4 mb-4"] do
         p_ [class_ "text-sm text-textStrong leading-relaxed"] $ toHtml issue.recommendedAction
 
-      -- Migration complexity (for API changes)
-      when (issue.issueType == Issues.APIChange && issue.migrationComplexity /= "n/a") do
-        div_ [class_ "flex items-center gap-2 mb-4"] do
-          span_ [class_ "text-sm text-textWeak"] "Migration complexity:"
-          let (complexityClass, complexityIcon) = case issue.migrationComplexity of
-                "low" -> ("text-fillSuccess-strong", "check-circle")
-                "medium" -> ("text-fillWarning-strong", "exclamation-circle")
-                "high" -> ("text-fillError-strong", "times-circle")
-                _ -> ("text-textWeak", "question-circle")
-          span_ [class_ $ "flex items-center gap-1 text-sm font-medium " <> complexityClass] do
-            faSprite_ complexityIcon "regular" "w-4 h-4"
-            toHtml $ T.toTitle issue.migrationComplexity
+      -- Collapsible payload changes (only for API changes)
+      when (issue.issueType == Issues.APIChange) do
+        details_ [class_ "group mb-4"] do
+          summary_ [class_ "inline-flex items-center cursor-pointer whitespace-nowrap text-sm font-medium transition-all rounded-md gap-1.5 text-textBrand hover:text-textBrand/80 list-none"] do
+            faSprite_ "chevron-right" "regular" "h-4 w-4 mr-1 transition-transform group-open:rotate-90"
+            "View detailed payload changes"
+
+          -- Payload details content
+          div_ [class_ "mt-4 border border-strokeWeak rounded-lg overflow-hidden bg-fillWhite"] do
+            renderPayloadChanges issue
 
       -- Action buttons
       div_ [class_ "flex items-center gap-3 mt-4 pt-4 border-t border-strokeWeak"] do
@@ -1181,125 +936,6 @@ renderIssue hideByDefault currTime timeFilter issue = do
                   , Widget.stats = Nothing
                   }
         }
-
-
--- | Render API change overview section
-apiChangeOverview :: Issues.APIChangeData -> Html ()
-apiChangeOverview apiData = div_ [class_ "space-y-6"] do
-  -- Endpoint information
-  div_ [class_ "bg-fillWeak rounded-lg p-4"] do
-    h4_ [class_ "text-sm font-medium text-textWeak mb-2"] "Endpoint"
-    div_ [class_ "flex items-center gap-2 text-lg font-mono"] do
-      span_ [class_ "text-textBrand font-medium"] $ toHtml apiData.endpointMethod
-      span_ [class_ "text-textStrong"] $ toHtml apiData.endpointPath
-
-  -- Field changes summary
-  div_ [class_ "grid grid-cols-3 gap-4"] do
-    div_ [class_ "bg-fillSuccess-weak rounded-lg p-4 border border-strokeSuccess-weak"] do
-      div_ [class_ "text-2xl font-bold text-fillSuccess-strong"] $ toHtml $ show $ V.length apiData.newFields
-      div_ [class_ "text-sm text-textWeak"] "New fields"
-    div_ [class_ "bg-fillWarning-weak rounded-lg p-4 border border-strokeWarning-weak"] do
-      div_ [class_ "text-2xl font-bold text-fillWarning-strong"] $ toHtml $ show $ V.length apiData.modifiedFields
-      div_ [class_ "text-sm text-textWeak"] "Modified fields"
-    div_ [class_ "bg-fillError-weak rounded-lg p-4 border border-strokeError-weak"] do
-      div_ [class_ "text-2xl font-bold text-fillError-strong"] $ toHtml $ show $ V.length apiData.deletedFields
-      div_ [class_ "text-sm text-textWeak"] "Deleted fields"
-
-  -- Detailed field changes
-  when (V.length apiData.newFields > 0) do
-    div_ [class_ "border-l-4 border-strokeSuccess-strong pl-4"] do
-      h5_ [class_ "font-medium text-textStrong mb-2"] "New Fields"
-      ul_ [class_ "space-y-1 text-sm text-textWeak"] do
-        V.forM_ apiData.newFields $ \field -> do
-          li_ [class_ "font-mono"] $ toHtml field
-
-  when (V.length apiData.modifiedFields > 0) do
-    div_ [class_ "border-l-4 border-strokeWarning-strong pl-4"] do
-      h5_ [class_ "font-medium text-textStrong mb-2"] "Modified Fields"
-      ul_ [class_ "space-y-1 text-sm text-textWeak"] do
-        V.forM_ apiData.modifiedFields $ \field -> do
-          li_ [class_ "font-mono"] $ toHtml field
-
-  when (V.length apiData.deletedFields > 0) do
-    div_ [class_ "border-l-4 border-strokeError-strong pl-4"] do
-      h5_ [class_ "font-medium text-textStrong mb-2"] "Deleted Fields"
-      ul_ [class_ "space-y-1 text-sm text-textWeak"] do
-        V.forM_ apiData.deletedFields $ \field -> do
-          li_ [class_ "font-mono"] $ toHtml field
-
-
--- | Render runtime exception overview section
-runtimeExceptionOverview :: Issues.RuntimeExceptionData -> Html ()
-runtimeExceptionOverview errorData = div_ [class_ "space-y-6"] do
-  -- Error information
-  div_ [class_ "bg-fillError-weak rounded-lg p-4 border border-strokeError-weak"] do
-    h4_ [class_ "text-lg font-medium text-fillError-strong mb-2"] $ toHtml errorData.errorType
-    p_ [class_ "text-sm text-textStrong"] $ toHtml errorData.errorMessage
-
-  -- Stack trace
-  when (T.length errorData.stackTrace > 0) do
-    div_ [class_ "bg-fillWeak rounded-lg p-4"] do
-      h5_ [class_ "font-medium text-textStrong mb-2"] "Stack Trace"
-      pre_ [class_ "text-xs font-mono text-textWeak overflow-x-auto"] $ toHtml errorData.stackTrace
-
-  -- Request context
-  div_ [class_ "grid grid-cols-2 gap-4"] do
-    whenJust errorData.requestMethod $ \method -> do
-      div_ [class_ "bg-fillWeak rounded-lg p-3"] do
-        div_ [class_ "text-sm text-textWeak"] "Request Method"
-        div_ [class_ "font-medium"] $ toHtml method
-    whenJust errorData.requestPath $ \path -> do
-      div_ [class_ "bg-fillWeak rounded-lg p-3"] do
-        div_ [class_ "text-sm text-textWeak"] "Request Path"
-        div_ [class_ "font-mono text-sm"] $ toHtml path
-
-  -- Occurrence information
-  div_ [class_ "flex items-center gap-6 text-sm"] do
-    div_ do
-      span_ [class_ "text-textWeak"] "First seen: "
-      dateTime errorData.firstSeen Nothing
-    div_ do
-      span_ [class_ "text-textWeak"] "Last seen: "
-      dateTime errorData.lastSeen Nothing
-    div_ do
-      span_ [class_ "text-textWeak"] "Occurrences: "
-      span_ [class_ "font-medium text-textStrong"] $ toHtml $ show errorData.occurrenceCount
-
-
--- | Render query alert overview section
-queryAlertOverview :: Issues.QueryAlertData -> Html ()
-queryAlertOverview alertData = div_ [class_ "space-y-6"] do
-  -- Alert information
-  div_ [class_ "bg-fillWarning-weak rounded-lg p-4 border border-strokeWarning-weak"] do
-    h4_ [class_ "text-lg font-medium text-fillWarning-strong mb-2"] $ toHtml alertData.queryName
-    div_ [class_ "mt-2 text-sm"] do
-      span_ [class_ "text-textWeak"] "Query ID: "
-      span_ [class_ "font-mono"] $ toHtml alertData.queryId
-
-  -- Query expression
-  div_ [class_ "bg-fillWeak rounded-lg p-4"] do
-    h5_ [class_ "font-medium text-textStrong mb-2"] "Query Expression"
-    pre_ [class_ "text-sm font-mono text-textWeak overflow-x-auto"] $ toHtml alertData.queryExpression
-
-  -- Threshold violation
-  div_ [class_ "bg-fillError-weak rounded-lg p-4 border border-strokeError-weak"] do
-    h5_ [class_ "font-medium text-textStrong mb-2"] "Threshold Violation"
-    div_ [class_ "grid grid-cols-2 gap-4 mt-3"] do
-      div_ do
-        div_ [class_ "text-sm text-textWeak"] "Threshold"
-        div_ [class_ "text-xl font-bold"] $ toHtml $ show alertData.thresholdValue
-      div_ do
-        div_ [class_ "text-sm text-textWeak"] "Actual Value"
-        div_ [class_ "text-xl font-bold text-fillError-strong"] $ toHtml $ show alertData.actualValue
-    div_ [class_ "mt-3 text-sm"] do
-      span_ [class_ "text-textWeak"] "Condition: Value should be "
-      span_ [class_ "font-medium"] $ toHtml alertData.thresholdType
-      span_ [class_ "text-textWeak"] " threshold"
-
-  -- Triggered time
-  div_ [class_ "text-sm"] do
-    span_ [class_ "text-textWeak"] "Triggered at: "
-    dateTime alertData.triggeredAt Nothing
 
 
 -- Render payload changes section
@@ -1421,75 +1057,3 @@ anomalyArchiveButton pid aid archived = do
     do
       faSprite_ "archive" "regular" "w-4 h-4"
       span_ [class_ "leading-none"] $ if archived then "Unarchive" else "Archive"
-
-
-reqResSection :: Text -> Bool -> [Shapes.ShapeWithFields] -> Html ()
-reqResSection title isRequest shapesWithFieldsMap =
-  section_ [class_ "space-y-3"] do
-    div_ [class_ "flex justify-between mt-5"] do
-      div_ [class_ "flex flex-row"] do
-        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-          $ faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
-        span_ [class_ "text-lg text-slate-800"] $ toHtml title
-
-    div_ [class_ "bg-base-100 border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
-      $ forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap)
-      $ \(index, s) -> do
-        let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
-        div_ [class_ sh, id_ $ title <> "_" <> show index] do
-          if isRequest
-            then do
-              subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
-              subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
-            else do
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
-
-
--- | subSubSection ..
-subSubSection :: Text -> Maybe [Fields.Field] -> Html ()
-subSubSection title fieldsM = whenJust fieldsM \fields -> do
-  div_ [class_ "space-y-1 mb-4"] do
-    div_ [class_ "flex flex-row items-center"] do
-      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]] $ faSprite_ "chevron-down" "regular" "h-6 mr-3 w-6 p-1 cursor-pointer"
-      div_ [class_ "px-4 rounded-xl w-full font-bold  text-textStrong"] $ toHtml title
-    div_ [class_ "space-y-1 subSectionContent"] do
-      fieldsToNormalized fields & mapM_ \(key, fieldM) -> do
-        let segments = T.splitOn "." key
-        let depth = length segments
-        let depthPadding = "margin-left:" <> show (20 + (depth * 20)) <> "px"
-        let displayKey = last ("" :| segments)
-        case fieldM of
-          Nothing -> do
-            a_
-              [ class_ "flex flex-row items-center"
-              , style_ depthPadding
-              , [__| on click toggle .neg-rotate-90 on <.chevron/> in me then collapseUntil((me), (my @data-depth))  |]
-              ]
-              do
-                faSprite_ "chevron-down" "light" "h-6 w-6 mr-1 chevron cursor-pointer p-1"
-                div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full"] do
-                  span_ [class_ " text-slate-800 inline-flex items-center"] $ toHtml displayKey
-                  span_ [class_ " text-slate-600 inline-flex items-center ml-4"] do
-                    if "[*]" `T.isSuffixOf` key
-                      then fieldTypeToDisplay Fields.FTList
-                      else fieldTypeToDisplay Fields.FTObject
-          Just field -> do
-            a_ [class_ "flex flex-row cursor-pointer", style_ depthPadding, term "data-depth" $ show depth] do
-              faSprite_ "chevron-down" "light" "h-4 mr-3 mt-4 w-4 invisible"
-              div_ [class_ "border-b flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] do
-                span_ [class_ "grow  text-slate-800 inline-flex items-center"] $ toHtml displayKey
-                span_ [class_ " text-slate-600 mx-12 inline-flex items-center"] $ fieldTypeToDisplay field.fieldType
-
-
-fieldTypeToDisplay :: Fields.FieldTypes -> Html ()
-fieldTypeToDisplay fieldType = case fieldType of
-  Fields.FTUnknown -> span_ [class_ "px-2 rounded-xl bg-red-100 red-800 monospace"] "unknown"
-  Fields.FTString -> span_ [class_ "px-2 rounded-xl bg-fillWeaker slate-800 monospace"] "abc"
-  Fields.FTNumber -> span_ [class_ "px-2 rounded-xl bg-blue-100 blue-800 monospace"] "123"
-  Fields.FTBool -> span_ [class_ "px-2 rounded-xl bg-gray-100 black-800 monospace"] "bool"
-  Fields.FTObject -> span_ [class_ "px-2 rounded-xl bg-orange-100 orange-800 monospace"] "{obj}"
-  Fields.FTList -> span_ [class_ "px-2 rounded-xl bg-stone-100 stone-800 monospace"] "[list]"
-  Fields.FTNull -> span_ [class_ "px-2 rounded-xl bg-red-100 red-800 monospace"] "null"

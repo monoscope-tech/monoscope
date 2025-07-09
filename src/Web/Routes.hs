@@ -237,7 +237,6 @@ data AnomaliesRoutes' mode = AnomaliesRoutes'
   , unarchiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] AnomalyList.AnomalyBulkForm :> Post '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , listGet :: mode :- QPT "layout" :> QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "load_more" :> QEID "endpoint" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders AnomalyList.AnomalyListGet)
-  , detailsGet :: mode :- "by_hash" :> Capture "targetHash" Text :> QPT "modal" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyDetails)
   }
   deriving stock (Generic)
 
@@ -441,7 +440,6 @@ anomaliesServer pid =
     , unarchiveGet = AnomalyList.unArchiveAnomalyGetH pid
     , bulkActionsPost = AnomalyList.anomalyBulkActionsPostH pid
     , listGet = AnomalyList.anomalyListGetH pid
-    , detailsGet = AnomalyList.anomalyDetailsGetH pid
     }
 
 
