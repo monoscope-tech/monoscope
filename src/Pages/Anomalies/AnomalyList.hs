@@ -776,30 +776,37 @@ issueItem hideByDefault currTime issue timeFilter icon title endpoint content an
           $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"]
           $ show issue.eventsAgg.count
         let issueQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
-        let mockChartData = if hideByDefault -- Only provide mock data for slider view
-              then case issue.targetHash of
-                "hash123" -> Just $ AE.Array $ V.fromList 
-                  [ AE.Array $ V.fromList [AE.Number 1735689600000, AE.Number 3]  -- timestamp, count
-                  , AE.Array $ V.fromList [AE.Number 1735693200000, AE.Number 5]
-                  , AE.Array $ V.fromList [AE.Number 1735696800000, AE.Number 8]
-                  , AE.Array $ V.fromList [AE.Number 1735700400000, AE.Number 12]
-                  , AE.Array $ V.fromList [AE.Number 1735704000000, AE.Number 15]
-                  , AE.Array $ V.fromList [AE.Number 1735707600000, AE.Number 10]
-                  , AE.Array $ V.fromList [AE.Number 1735711200000, AE.Number 8]
-                  , AE.Array $ V.fromList [AE.Number 1735714800000, AE.Number 5]
-                  ]
-                "hash456" -> Just $ AE.Array $ V.fromList 
-                  [ AE.Array $ V.fromList [AE.Number 1735689600000, AE.Number 2]
-                  , AE.Array $ V.fromList [AE.Number 1735693200000, AE.Number 4]
-                  , AE.Array $ V.fromList [AE.Number 1735696800000, AE.Number 7]
-                  , AE.Array $ V.fromList [AE.Number 1735700400000, AE.Number 11]
-                  , AE.Array $ V.fromList [AE.Number 1735704000000, AE.Number 15]
-                  , AE.Array $ V.fromList [AE.Number 1735707600000, AE.Number 18]
-                  , AE.Array $ V.fromList [AE.Number 1735711200000, AE.Number 12]
-                  , AE.Array $ V.fromList [AE.Number 1735714800000, AE.Number 8]
-                  ]
-                _ -> Nothing
-              else Nothing
+        let mockChartData =
+              if hideByDefault -- Only provide mock data for slider view
+                then case issue.targetHash of
+                  "hash123" ->
+                    Just
+                      $ AE.Array
+                      $ V.fromList
+                        [ AE.Array $ V.fromList [AE.Number 1735689600000, AE.Number 3] -- timestamp, count
+                        , AE.Array $ V.fromList [AE.Number 1735693200000, AE.Number 5]
+                        , AE.Array $ V.fromList [AE.Number 1735696800000, AE.Number 8]
+                        , AE.Array $ V.fromList [AE.Number 1735700400000, AE.Number 12]
+                        , AE.Array $ V.fromList [AE.Number 1735704000000, AE.Number 15]
+                        , AE.Array $ V.fromList [AE.Number 1735707600000, AE.Number 10]
+                        , AE.Array $ V.fromList [AE.Number 1735711200000, AE.Number 8]
+                        , AE.Array $ V.fromList [AE.Number 1735714800000, AE.Number 5]
+                        ]
+                  "hash456" ->
+                    Just
+                      $ AE.Array
+                      $ V.fromList
+                        [ AE.Array $ V.fromList [AE.Number 1735689600000, AE.Number 2]
+                        , AE.Array $ V.fromList [AE.Number 1735693200000, AE.Number 4]
+                        , AE.Array $ V.fromList [AE.Number 1735696800000, AE.Number 7]
+                        , AE.Array $ V.fromList [AE.Number 1735700400000, AE.Number 11]
+                        , AE.Array $ V.fromList [AE.Number 1735704000000, AE.Number 15]
+                        , AE.Array $ V.fromList [AE.Number 1735707600000, AE.Number 18]
+                        , AE.Array $ V.fromList [AE.Number 1735711200000, AE.Number 12]
+                        , AE.Array $ V.fromList [AE.Number 1735714800000, AE.Number 8]
+                        ]
+                  _ -> Nothing
+                else Nothing
         div_ [class_ "flex items-center justify-center "]
           $ div_ [class_ "w-56 h-12 px-3"]
           $ Widget.widget_
@@ -815,14 +822,17 @@ issueItem hideByDefault currTime issue timeFilter icon title endpoint content an
             , Widget._projectId = Just issue.projectId
             , Widget.hideLegend = Just True
             , Widget.eager = if isJust mockChartData then Just True else Nothing -- Enable eager mode when we have mock data
-            , Widget.dataset = mockChartData >>= \chartData -> Just Widget.WidgetDataset
-                { Widget.source = chartData
-                , Widget.rowsPerMin = Nothing
-                , Widget.value = Nothing
-                , Widget.from = Nothing
-                , Widget.to = Nothing
-                , Widget.stats = Nothing
-                }
+            , Widget.dataset =
+                mockChartData >>= \chartData ->
+                  Just
+                    Widget.WidgetDataset
+                      { Widget.source = chartData
+                      , Widget.rowsPerMin = Nothing
+                      , Widget.value = Nothing
+                      , Widget.from = Nothing
+                      , Widget.to = Nothing
+                      , Widget.stats = Nothing
+                      }
             }
 
 
@@ -1091,7 +1101,7 @@ renderIssue hideByDefault currTime timeFilter issue = do
   let issueId = Anomalies.anomalyIdText issue.id
   let timeSinceString = prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
 
-  div_ [class_ $ "flex py-4 gap-8 items-start itemsListItem border border-strokeWeak rounded-lg p-6 " <> if hideByDefault then "card-round" else "", style_ (if hideByDefault then "display:none" else ""), id_ issueId] do
+  div_ [class_ $ "flex py-4 gap-8 items-start itemsListItem p-6 " <> if hideByDefault then "card-round" else "", style_ (if hideByDefault then "display:none" else ""), id_ issueId] do
     -- Checkbox and accent color
     div_ [class_ $ "h-4 flex space-x-3 w-8 items-center justify-center " <> if hideByDefault then "hidden" else ""] do
       a_ [class_ $ anomalyAccentColor (isJust issue.acknowlegedAt) (isJust issue.archivedAt) <> " w-2 h-full"] ""
@@ -1105,27 +1115,27 @@ renderIssue hideByDefault currTime timeFilter issue = do
 
         -- Breaking, Incremental, Error, or Alert badge
         case issue.issueData of
-          Anomalies.IDNewRuntimeExceptionIssue err -> 
+          Anomalies.IDNewRuntimeExceptionIssue err ->
             if err.errorType == "High Error Rate Alert"
               then span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-strong text-fillWhite shadow-sm"] do
-                faSprite_ "zap" "regular" "h-3 w-3"
+                faSprite_ "zap" "regular" "w-3 h-3"
                 "above threshold"
               else span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-strong text-fillWhite shadow-sm"] do
-                faSprite_ "triangle-alert" "regular" "h-3 w-3"
+                faSprite_ "triangle-alert" "regular" "w-3 h-3"
                 "ERROR"
           _ ->
             if issue.breakingChanges > 0
               then span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-strong text-fillWhite shadow-sm"] do
-                faSprite_ "exclamation-triangle" "regular" "h-3 w-3"
+                faSprite_ "exclamation-triangle" "regular" "w-3 h-3"
                 "BREAKING"
               else when (issue.incrementalChanges > 0) do
                 span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillInformation-strong text-fillWhite shadow-sm"] do
-                  faSprite_ "info" "regular" "h-3 w-3"
+                  faSprite_ "info" "regular" "w-3 h-3 mr-0.5"
                   "Incremental"
 
         -- Critical or severity badge
         case issue.issueData of
-          Anomalies.IDNewRuntimeExceptionIssue err -> 
+          Anomalies.IDNewRuntimeExceptionIssue err ->
             if err.errorType == "High Error Rate Alert"
               then span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "MEDIUM"
               else when issue.critical do
@@ -1142,9 +1152,10 @@ renderIssue hideByDefault currTime timeFilter issue = do
               span_ [class_ "font-mono bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml issueD.endpointUrlPath
           Anomalies.IDNewRuntimeExceptionIssue err -> do
             div_ [class_ "flex items-center gap-2"] do
-              let methodBadgeClass = if fromMaybe "" err.requestMethod == "ALL" 
-                    then "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWeak text-textStrong border border-strokeWeak"
-                    else "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillSuccess-strong text-fillWhite shadow-sm"
+              let methodBadgeClass =
+                    if fromMaybe "" err.requestMethod == "ALL"
+                      then "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWeak text-textStrong border border-strokeWeak"
+                      else "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillSuccess-strong text-fillWhite shadow-sm"
               span_ [class_ methodBadgeClass] $ toHtml $ fromMaybe "GET" err.requestMethod
               -- Use the requestPath from the error
               span_ [class_ "font-mono bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml $ fromMaybe "" err.requestPath
@@ -1163,13 +1174,13 @@ renderIssue hideByDefault currTime timeFilter issue = do
           when (err.errorType == "High Error Rate Alert") do
             div_ [class_ "mb-4"] do
               span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
-              div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"] 
+              div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"]
                 $ toHtml err.stackTrace
           -- For actual errors, show the stack trace
           when (err.errorType /= "High Error Rate Alert") do
             div_ [class_ "bg-fillError-weak border border-strokeError-weak rounded-lg p-4 text-sm font-mono text-fillError-strong mb-4"] do
               pre_ [class_ "whitespace-pre-wrap"] $ toHtml err.stackTrace
-        _ -> 
+        _ ->
           -- For shape issues, show the description
           p_ [class_ "text-sm text-textWeak mb-4 bg-fillWeak p-3 rounded leading-relaxed"]
             $ toHtml
@@ -1184,7 +1195,7 @@ renderIssue hideByDefault currTime timeFilter issue = do
               _ -> "API structure has changed"
 
       -- Statistics row (only for shape issues)
-      unless (case issue.issueData of { Anomalies.IDNewRuntimeExceptionIssue _ -> True; _ -> False }) do
+      unless (case issue.issueData of Anomalies.IDNewRuntimeExceptionIssue _ -> True; _ -> False) do
         div_ [class_ "flex items-center gap-4 text-sm mb-4 p-3 bg-fillWeak rounded-lg"] do
           span_ [class_ "text-textWeak"] do
             strong_ [class_ "text-textStrong"] $ toHtml $ show issue.eventsAgg.count
@@ -1212,7 +1223,8 @@ renderIssue hideByDefault currTime timeFilter issue = do
             " payloads affected"
 
       -- Impact warning box (hidden for now - not yet supported)
-      when False do -- (issue.affectedClients > 0) do
+      when False do
+        -- (issue.affectedClients > 0) do
         div_ [class_ "mb-4 p-4 border-l-4 border-l-fillWarning-strong bg-fillWarning-weak rounded-lg"] do
           div_ [class_ "flex items-start gap-3"] do
             faSprite_ "circle-alert" "regular" "h-5 w-5 text-fillWarning-strong mt-0.5 flex-shrink-0"
@@ -1230,7 +1242,7 @@ renderIssue hideByDefault currTime timeFilter issue = do
               p_ [class_ "text-sm text-fillWarning-strong leading-relaxed font-medium"] $ toHtml issue.recommendedAction
 
       -- Collapsible payload changes using details/summary (only for shape issues)
-      unless (case issue.issueData of { Anomalies.IDNewRuntimeExceptionIssue _ -> True; _ -> False }) do
+      unless (case issue.issueData of Anomalies.IDNewRuntimeExceptionIssue _ -> True; _ -> False) do
         details_ [class_ "group mb-4"] do
           summary_ [class_ "inline-flex items-center cursor-pointer whitespace-nowrap text-sm font-medium transition-all rounded-md gap-1.5 text-textBrand hover:text-textBrand/80 list-none"] do
             faSprite_ "chevron-right" "regular" "h-4 w-4 mr-1 transition-transform group-open:rotate-90"
@@ -1243,18 +1255,18 @@ renderIssue hideByDefault currTime timeFilter issue = do
       -- Action buttons
       div_ [class_ "flex items-center gap-3 mt-4 pt-4 border-t border-strokeWeak"] do
         button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 text-textBrand hover:text-textBrand/80 hover:bg-fillBrand-weak"] do
-          faSprite_ "eye" "regular" "w-4 h-4 mr-1"
-          "view related logs"
+          faSprite_ "eye" "regular" "w-4 h-4"
+          span_ [class_ "leading-none"] "view related logs"
 
         -- Review Impact button (hidden for now - not yet supported)
         when False do
           button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-fillWarning-strong border-strokeWarning-strong hover:bg-fillWarning-weak"] do
-            faSprite_ "exclamation-triangle" "regular" "h-4 w-4 mr-1"
-            "Review Impact"
+            faSprite_ "exclamation-triangle" "regular" "w-4 h-4"
+            span_ [class_ "leading-none"] "Review Impact"
 
         button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-textBrand border-strokeBrand-strong hover:bg-fillBrand-weak"] do
-          faSprite_ "code" "regular" "w-4 h-4 mr-1"
-          "View Full Schema"
+          faSprite_ "code" "regular" "w-4 h-4"
+          span_ [class_ "leading-none"] "View Full Schema"
 
     -- Events count
     div_ [class_ "w-36 flex items-start justify-center"]
@@ -1263,50 +1275,63 @@ renderIssue hideByDefault currTime timeFilter issue = do
 
     -- Chart widget
     let issueQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
-    let mockChartData = if hideByDefault -- Only provide mock data for slider view
-          then case issue.targetHash of
-            "hash123" -> Just $ AE.Array $ V.fromList 
-              [ AE.Array $ V.fromList [AE.Number 1735689600000, AE.Number 3]  -- timestamp, count
-              , AE.Array $ V.fromList [AE.Number 1735693200000, AE.Number 5]
-              , AE.Array $ V.fromList [AE.Number 1735696800000, AE.Number 8]
-              , AE.Array $ V.fromList [AE.Number 1735700400000, AE.Number 12]
-              , AE.Array $ V.fromList [AE.Number 1735704000000, AE.Number 15]
-              , AE.Array $ V.fromList [AE.Number 1735707600000, AE.Number 10]
-              , AE.Array $ V.fromList [AE.Number 1735711200000, AE.Number 8]
-              , AE.Array $ V.fromList [AE.Number 1735714800000, AE.Number 5]
-              ]
-            "hash456" -> Just $ AE.Array $ V.fromList 
-              [ AE.Array $ V.fromList [AE.Number 1735689600000, AE.Number 2]
-              , AE.Array $ V.fromList [AE.Number 1735693200000, AE.Number 4]
-              , AE.Array $ V.fromList [AE.Number 1735696800000, AE.Number 7]
-              , AE.Array $ V.fromList [AE.Number 1735700400000, AE.Number 11]
-              , AE.Array $ V.fromList [AE.Number 1735704000000, AE.Number 15]
-              , AE.Array $ V.fromList [AE.Number 1735707600000, AE.Number 18]
-              , AE.Array $ V.fromList [AE.Number 1735711200000, AE.Number 12]
-              , AE.Array $ V.fromList [AE.Number 1735714800000, AE.Number 8]
-              ]
-            "hash789" -> Just $ AE.Array $ V.fromList  -- Payment error spike
-              [ AE.Array $ V.fromList [AE.Number 1735689600000, AE.Number 5]
-              , AE.Array $ V.fromList [AE.Number 1735693200000, AE.Number 3]
-              , AE.Array $ V.fromList [AE.Number 1735696800000, AE.Number 8]
-              , AE.Array $ V.fromList [AE.Number 1735700400000, AE.Number 45]  -- Spike
-              , AE.Array $ V.fromList [AE.Number 1735704000000, AE.Number 120] -- Big spike
-              , AE.Array $ V.fromList [AE.Number 1735707600000, AE.Number 85]
-              , AE.Array $ V.fromList [AE.Number 1735711200000, AE.Number 20]
-              , AE.Array $ V.fromList [AE.Number 1735714800000, AE.Number 10]
-              ]
-            "hash1011" -> Just $ AE.Array $ V.fromList  -- High error rate
-              [ AE.Array $ V.fromList [AE.Number 1735689600000, AE.Number 10]
-              , AE.Array $ V.fromList [AE.Number 1735693200000, AE.Number 15]
-              , AE.Array $ V.fromList [AE.Number 1735696800000, AE.Number 25]
-              , AE.Array $ V.fromList [AE.Number 1735700400000, AE.Number 40]
-              , AE.Array $ V.fromList [AE.Number 1735704000000, AE.Number 65]
-              , AE.Array $ V.fromList [AE.Number 1735707600000, AE.Number 90]  -- Peak
-              , AE.Array $ V.fromList [AE.Number 1735711200000, AE.Number 75]
-              , AE.Array $ V.fromList [AE.Number 1735714800000, AE.Number 60]
-              ]
-            _ -> Nothing
-          else Nothing
+    let mockChartData =
+          if hideByDefault -- Only provide mock data for slider view
+            then case issue.targetHash of
+              "hash123" ->
+                Just
+                  $ AE.Array
+                  $ V.fromList
+                    [ AE.Array $ V.fromList [AE.Number 1735689600000, AE.Number 3] -- timestamp, count
+                    , AE.Array $ V.fromList [AE.Number 1735693200000, AE.Number 5]
+                    , AE.Array $ V.fromList [AE.Number 1735696800000, AE.Number 8]
+                    , AE.Array $ V.fromList [AE.Number 1735700400000, AE.Number 12]
+                    , AE.Array $ V.fromList [AE.Number 1735704000000, AE.Number 15]
+                    , AE.Array $ V.fromList [AE.Number 1735707600000, AE.Number 10]
+                    , AE.Array $ V.fromList [AE.Number 1735711200000, AE.Number 8]
+                    , AE.Array $ V.fromList [AE.Number 1735714800000, AE.Number 5]
+                    ]
+              "hash456" ->
+                Just
+                  $ AE.Array
+                  $ V.fromList
+                    [ AE.Array $ V.fromList [AE.Number 1735689600000, AE.Number 2]
+                    , AE.Array $ V.fromList [AE.Number 1735693200000, AE.Number 4]
+                    , AE.Array $ V.fromList [AE.Number 1735696800000, AE.Number 7]
+                    , AE.Array $ V.fromList [AE.Number 1735700400000, AE.Number 11]
+                    , AE.Array $ V.fromList [AE.Number 1735704000000, AE.Number 15]
+                    , AE.Array $ V.fromList [AE.Number 1735707600000, AE.Number 18]
+                    , AE.Array $ V.fromList [AE.Number 1735711200000, AE.Number 12]
+                    , AE.Array $ V.fromList [AE.Number 1735714800000, AE.Number 8]
+                    ]
+              "hash789" ->
+                Just
+                  $ AE.Array
+                  $ V.fromList -- Payment error spike
+                    [ AE.Array $ V.fromList [AE.Number 1735689600000, AE.Number 5]
+                    , AE.Array $ V.fromList [AE.Number 1735693200000, AE.Number 3]
+                    , AE.Array $ V.fromList [AE.Number 1735696800000, AE.Number 8]
+                    , AE.Array $ V.fromList [AE.Number 1735700400000, AE.Number 45] -- Spike
+                    , AE.Array $ V.fromList [AE.Number 1735704000000, AE.Number 120] -- Big spike
+                    , AE.Array $ V.fromList [AE.Number 1735707600000, AE.Number 85]
+                    , AE.Array $ V.fromList [AE.Number 1735711200000, AE.Number 20]
+                    , AE.Array $ V.fromList [AE.Number 1735714800000, AE.Number 10]
+                    ]
+              "hash1011" ->
+                Just
+                  $ AE.Array
+                  $ V.fromList -- High error rate
+                    [ AE.Array $ V.fromList [AE.Number 1735689600000, AE.Number 10]
+                    , AE.Array $ V.fromList [AE.Number 1735693200000, AE.Number 15]
+                    , AE.Array $ V.fromList [AE.Number 1735696800000, AE.Number 25]
+                    , AE.Array $ V.fromList [AE.Number 1735700400000, AE.Number 40]
+                    , AE.Array $ V.fromList [AE.Number 1735704000000, AE.Number 65]
+                    , AE.Array $ V.fromList [AE.Number 1735707600000, AE.Number 90] -- Peak
+                    , AE.Array $ V.fromList [AE.Number 1735711200000, AE.Number 75]
+                    , AE.Array $ V.fromList [AE.Number 1735714800000, AE.Number 60]
+                    ]
+              _ -> Nothing
+            else Nothing
     div_ [class_ "flex items-start justify-center "]
       $ div_ [class_ "w-56 h-12 px-3"]
       $ Widget.widget_
@@ -1322,14 +1347,17 @@ renderIssue hideByDefault currTime timeFilter issue = do
         , Widget._projectId = Just issue.projectId
         , Widget.hideLegend = Just True
         , Widget.eager = if isJust mockChartData then Just True else Nothing -- Enable eager mode when we have mock data
-        , Widget.dataset = mockChartData >>= \chartData -> Just Widget.WidgetDataset
-            { Widget.source = chartData
-            , Widget.rowsPerMin = Nothing
-            , Widget.value = Nothing
-            , Widget.from = Nothing
-            , Widget.to = Nothing
-            , Widget.stats = Nothing
-            }
+        , Widget.dataset =
+            mockChartData >>= \chartData ->
+              Just
+                Widget.WidgetDataset
+                  { Widget.source = chartData
+                  , Widget.rowsPerMin = Nothing
+                  , Widget.value = Nothing
+                  , Widget.from = Nothing
+                  , Widget.to = Nothing
+                  , Widget.stats = Nothing
+                  }
         }
 
 
@@ -1377,10 +1405,10 @@ renderPayloadChange payload = do
       -- Change type badge
       case payload.changeType of
         Anomalies.Breaking -> span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillError-strong text-fillWhite shadow-sm"] do
-          faSprite_ "circle-x" "regular" "h-3 w-3 mr-1"
+          faSprite_ "circle-x" "regular" "w-3 h-3"
           "Breaking"
         Anomalies.Safe -> span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillSuccess-strong text-fillWhite shadow-sm"] do
-          faSprite_ "circle-check" "regular" "h-3 w-3 mr-1"
+          faSprite_ "circle-check" "regular" "w-3 h-3"
           "Safe"
         Anomalies.Incremental -> span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillInformation-weak text-fillInformation-strong border-strokeInformation-strong"] "Incremental"
 
@@ -1472,15 +1500,15 @@ anomalyAcknowlegeButton pid aid acked host = do
   let acknowlegeAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if acked then "/unacknowlege" else "/acknowlege?host=" <> host
   a_
     [ class_
-        $ "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
+        $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
           <> (if acked then "bg-green-100 text-green-900" else "btn-primary")
     , term "data-tippy-content" "acknowlege anomaly"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
     ]
     do
-      faSprite_ "check" "regular" "h-4 w-4 mr-2"
-      if acked then "Acknowleged" else "Acknowlege"
+      faSprite_ "check" "regular" "w-4 h-4"
+      span_ [class_ "leading-none"] $ if acked then "Acknowleged" else "Acknowlege"
 
 
 anomalyArchiveButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Html ()
@@ -1488,15 +1516,15 @@ anomalyArchiveButton pid aid archived = do
   let archiveAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if archived then "/unarchive" else "/archive"
   a_
     [ class_
-        $ "flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
+        $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
           <> (if archived then " bg-green-100 text-green-900" else "btn-primary")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"
     ]
     do
-      faSprite_ "archive" "regular" "h-4 w-4"
-      if archived then "Unarchive" else "Archive"
+      faSprite_ "archive" "regular" "w-4 h-4"
+      span_ [class_ "leading-none"] $ if archived then "Unarchive" else "Archive"
 
 
 reqResSection :: Text -> Bool -> [Shapes.ShapeWithFields] -> Html ()
