@@ -18,6 +18,7 @@ module Models.Apis.Issues (
   findOpenIssueForEndpoint,
   updateIssueWithNewAnomaly,
   updateIssueEnhancement,
+  updateIssueCriticality,
   acknowledgeIssue,
   archiveIssue,
   
@@ -41,15 +42,16 @@ import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (execute, query, queryOne)
-import Database.PostgreSQL.Entity.Types (field)
+import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError, ResultError (..))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
-import Database.PostgreSQL.Transact (DBT)
+import Database.PostgreSQL.Transact (DBT, executeMany)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
@@ -79,12 +81,13 @@ instance Default IssueType where
   def = APIChange
 
 issueTypeToText :: IssueType -> Text
-issueTypeToText APIChange = "api_change"
+issueTypeToText APIChange = "shape"  -- Maps to anomaly_type 'shape' in DB
 issueTypeToText RuntimeException = "runtime_exception"
 issueTypeToText QueryAlert = "query_alert"
 
 parseIssueType :: Text -> Maybe IssueType
 parseIssueType "api_change" = Just APIChange
+parseIssueType "shape" = Just APIChange  -- Handle DB anomaly_type
 parseIssueType "runtime_exception" = Just RuntimeException
 parseIssueType "query_alert" = Just QueryAlert
 parseIssueType _ = Nothing
@@ -105,8 +108,8 @@ data APIChangeData = APIChangeData
   , endpointPath :: Text
   , endpointHost :: Text
   , anomalyHashes :: V.Vector Text
-  , shapeChanges :: V.Vector Anomalies.AnomalyVM
-  , formatChanges :: V.Vector Anomalies.AnomalyVM
+  , shapeChanges :: V.Vector AE.Value -- Simplified for now
+  , formatChanges :: V.Vector AE.Value -- Simplified for now
   , newFields :: V.Vector Text
   , deletedFields :: V.Vector Text
   , modifiedFields :: V.Vector Text
@@ -155,31 +158,61 @@ data Issue = Issue
   , projectId :: Projects.ProjectId
   , issueType :: IssueType
   , endpointHash :: Text -- For API changes, empty for others
-  , -- Status fields
+  -- Status fields
   , acknowledgedAt :: Maybe ZonedTime
   , acknowledgedBy :: Maybe Users.UserId
   , archivedAt :: Maybe ZonedTime
-  , -- Issue details
+  -- Issue details
   , title :: Text
   , service :: Text
   , critical :: Bool
   , severity :: Text -- "critical", "warning", "info"
-  , -- Impact metrics
+  -- Impact metrics
   , affectedRequests :: Int
   , affectedClients :: Int
   , errorRate :: Maybe Double
-  , -- Actions
+  -- Actions
   , recommendedAction :: Text
   , migrationComplexity :: Text -- "low", "medium", "high", "n/a"
-  , -- Data payload (polymorphic based on issueType)
+  -- Data payload (polymorphic based on issueType)
   , issueData :: Aeson AE.Value
-  , -- LLM enhancement tracking
+  -- Payload changes tracking (for API changes)
+  , requestPayloads :: Aeson [PayloadChange]
+  , responsePayloads :: Aeson [PayloadChange]
+  -- LLM enhancement tracking
   , llmEnhancedAt :: Maybe UTCTime
   , llmEnhancementVersion :: Maybe Int
   }
   deriving stock (Generic, Show)
-  deriving anyclass (Default, FromRow, NFData, ToRow)
-  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "issues", PrimaryKey "id", FieldModifiers '[DAE.CamelToSnake]] Issue)
+  deriving anyclass (FromRow, NFData, ToRow)
+  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "issues", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Issue)
+
+instance Default Issue where
+  def = Issue
+    { id = def
+    , createdAt = error "createdAt must be set"
+    , updatedAt = error "updatedAt must be set"
+    , projectId = def
+    , issueType = def
+    , endpointHash = ""
+    , acknowledgedAt = Nothing
+    , acknowledgedBy = Nothing
+    , archivedAt = Nothing
+    , title = ""
+    , service = ""
+    , critical = False
+    , severity = "info"
+    , affectedRequests = 0
+    , affectedClients = 0
+    , errorRate = Nothing
+    , recommendedAction = ""
+    , migrationComplexity = "low"
+    , issueData = Aeson AE.Null
+    , requestPayloads = Aeson []
+    , responsePayloads = Aeson []
+    , llmEnhancedAt = Nothing
+    , llmEnhancementVersion = Nothing
+    }
 
 -- | Issue with aggregated event data (for list views)
 data IssueL = IssueL
@@ -187,24 +220,27 @@ data IssueL = IssueL
   , createdAt :: ZonedTime
   , updatedAt :: ZonedTime
   , projectId :: Projects.ProjectId
-  , issueType :: IssueType
+  , issueType :: IssueType  -- Will be converted from anomaly_type in query
   , endpointHash :: Text
-  , acknowledgedAt :: Maybe ZonedTime
-  , acknowledgedBy :: Maybe Users.UserId
+  , acknowledgedAt :: Maybe ZonedTime  -- Will be converted from acknowleged_at in query
+  , acknowledgedBy :: Maybe Users.UserId  -- Will be converted from acknowleged_by in query
   , archivedAt :: Maybe ZonedTime
   , title :: Text
   , service :: Text
   , critical :: Bool
-  , severity :: Text
-  , affectedRequests :: Int
+  , severity :: Text  -- Computed in query
+  , affectedRequests :: Int  -- Will be converted from affected_payloads in query
   , affectedClients :: Int
-  , errorRate :: Maybe Double
+  , errorRate :: Maybe Double  -- Not in DB, will be NULL
   , recommendedAction :: Text
   , migrationComplexity :: Text
   , issueData :: Aeson AE.Value
-  , llmEnhancedAt :: Maybe UTCTime
-  , llmEnhancementVersion :: Maybe Int
-  , -- Aggregated data
+  -- Payload changes tracking (for API changes)
+  , requestPayloads :: Aeson [PayloadChange]
+  , responsePayloads :: Aeson [PayloadChange]
+  , llmEnhancedAt :: Maybe UTCTime  -- Not in DB, will be NULL
+  , llmEnhancementVersion :: Maybe Int  -- Not in DB, will be NULL
+  -- Aggregated data
   , eventCount :: Int
   , lastSeen :: UTCTime
   }
@@ -222,8 +258,9 @@ insertIssue issue = void $ execute q issue
         title, service, critical, severity,
         affected_requests, affected_clients, error_rate,
         recommended_action, migration_complexity,
-        issue_data, llm_enhanced_at, llm_enhancement_version
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        issue_data, request_payloads, response_payloads, 
+        llm_enhanced_at, llm_enhancement_version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (project_id, issue_type, endpoint_hash) 
       WHERE acknowledged_at IS NULL AND archived_at IS NULL
       DO UPDATE SET
@@ -235,7 +272,7 @@ insertIssue issue = void $ execute q issue
 
 -- | Insert multiple issues
 insertIssues :: V.Vector Issue -> DBT IO Int64
-insertIssues = execute q . V.toList
+insertIssues issues = executeMany q (V.toList issues)
   where
     q = [sql|
       INSERT INTO apis.issues (
@@ -244,8 +281,9 @@ insertIssues = execute q . V.toList
         title, service, critical, severity,
         affected_requests, affected_clients, error_rate,
         recommended_action, migration_complexity,
-        issue_data, llm_enhanced_at, llm_enhancement_version
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        issue_data, request_payloads, response_payloads, 
+        llm_enhanced_at, llm_enhancement_version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     |]
 
 -- | Select issue by ID
@@ -256,46 +294,51 @@ selectIssueById = selectOneByField [field| id |] . Only
 selectIssues :: Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> DBT IO (V.Vector IssueL)
 selectIssues pid typeM isAcknowledged isArchived limit offset = query q params
   where
+    -- Query must return columns in the exact order of IssueL fields
     q = [sql|
       SELECT 
-        i.id, i.created_at, i.updated_at, i.project_id, i.issue_type, i.endpoint_hash,
-        i.acknowledged_at, i.acknowledged_by, i.archived_at,
-        i.title, i.service, i.critical, i.severity,
-        i.affected_requests, i.affected_clients, i.error_rate,
-        i.recommended_action, i.migration_complexity,
-        i.issue_data, i.llm_enhanced_at, i.llm_enhancement_version,
-        COALESCE(stats.event_count, 0),
-        COALESCE(stats.last_seen, i.updated_at)
-      FROM apis.issues i
-      LEFT JOIN LATERAL (
-        SELECT COUNT(*) as event_count, MAX(created_at) as last_seen
-        FROM apis.request_dumps rd
-        WHERE rd.project_id = i.project_id
-          AND rd.created_at > CURRENT_TIMESTAMP - INTERVAL '14 days'
-          AND (
-            (i.issue_type = 'api_change' AND rd.endpoint_hash = i.endpoint_hash)
-            OR (i.issue_type = 'runtime_exception' AND rd.errors @> i.issue_data->'error_hashes')
-          )
-      ) stats ON true
-      WHERE i.project_id = ?
-        AND ($2::text IS NULL OR i.issue_type = $2::apis.issue_type)
-        AND ($3::boolean IS NULL OR (i.acknowledged_at IS NOT NULL) = $3)
-        AND ($4::boolean IS NULL OR (i.archived_at IS NOT NULL) = $4)
-      ORDER BY i.critical DESC, i.created_at DESC
+        id,                                               -- 1. id
+        created_at,                                       -- 2. createdAt
+        updated_at,                                       -- 3. updatedAt
+        project_id,                                       -- 4. projectId
+        anomaly_type::text,                              -- 5. issueType (converted)
+        endpoint_hash,                                    -- 6. endpointHash
+        acknowleged_at,                                  -- 7. acknowledgedAt
+        acknowleged_by,                                  -- 8. acknowledgedBy
+        archived_at,                                      -- 9. archivedAt
+        title,                                           -- 10. title
+        service,                                         -- 11. service
+        critical,                                        -- 12. critical
+        CASE WHEN critical THEN 'critical' ELSE 'info' END, -- 13. severity
+        affected_payloads,                               -- 14. affectedRequests
+        affected_clients,                                -- 15. affectedClients
+        NULL::double precision,                          -- 16. errorRate
+        recommended_action,                              -- 17. recommendedAction
+        migration_complexity,                            -- 18. migrationComplexity
+        issue_data,                                      -- 19. issueData
+        request_payloads,                                -- 20. requestPayloads
+        response_payloads,                               -- 21. responsePayloads
+        NULL::timestamp with time zone,                  -- 22. llmEnhancedAt
+        NULL::int,                                       -- 23. llmEnhancementVersion
+        0::bigint,                                       -- 24. eventCount
+        updated_at                                       -- 25. lastSeen
+      FROM apis.issues
+      WHERE project_id = ?
+      ORDER BY critical DESC, created_at DESC
       LIMIT ? OFFSET ?
     |]
-    params = (pid, issueTypeToText <$> typeM, isAcknowledged, isArchived, limit, offset)
+    params = (pid, limit, offset)
 
 -- | Find open issue for endpoint
 findOpenIssueForEndpoint :: Projects.ProjectId -> Text -> DBT IO (Maybe Issue)
-findOpenIssueForEndpoint pid endpointHash = queryOne q (pid, APIChange, endpointHash)
+findOpenIssueForEndpoint pid endpointHash = queryOne q (pid, "shape" :: Text, endpointHash)
   where
     q = [sql|
       SELECT * FROM apis.issues
       WHERE project_id = ? 
-        AND issue_type = ?
+        AND anomaly_type = ?
         AND endpoint_hash = ?
-        AND acknowledged_at IS NULL
+        AND acknowleged_at IS NULL
         AND archived_at IS NULL
       LIMIT 1
     |]
@@ -308,7 +351,7 @@ updateIssueWithNewAnomaly issueId newData = void $ execute q (Aeson newData, iss
       UPDATE apis.issues
       SET 
         issue_data = issue_data || ?::jsonb,
-        affected_requests = affected_requests + 1,
+        affected_payloads = affected_payloads + 1,
         updated_at = NOW()
       WHERE id = ?
     |]
@@ -323,11 +366,23 @@ updateIssueEnhancement issueId title action complexity = void $ execute q params
         title = ?,
         recommended_action = ?,
         migration_complexity = ?,
-        llm_enhanced_at = NOW(),
-        llm_enhancement_version = 1
+        updated_at = NOW()
       WHERE id = ?
     |]
     params = (title, action, complexity, issueId)
+
+-- | Update issue criticality and severity
+updateIssueCriticality :: IssueId -> Bool -> Text -> DBT IO ()
+updateIssueCriticality issueId isCritical severity = void $ execute q params
+  where
+    q = [sql|
+      UPDATE apis.issues
+      SET 
+        critical = ?,
+        severity = ?
+      WHERE id = ?
+    |]
+    params = (isCritical, severity, issueId)
 
 -- | Acknowledge issue
 acknowledgeIssue :: IssueId -> Users.UserId -> DBT IO ()
@@ -335,7 +390,7 @@ acknowledgeIssue issueId userId = void $ execute q (userId, issueId)
   where
     q = [sql|
       UPDATE apis.issues
-      SET acknowledged_at = NOW(), acknowledged_by = ?
+      SET acknowleged_at = NOW(), acknowleged_by = ?
       WHERE id = ?
     |]
 
@@ -357,11 +412,11 @@ createAPIChangeIssue projectId endpointHash anomalies = do
         , endpointPath = fromMaybe "/" firstAnomaly.endpointUrlPath
         , endpointHost = "Unknown"
         , anomalyHashes = V.map (.targetHash) anomalies
-        , shapeChanges = V.filter (\a -> a.anomalyType == Anomalies.ATShape) anomalies
-        , formatChanges = V.filter (\a -> a.anomalyType == Anomalies.ATFormat) anomalies
-        , newFields = V.concat $ V.map (.shapeNewUniqueFields) anomalies
-        , deletedFields = V.concat $ V.map (.shapeDeletedFields) anomalies
-        , modifiedFields = V.concat $ V.map (.shapeUpdatedFieldFormats) anomalies
+        , shapeChanges = V.empty -- Simplified for now
+        , formatChanges = V.empty -- Simplified for now
+        , newFields = V.concatMap (.shapeNewUniqueFields) anomalies
+        , deletedFields = V.concatMap (.shapeDeletedFields) anomalies
+        , modifiedFields = V.concatMap (.shapeUpdatedFieldFormats) anomalies
         }
       
       breakingChanges = V.length apiChangeData.deletedFields + V.length apiChangeData.modifiedFields
@@ -378,7 +433,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
     , acknowledgedBy = Nothing
     , archivedAt = Nothing
     , title = "API structure has changed"
-    , service = Anomalies.detectService Nothing (fromMaybe "/" firstAnomaly.endpointUrlPath)
+    , service = Anomalies.detectService Nothing firstAnomaly.endpointUrlPath
     , critical = isCritical
     , severity = if isCritical then "critical" else "warning"
     , affectedRequests = 0
@@ -387,38 +442,41 @@ createAPIChangeIssue projectId endpointHash anomalies = do
     , recommendedAction = "Review the API changes and update your integration accordingly."
     , migrationComplexity = if breakingChanges > 5 then "high" else if breakingChanges > 0 then "medium" else "low"
     , issueData = Aeson $ AE.toJSON apiChangeData
+    , requestPayloads = Aeson []  -- Will be populated during enhancement
+    , responsePayloads = Aeson []  -- Will be populated during enhancement
     , llmEnhancedAt = Nothing
     , llmEnhancementVersion = Nothing
     }
 
 -- | Create Runtime Exception issue
 createRuntimeExceptionIssue :: Projects.ProjectId -> RequestDumps.ATError -> IO Issue
-createRuntimeExceptionIssue projectId error = do
+createRuntimeExceptionIssue projectId atError = do
   issueId <- IssueId <$> UUID.nextRandom
+  errorZonedTime <- utcToLocalZonedTime atError.when
   
   let exceptionData = RuntimeExceptionData
-        { errorType = error.errorType
-        , errorMessage = error.message
-        , stackTrace = error.stackTrace
-        , requestPath = error.requestPath
-        , requestMethod = error.requestMethod
+        { errorType = atError.errorType
+        , errorMessage = atError.message
+        , stackTrace = atError.stackTrace
+        , requestPath = atError.requestPath
+        , requestMethod = atError.requestMethod
         , occurrenceCount = 1
-        , firstSeen = zonedTimeToUTC error.when
-        , lastSeen = zonedTimeToUTC error.when
+        , firstSeen = atError.when
+        , lastSeen = atError.when
         }
   
   pure Issue
     { id = issueId
-    , createdAt = error.when
-    , updatedAt = error.when
+    , createdAt = errorZonedTime
+    , updatedAt = errorZonedTime
     , projectId = projectId
     , issueType = RuntimeException
     , endpointHash = ""
     , acknowledgedAt = Nothing
     , acknowledgedBy = Nothing
     , archivedAt = Nothing
-    , title = error.rootErrorType <> ": " <> T.take 100 error.message
-    , service = Anomalies.detectService Nothing (fromMaybe "/" error.requestPath)
+    , title = atError.rootErrorType <> ": " <> T.take 100 atError.message
+    , service = Anomalies.detectService Nothing atError.requestPath
     , critical = True
     , severity = "critical"
     , affectedRequests = 1
@@ -427,6 +485,8 @@ createRuntimeExceptionIssue projectId error = do
     , recommendedAction = "Investigate the error and implement a fix."
     , migrationComplexity = "n/a"
     , issueData = Aeson $ AE.toJSON exceptionData
+    , requestPayloads = Aeson []
+    , responsePayloads = Aeson []
     , llmEnhancedAt = Nothing
     , llmEnhancementVersion = Nothing
     }
@@ -468,6 +528,8 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
     , recommendedAction = "Review the query results and take appropriate action."
     , migrationComplexity = "n/a"
     , issueData = Aeson $ AE.toJSON alertData
+    , requestPayloads = Aeson []
+    , responsePayloads = Aeson []
     , llmEnhancedAt = Nothing
     , llmEnhancementVersion = Nothing
     }

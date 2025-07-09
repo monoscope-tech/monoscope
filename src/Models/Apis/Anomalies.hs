@@ -38,13 +38,13 @@ module Models.Apis.Anomalies (
   getFormatParentAnomalyVM,
   findOpenIssueForEndpoint,
   updateIssueWithNewAnomaly,
-  mergeIssues,
-  getEndpointFromIssueData,
-  getShapeChangesFromIssueData,
-  getFieldFromIssueData,
-  getErrorDataFromIssueData,
+  -- mergeIssues, -- DEPRECATED
+  -- getEndpointFromIssueData, -- DEPRECATED
+  -- getShapeChangesFromIssueData, -- DEPRECATED
+  -- getFieldFromIssueData, -- DEPRECATED
+  -- getErrorDataFromIssueData, -- DEPRECATED
   selectIssueById,
-  updateIssueEnhancement,
+  -- updateIssueEnhancement, -- DEPRECATED
 )
 where
 
@@ -1086,49 +1086,50 @@ updateIssueWithNewAnomaly existingIssue newAnomalyHashes newRequestPayloads newR
 
 
 -- Merge multiple issues into one (for grouping logic)
-mergeIssues :: V.Vector Issue -> Issue
-mergeIssues issues = case V.uncons issues of
-  Nothing -> error "Cannot merge empty issues vector"
-  Just (first, rest) -> V.foldl' mergeTwo first rest
-  where
-    mergeTwo :: Issue -> Issue -> Issue
-    mergeTwo base new = base
-      { anomalyHashes = base.anomalyHashes <> new.anomalyHashes
-      , breakingChanges = base.breakingChanges + new.breakingChanges
-      , incrementalChanges = base.incrementalChanges + new.incrementalChanges
-      , affectedPayloads = base.affectedPayloads + new.affectedPayloads
-      , affectedClients = max base.affectedClients new.affectedClients
-      , requestPayloads = mergePayloadLists base.requestPayloads new.requestPayloads
-      , responsePayloads = mergePayloadLists base.responsePayloads new.responsePayloads
-      , updatedAt = if zonedTimeToUTC base.updatedAt > zonedTimeToUTC new.updatedAt then base.updatedAt else new.updatedAt
-      , critical = base.critical || new.critical
-      }
-    
-    mergePayloadLists :: Aeson [PayloadChange] -> Aeson [PayloadChange] -> Aeson [PayloadChange]
-    mergePayloadLists (Aeson pl1) (Aeson pl2) = Aeson (pl1 ++ pl2)
+-- DEPRECATED: These functions are for the old Issue model
+-- mergeIssues :: V.Vector Issue -> Issue
+-- mergeIssues issues = case V.uncons issues of
+--   Nothing -> error "Cannot merge empty issues vector"
+--   Just (firstIssue, rest) -> V.foldl' mergeTwo firstIssue rest
+--   where
+--     mergeTwo :: Issue -> Issue -> Issue
+--     mergeTwo base new = base
+--       { anomalyHashes = base.anomalyHashes <> new.anomalyHashes
+--       , breakingChanges = base.breakingChanges + new.breakingChanges
+--       , incrementalChanges = base.incrementalChanges + new.incrementalChanges
+--       , affectedPayloads = base.affectedPayloads + new.affectedPayloads
+--       , affectedClients = max base.affectedClients new.affectedClients
+--       , requestPayloads = mergePayloadLists base.requestPayloads new.requestPayloads
+--       , responsePayloads = mergePayloadLists base.responsePayloads new.responsePayloads
+--       , updatedAt = if zonedTimeToUTC base.updatedAt > zonedTimeToUTC new.updatedAt then base.updatedAt else new.updatedAt
+--       , critical = base.critical || new.critical
+--       }
+--     
+--     mergePayloadLists :: Aeson [PayloadChange] -> Aeson [PayloadChange] -> Aeson [PayloadChange]
+--     mergePayloadLists (Aeson pl1) (Aeson pl2) = Aeson (pl1 ++ pl2)
 
 
--- Helper functions for extracting data from IssuesData
-getEndpointFromIssueData :: IssuesData -> Maybe Text
-getEndpointFromIssueData (IDNewEndpointIssue issue) = Just $ issue.endpointMethod <> " " <> issue.endpointUrlPath
-getEndpointFromIssueData _ = Nothing
+-- DEPRECATED: Helper functions for extracting data from IssuesData (old model)
+-- getEndpointFromIssueData :: IssuesData -> Maybe Text
+-- getEndpointFromIssueData (IDNewEndpointIssue issue) = Just $ issue.endpointMethod <> " " <> issue.endpointUrlPath
+-- getEndpointFromIssueData _ = Nothing
 
 
-getShapeChangesFromIssueData :: IssuesData -> ([Text], [Text], [Text])
-getShapeChangesFromIssueData (IDNewShapeIssue issue) = 
-  (V.toList issue.newUniqueFields, V.toList issue.deletedFields, V.toList issue.updatedFieldFormats)
-getShapeChangesFromIssueData _ = ([], [], [])
+-- getShapeChangesFromIssueData :: IssuesData -> ([Text], [Text], [Text])
+-- getShapeChangesFromIssueData (IDNewShapeIssue issue) = 
+--   (V.toList issue.newUniqueFields, V.toList issue.deletedFields, V.toList issue.updatedFieldFormats)
+-- getShapeChangesFromIssueData _ = ([], [], [])
 
 
-getFieldFromIssueData :: IssuesData -> Maybe Text
-getFieldFromIssueData (IDNewFieldIssue issue) = Just issue.key
-getFieldFromIssueData (IDNewFormatIssue issue) = Just issue.fieldKeyPath
-getFieldFromIssueData _ = Nothing
+-- getFieldFromIssueData :: IssuesData -> Maybe Text
+-- getFieldFromIssueData (IDNewFieldIssue issue) = Just issue.key
+-- getFieldFromIssueData (IDNewFormatIssue issue) = Just issue.fieldKeyPath
+-- getFieldFromIssueData _ = Nothing
 
 
-getErrorDataFromIssueData :: IssuesData -> Maybe RequestDumps.ATError
-getErrorDataFromIssueData (IDNewRuntimeExceptionIssue err) = Just err
-getErrorDataFromIssueData _ = Nothing
+-- getErrorDataFromIssueData :: IssuesData -> Maybe RequestDumps.ATError
+-- getErrorDataFromIssueData (IDNewRuntimeExceptionIssue err) = Just err
+-- getErrorDataFromIssueData _ = Nothing
 
 
 -- Select issue by ID
@@ -1146,18 +1147,18 @@ selectIssueById aid = queryOne q (Only aid)
     |]
 
 
--- Update issue with LLM enhancement
-updateIssueEnhancement :: AnomalyId -> Text -> Text -> Text -> DBT IO Int64
-updateIssueEnhancement issueId title recommendedAction migrationComplexity = 
-  execute q (title, recommendedAction, migrationComplexity, issueId)
-  where
-    q = [sql|
-      UPDATE apis.issues 
-      SET title = ?, 
-          recommended_action = ?, 
-          migration_complexity = ?,
-          llm_enhanced_at = NOW(),
-          llm_enhancement_version = 1,
-          updated_at = NOW()
-      WHERE id = ?
-    |]
+-- DEPRECATED: Update issue with LLM enhancement (old model)
+-- updateIssueEnhancement :: AnomalyId -> Text -> Text -> Text -> DBT IO Int64
+-- updateIssueEnhancement issueId title recommendedAction migrationComplexity = 
+--   execute q (title, recommendedAction, migrationComplexity, issueId)
+--   where
+--     q = [sql|
+--       UPDATE apis.issues 
+--       SET title = ?, 
+--           recommended_action = ?, 
+--           migration_complexity = ?,
+--           llm_enhanced_at = NOW(),
+--           llm_enhancement_version = 1,
+--           updated_at = NOW()
+--       WHERE id = ?
+--     |]

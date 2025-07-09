@@ -21,6 +21,7 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AEP
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Data.Default (def)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -31,6 +32,7 @@ import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.Fields.Types (textFieldTypeToText)
 import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
@@ -383,7 +385,7 @@ renderEndpointsTable endpoints = table_ [class_ "table-auto w-full"] do
   tbody_ $ mapM_ renderEndpointRow endpoints
 
 
-buildReportJSON :: V.Vector Anomalies.IssueL -> V.Vector RequestForReport -> V.Vector EndpointPerf -> AE.Value
+buildReportJSON :: V.Vector Issues.IssueL -> V.Vector RequestForReport -> V.Vector EndpointPerf -> AE.Value
 buildReportJSON anomalies endpoints_perf previous_perf =
   let anomalies_json = buildAnomalyJSON anomalies (length anomalies)
       perf_insight = getPerformanceInsight endpoints_perf previous_perf
@@ -400,94 +402,71 @@ buildPerformanceJSON :: V.Vector PerformanceReport -> AE.Value
 buildPerformanceJSON pr = AE.object ["endpoints" AE..= pr]
 
 
-buildAnomalyJSON :: V.Vector Anomalies.IssueL -> Int -> AE.Value
+buildAnomalyJSON :: V.Vector Issues.IssueL -> Int -> AE.Value
 buildAnomalyJSON anomalies total = AE.object ["anomalies" AE..= V.catMaybes (V.map buildjson anomalies), "anomaliesCount" AE..= total]
   where
-    buildjson :: Anomalies.IssueL -> Maybe AE.Value
-    buildjson an = case an.issueData of
-      Anomalies.IDNewEndpointIssue e ->
-        Just
-          $ AE.object
-            [ "endpointUrlPath" AE..= e.endpointUrlPath
-            , "endpointMethod" AE..= e.endpointMethod
-            , "tag" AE..= Anomalies.ATEndpoint
-            , "eventsCount" AE..= an.eventsAgg.count
-            ]
-      Anomalies.IDNewShapeIssue s ->
-        Just
-          $ AE.object
-            [ "endpointUrlPath" AE..= s.endpointUrlPath
-            , "endpointMethod" AE..= s.endpointMethod
-            , "targetHash" AE..= an.targetHash
-            , "tag" AE..= Anomalies.ATShape
-            , "newUniqueFields" AE..= s.newUniqueFields
-            , "updatedFieldFormats" AE..= s.updatedFieldFormats
-            , "deletedFields" AE..= s.deletedFields
-            , "eventsCount" AE..= an.eventsAgg.count
-            ]
-      Anomalies.IDNewFormatIssue f ->
-        Just
-          $ AE.object
-            [ "endpointUrlPath" AE..= f.endpointUrlPath
-            , "endpointMethod" AE..= f.endpointMethod
-            , "keyPath" AE..= f.fieldKeyPath
-            , "tag" AE..= Anomalies.ATFormat
-            , "formatType" AE..= f.formatType
-            , "formatExamples" AE..= f.examples
-            , "eventsCount" AE..= an.eventsAgg.count
-            ]
+    buildjson :: Issues.IssueL -> Maybe AE.Value
+    buildjson issue = case issue.issueType of
+      Issues.APIChange ->
+        case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (apiData :: Issues.APIChangeData) ->
+            Just $ AE.object
+              [ "endpointUrlPath" AE..= apiData.endpointPath
+              , "endpointMethod" AE..= apiData.endpointMethod
+              , "targetHash" AE..= issue.endpointHash
+              , "tag" AE..= Anomalies.ATShape
+              , "newUniqueFields" AE..= apiData.newFields
+              , "updatedFieldFormats" AE..= apiData.modifiedFields
+              , "deletedFields" AE..= apiData.deletedFields
+              , "eventsCount" AE..= issue.eventCount
+              ]
+          _ -> Nothing
+      Issues.RuntimeException ->
+        case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (errorData :: Issues.RuntimeExceptionData) ->
+            Just $ AE.object
+              [ "endpointUrlPath" AE..= fromMaybe "/" errorData.requestPath
+              , "endpointMethod" AE..= fromMaybe "UNKNOWN" errorData.requestMethod
+              , "tag" AE..= Anomalies.ATRuntimeException
+              , "eventsCount" AE..= issue.eventCount
+              ]
+          _ -> Nothing
       _ -> Nothing
 
 
-getAnomaliesEmailTemplate :: V.Vector Anomalies.IssueL -> V.Vector AE.Value
+getAnomaliesEmailTemplate :: V.Vector Issues.IssueL -> V.Vector AE.Value
 getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
   where
-    buildEmailjson :: Anomalies.IssueL -> AE.Value
-    buildEmailjson an = case an.issueData of
-      Anomalies.IDNewEndpointIssue e ->
-        AE.object
-          [ "tag" AE..= "ATEndpoint"
-          , "title" AE..= "New Endpoint"
-          , "eventsCount" AE..= an.eventsAgg.count
-          , "endpointMethod" AE..= e.endpointMethod
-          , "endpointUrlPath" AE..= e.endpointUrlPath
-          , "firstSeen" AE..= formatUTC an.eventsAgg.lastSeen
-          ]
-      Anomalies.IDNewShapeIssue s ->
-        AE.object
-          [ "tag" AE..= "ATShape"
-          , "title" AE..= "New Request Shape"
-          , "eventsCount" AE..= an.eventsAgg.count
-          , "deletedFields" AE..= length s.deletedFields
-          , "endpointMethod" AE..= s.endpointMethod
-          , "endpointUrlPath" AE..= s.endpointUrlPath
-          , "newUniqueFields" AE..= length s.newUniqueFields
-          , "updatedFields" AE..= length s.updatedFieldFormats
-          , "firstSeen" AE..= formatUTC an.eventsAgg.lastSeen
-          ]
-      Anomalies.IDNewFormatIssue f ->
-        AE.object
-          [ "tag" AE..= "ATFormat"
-          , "title" AE..= "Modified Field"
-          , "eventsCount" AE..= an.eventsAgg.count
-          , "keyPath" AE..= f.fieldKeyPath
-          , "formatType" AE..= f.formatType
-          , "endpointMethod" AE..= f.endpointMethod
-          , "endpointUrlPath" AE..= f.endpointUrlPath
-          , "formatExamples" AE..= f.examples
-          , "firstSeen" AE..= formatUTC an.eventsAgg.lastSeen
-          ]
-      Anomalies.IDNewRuntimeExceptionIssue e ->
-        AE.object
-          [ "tag" AE..= "ATError"
-          , "title" AE..= e.errorType
-          , "eventsCount" AE..= an.eventsAgg.count
-          , "errorMessage" AE..= e.message
-          , "endpointMethod" AE..= e.requestMethod
-          , "endpointUrlPath" AE..= e.requestPath
-          , "firstSeen" AE..= formatUTC an.eventsAgg.lastSeen
-          ]
-      _ -> AE.object ["message" AE..= AE.String "unknown"]
+    buildEmailjson :: Issues.IssueL -> AE.Value
+    buildEmailjson issue = 
+      let baseObject = 
+            [ "title" AE..= issue.title
+            , "eventsCount" AE..= issue.eventCount
+            , "firstSeen" AE..= formatUTC issue.lastSeen
+            ]
+      in case issue.issueType of
+        Issues.APIChange ->
+          case AE.fromJSON (getAeson issue.issueData) of
+            AE.Success (apiData :: Issues.APIChangeData) ->
+              AE.object $ baseObject <>
+                [ "tag" AE..= "ATShape"
+                , "deletedFields" AE..= length apiData.deletedFields
+                , "endpointMethod" AE..= apiData.endpointMethod
+                , "endpointUrlPath" AE..= apiData.endpointPath
+                , "newUniqueFields" AE..= length apiData.newFields
+                , "updatedFields" AE..= length apiData.modifiedFields
+                ]
+            _ -> AE.object baseObject
+        Issues.RuntimeException ->
+          case AE.fromJSON (getAeson issue.issueData) of
+            AE.Success (errorData :: Issues.RuntimeExceptionData) ->
+              AE.object $ baseObject <>
+                [ "tag" AE..= "ATRuntimeException"
+                , "endpointMethod" AE..= fromMaybe "UNKNOWN" errorData.requestMethod
+                , "endpointUrlPath" AE..= fromMaybe "/" errorData.requestPath
+                ]
+            _ -> AE.object baseObject
+        _ -> AE.object baseObject
 
 
 formatUTC :: UTCTime -> String

@@ -14,15 +14,16 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (execute, query, queryOne)
 import Database.PostgreSQL.Simple (Only (Only))
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
-import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+import Database.PostgreSQL.Transact qualified as PTR
 import Pkg.AI qualified as AI
 import Relude hiding (id)
 import Text.Read (readMaybe)
-import System.Config (AuthContext)
+import System.Config (AuthContext(..), EnvConfig(..))
 
 
 data IssueEnhancement = IssueEnhancement
@@ -85,8 +86,7 @@ generateEnhancedDescription authCtx issue = do
       case criticalityResult of
         Left _ -> pure $ Right (description, recommendedAction, complexity)
         Right (isCritical, breakingCount, incrementalCount) -> do
-          -- Update the issue with classification
-          _ <- updateIssueClassification issue.id isCritical breakingCount incrementalCount
+          -- Note: Classification update happens in the background job
           pure $ Right (description, recommendedAction, complexity)
 
 
@@ -171,8 +171,8 @@ buildDescriptionPrompt issue =
             _ -> "Analyze this runtime exception."
         
         Issues.QueryAlert ->
-          case AE.fromJSON issue.issueData of  
-            AE.Success alertData ->
+          case AE.fromJSON (getAeson issue.issueData) of  
+            AE.Success (alertData :: Issues.QueryAlertData) ->
               "Describe this query alert and recommended actions.\n" <>
               "Query: " <> alertData.queryName <> "\n" <>
               "Expression: " <> alertData.queryExpression <> "\n" <>
@@ -269,8 +269,7 @@ buildCriticalityPrompt issue =
 
 
 -- | Update issue classification in database
-updateIssueClassification :: Issues.IssueId -> Bool -> Int -> Int -> IO ()
+updateIssueClassification :: Issues.IssueId -> Bool -> Int -> Int -> PTR.DBT IO ()
 updateIssueClassification issueId isCritical breakingCount incrementalCount = do
-  -- This would be implemented to update the database
-  -- For now, it's a placeholder as the actual DB update happens in the background job
-  pure ()
+  let severity = if isCritical then "critical" else if breakingCount > 0 then "warning" else "info"
+  Issues.updateIssueCriticality issueId isCritical severity
