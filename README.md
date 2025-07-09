@@ -4,9 +4,9 @@
 
 ## Advanced Monitoring & Observability Platform
 
-[![Haskell](https://img.shields.io/badge/Built%20with-Haskell-5e5086?logo=haskell)](https://www.haskell.org/) [![TimescaleDB](https://img.shields.io/badge/Powered%20by-TimescaleDB-4B8BBE?logo=timescale)](https://www.timescale.com/) [![S3 Compatible](https://img.shields.io/badge/Storage-S3%20Compatible-EC912E?logo=amazons3)](https://aws.amazon.com/s3/) [![LLM Powered](https://img.shields.io/badge/AI-LLM%20Anomaly%20Detection-412991)](https://github.com/apitoolkit/apitoolkit-server)
+[![Haskell](https://img.shields.io/badge/Built%20with-Haskell-5e5086?logo=haskell)](https://www.haskell.org/) [![S3 Compatible](https://img.shields.io/badge/Storage-S3%20Compatible-EC912E?logo=amazons3)](https://aws.amazon.com/s3/) [![LLM Powered](https://img.shields.io/badge/AI-LLM%20Anomaly%20Detection-412991)](https://github.com/apitoolkit/apitoolkit-server)
 
-[Monoscope](https://github.com/apitoolkit/apitoolkit-server) is a powerful monitoring and observability platform that leverages LLMs to intelligently identify anomalies in your systems. With efficient data storage to S3-compatible buckets and real-time analytics powered by TimescaleDB, Monoscope provides deep insights into your infrastructure and applications.
+[Monoscope](https://github.com/apitoolkit/apitoolkit-server) is a powerful monitoring and observability platform that leverages LLMs to intelligently identify anomalies in your systems. With efficient data storage to S3-compatible buckets and real-time analytics powered by our custom timefusion storage engine, Monoscope provides deep insights into your infrastructure and applications.
 
 </div>
 
@@ -29,9 +29,8 @@
 ## Features
 
 - 🤖 **AI-Powered Anomaly Detection**: Leverages LLMs to automatically identify and alert on unusual patterns
-- 📊 **Time-Series Data Management**: Built on TimescaleDB for efficient storage and querying of metrics
-- ☁️ **S3-Compatible Storage**: Store historical data and backups in any S3-compatible object storage
-- 🚀 **High Performance**: Written in Haskell for reliability and performance
+- ☁️ **S3-Compatible Storage**: Store logs, metrics and traces in any S3-compatible object storage
+- 🚀 **High Performance**: Written in Haskell and rust for reliability and performance
 - 📈 **Real-Time Analytics**: Monitor your systems with minimal latency
 - 🔌 **Extensible**: Easy to integrate with existing monitoring infrastructure
 
@@ -64,6 +63,7 @@ cd monoscope
 3. **Install System Dependencies**
 
 **For macOS:**
+
 ```bash
 # Install LLVM
 brew install llvm
@@ -77,6 +77,7 @@ brew install libpq
 ```
 
 **For Linux (Ubuntu/Debian):**
+
 ```bash
 # Install LLVM
 sudo apt-get install llvm
@@ -91,6 +92,7 @@ sudo apt-get install libpq-dev
 4. **Configure Google Cloud (Optional)**
 
 If using Google Cloud integration:
+
 ```bash
 gcloud auth application-default login
 ```
@@ -106,11 +108,13 @@ stack run
 ### Database Setup with Docker
 
 1. **Create a Docker volume for PostgreSQL data:**
+
 ```bash
 docker volume create pgdata
 ```
 
 2. **Run TimescaleDB in Docker:**
+
 ```bash
 make timescaledb-docker
 ```
@@ -118,6 +122,7 @@ make timescaledb-docker
 3. **Configure pg_cron extension:**
 
 Add the following to your PostgreSQL configuration:
+
 ```sql
 ALTER system SET cron.database_name = 'apitoolkit';
 ALTER system SET shared_preload_libraries = 'pg_cron';
@@ -128,6 +133,7 @@ Then restart the TimescaleDB Docker container.
 ### Development Tools
 
 **Install code formatting and linting tools:**
+
 ```bash
 # Code formatter
 brew install ormolu
@@ -137,6 +143,7 @@ brew install hlint
 ```
 
 **Useful commands:**
+
 ```bash
 # Format code
 make fmt
@@ -150,15 +157,15 @@ make lint
 ### Service Worker
 
 To build the service worker:
+
 ```bash
 workbox generateSW workbox-config.js
 ```
 
-
-
 ## Testing
 
 ### Run all tests
+
 ```haskell
 make test
 # OR
@@ -166,7 +173,9 @@ stack test --ghc-options=-w
 ```
 
 ### Run only unit tests
+
 Unit tests don't require a database connection and run much faster. They include doctests and pure function tests.
+
 ```haskell
 make test-unit
 # OR
@@ -174,16 +183,18 @@ stack test apitoolkit-server:unit-tests --ghc-options=-w
 ```
 
 ### Run unit tests with file watching for development
+
 ```haskell
 make live-test-unit
 # OR
 stack test apitoolkit-server:unit-tests --ghc-options=-w --file-watch
 ```
 
-### Run a specific individual test 
+### Run a specific individual test
+
 ```haskell
 stack test --test-arguments "--match=SeedingConfig" apitoolkit-server:tests
-# OR 
+# OR
 stack test --ta "--match=SeedingConfig" apitoolkit-server:tests
 ```
 
@@ -211,7 +222,7 @@ Monoscope is open source software. Please see the LICENSE file for details.
 ---
 
 <div align="center">
-    
+
 <a href="https://github.com/apitoolkit/apitoolkit-server" target="_blank" rel="noopener noreferrer">⭐ Star us on GitHub</a>
 
 </div>
