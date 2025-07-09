@@ -416,7 +416,6 @@ test-suite integration-tests
   type: exitcode-stdio-1.0
   main-is: Main.hs
   other-modules:
-      AnomalyGroupingSpec
       Models.Projects.SwaggersSpec
       MonitoringSpec
       Opentelemetry.OtlpServerSpec
