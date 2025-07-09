@@ -237,8 +237,8 @@ data IssueL = IssueL
   , projectId :: Projects.ProjectId
   , issueType :: IssueType -- Will be converted from anomaly_type in query
   , endpointHash :: Text
-  , acknowledgedAt :: Maybe ZonedTime -- Will be converted from acknowleged_at in query
-  , acknowledgedBy :: Maybe Users.UserId -- Will be converted from acknowleged_by in query
+  , acknowledgedAt :: Maybe ZonedTime
+  , acknowledgedBy :: Maybe Users.UserId
   , archivedAt :: Maybe ZonedTime
   , title :: Text
   , service :: Text
@@ -362,7 +362,7 @@ findOpenIssueForEndpoint pid endpointHash = queryOne q (pid, "shape" :: Text, en
       WHERE project_id = ? 
         AND anomaly_type = ?
         AND endpoint_hash = ?
-        AND acknowleged_at IS NULL
+        AND acknowledged_at IS NULL
         AND archived_at IS NULL
       LIMIT 1
     |]
@@ -422,7 +422,7 @@ acknowledgeIssue issueId userId = void $ execute q (userId, issueId)
     q =
       [sql|
       UPDATE apis.issues
-      SET acknowleged_at = NOW(), acknowleged_by = ?
+      SET acknowledged_at = NOW(), acknowledged_by = ?
       WHERE id = ?
     |]
 
