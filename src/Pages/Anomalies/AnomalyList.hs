@@ -197,7 +197,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
 
   let fLimit = 10
   -- Toggle between mock data and real database queries
-  let useMockData = False -- Set to False to use real database data
+  let useMockData = True -- Set to False to use real database data
   issues <-
     if useMockData
       then do
@@ -998,7 +998,7 @@ renderIssue hideByDefault currTime timeFilter issue = do
   let issueId = Issues.issueIdText issue.id
   let timeSinceString = prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
 
-  div_ [class_ $ "flex py-4 gap-8 items-start itemsListItem p-6 " <> if hideByDefault then "card-round" else "", style_ (if hideByDefault then "display:none" else ""), id_ issueId] do
+  div_ [class_ $ "flex py-4 gap-8 items-start itemsListItem p-6 " <> if hideByDefault then "card-round" else "", style_ (if hideByDefault then "display:none" else "")] do
     -- Checkbox and accent color
     div_ [class_ $ "h-4 flex space-x-3 w-8 items-center justify-center " <> if hideByDefault then "hidden" else ""] do
       a_ [class_ $ anomalyAccentColor (isJust issue.acknowledgedAt) (isJust issue.archivedAt) <> " w-2 h-full"] ""
@@ -1086,12 +1086,6 @@ renderIssue hideByDefault currTime timeFilter issue = do
         button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 text-textBrand hover:text-textBrand/80 hover:bg-fillBrand-weak"] do
           faSprite_ "eye" "regular" "w-4 h-4"
           span_ [class_ "leading-none"] "view related logs"
-
-        -- Review Impact button (hidden for now - not yet supported)
-        when False do
-          button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-fillWarning-strong border-strokeWarning-strong hover:bg-fillWarning-weak"] do
-            faSprite_ "exclamation-triangle" "regular" "w-4 h-4"
-            span_ [class_ "leading-none"] "Review Impact"
 
         button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-textBrand border-strokeBrand-strong hover:bg-fillBrand-weak"] do
           faSprite_ "code" "regular" "w-4 h-4"
