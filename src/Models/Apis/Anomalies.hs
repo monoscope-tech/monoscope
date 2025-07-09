@@ -39,6 +39,12 @@ module Models.Apis.Anomalies (
   findOpenIssueForEndpoint,
   updateIssueWithNewAnomaly,
   mergeIssues,
+  getEndpointFromIssueData,
+  getShapeChangesFromIssueData,
+  getFieldFromIssueData,
+  getErrorDataFromIssueData,
+  selectIssueById,
+  updateIssueEnhancement,
 )
 where
 
@@ -1100,3 +1106,58 @@ mergeIssues issues = case V.uncons issues of
     
     mergePayloadLists :: Aeson [PayloadChange] -> Aeson [PayloadChange] -> Aeson [PayloadChange]
     mergePayloadLists (Aeson pl1) (Aeson pl2) = Aeson (pl1 ++ pl2)
+
+
+-- Helper functions for extracting data from IssuesData
+getEndpointFromIssueData :: IssuesData -> Maybe Text
+getEndpointFromIssueData (IDNewEndpointIssue issue) = Just $ issue.endpointMethod <> " " <> issue.endpointUrlPath
+getEndpointFromIssueData _ = Nothing
+
+
+getShapeChangesFromIssueData :: IssuesData -> ([Text], [Text], [Text])
+getShapeChangesFromIssueData (IDNewShapeIssue issue) = 
+  (V.toList issue.newUniqueFields, V.toList issue.deletedFields, V.toList issue.updatedFieldFormats)
+getShapeChangesFromIssueData _ = ([], [], [])
+
+
+getFieldFromIssueData :: IssuesData -> Maybe Text
+getFieldFromIssueData (IDNewFieldIssue issue) = Just issue.key
+getFieldFromIssueData (IDNewFormatIssue issue) = Just issue.fieldKeyPath
+getFieldFromIssueData _ = Nothing
+
+
+getErrorDataFromIssueData :: IssuesData -> Maybe RequestDumps.ATError
+getErrorDataFromIssueData (IDNewRuntimeExceptionIssue err) = Just err
+getErrorDataFromIssueData _ = Nothing
+
+
+-- Select issue by ID
+selectIssueById :: AnomalyId -> DBT IO (Maybe Issue)
+selectIssueById aid = queryOne q (Only aid)
+  where
+    q = [sql|
+      SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
+        endpoint_id, acknowleged_by, archived_at, title, service, critical, breaking_changes, incremental_changes,
+        affected_payloads, affected_clients, estimated_requests, migration_complexity, recommended_action,
+        request_payloads, response_payloads, COALESCE(anomaly_hashes, '{}'), COALESCE(endpoint_hash, '')
+      FROM apis.issues 
+      WHERE id = ?
+      LIMIT 1
+    |]
+
+
+-- Update issue with LLM enhancement
+updateIssueEnhancement :: AnomalyId -> Text -> Text -> Text -> DBT IO Int64
+updateIssueEnhancement issueId title recommendedAction migrationComplexity = 
+  execute q (title, recommendedAction, migrationComplexity, issueId)
+  where
+    q = [sql|
+      UPDATE apis.issues 
+      SET title = ?, 
+          recommended_action = ?, 
+          migration_complexity = ?,
+          llm_enhanced_at = NOW(),
+          llm_enhancement_version = 1,
+          updated_at = NOW()
+      WHERE id = ?
+    |]
