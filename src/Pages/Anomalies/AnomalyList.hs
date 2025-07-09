@@ -1094,7 +1094,7 @@ renderPayloadChange isResponse change =
           faSprite_ "code" "regular" "w-4 h-4 text-iconNeutral"
           span_ [class_ "font-medium text-textStrong"]
             $ case (change.statusCode, change.statusText) of
-              (Just code, Just text) -> toHtml $ show code <> " Response Changes"
+              (Just code, Just txt) -> toHtml $ show code <> " Response Changes"
               _ -> "Payload Changes"
           span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-xs border-strokeWeak text-textWeak bg-fillWeak"] do
             toHtml change.contentType

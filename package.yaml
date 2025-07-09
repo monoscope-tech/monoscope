@@ -61,6 +61,7 @@ ghc-options:
   - -Wno-unused-top-binds
   - -Wno-unused-imports
   - -Wno-error=incomplete-record-selectors
+  - -Wno-error=ambiguous-fields
   # - -plugin-package hiedb-plugin -fplugin Plugin.HieDb
   # - "-prof"
   # - -g
