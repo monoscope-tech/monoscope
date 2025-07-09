@@ -190,7 +190,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
 
   let fLimit = 10
   -- Toggle between mock data and real database queries
-  let useMockData = True -- Set to False to use real database data
+  let useMockData = False -- Set to False to use real database data
   issues <-
     if useMockData
       then do
@@ -1167,33 +1167,6 @@ renderIssue hideByDefault currTime timeFilter issue = do
 
         span_ [class_ "text-textWeak"] $ toHtml timeSinceString
 
-      -- Description or Error Details
-      case issue.issueData of
-        Anomalies.IDNewRuntimeExceptionIssue err -> do
-          -- For runtime exceptions, show the error/alert query in a special box
-          when (err.errorType == "High Error Rate Alert") do
-            div_ [class_ "mb-4"] do
-              span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
-              div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"]
-                $ toHtml err.stackTrace
-          -- For actual errors, show the stack trace
-          when (err.errorType /= "High Error Rate Alert") do
-            div_ [class_ "bg-fillError-weak border border-strokeError-weak rounded-lg p-4 text-sm font-mono text-fillError-strong mb-4"] do
-              pre_ [class_ "whitespace-pre-wrap"] $ toHtml err.stackTrace
-        _ ->
-          -- For shape issues, show the description
-          p_ [class_ "text-sm text-textWeak mb-4 bg-fillWeak p-3 rounded leading-relaxed"]
-            $ toHtml
-            $ case issue.issueData of
-              Anomalies.IDNewShapeIssue issueD ->
-                if issue.breakingChanges > 0
-                  then "Authentication flow updated with enhanced security requirements"
-                  else
-                    if issue.incrementalChanges > 0
-                      then "Enhanced product information with sustainability and manufacturer data"
-                      else "New fields detected in API response"
-              _ -> "API structure has changed"
-
       -- Statistics row (only for shape issues)
       unless (case issue.issueData of Anomalies.IDNewRuntimeExceptionIssue _ -> True; _ -> False) do
         div_ [class_ "flex items-center gap-4 text-sm mb-4 p-3 bg-fillWeak rounded-lg"] do
@@ -1221,6 +1194,34 @@ renderIssue hideByDefault currTime timeFilter issue = do
           span_ [class_ "text-textWeak"] do
             strong_ [class_ "text-textBrand"] $ toHtml $ show issue.affectedPayloads
             " payloads affected"
+
+      -- Description or Error Details
+      case issue.issueData of
+        Anomalies.IDNewRuntimeExceptionIssue err -> do
+          -- For runtime exceptions, show the error/alert query in a special box
+          when (err.errorType == "High Error Rate Alert") do
+            div_ [class_ "mb-4"] do
+              span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
+              div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"]
+                $ toHtml err.stackTrace
+          -- For actual errors, show the stack trace
+          when (err.errorType /= "High Error Rate Alert") do
+            div_ [class_ "bg-fillError-weak border border-strokeError-weak rounded-lg p-4 text-sm font-mono text-fillError-strong mb-4"] do
+              pre_ [class_ "whitespace-pre-wrap"] $ toHtml err.stackTrace
+        _ ->
+          -- For shape issues, show the description
+          div_ [class_ "border-l-4 border-strokeBrand pl-4 mb-4"] do
+            p_ [class_ "text-sm text-textStrong leading-relaxed"]
+              $ toHtml
+              $ case issue.issueData of
+                Anomalies.IDNewShapeIssue issueD ->
+                  if issue.breakingChanges > 0
+                    then "Authentication flow updated with enhanced security requirements"
+                    else
+                      if issue.incrementalChanges > 0
+                        then "Enhanced product information with sustainability and manufacturer data"
+                        else "New fields detected in API response"
+                _ -> "API structure has changed"
 
       -- Impact warning box (hidden for now - not yet supported)
       when False do

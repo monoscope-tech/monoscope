@@ -343,16 +343,17 @@ selectIssues pid endpointM isAcknowleged isArchived sortM limitM skipM = query (
     q =
       [text|
 SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
-    endpoint_id, acknowleged_by, archived_at, title, service, critical, breaking_changes, incremental_changes,
-    affected_payloads, affected_clients, estimated_requests, migration_complexity, recommended_action,
-    request_payloads, response_payloads, COALESCE(anomaly_hashes, '{}'), COALESCE(endpoint_hash, ''),
+    endpoint_id, acknowleged_by, archived_at,
     CASE
       WHEN anomaly_type='shape' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND shape_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
       -- Format requires a CONTAINS query which is not covered by the regular indexes. GIN index can't have created_at compound indexes, so its a slow query
       -- WHEN anomaly_type='format' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND iss.target_hash=ANY(format_hashes) AND created_at > current_timestamp - interval '14d' )
       WHEN anomaly_type='runtime_exception' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND errors @> ('[{"hash": "' || iss.target_hash || '"}]')::jsonb AND created_at > current_timestamp - interval '14d')
       ELSE (0, NOW()::TEXT)
-    END as req_count
+    END as req_count,
+    title, service, critical, breaking_changes, incremental_changes,
+    affected_payloads, affected_clients, estimated_requests, migration_complexity, recommended_action,
+    request_payloads, response_payloads, COALESCE(anomaly_hashes, '{}'), COALESCE(endpoint_hash, '')
     FROM apis.issues iss WHERE project_id = ? $cond
     AND anomaly_type!='endpoint' 
     ORDER BY $orderBy $skip $limit |]
@@ -364,16 +365,17 @@ selectIssueByHash pid targetHash = queryOne q (pid, targetHash)
     q =
       [sql|
 SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
-    endpoint_id, acknowleged_by, archived_at, title, service, critical, breaking_changes, incremental_changes,
-    affected_payloads, affected_clients, estimated_requests, migration_complexity, recommended_action,
-    request_payloads, response_payloads, COALESCE(anomaly_hashes, '{}'), COALESCE(endpoint_hash, ''),
+    endpoint_id, acknowleged_by, archived_at,
     CASE
       WHEN anomaly_type='endpoint' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND endpoint_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
       WHEN anomaly_type='shape' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND shape_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
       WHEN anomaly_type='format' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND iss.target_hash=ANY(format_hashes) AND created_at > current_timestamp - interval '14d' )
       WHEN anomaly_type='runtime_exception' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND errors @> ('[{"hash": "' || iss.target_hash || '"}]')::jsonb AND created_at > current_timestamp - interval '14d')
       ELSE (0::BIGINT, NOW()::TEXT)
-    END as req_count
+    END as req_count,
+    title, service, critical, breaking_changes, incremental_changes,
+    affected_payloads, affected_clients, estimated_requests, migration_complexity, recommended_action,
+    request_payloads, response_payloads, COALESCE(anomaly_hashes, '{}'), COALESCE(endpoint_hash, '')
     FROM apis.issues iss WHERE project_id = ? and target_hash=? LIMIT 1
     |]
 
@@ -385,9 +387,7 @@ getReportAnomalies pid report_type = query (Query $ encodeUtf8 q) pid
     q =
       [text|
   SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
-    endpoint_id, acknowleged_by, archived_at, title, service, critical, breaking_changes, incremental_changes,
-    affected_payloads, affected_clients, estimated_requests, migration_complexity, recommended_action,
-    request_payloads, response_payloads, COALESCE(anomaly_hashes, '{}'), COALESCE(endpoint_hash, ''),
+    endpoint_id, acknowleged_by, archived_at,
     CASE
       WHEN anomaly_type='endpoint' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND endpoint_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
       WHEN anomaly_type='shape' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND shape_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
@@ -395,7 +395,10 @@ getReportAnomalies pid report_type = query (Query $ encodeUtf8 q) pid
       -- WHEN anomaly_type='format' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND iss.target_hash=ANY(format_hashes) AND created_at > current_timestamp - interval '14d' )
       WHEN anomaly_type='runtime_exception' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND errors @> ('[{"hash": "' || iss.target_hash || '"}]')::jsonb AND created_at > current_timestamp - interval '14d')
       ELSE (0::BIGINT, NOW()::TEXT)
-    END as req_count
+    END as req_count,
+    title, service, critical, breaking_changes, incremental_changes,
+    affected_payloads, affected_clients, estimated_requests, migration_complexity, recommended_action,
+    request_payloads, response_payloads, COALESCE(anomaly_hashes, '{}'), COALESCE(endpoint_hash, '')
     FROM apis.issues iss WHERE project_id = ?  and created_at > current_timestamp - interval $report_interval
     ORDER BY req_count desc limit 20
         |]
@@ -1059,8 +1062,8 @@ updateIssueWithNewAnomaly existingIssue newAnomalyHashes newRequestPayloads newR
         anomaly_hashes = array_cat(anomaly_hashes, ?),
         breaking_changes = breaking_changes + ?,
         incremental_changes = incremental_changes + ?,
-        request_payloads = merge_payload_arrays(request_payloads, ?::jsonb),
-        response_payloads = merge_payload_arrays(response_payloads, ?::jsonb),
+        request_payloads = COALESCE(request_payloads, '[]'::jsonb) || ?::jsonb,
+        response_payloads = COALESCE(response_payloads, '[]'::jsonb) || ?::jsonb,
         updated_at = NOW()
       WHERE id = ?
     |]
