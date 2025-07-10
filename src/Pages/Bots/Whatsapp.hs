@@ -55,7 +55,7 @@ whatsappIncomingPostH val = do
           dashboards' <- getDashboardsForWhatsapp fromN
           let dashboards = V.map (\(k, v) -> (k, "dash" <> joiner <> v)) dashboards'
           let contentVars = getWhatsappList "dashboard" "Please select a dashboard" dashboards 0
-          sendWhatsappResponse contentVars val.from envCfg.whatsappDashboard Nothing
+          sendWhatsappResponse contentVars val.from envCfg.whatsappDashboardList Nothing
         WidgetsLoad dashboardId skip -> handleDashboard dashboardId skip val p envCfg
         WidgetSelect widgetTitle dashboardId -> handleWidget widgetTitle dashboardId val p envCfg
         Prompt _ -> void $ forkIO $ handlePrompt val envCfg p
@@ -73,7 +73,7 @@ whatsappIncomingPostH val = do
             let widgets' = (\w -> (fromMaybe "Untitled-" w.title, fromMaybe "Untitled-" w.title)) <$> dashboard.widgets
                 widgets = V.fromList $ (\(k, id') -> (k, "widg" <> joiner <> id' <> joiner <> dashboardId)) <$> widgets'
             let contentVars = getWhatsappList ("widget" <> joiner <> dashboardId) "Please select a widget" widgets skip
-            sendWhatsappResponse contentVars val.from envCfg.whatsappDashboard Nothing
+            sendWhatsappResponse contentVars val.from envCfg.whatsappDashboardList Nothing
             pass
 
     handleWidget :: Text -> Text -> TwilioWhatsAppMessage -> Projects.Project -> EnvConfig -> ATBaseCtx ()
