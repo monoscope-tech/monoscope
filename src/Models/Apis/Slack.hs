@@ -9,6 +9,7 @@ module Models.Apis.Slack (
   getProjectSlackData,
   updateSlackNotificationChannel,
   getDashboardsForSlack,
+  getDashboardsForWhatsapp,
   getDiscordData,
 ) where
 
@@ -109,3 +110,9 @@ getDashboardsForSlack :: DB :> es => Text -> Eff es (V.Vector (Text, Text))
 getDashboardsForSlack teamId = dbtToEff $ query q (Only teamId)
   where
     q = [sql|SELECT d.title, d.id::text FROM projects.dashboards d JOIN apis.slack s ON d.project_id = s.project_id WHERE  s.team_id = ?|]
+
+
+getDashboardsForWhatsapp :: DB :> es => Text -> Eff es (V.Vector (Text, Text))
+getDashboardsForWhatsapp number = dbtToEff $ query q (Only number)
+  where
+    q = [sql|SELECT d.title, d.id::text FROM projects.dashboards d JOIN projects.projects p ON d.project_id = p.id where ?=Any(p.whatsapp_numbers)|]

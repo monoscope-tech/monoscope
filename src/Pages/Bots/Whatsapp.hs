@@ -4,17 +4,20 @@ import Control.Applicative ((<|>))
 import Control.Lens ((?~))
 import Control.Lens.Setter ((.~))
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as KEYM
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Effectful.Wreq qualified as Wreq
 import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time qualified as Time
+import Data.Vector qualified as V
 import Effectful
 import Effectful.Concurrent (forkIO)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.Slack (getDashboardsForWhatsapp)
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq
@@ -34,13 +37,22 @@ import Web.Internal.FormUrlEncoded
 
 whatsappIncomingPostH :: TwilioWhatsAppMessage -> ATBaseCtx AE.Value
 whatsappIncomingPostH val = do
+  traceShowM val
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   let envCfg = authCtx.config
-  projectM <- dbtToEff $ Projects.getProjectByPhoneNumber (T.dropWhile (/= '+') val.from)
+  let fromN = (T.dropWhile (/= '+') val.from)
+  projectM <- dbtToEff $ Projects.getProjectByPhoneNumber fromN
   case projectM of
     Just p -> do
-      void $ forkIO $ handlePrompt val envCfg p
-
+      case val.body of
+        "/dashboard" -> do
+          dashboards <- getDashboardsForWhatsapp fromN
+          let contentVars = getDashboardButtons dashboards "3"
+          traceShowM contentVars
+          res <- sendWhatsappResponse contentVars val.from envCfg.whatsappDashboard Nothing
+          traceShowM res
+          pass
+        _ -> void $ forkIO $ handlePrompt val envCfg p
       pure $ AE.object []
     _ -> pure $ AE.object []
   where
@@ -57,7 +69,7 @@ whatsappIncomingPostH val = do
           case vizTypeM of
             Just vizType -> do
               let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-                  opts = "t=" <> decodeUtf8 (urlEncode True (encodeUtf8 $ show now)) <> "&q=" <> decodeUtf8 (urlEncode True (encodeUtf8 query)) <> "&p=" <> project.id.toText <> "&t=" <> chartType
+                  opts = "time=" <> decodeUtf8 (urlEncode True (encodeUtf8 $ show now)) <> "&q=" <> decodeUtf8 (urlEncode True (encodeUtf8 query)) <> "&p=" <> project.id.toText <> "&t=" <> chartType
                   query_url = project.id.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query))
                   content' = getBotContent reqBody.body query query_url opts
               _ <- sendWhatsappResponse content' reqBody.from envCfg.whatsappBotChart Nothing
@@ -80,6 +92,31 @@ whatsappIncomingPostH val = do
 getBotContent :: Text -> Text -> Text -> Text -> AE.Value
 getBotContent question query query_url opts =
   AE.object ["1" AE..= ("*" <> question <> "*"), "2" AE..= ("`" <> query <> "`"), "3" AE..= opts, "4" AE..= query_url]
+
+
+getDashboardButtons :: V.Vector (Text, Text) -> Text -> AE.Value
+getDashboardButtons vals' skip = AE.object vars
+  where
+    vals = V.map fst vals'
+    paddedVals =
+      let missing = 3 - V.length vals
+          placeholders = V.generate missing  ( \i -> "Placeholder " <> toText (show (i + 1)) )
+       in if missing > 0
+            then vals <> placeholders
+            else vals
+    vars
+      | V.length vals > 4 =
+          let firstThree = V.take 3 paddedVals
+              loadMore = ("Load More", "dashmore-" <> skip)
+              buttonPairs = V.toList $ V.imap (\i k -> [key ( i + 1) AE..= k]) firstThree
+              flattened = concat buttonPairs
+           in flattened ++ [key 5 AE..= fst loadMore]
+      | otherwise =
+          let buttonPairs = V.toList $ V.imap (\i k -> [key ( i + 1) AE..= k]) paddedVals
+           in concat buttonPairs
+
+    key :: Int -> AE.Key
+    key = KEYM.fromText . toText . show
 
 
 data TwilioWhatsAppMessage = TwilioWhatsAppMessage
@@ -154,5 +191,7 @@ sendWhatsappResponse contentVariables to template bodyM = do
       variables = toStrict $ AE.encode contentVariables
       payload :: [FormParam]
       payload = ["To" := to, "From" := ("whatsapp:" <> from)] <> maybe ["ContentSid" := template, "ContentVariables" := variables] (\x -> ["Body" := x]) bodyM
-  _ <- Wreq.postWith opts url payload
+  traceShowM payload
+  res <- Wreq.postWith opts url payload
+  traceShowM res
   pass
