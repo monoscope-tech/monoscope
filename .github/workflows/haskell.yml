@@ -60,6 +60,18 @@ jobs:
 
       - run: stack --no-terminal build --dependencies-only
       - run: stack build --ghc-options "-O3"
+      - run: stack install --local-bin-path=./build-output --ghc-options "-O3"
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            ./build-output
+            ./static
+            ./web-components/dist
+            ./rust-interop/target/release/libCrust_interop.so
+          retention-days: 1
       
       - name: Cache build artifacts
         uses: actions/cache@v3
@@ -137,56 +149,24 @@ jobs:
       id-token: 'write'
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          override: true
-      - uses: freckle/stack-cache-action@main
-      - uses: haskell-actions/setup@v2
-        with:
-          ghc-version: 9.10.2
-          enable-stack: true
-          stack-version: 'latest'
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev librdkafka-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev
-      - name: Setup node env
-        uses: actions/setup-node@v4
-        with:
-          node-version: 18
-      - run: npm install
-      - run: npx tailwindcss  -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
-      - name: Build web-components
-        run: |
-          cd web-components
-          npm install
-          npm run build
       
-      - name: Restore build artifacts
-        uses: actions/cache@v3
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
         with:
-          path: |
-            .stack-work
-            ~/.stack
-            /usr/local/lib/libCrust_interop.so
-            /usr/local/lib/librust_interop.so
-            /usr/lib/libCrust_interop.so
-            /usr/lib/librust_interop.so
-          key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml', 'package.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-stack-
-            
-      - run: |
-          make prepare-rust-interop
+          name: build-artifacts
+          
+      - name: Setup Rust libraries
+        run: |
           sudo mkdir -p /usr/local/lib
+          sudo mkdir -p /usr/lib
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so
-          sudo mkdir -p /usr/lib
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
           
-      - run: stack install --local-bin-path=. --ghc-options "-O3"
+      - name: Copy binary to root
+        run: |
+          cp ./build-output/* .
       
       - name: Login to Container Registry
         uses: docker/login-action@v2
