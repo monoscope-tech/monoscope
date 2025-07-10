@@ -23,13 +23,10 @@ jobs:
           toolchain: stable
           profile: minimal
           override: true
-      - uses: freckle/stack-cache-action@main
-      # - uses: freckle/stack-action@v5
       - uses: haskell-actions/setup@v2
         with:
           ghc-version: 9.10.2
-          enable-stack: true
-          stack-version: 'latest'
+          cabal-version: 'latest'
       - name: Install OpenSSL, protoc and snappy
         run: sudo apt-get update && sudo apt-get install -y libssl-dev librdkafka-dev protobuf-compiler libsnappy-dev # or "brew install openssl" for macOS
       - name: Set OpenSSL Paths
@@ -58,9 +55,21 @@ jobs:
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
 
-      - run: stack --no-terminal build --dependencies-only
-      - run: stack build --ghc-options "-O3"
-      - run: stack install --local-bin-path=./build-output --ghc-options "-O3"
+      - name: Configure project
+        run: |
+          cabal update
+          cabal configure --enable-tests --enable-benchmarks
+      
+      - name: Build dependencies
+        run: cabal build --only-dependencies all
+      
+      - name: Build project
+        run: cabal build all --ghc-options "-O3"
+      
+      - name: Install to build-output
+        run: |
+          mkdir -p ./build-output
+          cabal install --install-method=copy --installdir=./build-output --ghc-options "-O3"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -77,15 +86,15 @@ jobs:
         uses: actions/cache@v3
         with:
           path: |
-            .stack-work
-            ~/.stack
+            ~/.cabal/store
+            dist-newstyle
             /usr/local/lib/libCrust_interop.so
             /usr/local/lib/librust_interop.so
             /usr/lib/libCrust_interop.so
             /usr/lib/librust_interop.so
-          key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml', 'package.yaml') }}
+          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project', '**/cabal.project.freeze') }}
           restore-keys: |
-            ${{ runner.os }}-stack-
+            ${{ runner.os }}-cabal-
 
   test:
     name: Test ${{ matrix.test-suite }}
@@ -102,12 +111,10 @@ jobs:
           toolchain: stable
           profile: minimal
           override: true
-      - uses: freckle/stack-cache-action@main
       - uses: haskell-actions/setup@v2
         with:
           ghc-version: 9.10.2
-          enable-stack: true
-          stack-version: 'latest'
+          cabal-version: 'latest'
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libssl-dev librdkafka-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev
 
@@ -115,15 +122,15 @@ jobs:
         uses: actions/cache@v3
         with:
           path: |
-            .stack-work
-            ~/.stack
+            ~/.cabal/store
+            dist-newstyle
             /usr/local/lib/libCrust_interop.so
             /usr/local/lib/librust_interop.so
             /usr/lib/libCrust_interop.so
             /usr/lib/librust_interop.so
-          key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml', 'package.yaml') }}
+          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project', '**/cabal.project.freeze') }}
           restore-keys: |
-            ${{ runner.os }}-stack-
+            ${{ runner.os }}-cabal-
 
       - name: Restore Rust libraries
         run: |
@@ -137,8 +144,13 @@ jobs:
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
 
+      - name: Configure project
+        run: |
+          cabal update
+          cabal configure --enable-tests
+      
       - name: Run ${{ matrix.test-suite }}
-        run: stack test :${{ matrix.test-suite }}
+        run: cabal test ${{ matrix.test-suite }}
 
   deploy:
     name: Deploy
