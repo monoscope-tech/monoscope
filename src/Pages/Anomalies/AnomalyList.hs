@@ -1,3 +1,5 @@
+{-# LANGUAGE DuplicateRecordFields #-}
+
 module Pages.Anomalies.AnomalyList (
   anomalyListGetH,
   anomalyBulkActionsPostH,
@@ -566,8 +568,10 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
                 , lastSeen = currTime
                 }
         -- Update issues with payload changes
-        let mockIssue1' = mockIssue1{Issues.requestPayloads = Aeson mockPayloadChanges1, Issues.responsePayloads = Aeson mockResponsePayloads1} :: Issues.IssueL
-        let mockIssue2' = mockIssue2{Issues.responsePayloads = Aeson mockPayloadChanges2} :: Issues.IssueL
+        let mockIssue1' :: Issues.IssueL
+            mockIssue1' = mockIssue1{Issues.requestPayloads = Aeson mockPayloadChanges1, Issues.responsePayloads = Aeson mockResponsePayloads1}
+        let mockIssue2' :: Issues.IssueL
+            mockIssue2' = mockIssue2{Issues.responsePayloads = Aeson mockPayloadChanges2}
         pure $ V.fromList [mockIssue1', mockIssue2', mockIssue3, mockIssue4]
       else
         -- Fetch real data from database
@@ -863,36 +867,40 @@ renderIssue hideByDefault currTime timeFilter issue = do
         button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-textBrand border-strokeBrand-strong hover:bg-fillBrand-weak"] do
           faSprite_ "code" "regular" "w-4 h-4"
           span_ [class_ "leading-none"] "View Full Schema"
-        
+
         -- Acknowledge button
         let isAcknowledged = isJust issue.acknowledgedAt
         let acknowledgeEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/" <> Issues.issueIdText issue.id <> if isAcknowledged then "/unacknowlege" else "/acknowlege"
-        button_ 
-          [ class_ $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 " <>
-              if isAcknowledged 
-                then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80"
-                else "bg-fillPrimary text-fillWhite hover:bg-fillPrimary/90"
+        button_
+          [ class_
+              $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
+                <> if isAcknowledged
+                  then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80"
+                  else "bg-fillPrimary text-fillWhite hover:bg-fillPrimary/90"
           , hxGet_ acknowledgeEndpoint
           , hxSwap_ "outerHTML"
           , hxTarget_ "closest .itemsListItem"
-          ] do
-          faSprite_ "check" "regular" "w-4 h-4"
-          span_ [class_ "leading-none"] $ if isAcknowledged then "Acknowledged" else "Acknowledge"
-        
+          ]
+          do
+            faSprite_ "check" "regular" "w-4 h-4"
+            span_ [class_ "leading-none"] $ if isAcknowledged then "Acknowledged" else "Acknowledge"
+
         -- Archive button
         let isArchived = isJust issue.archivedAt
         let archiveEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/" <> Issues.issueIdText issue.id <> if isArchived then "/unarchive" else "/archive"
-        button_ 
-          [ class_ $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 " <>
-              if isArchived
-                then "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak hover:bg-fillWarning-weak/80"
-                else "border border-strokeWeak text-textStrong hover:bg-fillWeak"
+        button_
+          [ class_
+              $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
+                <> if isArchived
+                  then "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak hover:bg-fillWarning-weak/80"
+                  else "border border-strokeWeak text-textStrong hover:bg-fillWeak"
           , hxGet_ archiveEndpoint
           , hxSwap_ "outerHTML"
           , hxTarget_ "closest .itemsListItem"
-          ] do
-          faSprite_ "archive" "regular" "w-4 h-4"
-          span_ [class_ "leading-none"] $ if isArchived then "Unarchive" else "Archive"
+          ]
+          do
+            faSprite_ "archive" "regular" "w-4 h-4"
+            span_ [class_ "leading-none"] $ if isArchived then "Unarchive" else "Archive"
 
     -- Events count
     div_ [class_ "w-36 flex items-start justify-center"]
@@ -1087,7 +1095,7 @@ renderPayloadChange isResponse change =
       p_ [class_ "text-sm text-textWeak mb-4 leading-relaxed"] $ toHtml change.description
 
     -- Field changes section
-    when (not (null change.changes)) do
+    unless (null change.changes) do
       div_ [class_ "space-y-3"] do
         -- Section header
         div_ [class_ "flex items-center gap-2 pb-2 border-b border-strokeWeak"] do
