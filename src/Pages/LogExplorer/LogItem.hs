@@ -10,10 +10,12 @@ module Pages.LogExplorer.LogItem (
 ) where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.Text (encodeToLazyText)
 import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
+import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
@@ -31,8 +33,6 @@ import Pages.Components (dateTime)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils
-import Data.Aeson.Key qualified as AEKey
-import Data.Scientific (toBoundedInteger)
 
 
 getServiceName :: Maybe (Map Text AE.Value) -> Text

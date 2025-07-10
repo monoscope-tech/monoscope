@@ -56,12 +56,12 @@ handleTableResponse target tableAsVecE envCfg projectId query =
       let (requestVecs, colNames, resultCount) = tableAsVec
           colIdxMap = listToIndexHashMap colNames
           tableData = recsVecToTableData requestVecs colIdxMap
-          url' =   envCfg.hostUrl <> "p/" <> projectId.toText <> "/log_explorer?query=" <> (decodeUtf8 $ urlEncode True $ encodeUtf8 query)
-          explorerLink = "[Open in log explorer]("  <> url' <> ")"
+          url' = envCfg.hostUrl <> "p/" <> projectId.toText <> "/log_explorer?query=" <> (decodeUtf8 $ urlEncode True $ encodeUtf8 query)
+          explorerLink = "[Open in log explorer](" <> url' <> ")"
           content = "**Total events (" <> show resultCount <> ")**\n**Query used:** " <> query <> "\n\n" <> tableData <> "\n"
        in case target of
-            Discord -> AE.object ["content" AE..= (content  <> explorerLink)]
-            WhatsApp -> AE.object ["body" AE..= (content  <> url')]
+            Discord -> AE.object ["content" AE..= (content <> explorerLink)]
+            WhatsApp -> AE.object ["body" AE..= (content <> url')]
             Slack ->
               AE.object
                 [ "blocks"

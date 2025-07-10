@@ -561,8 +561,8 @@ data Issue = Issue
   , endpointId :: Maybe Endpoints.EndpointId
   , acknowlegedBy :: Maybe Users.UserId
   , archivedAt :: Maybe ZonedTime
-  -- Enhanced UI fields
-  , title :: Text
+  , -- Enhanced UI fields
+    title :: Text
   , service :: Text
   , critical :: Bool
   , breakingChanges :: Int
@@ -574,8 +574,8 @@ data Issue = Issue
   , recommendedAction :: Text
   , requestPayloads :: Aeson [PayloadChange]
   , responsePayloads :: Aeson [PayloadChange]
-  -- New fields for anomaly grouping
-  , anomalyHashes :: V.Vector Text
+  , -- New fields for anomaly grouping
+    anomalyHashes :: V.Vector Text
   , endpointHash :: Text
   }
   deriving stock (Generic, Show)
@@ -631,8 +631,8 @@ data IssueL = IssueL
   , acknowlegedBy :: Maybe Users.UserId
   , archivedAt :: Maybe ZonedTime
   , eventsAgg :: IssueEventAgg
-  -- New fields for enhanced UI
-  , title :: Text
+  , -- New fields for enhanced UI
+    title :: Text
   , service :: Text
   , critical :: Bool
   , breakingChanges :: Int
@@ -642,11 +642,11 @@ data IssueL = IssueL
   , estimatedRequests :: Text
   , migrationComplexity :: Text
   , recommendedAction :: Text
-  -- Payload changes data
-  , requestPayloads :: Aeson [PayloadChange]
+  , -- Payload changes data
+    requestPayloads :: Aeson [PayloadChange]
   , responsePayloads :: Aeson [PayloadChange]
-  -- New fields for anomaly grouping
-  , anomalyHashes :: V.Vector Text
+  , -- New fields for anomaly grouping
+    anomalyHashes :: V.Vector Text
   , endpointHash :: Text
   }
   deriving stock (Generic, Show)
@@ -773,25 +773,25 @@ generateIssueTitle anomaly = case anomaly.anomalyType of
 
 -- Helper function to detect service from endpoint path or host
 detectService :: Maybe Text -> Maybe Text -> Text
-detectService hostM endpointPathM = 
+detectService hostM endpointPathM =
   let pathSegments = maybe [] (T.splitOn "/" . T.dropWhile (== '/')) endpointPathM
       -- Try to detect service from common patterns like /api/v1/auth/login -> auth-service
       serviceFromPath = case pathSegments of
-        ("api":_:service:_) -> service <> "-service"
-        (service:_) | service /= "" -> service <> "-service"
+        ("api" : _ : service : _) -> service <> "-service"
+        (service : _) | service /= "" -> service <> "-service"
         _ -> ""
-  in if T.null serviceFromPath
-     then fromMaybe "api-service" hostM
-     else serviceFromPath
+   in if T.null serviceFromPath
+        then fromMaybe "api-service" hostM
+        else serviceFromPath
 
 
 -- Helper function to assess if changes are critical
 assessCriticality :: AnomalyVM -> Bool
 assessCriticality anomaly = case anomaly.anomalyType of
   ATShape -> V.length anomaly.shapeDeletedFields > 0 || V.length anomaly.shapeUpdatedFieldFormats > 0
-  ATFormat -> True  -- Format changes are often breaking
-  ATEndpoint -> False  -- New endpoints are not critical
-  ATRuntimeException -> True  -- Runtime exceptions are critical
+  ATFormat -> True -- Format changes are often breaking
+  ATEndpoint -> False -- New endpoints are not critical
+  ATRuntimeException -> True -- Runtime exceptions are critical
   _ -> False
 
 
@@ -814,21 +814,24 @@ countIncrementalChanges anomaly = case anomaly.anomalyType of
 
 -- Helper function to assess migration complexity
 assessMigrationComplexity :: AnomalyVM -> Text
-assessMigrationComplexity anomaly = 
+assessMigrationComplexity anomaly =
   let breakingCount = countBreakingChanges anomaly
-  in if breakingCount == 0 then "low"
-     else if breakingCount <= 2 then "medium"
-     else "high"
+   in if breakingCount == 0
+        then "low"
+        else
+          if breakingCount <= 2
+            then "medium"
+            else "high"
 
 
 -- Helper function to generate recommended action
 generateRecommendedAction :: AnomalyVM -> Text
 generateRecommendedAction anomaly = case anomaly.anomalyType of
-  ATShape -> 
+  ATShape ->
     let hasBreaking = V.length anomaly.shapeDeletedFields > 0 || V.length anomaly.shapeUpdatedFieldFormats > 0
-    in if hasBreaking 
-       then "Review breaking changes and implement backward compatibility or schedule client migration"
-       else "Update documentation and notify clients of new optional fields"
+     in if hasBreaking
+          then "Review breaking changes and implement backward compatibility or schedule client migration"
+          else "Update documentation and notify clients of new optional fields"
   ATFormat -> "Validate data format compatibility and update validation rules"
   ATEndpoint -> "Document new endpoint and update API specifications"
   ATRuntimeException -> "Investigate error cause and implement fix"
@@ -838,82 +841,88 @@ generateRecommendedAction anomaly = case anomaly.anomalyType of
 -- Helper function to generate example payloads (placeholder for now)
 generateExamplePayloads :: AnomalyVM -> [PayloadChange]
 generateExamplePayloads anomaly = case anomaly.anomalyType of
-  ATShape -> 
+  ATShape ->
     let changes = generateFieldChanges anomaly
         hasBreaking = countBreakingChanges anomaly > 0
         description = generatePayloadChangeDescription anomaly
-    in if not (null changes)
-       then [PayloadChange
-              { method = anomaly.endpointMethod
-              , statusCode = Nothing
-              , statusText = Nothing
-              , contentType = "application/json"
-              , changeType = if hasBreaking then Breaking else Incremental
-              , description = description
-              , changes = changes
-              , exampleBefore = "{}"  -- TODO: Generate from actual data
-              , exampleAfter = "{}"   -- TODO: Generate from actual data
-              }]
-       else []
+     in if not (null changes)
+          then
+            [ PayloadChange
+                { method = anomaly.endpointMethod
+                , statusCode = Nothing
+                , statusText = Nothing
+                , contentType = "application/json"
+                , changeType = if hasBreaking then Breaking else Incremental
+                , description = description
+                , changes = changes
+                , exampleBefore = "{}" -- TODO: Generate from actual data
+                , exampleAfter = "{}" -- TODO: Generate from actual data
+                }
+            ]
+          else []
   _ -> []
 
 
 -- Helper function to generate descriptive text for payload changes
 generatePayloadChangeDescription :: AnomalyVM -> Text
-generatePayloadChangeDescription anomaly = 
+generatePayloadChangeDescription anomaly =
   let newCount = V.length anomaly.shapeNewUniqueFields
       deletedCount = V.length anomaly.shapeDeletedFields
       updatedCount = V.length anomaly.shapeUpdatedFieldFormats
-      parts = catMaybes
-        [ if newCount > 0 then Just (show newCount <> " new field" <> if newCount > 1 then "s" else "") else Nothing
-        , if deletedCount > 0 then Just (show deletedCount <> " removed field" <> if deletedCount > 1 then "s" else "") else Nothing
-        , if updatedCount > 0 then Just (show updatedCount <> " modified field" <> if updatedCount > 1 then "s" else "") else Nothing
-        ]
-  in if null parts
-     then "No changes detected"
-     else "Schema updated: " <> T.intercalate ", " parts
+      parts =
+        catMaybes
+          [ if newCount > 0 then Just (show newCount <> " new field" <> if newCount > 1 then "s" else "") else Nothing
+          , if deletedCount > 0 then Just (show deletedCount <> " removed field" <> if deletedCount > 1 then "s" else "") else Nothing
+          , if updatedCount > 0 then Just (show updatedCount <> " modified field" <> if updatedCount > 1 then "s" else "") else Nothing
+          ]
+   in if null parts
+        then "No changes detected"
+        else "Schema updated: " <> T.intercalate ", " parts
 
 
 -- Helper function to generate field changes from anomaly
 generateFieldChanges :: AnomalyVM -> [FieldChange]
-generateFieldChanges anomaly = 
-  let newFields = V.toList anomaly.shapeNewUniqueFields <&> \fieldName ->
-        FieldChange
-          { fieldName = fieldName
-          , changeKind = Added
-          , breaking = False
-          , path = fieldName
-          , changeDescription = "New field added"
-          , oldType = Nothing
-          , newType = Just "unknown"
-          , oldValue = Nothing
-          , newValue = Nothing
-          }
-      deletedFields = V.toList anomaly.shapeDeletedFields <&> \fieldName ->
-        FieldChange
-          { fieldName = fieldName
-          , changeKind = Removed
-          , breaking = True
-          , path = fieldName
-          , changeDescription = "Field removed"
-          , oldType = Just "unknown"
-          , newType = Nothing
-          , oldValue = Nothing
-          , newValue = Nothing
-          }
-      updatedFields = V.toList anomaly.shapeUpdatedFieldFormats <&> \fieldName ->
-        FieldChange
-          { fieldName = fieldName
-          , changeKind = Modified
-          , breaking = True
-          , path = fieldName
-          , changeDescription = "Field format changed"
-          , oldType = Just "unknown"
-          , newType = Just "unknown"
-          , oldValue = Nothing
-          , newValue = Nothing
-          }
-  in newFields ++ deletedFields ++ updatedFields
+generateFieldChanges anomaly =
+  let newFields =
+        V.toList anomaly.shapeNewUniqueFields <&> \fieldName ->
+          FieldChange
+            { fieldName = fieldName
+            , changeKind = Added
+            , breaking = False
+            , path = fieldName
+            , changeDescription = "New field added"
+            , oldType = Nothing
+            , newType = Just "unknown"
+            , oldValue = Nothing
+            , newValue = Nothing
+            }
+      deletedFields =
+        V.toList anomaly.shapeDeletedFields <&> \fieldName ->
+          FieldChange
+            { fieldName = fieldName
+            , changeKind = Removed
+            , breaking = True
+            , path = fieldName
+            , changeDescription = "Field removed"
+            , oldType = Just "unknown"
+            , newType = Nothing
+            , oldValue = Nothing
+            , newValue = Nothing
+            }
+      updatedFields =
+        V.toList anomaly.shapeUpdatedFieldFormats <&> \fieldName ->
+          FieldChange
+            { fieldName = fieldName
+            , changeKind = Modified
+            , breaking = True
+            , path = fieldName
+            , changeDescription = "Field format changed"
+            , oldType = Just "unknown"
+            , newType = Just "unknown"
+            , oldValue = Nothing
+            , newValue = Nothing
+            }
+   in newFields ++ deletedFields ++ updatedFields
 
 
 -- Main conversion function
@@ -938,19 +947,19 @@ convertAnomalyToIssue hostM anomaly = do
       , endpointId = anomaly.endpointId
       , acknowlegedBy = anomaly.acknowlegedBy
       , archivedAt = anomaly.archivedAt
-      -- Enhanced fields
-      , title = generateIssueTitle anomaly
+      , -- Enhanced fields
+        title = generateIssueTitle anomaly
       , service = detectService hostM anomaly.endpointUrlPath
       , critical = assessCriticality anomaly
       , breakingChanges = countBreakingChanges anomaly
       , incrementalChanges = countIncrementalChanges anomaly
-      , affectedPayloads = 0  -- TODO: Calculate from actual request data
-      , affectedClients = 0   -- TODO: Calculate from actual client data
-      , estimatedRequests = "N/A"  -- TODO: Calculate from metrics
+      , affectedPayloads = 0 -- TODO: Calculate from actual request data
+      , affectedClients = 0 -- TODO: Calculate from actual client data
+      , estimatedRequests = "N/A" -- TODO: Calculate from metrics
       , migrationComplexity = assessMigrationComplexity anomaly
       , recommendedAction = generateRecommendedAction anomaly
       , requestPayloads = Aeson $ generateExamplePayloads anomaly
-      , responsePayloads = Aeson []  -- TODO: Generate response payloads
+      , responsePayloads = Aeson [] -- TODO: Generate response payloads
       -- New fields for anomaly grouping
       , anomalyHashes = V.singleton anomaly.targetHash
       , endpointHash = endpointHashValue
@@ -1043,7 +1052,8 @@ insertIssues issues = executeMany q (V.toList issues)
 findOpenIssueForEndpoint :: Projects.ProjectId -> Text -> DBT IO (Maybe Issue)
 findOpenIssueForEndpoint pid endpointHash = queryOne q (pid, endpointHash)
   where
-    q = [sql|
+    q =
+      [sql|
       SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
         endpoint_id, acknowleged_by, archived_at, title, service, critical, breaking_changes, incremental_changes,
         affected_payloads, affected_clients, estimated_requests, migration_complexity, recommended_action,
@@ -1059,10 +1069,11 @@ findOpenIssueForEndpoint pid endpointHash = queryOne q (pid, endpointHash)
 
 -- Update existing issue with new anomaly data
 updateIssueWithNewAnomaly :: Issue -> V.Vector Text -> [PayloadChange] -> [PayloadChange] -> DBT IO Int64
-updateIssueWithNewAnomaly existingIssue newAnomalyHashes newRequestPayloads newResponsePayloads = 
+updateIssueWithNewAnomaly existingIssue newAnomalyHashes newRequestPayloads newResponsePayloads =
   execute q params
   where
-    q = [sql|
+    q =
+      [sql|
       UPDATE apis.issues 
       SET 
         anomaly_hashes = array_cat(anomaly_hashes, ?),
@@ -1075,10 +1086,10 @@ updateIssueWithNewAnomaly existingIssue newAnomalyHashes newRequestPayloads newR
     |]
     newBreaking = length $ filter (\p -> p.changeType == Breaking) (newRequestPayloads ++ newResponsePayloads)
     newIncremental = length $ filter (\p -> p.changeType == Incremental || p.changeType == Safe) (newRequestPayloads ++ newResponsePayloads)
-    params = 
+    params =
       ( newAnomalyHashes
       , newBreaking
-      , newIncremental 
+      , newIncremental
       , Aeson newRequestPayloads
       , Aeson newResponsePayloads
       , existingIssue.id
@@ -1104,39 +1115,35 @@ updateIssueWithNewAnomaly existingIssue newAnomalyHashes newRequestPayloads newR
 --       , updatedAt = if zonedTimeToUTC base.updatedAt > zonedTimeToUTC new.updatedAt then base.updatedAt else new.updatedAt
 --       , critical = base.critical || new.critical
 --       }
---     
+--
 --     mergePayloadLists :: Aeson [PayloadChange] -> Aeson [PayloadChange] -> Aeson [PayloadChange]
 --     mergePayloadLists (Aeson pl1) (Aeson pl2) = Aeson (pl1 ++ pl2)
-
 
 -- DEPRECATED: Helper functions for extracting data from IssuesData (old model)
 -- getEndpointFromIssueData :: IssuesData -> Maybe Text
 -- getEndpointFromIssueData (IDNewEndpointIssue issue) = Just $ issue.endpointMethod <> " " <> issue.endpointUrlPath
 -- getEndpointFromIssueData _ = Nothing
 
-
 -- getShapeChangesFromIssueData :: IssuesData -> ([Text], [Text], [Text])
--- getShapeChangesFromIssueData (IDNewShapeIssue issue) = 
+-- getShapeChangesFromIssueData (IDNewShapeIssue issue) =
 --   (V.toList issue.newUniqueFields, V.toList issue.deletedFields, V.toList issue.updatedFieldFormats)
 -- getShapeChangesFromIssueData _ = ([], [], [])
-
 
 -- getFieldFromIssueData :: IssuesData -> Maybe Text
 -- getFieldFromIssueData (IDNewFieldIssue issue) = Just issue.key
 -- getFieldFromIssueData (IDNewFormatIssue issue) = Just issue.fieldKeyPath
 -- getFieldFromIssueData _ = Nothing
 
-
 -- getErrorDataFromIssueData :: IssuesData -> Maybe RequestDumps.ATError
 -- getErrorDataFromIssueData (IDNewRuntimeExceptionIssue err) = Just err
 -- getErrorDataFromIssueData _ = Nothing
-
 
 -- Select issue by ID
 selectIssueById :: AnomalyId -> DBT IO (Maybe Issue)
 selectIssueById aid = queryOne q (Only aid)
   where
-    q = [sql|
+    q =
+      [sql|
       SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
         endpoint_id, acknowleged_by, archived_at, title, service, critical, breaking_changes, incremental_changes,
         affected_payloads, affected_clients, estimated_requests, migration_complexity, recommended_action,
@@ -1146,16 +1153,15 @@ selectIssueById aid = queryOne q (Only aid)
       LIMIT 1
     |]
 
-
 -- DEPRECATED: Update issue with LLM enhancement (old model)
 -- updateIssueEnhancement :: AnomalyId -> Text -> Text -> Text -> DBT IO Int64
--- updateIssueEnhancement issueId title recommendedAction migrationComplexity = 
+-- updateIssueEnhancement issueId title recommendedAction migrationComplexity =
 --   execute q (title, recommendedAction, migrationComplexity, issueId)
 --   where
 --     q = [sql|
---       UPDATE apis.issues 
---       SET title = ?, 
---           recommended_action = ?, 
+--       UPDATE apis.issues
+--       SET title = ?,
+--           recommended_action = ?,
 --           migration_complexity = ?,
 --           llm_enhanced_at = NOW(),
 --           llm_enhancement_version = 1,

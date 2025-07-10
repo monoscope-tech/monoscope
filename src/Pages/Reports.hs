@@ -21,19 +21,19 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AEP
-import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Data.Default (def)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Apis.Anomalies qualified as Anomalies
-import Models.Apis.Issues qualified as Issues
 import Models.Apis.Fields.Types (textFieldTypeToText)
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -410,26 +410,28 @@ buildAnomalyJSON anomalies total = AE.object ["anomalies" AE..= V.catMaybes (V.m
       Issues.APIChange ->
         case AE.fromJSON (getAeson issue.issueData) of
           AE.Success (apiData :: Issues.APIChangeData) ->
-            Just $ AE.object
-              [ "endpointUrlPath" AE..= apiData.endpointPath
-              , "endpointMethod" AE..= apiData.endpointMethod
-              , "targetHash" AE..= issue.endpointHash
-              , "tag" AE..= Anomalies.ATShape
-              , "newUniqueFields" AE..= apiData.newFields
-              , "updatedFieldFormats" AE..= apiData.modifiedFields
-              , "deletedFields" AE..= apiData.deletedFields
-              , "eventsCount" AE..= issue.eventCount
-              ]
+            Just
+              $ AE.object
+                [ "endpointUrlPath" AE..= apiData.endpointPath
+                , "endpointMethod" AE..= apiData.endpointMethod
+                , "targetHash" AE..= issue.endpointHash
+                , "tag" AE..= Anomalies.ATShape
+                , "newUniqueFields" AE..= apiData.newFields
+                , "updatedFieldFormats" AE..= apiData.modifiedFields
+                , "deletedFields" AE..= apiData.deletedFields
+                , "eventsCount" AE..= issue.eventCount
+                ]
           _ -> Nothing
       Issues.RuntimeException ->
         case AE.fromJSON (getAeson issue.issueData) of
           AE.Success (errorData :: Issues.RuntimeExceptionData) ->
-            Just $ AE.object
-              [ "endpointUrlPath" AE..= fromMaybe "/" errorData.requestPath
-              , "endpointMethod" AE..= fromMaybe "UNKNOWN" errorData.requestMethod
-              , "tag" AE..= Anomalies.ATRuntimeException
-              , "eventsCount" AE..= issue.eventCount
-              ]
+            Just
+              $ AE.object
+                [ "endpointUrlPath" AE..= fromMaybe "/" errorData.requestPath
+                , "endpointMethod" AE..= fromMaybe "UNKNOWN" errorData.requestMethod
+                , "tag" AE..= Anomalies.ATRuntimeException
+                , "eventsCount" AE..= issue.eventCount
+                ]
           _ -> Nothing
       _ -> Nothing
 
@@ -438,35 +440,37 @@ getAnomaliesEmailTemplate :: V.Vector Issues.IssueL -> V.Vector AE.Value
 getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
   where
     buildEmailjson :: Issues.IssueL -> AE.Value
-    buildEmailjson issue = 
-      let baseObject = 
+    buildEmailjson issue =
+      let baseObject =
             [ "title" AE..= issue.title
             , "eventsCount" AE..= issue.eventCount
             , "firstSeen" AE..= formatUTC issue.lastSeen
             ]
-      in case issue.issueType of
-        Issues.APIChange ->
-          case AE.fromJSON (getAeson issue.issueData) of
-            AE.Success (apiData :: Issues.APIChangeData) ->
-              AE.object $ baseObject <>
-                [ "tag" AE..= "ATShape"
-                , "deletedFields" AE..= length apiData.deletedFields
-                , "endpointMethod" AE..= apiData.endpointMethod
-                , "endpointUrlPath" AE..= apiData.endpointPath
-                , "newUniqueFields" AE..= length apiData.newFields
-                , "updatedFields" AE..= length apiData.modifiedFields
-                ]
+       in case issue.issueType of
+            Issues.APIChange ->
+              case AE.fromJSON (getAeson issue.issueData) of
+                AE.Success (apiData :: Issues.APIChangeData) ->
+                  AE.object
+                    $ baseObject
+                    <> [ "tag" AE..= "ATShape"
+                       , "deletedFields" AE..= length apiData.deletedFields
+                       , "endpointMethod" AE..= apiData.endpointMethod
+                       , "endpointUrlPath" AE..= apiData.endpointPath
+                       , "newUniqueFields" AE..= length apiData.newFields
+                       , "updatedFields" AE..= length apiData.modifiedFields
+                       ]
+                _ -> AE.object baseObject
+            Issues.RuntimeException ->
+              case AE.fromJSON (getAeson issue.issueData) of
+                AE.Success (errorData :: Issues.RuntimeExceptionData) ->
+                  AE.object
+                    $ baseObject
+                    <> [ "tag" AE..= "ATRuntimeException"
+                       , "endpointMethod" AE..= fromMaybe "UNKNOWN" errorData.requestMethod
+                       , "endpointUrlPath" AE..= fromMaybe "/" errorData.requestPath
+                       ]
+                _ -> AE.object baseObject
             _ -> AE.object baseObject
-        Issues.RuntimeException ->
-          case AE.fromJSON (getAeson issue.issueData) of
-            AE.Success (errorData :: Issues.RuntimeExceptionData) ->
-              AE.object $ baseObject <>
-                [ "tag" AE..= "ATRuntimeException"
-                , "endpointMethod" AE..= fromMaybe "UNKNOWN" errorData.requestMethod
-                , "endpointUrlPath" AE..= fromMaybe "/" errorData.requestPath
-                ]
-            _ -> AE.object baseObject
-        _ -> AE.object baseObject
 
 
 formatUTC :: UTCTime -> String

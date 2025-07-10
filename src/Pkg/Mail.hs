@@ -114,7 +114,7 @@ sendWhatsAppAlert alert pid pTitle tos = do
     EndpointAlert{..} -> do
       let template = appCtx.config.whatsappEndpointTemplate
           url = pid.toText <> "/anomalies/by_hash/" <> endpointHash
-          contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= T.intercalate "." ((\x-> "`" <> x <> "`") <$> V.toList endpoints), "3" AE..= url]
+          contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= T.intercalate "." ((\x -> "`" <> x <> "`") <$> V.toList endpoints), "3" AE..= url]
       sendAlert template contentVars
       pass
     ReportAlert{..} -> do

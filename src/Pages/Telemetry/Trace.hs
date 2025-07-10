@@ -19,8 +19,8 @@ import Models.Telemetry.Telemetry (SpanStatus (SSError))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.Components (dateTime)
+import Pages.LogExplorer.LogItem (getRequestDetails, getServiceColor, getServiceName, spanHasErrors)
 import Pages.LogExplorer.LogItem qualified as LogItem
-import Pages.LogExplorer.LogItem (getServiceName, getServiceColor, getRequestDetails, spanHasErrors)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, getDurationNSMS, getServiceColors, onpointerdown_, utcTimeToNanoseconds)
@@ -347,19 +347,19 @@ buildTree spanMap parentId =
     Nothing -> []
     Just spans ->
       [ SpanTree
-          SpanMin
-            { parentSpanId = sp.parentSpanId
-            , spanId = sp.spanId
-            , uSpanId = sp.uSpanId
-            , spanName = sp.spanName
-            , spanDurationNs = sp.spanDurationNs
-            , serviceName = getServiceName sp.resource
-            , startTime = utcTimeToNanoseconds sp.startTime
-            , endTime = utcTimeToNanoseconds <$> sp.endTime
-            , hasErrors = spanHasErrors sp
-            , timestamp = sp.timestamp
-            }
-          (buildTree spanMap (Just sp.spanId))
+        SpanMin
+          { parentSpanId = sp.parentSpanId
+          , spanId = sp.spanId
+          , uSpanId = sp.uSpanId
+          , spanName = sp.spanName
+          , spanDurationNs = sp.spanDurationNs
+          , serviceName = getServiceName sp.resource
+          , startTime = utcTimeToNanoseconds sp.startTime
+          , endTime = utcTimeToNanoseconds <$> sp.endTime
+          , hasErrors = spanHasErrors sp
+          , timestamp = sp.timestamp
+          }
+        (buildTree spanMap (Just sp.spanId))
       | sp <- spans
       ]
 
