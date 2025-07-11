@@ -78,14 +78,13 @@ whatsappIncomingPostH val = do
 
     handleWidget :: Text -> Text -> TwilioWhatsAppMessage -> Projects.Project -> EnvConfig -> ATBaseCtx ()
     handleWidget widget dashboardId reqBody project envCfg = do
-      let widgetTitle = getWidgetTitle widget
       dashboardVMM <- Dashboards.getDashboardById dashboardId
       case dashboardVMM of
         Nothing -> pass
         Just dashboardVM -> do
           dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString $ fromMaybe "_overview.yaml" dashboardVM.baseTemplate)
           whenJust dashboardM $ \dashboard -> do
-            let widgetM = find (\w -> (fromMaybe "Untitled-" w.title) == widgetTitle) dashboard.widgets
+            let widgetM = find (\w -> (fromMaybe "Untitled-" w.title) == widget) dashboard.widgets
             whenJust widgetM $ \w -> do
               now <- Time.currentTime
               let widgetQuery = "&widget=" <> decodeUtf8 (urlEncode True (toStrict $ AE.encode $ AE.toJSON w))
@@ -144,8 +143,10 @@ parseWhatsappBody body =
        in case parts of
             ["dashboard", skip] -> DashboardLoad $ defaultZero skip
             ["dash", dashboardId] -> WidgetsLoad dashboardId 0
+            ["dash", dashboardId, _] -> WidgetsLoad dashboardId 0
             ["widget", dashboardId, skip] -> WidgetsLoad dashboardId (defaultZero skip)
             ["widg", widgetTitle, dashboardId] -> WidgetSelect widgetTitle dashboardId
+            ["widg", widgetTitle, dashboardId, _] -> WidgetSelect widgetTitle dashboardId
             _ -> Prompt body
   where
     defaultZero skip = fromMaybe 0 (readMaybe (toString skip))
@@ -169,15 +170,10 @@ getWhatsappList typ body vals' skip = AE.object $ ["1" AE..= body] ++ vars
     vals = V.map (\(k, v) -> (T.take 24 k, v)) (V.drop skip vals')
     paddedVals =
       let missing = 3 - V.length vals
-          placeholders =
-            V.generate
-              missing
-              ( \i ->
-                  let label = "Placeholder " <> toText (show (i + 1))
-                   in (label, label)
-              )
+          duplicates' = if V.length vals == 1 then V.replicate missing (V.head vals) else V.take missing vals
+          duplicates = V.imap (\i (k, v) -> (k <> " " <> show (i + 1), v <> joiner <> show (i + 1))) duplicates'
        in if missing > 0
-            then vals <> placeholders
+            then vals <> duplicates
             else vals
     vars
       | V.length vals > 3 =
