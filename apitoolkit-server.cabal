@@ -466,7 +466,8 @@ test-suite integration-tests
       BangPatterns
   ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-error=ambiguous-fields -threaded -rtsopts -with-rtsopts=-N
   build-tool-depends:
-      proto-lens-protoc:proto-lens-protoc
+      hspec-discover:hspec-discover
+    , proto-lens-protoc:proto-lens-protoc
   build-depends:
       aeson
     , aeson-qq
