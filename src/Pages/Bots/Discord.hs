@@ -11,7 +11,7 @@ import Data.Vector qualified as V
 import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
-import Models.Apis.Slack (DiscordData (..), getDiscordData, insertDiscordData, updateDiscordNotificationChannel)
+import Models.Apis.Slack (DiscordData (..), getDashboardsForDiscord, getDiscordData, insertDiscordData, updateDiscordNotificationChannel)
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Relude hiding (ask, asks)
@@ -200,16 +200,27 @@ discordInteractionsH rawBody signatureM timestampM = do
     handleCommand :: InteractionData -> DiscordInteraction -> EnvConfig -> AuthContext -> DiscordData -> ATBaseCtx AE.Value
     handleCommand cmdData interaction envCfg authCtx discordData =
       case cmdData.name of
-        "ask" -> handleAskCommand cmdData interaction envCfg authCtx discordData
+        "ask" -> do
+          handleAskCommand cmdData interaction envCfg authCtx discordData
+          pure $ AE.object []
         "here" -> do
           case (interaction.channel_id, interaction.guild_id) of
             (Just channelId, Just guildId) -> do
               _ <- updateDiscordNotificationChannel guildId channelId
               pure $ contentResponse "Got it, notifications and alerts on your project will now be sent to this channel"
             _ -> pure $ contentResponse "No channel ID provided"
+        "dashboard" -> do
+          handleDashboard cmdData interaction envCfg authCtx discordData
+          pure $ AE.object []
         _ -> pure $ contentResponse "The command is not recognized"
 
-    handleAskCommand :: InteractionData -> DiscordInteraction -> EnvConfig -> AuthContext -> DiscordData -> ATBaseCtx AE.Value
+    handleDashboard :: InteractionData -> DiscordInteraction -> EnvConfig -> AuthContext -> DiscordData -> ATBaseCtx ()
+    handleDashboard cmData interaction envCfg authCtx discordData = do
+      dashboards <- getDashboardsForDiscord (fromMaybe "" interaction.guild_id)
+      let content = discordSelectContent dashboards "dashboard-select" "Select a dashboard"
+      sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
+
+    handleAskCommand :: InteractionData -> DiscordInteraction -> EnvConfig -> AuthContext -> DiscordData -> ATBaseCtx ()
     handleAskCommand cmdData interaction envCfg authCtx discordData = do
       now <- Time.currentTime
       _ <- sendDeferredResponse interaction.id interaction.token envCfg.discordBotToken
@@ -217,8 +228,7 @@ discordInteractionsH rawBody signatureM timestampM = do
       result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
       case result of
         Left err -> do
-          _ <- sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= "Sorry, there was an error processing your request"])
-          pure $ AE.object []
+          sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= "Sorry, there was an error processing your request"])
         Right (query, vizTypeM) -> do
           case vizTypeM of
             Just vizType -> do
@@ -230,18 +240,16 @@ discordInteractionsH rawBody signatureM timestampM = do
                     _ -> "[?]"
                   content = getBotContent question query query_url opts authCtx.env.chartShotUrl now
               sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
-              pure $ contentResponse "Generated query: "
             Nothing -> do
               let queryAST = parseQueryToAST query
               case queryAST of
                 Left err -> do
                   _ <- sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= ("Error parsing query: " <> err)])
-                  pure $ AE.object []
+                  pass
                 Right query' -> do
                   tableAsVecE <- RequestDumps.selectLogTable discordData.projectId query' query Nothing (Nothing, Nothing) [] Nothing Nothing
                   let content = handleTableResponse Discord tableAsVecE envCfg discordData.projectId query
-                  _ <- sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
-                  pure $ AE.object []
+                  sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
 
 
 buildPrompt :: InteractionData -> DiscordInteraction -> EnvConfig -> ATBaseCtx Text
@@ -285,8 +293,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-        <> [msgJson]
-        <> ["\n\nUser query: " <> question]
+          <> [msgJson]
+          <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
@@ -384,3 +392,40 @@ getBotContent question query query_url chartOptions baseUrl now =
                 ]
           )
     ]
+
+
+discordSelectContent :: V.Vector (Text, Text) -> Text -> Text -> AE.Value
+discordSelectContent dashboards sId placeholder =
+  AE.object
+    [ "flags" AE..= 32768
+    , "components" AE..= AE.Array (V.fromList [AE.object ["type" AE..= 3, "custom_id" AE..= sId, "placeholder" AE..= placeholder, "options" AE..= opts]])
+    ]
+  where
+    opts = AE.Array $ V.map (\(t, i) -> AE.object ["label" AE..= t, "value" AE..= i]) dashboards
+
+--   {
+--     "type": 3,
+--     "custom_id": "string_select",
+--     "placeholder": "Favorite bug?",
+--     "options": [
+--       {
+--         "label": "Ant",
+--         "value": "ant",
+--         "description": "(best option)",
+--         "emoji": {"name": "🐜"}
+--       },
+--       {
+--         "label": "Butterfly",
+--         "value": "butterfly",
+--         "emoji": {"name": "🦋"}
+--       },
+--       {
+--         "label": "Catarpillar",
+--         "value": "caterpillar",
+--         "emoji": {"name": "🐛"}
+--       }
+--     ]
+--   }
+-- ]
+
+-- ]
