@@ -94,6 +94,13 @@
   <symbol id="arrow-down-to-line" viewBox="0 0 384 512">
     <path d="M360 480c13.3 0 24-10.7 24-24s-10.7-24-24-24L24 432c-13.3 0-24 10.7-24 24s10.7 24 24 24l336 0zM174.5 344.4c4.5 4.8 10.9 7.6 17.5 7.6s12.9-2.7 17.5-7.6l128-136c9.1-9.7 8.6-24.8-1-33.9s-24.8-8.6-33.9 1L216 267.5l0-83.5 0-128c0-13.3-10.7-24-24-24s-24 10.7-24 24l0 128 0 83.5L81.5 175.6c-9.1-9.7-24.3-10.1-33.9-1s-10.1 24.3-1 33.9l128 136z" />
   </symbol>
+  <symbol id="sun-bright" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="5" stroke="currentColor" stroke-width="2" fill="none" />
+    <path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+  </symbol>
+  <symbol id="moon-stars" viewBox="0 0 24 24">
+    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+  </symbol>
   <symbol id="pen-to-square" viewBox="0 0 512 512">
     <!--!Font
     Awesome Free 6.5.2 by @fontawesome - https://fontawesome.com License -
@@ -185,7 +192,7 @@
 
   <symbol id="cross-hair" width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
     <g clip-path="url(#clip0_7428_47266)">
-      <path d="M11 6C11 8.76142 8.76142 11 6 11M11 6C11 3.23858 8.76142 1 6 1M11 6H9M6 11C3.23858 11 1 8.76142 1 6M6 11V9M1 6C1 3.23858 3.23858 1 6 1M1 6H3M6 1V3" stroke="#0068FF" stroke-opacity="0.8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M11 6C11 8.76142 8.76142 11 6 11M11 6C11 3.23858 8.76142 1 6 1M11 6H9M6 11C3.23858 11 1 8.76142 1 6M6 11V9M1 6C1 3.23858 3.23858 1 6 1M1 6H3M6 1V3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
     </g>
     <defs>
       <clipPath id="clip0_7428_47266">

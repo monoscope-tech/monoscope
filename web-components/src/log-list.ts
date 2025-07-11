@@ -12,7 +12,7 @@ const _ensureBadgeClasses = html`
   <span class="badge-2xx badge-3xx badge-4xx badge-5xx badge-error badge-success badge-warning badge-info badge-fatal badge-neutral"></span>
   <span class="badge-GET badge-POST badge-PUT badge-DELETE badge-PATCH"></span>
   <span class="cbadge cbadge-sm"></span>
-  <span class="bg-blue-600 bg-orange-600 bg-red-600 bg-green-600 bg-yellow-500 bg-teal-600 bg-purple-600 bg-indigo-600 bg-gray-600 bg-amber-600"></span>
+  <span class="bg-fillBrand-strong bg-fillWarning-strong bg-fillError-strong bg-fillSuccess-strong bg-fillWarning-strong bg-fillInformation-strong bg-fillBrand-strong bg-fillBrand-strong bg-fillStrong bg-fillWarning-strong"></span>
 `;
 
 @customElement('log-list')
@@ -548,9 +548,9 @@ export class LogList extends LitElement {
                 data-tip="Scroll to bottom"
                 class=${`absolute tooltip tooltip-left right-8 bottom-2 group z-50 ${
                   this.recentDataToBeAdded.length > 0 ? 'bg-fillBrand-strong' : 'bg-bgInverse'
-                } text-white flex justify-center items-center rounded-full shadow-lg h-10 w-10`}
+                } text-textInverse-strong flex justify-center items-center rounded-full shadow-lg h-10 w-10`}
               >
-                ${faSprite('arrow-down', 'regular', 'h-6 w-6 fill-white stroke-white')}
+                ${faSprite('arrow-down', 'regular', 'h-6 w-6 fill-textInverse-strong stroke-textInverse-strong')}
               </button>
             </div>`
           : nothing}
@@ -589,12 +589,12 @@ export class LogList extends LitElement {
               faSprite(
                 value === 'incoming' ? 'arrow-down-left' : 'arrow-up-right',
                 'solid',
-                value === 'incoming' ? 'h-3 fill-iconNeutral' : 'h-3 fill-blue-700'
+                value === 'incoming' ? 'h-3 fill-iconNeutral' : 'h-3 fill-iconBrand'
               )
             ),
           kind: () =>
             value === 'internal' ? renderIconWithTippy('w-4 ml-2', 'Internal span', faSprite('function', 'regular', 'h-3 w-3')) : nothing,
-          'db.system': () => renderIconWithTippy('w-4 ml-2', value, faSprite('database', 'regular', 'h-3 w-3 fill-slate-500')),
+          'db.system': () => renderIconWithTippy('w-4 ml-2', value, faSprite('database', 'regular', 'h-3 w-3 fill-iconNeutral')),
         };
 
         if (iconConfig[field]) return iconConfig[field]();
@@ -703,7 +703,7 @@ export class LogList extends LitElement {
         // Check if summary is already an array, otherwise parse it
         const summaryArray = Array.isArray(summaryData) ? summaryData : summaryData ? String(summaryData).split(',') : [];
         const errClas = hasErrors
-          ? 'bg-fillError-strong text-white fill-white stroke-strokeError-strong'
+          ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
             ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
             : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
@@ -840,7 +840,7 @@ export class LogList extends LitElement {
     return html`
       <tr
         class=${`item-row relative p-0 flex items-center cursor-pointer whitespace-nowrap ${isNew ? 'animate-fadeBg' : ''}`}
-        @pointerdown=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
+        @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
       >
         ${this.logsColumns
           .filter((v) => v !== 'latency_breakdown')
@@ -909,7 +909,7 @@ export class LogList extends LitElement {
             this.mouseState = { x: event.clientX };
             document.body.style.userSelect = 'none';
           }}
-          class="w-3 text-gray-200 text-right select-none hover:text-textBrand overflow-hidden font-bold absolute right-0 top-1/2 -translate-y-1/2 h-4 cursor-ew-resize"
+          class="w-3 text-textWeak text-right select-none hover:text-textBrand overflow-hidden font-bold absolute right-0 top-1/2 -translate-y-1/2 h-4 cursor-ew-resize"
         >
           |
         </div>
@@ -918,7 +918,7 @@ export class LogList extends LitElement {
   }
 
   renderCheckbox(label: string, icon: string, checked: boolean, onChange: (checked: boolean) => void) {
-    return html` <label class="flex items-center cursor-pointer w-full gap-1 px-2 py-1 text-sm rounded text-textWeak hover:bg-gray-100">
+    return html` <label class="flex items-center cursor-pointer w-full gap-1 px-2 py-1 text-sm rounded text-textWeak hover:bg-fillWeaker">
       <input
         type="checkbox"
         class="checkbox checkbox-xs checkbox-primary mr-1"
@@ -935,7 +935,7 @@ export class LogList extends LitElement {
       html` <button
         @pointerdown=${() => (this.view = view)}
         class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
-          this.view === view ? 'bg-gray-200 text-gray-800' : 'text-textWeak hover:bg-gray-100'
+          this.view === view ? 'bg-fillWeak text-textStrong' : 'text-textWeak hover:bg-fillWeaker'
         }`}
       >
         ${faSprite(icon, 'regular', 'h-4 w-4')}
@@ -1071,7 +1071,7 @@ class ColumnsSettings extends LitElement {
                   ${this.defaultColumns.filter(
                     (col) => !this.columns.some((c) => c === col) && col.toLowerCase().includes(this.searchTerm.toLowerCase())
                   ).length === 0
-                    ? html`<li class="px-3 py-2 text-gray-400">No results</li>`
+                    ? html`<li class="px-3 py-2 text-textWeak">No results</li>`
                     : ''}
                 </ul>
               `
@@ -1093,7 +1093,7 @@ class ColumnsSettings extends LitElement {
                 <span class="text-textStrong">${col}</span>
                 <div class="flex items-center gap-2">
                   <button class="hidden group-hover:inline-block cursor-pointer" @pointerdown=${() => this._removeColumn(index)}>
-                    ${faSprite('trash-can', 'regular', 'h-3 w-3 text-iconNeutral fill-red-600')}
+                    ${faSprite('trash-can', 'regular', 'h-3 w-3 text-iconNeutral fill-iconError')}
                   </button>
                   ${faSprite('grip-dots-vertical', 'regular', 'h-4 w-4 text-iconNeutral')}
                 </div>
@@ -1185,27 +1185,15 @@ const errorClass = (reqVec: any[], colIdxMap: ColIdxMap) => {
   const errStatus = lookupVecTextByKey(reqVec, colIdxMap, 'status');
 
   const errClass =
-    hasErrors || errStatus === 'ERROR' ? 'w-1 bg-red-500' : status >= 400 ? 'w-1 bg-yellow-500' : 'w-1 bg-blue-200 status-indicator';
+    hasErrors || errStatus === 'ERROR'
+      ? 'w-1 bg-fillError-strong'
+      : status >= 400
+        ? 'w-1 bg-fillWarning-strong'
+        : 'w-1 bg-fillBrand-weak status-indicator';
 
   return [status, hasErrors, errClass];
 };
 
-const getSeverityColor = (severity: string | undefined) =>
-  ({
-    debug: 'text-gray-500 bg-gray-100',
-    info: 'text-brand bg-blue-100',
-    warning: 'text-yellow-700 bg-yellow-100',
-    error: 'text-red-500 bg-red-100',
-    critical: 'text-red-700 bg-red-200 font-bold',
-    notice: 'text-green-500 bg-green-100',
-    alert: 'text-orange-600 bg-orange-100 font-bold',
-  })[severity?.toLowerCase() || 'unset'] || 'badge-neutral ';
-
-const getSpanStatusColor = (status: string) =>
-  ({
-    ERROR: 'cbadge-sm badge-error',
-    OK: 'cbadge-sm badge-success',
-  })[status] || 'cbadge-sm badge-neutral bg-fillWeak';
 function spanLatencyBreakdown({
   start,
   duration,
@@ -1247,10 +1235,10 @@ function emptyState(cols: number) {
     <tr class="w-full flex justify-center">
       <td colspan=${String(cols)} class="w-full mx-auto">
         <div class="w-max mx-auto my-8 text-center p-5 sm:py-14 sm:px-24 flex flex-col gap-4">
-          <div>${faSprite('empty', 'regular', 'h-24 w-24 mx-auto stroke-blue-500 fill-blue-500')}</div>
+          <div>${faSprite('empty', 'regular', 'h-24 w-24 mx-auto stroke-strokeBrand-strong fill-fillBrand-strong')}</div>
           <div class="flex flex-col gap-2">
             <h2 class="text-xl text-textStrong font-bold">${title}</h2>
-            <p class="text-sm max-w-4xl font-medium text-gray-500">${subText}</p>
+            <p class="text-sm max-w-4xl font-medium text-textWeak">${subText}</p>
             <a href="https://apitoolkit.io/docs/sdks/" target="_BLANK" class="btn text-sm w-max mx-auto btn-primary"
               >Read integration guides</a
             >

@@ -210,18 +210,18 @@ getGrpcStatusColor :: Int -> Text
 getGrpcStatusColor status
   | status == 0 = "cbadge-sm badge-2xx" -- OK
   | status >= 1 && status <= 16 = "cbadge-sm badge-4xx" -- Errors (1 to 16 are error codes)
-  | otherwise = "text-slate-500 bg-slate-800"
+  | otherwise = "text-textWeak bg-fillStrong"
 
 
 getSeverityColor :: Text -> Text
-getSeverityColor "debug" = "text-gray-500 border-gray-500 bg-gray-100"
-getSeverityColor "info" = "text-brand border-strokeBrand-strong bg-blue-100"
-getSeverityColor "warning" = "text-yellow-700 border-yellow-700 bg-yellow-100"
-getSeverityColor "error" = "text-red-500 border-red-700 bg-red-100"
-getSeverityColor "critical" = "text-red-700 border-red-700 bg-red-200 font-bold"
-getSeverityColor "notice" = "text-green-500 border-green-500 bg-green-100"
-getSeverityColor "alert" = "text-orange-600 border-orange-600 bg-orange-100 font-bold"
-getSeverityColor _ = "text-black bg-gray-50"
+getSeverityColor "debug" = "text-textWeak border-strokeWeak bg-fillWeak"
+getSeverityColor "info" = "text-textBrand border-strokeBrand-strong bg-fillInformation-weak"
+getSeverityColor "warning" = "text-textWarning border-strokeWarning-strong bg-fillWarning-weak"
+getSeverityColor "error" = "text-textError border-strokeError-strong bg-fillError-weak"
+getSeverityColor "critical" = "text-textError border-strokeError-strong bg-fillError-strong font-bold"
+getSeverityColor "notice" = "text-textSuccess border-strokeSuccess-strong bg-fillSuccess-weak"
+getSeverityColor "alert" = "text-textWarning border-strokeWarning-strong bg-fillWarning-strong font-bold"
+getSeverityColor _ = "text-textStrong bg-fillWeaker"
 
 
 -- >>> replaceNumbers "response_body.0.completed"

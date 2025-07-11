@@ -193,6 +193,7 @@ data Session = Session
   , user :: Users.User
   , requestID :: Text
   , isSidebarClosed :: Bool
+  , theme :: Text
   }
   deriving stock (Generic, Show)
 

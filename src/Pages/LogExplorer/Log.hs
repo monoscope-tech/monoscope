@@ -66,25 +66,25 @@ renderFacets facetSummary = do
 
       -- Color functions for different facet types
       statusColorFn val = case T.take 1 val of
-        "2" -> "bg-green-500"
-        "3" -> "bg-blue-500"
-        "4" -> "bg-yellow-500"
-        "5" -> "bg-red-600"
-        _ -> "bg-gray-500"
+        "2" -> "bg-fillSuccess-strong"
+        "3" -> "bg-fillBrand-strong"
+        "4" -> "bg-fillWarning-strong"
+        "5" -> "bg-fillError-strong"
+        _ -> "bg-fillStrong"
 
       methodColorFn val = case val of
-        "GET" -> "bg-[#067cff]"
-        "POST" -> "bg-green-500"
-        "PUT" -> "bg-amber-500"
-        "DELETE" -> "bg-red-500"
-        _ -> "bg-purple-500"
+        "GET" -> "bg-fillBrand-strong"
+        "POST" -> "bg-fillSuccess-strong"
+        "PUT" -> "bg-fillWarning-strong"
+        "DELETE" -> "bg-fillError-strong"
+        _ -> "bg-fillBrand-strong"
 
       levelColorFn val = case val of
-        "ERROR" -> "bg-red-500"
-        "WARN" -> "bg-yellow-500"
-        "INFO" -> "bg-blue-500"
-        "DEBUG" -> "bg-gray-500"
-        _ -> "bg-gray-400"
+        "ERROR" -> "bg-fillError-strong"
+        "WARN" -> "bg-fillWarning-strong"
+        "INFO" -> "bg-fillBrand-strong"
+        "DEBUG" -> "bg-fillStrong"
+        _ -> "bg-fillWeak"
 
       -- Group facet fields by category
       -- Define mapping of field keys to display names and color functions
@@ -100,7 +100,7 @@ renderFacets facetSummary = do
         , ("resource___service___version", "Service Version", const "")
         , ("attributes___http___request___method", "HTTP Method", methodColorFn)
         , ("attributes___http___response___status_code", "HTTP Status", statusColorFn)
-        , ("attributes___error___type", "Error Type", const "bg-red-500")
+        , ("attributes___error___type", "Error Type", const "bg-fillError-strong")
         ]
 
       -- Grouped facets for better organization
@@ -156,8 +156,8 @@ renderFacets facetSummary = do
         ,
           ( "Errors & Exceptions"
           ,
-            [ ("attributes___error___type", "Error Type", const "bg-red-500")
-            , ("attributes___exception___type", "Exception Type", const "bg-red-500")
+            [ ("attributes___error___type", "Error Type", const "bg-fillError-strong")
+            , ("attributes___exception___type", "Exception Type", const "bg-fillError-strong")
             , ("attributes___exception___message", "Exception Message", const "")
             ]
           )

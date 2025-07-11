@@ -169,9 +169,9 @@ manageMembersBody projMembers =
           div_ [class_ "flex gap-2 w-full"] do
             input_ [type_ "text", name_ "emails", class_ "input w-full", placeholder_ "Add a member by email"]
             select_ [name_ "permissions", class_ "select w-[130px]"] do
-              option_ [class_ "text-gray-500", value_ "admin"] "Admin"
-              option_ [class_ "text-gray-500", value_ "edit"] "Can Edit"
-              option_ [class_ "text-gray-500", value_ "view"] "Can View"
+              option_ [class_ "text-textWeak", value_ "admin"] "Admin"
+              option_ [class_ "text-textWeak", value_ "edit"] "Can Edit"
+              option_ [class_ "text-textWeak", value_ "view"] "Can View"
             button_ [class_ "btn btn-secondary"] "Send invite"
           div_ [class_ "flex w-full flex-col gap-4"] do
             h3_ [class_ "text-textWeak font-semibold"] "Members"
@@ -192,9 +192,9 @@ memberRow prM = do
     div_ [class_ "flex items-center gap-4"] $ do
       let permission = prM.permission
       select_ [name_ "permissions", class_ "w-max text-textWeak text-sm font-normal leading-tight"] do
-        option_ ([class_ "text-gray-500", value_ "admin"] <> selectedIf ProjectMembers.PAdmin permission) "Admin"
-        option_ ([class_ "text-gray-500", value_ "edit"] <> selectedIf ProjectMembers.PEdit permission) "Can edit"
-        option_ ([class_ "text-gray-500", value_ "view"] <> selectedIf ProjectMembers.PView permission) "View only"
+        option_ ([class_ "text-textWeak", value_ "admin"] <> selectedIf ProjectMembers.PAdmin permission) "Admin"
+        option_ ([class_ "text-textWeak", value_ "edit"] <> selectedIf ProjectMembers.PEdit permission) "Can edit"
+        option_ ([class_ "text-textWeak", value_ "view"] <> selectedIf ProjectMembers.PView permission) "View only"
     button_ [[__| on click remove the closest parent <div/> then halt |]] do
       faSprite_ "trash" "regular" "w-4 h-4 text-textWeak"
   where

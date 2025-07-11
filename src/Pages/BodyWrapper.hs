@@ -256,10 +256,10 @@ bodyWrapper bcfg child = do
             end
     |]
 
-    body_ [class_ "h-full w-full bg-bgBase text-slate-700 group/pg", term "data-theme" "light", term "hx-ext" "multi-swap,preload", term "preload" "mouseover"] do
+    body_ [class_ "h-full w-full bg-bgBase text-textStrong group/pg", term "data-theme" (maybe "light" (.theme) bcfg.sessM), term "hx-ext" "multi-swap,preload", term "preload" "mouseover"] do
       div_
         [ style_ "z-index:99999"
-        , class_ "pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
+        , class_ "pt-24 sm:hidden justify-center z-50 w-full p-4 bg-fillWeak overflow-y-auto inset-0 h-full max-h-full"
         , tabindex_ "-1"
         ]
         do
@@ -273,7 +273,7 @@ bodyWrapper bcfg child = do
                 p_ [class_ ""] "We're diligently working on expanding its availability to other platforms, and we'll keep you updated as we make progress. "
                 p_ [] "Don't hesitate to let us know if this is a very important feature for your team, then we can prioritize it"
               -- Modal footer
-              div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] pass
+              div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-strokeMedium rounded-b"] pass
       case bcfg.sessM of
         Nothing -> do
           section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"]
@@ -340,6 +340,38 @@ bodyWrapper bcfg child = do
               hljs.highlightAll();
             });
           });
+          
+          // Dark mode toggle function
+          function toggleDarkMode() {
+            const currentTheme = document.body.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            document.body.setAttribute('data-theme', newTheme);
+            setCookie('theme', newTheme, 365);
+            
+            // Update both toggle states
+            const toggle = document.getElementById('dark-mode-toggle');
+            const swapToggle = document.getElementById('dark-mode-toggle-swap');
+            if (toggle) {
+              toggle.checked = newTheme === 'dark';
+            }
+            if (swapToggle) {
+              swapToggle.checked = newTheme === 'dark';
+            }
+          }
+          
+          // Initialize toggle state on page load
+          window.addEventListener('DOMContentLoaded', function() {
+            // Set initial toggle state based on data-theme attribute
+            const currentTheme = document.body.getAttribute('data-theme');
+            const toggle = document.getElementById('dark-mode-toggle');
+            const swapToggle = document.getElementById('dark-mode-toggle-swap');
+            if (toggle) {
+              toggle.checked = currentTheme === 'dark';
+            }
+            if (swapToggle) {
+              swapToggle.checked = currentTheme === 'dark';
+            }
+          });
       |]
       let email = show $ maybe "" ((.persistentSession.user.getUser.email)) bcfg.sessM
       let name = maybe "" (\sess -> sess.persistentSession.user.getUser.firstName <> " " <> sess.persistentSession.user.getUser.lastName) bcfg.sessM
@@ -358,7 +390,7 @@ projectsDropDown currProject projects = do
   let pidTxt = currProject.id.toText
   div_
     [ term "data-menu" "true"
-    , class_ "origin-top-right z-40 transition transform bg-bgOverlay p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200 opacity-100 scale-100"
+    , class_ "origin-top-right z-40 transition transform bg-bgOverlay p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-strokeBrand-weak opacity-100 scale-100"
     ]
     do
       div_ [class_ "p-2 pb-4 "] do
@@ -368,22 +400,22 @@ projectsDropDown currProject projects = do
             strong_ [class_ "block"] $ toHtml currProject.title
             small_ [class_ "block"] $ toHtml currProject.paymentPlan
         nav_ [] do
-          a_ [href_ [text| /p/$pidTxt/integrations|], class_ "p-3 flex gap-3 items-center rounded-sm hover:bg-gray-100"] do
+          a_ [href_ [text| /p/$pidTxt/integrations|], class_ "p-3 flex gap-3 items-center rounded-sm hover:bg-fillHover"] do
             faSprite_ "arrows-turn-right" "regular" "h-5 w-5" >> span_ "Integrations"
           when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing")
             $ a_
-              [class_ "p-3 flex gap-3 items-center rounded-sm hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
+              [class_ "p-3 flex gap-3 items-center rounded-sm hover:bg-fillHover cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
               (faSprite_ "dollar-sign" "regular" "h-5 w-5" >> span_ "Manage billing")
-      div_ [class_ "border-t border-gray-100 p-2"] do
+      div_ [class_ "border-t border-strokeWeak p-2"] do
         div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] do
           a_ [href_ "/"] $ h3_ [] "Switch projects"
-          a_ [class_ "bg-blue-700 flex pl-3 pr-4 py-2 rounded-xl text-white space-x-2", href_ "/p/new"] do
-            faSprite_ "plus" "regular" "h-5 w-5 bg-blue-800 rounded-xl" >> span_ [class_ "inline-block px-1"] "Add"
+          a_ [class_ "bg-fillBrand-strong flex pl-3 pr-4 py-2 rounded-xl text-textInverse-strong space-x-2", href_ "/p/new"] do
+            faSprite_ "plus" "regular" "h-5 w-5 bg-fillBrand-strong rounded-xl" >> span_ [class_ "inline-block px-1"] "Add"
         div_ do
           div_ [class_ "relative"] do
             div_ [class_ "absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"] $ faSprite_ "magnifying-glass" "regular" "h-6 w-4"
             input_
-              [ class_ "pl-12 w-full  bg-gray-100 rounded-2xl border-0 p-3"
+              [ class_ "pl-12 w-full  bg-fillWeak rounded-2xl border-0 p-3"
               , placeholder_ "Search Projects"
               , [__|on input show .project_item in #projectsContainer when its textContent.toLowerCase() contains my value.toLowerCase()|]
               ]
@@ -391,7 +423,7 @@ projectsDropDown currProject projects = do
             projects & mapM_ \project ->
               a_ [class_ "flex justify-between p-2 project_item", href_ $ "/p/" <> project.id.toText] do
                 div_ [class_ "space-x-3"] (faSprite_ "folders" "regular" "h-5 w-5 inline-block" >> span_ [class_ "inline-block"] (toHtml project.title))
-                when (currProject.id == project.id) $ faSprite_ "circle-check" "regular" "h-6 w-6 text-green-700"
+                when (currProject.id == project.id) $ faSprite_ "circle-check" "regular" "h-6 w-6 text-textSuccess"
 
 
 sideNav :: Sessions.Session -> Projects.Project -> Text -> Maybe Text -> Html ()
@@ -406,14 +438,14 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
         faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
     div_ [class_ "mt-4 sd-px-0 dropdown block"] do
       a_
-        [ class_ "flex flex-row border border-slate-300 bg-fillWeaker text-textStrong hover:bg-fillWeaker gap-2 justify-center items-center rounded-xl cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3"
+        [ class_ "flex flex-row border border-strokeWeak bg-fillWeaker text-textStrong hover:bg-fillWeaker gap-2 justify-center items-center rounded-xl cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3"
         , tabindex_ "0"
         ]
         do
           span_ [class_ "grow hidden group-has-[#sidenav-toggle:checked]/pg:block overflow-x-hidden whitespace-nowrap truncate"] $ toHtml project.title
           faSprite_ "angles-up-down" "regular" "w-4"
       div_ [tabindex_ "0", class_ "dropdown-content z-40"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess.persistentSession)
-    nav_ [class_ "mt-5 flex flex-col gap-2.5 text-slate-600"] do
+    nav_ [class_ "mt-5 flex flex-col gap-2.5 text-textWeak"] do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
@@ -438,7 +470,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
         sanitizedID = T.replace " " "+" userIdentifier
     div_ [tabindex_ "0", role_ "button", class_ ""] do
       img_
-        [ class_ "inline-block w-9 h-9 p-2 rounded-full bg-gray-300"
+        [ class_ "inline-block w-9 h-9 p-2 rounded-full bg-fillPress"
         , term "data-tippy-placement" "right"
         , term "data-tippy-content" userIdentifier
         , src_ [text|https://www.gravatar.com/avatar/${emailMd5}?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/${sanitizedID}/128|]
@@ -446,39 +478,70 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:inline-block overflow-hidden"] $ toHtml userIdentifier
 
     a_
-      [ class_ "hover:bg-blue-50 "
+      [ class_ "hover:bg-fillBrand-weak "
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" "Settings"
       , href_ $ "/p/" <> project.id.toText <> "/settings"
       ]
-      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-blue-100 text-brand leading-none "] (faSprite_ "gear" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
+      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-textBrand leading-none "] (faSprite_ "gear" "regular" "h-3 w-3")
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
     a_
-      [ class_ "hover:bg-blue-50 "
+      [ class_ "hover:bg-fillBrand-weak "
       , target_ "blank"
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" "Documentation"
       , href_ "https://apitoolkit.io/docs/"
       ]
-      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-blue-100 text-brand leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
+      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-textBrand leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
+
+    -- Dark mode toggle
+    div_
+      [ class_ "hover:bg-fillBrand-weak px-2 py-1 rounded-lg"
+      , term "data-tippy-placement" "right"
+      , term "data-tippy-content" "Toggle dark mode"
+      ]
+      $ do
+        -- Regular toggle with icons (visible when sidebar is expanded)
+        label_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex cursor-pointer gap-2 items-center justify-center"] $ do
+          faSprite_ "sun-bright" "regular" "h-5 w-5 text-textBrand"
+          input_
+            [ type_ "checkbox"
+            , class_ "toggle theme-controller"
+            , id_ "dark-mode-toggle"
+            , onclick_ "toggleDarkMode()"
+            ]
+          faSprite_ "moon-stars" "regular" "h-5 w-5 text-textBrand"
+        
+        -- Swap rotate icon (visible when sidebar is collapsed)
+        label_ [class_ "swap swap-rotate group-has-[#sidenav-toggle:checked]/pg:hidden"] $ do
+          input_
+            [ type_ "checkbox"
+            , class_ "theme-controller"
+            , id_ "dark-mode-toggle-swap"
+            , onclick_ "toggleDarkMode()"
+            ]
+          -- Sun icon (shown in light mode)
+          span_ [class_ "swap-off"] $ faSprite_ "sun-bright" "regular" "h-6 w-6"
+          -- Moon icon (shown in dark mode)
+          span_ [class_ "swap-on"] $ faSprite_ "moon-stars" "regular" "h-6 w-6"
     a_
-      [ class_ "hover:bg-blue-50"
+      [ class_ "hover:bg-fillBrand-weak"
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" "Logout"
       , href_ "/logout"
       , [__| on click js posthog.reset(); end |]
       ]
-      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center  rounded-full bg-red-100 text-red-600 leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
+      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center  rounded-full bg-fillError-weak text-textError leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 
 -- mapM_ renderNavBottomItem $ navBottomList project.id.toText
 
 navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 navbar projectM menuL currUser prePageTitle pageTitle pageTitleMonadId docsLink tabsM pageActionsM =
-  nav_ [id_ "main-navbar", class_ "w-full px-6 py-2 flex flex-row border-slate-200"] do
-    div_ [class_ "flex-1 flex items-center text-slate-950 gap-1"] do
+  nav_ [id_ "main-navbar", class_ "w-full px-6 py-2 flex flex-row border-strokeWeak"] do
+    div_ [class_ "flex-1 flex items-center text-textStrong gap-1"] do
       whenJust prePageTitle \pt -> whenJust (find (\a -> fst3 a == pt) menuL) \(_, _, icon) -> do
         whenJust projectM \p -> a_ [class_ "p-1 hover:bg-fillWeak inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ $ "/p/" <> p.id.toText <> "/dashboards"] do
           faSprite_ icon "regular" "w-4 h-4 text-strokeStrong"
@@ -538,12 +601,12 @@ settingsWrapper pid current pageHtml = do
 
 navBottomList :: Text -> [(Text, Text, Text, Text, Text, Maybe Text, Maybe Text, Maybe Text)]
 navBottomList pidTxt =
-  [ ("gear", "bg-blue-100", "text-brand", "Project settings", "/p/" <> pidTxt <> "/settings", Nothing, Nothing, Nothing)
-  , ("key", "bg-green-100", "text-green-600", "API keys", "/p/" <> pidTxt <> "/apis", Nothing, Nothing, Nothing)
-  , ("user-plus", "bg-yellow-100", "text-yellow-600", "Manage members", "/p/" <> pidTxt <> "/manage_members", Nothing, Nothing, Nothing)
-  , ("dollar", "bg-orange-100", "text-orange-600", "Manage billing", "/p/" <> pidTxt <> "/manage_billing", Nothing, Nothing, Nothing)
-  , ("arrows-turn-right", "bg-purple-100", "text-purple-600", "Integrations", "/p/" <> pidTxt <> "/integrations", Nothing, Nothing, Nothing)
-  , ("trash", "bg-red-100", "text-red-600", "Delete project", "/p/" <> pidTxt <> "/settings/delete", Nothing, Nothing, Nothing)
+  [ ("gear", "bg-fillBrand-weak", "text-textBrand", "Project settings", "/p/" <> pidTxt <> "/settings", Nothing, Nothing, Nothing)
+  , ("key", "bg-fillSuccess-weak", "text-textSuccess", "API keys", "/p/" <> pidTxt <> "/apis", Nothing, Nothing, Nothing)
+  , ("user-plus", "bg-fillWarning-weak", "text-textWarning", "Manage members", "/p/" <> pidTxt <> "/manage_members", Nothing, Nothing, Nothing)
+  , ("dollar", "bg-fillWarning-weak", "text-textWarning", "Manage billing", "/p/" <> pidTxt <> "/manage_billing", Nothing, Nothing, Nothing)
+  , ("arrows-turn-right", "bg-fillBrand-weak", "text-textBrand", "Integrations", "/p/" <> pidTxt <> "/integrations", Nothing, Nothing, Nothing)
+  , ("trash", "bg-fillError-weak", "text-textError", "Delete project", "/p/" <> pidTxt <> "/settings/delete", Nothing, Nothing, Nothing)
   ]
 
 
@@ -551,7 +614,7 @@ renderNavBottomItem :: Text -> (Text, Text, Text, Text, Text, Maybe Text, Maybe 
 renderNavBottomItem curr (iconName, bgColor, textColor, linkText, link, targetBlankM, onClickM, hxGetM) =
   let
     defaultAttrs =
-      [ class_ "hover:bg-blue-50 flex gap-2 items-center "
+      [ class_ "hover:bg-fillBrand-weak flex gap-2 items-center "
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" linkText
       ]

@@ -198,7 +198,7 @@ export function renderAssertionBuilder({
       ${assertions.map((assertion, index) => {
         const aResult = result?.assert_results?.[index];
         const passed = evaluateAssertion(assertion, aResult, result?.resp as any);
-        const error = passed ? '' : aResult?.err?.advice ?? '';
+        const error = passed ? '' : (aResult?.err?.advice ?? '');
 
         return html`
           <div class="pt-2">
@@ -227,13 +227,13 @@ export function renderAssertionBuilder({
               <div class="shrink-0">
                 <div class="flex gap-3 pt-2 items-center">
                   ${passed ? html`<span class="badge badge-success">Passed</span>` : html`<span class="badge badge-error">Failed</span>`}
-                  <a class="cursor-pointer text-slate-600" @pointerdown=${() => removeAssertion(index)}>
-                    ${faSprite_('trash', 'regular', 'rounded-full border bg-white shadow-sm p-1 w-5 h-5 stroke-red-500')}
+                  <a class="cursor-pointer text-textWeak" @pointerdown=${() => removeAssertion(index)}>
+                    ${faSprite_('trash', 'regular', 'rounded-full border bg-white shadow-sm p-1 w-5 h-5 stroke-iconError')}
                   </a>
                 </div>
               </div>
             </div>
-            <p class="text-sm text-red-500 text-center">${error}</p>
+            <p class="text-sm text-textError text-center">${error}</p>
           </div>
         `;
       })}

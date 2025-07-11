@@ -61,18 +61,18 @@ copyLink rid = do
     div_ [class_ "modal p-8", role_ "dialog"] do
       div_ [class_ "modal-box flex flex-col gap-4"] $ do
         div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"]
-          $ faSprite_ "copy" "regular" "h-6 w-6 text-green-500"
+          $ faSprite_ "copy" "regular" "h-6 w-6 text-textSuccess"
         span_ [class_ " text-textStrong text-2xl font-semibold"] "Copy Share Link"
         div_ [class_ "text-[#000833]/60"] "Share this link with anyone to give them access to this event. Lasts for 48 hours only."
         div_ [class_ "h-1 w-full  bg-fillWeak"] pass
         div_ [class_ "flex-col gap-6 flex"] $ do
           let url = "https://app.apitoolkit.io/share/r/" <> rid
           div_ [class_ "flex flex-col gap-2 items-center"] do
-            div_ [class_ "mt-2  text-green-700"] do
+            div_ [class_ "mt-2  text-textSuccess"] do
               strong_ [class_ "block pt-2 text-textWeak text-xs truncate ...", id_ "shareURL"] $ toHtml url
           button_
             [ type_ "button"
-            , class_ "self-start bg-green-500 px-2 py-1.5 text-white rounded-md text-sm font-medium hover:bg-green-300"
+            , class_ "self-start bg-fillSuccess-strong px-2 py-1.5 text-white rounded-md text-sm font-medium hover:bg-fillSuccess-weak"
             , [__|
                on click
                  if 'clipboard' in window.navigator then
@@ -132,4 +132,4 @@ sharePage req = do
       Just r -> r
       Nothing -> div_ [class_ "flex flex-col gap-4 mt-[80px] text-center"] do
         h1_ [class_ "font-bold text-3xl"] "Event Not Found"
-        p_ [class_ "text-gray-500 text-xl"] "This shared request log URL does not exist or has expired"
+        p_ [class_ "text-textWeak text-xl"] "This shared request log URL does not exist or has expired"

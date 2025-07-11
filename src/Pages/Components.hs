@@ -47,12 +47,12 @@ statBox_ pid iconM title helpInfo val bckupValM valClsM = do
   --       Nothing -> ""
   div_ [class_ "bg-fillWeaker rounded-3xl flex flex-col gap-3 p-5 border border-strokeWeak"] do
     whenJust iconM $ \(icon, kind, color) -> do
-      div_ [class_ "flex items-center justify-center h-10 w-10 bg-slate-50 rounded-xl"] do
+      div_ [class_ "flex items-center justify-center h-10 w-10 bg-fillWeaker rounded-xl"] do
         faSprite_ icon kind $ "w-4 h-4 " <> color
     div_ [class_ "flex flex-col gap-1"] do
       let fsiz = if isJust iconM then "text-2xl " else "text-4xl "
-      span_ [class_ $ "font-bold  " <> fsiz <> fromMaybe "text-gray-800" valClsM] $ toHtml val
-      div_ [class_ "flex gap-2 items-center text-sm text-gray-500"] do
+      span_ [class_ $ "font-bold  " <> fsiz <> fromMaybe "text-textStrong" valClsM] $ toHtml val
+      div_ [class_ "flex gap-2 items-center text-sm text-textWeak"] do
         p_ [] $ toHtml title
         span_ [term "data-tip" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 mt-[-2px]"
 
@@ -61,10 +61,10 @@ emptyState_ :: Text -> Text -> Maybe Text -> Text -> Html ()
 emptyState_ title subTxt url btnText =
   let (processedUrl, targetAttr) = maybe ("", []) (\u -> (u, [target_ "_blank" | "https://" `T.isPrefixOf` u])) url
    in section_ [class_ "w-max mx-auto my-8 text-center p-5 sm:py-14 sm:px-24 flex flex-col gap-4"] do
-        div_ [] $ faSprite_ "empty" "regular" "h-24 w-24 stroke-blue-500 fill-blue-500"
+        div_ [] $ faSprite_ "empty" "regular" "h-24 w-24 stroke-strokeBrand-strong fill-fillBrand-strong"
         div_ [class_ "flex flex-col gap-2"] do
-          h2_ [class_ "text-xl text-slate-800 font-bold"] $ toHtml title
-          p_ [class_ "text-sm font-medium text-gray-500"] $ toHtml subTxt
+          h2_ [class_ "text-xl text-textStrong font-bold"] $ toHtml title
+          p_ [class_ "text-sm font-medium text-textWeak"] $ toHtml subTxt
           a_ ([href_ processedUrl, class_ "btn text-sm w-max mx-auto btn-primary"] ++ targetAttr) $ toHtml btnText
 
 
@@ -328,7 +328,7 @@ navBar :: Html ()
 navBar = do
   nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full w-full px-6 py-4 bg-base-100 flex flex-row justify-between"] do
     div_ [class_ "flex justify-between items-center gap-4 w-[1000px] mx-auto"] do
-      a_ [href_ "https://apitoolkit.io", class_ "flex items-center text-gray-500 hover:text-gray-700"] do
+      a_ [href_ "https://apitoolkit.io", class_ "flex items-center text-textWeak hover:text-textStrong"] do
         img_
           [ class_ "h-12 sd-hidden"
           , src_ "/public/assets/svgs/logo.svg"

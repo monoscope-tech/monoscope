@@ -352,7 +352,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
     -- modal
     div_
       [ style_ "z-index:99999"
-      , class_ "fixed pt-24 hidden justify-center z-50 w-full p-4 bg-gray-500 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full"
+      , class_ "fixed pt-24 hidden justify-center z-50 w-full p-4 bg-fillWeak bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full"
       , id_ "swaggerModal"
       , tabindex_ "-1"
       , onpointerdown_ "closeModal(event)"
@@ -365,19 +365,19 @@ documentationsPage pid swaggers swaggerID jsonString = do
           do
             -- Modal content
             div_
-              [ class_ "bg-base-100 rounded-lg shadow-sm w-full"
+              [ class_ "bg-Raised rounded-lg shadow-sm w-full"
               -- , hxPost_ $ "/p/" <> pid.toText <> "/documentation"
               ]
               do
                 div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] do
-                  h3_ [class_ "text-xl font-semibold text-gray-900 dark:text-white"] "Save Swagger"
+                  h3_ [class_ "text-xl font-semibold text-textStrong"] "Save Swagger"
                 -- Modal body
                 div_ [class_ "w-full"] do
                   div_ [id_ "diff_editor_container", style_ "height:65vh; width:100%"] pass
                 -- input_ [type_ "hidden", name_ "from", value_ "docs"]
-                -- textarea_ [style_ "height:65vh;resize:none", name_ "swagger_json", class_ "w-full border outline-hidden p-4 focus:outline-hidden focus:border-blue-200", placeholder_ "Paste swagger here"] ""
+                -- textarea_ [style_ "height:65vh;resize:none", name_ "swagger_json", class_ "w-full border outline-hidden p-4 focus:outline-hidden focus:border-strokeBrand-strong", placeholder_ "Paste swagger here"] ""
                 -- Modal footer
-                div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] do
+                div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-strokeWeak rounded-b"] do
                   button_ [style_ "margin-right:50px", type_ "button", class_ "btn", onpointerdown_ "closeModal(event)", id_ "close_btn"] "Close"
                   button_ [type_ "sumbit", class_ "btn btn-primary flex items-center gap-1", onpointerdown_ "saveSwagger()"] do
                     span_ [] "Confirm  & Save"
@@ -387,29 +387,29 @@ documentationsPage pid swaggers swaggerID jsonString = do
 
     input_ [id_ "swaggerData", type_ "hidden", value_ (toText jsonString)]
     div_ [class_ "flex flex-col h-full w-full justify-between"] do
-      div_ [class_ "flex w-full bg-base-100 border-b items-center justify-between px-2", style_ "top: 0; height:60px; position: sticky"] do
+      div_ [class_ "flex w-full bg-Raised border-b items-center justify-between px-2", style_ "top: 0; height:60px; position: sticky"] do
         div_ [class_ "flex items-center gap-4"] do
-          h3_ [class_ "text-xl text-slate-700 text-2xl font-medium"] "OpenAPI/Swagger"
+          h3_ [class_ "text-xl text-textStrong text-2xl font-medium"] "OpenAPI/Swagger"
           div_ [class_ "relative", style_ "width:200px"] do
             button_
               [ onpointerdown_ "toggleSwaggerHistory(event)"
               , id_ "toggle_swagger_btn"
-              , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded-sm focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
+              , class_ "w-full flex gap-2 text-textWeak justify_between items-center cursor-pointer px-2 py-1 border rounded-sm focus:ring-2 focus:ring-strokeBrand-strong active:ring-2 active:ring-strokeBrand-strong"
               ]
               do
                 p_ [style_ "width: calc(100% - 25px)", class_ "truncate ..."] $ toHtml swaggerID
                 faSprite_ "chevron-down" "regular" "h-3 w-3"
-            div_ [id_ "swagger_history_container", class_ "absolute hidden bg-base-100 border shadow-sm w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
+            div_ [id_ "swagger_history_container", class_ "absolute hidden bg-Raised border shadow-sm w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
               swaggers & mapM_ \sw -> do
-                button_ [onpointerdown_ "swaggerChanged(event)", class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"] $ toHtml swaggerID
+                button_ [onpointerdown_ "swaggerChanged(event)", class_ "p-2 w-full text-left truncate ... hover:bg-fillBrand-weak hover:text-textStrong"] $ toHtml swaggerID
         button_ [class_ "place-content-center text-md btn btn-primary", onpointerdown_ "showModal()"] "Save swagger"
 
       div_ [class_ "w-full h-full", style_ "height: calc(100% - 60px)"] do
         div_ [id_ "columns_container", class_ "w-full h-full flex flex-row", style_ "height: 100%"] do
           -- loading indicator
           div_ [id_ "loading_indicator", class_ "fixed inset-0 flex justify-center bg-[rgba(0,0,0,0.4)] items-center", style_ "z-index:9999;"] do
-            div_ [class_ "py-10 px-24 bg-base-100 flex gap-2"] do
-              div_ [class_ "animate-spin h-5 w-5 mr-3 rounded-full border-t border-8 border-blue-500"] pass
+            div_ [class_ "py-10 px-24 bg-Raised flex gap-2"] do
+              div_ [class_ "animate-spin h-5 w-5 mr-3 rounded-full border-t border-8 border-strokeBrand-strong"] pass
               span_ "Loading..."
           div_ [id_ "endpoints_container", class_ "flex flex-auto", style_ "width:30%; height:100%"] do
             div_ [class_ "h-full overflow-auto", style_ "width: calc(100% - 2px)"] do
@@ -417,24 +417,24 @@ documentationsPage pid swaggers swaggerID jsonString = do
               div_ [class_ "w-full"] do
                 input_ [id_ "endpoints-search", type_ "text", class_ "w-full px-2 py-3 text-lg border-b border-t outline-hidden focus:outline-hidden", placeholder_ "Search.."]
                 div_ [id_ "endpoint_paths_container", class_ "w-full"] pass
-            div_ [onmousedown_ "mouseDown(event)", id_ "endpoints_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219)"] pass
+            div_ [onmousedown_ "mouseDown(event)", id_ "endpoints_resizer", class_ "h-full bg-strokeWeak", style_ "width: 2px; cursor: col-resize;"] pass
           div_ [id_ "editor_container", class_ "flex flex-auto overflow-auto", style_ "width:40%; height:100%"] do
             div_ [class_ "h-full", style_ "width: calc(100% - 2px)"] do
               div_ [class_ "w-full flex gap-8 justify-end px-2 items-center", style_ "height:40px"] do
                 div_ [onpointerdown_ "toggleFontSize(event)", class_ "relative"] do
                   button_ [id_ "toggle_font", class_ "font-semibold"] "Aa"
-                  div_ [id_ "toggle_dropdown_container", class_ "absolute hidden flex flex-col justify-between bg-base-100 shadow-sm bottom-0 rounded-b overflow-hidden", style_ "bottom:-105px;left:-50px; height: 100px;width:100px; z-index:999"] do
-                    span_ [id_ "toggle_sm", class_ "cursor-pointer  w-full px-3 py-2 hover:bg-blue-100"] "Small"
-                    span_ [id_ "toggle_md", class_ "font_toggle_active cursor-pointer w-full px-3 py-2 hover:bg-blue-100"] "Medium"
-                    span_ [id_ "toggle_lg", class_ "cursor-pointer text-lg w-full px-3 py-2 hover:bg-blue-100"] "Large"
+                  div_ [id_ "toggle_dropdown_container", class_ "absolute hidden flex flex-col justify-between bg-Raised shadow-sm bottom-0 rounded-b overflow-hidden", style_ "bottom:-105px;left:-50px; height: 100px;width:100px; z-index:999"] do
+                    span_ [id_ "toggle_sm", class_ "cursor-pointer  w-full px-3 py-2 hover:bg-fillBrand-weak"] "Small"
+                    span_ [id_ "toggle_md", class_ "font_toggle_active cursor-pointer w-full px-3 py-2 hover:bg-fillBrand-weak"] "Medium"
+                    span_ [id_ "toggle_lg", class_ "cursor-pointer text-lg w-full px-3 py-2 hover:bg-fillBrand-weak"] "Large"
                 form_ [hxPost_ $ "/p/" <> pid.toText <> "/documentation/save"] do
                   input_ [id_ "save_swagger_input_id", name_ "swagger_id", type_ "hidden", value_ (toText swaggerID)]
                   input_ [id_ "save_swagger_input_data", name_ "updated_swagger", type_ "hidden", value_ (toText jsonString)]
               --  button_ [type_ "submit", id_ "save_swagger_btn", class_ "bg-gray-200  py-2 px-4 rounded-sm active:bg-green-600"] "Save"
               div_ [id_ "swaggerEditor", class_ "w-full overflow-y-auto", style_ "height: calc(100% - 40px)"] pass
-            div_ [onmousedown_ "mouseDown(event)", id_ "editor_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219);"] pass
+            div_ [onmousedown_ "mouseDown(event)", id_ "editor_resizer", class_ "h-full bg-strokeWeak", style_ "width: 2px; cursor: col-resize;"] pass
           div_ [id_ "details_container", class_ "flex-auto overflow-y-auto", style_ "width:30%; height:100%"] do
-            div_ [id_ "swagger-ui", class_ "relative h-full w-full bg-base-100 overflow-auto"] pass
+            div_ [id_ "swagger-ui", class_ "relative h-full w-full bg-Raised overflow-auto"] pass
           button_ [class_ "absolute z-10 p-2", style_ "right: 15px", onpointerdown_ "fullscreen()", title_ "full screen"] do
             faSprite_ "square-dashed" "regular" "h-5 w-5"
   -- mainContent swaggers

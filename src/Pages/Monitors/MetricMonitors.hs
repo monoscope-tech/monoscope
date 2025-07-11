@@ -58,8 +58,8 @@ monitorCreateGetH pid monitorType = do
 
 
 selectClass, inputClass :: Text
-selectClass = "border border-gray-300 rounded-sm px-2 py-1"
-inputClass = "border border-gray-300 rounded-sm px-2 py-1"
+selectClass = "border border-strokeWeak rounded-sm px-2 py-1"
+inputClass = "border border-strokeWeak rounded-sm px-2 py-1"
 
 
 monitorTypes :: [MonitorType]
@@ -178,7 +178,7 @@ defineTheMetric_ pid = do
         , updateUrl = False
         , targetWidgetPreview = Nothing
         }
-  div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] do
+  div_ [class_ "border-l-2 border-l-strokeWeak pl-4 space-y-2"] do
     h3_ [class_ "font-normal text-base"] "Evaluation Details"
     div_ [class_ "flex items-center gap-2"] do
       fieldset_ [class_ "fieldset"] do
@@ -195,7 +195,7 @@ configureNotificationMessage_ colM = do
         Just col -> (col.alertSeverity, col.alertSubject, col.alertMessage, col.notifyAfter, col.stopAfter, col.notifyAfterCheck, col.stopAfterCheck)
         Nothing -> ("Info", "Error: Error subject", "Alert Message", "10 minutes", "0", False, False)
   div_ [class_ "space-y-4 bg-fillWeaker p-4 rounded-2xl"] do
-    div_ [class_ "p-4 bg-slate-50 rounded-xl"] do
+    div_ [class_ "p-4 bg-fillWeaker rounded-xl"] do
       div_ [class_ "flex items-center w-full gap-2"] do
         fieldset_ [class_ "fieldset"] do
           label_ [class_ "label"] $ span_ [class_ "label-text font-medium"] "Severity"
@@ -213,7 +213,7 @@ configureNotificationMessage_ colM = do
           [placeholder_ "Alert Message", class_ "textarea  shadow-none p-2 rounded-2xl textarea-xs w-full", name_ "alertMessage", value_ message]
           $ toHtml message
       div_ [class_ "space-y-2 py-4"] do
-        h3_ [class_ "text-slate-600 font-medium"] "Recovery Thresholds"
+        h3_ [class_ "text-textWeak font-medium"] "Recovery Thresholds"
         p_ [class_ "text-sm font-medium"] "Send notifications for alert status periodically as long as the monitor has not recovered"
         div_ [class_ "flex items-center gap-2 pt-4"] do
           input_ $ [class_ "checkbox checkbox-sm", type_ "checkbox", name_ "notifyAfterCheck"] ++ [checked_ | nfc]
@@ -259,7 +259,7 @@ inputRadio_ name label = fieldset_ [class_ "fieldset"] $ label_ [class_ "label c
 monitorTypeDetail_ :: MonitorType -> Html ()
 monitorTypeDetail_ m = do
   let slug = slugify m.label
-  div_ [class_ [text|border divide-y divide-gray-100 rounded-md hidden group-has-[.${slug}:checked]/pg:block |]] $ do
+  div_ [class_ [text|border divide-y divide-strokeWeaker rounded-md hidden group-has-[.${slug}:checked]/pg:block |]] $ do
     h3_ [class_ "bg-base-200 px-4 py-2 text-lg"] $ toHtml m.label
     div_ [class_ "prose px-4 py-4"] m.content
     div_ [class_ "text-right px-4 py-3"] $ a_ [class_ "btn btn-sm btn-success", href_ m.uri] "Continue"
@@ -269,7 +269,7 @@ monitorTypeDetail_ m = do
 
 thresholdInput_ :: Text -> Text -> Maybe Text -> Text -> Html ()
 thresholdInput_ sign label colorM placeholder = div_ [class_ "flex items-center space-x-4"] $ do
-  whenJust colorM \color -> div_ [class_ $ "w-1 h-6 rounded-sm bg-" <> color] mempty
+  whenJust colorM \color -> div_ [class_ $ "w-1 h-6 rounded-sm " <> if color == "red-500" then "bg-fillError-strong" else "bg-fillWarning-strong"] mempty
   span_ [class_ "w-52 inline-block"] $ toHtml $ label <> " threshold:"
   div_ [class_ "space-x-5"] $ do
     span_ $ toHtml sign
@@ -300,14 +300,14 @@ triggerCondition_ = div_ [class_ "flex items-center space-x-2"] $ do
 
 
 recoveryThresholds_ :: Html ()
-recoveryThresholds_ = div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] $ do
+recoveryThresholds_ = div_ [class_ "border-l-2 border-l-strokeWeak pl-4 space-y-2"] $ do
   h3_ [class_ "font-normal text-base"] "Recovery Thresholds"
   thresholdInput_ "<=" "Alert recovery" Nothing "Optional"
   thresholdInput_ "<=" "Warning recovery" Nothing "Optional"
 
 
 evaluationOptions_ :: Html ()
-evaluationOptions_ = div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] $ do
+evaluationOptions_ = div_ [class_ "border-l-2 border-l-strokeWeak pl-4 space-y-2"] $ do
   h3_ [class_ "font-normal text-base"] "Evaluation options"
   div_ [class_ "flex items-center space-x-2"] $ do
     span_ "Delay monitor evaluation by"
@@ -347,7 +347,7 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
     ]
     ""
   toHtml $ timelineSteps pid
-  div_ [class_ "sticky bottom-4 p-5 bg-white border-t border-slate-500 flex space-between justify-between items-center"] $ do
+  div_ [class_ "sticky bottom-4 p-5 bg-Raised border-t border-strokeStrong flex space-between justify-between items-center"] $ do
     h3_ "Complete all steps to proceed"
     div_ [class_ "flex gap-5 mr-6"] $ do
       button_ [class_ "btn btn-sm btn-outline"] "Test Notifications"

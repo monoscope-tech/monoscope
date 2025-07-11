@@ -230,7 +230,7 @@ singleReportPage pid report =
       Just report' -> do
         div_ [class_ "mt-4 space-y-4"] do
           div_ [class_ "mx-auto rounded-lg border max-w-[1000px]"] do
-            div_ [class_ "bg-gray-100 px-4 py-3 flex justify-between"] do
+            div_ [class_ "bg-fillWeak px-4 py-3 flex justify-between"] do
               h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report'.reportType <> " report"
               span_ [] $ show $ localDay (zonedTimeToLocalTime report'.createdAt)
             div_ [class_ "px-4 py-3 space-y-8"] do
@@ -241,7 +241,7 @@ singleReportPage pid report =
                     div_ [class_ "pb-3 border-b flex justify-between"] do
                       h5_ [class_ "font-bold"] "Anomalies"
                       div_ [class_ "flex gap-2"] do
-                        span_ [class_ "text-red-500 font-medium"] $ show v.anomaliesCount
+                        span_ [class_ "text-textError font-medium"] $ show v.anomaliesCount
                         span_ [] "New anomalies"
                     div_ [class_ "mt-2 space-y-2"] do
                       forM_ v.anomalies $ \anomaly -> do
@@ -249,7 +249,7 @@ singleReportPage pid report =
                           ATEndpoint{endpointUrlPath, endpointMethod, eventsCount} -> do
                             div_ [class_ "space-x-3 border-b pb-1 flex gap-4 items-center justify-between"] do
                               div_ [class_ "flex items-center space-x-3 "] do
-                                div_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
+                                div_ [class_ "inline-block font-bold text-textBrand space-x-2"] do
                                   img_ [class_ "inline w-4 h-4", src_ "/public/assets/svgs/anomalies/endpoint.svg"]
                                   span_ [] "New Endpoint"
                                 small_ [] $ toHtml $ endpointMethod <> " " <> endpointUrlPath <> " "
@@ -257,7 +257,7 @@ singleReportPage pid report =
                           ATShape{endpointUrlPath, endpointMethod, newUniqueFields, updatedFieldFormats, deletedFields, targetHash, eventsCount} -> do
                             div_ [class_ "border-b pb-1 flex items-center justify-between"] do
                               div_ [class_ "flex items-center space-x-3 "] do
-                                div_ [class_ "inline-block font-bold text-blue-700 space-x-2 flex items-center"] do
+                                div_ [class_ "inline-block font-bold text-textBrand space-x-2 flex items-center"] do
                                   img_ [class_ "inline w-4 h-4", src_ "/public/assets/svgs/anomalies/fields.svg"]
                                   span_ [] "New Request Shape"
                                 div_ [class_ "flex flex-col"] do
@@ -268,7 +268,7 @@ singleReportPage pid report =
                           ATFormat{endpointUrlPath, endpointMethod, keyPath, formatType, formatExamples, eventsCount} -> do
                             div_ [class_ "space-x-3 border-b pb-1 flex items-center justify-between"] do
                               div_ [class_ "flex items-center gap-2"] do
-                                div_ [class_ "inline-block font-bold text-blue-700 space-x-2 shrink-0"] do
+                                div_ [class_ "inline-block font-bold text-textBrand space-x-2 shrink-0"] do
                                   img_ [class_ "inline w-4 h-4", src_ "/public/assets/svgs/anomalies/fields.svg"]
                                   span_ [class_ "inline-block"] "Modified field"
                                 small_ [] $ toHtml $ keyPath <> " in " <> endpointMethod <> "  " <> endpointUrlPath
@@ -301,13 +301,13 @@ singleReportPage pid report =
 shapeParameterStats_ :: Int -> Int -> Int -> Html ()
 shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
   div_ [class_ "grid grid-cols-3 gap-2 text-center text-xs"] do
-    div_ [class_ "p-2 py-1 bg-emerald-100 text-emerald-900 border border-emerald-300"] do
+    div_ [class_ "p-2 py-1 bg-fillSuccess-weak text-textSuccess border border-strokeSuccess-strong"] do
       div_ [class_ "text-base"] $ toHtml @String $ show newF
       small_ [class_ "block"] "new fields"
-    div_ [class_ " p-2 py-1 bg-fillWeaker text-slate-900 border border-slate-300"] do
+    div_ [class_ " p-2 py-1 bg-fillWeaker text-textStrong border border-strokeMedium"] do
       div_ [class_ "text-base"] $ toHtml @String $ show updatedFF
       small_ [class_ "block"] "updated fields"
-    div_ [class_ "p-2  py-1  bg-rose-100 text-rose-900 border border-rose-300"] do
+    div_ [class_ "p-2  py-1  bg-fillError-weak text-textError border border-strokeError-strong"] do
       div_ [class_ "text-base"] $ toHtml @String $ show deletedF
       small_ [class_ "block"] "deleted fields"
 
@@ -315,7 +315,7 @@ shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
 reportsPage :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Text -> Bool -> Bool -> Html ()
 reportsPage pid reports nextUrl daily weekly =
   div_ [class_ "flex flex-row h-screen bg-white"] do
-    div_ [class_ "w-1/3 border-r border-gray-200 p-4 overflow-y-auto"] do
+    div_ [class_ "w-1/3 border-r border-strokeMedium p-4 overflow-y-auto"] do
       div_ [class_ "mt-4"] do
         reportListItems pid reports nextUrl
 
@@ -323,10 +323,10 @@ reportsPage pid reports nextUrl daily weekly =
       div_ [class_ "flex items-center justify-center h-full", id_ "detailSidebar"] do
         div_ [class_ "text-center"] do
           faSprite_ "clapperboard" "light" "w-36 h-36 mx-auto"
-          h3_ [class_ "text-xl font-bold mb-4 text-slate-700"] "View Each Report Details here"
-          h3_ [class_ "mt-2 text-lg font-medium text-slate-900"] "But nothing is selected yet"
-          p_ [class_ "mt-1  text-slate-500"] "Select a field or similar item on the left"
-          p_ [class_ "mt-1  text-slate-500"] "to view more details about it here."
+          h3_ [class_ "text-xl font-bold mb-4 text-textStrong"] "View Each Report Details here"
+          h3_ [class_ "mt-2 text-lg font-medium text-textStrong"] "But nothing is selected yet"
+          p_ [class_ "mt-1  text-textWeak"] "Select a field or similar item on the left"
+          p_ [class_ "mt-1  text-textWeak"] "to view more details about it here."
 
 
 -- div_ [class_ "w-5 bg-gray-200"] ""
@@ -338,9 +338,9 @@ reportListItems pid reports nextUrl =
       let isWeeklyData = report.reportType == "weekly"
 
       div_ [class_ "w-full flex flex-col"] do
-        div_ [class_ $ if isWeeklyData then "w-full bg-gray-100" else "w-11/12 self-end "] do
+        div_ [class_ $ if isWeeklyData then "w-full bg-fillWeak" else "w-11/12 self-end "] do
           a_
-            [ class_ "w-full px-4 py-3 flex justify-between hover:bg-gray-200 cursor-pointer"
+            [ class_ "w-full px-4 py-3 flex justify-between hover:bg-fillHover cursor-pointer"
             , hxGet_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId
             , hxTarget_ "#detailSidebar"
             , hxSwap_ "innerHTML"
@@ -348,36 +348,36 @@ reportListItems pid reports nextUrl =
             do
               div_ [class_ "flex flex-col grow"] do
                 h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " Report"
-                span_ [class_ " text-gray-500"] $ toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
+                span_ [class_ " text-textWeak"] $ toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
 
               div_ [class_ "ml-4 flex items-center"] do
-                i_ [class_ "fa fa-arrow-right text-gray-500"] mempty
+                i_ [class_ "fa fa-arrow-right text-textWeak"] mempty
 
     when (length reports < 20) $ do
       div_ [class_ "w-full h-16 center-item my-200"] do
-        p_ [class_ "text-center text-blue-100"] "The End: No more report to display"
+        p_ [class_ "text-center text-textBrand"] "The End: No more report to display"
 
     unless (length reports < 20) $ do
-      a_ [class_ "w-full cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center mb-4", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextUrl] "LOAD MORE"
+      a_ [class_ "w-full cursor-pointer block p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center mb-4", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextUrl] "LOAD MORE"
 
 
 renderEndpointRow :: PerformanceReport -> Html ()
 renderEndpointRow endpoint = tr_ do
   let (pcls, prc) =
         if endpoint.durationDiffPct > 0
-          then ("text-red-500" :: Text, "+" <> show (durationDiffPct endpoint) <> "%" :: Text)
-          else ("text-green-500", show (durationDiffPct endpoint) <> "%")
+          then ("text-textError" :: Text, "+" <> show (durationDiffPct endpoint) <> "%" :: Text)
+          else ("text-textSuccess", show (durationDiffPct endpoint) <> "%")
   let avg_dur_ms = (fromInteger (round $ ((fromInteger endpoint.averageDuration :: Double) / 1000000.0) * 100) :: Double) / 100
   let dur_diff_ms = (fromInteger (round $ ((fromInteger endpoint.durationDiff :: Double) / 1000000.0) * 100) :: Double) / 100
-  td_ [class_ "px-6 py-2 border-b text-gray-500 "] $ toHtml $ method endpoint <> " " <> urlPath endpoint
-  td_ [class_ "px-6 py-2 border-b text-gray-500 "] $ show avg_dur_ms <> "ms"
-  td_ [class_ "px-6 py-2 border-b text-gray-500 "] $ show dur_diff_ms <> "ms"
+  td_ [class_ "px-6 py-2 border-b text-textWeak "] $ toHtml $ method endpoint <> " " <> urlPath endpoint
+  td_ [class_ "px-6 py-2 border-b text-textWeak "] $ show avg_dur_ms <> "ms"
+  td_ [class_ "px-6 py-2 border-b text-textWeak "] $ show dur_diff_ms <> "ms"
   td_ [class_ $ "px-6 py-2 border-b " <> pcls] $ toHtml prc
 
 
 renderEndpointsTable :: [PerformanceReport] -> Html ()
 renderEndpointsTable endpoints = table_ [class_ "table-auto w-full"] do
-  thead_ [class_ "text-xs text-left text-gray-700 uppercase bg-gray-100"] $ tr_ do
+  thead_ [class_ "text-xs text-left text-textStrong uppercase bg-fillWeak"] $ tr_ do
     th_ [class_ "px-6 py-3"] "Endpoint"
     th_ [class_ "px-6 py-3"] "Average latency"
     th_ [class_ "px-6 py-3"] "Change compared to prev."

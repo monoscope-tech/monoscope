@@ -651,7 +651,7 @@ anomalyListSlider _ pid eid Nothing = do
     div_ [class_ "flex justify-between mt-5 pb-2"] do
       div_ [class_ "flex flex-row"] do
         a_ [href_ "#", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]] $ faSprite_ "chevron-down" "regular" "h-4 mr-3 mt-1 w-4"
-        span_ [class_ "text-lg text-slate-700"] "Ongoing Issues and Monitors"
+        span_ [class_ "text-lg text-textStrong"] "Ongoing Issues and Monitors"
       div_ [class_ "flex flex-row mt-2"] ""
 anomalyListSlider currTime _ _ (Just issues) = do
   let anomalyIds = T.replace "\"" "'" $ show $ fmap (Issues.issueIdText . (\(IssueVM _ _ _ issue) -> issue.id)) issues
@@ -667,7 +667,7 @@ anomalyListSlider currTime _ _ (Just issues) = do
     div_ [class_ "flex justify-between mt-5 pb-2"] do
       div_ [class_ "flex flex-row"] do
         a_ [href_ "#", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]] $ faSprite_ "chevron-down" "regular" "h-4 mr-3 mt-1 w-4"
-        span_ [class_ "text-lg text-slate-700"] "Ongoing Issues and Monitors"
+        span_ [class_ "text-lg text-textStrong"] "Ongoing Issues and Monitors"
       div_ [class_ "flex items-center gap-2 mt-2"] do
         a_
           [ class_ "cursor-pointer"
@@ -694,9 +694,9 @@ anomalyListSlider currTime _ _ (Just issues) = do
 
 -- anomalyAccentColor isAcknowleged isArchived
 anomalyAccentColor :: Bool -> Bool -> Text
-anomalyAccentColor _ True = "bg-slate-400"
-anomalyAccentColor True False = "bg-green-200"
-anomalyAccentColor False False = "bg-red-800"
+anomalyAccentColor _ True = "bg-fillStrong"
+anomalyAccentColor True False = "bg-fillSuccess-weak"
+anomalyAccentColor False False = "bg-fillError-strong"
 
 
 buildQueryForAnomaly :: Anomalies.AnomalyTypes -> Text -> Text
@@ -1200,7 +1200,7 @@ anomalyAcknowlegeButton pid aid acked host = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
-        <> (if acked then "bg-green-100 text-green-900" else "btn-primary")
+          <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" "acknowlege issue"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -1216,7 +1216,7 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
-        <> (if archived then " bg-green-100 text-green-900" else "btn-primary")
+          <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"

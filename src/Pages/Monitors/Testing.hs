@@ -126,7 +126,7 @@ collectionCard pid col currTime = do
         ]
     div_ [class_ "w-full flex flex-col gap-2 shrink-1"] do
       div_ [class_ "flex gap-10 items-center"] do
-        a_ [href_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText <> "/overview", class_ "font-medium text-gray-800 text-base"] $ toHtml col.title
+        a_ [href_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText <> "/overview", class_ "font-medium text-textStrong text-base"] $ toHtml col.title
         div_ [class_ "flex gap-1 items-center text-sm"] do
           forM_ col.tags $ \tag -> do
             span_ [class_ "badge badge-blue"] $ toHtml tag
@@ -148,13 +148,13 @@ collectionCard pid col currTime = do
             div_ [class_ "flex gap-1.5 items-center"] do
               faSprite_ "calendar" "regular" "h-6 w-6 fill-none"
               div_ [class_ "flex flex-col"] do
-                span_ [class_ "text-gray-500"] "Started"
-                span_ [class_ "text-sm font-medium text-gray-800"] $ toHtml $ prettyTimeAuto currTime col.createdAt
+                span_ [class_ "text-textWeak"] "Started"
+                span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ prettyTimeAuto currTime col.createdAt
             div_ [class_ "flex gap-1.5 items-center"] do
               faSprite_ "play" "regular" "h-6 w-6 fill-none text-[#64748B]"
               div_ [class_ "flex flex-col"] do
-                span_ [class_ "text-gray-500"] "Last run"
-                span_ [class_ "text-sm font-medium text-gray-800"] do
+                span_ [class_ "text-textWeak"] "Last run"
+                span_ [class_ "text-sm font-medium text-textStrong"] do
                   case col.lastRun of
                     Just t -> toHtml $ prettyTimeAuto currTime t
                     Nothing -> "-"
@@ -168,13 +168,13 @@ stepsBox_ :: Int -> Int -> Int -> Html ()
 stepsBox_ total passed failed = do
   div_ [class_ "flex gap-2 px-6 py-2 items-center border rounded-3xl"] do
     div_ [class_ "p-2 text-center"] do
-      div_ [class_ "text-gray-800 text-lg text-base font-medium"] $ show total
+      div_ [class_ "text-textStrong text-lg text-base font-medium"] $ show total
       small_ [class_ "block"] "Steps"
     div_ [class_ "p-2 text-center"] do
-      div_ [class_ "font-medium  text-lg text-green-700"] $ show passed
+      div_ [class_ "font-medium  text-lg text-textSuccess"] $ show passed
       small_ [class_ "block"] "Passed"
     div_ [class_ "p-2 text-center"] do
-      div_ [class_ "font-medium text-lg text-red-700"] $ show failed
+      div_ [class_ "font-medium text-lg text-textError"] $ show failed
       small_ [class_ "block"] "Failed"
 
 
@@ -237,14 +237,14 @@ dashboardPage pid col reqsVecM = do
     div_ [role_ "tablist", class_ "w-full rounded-3xl border", id_ "t-tabs-container"] do
       div_ [class_ "w-full flex"] do
         button_
-          [ class_ "cursor-pointer t-tab px-5 pt-2 pb-1.5 text-sm text-gray-600 border-b t-tab-active a-tab"
+          [ class_ "cursor-pointer t-tab px-5 pt-2 pb-1.5 text-sm text-textWeak border-b t-tab-active a-tab"
           , role_ "tab"
           , term "aria-label" "Overview"
           , onclick_ "navigatable(this, '#results-t', '#t-tabs-container', 't-tab-active')"
           ]
           "Results"
         button_
-          [ class_ "cursor-pointer t-tab px-5 pt-2 pb-1.5 text-sm text-gray-600 border-b a-tab"
+          [ class_ "cursor-pointer t-tab px-5 pt-2 pb-1.5 text-sm text-textWeak border-b a-tab"
           , role_ "tab"
           , term "aria-label" "Logs"
           , onclick_ "navigatable(this, '#logs-t', '#t-tabs-container', 't-tab-active')"
@@ -321,9 +321,9 @@ renderStepIll_ st stepResult ind = do
     div_ [] do
       div_ [class_ "flex items-center gap-2 cursor-pointer", [__|on click toggle .hidden on the next .step-body|]] do
         faSprite_ "chevron-up" "regular" "h-5 w-5 border rounded-sm p-1"
-        span_ [class_ "text-gray-800 text-sm font-medium"] $ "Step " <> show (ind + 1)
+        span_ [class_ "text-textStrong text-sm font-medium"] $ "Step " <> show (ind + 1)
         span_ [class_ "badge badge-success"] $ show totalPass <> "/" <> show (V.length assertionRes) <> " Passed"
-        span_ [class_ "text-gray-500 text-sm flex items-center gap-1"] do
+        span_ [class_ "text-textWeak text-sm flex items-center gap-1"] do
           faSprite_ "chevron-right" "regular" "h-3 w-3"
           toHtml $ maybeToMonoid st.title
       div_ [class_ "step-body ml-2"] do
@@ -333,12 +333,12 @@ renderStepIll_ st stepResult ind = do
           div_ [] do
             div_ [class_ "flex gap-1 -mt-2 cursor-pointer", [__|on click toggle .hidden on the next .assert-body|]] do
               faSprite_ "chevron-up" "regular" "h-5 w-5 border rounded-sm p-1"
-              span_ [class_ "font-medium text-sm text-gray-800"] "Assertions"
+              span_ [class_ "font-medium text-sm text-textStrong"] "Assertions"
             div_ [class_ "border-l pt-4 ml-2 flex flex-col gap-3 assert-body"] do
               forM_ assertionRes $ \(success, resultText) -> do
                 div_ [class_ "flex gap-3 items-center"] do
                   span_
-                    [ class_ "w-10 relative border-t after:content-[''] after:top-[-2px] after:absolute after:h-1 after:w-1 after:rounded-full after:bg-gray-200 after:right-[-2px] after:z-10"
+                    [ class_ "w-10 relative border-t after:content-[''] after:top-[-2px] after:absolute after:h-1 after:w-1 after:rounded-full after:bg-fillWeak after:right-[-2px] after:z-10"
                     ]
                     pass
                   if success

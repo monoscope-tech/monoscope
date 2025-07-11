@@ -178,7 +178,7 @@ logQueryBox_ config = do
                     option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
 
               div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-end"] do
-                div_ [class_ "rounded-lg px-3 py-2 text-slate-700 inline-flex items-center border border-strokeStrong h-full", tabindex_ "0", role_ "button"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5"
+                div_ [class_ "rounded-lg px-3 py-2 text-textStrong inline-flex items-center border border-strokeStrong h-full", tabindex_ "0", role_ "button"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5"
                 ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-1 w-60 p-2 shadow-lg"] do
                   li_ $ label_ [Lucid.for_ "saveQueryMdl"] "Save query to Query Library"
             button_
@@ -205,7 +205,7 @@ logQueryBox_ config = do
 -- | Helper for visualizing the data with different chart types
 visualizationTabs_ :: Maybe Text -> Bool -> Maybe Text -> Html ()
 visualizationTabs_ vizTypeM updateUrl widgetContainerId =
-  div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-gray-100 p-1 rounded-lg", id_ "visualizationTabs", role_ "tablist"] do
+  div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-fillWeak p-1 rounded-lg", id_ "visualizationTabs", role_ "tablist"] do
     let defaultVizType = fromMaybe "logs" vizTypeM
         containerSelector = fromMaybe "visualization-widget-container" widgetContainerId
     forM_ visTypes $ \(icon, label, vizType, emoji) -> label_ [class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
@@ -263,10 +263,10 @@ queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown
                  else show <.group/> in .{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()|]
           ]
       when (label == "Saved") do
-        label_ [class_ "tabs tabs-md tabs-box tabs-outline bg-slate-200 text-slate-50 shrink items-center", role_ "tablist"] do
+        label_ [class_ "tabs tabs-md tabs-box tabs-outline bg-fillWeak text-textInverse-weak shrink items-center", role_ "tablist"] do
           input_ [class_ "hidden", type_ "checkbox", id_ "queryLibraryGroup"]
-          div_ [role_ "tab", class_ "tab h-full bg-slate-50 group-has-[#queryLibraryGroup:checked]/pg:bg-transparent", term "data-tippy-content" "My Queries"] $ faSprite_ "user" "solid" "w-5 h-5"
-          div_ [role_ "tab", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-slate-50", term "data-tippy-content" "All team Queries"] $ faSprite_ "users" "solid" "w-5 h-5"
+          div_ [role_ "tab", class_ "tab h-full bg-fillWeaker group-has-[#queryLibraryGroup:checked]/pg:bg-transparent", term "data-tippy-content" "My Queries"] $ faSprite_ "user" "solid" "w-5 h-5"
+          div_ [role_ "tab", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-fillWeaker", term "data-tippy-content" "All team Queries"] $ faSprite_ "users" "solid" "w-5 h-5"
 
 
 -- | Visualization types used across the application

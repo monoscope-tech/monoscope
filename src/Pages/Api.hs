@@ -191,7 +191,7 @@ keyRow pid i apiKey = do
         <> T.replicate 20 "*"
       div_ [class_ "hidden group-hover:flex justify-between items-center gap-3"] do
         button_
-          [ class_ "text-brand"
+          [ class_ "text-textBrand"
           , term "data-key" apiKey.keyPrefix
           , term "data-state" "hide"
           , term "data-tippy-content" "Show key"
@@ -212,7 +212,7 @@ keyRow pid i apiKey = do
           do
             faSprite_ "eye" "regular" "h-4 w-4 text-textWeak"
         button_
-          [ class_ "text-brand  cursor-pointer"
+          [ class_ "text-textBrand  cursor-pointer"
           , term "data-key" apiKey.keyPrefix
           , [__| on click if 'clipboard' in window.navigator then
                           call navigator.clipboard.writeText(my @data-key)
@@ -234,7 +234,7 @@ keyRow pid i apiKey = do
               ]
               do
                 faSprite_ "circle-xmark" "regular" "h-4 w-4 text-textError"
-                span_ [class_ "text-slate-500"] "Revoke"
+                span_ [class_ "text-textWeak"] "Revoke"
           else do
             button_
               [ class_ "text-textWeak flex gap-2 items-center cursor-pointer"
@@ -245,7 +245,7 @@ keyRow pid i apiKey = do
               ]
               do
                 faSprite_ "circle-check" "regular" "h-4 w-4 text-textWeak"
-                span_ [class_ "text-slate-500"] "Activate"
+                span_ [class_ "text-textWeak"] "Activate"
 
 
 copyNewApiKey :: Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Bool -> Html ()
@@ -254,19 +254,19 @@ copyNewApiKey newKeyM hasNext =
     Nothing -> ""
     Just (keyObj, newKey) -> do
       div_ [id_ "apiFeedbackSection", class_ "pb-8"] do
-        div_ [class_ "rounded-md bg-green-50 p-4"] do
+        div_ [class_ "rounded-md bg-fillSuccess-weak p-4"] do
           div_ [class_ "flex"] do
             div_ [class_ "shrink-0"] do
-              faSprite_ "circle-check" "regular" "h-5 w-5 text-green-400"
+              faSprite_ "circle-check" "regular" "h-5 w-5 text-textSuccess"
             div_ [class_ "ml-3"] do
-              h3_ [class_ " font-medium text-green-800"] "API Key was generated successfully"
-              div_ [class_ "mt-2  text-green-700 py-2"] do
+              h3_ [class_ " font-medium text-textSuccess"] "API Key was generated successfully"
+              div_ [class_ "mt-2  text-textSuccess py-2"] do
                 strong_ [class_ "block pt-2", id_ "newKey"] $ toHtml newKey
               div_ [class_ "mt-4"] do
                 div_ [class_ "-mx-2 -my-1.5 flex"] do
                   button_
                     [ type_ "button"
-                    , class_ "bg-green-500 px-2 py-1.5 text-white rounded-md  font-medium text-green-800 hover:bg-green-300 focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
+                    , class_ "bg-fillSuccess-strong px-2 py-1.5 text-white rounded-md  font-medium text-textSuccess hover:bg-fillSuccess-weak focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-offset-fillSuccess-weak focus:ring-strokeSuccess-strong"
                     , [__|
                       on click
                         if 'clipboard' in window.navigator then
@@ -280,14 +280,14 @@ copyNewApiKey newKeyM hasNext =
                     then do
                       button_
                         [ type_ "button"
-                        , class_ "ml-3 bg-green-50 px-2 py-1.5 rounded-md  font-medium text-green-800 hover:bg-green-100 focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
+                        , class_ "ml-3 bg-green-50 px-2 py-1.5 rounded-md  font-medium text-textSuccess hover:bg-fillSuccess-weak focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-offset-fillSuccess-weak focus:ring-strokeSuccess-strong"
                         , [__|on click remove #apiFeedbackSection|]
                         ]
                         "Dismiss"
                     else do
                       button_
                         [ type_ "button"
-                        , class_ "ml-6 font-medium px-2 py-1.5 rounded-md font-medium text-brand"
+                        , class_ "ml-6 font-medium px-2 py-1.5 rounded-md font-medium text-textBrand"
                         , [__|on click call window.location.reload()|]
                         ]
                         "Next"

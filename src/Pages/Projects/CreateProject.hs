@@ -464,7 +464,7 @@ deleteProjectBody pid = do
       h1_ [class_ "text-textStrong font-semibold text-2xl"] "Delete project"
       p_ [class_ "py-4 text-sm text-textWeak"] "This is action not reversible, only delete a project you no longer need."
       button_
-        [ class_ "btn btn-sm bg-fillError-strong text-white shadow-md hover:bg-red-700 cursor-pointer"
+        [ class_ "btn btn-sm bg-fillError-strong text-white shadow-md hover:bg-fillError-strong cursor-pointer"
         , hxGet_ [text|/p/$pidText/delete|]
         , hxConfirm_ "Are you sure you want to delete this project?"
         ]

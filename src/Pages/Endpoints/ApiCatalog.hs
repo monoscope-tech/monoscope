@@ -99,8 +99,8 @@ renderapiCatalog pid host timeFilter requestType = div_ [class_ "flex py-4 gap-8
   div_ [class_ "space-y-3 grow"] do
     div_ [class_ "space-x-3"] do
       a_ [class_ "inline-block font-bold space-x-2"] $ do
-        a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host <> "&request_type=" <> requestType, class_ " hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
-        a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=attributes.net.host.name%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-brand hover:text-slate-600 text-xs"] "View logs"
+        a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host <> "&request_type=" <> requestType, class_ " hover:text-textWeak"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
+        a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=attributes.net.host.name%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-textBrand hover:text-textWeak text-xs"] "View logs"
 
   div_ [class_ "w-36 flex items-center justify-center"]
     $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14 days"]
@@ -197,7 +197,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                   , ItemsList.BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
                   ]
               , heading = Just case hostM of
-                  Just h -> span_ [] "Endpoints for dependency: " >> span_ [class_ "text-brand font-bold"] (toHtml h)
+                  Just h -> span_ [] "Endpoints for dependency: " >> span_ [class_ "text-textBrand font-bold"] (toHtml h)
                   Nothing -> "Endpoints"
               , search = Just $ ItemsList.SearchCfg{viaQueryParam = Just (maybeToMonoid searchM)}
               , zeroState =
@@ -239,9 +239,9 @@ instance ToHtml EndpointRequestStatsVM where
 
 
 endpointAccentColor :: Bool -> Bool -> Text
-endpointAccentColor _ True = "bg-slate-400"
-endpointAccentColor True False = "bg-green-200"
-endpointAccentColor False False = "bg-red-800"
+endpointAccentColor _ True = "bg-fillWeaker"
+endpointAccentColor True False = "bg-fillSuccess-weak"
+endpointAccentColor False False = "bg-fillError-strong"
 
 
 renderEndpoint :: Bool -> UTCTime -> Endpoints.EndpointRequestStats -> Html ()
@@ -253,10 +253,10 @@ renderEndpoint activePage currTime enp = do
       input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "anomalyId", value_ anomalyId]
     div_ [class_ "space-y-3 grow"] do
       div_ [class_ "space-x-3"] do
-        a_ [class_ "inline-block font-bold text-red-700 space-x-2", href_ ("/p/" <> enp.projectId.toText <> "/endpoints/details?var-endpointHash=" <> enp.endpointHash <> "&var-host=" <> enp.host)] $ do
+        a_ [class_ "inline-block font-bold text-textError space-x-2", href_ ("/p/" <> enp.projectId.toText <> "/endpoints/details?var-endpointHash=" <> enp.endpointHash <> "&var-host=" <> enp.host)] $ do
           span_ [class_ $ "endpoint endpoint-" <> T.toLower enp.method, data_ "enp-urlMethod" enp.method] $ toHtml enp.method
-          span_ [class_ " inconsolata text-base text-slate-700", data_ "enp-urlPath" enp.urlPath] $ toHtml $ if T.null enp.urlPath then "/" else T.take 150 enp.urlPath
-        a_ [class_ "text-brand  hover:text-slate-600", href_ ("/p/" <> enp.projectId.toText <> "/log_explorer?query=" <> "attributes.http.route==\"" <> enp.urlPath <> "\"")] "View logs"
+          span_ [class_ " inconsolata text-base text-textStrong", data_ "enp-urlPath" enp.urlPath] $ toHtml $ if T.null enp.urlPath then "/" else T.take 150 enp.urlPath
+        a_ [class_ "text-textBrand  hover:text-textStrong", href_ ("/p/" <> enp.projectId.toText <> "/log_explorer?query=" <> "attributes.http.route==\"" <> enp.urlPath <> "\"")] "View logs"
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml @String $ fmt $ commaizeF enp.totalRequests
     div_ [class_ "flex items-center justify-center w-60 h-10"]
       $ div_ [class_ "w-56 h-12 px-3"]

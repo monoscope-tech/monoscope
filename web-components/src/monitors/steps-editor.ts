@@ -280,7 +280,7 @@ export class StepsEditor extends LitElement {
     return html`
       <div
         class="rounded-2xl overflow-hidden group/item  bg-fillWeak collectionStep border draggable  ${
-          failed ? 'border-red-500' : passed ? 'border-green-500' : 'border-strokeWeak'
+          failed ? 'border-strokeError-strong' : passed ? 'border-strokeSuccess-strong' : 'border-strokeWeak'
         }"
         data-index="${idx}"
       >
@@ -299,7 +299,7 @@ export class StepsEditor extends LitElement {
               class="text-lg w-full pl-2 bg-transparent outline-hidden focus:outline-hidden" placeholder="Give your step a name*"
                .value="${stepData.title || ''}" id="title-${idx}" @change=${(e: any) => this.updateValue(e, idx, null, null, 'title')} />
             </div>
-            <div class="items-center w-max shrink-0 gap-3 text-xs text-slate-600 flex">
+            <div class="items-center w-max shrink-0 gap-3 text-xs text-textWeak flex">
                 <input
                   @pointerdown="${(e: any) => e.stopPropagation()}"
                   @change="${(e: any) => {
@@ -308,35 +308,35 @@ export class StepsEditor extends LitElement {
                   }}"
                   ?checked="${stepData.disabled === undefined ? true : stepData.disabled ? false : true}"
                   type="checkbox"
-                  class="toggle toggle-sm  ${stepData.disabled ? 'border-red-500  text-[#ef4444]' : 'border-green-500 text-[#22c55e]'}"
+                  class="toggle toggle-sm  ${stepData.disabled ? 'border-strokeError-strong  text-textError' : 'border-strokeSuccess-strong text-textSuccess'}"
                    />
-                <button class="text-red-700 cursor-pointer" @pointerdown="${(e: any) => {
+                <button class="text-textSuccess cursor-pointer" @pointerdown="${(e: any) => {
                   e.preventDefault();
                   e.stopPropagation();
                   this.collectionSteps = this.collectionSteps.filter((_, i) => i != idx);
                   this.collectionResults = this.collectionResults.filter((_, i) => i != idx);
                 }}">
-                  ${faSprite_('trash', 'regular', 'w-4 h-4 stroke-red-700')}
+                  ${faSprite_('trash', 'regular', 'w-4 h-4 stroke-iconError')}
                 </button>
-                <button type="button" class="text-slate-400 transition-all ${stepData._expanded ? 'rotate-90' : ''}">
+                <button type="button" class="text-textWeak transition-all ${stepData._expanded ? 'rotate-90' : ''}">
                   ${faSprite_('f-chevron-right', 'solid', 'w-4 h-4')}
                 </button>
               </div>
           </div>
         </div>
         <div class="p-4 pt-0 bg-fillWeaker ${stepData._expanded ? 'block' : 'hidden'} ">
-        <div class="rounded-xl p-4 bg-slate-50">
+        <div class="rounded-xl p-4 bg-fillWeaker">
           <div>
             <div class="p-0 m-0s">
               <div class="">
-                <div class="text-sm text-slate-700"><div>URL<span class="text-error">*</span></div></div>
+                <div class="text-sm text-textStrong"><div>URL<span class="text-error">*</span></div></div>
                 <div class="relative flex flex-row gap-2 items-center">
                   <label for="actions-list-input-${idx}" class="w-28 shrink text-sm font-medium form-control">
                     <select id="actions-list-input-${idx}" class="select select-sm shadow-none w-full" @change=${(e: any) =>
                       this.updateValue(e, idx, null, null, '_method')}>
                       ${validMethods.map((methodItem) => html`<option ?selected=${methodItem == stepData._method}>${methodItem}</option>`)}
                     </select>
-                    ${saveError.method ? html`<span class="text-red-700 text-xs">${saveError.method}</span>` : ''}
+                    ${saveError.method ? html`<span class="text-textError text-xs">${saveError.method}</span>` : ''}
                   </label>
                   <label for="actions-data-${idx}" class="flex-1 text-sm font-medium form-control w-full flex flex-row items-center gap-1">
                     <input
@@ -345,17 +345,17 @@ export class StepsEditor extends LitElement {
                         stepData._url || ''
                       } class="input input-sm shadow-none w-full" @change=${(e: any) => this.updateValue(e, idx, null, null, '_url')}
                     />
-                    ${saveError.url ? html`<span class="text-red-700 text-xs">${saveError.url}</span>` : ''}
+                    ${saveError.url ? html`<span class="text-textError text-xs">${saveError.url}</span>` : ''}
                   </label>
                 </div>
               </div>
               <details class="mt-4">
-                <summary class="cursor-pointer text-sm text-slate-700 font-medium">Advanced Options (${totalConfigured} configured)</summary
+                <summary class="cursor-pointer text-sm text-textStrong font-medium">Advanced Options (${totalConfigured} configured)</summary
                  <div>
                   <div class="mt-4 pb-3 border rounded-xl">
                     <div role="tablist" class="tabs tabs-bordered pt-1">
                       <a role="tab" class="tab  ${
-                        activeTab === 'request-options' ? 'tab-active [--bc:var(--brand-color)] text-brand font-bold' : ''
+                        activeTab === 'request-options' ? 'tab-active [--bc:var(--brand-color)] text-textBrand font-bold' : ''
                       }" @pointerdown=${() => setActiveTab('request-options')}>
                         Request Options ${
                           configuredOptions['request-options'] > 0
@@ -364,7 +364,7 @@ export class StepsEditor extends LitElement {
                         }
                       </a>
                       <a role="tab" class="tab ${
-                        activeTab === 'query-params' ? 'tab-active [--bc:var(--brand-color)] text-brand font-bold' : ''
+                        activeTab === 'query-params' ? 'tab-active [--bc:var(--brand-color)] text-textBrand font-bold' : ''
                       }" @pointerdown=${() => setActiveTab('query-params')}>
                         Query Params ${
                           configuredOptions['query-params'] > 0
@@ -373,7 +373,7 @@ export class StepsEditor extends LitElement {
                         }
                       </a>
                       <a role="tab" class="tab ${
-                        activeTab === 'request-body' ? 'tab-active [--bc:var(--brand-color)] text-brand font-bold' : ''
+                        activeTab === 'request-body' ? 'tab-active [--bc:var(--brand-color)] text-textBrand font-bold' : ''
                       }" @pointerdown=${() => setActiveTab('request-body')}>
                         Request Body ${
                           configuredOptions['request-body'] > 0
@@ -409,7 +409,7 @@ export class StepsEditor extends LitElement {
                                       ?checked=${stepData.followRedirects}
                                       @change=${(e: any) => (this.collectionSteps[idx].followRedirects = e.target.value == 'on')}
                                     />
-                                    <span class="text-slate-700 font-medium">Follow redirects</span>
+                                    <span class="text-textStrong font-medium">Follow redirects</span>
                                   </label>
                                 </div>
                                 <div class="form-control">
@@ -420,12 +420,12 @@ export class StepsEditor extends LitElement {
                                       ?checked=${stepData.ignoreSSLErrors}
                                       @change=${(e: any) => (this.collectionSteps[idx].ignoreSSLErrors = e.target.value == 'on')}
                                     />
-                                    <span class="text-slate-700 font-medium">Ignore server certificate error</span>
+                                    <span class="text-textStrong font-medium">Ignore server certificate error</span>
                                   </label>
                                 </div>
                               </div>
 
-                              <div class="flex items-center gap-2 text-slate-700 font-medium">
+                              <div class="flex items-center gap-2 text-textStrong font-medium">
                                 <span class="">Time out after</span>
                                 <input
                                   type="number"
@@ -500,7 +500,7 @@ ${stepData?.headers?.Cookie || ''}</textarea
                                 ${this.collectionSteps[idx]._requestType === 'application/x-www-form-urlencoded'
                                   ? html`<div class="flex flex-col gap-1">${this.renderParamsRows(stepData, idx, '_requestBody')}</div>`
                                   : html` <textarea
-                                      class="w-full border border-slate-200 textarea"
+                                      class="w-full border border-strokeWeak textarea"
                                       name="[${idx}][json]"
                                       @change=${(e: any) => {
                                         this.collectionSteps[idx]._json = e.target.value;
@@ -535,7 +535,7 @@ ${stepData._json}</textarea
                       <div class="rounded-xl border border-weak p-4  text-textStrong flex flex-col gap-1">
                         ${unsafeHTML(generateRequestPreviewFromObject(this.collectionSteps[idx]))}
                       </div>
-                      <div role="tablist" class="tabs tabs-bordered max-h-96 overflow-y-auto border border-slate-200 rounded-xl mt-6">
+                      <div role="tablist" class="tabs tabs-bordered max-h-96 overflow-y-auto border border-strokeWeak rounded-xl mt-6">
                         <input
                           type="radio"
                           name="resp-items"
@@ -546,7 +546,7 @@ ${stepData._json}</textarea
                         />
                         <div role="tabpanel" class="tab-content p-4">
                           <div class="flex rounded-sm  bg-fillWeak px-2 py-1 mb-2 items-center gap-2">
-                            ${faSprite_('circle-info', 'regular', 'w-4 h-4 fill-none stroke-slate-600')}
+                            ${faSprite_('circle-info', 'regular', 'w-4 h-4 fill-none stroke-strokeWeak')}
                             <span class=" text-textWeak">Click below to add field as an assertion</span>
                           </div>
                           ${Object.entries(stepResult.resp.headers).map(([key, value]) => {
@@ -611,7 +611,7 @@ ${stepData._json}</textarea
                 <div class="inline-flex text-lg gap-2 items-center cursor-pointer  text-textStrong font-medium">
                   Add Assertions <span class="font-normal  text-textWeak">(optional)</span>
                   <a href="https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/#test-definition-syntax" class="" target="_blank">
-                    ${faSprite_('circle-info', 'regular', 'w-3 h-3 text-slate-700')}
+                    ${faSprite_('circle-info', 'regular', 'w-3 h-3 text-iconNeutral')}
                   </a>
                 </div>
               </summary>
@@ -651,15 +651,15 @@ ${stepData._json}</textarea
     let error = result?.err?.advice || '';
 
     if (hasPassed) {
-      return html` <svg class="icon w-3 h-3 text-green-500"><use href="/public/assets/svgs/fa-sprites/solid.svg#check"></use></svg>`;
+      return html` <svg class="icon w-3 h-3 text-textSuccess"><use href="/public/assets/svgs/fa-sprites/solid.svg#check"></use></svg>`;
     }
     if (!hasPassed && !notRun) {
       return html`<span title="${error}"
-        ><svg class="icon w-3 h-3 text-red-500"><use href="/public/assets/svgs/fa-sprites/regular.svg#trash"></use></svg><span></span
+        ><svg class="icon w-3 h-3 text-textError"><use href="/public/assets/svgs/fa-sprites/regular.svg#trash"></use></svg><span></span
       ></span>`;
     }
     return html`<span title="${error}" class="opacity-0"
-      ><svg class="icon w-3 h-3 text-red-500"><use href="/public/assets/svgs/fa-sprites/regular.svg#trash"></use></svg><span></span
+      ><svg class="icon w-3 h-3 text-textError"><use href="/public/assets/svgs/fa-sprites/regular.svg#trash"></use></svg><span></span
     ></span>`;
   }
 
@@ -709,7 +709,7 @@ ${stepData._json}</textarea
             .value="${key}"
             @change=${(e: any) => this.updateKey(e, idx, type, aidx)}
           />
-          <span class="text-xs text-red-500 w-full">${keyError}</span>
+          <span class="text-xs text-textError w-full">${keyError}</span>
         </div>
         ${type === 'exports'
           ? html`
@@ -731,10 +731,10 @@ ${stepData._json}</textarea
             .value="${value}"
             @input=${(e: any) => this.updateValue(e, idx, type, aidx, key)}
           />
-          <span class="text-xs text-red-500">${error}</span>
+          <span class="text-xs text-textError">${error}</span>
         </div>
-        <a class="cursor-pointer text-slate-600" @pointerdown=${(e: any) => this.deleteKey(e, idx, type, aidx, key)}>
-          <svg class="inline-block icon w-5 h-5 p-1 rounded-full shadow-sm border stroke-red-500"><use href="/public/assets/svgs/fa-sprites/regular.svg#trash"></use></svg>
+        <a class="cursor-pointer text-iconNeutral" @pointerdown=${(e: any) => this.deleteKey(e, idx, type, aidx, key)}>
+          <svg class="inline-block icon w-5 h-5 p-1 rounded-full shadow-sm border stroke-strokeError-strong"><use href="/public/assets/svgs/fa-sprites/regular.svg#trash"></use></svg>
         </a>
       </div>`
           : nothing}
@@ -774,7 +774,7 @@ ${stepData._json}</textarea
       rows.push(html`
         <datalist id=${'assertAutocomplete-' + idx}>
           ${matches.map((fieldPath) => {
-            return html`<option class="w-full  text-left text-xs px-3 py-1 hover:bg-gray-200">${fieldPath}</option>`;
+            return html`<option class="w-full  text-left text-xs px-3 py-1 hover:bg-fillWeak">${fieldPath}</option>`;
           })}
         </datalist>
       `);
