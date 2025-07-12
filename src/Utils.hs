@@ -321,8 +321,8 @@ jsonValueToHtmlTree val pathM = do
           [class_ "block hover:bg-fillBrandWeak cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
           do
             span_ $ toHtml key
-            span_ [class_ "text-blue-800"] ":"
-            span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue False value
+            span_ [class_ "text-textBrand"] ":"
+            span_ [class_ "text-textBrand ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue False value
 
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
     renderParentType opening closing key count child = div_ [class_ $ "log-item-with-children" <> if count == 0 then " collapsed" else ""] do

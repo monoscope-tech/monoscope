@@ -193,7 +193,7 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan = div_ [
           div_ [class_ "flex flex-col text-textWeak text-sm"] do
             span_ [class_ ""] "Starts at"
             span_ [class_ ""] "/per month"
-        label_ [class_ "btn btn-secondary bg-white cursor pointer z-10", Lucid.for_ "pricing-modal", [__|on click set #pricing-modal.check to true|]] "Change plan"
+        label_ [class_ "btn btn-secondary bg-bgRaised cursor pointer z-10", Lucid.for_ "pricing-modal", [__|on click set #pricing-modal.check to true|]] "Change plan"
 
         input_ [type_ "checkbox", id_ "pricing-modal", class_ "modal-toggle"]
         div_ [class_ "modal p-8", role_ "dialog", [__|on closeModal from body set #pricing-modal.checked to false |]] do

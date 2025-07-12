@@ -165,7 +165,7 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan = do
 freePricing :: Projects.ProjectId -> Bool -> Html ()
 freePricing pid isCurrent = do
   div_
-    [ class_ "relative bg-white rounded-2xl py-11 px-4 outline outline-strokeWeak overflow-hidden"
+    [ class_ "relative bg-bgRaised rounded-2xl py-11 px-4 outline outline-strokeWeak overflow-hidden"
     , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
     , id_ "freePricing"
     , hxSwap_ "none"
@@ -211,7 +211,7 @@ popularPricing :: Projects.ProjectId -> Text -> Bool -> Html ()
 popularPricing pid lemonUrl isCurrent = do
   div_ [class_ "relative"] do
     div_
-      [ class_ "relative bg-white rounded-2xl py-11 px-4 outline overflow-hidden outline-strokeBrand-strong shadow-[0px_3px_3px_-1.5px_rgba(10,13,18,0.04)] shadow-[0px_8px_8px_-4px_rgba(10,13,18,0.03)] shadow-[0px_20px_24px_-4px_rgba(10,13,18,0.08)]"
+      [ class_ "relative bg-bgRaised rounded-2xl py-11 px-4 outline overflow-hidden outline-strokeBrand-strong shadow-[0px_3px_3px_-1.5px_rgba(10,13,18,0.04)] shadow-[0px_8px_8px_-4px_rgba(10,13,18,0.03)] shadow-[0px_20px_24px_-4px_rgba(10,13,18,0.08)]"
       , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
       , id_ "GraduatedPricing"
       , hxIndicator_ "#loadingIndicator"
@@ -265,7 +265,7 @@ popularPricing pid lemonUrl isCurrent = do
 systemsPricing :: Projects.ProjectId -> Text -> Bool -> Html ()
 systemsPricing pid critical isCurrent = do
   div_
-    [ class_ "relative bg-white rounded-2xl py-11 px-4 outline outline-strokeWeak overflow-hidden"
+    [ class_ "relative bg-bgRaised rounded-2xl py-11 px-4 outline outline-strokeWeak overflow-hidden"
     , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
     , id_ "SystemsPricing"
     , hxIndicator_ "#loadingIndicator"

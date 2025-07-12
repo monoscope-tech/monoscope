@@ -314,7 +314,7 @@ shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
 
 reportsPage :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Text -> Bool -> Bool -> Html ()
 reportsPage pid reports nextUrl daily weekly =
-  div_ [class_ "flex flex-row h-screen bg-white"] do
+  div_ [class_ "flex flex-row h-screen bg-bgRaised"] do
     div_ [class_ "w-1/3 border-r border-strokeMedium p-4 overflow-y-auto"] do
       div_ [class_ "mt-4"] do
         reportListItems pid reports nextUrl

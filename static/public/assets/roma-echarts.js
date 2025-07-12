@@ -46,6 +46,7 @@
       if (theme) {
         echarts.registerTheme('roma', theme['roma'])
         echarts.registerTheme('default', theme['default'])
+        echarts.registerTheme('dark', theme['dark'])
       }
     })
     .catch(error => {

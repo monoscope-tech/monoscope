@@ -174,8 +174,8 @@ itemsList_ listCfg items = do
         div_ [class_ "flex justify-center w-60 items-center text-sm  content-between gap-2"] do
           span_ [] "Chart"
           div_ [class_ "rounded-lg border grid grid-cols-2 w-max h-7 bg-fillWeaker overflow-hidden"] do
-            a_ [class_ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded-sm bg-white ", [__|init if window.location.search contains "since=14D" remove .bg-white from me else add .bg-white to me |], href_ $ currentURL' <> "&since=24H"] "24h"
-            a_ [class_ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded-sm ", [__|init if window.location.search contains "since=14D" add .bg-white to me else remove .bg-white from me |], href_ $ currentURL' <> "&since=14D"] "14d"
+            a_ [class_ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded-sm bg-bgRaised ", [__|init if window.location.search contains "since=14D" remove .bg-bgRaised from me else add .bg-bgRaised to me |], href_ $ currentURL' <> "&since=24H"] "24h"
+            a_ [class_ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded-sm ", [__|init if window.location.search contains "since=14D" add .bg-bgRaised to me else remove .bg-bgRaised from me |], href_ $ currentURL' <> "&since=14D"] "14d"
         div_
           [ class_ "p-12 fixed rounded-lg shadow-sm bg-base-100 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md"
           , id_ "sortLoader"

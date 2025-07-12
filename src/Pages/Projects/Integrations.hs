@@ -170,7 +170,7 @@ integrationsBody sess envCfg isUpdate cp notifChannel phones slackData = do
 renderNotificationOption :: Text -> Text -> Text -> Projects.NotificationChannel -> Maybe (V.Vector Projects.NotificationChannel) -> Html () -> Html () -> Html ()
 renderNotificationOption title description value channel notifChannel icon extraContent = do
   let isChecked = channel `elem` fromMaybe [] notifChannel
-  div_ [class_ $ "bg-white rounded-lg border border-strokeWeak shadow-xs " <> if isChecked then "border-l-4 border-l-primary" else ""] do
+  div_ [class_ $ "bg-bgRaised rounded-lg border border-strokeWeak shadow-xs " <> if isChecked then "border-l-4 border-l-primary" else ""] do
     div_ [class_ "p-6 pb-3"] do
       div_ [class_ "flex items-center justify-between"] do
         div_ [class_ "flex items-center gap-3"] do

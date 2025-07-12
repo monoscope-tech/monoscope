@@ -228,7 +228,7 @@ export function renderAssertionBuilder({
                 <div class="flex gap-3 pt-2 items-center">
                   ${passed ? html`<span class="badge badge-success">Passed</span>` : html`<span class="badge badge-error">Failed</span>`}
                   <a class="cursor-pointer text-textWeak" @pointerdown=${() => removeAssertion(index)}>
-                    ${faSprite_('trash', 'regular', 'rounded-full border bg-white shadow-sm p-1 w-5 h-5 stroke-iconError')}
+                    ${faSprite_('trash', 'regular', 'rounded-full border bg-bgRaised shadow-sm p-1 w-5 h-5 stroke-iconError')}
                   </a>
                 </div>
               </div>

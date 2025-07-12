@@ -410,7 +410,7 @@ integrationGroups =
 integrationsPage :: Projects.ProjectId -> Text -> Html ()
 integrationsPage pid apikey =
   div_ [class_ "w-full flex h-screen overflow-hidden group/pg"] do
-    div_ [class_ "w-1/2 bg-white h-full flex flex-col"] do
+    div_ [class_ "w-1/2 bg-bgRaised h-full flex flex-col"] do
       div_ [class_ "pt-[156px] px-12 flex-shrink-0"]
         $ div_ [class_ "max-w-[550px]"]
         $ stepIndicator 5 "Instrument your apps or servers"

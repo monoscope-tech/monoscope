@@ -643,6 +643,15 @@ documentationsPage pid swaggers swaggerID jsonString = do
         require.config({ paths: { vs: '/public/assets/js/monaco/vs' } });
         require.config({ paths: { 'vs': 'https://unpkg.com/monaco-editor/min/vs' } });
 		  	require(['vs/editor/editor.main'], function () {
+        // Define light theme
+        monaco.editor.defineTheme('vsLight', {
+          base: 'vs',
+          inherit: true,
+          rules: [],
+          colors: {}
+        });
+
+        // Define dark theme (nightOwl)
         monaco.editor.defineTheme('nightOwl', {
            base: 'vs-dark',
            inherit: true,
@@ -670,6 +679,10 @@ documentationsPage pid swaggers swaggerID jsonString = do
              'editorWhitespace.foreground': '#404040'
            }
         });
+
+       const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
+       const theme = isDarkMode ? 'nightOwl' : 'vsLight';
+
        window.monacoEditor = monaco.editor
        const val = document.querySelector('#swaggerData').value
        let json = JSON.parse(val)
@@ -682,8 +695,24 @@ documentationsPage pid swaggers swaggerID jsonString = do
             fontSize: 14,
             lineHeight: 20,
             lineNumbersMinChars: 3,
-            theme: 'nightOwl'
+            theme: theme
 		  		});
+
+        // Watch for theme changes
+        const themeObserver = new MutationObserver((mutations) => {
+          mutations.forEach((mutation) => {
+            if (mutation.type === 'attributes' && mutation.attributeName === 'data-theme') {
+              const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
+              const theme = isDarkMode ? 'nightOwl' : 'vsLight';
+              window.editor?.updateOptions({ theme });
+            }
+          });
+        });
+        
+        themeObserver.observe(document.body, {
+          attributes: true,
+          attributeFilter: ['data-theme']
+        });
 		   });
       })
    |]

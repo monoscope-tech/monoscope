@@ -310,7 +310,7 @@ nameOfTest_ name tags = do
 defineTestSteps_ :: Maybe Testing.Collection -> Html ()
 defineTestSteps_ colM = do
   div_ [class_ "flex flex-col  notif bg-fillInformation-weak bg-opacity-60 rounded-xl relative"] do
-    div_ [class_ "rounded-full absolute shadow-xs bg-white flex justify-center items-center h-5 w-5 top-1.5 right-1.5 mb-0"] do
+    div_ [class_ "rounded-full absolute shadow-xs bg-bgRaised flex justify-center items-center h-5 w-5 top-1.5 right-1.5 mb-0"] do
       a_ [[__|on click remove the closest parent <.notif/>|]] $ faSprite_ "xmark" "regular" "w-2 -mt-[2px] text-textBrand"
     div_ [class_ "flex items-center gap-4 py-4 px-8"] do
       faSprite_ "circle-info" "regular" "w-5 h-5 fill-none stroke-strokeBrand-strong"
@@ -425,7 +425,7 @@ variablesDialog pid colM = do
             span_ [] "="
             div_ [class_ "input text-left truncate ellipsis input-sm w-full bg-transparent"] $ toHtml var.variableValue
             div_
-              [ class_ "acursor-pointer h-5 w-5 flex justify-center items-center rounded-full bg-white shadow-sm border"
+              [ class_ "acursor-pointer h-5 w-5 flex justify-center items-center rounded-full bg-bgRaised shadow-sm border"
               , hxDelete_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText <> "/variables/" <> var.variableName
               , hxTarget_ "#test-variables-content"
               , hxSwap_ "outerHTML"

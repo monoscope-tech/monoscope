@@ -21,6 +21,7 @@ export class StepsEditor extends LitElement {
 
   private editor: any = null;
   private response: any = {};
+  private themeObserver: MutationObserver | null = null;
   @query('#steps-codeEditor') private editorContainer!: HTMLElement;
   createRenderRoot = () => this;
   constructor() {
@@ -96,6 +97,15 @@ export class StepsEditor extends LitElement {
     ];
   }
   initializeEditor(monaco: typeof import('monaco-editor')) {
+    // Define light theme
+    monaco.editor.defineTheme('vsLight', {
+      base: 'vs',
+      inherit: true,
+      rules: [],
+      colors: {}
+    });
+
+    // Define dark theme (nightOwl)
     monaco.editor.defineTheme('nightOwl', {
       base: 'vs-dark',
       inherit: true,
@@ -124,11 +134,14 @@ export class StepsEditor extends LitElement {
       },
     });
 
+    const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
+    const theme = isDarkMode ? 'nightOwl' : 'vsLight';
+
     console.log(this.editorContainer);
     this.editor = monaco.editor.create(this.editorContainer, {
       value: jsyaml.dump(convertCollectionStepsToTestkitFormat(this.collectionSteps), { indent: 2 }),
       language: 'yaml',
-      theme: 'nightOwl',
+      theme: theme,
       fontSize: 14,
       lineHeight: 20,
       lineNumbersMinChars: 3,
@@ -152,6 +165,22 @@ export class StepsEditor extends LitElement {
       } catch (e) {
         console.error('Invalid YAML input', e);
       }
+    });
+
+    // Watch for theme changes
+    this.themeObserver = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        if (mutation.type === 'attributes' && mutation.attributeName === 'data-theme') {
+          const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
+          const theme = isDarkMode ? 'nightOwl' : 'vsLight';
+          this.editor?.updateOptions({ theme });
+        }
+      });
+    });
+    
+    this.themeObserver.observe(document.body, {
+      attributes: true,
+      attributeFilter: ['data-theme']
     });
   }
 
