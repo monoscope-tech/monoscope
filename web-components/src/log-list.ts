@@ -695,6 +695,7 @@ export class LogList extends LitElement {
               color,
               children: chil,
               barWidth: width - 12,
+              expanded,
             })}
             <span class="w-1"></span>
           </div>
@@ -1207,6 +1208,7 @@ function spanLatencyBreakdown({
   color,
   children,
   barWidth,
+  expanded,
 }: {
   start: number;
   duration: number;
@@ -1215,10 +1217,13 @@ function spanLatencyBreakdown({
   color: string;
   barWidth: number;
   children: (ChildrenForLatency & { color: string })[];
+  expanded?: boolean;
 }) {
   const width = (duration / traceEnd) * barWidth;
   const left = (start / traceEnd) * barWidth;
-  return html`<div class="-mt-1 shrink-0">
+  
+  // Base visualization that's always rendered
+  const baseVisualization = html`
     <div class="flex h-5 relative bg-fillWeak overflow-x-hidden" style=${`width:${barWidth}px`}>
       <div
         class=${`h-full absolute top-0 ${depth === 0 || children.length === 0 ? color : ''}`}
@@ -1230,7 +1235,36 @@ function spanLatencyBreakdown({
         return html`<div class=${`h-full absolute top-0 ${child.color}`} style=${`width:${cWidth}px; left:${cLeft}px`}></div>`;
       })}
     </div>
-  </div>`;
+  `;
+
+  // For child spans (depth > 0) OR expanded root spans, add the frame overlay
+  if (depth > 0 || (depth === 0 && expanded)) {
+    return html`<div class="-mt-1 shrink-0">
+      <div class="flex h-5 relative" style=${`width:${barWidth}px`}>
+        ${baseVisualization}
+        
+        <!-- Overlay frame elements on top -->
+        <!-- Full width boundary markers at the start and end -->
+        <div 
+          class="absolute top-0 h-full border-l-2 border-strokeBrand-strong pointer-events-none" 
+          style="left:0"
+        ></div>
+        <div 
+          class="absolute top-0 h-full border-r-2 border-strokeBrand-strong pointer-events-none" 
+          style=${`left:${barWidth - 2}px`}
+        ></div>
+        
+        <!-- Horizontal line representing the full timeline -->
+        <div
+          class="absolute top-1/2 -translate-y-1/2 h-[1px] bg-strokeBrand-strong pointer-events-none"
+          style=${`width:${barWidth}px; left:0`}
+        ></div>
+      </div>
+    </div>`;
+  }
+  
+  // For root spans that are not expanded, return just the base visualization
+  return html`<div class="-mt-1 shrink-0">${baseVisualization}</div>`;
 }
 
 function emptyState(cols: number) {
