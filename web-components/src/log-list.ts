@@ -735,6 +735,10 @@ export class LogList extends LitElement {
                           e.stopPropagation();
                           this.expandTrace(traceId, id);
                         }}
+                        @click=${(e: any) => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                        }}
                         class=${`hover:border-strokeBrand-strong rounded-sm ml-1 cursor-pointer shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
                       >
                         ${expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')}
