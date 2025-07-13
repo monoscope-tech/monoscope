@@ -238,7 +238,7 @@ export function renderAssertionBuilder({
         `;
       })}
       <button class="flex items-center gap-1 mt-4 text-sm" @pointerdown=${addAssertion}>
-        ${faSprite_('plus', 'regular', 'w-4 h-4 text-textWeak')}
+        ${faSprite_('plus', 'regular', 'w-4 h-4 text-iconNeutral')}
         <span class="underline text-textWeak font-semibold">New assertion</span>
       </button>
     </div>

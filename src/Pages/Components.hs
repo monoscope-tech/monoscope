@@ -329,11 +329,12 @@ navBar = do
   nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full w-full px-6 py-4 bg-base-100 flex flex-row justify-between"] do
     div_ [class_ "flex justify-between items-center gap-4 w-[1000px] mx-auto"] do
       a_ [href_ "https://apitoolkit.io", class_ "flex items-center text-textWeak hover:text-textStrong"] do
+        -- Only show full logos (no mini version needed for navbar)
         img_
-          [ class_ "h-12 sd-hidden"
-          , src_ "/public/assets/svgs/logo.svg"
+          [ class_ "h-12 dark:hidden"
+          , src_ "/public/assets/svgs/logo_black.svg"
           ]
         img_
-          [ class_ "h-12 w-10 hidden sd-show"
-          , src_ "/public/assets/svgs/logo_mini.svg"
+          [ class_ "h-12 hidden dark:block"
+          , src_ "/public/assets/svgs/logo_white.svg"
           ]

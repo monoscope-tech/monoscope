@@ -430,9 +430,13 @@ sideNav :: Sessions.Session -> Projects.Project -> Text -> Maybe Text -> Html ()
 sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker border-strokeWeak text-sm min-w-15 shrink-0 w-15 group-has-[#sidenav-toggle:checked]/pg:w-60  h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
   div_ [class_ "px-2 group-has-[#sidenav-toggle:checked]/pg:px-6"] do
     div_ [class_ "py-5 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center"] do
-      a_ [href_ "/", class_ "inline-flex"] do
-        img_ [class_ "h-6 hidden group-has-[#sidenav-toggle:checked]/pg:block", src_ "/public/assets/svgs/logo.svg"]
-        img_ [class_ "h-10 w-10 hidden sd-show", src_ "/public/assets/logo-mini.png"]
+      a_ [href_ "/", class_ "relative h-6 flex-1 hidden group-has-[#sidenav-toggle:checked]/pg:inline-flex"] do
+        -- Full logos (shown when sidebar is expanded)
+        img_ [class_ "h-6 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:block dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
+        img_ [class_ "h-6 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:dark:block", src_ "/public/assets/svgs/logo_white.svg"]
+      -- Mini logos (shown when sidebar is collapsed)
+      -- img_ [class_ "h-10 w-10 block group-has-[#sidenav-toggle:checked]/pg:hidden dark:hidden", src_ "/public/assets/svgs/logo_mini_black.svg"]
+      -- img_ [class_ "h-10 w-10 hidden dark:block group-has-[#sidenav-toggle:checked]/pg:dark:hidden", src_ "/public/assets/svgs/logo_mini_white.svg"]
       label_ [class_ "cursor-pointer text-strokeStrong"] do
         input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`)|]] <> [checked_ | sess.isSidebarClosed])
         faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
@@ -512,7 +516,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
             , onclick_ "toggleDarkMode()"
             ]
           faSprite_ "moon-stars" "regular" "h-5 w-5 text-textBrand"
-        
+
         -- Swap rotate icon (visible when sidebar is collapsed)
         label_ [class_ "swap swap-rotate group-has-[#sidenav-toggle:checked]/pg:hidden"] $ do
           input_

@@ -164,10 +164,10 @@ export function renderJsonWithIndentation(
           <div class="flex items-center gap-4">
             <span> ${key}: ${typeof value === 'object' && value ? '' : JSON.stringify(value)} </span>
             <button
-              class="rounded-full border fill-textDisabled shadow-[0px_4px_4px_0px_rgba(0,0,0,0.06)] border-strokeWeak shadown-sm p-1.5 bg-bgBase"
+              class="rounded-full border fill-iconNeutral shadow-[0px_4px_4px_0px_rgba(0,0,0,0.06)] border-strokeWeak shadown-sm p-1.5 bg-bgBase"
               @pointerdown="${(e: Event) => addAssertion(e, assertionObj)}"
             >
-              ${faSprite_('plus', 'regular', 'w-3 h-3')}
+              ${faSprite_('plus', 'regular', 'w-3 h-3 text-iconNeutral')}
             </button>
           </div>
           ${typeof value === 'object' && value ? renderJsonWithIndentation(value, addAssertion, currentPath, depth + 1) : ''}

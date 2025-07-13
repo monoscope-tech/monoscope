@@ -834,7 +834,8 @@ stepIndicator step title prevUrl = do
   universalIndicator
   div_ [class_ "flex-col gap-4 flex w-full"] $ do
     a_ [href_ "/", class_ "absolute top-10 left-10 py-2 pr-2 bg-bgBase rounded-xs"] do
-      img_ [class_ "h-7", src_ "/public/assets/svgs/logo.svg"]
+      img_ [class_ "h-7 dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
+      img_ [class_ "h-7 hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
     div_ [class_ "flex-col gap-2 flex w-full"] $ do
       div_ [class_ " text-textStrong text-base font-semibold"] $ "Step " <> show step <> " of 6"
       div_ [class_ "grid grid-cols-6 w-full gap-1"] $ do

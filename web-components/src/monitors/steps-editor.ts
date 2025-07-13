@@ -545,7 +545,7 @@ ${stepData._json}</textarea
                   </div>
                 </details>
               </div>
-              <button class="mt-5 btn btn-sm btn-primary px-2 py-1" @pointerdown=${(e: any) => this.sendStepRequest(e, idx)}>
+              <button type="button" class="mt-5 btn btn-sm btn-primary px-2 py-1" @pointerdown=${(e: any) => this.sendStepRequest(e, idx)}>
               ${this.isSendingRequest[idx] ? html`<span class="loading loading-dots loading-sm"></span>` : 'Send request'}
               </button>
               ${
@@ -592,10 +592,10 @@ ${stepData._json}</textarea
                                 <span class=" text-textWeak">${value}</span>
                                 <button
                                   data-tippy-content="Add as an assertion"
-                                  class="rounded-full border fill-textDisabled shadow-[0px_4px_4px_0px_rgba(0,0,0,0.06)] border-strokeWeak shadown-sm p-1.5 bg-bgBase"
+                                  class="rounded-full border fill-iconNeutral shadow-[0px_4px_4px_0px_rgba(0,0,0,0.06)] border-strokeWeak shadown-sm p-1.5 bg-bgBase"
                                   @pointerdown="${(e: any) => this.addAssertion(e, idx, assertionObj)}"
                                 >
-                                  ${faSprite_('plus', 'regular', 'w-3 h-3')}
+                                  ${faSprite_('plus', 'regular', 'w-3 h-3 text-iconNeutral')}
                                 </button>
                               </div>
                             `;
@@ -662,7 +662,7 @@ ${stepData._json}</textarea
                 <p class=" text-textStrong">Variables consist of a variable name and a json path pointing to the variable in the response.</p>
                 ${this.renderParamsRows(stepData, idx, 'exports')}
                 <button class="flex items-center gap-1 mt-4" type="button" @pointerdown=${() => {}}>
-                ${faSprite_('plus', 'regular', 'w-4 h-4  text-textWeak')}
+                ${faSprite_('plus', 'regular', 'w-4 h-4 text-iconNeutral')}
                 <span class="underline  text-textWeak font-semibold">New variable<span>
                 </button>
               </div>
