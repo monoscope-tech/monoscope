@@ -53,7 +53,6 @@ import Data.ByteString.Char8 qualified as BSC
 import Data.Default (Default, def)
 import Data.Text qualified as T
 import Data.Time
-import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity

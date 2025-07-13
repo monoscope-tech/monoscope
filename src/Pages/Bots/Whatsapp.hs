@@ -1,16 +1,12 @@
 module Pages.Bots.Whatsapp (whatsappIncomingPostH, TwilioWhatsAppMessage) where
 
-import Control.Applicative ((<|>))
 import Control.Lens ((?~))
 import Control.Lens.Setter ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as KEYM
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Effectful.Wreq qualified as Wreq
-import Data.List qualified as L
 import Data.Text qualified as T
-import Data.Time qualified as Time
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful
 import Effectful.Concurrent (forkIO)
@@ -23,17 +19,14 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq
-import Network.Wreq.Types (FormParam)
 import Pages.Bots.Utils (BotType (..), chartImageUrl, handleTableResponse)
 import Pkg.AI (callOpenAIAPI, systemPrompt)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (parseQueryToAST)
 import Relude
-import System.Config (AuthContext, EnvConfig, env)
+import System.Config (AuthContext, EnvConfig)
 import System.Config qualified as Config
 import System.Types (ATBaseCtx)
-import Web.FormUrlEncoded (FromForm)
-import Web.HttpApiData (FromHttpApiData (..))
 import Web.Internal.FormUrlEncoded
 
 

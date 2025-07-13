@@ -6,7 +6,6 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.UUID qualified as UUID
-import Data.List qualified as L (intersect, union)
 import Data.List.Extra (chunksOf, groupBy)
 import Data.Pool (withResource)
 import Data.Text qualified as T
@@ -19,7 +18,6 @@ import Data.Vector qualified as V
 import Data.Vector.Algorithms qualified as VAA
 import Database.PostgreSQL.Entity.DBT (execute, query, withPool)
 import Database.PostgreSQL.Simple (Only (Only), Query, SomePostgreSqlException)
-import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact qualified as PTR
 import Effectful (Eff, (:>))
@@ -879,20 +877,8 @@ groupAnomaliesByEndpointHash anomalies =
         grouped
 
 
-getUpdatedFieldFormats :: Projects.ProjectId -> V.Vector Text -> PTR.DBT IO (V.Vector Text)
-getUpdatedFieldFormats pid fieldHashes
-  | V.null fieldHashes = pure V.empty
-  | otherwise = query q (pid, fieldHashes)
-  where
-    q =
-      [sql| select fm.hash from apis.formats fm JOIN apis.fields fd ON (fm.project_id=fd.project_id AND fd.hash=fm.field_hash) 
-                where fm.project_id=? AND fm.created_at>(fd.created_at+interval '2 minutes') AND fm.field_hash=ANY(?) |]
 
 
-updateShapeCounts :: Projects.ProjectId -> Text -> V.Vector Text -> V.Vector Text -> V.Vector Text -> PTR.DBT IO Int64
-updateShapeCounts pid shapeHash newFields deletedFields updatedFields = execute q (newFields, deletedFields, updatedFields, pid, shapeHash)
-  where
-    q = [sql| update apis.shapes SET new_unique_fields=?, deleted_fields=?, updated_field_formats=? where project_id=? and hash=?|]
 
 
 -- | Process issues enhancement job - finds issues that need LLM enhancement

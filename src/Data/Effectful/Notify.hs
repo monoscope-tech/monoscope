@@ -35,14 +35,12 @@ import Control.Lens ((.~))
 import Control.Lens.Setter ((?~))
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
-import Data.ByteString.Lazy qualified as BL
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Log qualified
 import Network.Wreq (FormParam ((:=)), auth, basicAuth, defaults, header, postWith)
-import Network.Wreq.Types (FormParam)
 import Relude hiding (Reader, State, ask, get, modify, put, runState)
 import System.Config qualified as Config
 

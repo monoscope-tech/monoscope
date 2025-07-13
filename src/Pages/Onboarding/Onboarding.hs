@@ -35,7 +35,6 @@ import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.Slack (getDiscordDataByProjectId, getProjectSlackData)
@@ -47,7 +46,6 @@ import Models.Users.Users
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components
-import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import Servant (err401, errBody)

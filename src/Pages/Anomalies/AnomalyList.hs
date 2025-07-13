@@ -21,10 +21,9 @@ where
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Default (def)
-import Data.Map qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime, parseTimeM, utc, utcToZonedTime, utctDayTime)
+import Data.Time (UTCTime, getCurrentTime, utc, utcToZonedTime, utctDayTime)
 import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -38,32 +37,19 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
-import Models.Apis.Anomalies (ChangeType (..), FieldChange (..), FieldChangeKind (..), PayloadChange (..))
+import Models.Apis.Anomalies (FieldChange (..), PayloadChange (..))
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields.Query qualified as Fields
-import Models.Apis.Fields.Types (
-  Field (fieldType),
-  fieldTypeToText,
-  fieldsToNormalized,
-  groupFieldsByCategory,
- )
-import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Issues qualified as Issues
-import Models.Apis.RequestDumps qualified as RequestDumps
-import Models.Apis.Shapes (ShapeId (..), getShapeFields)
-import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users (User (id))
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Components (dateTime, statBox_)
 import Pkg.Components.ItemsList (TabFilter (..), TabFilterOpt (..))
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget qualified as Widget
-import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (pool))
@@ -699,13 +685,6 @@ anomalyAccentColor True False = "bg-fillSuccess-weak"
 anomalyAccentColor False False = "bg-fillError-strong"
 
 
-buildQueryForAnomaly :: Anomalies.AnomalyTypes -> Text -> Text
-buildQueryForAnomaly Anomalies.ATEndpoint hash = "hashes[*]==\"" <> hash <> "\""
-buildQueryForAnomaly Anomalies.ATShape hash = "hashes[*]==\"" <> hash <> "\""
-buildQueryForAnomaly Anomalies.ATFormat hash = "hashes[*]==\"" <> hash <> "\""
-buildQueryForAnomaly Anomalies.ATField hash = "hashes[*]==\"" <> hash <> "\""
-buildQueryForAnomaly Anomalies.ATRuntimeException hash = "hashes[*]==\"" <> hash <> "\""
-buildQueryForAnomaly Anomalies.ATUnknown hash = ""
 
 
 data IssueVM = IssueVM Bool UTCTime Text Issues.IssueL
@@ -1187,11 +1166,6 @@ renderFieldChange fieldChange =
                 toHtml $ fromMaybe "" fieldChange.newValue
 
 
-anomalyActionButtons :: Projects.ProjectId -> Issues.IssueId -> Bool -> Bool -> Text -> Html ()
-anomalyActionButtons pid aid acked achved host = do
-  div_ [class_ "flex itms-center gap-2"] do
-    anomalyAcknowlegeButton pid aid acked host
-    anomalyArchiveButton pid aid achved
 
 
 anomalyAcknowlegeButton :: Projects.ProjectId -> Issues.IssueId -> Bool -> Text -> Html ()

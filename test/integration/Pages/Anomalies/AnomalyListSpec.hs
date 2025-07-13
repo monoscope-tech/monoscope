@@ -21,6 +21,7 @@ import Database.PostgreSQL.Simple (Only (..), query)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import OddJobs.Job (Job (..))
@@ -116,18 +117,16 @@ spec = aroundAll withTestResources do
         AnomalyList.Acknowlege pid anid isack -> do
           pid `shouldBe` testPid
           isack `shouldBe` True
-          anid `shouldBe` anmId
+          anid `shouldBe` Issues.IssueId anmId.unAnomalyId
         _ -> error "Unexpected response"
       
       -- After acknowledging endpoint, child anomalies should be visible
       anomalies <- getNonEndpointAnomalies tr
-      -- Now shape and field anomalies should be visible
-      let shapeAnomalies = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.anomalyType == ATShape) anomalies
-      let fieldAnomalies = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.anomalyType == ATField) anomalies
-      let formatAnomalies = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.anomalyType == ATFormat) anomalies
+      -- In the new Issues system, shape/field/format anomalies are all API changes
+      let apiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
       
-      V.length shapeAnomalies `shouldSatisfy` (>= 1)
-      V.length (shapeAnomalies <> fieldAnomalies <> formatAnomalies) `shouldSatisfy` (> 0)
+      -- There should be API change issues visible after acknowledging the endpoint
+      V.length apiChangeIssues `shouldSatisfy` (> 0)
 
     it "should detect new shape anomaly after endpoint acknowledgment" \tr@TestResources{..} -> do
       currentTime <- getCurrentTime
@@ -161,10 +160,10 @@ spec = aroundAll withTestResources do
 
       -- Now check anomaly list
       anomalies <- getNonEndpointAnomalies tr
-      let shapesAnomalies = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.anomalyType == ATShape) anomalies
-      -- Format anomalies are hidden until parent shape is acknowledged
+      let apiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
+      -- In the new Issues system, shape anomalies are part of API changes
       
-      length shapesAnomalies `shouldSatisfy` (>= 1) -- At least one shape anomaly
+      length apiChangeIssues `shouldSatisfy` (>= 1) -- At least one API change issue
       length anomalies `shouldSatisfy` (> 0)
 
     it "should detect new format anomaly" \tr@TestResources{..} -> do
@@ -200,10 +199,10 @@ spec = aroundAll withTestResources do
 
       -- Get updated anomaly list
       anomalies <- getNonEndpointAnomalies tr
-      let formatAnomalies = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.anomalyType == ATFormat) anomalies
+      let apiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
       
-      -- After acknowledging shape, format anomalies should be visible
-      length formatAnomalies `shouldSatisfy` (>= 1)
+      -- In the new Issues system, format anomalies are part of API changes
+      length apiChangeIssues `shouldSatisfy` (>= 1)
       length anomalies `shouldSatisfy` (> 0)
 
     it "should get acknowledged anomalies" \tr@TestResources{..} -> do
@@ -211,11 +210,11 @@ spec = aroundAll withTestResources do
         AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowleged") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case pg of
         AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do
-          -- Acknowledged anomalies should include shapes (endpoint anomalies are never returned)
-          let shapesAnomalies = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.anomalyType == ATShape) anomalies
+          -- Acknowledged anomalies should include API changes (endpoint anomalies are never returned)
+          let apiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
           
-          -- We acknowledged at least one shape anomaly in the previous test
-          length shapesAnomalies `shouldSatisfy` (>= 1) 
+          -- We acknowledged at least one API change issue in the previous test
+          length apiChangeIssues `shouldSatisfy` (>= 1) 
           length anomalies `shouldSatisfy` (> 0)
         _ -> error "Unexpected response"
 
