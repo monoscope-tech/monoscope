@@ -153,8 +153,8 @@ themeFromCookie :: Cookies -> Text
 themeFromCookie cookies = case L.lookup "theme" cookies of
   Just "dark" -> "dark"
   Just "light" -> "light"
-  Just _ -> "light"
-  Nothing -> "light"
+  Just _ -> "dark"
+  Nothing -> "dark"
 
 
 getSessionId :: Cookies -> Handler (Maybe Sessions.PersistentSessionId)

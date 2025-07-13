@@ -874,6 +874,11 @@ code, pre, .code, .monospace {
   .btn-primary {
     @apply bg-fillBrand-strong hover:bg-fillBrand-strong text-textInverse-strong;
   }
+  
+  [data-theme="dark"] .btn-primary {
+    background-color: var(--color-iconBrand);
+    @apply hover:opacity-90 text-textInverse-strong ring-1 ring-strokeBrand-weak;
+  }
   .input, .select, .checkbox, .textarea {
     @apply shadow-none;
     --chkbg: var(--brand-color);

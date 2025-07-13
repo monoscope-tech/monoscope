@@ -256,7 +256,7 @@ bodyWrapper bcfg child = do
             end
     |]
 
-    body_ [class_ "h-full w-full bg-bgBase text-textStrong group/pg", term "data-theme" (maybe "light" (.theme) bcfg.sessM), term "hx-ext" "multi-swap,preload", term "preload" "mouseover"] do
+    body_ [class_ "h-full w-full bg-bgBase text-textStrong group/pg", term "data-theme" (maybe "dark" (.theme) bcfg.sessM), term "hx-ext" "multi-swap,preload", term "preload" "mouseover"] do
       div_
         [ style_ "z-index:99999"
         , class_ "pt-24 sm:hidden justify-center z-50 w-full p-4 bg-fillWeak overflow-y-auto inset-0 h-full max-h-full"
@@ -583,10 +583,15 @@ alerts_ = do
 
 loginBanner :: Html ()
 loginBanner = do
-  div_ [class_ "flex items-center justify-end border-b px-6 py-2 gap-4"] do
-    a_ [class_ "underline underline-offset-2 ", href_ "https://apitoolkit.io/docs/onboarding/"] "Documentation"
-    a_ [class_ "py-2 px-3 rounded-xl bg-transparent border border-fillBrand-strong text-fillBrand-strong shadow-sm hover:shadow-md", href_ "https://calendar.app.google/1a4HG5GZYv1sjjZG6"] "Book a demo with an engineer"
-    a_ [class_ "py-2 px-3 rounded-xl bg-fillBrand-strong text-textInverse-strong shadow-sm hover:shadow-md", href_ "/login"] "Start 30 day free trial"
+  div_ [class_ "flex items-center justify-between border-b border-strokeWeak bg-fillWeak px-4 py-1.5 gap-3 text-sm"] do
+    div_ [class_ "flex items-center gap-2"] do
+      faSprite_ "flask" "regular" "h-4 w-4 text-textBrand"
+      span_ [class_ "font-medium text-textStrong"] "Demo Project"
+      span_ [class_ "hidden sm:inline text-textWeak"] "· Explore APIToolkit's features"
+    div_ [class_ "flex items-center gap-3"] do
+      a_ [class_ "text-textBrand hover:underline underline-offset-2", href_ "https://apitoolkit.io/docs/onboarding/"] "Docs"
+      a_ [class_ "py-1 px-2.5 rounded-lg bg-fillWeak hover:bg-fillHover text-textStrong border border-strokeWeak text-xs font-medium", href_ "https://calendar.app.google/1a4HG5GZYv1sjjZG6"] "Book Demo"
+      a_ [class_ "py-1 px-2.5 rounded-lg bg-fillBrand-strong hover:opacity-90 text-textInverse-strong text-xs font-medium", href_ "/login"] "Start Free Trial"
 
 
 settingsWrapper :: Projects.ProjectId -> Text -> Html () -> Html ()

@@ -733,24 +733,24 @@ renderIssue hideByDefault currTime timeFilter issue = do
     div_ [class_ "flex-1 min-w-0"] do
       -- Title and badges row
       div_ [class_ "flex items-center gap-3 mb-3 flex-wrap"] do
-        h3_ [class_ "font-semibold text-textStrong text-base"] $ toHtml issue.title
+        h3_ [class_ "text-textStrong text-base"] $ toHtml issue.title
 
         -- Issue type badge
         case issue.issueType of
           Issues.RuntimeException ->
-            span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-strong text-fillWhite shadow-sm"] do
+            span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-strong text-textInverse-strong shadow-sm"] do
               faSprite_ "triangle-alert" "regular" "w-3 h-3"
               "ERROR"
           Issues.QueryAlert ->
-            span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-strong text-fillWhite shadow-sm"] do
+            span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-strong text-textInverse-strong shadow-sm"] do
               faSprite_ "zap" "regular" "w-3 h-3"
               "ALERT"
           Issues.APIChange ->
             if issue.critical
-              then span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-strong text-fillWhite shadow-sm"] do
+              then span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-strong text-textInverse-strong shadow-sm"] do
                 faSprite_ "exclamation-triangle" "regular" "w-3 h-3"
                 "BREAKING"
-              else span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillInformation-strong text-fillWhite shadow-sm"] do
+              else span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillInformation-strong text-textInverse-strong shadow-sm"] do
                 faSprite_ "info" "regular" "w-3 h-3 mr-0.5"
                 "Incremental"
 
@@ -774,7 +774,7 @@ renderIssue hideByDefault currTime timeFilter issue = do
                       "PUT" -> "bg-fillWarning-strong"
                       "DELETE" -> "bg-fillError-strong"
                       _ -> "bg-fillInformation-strong"
-                span_ [class_ $ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent " <> methodClass <> " text-fillWhite shadow-sm"] do
+                span_ [class_ $ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent " <> methodClass <> " text-textInverse-strong shadow-sm"] do
                   toHtml apiData.endpointMethod
                 -- Endpoint path
                 span_ [class_ "font-mono bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml apiData.endpointPath
@@ -854,7 +854,7 @@ renderIssue hideByDefault currTime timeFilter issue = do
             "View detailed payload changes"
 
           -- Payload details content
-          div_ [class_ "mt-4 border border-strokeWeak rounded-lg overflow-hidden bg-fillWhite"] do
+          div_ [class_ "mt-4 border border-strokeWeak rounded-lg overflow-hidden bg-bgRaised"] do
             renderPayloadChanges issue
 
       -- Action buttons
@@ -873,9 +873,9 @@ renderIssue hideByDefault currTime timeFilter issue = do
         button_
           [ class_
               $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
-              <> if isAcknowledged
-                then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80"
-                else "bg-fillPrimary text-fillWhite hover:bg-fillPrimary/90"
+                <> if isAcknowledged
+                  then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80"
+                  else "bg-fillPrimary text-textInverse-strong hover:bg-fillPrimary/90"
           , hxGet_ acknowledgeEndpoint
           , hxSwap_ "outerHTML"
           , hxTarget_ "closest .itemsListItem"
@@ -890,9 +890,9 @@ renderIssue hideByDefault currTime timeFilter issue = do
         button_
           [ class_
               $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
-              <> if isArchived
-                then "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak hover:bg-fillWarning-weak/80"
-                else "border border-strokeWeak text-textStrong hover:bg-fillWeak"
+                <> if isArchived
+                  then "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak hover:bg-fillWarning-weak/80"
+                  else "border border-strokeWeak text-textStrong hover:bg-fillWeak"
           , hxGet_ archiveEndpoint
           , hxSwap_ "outerHTML"
           , hxTarget_ "closest .itemsListItem"
@@ -1001,14 +1001,14 @@ renderPayloadChanges issue =
     let responseChanges = getAeson issue.responsePayloads :: [Anomalies.PayloadChange]
 
     when (not (null requestChanges) || not (null responseChanges)) do
-      div_ [class_ "border border-strokeWeak rounded-lg overflow-hidden bg-fillWhite group/payloadtabs"] do
+      div_ [class_ "border border-strokeWeak rounded-lg overflow-hidden bg-bgRaised group/payloadtabs"] do
         div_ [class_ "flex flex-col gap-2"] do
           -- Tab navigation using radio buttons
           div_ [role_ "tablist", Aria.orientation_ "horizontal", class_ "text-muted-foreground h-9 items-center justify-center rounded-xl p-[3px] w-full grid grid-cols-2 bg-fillWeak"] do
             -- Response tab (default active)
             label_
               [ role_ "tab"
-              , class_ "h-[calc(100%-1px)] flex-1 justify-center rounded-xl border border-transparent px-2 py-1 text-sm font-medium whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer has-[:checked]:bg-fillWhite has-[:checked]:text-textStrong bg-transparent text-textWeak"
+              , class_ "h-[calc(100%-1px)] flex-1 justify-center rounded-xl border border-transparent px-2 py-1 text-sm font-medium whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer has-[:checked]:bg-bgRaised has-[:checked]:text-textStrong bg-transparent text-textWeak"
               ]
               do
                 input_ [type_ "radio", name_ ("payload-tab-" <> Issues.issueIdText issue.id), class_ "hidden payload-tab-response", checked_]
@@ -1018,7 +1018,7 @@ renderPayloadChanges issue =
             -- Request tab
             label_
               [ role_ "tab"
-              , class_ "h-[calc(100%-1px)] flex-1 justify-center rounded-xl border border-transparent px-2 py-1 text-sm font-medium whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer has-[:checked]:bg-fillWhite has-[:checked]:text-textStrong bg-transparent text-textWeak"
+              , class_ "h-[calc(100%-1px)] flex-1 justify-center rounded-xl border border-transparent px-2 py-1 text-sm font-medium whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer has-[:checked]:bg-bgRaised has-[:checked]:text-textStrong bg-transparent text-textWeak"
               ]
               do
                 input_ [type_ "radio", name_ ("payload-tab-" <> Issues.issueIdText issue.id), class_ "hidden payload-tab-request"]
@@ -1057,35 +1057,35 @@ renderPayloadChange isResponse change =
       case (change.statusCode, change.method) of
         (Just statusCode, _) -> do
           let statusClass = case statusCode of
-                200 -> "bg-fillSuccess-strong text-fillWhite shadow-sm"
-                401 -> "bg-fillWarning-strong text-fillWhite shadow-sm"
-                422 -> "bg-fillWarning-strong text-fillWhite shadow-sm"
-                404 -> "bg-fillWarning-strong text-fillWhite shadow-sm"
-                500 -> "bg-fillError-strong text-fillWhite shadow-sm"
-                _ -> "bg-fillInformation-strong text-fillWhite shadow-sm"
+                200 -> "bg-fillSuccess-strong text-textInverse-strong shadow-sm"
+                401 -> "bg-fillWarning-strong text-textInverse-strong shadow-sm"
+                422 -> "bg-fillWarning-strong text-textInverse-strong shadow-sm"
+                404 -> "bg-fillWarning-strong text-textInverse-strong shadow-sm"
+                500 -> "bg-fillError-strong text-textInverse-strong shadow-sm"
+                _ -> "bg-fillInformation-strong text-textInverse-strong shadow-sm"
           span_ [class_ $ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent " <> statusClass] do
             toHtml $ show statusCode <> " " <> fromMaybe "" change.statusText
         (_, Just method) ->
-          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillInformation-strong text-fillWhite shadow-sm"] do
+          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillInformation-strong text-textInverse-strong shadow-sm"] do
             toHtml method
         _ -> pass
 
       -- Content type badge
-      span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-strokeWeak text-textWeak bg-fillWhite"] do
+      span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-strokeWeak text-textWeak bg-bgRaised"] do
         toHtml change.contentType
 
       -- Change type badge
       case change.changeType of
         Anomalies.Breaking ->
-          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillError-strong text-fillWhite shadow-sm"] do
+          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillError-strong text-textInverse-strong shadow-sm"] do
             faSprite_ "circle-x" "regular" "w-3 h-3 mr-1"
             "Breaking"
         Anomalies.Incremental ->
-          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillInformation-strong text-fillWhite shadow-sm"] do
+          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillInformation-strong text-textInverse-strong shadow-sm"] do
             faSprite_ "info" "regular" "w-3 h-3 mr-1"
             "Incremental"
         Anomalies.Safe ->
-          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillSuccess-strong text-fillWhite shadow-sm"] do
+          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillSuccess-strong text-textInverse-strong shadow-sm"] do
             faSprite_ "circle-check" "regular" "w-3 h-3 mr-1"
             "Safe"
 
@@ -1130,7 +1130,7 @@ renderPayloadChange isResponse change =
 -- Render individual field change
 renderFieldChange :: Anomalies.FieldChange -> Html ()
 renderFieldChange fieldChange =
-  div_ [class_ "border border-strokeWeak rounded-lg p-4 bg-fillWhite"] do
+  div_ [class_ "border border-strokeWeak rounded-lg p-4 bg-bgRaised"] do
     -- Field name and change kind badges
     div_ [class_ "flex items-start justify-between gap-4 mb-3"] do
       div_ [class_ "flex items-center gap-2 flex-wrap"] do
@@ -1148,7 +1148,7 @@ renderFieldChange fieldChange =
 
         -- Breaking badge if applicable
         when fieldChange.breaking do
-          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillError-strong text-fillWhite shadow-sm"] do
+          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillError-strong text-textInverse-strong shadow-sm"] do
             faSprite_ "triangle-alert" "regular" "w-3 h-3 mr-1"
             "Breaking"
 
