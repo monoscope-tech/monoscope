@@ -37,6 +37,18 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 18
+          cache: 'npm'
+      
+      - name: Cache Node modules
+        uses: actions/cache@v3
+        with:
+          path: |
+            node_modules
+            web-components/node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+      
       - run: npm install
       - run: npx tailwindcss  -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
       # - run: npx postcss-cli ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
@@ -45,6 +57,27 @@ jobs:
           cd web-components
           npm install
           npm run build
+
+      - name: Cache Cabal dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cabal/store
+            dist-newstyle
+          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project', '**/cabal.project.freeze') }}
+          restore-keys: |
+            ${{ runner.os }}-cabal-
+
+      - name: Cache Rust build
+        uses: actions/cache@v3
+        with:
+          path: |
+            rust-interop/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-rust-${{ hashFiles('rust-interop/Cargo.lock', 'rust-interop/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-
 
       - name: Build Rust interop library
         run: |
@@ -85,20 +118,6 @@ jobs:
             ./rust-interop/target/release/libCrust_interop.so
           retention-days: 1
 
-      - name: Cache build artifacts
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cabal/store
-            dist-newstyle
-            /usr/local/lib/libCrust_interop.so
-            /usr/local/lib/librust_interop.so
-            /usr/lib/libCrust_interop.so
-            /usr/lib/librust_interop.so
-          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project', '**/cabal.project.freeze') }}
-          restore-keys: |
-            ${{ runner.os }}-cabal-
-
   test:
     name: Test ${{ matrix.test-suite }}
     needs: build
@@ -121,19 +140,26 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libssl-dev librdkafka-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev
 
-      - name: Restore build artifacts
+      - name: Cache Cabal dependencies
         uses: actions/cache@v3
         with:
           path: |
             ~/.cabal/store
             dist-newstyle
-            /usr/local/lib/libCrust_interop.so
-            /usr/local/lib/librust_interop.so
-            /usr/lib/libCrust_interop.so
-            /usr/lib/librust_interop.so
           key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project', '**/cabal.project.freeze') }}
           restore-keys: |
             ${{ runner.os }}-cabal-
+
+      - name: Cache Rust build
+        uses: actions/cache@v3
+        with:
+          path: |
+            rust-interop/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-rust-${{ hashFiles('rust-interop/Cargo.lock', 'rust-interop/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-
 
       - name: Restore Rust libraries
         run: |
