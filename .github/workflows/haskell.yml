@@ -38,7 +38,7 @@ jobs:
         with:
           node-version: 18
           cache: 'npm'
-      
+
       - name: Cache Node modules
         uses: actions/cache@v3
         with:
@@ -48,7 +48,7 @@ jobs:
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
-      
+
       - run: npm install
       - run: npx tailwindcss  -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
       # - run: npx postcss-cli ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
@@ -83,11 +83,14 @@ jobs:
         run: |
           make prepare-rust-interop
           sudo mkdir -p /usr/local/lib
+          sudo cp rust-interop/target/release/* /usr/local/lib || true
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib || true
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so || true
           sudo mkdir -p /usr/lib
+          sudo cp rust-interop/target/release/* /usr/lib || true
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib || true
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so || true
+          sudo cp rust-interop/target/release/* dist/build/
           # Ensure the static library is available for cabal install
           ls -la rust-interop/target/release/
 
@@ -95,17 +98,12 @@ jobs:
         run: |
           cabal update
           cabal configure --enable-tests --enable-benchmarks
-      
+
       - name: Build dependencies
         run: cabal build --only-dependencies all
-      
+
       - name: Build project
         run: cabal build all --ghc-options "-O3"
-      
-      - name: Install to build-output
-        run: |
-          mkdir -p ./build-output
-          cabal install --install-method=copy --installdir=./build-output --ghc-options "-O3"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -116,7 +114,13 @@ jobs:
             ./static
             ./web-components/dist
             ./rust-interop/target/release/libCrust_interop.so
-          retention-days: 1
+            ./rust-interop/target/release/libCrust_interop.a
+          retention-days: 3
+
+      - name: Install to build-output
+        run: |
+          mkdir -p ./build-output
+          cabal install --install-method=copy --installdir=./build-output --ghc-options "-O3"
 
   test:
     name: Test ${{ matrix.test-suite }}
@@ -177,7 +181,7 @@ jobs:
         run: |
           cabal update
           cabal configure --enable-tests
-      
+
       - name: Run ${{ matrix.test-suite }}
         run: cabal test ${{ matrix.test-suite }}
 
