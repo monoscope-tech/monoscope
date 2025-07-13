@@ -19,7 +19,7 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq
-import Pages.Bots.Utils (BotType (..), chartImageUrl, handleTableResponse)
+import Pages.Bots.Utils (BotType (..), handleTableResponse)
 import Pkg.AI (callOpenAIAPI, systemPrompt)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (parseQueryToAST)
@@ -143,13 +143,6 @@ parseWhatsappBody body =
             _ -> Prompt body
   where
     defaultZero skip = fromMaybe 0 (readMaybe (toString skip))
-
-
-getWidgetTitle :: Text -> Text
-getWidgetTitle "Requests latency (ms)" = "Incoming request latency (ms)"
-getWidgetTitle "HTTP Requests by endpoint" = "Incoming Requests by Endpoint"
-getWidgetTitle "HTTP Errors (Incoming)" = "HTTP Errors (Incoming)"
-getWidgetTitle _ = "All requests (Incoming)"
 
 
 getBotContent :: Text -> Text -> Text -> Text -> AE.Value

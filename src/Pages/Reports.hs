@@ -27,7 +27,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
+import Database.PostgreSQL.Simple.Newtypes (getAeson)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
