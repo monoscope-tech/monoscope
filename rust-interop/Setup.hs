@@ -6,6 +6,7 @@ While it's an acceptable hack as this project is currently a prototype, this
 should be removed before `cargo-cabal` stable release.
 -}
 
+import Control.Monad (when, unless)
 import Data.Maybe
 import System.Environment (setEnv, lookupEnv)
 import qualified Distribution.PackageDescription as PD
@@ -15,19 +16,21 @@ import Distribution.Simple
     defaultMainWithHooks,
     simpleUserHooks,
   )
-import Distribution.Simple.LocalBuildInfo ( LocalBuildInfo (localPkgDescr))
-import Distribution.Simple.Setup ( BuildFlags (buildVerbosity), ConfigFlags (configVerbosity), fromFlag)
+import Distribution.Simple.LocalBuildInfo ( LocalBuildInfo (localPkgDescr), buildDir)
+import Distribution.Simple.Setup ( BuildFlags (buildVerbosity), ConfigFlags (configVerbosity), CopyFlags, fromFlag)
 import Distribution.Simple.UserHooks
-  ( UserHooks (buildHook, confHook),
+  ( UserHooks (buildHook, confHook, copyHook, instHook),
   )
-import Distribution.Simple.Utils (rawSystemExit)
-import System.Directory (getCurrentDirectory)
+import Distribution.Simple.Utils (rawSystemExit, installOrdinaryFile)
+import System.Directory (getCurrentDirectory, copyFile, createDirectoryIfMissing, doesFileExist)
+import System.FilePath ((</>))
 
 main :: IO ()
 main =
   defaultMainWithHooks
     simpleUserHooks
       { confHook = rustConfHook
+      , copyHook = rustCopyHook
       -- , buildHook = rustBuildHook
       }
 
@@ -53,6 +56,56 @@ rustConfHook (description, buildInfo) flags = do
                               -- (dir ++ "/target/debug") :
             PD.extraLibDirs libraryBuildInfo
     } } } }
+
+rustCopyHook ::
+  PD.PackageDescription ->
+  LocalBuildInfo ->
+  UserHooks ->
+  CopyFlags ->
+  IO ()
+rustCopyHook description localBuildInfo hooks flags = do
+  -- First, run the default copy hook
+  copyHook simpleUserHooks description localBuildInfo hooks flags
+  
+  -- Then, ensure the Rust library is copied to the build directory
+  dir <- getCurrentDirectory
+  let distBuildDir = buildDir localBuildInfo
+      libName = "libCrust_interop"
+      srcDir = dir </> "target" </> "release"
+  
+  putStrLn $ "=== Copying Rust libraries for installation"
+  putStrLn $ "=== Build directory: " ++ distBuildDir
+  
+  -- Create the destination directory if it doesn't exist
+  createDirectoryIfMissing True distBuildDir
+  
+  -- Copy static library (.a)
+  let srcPathA = srcDir </> (libName ++ ".a")
+      dstPathA = distBuildDir </> (libName ++ ".a")
+  srcExistsA <- doesFileExist srcPathA
+  when srcExistsA $ do
+    copyFile srcPathA dstPathA
+    putStrLn $ "=== Successfully copied " ++ libName ++ ".a"
+  
+  -- Copy shared library (.so) if it exists (Linux)
+  let srcPathSO = srcDir </> (libName ++ ".so")
+      dstPathSO = distBuildDir </> (libName ++ ".so")
+  srcExistsSO <- doesFileExist srcPathSO
+  when srcExistsSO $ do
+    copyFile srcPathSO dstPathSO
+    putStrLn $ "=== Successfully copied " ++ libName ++ ".so"
+  
+  -- Copy dylib if it exists (macOS)
+  let srcPathDylib = srcDir </> (libName ++ ".dylib")
+      dstPathDylib = distBuildDir </> (libName ++ ".dylib")
+  srcExistsDylib <- doesFileExist srcPathDylib
+  when srcExistsDylib $ do
+    copyFile srcPathDylib dstPathDylib
+    putStrLn $ "=== Successfully copied " ++ libName ++ ".dylib"
+  
+  -- Warn if no library files were found
+  unless (srcExistsA || srcExistsSO || srcExistsDylib) $
+    putStrLn $ "=== WARNING: No library files found in " ++ srcDir
 
 -- It would be nice to remove this hook at some point, e.g., if this RFC is merged
 -- in Cabal https://github.com/haskell/cabal/issues/7906

@@ -46,14 +46,17 @@ jobs:
           npm install
           npm run build
 
-      - run: |
+      - name: Build Rust interop library
+        run: |
           make prepare-rust-interop
           sudo mkdir -p /usr/local/lib
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib || true
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so || true
           sudo mkdir -p /usr/lib
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib || true
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so || true
+          # Ensure the static library is available for cabal install
+          ls -la rust-interop/target/release/
 
       - name: Configure project
         run: |

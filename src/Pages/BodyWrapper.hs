@@ -437,7 +437,7 @@ projectsDropDown currProject projects = do
 
 sideNav :: Sessions.Session -> Projects.Project -> Text -> Maybe Text -> Html ()
 sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker border-strokeWeak text-sm min-w-15 shrink-0 w-15 group-has-[#sidenav-toggle:checked]/pg:w-60  h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
-  div_ [class_ "px-2 group-has-[#sidenav-toggle:checked]/pg:px-6"] do
+  div_ [class_ "px-2 group-has-[#sidenav-toggle:checked]/pg:px-3"] do
     div_ [class_ "py-5 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center"] do
       a_ [href_ "/", class_ "relative h-6 flex-1 hidden group-has-[#sidenav-toggle:checked]/pg:inline-flex"] do
         -- Full logos (shown when sidebar is expanded)
@@ -473,7 +473,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
             faSprite_ fIcon "regular" "w-4 h-4 shrink-0 "
             span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
 
-  div_ [class_ "py-8 px-2 group-has-[#sidenav-toggle:checked]/pg:px-6 *:gap-2 *:whitespace-nowrap *:truncate flex flex-col gap-2.5 *:items-center *:overflow-x-hidden *:flex &:no-wrap"] do
+  div_ [class_ "py-8 px-2 group-has-[#sidenav-toggle:checked]/pg:px-3 *:gap-2 *:whitespace-nowrap *:truncate flex flex-col gap-2.5 *:items-center *:overflow-x-hidden *:flex &:no-wrap"] do
     let currUser = sess.persistentSession.user.getUser
         userIdentifier =
           if currUser.firstName /= "" || currUser.lastName /= ""
@@ -497,7 +497,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , href_ $ "/p/" <> project.id.toText <> "/settings"
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-textBrand leading-none "] (faSprite_ "gear" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
     a_
       [ class_ "hover:bg-fillBrand-weak "
       , target_ "blank"
@@ -506,7 +506,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , href_ "https://apitoolkit.io/docs/"
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-textBrand leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
 
     -- Dark mode toggle
     div_
@@ -546,14 +546,14 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , [__| on click js posthog.reset(); end |]
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center  rounded-full bg-fillError-weak text-textError leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 
 -- mapM_ renderNavBottomItem $ navBottomList project.id.toText
 
 navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 navbar projectM menuL currUser prePageTitle pageTitle pageTitleMonadId docsLink tabsM pageActionsM =
-  nav_ [id_ "main-navbar", class_ "w-full px-6 py-2 flex flex-row border-strokeWeak"] do
+  nav_ [id_ "main-navbar", class_ "w-full px-3 py-2 flex flex-row border-strokeWeak"] do
     div_ [class_ "flex-1 flex items-center text-textStrong gap-1"] do
       whenJust prePageTitle \pt -> whenJust (find (\a -> fst3 a == pt) menuL) \(_, _, icon) -> do
         whenJust projectM \p -> a_ [class_ "p-1 hover:bg-fillWeak inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ $ "/p/" <> p.id.toText <> "/dashboards"] do
