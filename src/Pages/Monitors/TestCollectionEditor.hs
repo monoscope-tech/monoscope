@@ -291,10 +291,10 @@ nameOfTest_ :: Text -> V.Vector Text -> Html ()
 nameOfTest_ name tags = do
   let tgs = decodeUtf8 $ AE.encode $ V.toList tags
   div_ [class_ "fieldset w-full p-4 bg-fillWeaker rounded-2xl"] do
-    div_ [class_ "flex flex-col rounded-xl p-4 bg-slate-50"] do
-      label_ [class_ "label text-slate-500 text-sm font-semibold"] "Name"
+    div_ [class_ "flex flex-col rounded-xl p-4 bg-fillWeaker"] do
+      label_ [class_ "label text-textWeak text-sm font-semibold"] "Name"
       input_ [placeholder_ "Give your test a name", id_ "test_title", class_ "input input-sm mb-2 shadow-none w-full", name_ "title", value_ name]
-      label_ [class_ "label text-slate-500 text-sm font-semibold"] "Tags"
+      label_ [class_ "label text-textWeak text-sm font-semibold"] "Tags"
       input_ [placeholder_ "Add tags", id_ "tags_input", class_ "rounded-lg shadow-none w-full", value_ tgs]
       script_
         [text|
@@ -309,12 +309,12 @@ nameOfTest_ name tags = do
 
 defineTestSteps_ :: Maybe Testing.Collection -> Html ()
 defineTestSteps_ colM = do
-  div_ [class_ "flex flex-col  notif bg-blue-100 bg-opacity-60 rounded-xl relative"] do
-    div_ [class_ "rounded-full absolute shadow-xs bg-white flex justify-center items-center h-5 w-5 top-1.5 right-1.5 mb-0"] do
-      a_ [[__|on click remove the closest parent <.notif/>|]] $ faSprite_ "xmark" "regular" "w-2 -mt-[2px] text-brand"
+  div_ [class_ "flex flex-col  notif bg-fillInformation-weak bg-opacity-60 rounded-xl relative"] do
+    div_ [class_ "rounded-full absolute shadow-xs bg-bgRaised flex justify-center items-center h-5 w-5 top-1.5 right-1.5 mb-0"] do
+      a_ [[__|on click remove the closest parent <.notif/>|]] $ faSprite_ "xmark" "regular" "w-2 -mt-[2px] text-textBrand"
     div_ [class_ "flex items-center gap-4 py-4 px-8"] do
-      faSprite_ "circle-info" "regular" "w-5 h-5 fill-none stroke-blue-500"
-      div_ [class_ "text-sm font-medium text-gray-500"] do
+      faSprite_ "circle-info" "regular" "w-5 h-5 fill-none stroke-strokeBrand-strong"
+      div_ [class_ "text-sm font-medium text-textWeak"] do
         p_ [] "Link multiple steps by creating variables from the request response data."
   div_ [class_ "overflow-y-hidden flex-1 "] $ termRaw "assertion-builder" [id_ ""] ""
   div_ [class_ "overflow-y-hidden flex-1 "] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
@@ -347,15 +347,15 @@ collectionPage pid colM col_rn respJson = do
         div_ [class_ "col-span-2 px-8 pt-5 pb-12"] do
           div_ [class_ "flex items-centers justify-between mb-4"] do
             div_ [class_ "flex items-center gap-2"] do
-              span_ [class_ "text-gray-900 font-medium whitespace-nowrap"] "Run the test every"
+              span_ [class_ "text-textStrong font-medium whitespace-nowrap"] "Run the test every"
               input_ [class_ "ml-3 input input-sm shadow-none w-12 text-center", type_ "number", value_ scheduleNumber, name_ "scheduleNumber"]
               select_ [class_ "select select-sm shadow-none", name_ "scheduleNumberUnit"] do
                 option_ (value_ "minutes" : [selected_ "" | scheduleNumberUnit == "minutes"]) "minutes"
                 option_ (value_ "hours" : [selected_ "" | scheduleNumberUnit == "hours"]) "hours"
                 option_ (value_ "days" : [selected_ "" | scheduleNumberUnit == "days"]) "days"
             div_ [class_ "flex items-center gap-2"] do
-              span_ [class_ "text-sm text-gray-500 font-medium"] "Status"
-              let extrcls = if scheduled then "bg-green-100 text-green-700" else "bg-gray-100 text-gray-600"
+              span_ [class_ "text-sm text-textWeak font-medium"] "Status"
+              let extrcls = if scheduled then "bg-fillSuccess-weak text-textSuccess" else "bg-fillWeak text-textWeak"
               select_ [class_ $ "select select-sm rounded-lg shadow-none " <> extrcls, name_ "scheduled"] do
                 option_ (value_ "on" : [selected_ "" | scheduled]) "Active"
                 option_ (value_ "off" : [selected_ "" | not scheduled]) "Inactive"
@@ -371,14 +371,14 @@ collectionPage pid colM col_rn respJson = do
           div_ [role_ "tablist", class_ "w-full h-full"] do
             div_ [class_ "w-full flex rounded-t-2xl border"] do
               button_
-                [ class_ "cursor-pointer a-tab px-4 py-3 text-sm text-gray-600 border-b-2 t-tab-active"
+                [ class_ "cursor-pointer a-tab px-4 py-3 text-sm text-textWeak border-b-2 t-tab-active"
                 , role_ "tab"
                 , type_ "button"
                 , onclick_ "navigatable(this, '#vars-t', '#v-tabs-container', 't-tab-active')"
                 ]
                 "Variables"
               button_
-                [ class_ "cursor-pointer a-tab px-4 py-3 text-sm whitespace-nowrap text-gray-600 border-b-2"
+                [ class_ "cursor-pointer a-tab px-4 py-3 text-sm whitespace-nowrap text-textWeak border-b-2"
                 , role_ "tab"
                 , type_ "button"
                 , onclick_ "navigatable(this, '#step-results-parent', '#v-tabs-container', 't-tab-active')"
@@ -392,10 +392,10 @@ collectionPage pid colM col_rn respJson = do
                 Just res -> do
                   V.iforM_ res collectionStepResult_
                 Nothing -> do
-                  div_ [id_ "step-results-indicator", class_ "steps-indicator flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
+                  div_ [id_ "step-results-indicator", class_ "steps-indicator flex flex-col justify-center items-center h-full text-textWeak text-xl space-y-4"] do
                     div_ [class_ "w-full flex flex-col gap-2 items-center empty-state"] do
                       Utils.faSprite_ "objects-column" "solid" "w-16 h-16"
-                      p_ [class_ "text-slate-500"] "Run tests to view the results here."
+                      p_ [class_ "text-textWeak"] "Run tests to view the results here."
                     div_ [class_ "hidden loading-indicator flex justify-center"] do
                       span_ [class_ "loading loading-dots loading-lg"] ""
 
@@ -425,13 +425,13 @@ variablesDialog pid colM = do
             span_ [] "="
             div_ [class_ "input text-left truncate ellipsis input-sm w-full bg-transparent"] $ toHtml var.variableValue
             div_
-              [ class_ "acursor-pointer h-5 w-5 flex justify-center items-center rounded-full bg-white shadow-sm border"
+              [ class_ "acursor-pointer h-5 w-5 flex justify-center items-center rounded-full bg-bgRaised shadow-sm border"
               , hxDelete_ $ "/p/" <> pid.toText <> "/monitors/" <> col.id.toText <> "/variables/" <> var.variableName
               , hxTarget_ "#test-variables-content"
               , hxSwap_ "outerHTML"
               ]
               do
-                faSprite_ "trash" "regular" "w-3 h-3 stroke-red-500"
+                faSprite_ "trash" "regular" "w-3 h-3 stroke-strokeError-strong"
       let varsJson = decodeUtf8 $ AE.encode $ V.toList vars
       script_
         [text|
@@ -440,13 +440,13 @@ variablesDialog pid colM = do
     when (isNothing colM) $ do
       div_ [class_ "w-full pt-24 text-center"] do
         h4_ [class_ "text-lg font-medium"] "Save New Test Collection To Create Local Variables"
-        p_ [class_ "text-gray-500"] "Save your new test collection before you can create local variables to be used in your test steps."
+        p_ [class_ "text-textWeak"] "Save your new test collection before you can create local variables to be used in your test steps."
     whenJust colM $ \col -> do
       let Testing.CollectionVariables vars = col.collectionVariables
       when (V.null vars) $ do
         div_ [class_ "w-full pt-24 text-center"] do
           h4_ [class_ "text-lg font-medium"] "Create Local Variables"
-          p_ [class_ "text-gray-500"] "Create local variables to be used in your test steps."
+          p_ [class_ "text-textWeak"] "Create local variables to be used in your test steps."
       label_ [Lucid.for_ "my_modal_7", class_ "flex items-center mx-4 mt-4 gap-2"] do
         faSprite_ "plus" "solid" "w-4 h-4"
         span_ [class_ "underline  text-textWeak font-medium"] "Add new variable"
@@ -479,7 +479,7 @@ variablesDialog pid colM = do
 
 collectionStepResult_ :: Int -> Testing.StepResult -> Html ()
 collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
-  when (idx == 0) $ div_ [id_ "step-results-indicator", class_ "absolute top-1/2 z-10 left-1/2 -translate-x-1/2 rounded-xs -translate-y-1/2 steps-indicator text-slate-400"] do
+  when (idx == 0) $ div_ [id_ "step-results-indicator", class_ "absolute top-1/2 z-10 left-1/2 -translate-x-1/2 rounded-xs -translate-y-1/2 steps-indicator text-textWeak"] do
     div_ [class_ "hidden loading-indicator flex justify-center bg-base-100 rounded-xs shadow-xs p-4"] do
       span_ [class_ "loading loading-dots loading-lg"] ""
   div_ [class_ "p-2 bg-base-200 font-bold"] do
@@ -513,7 +513,7 @@ jsonTreeAuxillaryCode = do
     div_ [id_ "log-item-context-menu", class_ "log-item-context-menu  origin-top-right absolute left-0 mt-2 rounded-md shadow-md shadow-slate-300 bg-base-100 ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-hidden z-10", role_ "menu", tabindex_ "-1"] do
       div_ [class_ "py-1 w-max", role_ "none"] do
         button_
-          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
+          [ class_ "cursor-pointer w-full text-left text-textStrong block px-4 py-1  hover:bg-fillWeak hover:text-textStrong"
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-1"
@@ -522,7 +522,7 @@ jsonTreeAuxillaryCode = do
           ]
           "Add an equals to assertion"
         button_
-          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
+          [ class_ "cursor-pointer w-full text-left text-textStrong block px-4 py-1  hover:bg-fillWeak hover:text-textStrong"
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-2"
@@ -531,7 +531,7 @@ jsonTreeAuxillaryCode = do
           ]
           "Add a not equals assertion"
         button_
-          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
+          [ class_ "cursor-pointer w-full text-left text-textStrong block px-4 py-1  hover:bg-fillWeak hover:text-textStrong"
           , role_ "menuitem"
           , tabindex_ "-1"
           , onclick_ "addToAssertions(event, 'ok', '>')"
@@ -539,7 +539,7 @@ jsonTreeAuxillaryCode = do
           ]
           "Add a greater than assertions"
         button_
-          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
+          [ class_ "cursor-pointer w-full text-left text-textStrong block px-4 py-1  hover:bg-fillWeak hover:text-textStrong"
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-4"
@@ -549,7 +549,7 @@ jsonTreeAuxillaryCode = do
           "Add an is string assertions"
 
         button_
-          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1  hover:bg-gray-100 hover:text-slate-900"
+          [ class_ "cursor-pointer w-full text-left text-textStrong block px-4 py-1  hover:bg-fillWeak hover:text-textStrong"
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-4"

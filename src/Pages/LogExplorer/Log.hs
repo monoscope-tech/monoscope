@@ -66,25 +66,25 @@ renderFacets facetSummary = do
 
       -- Color functions for different facet types
       statusColorFn val = case T.take 1 val of
-        "2" -> "bg-green-500"
-        "3" -> "bg-blue-500"
-        "4" -> "bg-yellow-500"
-        "5" -> "bg-red-600"
-        _ -> "bg-gray-500"
+        "2" -> "bg-fillSuccess-strong"
+        "3" -> "bg-fillBrand-strong"
+        "4" -> "bg-fillWarning-strong"
+        "5" -> "bg-fillError-strong"
+        _ -> "bg-fillStrong"
 
       methodColorFn val = case val of
-        "GET" -> "bg-[#067cff]"
-        "POST" -> "bg-green-500"
-        "PUT" -> "bg-amber-500"
-        "DELETE" -> "bg-red-500"
-        _ -> "bg-purple-500"
+        "GET" -> "bg-fillBrand-strong"
+        "POST" -> "bg-fillSuccess-strong"
+        "PUT" -> "bg-fillWarning-strong"
+        "DELETE" -> "bg-fillError-strong"
+        _ -> "bg-fillBrand-strong"
 
       levelColorFn val = case val of
-        "ERROR" -> "bg-red-500"
-        "WARN" -> "bg-yellow-500"
-        "INFO" -> "bg-blue-500"
-        "DEBUG" -> "bg-gray-500"
-        _ -> "bg-gray-400"
+        "ERROR" -> "bg-fillError-strong"
+        "WARN" -> "bg-fillWarning-strong"
+        "INFO" -> "bg-fillBrand-strong"
+        "DEBUG" -> "bg-fillStrong"
+        _ -> "bg-fillWeak"
 
       -- Group facet fields by category
       -- Define mapping of field keys to display names and color functions
@@ -100,7 +100,7 @@ renderFacets facetSummary = do
         , ("resource___service___version", "Service Version", const "")
         , ("attributes___http___request___method", "HTTP Method", methodColorFn)
         , ("attributes___http___response___status_code", "HTTP Status", statusColorFn)
-        , ("attributes___error___type", "Error Type", const "bg-red-500")
+        , ("attributes___error___type", "Error Type", const "bg-fillError-strong")
         ]
 
       -- Grouped facets for better organization
@@ -156,8 +156,8 @@ renderFacets facetSummary = do
         ,
           ( "Errors & Exceptions"
           ,
-            [ ("attributes___error___type", "Error Type", const "bg-red-500")
-            , ("attributes___exception___type", "Exception Type", const "bg-red-500")
+            [ ("attributes___error___type", "Error Type", const "bg-fillError-strong")
+            , ("attributes___exception___type", "Exception Type", const "bg-fillError-strong")
             , ("attributes___exception___message", "Exception Message", const "")
             ]
           )
@@ -613,7 +613,7 @@ virtualTable page = do
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
-  section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-hidden pb-2 group/pg", id_ "apiLogsPage"] do
+  section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-hidden overflow-x-hidden pb-2 group/pg", id_ "apiLogsPage"] do
     template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
     div_
       [ style_ "z-index:26"
@@ -636,7 +636,7 @@ apiLogsPage page = do
               input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
               input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
               input_ [type_ "hidden", value_ "", name_ "reqCreatedAt", id_ "req_created_at_input"]
-    div_ [] do
+    div_ [class_ "w-full"] do
       logQueryBox_
         LogQueryBoxConfig
           { pid = page.pid
@@ -720,8 +720,18 @@ apiLogsPage page = do
             span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
             span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
             "filters"
-            input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked)"]
-            script_ "document.getElementById('toggle-filters').checked = localStorage.getItem('toggle-filter-checked') === 'true';"
+            input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked); setTimeout(() => { const editor = document.getElementById('filterElement'); if (editor && editor.refreshLayout) editor.refreshLayout(); }, 200);"]
+            script_
+              $ [text|
+              document.getElementById('toggle-filters').checked = localStorage.getItem('toggle-filter-checked') === 'true';
+              // Ensure editor layout is correct on initial load
+              setTimeout(() => {
+                const editor = document.getElementById('filterElement');
+                if (editor && editor.refreshLayout) {
+                  editor.refreshLayout();
+                }
+              }, 300);
+            |]
           span_ [class_ "text-strokeWeak "] "|"
           div_ [class_ ""] $ span_ [class_ "text-textStrong"] (toHtml $ prettyPrintCount page.resultCount) >> span_ [class_ "text-textStrong"] (toHtml " rows")
         div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-bgBase transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
@@ -763,7 +773,7 @@ apiLogsPage page = do
             ]
             ""
 
-      resizer_ "log_details_container" "details_width" False
+      div_ [class_ $ "transition-opacity duration-200 " <> if isJust page.targetEvent then "" else "opacity-0 pointer-events-none hidden", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
 
       div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0", id_ "log_details_container"] do
         span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""

@@ -74,6 +74,98 @@
             "color": "#f3d999"
           }
         }
+      },
+    "dark": {
+        "color":[
+            "#1A74A8",
+            "#91cc75",
+            "#fac858",
+            "#ee6666",
+            "#73c0de",
+            "#3ba272",
+            "#fc8452",
+            "#9a60b4",
+            "#ea7ccc",
+            "#37a2da",
+            "#32c5e9",
+            "#67e0e3",
+            "#9fe6b8",
+            "#ffdb5c",
+            "#ff9f7f",
+            "#fb7293",
+            "#e062ae",
+            "#e690d1",
+            "#e7bcf3",
+            "#9d96f5"
+          ],
+        "backgroundColor": "transparent",
+        "textStyle": {
+          "color": "#e0e0e0"
+        },
+        "title": {
+          "textStyle": {
+            "color": "#e0e0e0"
+          }
+        },
+        "line": {
+          "itemStyle": {
+            "borderWidth": 1
+          },
+          "lineStyle": {
+            "width": 2
+          },
+          "symbolSize": 4,
+          "symbol": "emptyCircle",
+          "smooth": false
+        },
+        "bar": {
+          "itemStyle": {
+            "barBorderWidth": 0,
+            "barBorderColor": "#ccc"
+          }
+        },
+        "pie": {
+          "itemStyle": {
+            "borderWidth": 0,
+            "borderColor": "#ccc"
+          }
+        },
+        "scatter": {
+          "itemStyle": {
+            "borderWidth": 0,
+            "borderColor": "#ccc"
+          }
+        },
+        "visualMap": {
+          "color": ["#e01f54", "#e7dbc3"],
+          "textStyle": {
+            "color": "#e0e0e0"
+          }
+        },
+        "graph": {
+          "itemStyle": {
+            "color": "#a4d8c2"
+          },
+          "linkStyle": {
+            "color": "#f3d999"
+          }
+        },
+        "grid": {
+          "left": "10%",
+          "right": "10%",
+          "top": "60",
+          "bottom": "60"
+        },
+        "axisLine": {
+          "lineStyle": {
+            "color": "#555"
+          }
+        },
+        "splitLine": {
+          "lineStyle": {
+            "color": "#333"
+          }
+        }
       }
   }
 

@@ -357,7 +357,7 @@ testSessionHeader pool = do
          ON CONFLICT (project_id, user_id) DO UPDATE SET permission = 'admin'|]
         (Only testProjectId)
 
-  Auth.sessionByID (Just pSessId) "requestID" False Nothing
+  Auth.sessionByID (Just pSessId) "requestID" False "light" Nothing
     & runErrorNoCallStack @Servant.ServerError
     & DB.runDB pool
     & runTime

@@ -47,12 +47,12 @@ statBox_ pid iconM title helpInfo val bckupValM valClsM = do
   --       Nothing -> ""
   div_ [class_ "bg-fillWeaker rounded-3xl flex flex-col gap-3 p-5 border border-strokeWeak"] do
     whenJust iconM $ \(icon, kind, color) -> do
-      div_ [class_ "flex items-center justify-center h-10 w-10 bg-slate-50 rounded-xl"] do
+      div_ [class_ "flex items-center justify-center h-10 w-10 bg-fillWeaker rounded-xl"] do
         faSprite_ icon kind $ "w-4 h-4 " <> color
     div_ [class_ "flex flex-col gap-1"] do
       let fsiz = if isJust iconM then "text-2xl " else "text-4xl "
-      span_ [class_ $ "font-bold  " <> fsiz <> fromMaybe "text-gray-800" valClsM] $ toHtml val
-      div_ [class_ "flex gap-2 items-center text-sm text-gray-500"] do
+      span_ [class_ $ "font-bold  " <> fsiz <> fromMaybe "text-textStrong" valClsM] $ toHtml val
+      div_ [class_ "flex gap-2 items-center text-sm text-textWeak"] do
         p_ [] $ toHtml title
         span_ [term "data-tip" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 mt-[-2px]"
 
@@ -61,10 +61,10 @@ emptyState_ :: Text -> Text -> Maybe Text -> Text -> Html ()
 emptyState_ title subTxt url btnText =
   let (processedUrl, targetAttr) = maybe ("", []) (\u -> (u, [target_ "_blank" | "https://" `T.isPrefixOf` u])) url
    in section_ [class_ "w-max mx-auto my-8 text-center p-5 sm:py-14 sm:px-24 flex flex-col gap-4"] do
-        div_ [] $ faSprite_ "empty" "regular" "h-24 w-24 stroke-blue-500 fill-blue-500"
+        div_ [] $ faSprite_ "empty" "regular" "h-24 w-24 stroke-strokeBrand-strong fill-fillBrand-strong"
         div_ [class_ "flex flex-col gap-2"] do
-          h2_ [class_ "text-xl text-slate-800 font-bold"] $ toHtml title
-          p_ [class_ "text-sm font-medium text-gray-500"] $ toHtml subTxt
+          h2_ [class_ "text-xl text-textStrong font-bold"] $ toHtml title
+          p_ [class_ "text-sm font-medium text-textWeak"] $ toHtml subTxt
           a_ ([href_ processedUrl, class_ "btn text-sm w-max mx-auto btn-primary"] ++ targetAttr) $ toHtml btnText
 
 
@@ -165,7 +165,7 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan = do
 freePricing :: Projects.ProjectId -> Bool -> Html ()
 freePricing pid isCurrent = do
   div_
-    [ class_ "relative bg-white rounded-2xl py-11 px-4 outline outline-strokeWeak overflow-hidden"
+    [ class_ "relative bg-bgRaised rounded-2xl py-11 px-4 outline outline-strokeWeak overflow-hidden"
     , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
     , id_ "freePricing"
     , hxSwap_ "none"
@@ -211,7 +211,7 @@ popularPricing :: Projects.ProjectId -> Text -> Bool -> Html ()
 popularPricing pid lemonUrl isCurrent = do
   div_ [class_ "relative"] do
     div_
-      [ class_ "relative bg-white rounded-2xl py-11 px-4 outline overflow-hidden outline-strokeBrand-strong shadow-[0px_3px_3px_-1.5px_rgba(10,13,18,0.04)] shadow-[0px_8px_8px_-4px_rgba(10,13,18,0.03)] shadow-[0px_20px_24px_-4px_rgba(10,13,18,0.08)]"
+      [ class_ "relative bg-bgRaised rounded-2xl py-11 px-4 outline overflow-hidden outline-strokeBrand-strong shadow-[0px_3px_3px_-1.5px_rgba(10,13,18,0.04)] shadow-[0px_8px_8px_-4px_rgba(10,13,18,0.03)] shadow-[0px_20px_24px_-4px_rgba(10,13,18,0.08)]"
       , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
       , id_ "GraduatedPricing"
       , hxIndicator_ "#loadingIndicator"
@@ -265,7 +265,7 @@ popularPricing pid lemonUrl isCurrent = do
 systemsPricing :: Projects.ProjectId -> Text -> Bool -> Html ()
 systemsPricing pid critical isCurrent = do
   div_
-    [ class_ "relative bg-white rounded-2xl py-11 px-4 outline outline-strokeWeak overflow-hidden"
+    [ class_ "relative bg-bgRaised rounded-2xl py-11 px-4 outline outline-strokeWeak overflow-hidden"
     , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
     , id_ "SystemsPricing"
     , hxIndicator_ "#loadingIndicator"
@@ -328,12 +328,13 @@ navBar :: Html ()
 navBar = do
   nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full w-full px-6 py-4 bg-base-100 flex flex-row justify-between"] do
     div_ [class_ "flex justify-between items-center gap-4 w-[1000px] mx-auto"] do
-      a_ [href_ "https://apitoolkit.io", class_ "flex items-center text-gray-500 hover:text-gray-700"] do
+      a_ [href_ "https://apitoolkit.io", class_ "flex items-center text-textWeak hover:text-textStrong"] do
+        -- Only show full logos (no mini version needed for navbar)
         img_
-          [ class_ "h-12 sd-hidden"
-          , src_ "/public/assets/svgs/logo.svg"
+          [ class_ "h-12 dark:hidden"
+          , src_ "/public/assets/svgs/logo_black.svg"
           ]
         img_
-          [ class_ "h-12 w-10 hidden sd-show"
-          , src_ "/public/assets/svgs/logo_mini.svg"
+          [ class_ "h-12 hidden dark:block"
+          , src_ "/public/assets/svgs/logo_white.svg"
           ]

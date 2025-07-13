@@ -1,6 +1,7 @@
 'use strict';
 import { params } from './main';
 const DEFAULT_BACKGROUND_STYLE = { color: 'rgba(240,248,255, 0.4)' };
+const DARK_BACKGROUND_STYLE = { color: 'rgba(40, 40, 40, 0.15)' };
 const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
 const DEFAULT_PALETTE = ['#1A74A8', '#067A57CC', '#EE6666', '#FAC858', '#73C0DE', '#3BA272', '#FC8452', '#9A60B4', '#ea7ccc'];
@@ -14,17 +15,26 @@ const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt
     { offset: 1, color: (window as any).echarts.color.modifyAlpha(paletteColor, 0) },
   ]);
 
+  const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
+  const backgroundStyle = isDarkMode ? DARK_BACKGROUND_STYLE : DEFAULT_BACKGROUND_STYLE;
+
   const seriesOpt: any = {
     type: widgetData.chartType,
     name,
     stack: widgetData.chartType === 'line' ? undefined : widgetData.yAxisLabel || 'units',
     showSymbol: false,
     showBackground: true,
-    backgroundStyle: DEFAULT_BACKGROUND_STYLE,
+    backgroundStyle,
     barMaxWidth: '10',
     barMinHeight: '1',
     encode: { x: 0, y: i + 1 },
   };
+  
+  // For line charts in dark mode, override the symbol to avoid white centers
+  if (widgetData.chartType === 'line' && isDarkMode) {
+    seriesOpt.symbol = 'circle'; // Use filled circle instead of empty circle
+    seriesOpt.symbolSize = 4;
+  }
 
   if (widgetData.widgetType == 'timeseries_stat') {
     seriesOpt.itemStyle = { color: gradientColor };
@@ -148,7 +158,7 @@ type WidGetData = {
 };
 
 const chartWidget = (widgetData: WidGetData) => {
-  const { chartType, opt, chartId, query, querySQL, theme } = widgetData,
+  const { chartType, opt, chartId, query, querySQL } = widgetData,
     chartEl = $(chartId),
     liveStreamCheckbox = $('streamLiveData') as HTMLInputElement;
   let intervalId: NodeJS.Timeout | null = null;
@@ -158,6 +168,10 @@ const chartWidget = (widgetData: WidGetData) => {
   if (existingChart) {
     existingChart.dispose();
   }
+
+  // Determine theme based on current mode
+  const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
+  const theme = isDarkMode ? 'dark' : widgetData.theme || 'default';
 
   // Initialize new chart
   const chart = (window as any).echarts.init(chartEl, theme);
@@ -178,6 +192,27 @@ const chartWidget = (widgetData: WidGetData) => {
 
   (window as any)[`${chartType}Chart`] = chart;
 
+  // Get CSS variable values from body (where theme is applied)
+  const computedStyle = getComputedStyle(document.body);
+  const textColor = computedStyle.getPropertyValue('--color-textWeak').trim();
+  const tooltipBg = computedStyle.getPropertyValue('--color-bgRaised').trim();
+  const tooltipTextColor = computedStyle.getPropertyValue('--color-textStrong').trim();
+  const tooltipBorderColor = computedStyle.getPropertyValue('--color-borderWeak').trim();
+  
+  if (textColor) {
+    opt.legend = opt.legend || {};
+    opt.legend.textStyle = opt.legend.textStyle || {};
+    opt.legend.textStyle.color = textColor;
+  }
+  
+  // Configure tooltip styling
+  opt.tooltip = opt.tooltip || {};
+  opt.tooltip.backgroundColor = tooltipBg || (isDarkMode ? 'rgba(50, 50, 50, 0.9)' : 'rgba(255, 255, 255, 0.9)');
+  opt.tooltip.textStyle = opt.tooltip.textStyle || {};
+  opt.tooltip.textStyle.color = tooltipTextColor || (isDarkMode ? '#e0e0e0' : '#333');
+  opt.tooltip.borderColor = tooltipBorderColor || (isDarkMode ? '#555' : '#ccc');
+  opt.tooltip.borderWidth = 1;
+  
   chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source));
 
   const resizeObserver = new ResizeObserver(() => requestAnimationFrame(() => (window as any).echarts.getInstanceByDom(chartEl).resize()));
@@ -195,7 +230,14 @@ const chartWidget = (widgetData: WidGetData) => {
     });
 
   if (!opt.dataset.source && chartEl) {
-    chart.showLoading();
+    const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
+    chart.showLoading({
+      text: 'Loading...',
+      color: isDarkMode ? '#1A74A8' : '#1A74A8',
+      textColor: isDarkMode ? '#e0e0e0' : '#333',
+      maskColor: isDarkMode ? 'rgba(30, 30, 30, 0.8)' : 'rgba(255, 255, 255, 0.8)',
+      zlevel: 0
+    });
     new IntersectionObserver(
       (entries, observer) => entries[0]?.isIntersecting && (updateChartData(chart, opt, true, widgetData), observer.disconnect())
     ).observe(chartEl);
@@ -228,6 +270,51 @@ const chartWidget = (widgetData: WidGetData) => {
   window.addEventListener('pagehide', () => {
     if (intervalId) clearInterval(intervalId);
     resizeObserver.disconnect();
+  });
+
+  // Listen for theme changes
+  const observer = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      if (mutation.type === 'attributes' && mutation.attributeName === 'data-theme') {
+        const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
+        const newTheme = isDarkMode ? 'dark' : widgetData.theme || 'default';
+        
+        // Dispose and reinitialize chart with new theme
+        chart.dispose();
+        const newChart = (window as any).echarts.init(chartEl, newTheme);
+        newChart.group = 'default';
+        (window as any)[`${chartType}Chart`] = newChart;
+        
+        // Get CSS variable values from body (where theme is applied)
+        const computedStyle = getComputedStyle(document.body);
+        const textColor = computedStyle.getPropertyValue('--color-textWeak').trim();
+        const tooltipBg = computedStyle.getPropertyValue('--color-bgRaised').trim();
+        const tooltipTextColor = computedStyle.getPropertyValue('--color-textStrong').trim();
+        const tooltipBorderColor = computedStyle.getPropertyValue('--color-borderWeak').trim();
+        
+        if (textColor) {
+          opt.legend = opt.legend || {};
+          opt.legend.textStyle = opt.legend.textStyle || {};
+          opt.legend.textStyle.color = textColor;
+        }
+        
+        // Configure tooltip styling
+        opt.tooltip = opt.tooltip || {};
+        opt.tooltip.backgroundColor = tooltipBg || (isDarkMode ? 'rgba(50, 50, 50, 0.9)' : 'rgba(255, 255, 255, 0.9)');
+        opt.tooltip.textStyle = opt.tooltip.textStyle || {};
+        opt.tooltip.textStyle.color = tooltipTextColor || (isDarkMode ? '#e0e0e0' : '#333');
+        opt.tooltip.borderColor = tooltipBorderColor || (isDarkMode ? '#555' : '#ccc');
+        opt.tooltip.borderWidth = 1;
+        
+        // Restore the chart with current options and data
+        newChart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source));
+      }
+    });
+  });
+
+  observer.observe(document.body, {
+    attributes: true,
+    attributeFilter: ['data-theme']
   });
 };
 

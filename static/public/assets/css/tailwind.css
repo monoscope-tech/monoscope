@@ -12,6 +12,8 @@
     cupcake;
 }
 
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
 /* JetBrains Mono font */
 @font-face {
   font-family: 'JetBrains Mono';
@@ -48,93 +50,98 @@
 
 @theme {
   /* Simple colors */
-  --color-gray-25: #fcfcfd;
-  --color-gray-150: #ecedf0;
-  --color-slate-25: #fbfcfd;
-  --color-slate-150: #e9eef4;
-  --color-slate-250: #d6dee8;
+  --color-gray-25: oklch(99.1% 0.002 247);
+  --color-gray-150: oklch(94.5% 0.005 247);
+  --color-slate-25: oklch(99.1% 0.002 226);
+  --color-slate-150: oklch(94.5% 0.007 226);
+  --color-slate-250: oklch(89.2% 0.012 226);
 
   /* Background colors */
-  --color-bgAlternate: #f5f6fa;
-  --color-bgBase: #fbfcfd;
-  --color-bgInverse: #12131a;
-  --color-bgOverlay: #fbfcfd;
-  --color-bgRaised: #fbfcfd;
-  --color-bgSunken: #f5f6fa;
+  --color-bgAlternate: oklch(97.7% 0.006 247);
+  --color-bgBase: oklch(99.1% 0.002 247);
+  --color-bgInverse: oklch(16.4% 0.012 263);
+  --color-bgOverlay: oklch(99.1% 0.002 247);
+  --color-bgRaised: oklch(99.1% 0.002 247);
+  --color-bgSunken: oklch(97.7% 0.006 247);
+  --color-bgBrand: rgb(0 104 255);
 
   /* Fill colors */
-  --color-fillBrand-strong: #0068ff;
-  --color-fillBrand-weak: #0068ff0d;
-  --color-fillDisabled: #0011661a;
-  --color-fillStrong: #000626e5;
-  --color-fillError-strong: #c73a3a;
-  --color-fillError-weak: #ff4a4a0d;
-  --color-fillHover: #0015800a;
-  --color-fillInformation-strong: #1a74a8;
-  --color-fillInformation-weak: #26b0ff0d;
-  --color-fillInverseDisabled: #ffffff1f;
-  --color-fillInverse-weak: #ffffff0f;
-  --color-fillOverlay: #000d4d73;
-  --color-fillPress: #0011661a;
-  --color-fillSelected: #0068ff;
-  --color-fillSuccess-strong: #067a57;
-  --color-fillSuccess-weak: #0acc920d;
-  --color-fillWarning-strong: #8f6c1a;
-  --color-fillDisabled: #0015800a;
-  --color-fillWarning-weak: #ffc02e0d;
-  --color-fillWeak: #0015800a;
-  --color-fillWeaker: #00158005;
-  --color-fillWhite: #ffffff;
-  --color-fillYellow: #fec62e;
-  --color-fillWeakerSolid: #f7f7fc;
+  --color-fillBrand-strong: rgb(0 104 255);
+  --color-fillBrand-weak: rgba(0 104 255 / 0.05);
+  --color-fillDisabled: rgba(0 17 102 / 0.1);
+  --color-fillStrong: rgba(0 6 38 / 0.9);
+  --color-fillError-strong: oklch(51.3% 0.197 21);
+  --color-fillError-weak: rgba(255 74 74 / 0.05);
+  --color-fillHover: rgba(0 21 128 / 0.04);
+  --color-fillInformation-strong: oklch(49.3% 0.088 241);
+  --color-fillInformation-weak: rgba(38 176 255 / 0.05);
+  --color-fillInverseDisabled: rgba(255 255 255 / 0.12);
+  --color-fillInverse-hover: rgba(255 255 255 / 0.06);
+  --color-fillInverse-press: rgba(255 255 255 / 0.12);
+  --color-fillInverse-strong: oklch(99.1% 0.002 247);
+  --color-fillInverse-weak: rgba(255 255 255 / 0.06);
+  --color-fillOverlay: rgba(0 13 77 / 0.45);
+  --color-fillPress: rgba(0 17 102 / 0.1);
+  --color-fillSelected: rgb(0 104 255);
+  --color-fillSuccess-strong: oklch(47.8% 0.130 162);
+  --color-fillSuccess-weak: rgba(10 204 146 / 0.05);
+  --color-fillWarning-strong: oklch(54.7% 0.126 69);
+  --color-fillWarning-weak: rgba(255 192 46 / 0.05);
+  --color-fillWeak: rgba(0 21 128 / 0.04);
+  --color-fillWeaker: rgba(0 21 128 / 0.02);
+  --color-fillWhite: rgb(255 255 255);
+  --color-fillYellow: oklch(85.8% 0.179 92);
 
   /* Icon colors */
-  --color-iconBrand: #0068ffcc;
-  --color-iconDisabled: #0011661a;
-  --color-iconError: #c73a3acc;
-  --color-iconInformation: #1a74a8cc;
-  --color-iconInverse: #ffffff99;
-  --color-iconInverseDisabled: #ffffff1f;
-  --color-iconInverse-strong: #ffffff;
-  --color-iconNeutral: #000d4d73;
-  --color-iconSuccess: #067a57cc;
-  --color-iconWarning: #8f6c1acc;
+  --color-iconBrand: rgba(0 104 255 / 0.8);
+  --color-iconDisabled: rgba(0 17 102 / 0.1);
+  --color-iconError: rgba(199 58 58 / 0.8);
+  --color-iconInformation: rgba(26 116 168 / 0.8);
+  --color-iconInverse: rgba(255 255 255 / 0.6);
+  --color-iconInverseDisabled: rgba(255 255 255 / 0.12);
+  --color-iconInverse-strong: rgb(255 255 255);
+  --color-iconNeutral: rgba(0 13 77 / 0.45);
+  --color-iconSuccess: rgba(6 122 87 / 0.8);
+  --color-iconWarning: rgba(143 108 26 / 0.8);
 
   /* Stroke colors */
-  --color-strokeBrand-strong: #0068ffcc;
-  --color-strokeBrand-weak: #0068ff33;
-  --color-strokeDisabled: #0011661a;
-  --color-strokeError-strong: #c73a3acc;
-  --color-strokeError-weak: #c73a3a24;
-  --color-strokeFocus: #0068ff;
-  --color-strokeInformation-strong: #1a74a8cc;
-  --color-strokeInformation-weak: #1a74a833;
-  --color-strokeInverseDisabled: #ffffff1f;
-  --color-strokeInverse-strong: #ffffff99;
-  --color-strokeInverse-weak: #ffffff1f;
-  --color-strokeSelected: #0068ff;
-  --color-strokeStrong: #000d4d73;
-  --color-strokeSuccess-strong: #067a57cc;
-  --color-strokeSuccess-weak: #067a5733;
-  --color-strokeWarning-strong: #8f6c1acc;
-  --color-strokeWarning-weak: #8f6c1a33;
-  --color-strokeWeak: #0011661a;
+  --color-strokeBrand-strong: rgba(0 104 255 / 0.8);
+  --color-strokeBrand-weak: rgba(0 104 255 / 0.2);
+  --color-strokeDisabled: rgba(0 17 102 / 0.1);
+  --color-strokeError-strong: rgba(199 58 58 / 0.8);
+  --color-strokeError-weak: rgba(199 58 58 / 0.14);
+  --color-strokeFocus: rgb(0 104 255);
+  --color-strokeInformation-strong: rgba(26 116 168 / 0.8);
+  --color-strokeInformation-weak: rgba(26 116 168 / 0.2);
+  --color-strokeInverseDisabled: rgba(255 255 255 / 0.12);
+  --color-strokeInverse-strong: rgba(255 255 255 / 0.6);
+  --color-strokeInverse-weak: rgba(255 255 255 / 0.12);
+  --color-strokeSelected: rgb(0 104 255);
+  --color-strokeStrong: rgba(0 13 77 / 0.45);
+  --color-strokeSuccess-strong: rgba(6 122 87 / 0.8);
+  --color-strokeSuccess-weak: rgba(6 122 87 / 0.2);
+  --color-strokeWarning-strong: rgba(143 108 26 / 0.8);
+  --color-strokeWarning-weak: rgba(143 108 26 / 0.2);
+  --color-strokeWeak: rgba(0 17 102 / 0.1);
 
   /* Text colors */
-  --color-textBrand: #0068ff;
-  --color-textDisabled: #000d4d73;
-  --color-textError: #c73a3a;
-  --color-textInverseDisabled: #ffffff1f;
-  --color-textInverse-strong: #ffffff;
-  --color-textInverse-weak: #ffffffc7;
-  --color-textStrong: #000626e6;
-  --color-textWeak: #000833a6;
+  --color-textBrand: rgb(0 104 255);
+  --color-textDisabled: rgba(0 13 77 / 0.45);
+  --color-textError: oklch(51.3% 0.197 21);
+  --color-textInformation: oklch(49.3% 0.088 241);
+  --color-textSuccess: oklch(47.8% 0.130 162);
+  --color-textWarning: oklch(54.7% 0.126 69);
+  --color-textInverseDisabled: rgba(255 255 255 / 0.12);
+  --color-textInverse-strong: rgb(255 255 255);
+  --color-textInverse-weak: rgba(255 255 255 / 0.78);
+  --color-textStrong: rgba(0 6 38 / 0.9);
+  --color-textWeak: rgba(0 8 51 / 0.65);
   --animate-fadeBg: fadeBg 2s ease-out;
 
 
   @keyframes fadeBg {
-    0% { background-color: #0068ff }
-    70% { background-color: #0068ff}
+    0% { background-color: rgb(0 104 255) }
+    70% { background-color: rgb(0 104 255)}
     100% { background-color: transparent }
   }
 }
@@ -144,26 +151,26 @@
   default: true;
   prefersdark: false;
   color-scheme: 'light';
-  --color-base-100: #00158005;
-  --color-base-200: #0015800a;
-  --color-base-300: #0015800a;
-  --color-base-content: #000626e6;
-  --color-primary: #0068ff;
-  --color-primary-content: #ffffff;
-  --color-secondary: --color-textBrand;
-  --color-secondary-content: #000833a6;
-  --color-accent: #00158005;
-  --color-accent-content: #0068ff;
-  --color-neutral: #0015800a;
-  --color-neutral-content: #000626e6;
-  --color-info: #26b0ff0d;
-  --color-info-content: #1a74a8;
-  --color-success: #0acc920d;
-  --color-success-content: #067a57;
-  --color-warning: #ffc02e0d;
-  --color-warning-content: #8f6c1a;
-  --color-error: #ff4a4a0d;
-  --color-error-content: #c73a3a;
+  --color-base-100: rgba(0 21 128 / 0.02);
+  --color-base-200: rgba(0 21 128 / 0.04);
+  --color-base-300: rgba(0 21 128 / 0.04);
+  --color-base-content: rgba(0 6 38 / 0.9);
+  --color-primary: rgb(0 104 255);
+  --color-primary-content: rgb(255 255 255);
+  --color-secondary: var(--color-textBrand);
+  --color-secondary-content: rgba(0 8 51 / 0.65);
+  --color-accent: rgba(0 21 128 / 0.02);
+  --color-accent-content: rgb(0 104 255);
+  --color-neutral: rgba(0 21 128 / 0.04);
+  --color-neutral-content: rgba(0 6 38 / 0.9);
+  --color-info: rgba(38 176 255 / 0.05);
+  --color-info-content: rgb(26 116 168);
+  --color-success: rgba(10 204 146 / 0.05);
+  --color-success-content: rgb(6 122 87);
+  --color-warning: rgba(255 192 46 / 0.05);
+  --color-warning-content: rgb(143 108 26);
+  --color-error: rgba(255 74 74 / 0.05);
+  --color-error-content: rgb(199 58 58);
   --radius-selector: 0.5rem;
   --radius-field: 0.4rem;
   --radius-box: 1rem;
@@ -172,24 +179,60 @@
   --border: 1px;
   --depth: 1;
   --noise: 1;
-  --tw-prose-body: --color-textStrong !important;
+  --tw-prose-body: var(--color-textStrong) !important;
+}
+
+@plugin "daisyui/theme" {
+  name: 'dark';
+  default: false;
+  prefersdark: true;
+  color-scheme: 'dark';
+  --color-base-100: rgba(255 255 255 / 0.03);
+  --color-base-200: rgba(255 255 255 / 0.06);
+  --color-base-300: rgba(255 255 255 / 0.06);
+  --color-base-content: rgb(255 255 255);
+  --color-primary: rgb(0 104 255);
+  --color-primary-content: rgb(255 255 255);
+  --color-secondary: var(--color-textBrand);
+  --color-secondary-content: rgba(255 255 255 / 0.78);
+  --color-accent: rgba(255 255 255 / 0.03);
+  --color-accent-content: rgb(0 104 255);
+  --color-neutral: rgba(255 255 255 / 0.06);
+  --color-neutral-content: rgb(255 255 255);
+  --color-info: rgba(126 192 229 / 0.08);
+  --color-info-content: rgb(126 192 229);
+  --color-success: rgba(119 199 175 / 0.08);
+  --color-success-content: rgb(119 199 175);
+  --color-warning: rgba(224 190 112 / 0.08);
+  --color-warning-content: rgb(224 190 112);
+  --color-error: rgba(255 156 156 / 0.08);
+  --color-error-content: rgb(255 156 156);
+  --radius-selector: 0.5rem;
+  --radius-field: 0.4rem;
+  --radius-box: 1rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 1;
+  --noise: 1;
+  --tw-prose-body: var(--color-textStrong) !important;
 }
 
 :root,
 [data-theme] {
-  --backgroundPrimary: #fff;
+  --backgroundPrimary: rgb(255 255 255);
   --rounded-btn: 0.5rem;
 
-  --tw-prose-body: --color-textStrong !important;
+  --tw-prose-body: var(--color-textStrong) !important;
 }
 
 html,
 body {
   @apply overscroll-none bg-bgBase;
-  --brand-color: #0068ff;
-  --brand-color-light: #0090f0;
-  --tags-border-color: rgba(0, 13, 77, 0.45);
-  --tags-hover-border-color: rgba(0, 13, 77, 0.45);
+  --brand-color: var(--color-fillBrand-strong);
+  --brand-color-light: var(--color-fillBrand-strong);
+  --tags-border-color: var(--color-strokeStrong);
+  --tags-hover-border-color: var(--color-strokeStrong);
   --chkbg: var(--brand-color);
 }
 
@@ -228,10 +271,10 @@ body {
     display: none;
   }
   .alert {
-    --color-success: #eef8f7;
-    --color-error: #eef8f7;
-    --color-warning: #eef8f7;
-    --color-info: #eef8f7;
+    --color-success: var(--color-fillSuccess-weak);
+    --color-error: var(--color-fillError-weak);
+    --color-warning: var(--color-fillWarning-weak);
+    --color-info: var(--color-fillInformation-weak);
   }
 }
 
@@ -326,16 +369,16 @@ code, pre, .code, .monospace {
   @apply rounded-sm;
 }
 @utility btn-indigo {
-  @apply ml-3 text-white bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500;
+  @apply ml-3 text-textInverse-strong bg-fillBrand-strong hover:bg-fillBrand-strong focus:ring-strokeFocus;
 }
 @utility btn-yellow {
-  @apply btn-sm ml-3 text-black bg-yellow-300 hover:bg-yellow-400 focus:ring-yellow-500;
+  @apply btn-sm ml-3 text-textStrong bg-fillYellow hover:bg-fillYellow focus:ring-strokeWarning-strong;
 }
 @utility btn-white-sm {
-  @apply btn-sm bg-base-100 border-gray-300 text-gray-700 hover:bg-gray-50 focus:ring-indigo-500;
+  @apply btn-sm bg-base-100 border-strokeWeak text-textWeak hover:bg-fillHover focus:ring-strokeFocus;
 }
 @utility input-txt {
-  @apply shadow-xs focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md;
+  @apply shadow-xs focus:ring-strokeFocus focus:border-strokeFocus block w-full sm:text-sm border-strokeWeak rounded-md;
 }
 @utility neg-rotate-90 {
   /* Added because using - in class name prefix via hyperscript doesnt work*/
@@ -361,11 +404,11 @@ code, pre, .code, .monospace {
 }
 
 @utility blue-gr-btn {
-  @apply bg-linear-to-b text-white font-medium from-blue-500 to-blue-600;
+  @apply bg-linear-to-b text-textInverse-strong font-medium from-fillBrand-strong to-fillBrand-strong;
 }
 
 @utility blue-outline-btn {
-  @apply border-blue-500 text-[var(--brand-color)] font-medium;
+  @apply border-strokeBrand-strong text-textBrand font-medium;
 }
 
 .cbadge {
@@ -377,47 +420,47 @@ code, pre, .code, .monospace {
 }
 
 @utility badge-2xx {
-  @apply bg-green-100 text-green-700;
+  @apply bg-green-100 text-green-700 dark:bg-green-900/20 dark:text-green-300;
 }
 
 @utility badge-success {
-  @apply bg-green-100 text-green-700 font-medium;
+  @apply bg-fillSuccess-weak text-textSuccess font-medium;
 }
 
 @utility badge-error {
-  @apply bg-red-100 text-red-700 font-medium;
+  @apply bg-fillError-weak text-textError font-medium;
 }
 
 @utility badge-3xx {
-  @apply bg-amber-100 text-amber-800;
+  @apply bg-amber-100 text-amber-800 dark:bg-amber-900/20 dark:text-amber-300;
 }
 
 @utility badge-4xx {
-  @apply bg-red-50 text-red-800;
+  @apply bg-red-50 text-red-800 dark:bg-red-900/20 dark:text-red-300;
 }
 
 @utility badge-blue {
-  @apply text-[var(--brand-color)] bg-[#d6efff];
+  @apply text-[var(--brand-color)] bg-fillBrand-weak;
 }
 
 @utility badge-green {
-  @apply text-green-500 bg-green-100;
+  @apply text-textSuccess bg-fillSuccess-weak;
 }
 
 @utility badge-lime {
-  @apply bg-lime-200 text-lime-600;
+  @apply bg-fillSuccess-weak text-textSuccess;
 }
 
 @utility badge-pink {
-  @apply bg-pink-100 text-pink-600;
+  @apply bg-fillBrand-weak text-textBrand;
 }
 
 @utility badge-cyan {
-  @apply bg-cyan-100 text-cyan-600;
+  @apply bg-fillInformation-weak text-textInformation;
 }
 
 @utility badge-5xx {
-  @apply bg-red-200 text-red-900 font-medium;
+  @apply bg-red-200 text-red-900 font-medium dark:bg-red-900/30 dark:text-red-200;
 }
 
 @utility badge-neutral {
@@ -425,84 +468,84 @@ code, pre, .code, .monospace {
 }
 
 @utility badge-info {
-  @apply bg-blue-100 text-blue-700;
+  @apply bg-fillInformation-weak text-textInformation;
 }
 
 @utility badge-warning {
-  @apply bg-yellow-100 text-yellow-700;
+  @apply bg-fillWarning-weak text-textWarning;
 }
 
 @utility badge-fatal {
-  @apply bg-red-300 text-red-900 font-bold;
+  @apply bg-fillError-strong text-textInverse-strong font-bold;
 }
 
 @utility badge-GET {
-  @apply bg-blue-100 text-blue-700;
+  @apply bg-blue-100 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300;
 }
 
 @utility badge-POST {
-  @apply bg-pink-100 text-pink-700;
+  @apply bg-pink-100 text-pink-700 dark:bg-pink-900/20 dark:text-pink-300;
 }
 
 @utility badge-PUT {
-  @apply bg-lime-100 text-lime-700;
+  @apply bg-lime-100 text-lime-700 dark:bg-lime-900/20 dark:text-lime-300;
 }
 
 @utility badge-DELETE {
-  @apply bg-red-100 text-red-700;
+  @apply bg-red-100 text-red-700 dark:bg-red-900/20 dark:text-red-300;
 }
 
 @utility badge-PATCH {
-  @apply bg-cyan-100 text-cyan-700;
+  @apply bg-cyan-100 text-cyan-700 dark:bg-cyan-900/20 dark:text-cyan-300;
 }
 
 /* Database-specific badges - neutral background with colored borders */
 .badge-postgres {
-  @apply bg-fillWeak text-textStrong border border-blue-600;
+  @apply bg-fillWeak text-textStrong border border-strokeBrand-strong;
 }
 
 .badge-mysql {
-  @apply bg-fillWeak text-textStrong border border-orange-600;
+  @apply bg-fillWeak text-textStrong border border-strokeWarning-strong;
 }
 
 .badge-redis {
-  @apply bg-fillWeak text-textStrong border border-red-600;
+  @apply bg-fillWeak text-textStrong border border-strokeError-strong;
 }
 
 .badge-mongo {
-  @apply bg-fillWeak text-textStrong border border-green-600;
+  @apply bg-fillWeak text-textStrong border border-strokeSuccess-strong;
 }
 
 .badge-mongodb {
-  @apply bg-fillWeak text-textStrong border border-green-600;
+  @apply bg-fillWeak text-textStrong border border-strokeSuccess-strong;
 }
 
 .badge-elastic {
-  @apply bg-fillWeak text-textStrong border border-yellow-500;
+  @apply bg-fillWeak text-textStrong border border-strokeWarning-strong;
 }
 
 .badge-elasticsearch {
-  @apply bg-fillWeak text-textStrong border border-yellow-500;
+  @apply bg-fillWeak text-textStrong border border-strokeWarning-strong;
 }
 
 .badge-cassandra {
-  @apply bg-fillWeak text-textStrong border border-teal-600;
+  @apply bg-fillWeak text-textStrong border border-strokeInformation-strong;
 }
 
 .badge-dynamodb {
-  @apply bg-fillWeak text-textStrong border border-purple-600;
+  @apply bg-fillWeak text-textStrong border border-strokeBrand-strong;
 }
 
 .badge-memcached {
-  @apply bg-fillWeak text-textStrong border border-indigo-600;
+  @apply bg-fillWeak text-textStrong border border-strokeBrand-strong;
 }
 
 .badge-sqlite {
-  @apply bg-fillWeak text-textStrong border border-gray-600;
+  @apply bg-fillWeak text-textStrong border border-strokeStrong;
 }
 
 .badge-clickhouse {
-  @apply bg-fillWeak text-textStrong border border-amber-600;
+  @apply bg-fillWeak text-textStrong border border-strokeWarning-strong;
 }
 
 @utility ctable {
@@ -519,11 +562,11 @@ code, pre, .code, .monospace {
   }
 
   & .log-row.htmx-added {
-    @apply bg-[#d6efff] transition-colors duration-300 ease-in-out;
+    @apply bg-fillBrand-weak transition-colors duration-300 ease-in-out;
   }
 
   & .log-row.htmx-settling {
-    @apply bg-[#d6efff] transition-colors duration-300 ease-in-out;
+    @apply bg-fillBrand-weak transition-colors duration-300 ease-in-out;
   }
 }
 
@@ -541,23 +584,23 @@ code, pre, .code, .monospace {
 
 @utility log-row {
   .ctable &.htmx-added {
-    @apply bg-[#d6efff] transition-colors duration-300 ease-in-out;
+    @apply bg-fillBrand-weak transition-colors duration-300 ease-in-out;
   }
 
   .ctable &.htmx-settling {
-    @apply bg-[#d6efff] transition-colors duration-300 ease-in-out;
+    @apply bg-fillBrand-weak transition-colors duration-300 ease-in-out;
   }
 }
 
 @utility htmx-added {
   .ctable &.log-row {
-    @apply bg-[#d6efff] transition-colors duration-300 ease-in-out;
+    @apply bg-fillBrand-weak transition-colors duration-300 ease-in-out;
   }
 }
 
 @utility htmx-settling {
   .ctable &.log-row {
-    @apply bg-[#d6efff] transition-colors duration-300 ease-in-out;
+    @apply bg-fillBrand-weak transition-colors duration-300 ease-in-out;
   }
 }
 
@@ -571,7 +614,7 @@ code, pre, .code, .monospace {
   }
 
   .swagger_history_container .active {
-    background-color: lightgrey;
+    @apply bg-fillWeak;
   }
 
   .card-round {
@@ -580,10 +623,10 @@ code, pre, .code, .monospace {
   }
 
   :root {
-    --fallback-b2: #0015800a; /* bg-fillWeak*/
-    --tab-color: #000833a6; /* tab text color textWeak */
-    --fallback-pc: #000626e6; /*bg-textStrong */
-    --fallback-bc: #000d4d73; /*border color strokeStrong*/
+    --fallback-b2: var(--color-fillWeak); /* bg-fillWeak*/
+    --tab-color: var(--color-textWeak); /* tab text color textWeak */
+    --fallback-pc: var(--color-textStrong); /*bg-textStrong */
+    --fallback-bc: var(--color-strokeStrong); /*border color strokeStrong*/
   }
 }
 
@@ -604,16 +647,16 @@ code, pre, .code, .monospace {
 
   /* Handle */
   .c-scroll::-webkit-scrollbar-thumb {
-    @apply bg-gray-400 opacity-70;
+    @apply bg-strokeWeak opacity-70;
     border-radius: 3px;
   }
 
   .c-scroll::-webkit-scrollbar-thumb:hover {
-    @apply bg-gray-300;
+    @apply bg-strokeStrong;
   }
 
   .payment-radio-active {
-    @apply bg-blue-500;
+    @apply bg-fillBrand-strong;
   }
 
   .payment-radio-active > div {
@@ -629,7 +672,7 @@ code, pre, .code, .monospace {
   }
 
   .endpoint_schema {
-    @apply text-gray-600;
+    @apply text-textWeak;
   }
 
   .subpaths-container {
@@ -642,23 +685,23 @@ code, pre, .code, .monospace {
   }
 
   .subpaths-container > div:hover {
-    @apply bg-gray-100;
+    @apply bg-fillHover;
   }
 
   .save_swagger_btn_active {
-    @apply bg-green-500 text-white;
+    @apply bg-fillSuccess-strong text-textInverse-strong;
   }
 
   .selected_swagger {
-    @apply bg-blue-600 text-white;
+    @apply bg-fillBrand-strong text-textInverse-strong;
   }
 
   .font_toggle_active {
-    @apply bg-blue-200;
+    @apply bg-fillBrand-weak;
   }
 
   .path-method-get {
-    @apply text-[var(--brand-color)];
+    @apply text-textBrand;
   }
 
   .endpoint_active {
@@ -666,33 +709,33 @@ code, pre, .code, .monospace {
   }
 
   .path-method-put {
-    @apply text-orange-500;
+    @apply text-textWarning;
   }
 
   .path-method-post {
-    @apply text-green-500;
+    @apply text-textSuccess;
   }
 
   .path-method-delete {
-    @apply text-red-500;
+    @apply text-textError;
   }
 
   .path-method-patch {
-    @apply text-purple-500;
+    @apply text-textBrand;
   }
 
   .path-method-options {
-    @apply text-gray-500;
+    @apply text-textWeak;
   }
 
   .path-method-head {
-    @apply text-purple-500;
+    @apply text-textBrand;
   }
 
   .subpaths-header {
     display: flex;
     cursor: pointer;
-    @apply hover:bg-gray-100 py-3 px-2 w-full items-center justify-between;
+    @apply hover:bg-fillHover py-3 px-2 w-full items-center justify-between;
   }
 
   .htmx-indicator {
@@ -704,7 +747,7 @@ code, pre, .code, .monospace {
   }
 
   .btn-secondary {
-    @apply text-[var(--brand-color)] border border-[var(--brand-color)] rounded-lg font-semibold;
+    @apply text-textBrand border border-strokeBrand-strong rounded-lg font-semibold;
   }
 
   .htmx-request.survey-indicator + button {
@@ -738,14 +781,103 @@ code, pre, .code, .monospace {
     display: block;
   }
 
-  .text-brand {
-    @apply text-[var(--brand-color)];
-  }
-  .bg-brand {
-    @apply bg-[var(--brand-color)];
+  
+  /* Dark mode overrides */
+  [data-theme="dark"] {
+    /* Background colors - Dark theme */
+    --color-bgAlternate: oklch(20.1% 0.015 263);
+    --color-bgBase: oklch(16.4% 0.012 263);
+    --color-bgInverse: rgb(255 255 255);
+    --color-bgOverlay: oklch(26.4% 0.012 263);
+    --color-bgRaised: oklch(22.0% 0.010 263);
+    --color-bgSunken: rgb(0 0 0);
+    --color-bgBrand: rgb(59 130 246);
+
+    /* Fill colors - Dark theme */
+    --color-fillBrand-strong: rgb(59 130 246);
+    --color-fillBrand-weak: rgba(59 130 246 / 0.15);
+    --color-fillDisabled: rgba(255 255 255 / 0.12);
+    --color-fillStrong: rgb(255 255 255);
+    --color-fillError-strong: oklch(77.2% 0.126 21);
+    --color-fillError-weak: rgba(255 156 156 / 0.08);
+    --color-fillHover: rgba(255 255 255 / 0.06);
+    --color-fillInformation-strong: oklch(75.5% 0.098 241);
+    --color-fillInformation-weak: rgba(126 192 229 / 0.08);
+    --color-fillInverseDisabled: rgba(0 17 102 / 0.1);
+    --color-fillInverse-hover: rgba(0 21 128 / 0.04);
+    --color-fillInverse-press: rgba(0 17 102 / 0.1);
+    --color-fillInverse-strong: oklch(16.4% 0.012 263);
+    --color-fillInverse-weak: rgba(0 21 128 / 0.04);
+    --color-fillOverlay: rgba(0 6 38 / 0.9);
+    --color-fillPress: rgba(255 255 255 / 0.12);
+    --color-fillSelected: rgb(59 130 246);
+    --color-fillSuccess-strong: oklch(75.3% 0.092 162);
+    --color-fillSuccess-weak: rgba(119 199 175 / 0.08);
+    --color-fillWarning-strong: oklch(79.5% 0.106 92);
+    --color-fillWarning-weak: rgba(224 190 112 / 0.08);
+    --color-fillWeak: rgba(255 255 255 / 0.06);
+    --color-fillWeaker: rgba(255 255 255 / 0.03);
+    --color-fillWhite: rgb(255 255 255);
+    --color-fillYellow: oklch(85.8% 0.179 92);
+
+    /* Icon colors - Dark theme */
+    --color-iconBrand: rgba(96 165 250 / 0.9);
+    --color-iconDisabled: rgba(255 255 255 / 0.12);
+    --color-iconError: rgba(255 156 156 / 0.8);
+    --color-iconInformation: rgba(126 192 229 / 0.8);
+    --color-iconInverse: rgba(0 13 77 / 0.45);
+    --color-iconInverseDisabled: rgba(0 17 102 / 0.1);
+    --color-iconInverse-strong: rgba(0 6 38 / 0.9);
+    --color-iconNeutral: rgba(255 255 255 / 0.6);
+    --color-iconSuccess: rgba(119 199 175 / 0.8);
+    --color-iconWarning: rgba(224 190 112 / 0.8);
+
+    /* Stroke colors - Dark theme */
+    --color-strokeBrand-strong: rgba(96 165 250 / 0.5);
+    --color-strokeBrand-weak: rgba(96 165 250 / 0.15);
+    --color-strokeDisabled: rgba(255 255 255 / 0.12);
+    --color-strokeError-strong: rgba(248 113 113 / 0.5);
+    --color-strokeError-weak: rgba(248 113 113 / 0.15);
+    --color-strokeFocus: rgb(96 165 250);
+    --color-strokeInformation-strong: rgba(147 197 253 / 0.5);
+    --color-strokeInformation-weak: rgba(147 197 253 / 0.15);
+    --color-strokeInverseDisabled: rgba(0 17 102 / 0.1);
+    --color-strokeInverse-strong: rgba(0 13 77 / 0.45);
+    --color-strokeInverse-weak: rgba(0 17 102 / 0.1);
+    --color-strokeSelected: rgb(59 130 246);
+    --color-strokeStrong: rgba(255 255 255 / 0.3);
+    --color-strokeSuccess-strong: rgba(134 239 172 / 0.5);
+    --color-strokeSuccess-weak: rgba(134 239 172 / 0.15);
+    --color-strokeWarning-strong: rgba(251 191 36 / 0.5);
+    --color-strokeWarning-weak: rgba(251 191 36 / 0.15);
+    --color-strokeWeak: rgba(255 255 255 / 0.08);
+
+    /* Text colors - Dark theme */
+    --color-textBrand: oklch(70% 0.15 241);
+    --color-textDisabled: rgba(255 255 255 / 0.20);
+    --color-textError: oklch(77.2% 0.126 21);
+    --color-textInformation: oklch(75.5% 0.098 241);
+    --color-textInverseDisabled: rgba(0 17 102 / 0.1);
+    --color-textInverse-strong: rgba(0 6 38 / 0.9);
+    --color-textInverse-weak: rgba(0 8 51 / 0.65);
+    --color-textStrong: oklch(85% 0 0);
+    --color-textSuccess: oklch(75.3% 0.092 162);
+    --color-textWarning: oklch(79.5% 0.106 92);
+    --color-textWeak: oklch(70% 0 0);
+
+    /* Update fallback colors for dark mode */
+    --fallback-b2: rgba(255 255 255 / 0.06);
+    --tab-color: oklch(70% 0 0);
+    --fallback-pc: oklch(95% 0 0);
+    --fallback-bc: rgba(255 255 255 / 0.6);
   }
   .btn-primary {
-    @apply bg-[var(--brand-color)] hover:bg-[var(--brand-color-light)] text-white;
+    @apply bg-fillBrand-strong hover:bg-fillBrand-strong text-textInverse-strong;
+  }
+  
+  [data-theme="dark"] .btn-primary {
+    background-color: var(--color-iconBrand);
+    @apply hover:opacity-90 text-textInverse-strong ring-1 ring-strokeBrand-weak;
   }
   .input, .select, .checkbox, .textarea {
     @apply shadow-none;
@@ -763,11 +895,11 @@ code, pre, .code, .monospace {
 @layer custom {
   /* HERE SINCE IT"S BASICALLY AN OVERRIDE.  Its for the log items rows */
   .expanded-log {
-    @apply border-l-blue-200 bg-blue-50;
+    @apply border-l-strokeBrand-weak bg-fillBrand-weak;
   }
 
   .expanded-log .status-indicator {
-    @apply bg-blue-200;
+    @apply bg-fillBrand-weak;
   }
 
   .expanded-log .log-chevron {
@@ -775,7 +907,7 @@ code, pre, .code, .monospace {
   }
 
   .log-item-tree-chevron {
-    @apply cursor-pointer font-bold h-5 w-5 rotate-90 inline-block p-1 rounded-sm border border-slate-200 mr-1;
+    @apply cursor-pointer font-bold h-5 w-5 rotate-90 inline-block p-1 rounded-sm border border-strokeWeak mr-1;
   }
 
   .collapsed .log-item-tree-chevron {
@@ -799,39 +931,39 @@ code, pre, .code, .monospace {
    SINCE TREE SHAKING IS NOT ENABLED TO CLASSES DEFINED OUTSIDE THE TAILWIND @layers
 */
   .endpoint {
-    @apply w-20 rounded-lg text-center text-white text-sm p-2 m-2 inline-block;
+    @apply w-20 rounded-lg text-center text-textInverse-strong text-sm p-2 m-2 inline-block;
   }
 
   .endpoint-options {
-    @apply bg-red-700;
+    @apply bg-fillStrong;
   }
 
   .endpoint-get {
-    @apply bg-green-600;
+    @apply bg-fillSuccess-strong;
   }
 
   .endpoint-head {
-    @apply bg-yellow-600;
+    @apply bg-fillWarning-strong;
   }
 
   .endpoint-post {
-    @apply bg-blue-700;
+    @apply bg-fillBrand-strong;
   }
 
   .endpoint-put {
-    @apply bg-indigo-600;
+    @apply bg-fillWarning-strong;
   }
 
   .endpoint-delete {
-    @apply bg-orange-600;
+    @apply bg-fillError-strong;
   }
 
   .endpoint-trace {
-    @apply bg-purple-600;
+    @apply bg-fillBrand-strong;
   }
 
   .endpoint-patch {
-    @apply bg-amber-600;
+    @apply bg-fillWarning-strong;
   }
 
   .btn {
@@ -860,7 +992,7 @@ code, pre, .code, .monospace {
   .CodeMirror {
     font-family: 'JetBrains Mono', monospace;
     font-size: 16px;
-    background-color: rgb(243 244 246);
+    @apply bg-fillWeak;
   }
 
   .collapsed .tree-children-count {
@@ -877,15 +1009,15 @@ code, pre, .code, .monospace {
   }
 
   .sdk_tab {
-    @apply h-36 border rounded-sm w-full p-4;
+    @apply h-36 border border-strokeWeak rounded-sm w-full p-4;
   }
 
   .sdk_tab_active {
-    @apply border-blue-500 border ring-3 ring-blue-500 shadow-lg;
+    @apply border-strokeBrand-strong border ring-3 ring-strokeBrand-strong shadow-lg;
   }
 
   .t-tab-active {
-    @apply font-bold border-[var(--brand-color)] text-[var(--brand-color)];
+    @apply font-bold border-strokeBrand-strong text-textBrand;
   }
 
   .t-tab-box-active {
@@ -909,7 +1041,7 @@ code, pre, .code, .monospace {
 .dash-variable .tagify {
   margin-top: -0.5rem;
   --tags-border-color: transparent;
-  --tag-text-color: #000626e6;
+  --tag-text-color: var(--color-textStrong);
 }
 
 .dash-variable .tagify__tag {
@@ -932,7 +1064,7 @@ code, pre, .code, .monospace {
 
 .tagify--select::after {
   content: '›' !important;
-  color: #000d4d73;
+  color: var(--color-strokeStrong);
 }
 /* 
 .animated-fadeBG {
@@ -944,10 +1076,10 @@ code, pre, .code, .monospace {
     background-color: 
   }
   50% {
-    background-color: #fad0c4;
+    background-color: rgb(250 208 196);
   }
   100% {
-    background-color: #fbc2eb;
+    background-color: rgb(251 194 235);
   }
 } */
 
@@ -974,9 +1106,9 @@ code, pre, .code, .monospace {
   width: 200%;
   height: 200%;
   background-image: conic-gradient(
-    #ffcc00,
-    #33cc33,
-    #3399ff,
+    rgb(255 204 0),
+    rgb(51 204 51),
+    rgb(51 153 255),
     transparent,
     transparent,
     transparent,
@@ -999,13 +1131,13 @@ code, pre, .code, .monospace {
   position: absolute;
   z-index: -1;
   inset: 1px;
-  background: var(--color-fillWeakerSolid);
+  background: var(--color-bgRaised);
   border-radius: inherit;
 }
 
 
 .gradient-border {
-  border-image: linear-gradient(45deg, #ffcc00, #33cc33, #3399ff) 1;
+  border-image: linear-gradient(45deg, rgb(255 204 0), rgb(51 204 51), rgb(51 153 255)) 1;
 }
 
 

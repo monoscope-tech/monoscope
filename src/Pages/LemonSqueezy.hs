@@ -161,14 +161,14 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan = div_ [
     div_ [class_ "flex gap-6 justify-between mt-8"] do
       div_ [class_ "flex flex-col gap-2"] $ do
         div_ [class_ "text-4xl font-bold"] $ toHtml $ formatNumberWithCommas reqs
-        div_ [class_ " text-gray-600"] "Total Requests Made"
-        div_ [class_ " text-gray-600"] "*Calculation may not be up-to-date"
+        div_ [class_ " text-textWeak"] "Total Requests Made"
+        div_ [class_ " text-textWeak"] "*Calculation may not be up-to-date"
       div_ [class_ "flex flex-col gap-2"] $ do
         div_ [class_ "text-4xl font-bold"] $ toHtml $ "$" <> if paymentPlan == "Free" then "0" else T.replace "\"" "" amount
-        div_ [class_ " text-gray-600"] "Estimated Cost"
-        div_ [class_ " text-gray-600"] "*Based on current usage"
+        div_ [class_ " text-textWeak"] "Estimated Cost"
+        div_ [class_ " text-textWeak"] "*Based on current usage"
     div_ [class_ "mt-8 flex flex-col gap-4"] do
-      div_ [class_ "flex items-center gap-2  text-gray-600"] $ do
+      div_ [class_ "flex items-center gap-2  text-textWeak"] $ do
         faSprite_ "regular-calendar-days-clock" "regular" "h-4 w-4"
         span_ [data_ "id" "18"] $ toHtml $ "Latest data: " <> T.take 19 last_reported
       unless (paymentPlan == "Free") do
@@ -193,7 +193,7 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan = div_ [
           div_ [class_ "flex flex-col text-textWeak text-sm"] do
             span_ [class_ ""] "Starts at"
             span_ [class_ ""] "/per month"
-        label_ [class_ "btn btn-secondary bg-white cursor pointer z-10", Lucid.for_ "pricing-modal", [__|on click set #pricing-modal.check to true|]] "Change plan"
+        label_ [class_ "btn btn-secondary bg-bgRaised cursor pointer z-10", Lucid.for_ "pricing-modal", [__|on click set #pricing-modal.check to true|]] "Change plan"
 
         input_ [type_ "checkbox", id_ "pricing-modal", class_ "modal-toggle"]
         div_ [class_ "modal p-8", role_ "dialog", [__|on closeModal from body set #pricing-modal.checked to false |]] do

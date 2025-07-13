@@ -17,7 +17,6 @@ import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Relude hiding (ask, asks)
 
 import Control.Lens ((.~), (^.))
-import Data.ByteString.Lazy qualified
 import Data.Effectful.Wreq (
   HTTP,
   defaults,

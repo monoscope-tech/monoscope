@@ -25,7 +25,6 @@ import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxPatch_, hxPost_, hxPut_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
-import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
@@ -759,7 +758,7 @@ dashboardsGet_ dg = do
           $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full", id_ "dItemPreview"]
 
   div_ [id_ "itemsListPage", class_ "mx-auto px-6 pt-4 gap-8 w-full flex flex-col h-full overflow-hidden pb-2  group/pg"] do
-    div_ [class_ "flex"] $ label_ [class_ "input input-md flex-1 flex bg-fillWeaker border-slate-200 shadow-none overflow-hidden items-center gap-2"] do
+    div_ [class_ "flex"] $ label_ [class_ "input input-md flex-1 flex bg-fillWeaker border-strokeWeak shadow-none overflow-hidden items-center gap-2"] do
       faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
       input_
         [ type_ "text"
@@ -792,7 +791,7 @@ dashboardsGet_ dg = do
               span_ [class_ "leading-none", term "data-tippy-content" "This dashboard is currently your homepage."] do
                 when (isJust dashVM.homepageSince) $ faSprite_ "house" "regular" "w-4 h-4"
             div_ [class_ "gap-2 flex items-center"] do
-              time_ [class_ "mr-2 text-slate-400", term "data-tippy-content" "Date of dashboard creation", datetime_ $ Utils.formatUTC dashVM.createdAt] $ toHtml $ formatTime defaultTimeLocale "%eth %b %Y" dashVM.createdAt
+              time_ [class_ "mr-2 text-textWeak", term "data-tippy-content" "Date of dashboard creation", datetime_ $ Utils.formatUTC dashVM.createdAt] $ toHtml $ formatTime defaultTimeLocale "%eth %b %Y" dashVM.createdAt
               forM_ dashVM.tags (span_ [class_ "badge badge-neutral"] . toHtml @Text)
           div_ [class_ "flex items-end justify-center gap-5"] do
             button_ [class_ "leading-none", term "data-tippy-content" "click to star this dashboard"]

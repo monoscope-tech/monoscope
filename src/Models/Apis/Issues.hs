@@ -37,7 +37,7 @@ import Data.Aeson qualified as AE
 import Data.Default (Default, def)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
-import Data.Time.LocalTime (ZonedTime, utcToLocalZonedTime, zonedTimeToUTC)
+import Data.Time.LocalTime (ZonedTime, utcToLocalZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V

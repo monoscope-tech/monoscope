@@ -1,8 +1,5 @@
 module Pages.Telemetry.Metrics (metricsOverViewGetH, metricDetailsGetH, MetricsOverViewGet (..), metricBreakdownGetH) where
 
-import Data.Aeson qualified as AE
-import Data.Aeson.Key qualified as AEKey
-import Data.Aeson.KeyMap qualified as KEM
 import Data.Default
 import Data.Map qualified as Map
 import Data.Text qualified as T

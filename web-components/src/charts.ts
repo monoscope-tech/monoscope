@@ -3,12 +3,12 @@ const getErrorIndicator = () =>
   elt(
     'span',
     {
-      class: 'bg-red-600 rounded-l h-full w-5 flex justify-center items-center rounded-r shrink-0 font-bold',
+      class: 'bg-fillError-strong rounded-l h-full w-5 flex justify-center items-center rounded-r shrink-0 font-bold',
     },
     elt(
       'span',
       {
-        class: 'text-white text-xs h-3 w-3 flex items-center justify-center rounded-full border border-white p-1',
+        class: 'text-textInverse-strong text-xs h-3 w-3 flex items-center justify-center rounded-full border border-white p-1',
       },
       '!'
     )
@@ -69,7 +69,7 @@ export function flameGraphChart(data: FlameGraphItem[], renderAt: string, colors
     const filteredJson = filterJson(structuredClone(jsonObj), id);
     const rootVal = filteredJson.sort((a, b) => b.value - a.value)[0]?.value || 1;
     const recur = (item: FlameGraphItem, start = 0, level = 0) => {
-      const color = colorsMap[item.serviceName] || 'bg-black';
+      const color = colorsMap[item.serviceName] || 'bg-fillStrong';
       const temp: ItemsWithStyle = {
         name: item.name,
         hasErrors: item.hasErrors,
@@ -235,11 +235,11 @@ function generateTimeIntervals(duration: number, target: string) {
     const time = durationF;
     unit = t === 0 ? '' : unit;
     intervals.push(`
-              <div class="absolute bottom-0 text-gray-700 border-left overflow-x-visible" style="width: ${intervalWidth}px; left: ${
+              <div class="absolute bottom-0 text-textStrong border-left overflow-x-visible" style="width: ${intervalWidth}px; left: ${
       i * intervalWidth
     }px;">
                <div class="relative" style="height:10px">
-                <div class="bg-gray-300"  style="width:1px; height:10px;"></div>
+                <div class="bg-fillPress"  style="width:1px; height:10px;"></div>
                 <span class="absolute  left-0 -translate-x-1/2 text-xs" style="top:-13px">${time} ${unit}</span>
                </div>
               </div>
@@ -324,7 +324,7 @@ function buildTree(span: WaterfallItem, serviceColors: Record<string, string>, s
     class: 'flex flex-col span-filterble',
   });
   const spanId = span.spanRecord.spanId;
-  const color = serviceColors[span.spanRecord.serviceName] || 'bg-black';
+  const color = serviceColors[span.spanRecord.serviceName] || 'bg-fillStrong';
   const div = elt('div', {
     class:
       color +

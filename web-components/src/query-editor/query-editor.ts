@@ -285,9 +285,20 @@ export const language = {
   },
 };
 
-// Define transparent theme
-monaco.editor.defineTheme('transparent-theme', {
+// Define transparent themes for light and dark modes
+monaco.editor.defineTheme('transparent-theme-light', {
   base: 'vs',
+  inherit: true,
+  rules: [],
+  colors: {
+    'editor.background': '#00000000',
+    'editor.lineHighlightBackground': '#00000000',
+    'editorGutter.background': '#00000000',
+  },
+});
+
+monaco.editor.defineTheme('transparent-theme-dark', {
+  base: 'vs-dark',
   inherit: true,
   rules: [],
   colors: {
@@ -646,6 +657,8 @@ export class QueryEditorComponent extends LitElement {
   private suggestionListeners: (() => void)[] = [];
   private isProgrammaticUpdate = false;
   private updateHandlers: Array<monaco.IDisposable> = [];
+  private resizeObserver: ResizeObserver | null = null;
+  private themeObserver: MutationObserver | null = null;
 
   private readonly KIND_ICONS = ['📄', '🔢', '🔍', '#', '📊', '📋', '#', '🔢', '✅', '❓'];
 
@@ -658,7 +671,15 @@ export class QueryEditorComponent extends LitElement {
     }));
   }
 
+  // Public method to refresh editor layout
+  public refreshLayout(): void {
+    if (this.editor) {
+      this.editor.layout();
+    }
+  }
+
   private debouncedTriggerSuggestions = debounce(() => this.editor?.trigger('auto', 'editor.action.triggerSuggest', {}), 50);
+  private debouncedLayoutRefresh = debounce(() => this.refreshLayout(), 100);
   private debouncedUpdateQuery = debounce((queryValue: string) => {
     if (this.updateURLParams) {
       const url = new URL(window.location.href);
@@ -703,7 +724,18 @@ export class QueryEditorComponent extends LitElement {
       }
     });
 
-    window.addEventListener('resize', () => this.adjustEditorHeight());
+    window.addEventListener('resize', () => {
+      this.adjustEditorHeight();
+      this.debouncedLayoutRefresh();
+    });
+
+    // Set up ResizeObserver to handle container size changes
+    if (this._editorContainer && window.ResizeObserver) {
+      this.resizeObserver = new ResizeObserver(() => {
+        this.debouncedLayoutRefresh();
+      });
+      this.resizeObserver.observe(this._editorContainer);
+    }
 
     // Focus editor when "/" is pressed
     document.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -715,6 +747,22 @@ export class QueryEditorComponent extends LitElement {
         }
       }
     });
+
+    // Watch for theme changes
+    this.themeObserver = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        if (mutation.type === 'attributes' && mutation.attributeName === 'data-theme') {
+          const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
+          const theme = isDarkMode ? 'transparent-theme-dark' : 'transparent-theme-light';
+          this.editor?.updateOptions({ theme });
+        }
+      });
+    });
+    
+    this.themeObserver.observe(document.body, {
+      attributes: true,
+      attributeFilter: ['data-theme']
+    });
   }
 
   disconnectedCallback(): void {
@@ -722,6 +770,10 @@ export class QueryEditorComponent extends LitElement {
     this.suggestionListeners = [];
     this.updateHandlers.forEach((handler) => handler.dispose());
     this.updateHandlers = [];
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
+    this.themeObserver?.disconnect();
+    this.themeObserver = null;
     this.editor?.dispose();
     super.disconnectedCallback();
   }
@@ -951,10 +1003,13 @@ export class QueryEditorComponent extends LitElement {
   }
 
   private createMonacoEditor(): void {
+    const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
+    const theme = isDarkMode ? 'transparent-theme-dark' : 'transparent-theme-light';
+    
     this.editor = monaco.editor.create(this._editorContainer, {
       value: this.defaultValue,
       language: 'aql',
-      theme: 'transparent-theme',
+      theme: theme,
       automaticLayout: true,
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
@@ -980,6 +1035,8 @@ export class QueryEditorComponent extends LitElement {
       wordWrap: 'on',
       wrappingStrategy: 'advanced',
       wrappingIndent: 'indent',
+      wordWrapOverride1: 'on',
+      wordWrapOverride2: 'on',
       glyphMargin: false,
       folding: false,
       padding: { top: 8, bottom: 4 },
@@ -1369,7 +1426,7 @@ export class QueryEditorComponent extends LitElement {
         icon: '⭐',
         primaryText: (item as SavedView).name,
         secondaryText: html`
-          <span class="truncate text-gray-500 mr-2" title="${item.query}">${item.query}</span>
+          <span class="truncate text-textWeak mr-2" title="${item.query}">${item.query}</span>
           ${(item as SavedView).owner
             ? html`<span class="flex-shrink-0 rounded-full w-6 h-6 flex items-center justify-center text-xs"
                 >${(item as SavedView).owner!.icon || ''}</span
@@ -1387,7 +1444,7 @@ export class QueryEditorComponent extends LitElement {
         if (completion.parentPath) {
           return {
             icon: this.getCompletionIcon(completion.kindCategory),
-            primaryText: html` <span class="text-gray-400">${completion.parentPath}.</span><span>${completion.label}</span> `,
+            primaryText: html` <span class="text-textWeak">${completion.parentPath}.</span><span>${completion.label}</span> `,
             secondaryText: completion.detail,
           };
         }
@@ -1405,7 +1462,7 @@ export class QueryEditorComponent extends LitElement {
   private renderSuggestionItem(item: SuggestionItem, itemIndex: number): TemplateResult {
     const isSelected = itemIndex === this.selectedIndex;
     const { icon, primaryText, secondaryText } = this.getSuggestionUIData(item);
-    const selectedClass = isSelected ? 'bg-blue-50' : '';
+    const selectedClass = isSelected ? 'bg-fillBrand-weak' : '';
 
     const displayTextForTooltip =
       item.kind === 'completion'
@@ -1416,16 +1473,16 @@ export class QueryEditorComponent extends LitElement {
 
     return html`
       <div
-        class="flex items-center justify-between px-4 py-2 hover:bg-blue-50 cursor-pointer border-b border-gray-100 ${selectedClass}"
+        class="flex items-center justify-between px-4 py-2 hover:bg-fillBrand-weak cursor-pointer border-b border-strokeWeak ${selectedClass}"
         @pointerdown=${(e: MouseEvent) => this.handleSuggestionClick(item, e)}
         @mouseover=${() => (this.selectedIndex = itemIndex)}
         data-index="${itemIndex}"
       >
         <div class="flex items-center gap-2 overflow-hidden">
           <span class="text-base">${icon}</span>
-          <span class="truncate ${isSelected ? 'font-medium text-blue-600' : ''}" title="${displayTextForTooltip}">${primaryText}</span>
+          <span class="truncate ${isSelected ? 'font-medium text-textBrand' : ''}" title="${displayTextForTooltip}">${primaryText}</span>
         </div>
-        ${secondaryText ? html`<span class="text-xs text-gray-500 ml-2 flex-shrink-0 flex items-center">${secondaryText}</span>` : ''}
+        ${secondaryText ? html`<span class="text-xs text-textWeak ml-2 flex-shrink-0 flex items-center">${secondaryText}</span>` : ''}
       </div>
     `;
   }
@@ -1467,37 +1524,37 @@ export class QueryEditorComponent extends LitElement {
     if (!sections.length) {
       return html`
         <div
-          class="mt-1 suggestions-dropdown absolute bg-white border border-gray-200 shadow-lg z-10 overflow-y-auto rounded-md text-xs"
+          class="mt-1 suggestions-dropdown absolute bg-bgRaised border border-strokeMedium shadow-lg z-10 overflow-y-auto rounded-md text-xs"
           style="${positionStyle}"
         >
-          <div class="px-4 py-2 text-sm text-gray-400 italic">No suggestions found</div>
+          <div class="px-4 py-2 text-sm text-textWeak italic">No suggestions found</div>
         </div>
       `;
     }
 
     let currentIndex = 0;
     const keyboardHelp = html`
-      <div class="sticky bottom-0 bg-white z-50 border-t border-gray-200 px-4 py-2 text-xs text-gray-500">
+      <div class="sticky bottom-0 bg-bgRaised z-50 border-t border-strokeMedium px-4 py-2 text-xs text-textWeak">
         <span class="mr-2">
-          <kbd class="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded text-xs">↑</kbd>
-          <kbd class="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded text-xs">↓</kbd>
-          <kbd class="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded text-xs">Tab</kbd> to navigate
+          <kbd class="px-1 py-0.5 bg-fillWeak border border-strokeStrong rounded text-xs">↑</kbd>
+          <kbd class="px-1 py-0.5 bg-fillWeak border border-strokeStrong rounded text-xs">↓</kbd>
+          <kbd class="px-1 py-0.5 bg-fillWeak border border-strokeStrong rounded text-xs">Tab</kbd> to navigate
         </span>
-        <span class="mr-2">• <kbd class="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded text-xs">Enter</kbd> to select</span>
-        <span>• <kbd class="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded text-xs">Esc</kbd> to close</span>
+        <span class="mr-2">• <kbd class="px-1 py-0.5 bg-fillWeak border border-strokeStrong rounded text-xs">Enter</kbd> to select</span>
+        <span>• <kbd class="px-1 py-0.5 bg-fillWeak border border-strokeStrong rounded text-xs">Esc</kbd> to close</span>
       </div>
     `;
 
     return html`
       <div
-        class="mt-1 suggestions-dropdown absolute bg-white border border-gray-200 shadow-lg z-50 max-h-[80dvh] overflow-y-auto rounded-md text-xs flex flex-col"
+        class="mt-1 suggestions-dropdown absolute bg-bgRaised border border-strokeMedium shadow-lg z-50 max-h-[80dvh] overflow-y-auto rounded-md text-xs flex flex-col"
         style="${positionStyle}"
       >
         <div class="overflow-y-auto flex-grow min-h-0">
           ${sections.map(
             (section) => html`
               ${section.title
-                ? html`<div class="text-xs font-semibold text-gray-500 px-4 py-2 uppercase border-t border-b border-gray-100 bg-gray-50">
+                ? html`<div class="text-xs font-semibold text-textWeak px-4 py-2 uppercase border-t border-b border-strokeWeak bg-fillWeaker">
                     ${section.title}
                   </div>`
                 : ''}
@@ -1526,6 +1583,11 @@ export class QueryEditorComponent extends LitElement {
           border: none !important;
           outline: none !important;
         }
+        /* Ensure editor doesn't overflow container */
+        #editor-container {
+          max-width: 100%;
+          overflow: hidden;
+        }
       </style>
       <div
         class="relative w-full h-full pl-2 flex border rounded-md border-strokeStrong focus-within:border-strokeBrand-strong focus:outline-2 "
@@ -1533,7 +1595,7 @@ export class QueryEditorComponent extends LitElement {
         <div class="relative overflow-x-hidden w-full flex-1">
           <div id="editor-container" class="w-full"></div>
           <div
-            class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-auto z-[1] text-gray-400 f/nont-mono text-sm leading-[18px] pt-2 pl-0 hidden cursor-text"
+            class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-auto z-[1] text-textWeak f/nont-mono text-sm leading-[18px] pt-2 pl-0 hidden cursor-text"
             @pointerdown=${() => this.editor?.focus()}
           >
             Filter logs and events. Press <span class="kbd">/</span> to search or <span class="kbd">?</span>

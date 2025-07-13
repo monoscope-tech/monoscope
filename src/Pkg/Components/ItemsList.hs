@@ -123,7 +123,7 @@ itemsList_ listCfg items = do
             ]
               :: [(Text, Text, Text)]
 
-      div_ [class_ "flex py-3 gap-8 items-center  bg-gray-50"] do
+      div_ [class_ "flex py-3 gap-8 items-center  bg-fillWeaker"] do
         div_ [class_ "h-4 flex space-x-3 w-8 items-center"] do
           span_ [class_ " w-2 h-full"] ""
           input_
@@ -146,9 +146,9 @@ itemsList_ listCfg items = do
           whenJust listCfg.sort \sortCfg -> do
             let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == sortCfg.current) sortMenu
             div_ [class_ "dropdown dropdown-end inline-block"] do
-              a_ [class_ "btn btn-sm shadow-none text-sm font-medium bg-fillWeaker border text-slate-600 border-slate-300 ", tabindex_ "0"] do
+              a_ [class_ "btn btn-sm shadow-none text-sm font-medium bg-fillWeaker border text-textWeak border-strokeWeak ", tabindex_ "0"] do
                 span_ $ toHtml currentSortTitle
-                faSprite_ "sort" "regular" "h-4 w-4 stroke-slate-600"
+                faSprite_ "sort" "regular" "h-4 w-4 stroke-iconNeutral"
 
               div_
                 [ id_ "sortMenuDiv"
@@ -160,7 +160,7 @@ itemsList_ listCfg items = do
                   sortMenu & mapM_ \(title, desc, identifier) -> do
                     let isActive = sortCfg.current == identifier || (sortCfg.current == "" && identifier == "first_seen")
                     a_
-                      [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
+                      [ class_ $ "block flex flex-row px-3 py-2 hover:bg-fillBrand-weak rounded-md cursor-pointer " <> (if isActive then " text-textBrand " else "")
                       , href_ $ currentURL' <> "&sort=" <> identifier
                       , hxIndicator_ "#sortLoader"
                       ]
@@ -173,9 +173,9 @@ itemsList_ listCfg items = do
         div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base text-sm"] "Events"
         div_ [class_ "flex justify-center w-60 items-center text-sm  content-between gap-2"] do
           span_ [] "Chart"
-          div_ [class_ "rounded-lg border grid grid-cols-2 w-max h-7 bg-slate-200 overflow-hidden"] do
-            a_ [class_ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded-sm bg-white ", [__|init if window.location.search contains "since=14D" remove .bg-white from me else add .bg-white to me |], href_ $ currentURL' <> "&since=24H"] "24h"
-            a_ [class_ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded-sm ", [__|init if window.location.search contains "since=14D" add .bg-white to me else remove .bg-white from me |], href_ $ currentURL' <> "&since=14D"] "14d"
+          div_ [class_ "rounded-lg border grid grid-cols-2 w-max h-7 bg-fillWeaker overflow-hidden"] do
+            a_ [class_ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded-sm bg-bgRaised ", [__|init if window.location.search contains "since=14D" remove .bg-bgRaised from me else add .bg-bgRaised to me |], href_ $ currentURL' <> "&since=24H"] "24h"
+            a_ [class_ "cursor-pointer px-1.5 flex items-center text-xs h-full rounded-sm ", [__|init if window.location.search contains "since=14D" add .bg-bgRaised to me else remove .bg-bgRaised from me |], href_ $ currentURL' <> "&since=14D"] "14d"
         div_
           [ class_ "p-12 fixed rounded-lg shadow-sm bg-base-100 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md"
           , id_ "sortLoader"
@@ -210,7 +210,7 @@ itemRows_ nextFetchUrl items = do
   whenJust nextFetchUrl \url ->
     when (length items > 9)
       $ a_
-        [ class_ "cursor-pointer flex justify-center items-center p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center"
+        [ class_ "cursor-pointer flex justify-center items-center p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center"
         , hxTrigger_ "click, intersect once"
         , hxSwap_ "outerHTML"
         , hxGet_ url
@@ -253,7 +253,7 @@ timelineSteps_ steps colM =
       div_ [class_ "timeline-end space-y-5 w-full"] $ do
         div_ [class_ "flex items-center justify-between"] do
           label_ [class_ "text-lg flex gap-2 items-center pt-1"] $ do
-            span_ [class_ "font-medium ml-2 text-gray-900"] (toHtml step.title)
+            span_ [class_ "font-medium ml-2 text-textStrong"] (toHtml step.title)
             input_ ([type_ "checkbox", class_ "hidden tm-toggle"] <> [checked_ | idx == 0])
             faSprite_ "chevron-up" "regular" "h-4 rounded-full rotate-180  bg-fillWeak  text-textStrong p-1 w-4 group-has-[.tm-toggle:checked]/tm:rotate-0"
           when (idx == 0) $ do
@@ -262,7 +262,7 @@ timelineSteps_ steps colM =
                 label_ [class_ "relative inline-flex items-center cursor-pointer space-x-1"] do
                   input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm editormode", id_ "test-code-toggle", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm  text-textWeak font-medium"] "Code editor"
                 button_
-                  [ class_ "flex items-center gap-1 font-medium rounded-lg text-brand underline"
+                  [ class_ "flex items-center gap-1 font-medium rounded-lg text-textBrand underline"
                   , hxPatch_ $ "/p/" <> col.projectId.toText <> "/monitors/" <> col.id.toText
                   , hxParams_ "stepsData"
                   , hxExt_ "json-enc"
@@ -305,4 +305,4 @@ instance ToHtml TabFilter where
         ]
         do
           span_ $ toHtml opt.name
-          whenJust opt.count $ span_ [class_ "absolute top-[1px] -right-[5px] text-white text-xs font-medium rounded-full px-1 bg-red-500"] . show
+          whenJust opt.count $ span_ [class_ "absolute top-[1px] -right-[5px] text-textInverse-strong text-xs font-medium rounded-full px-1 bg-fillError-strong"] . show

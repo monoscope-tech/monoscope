@@ -173,7 +173,7 @@ instance ToHtml ApiItemDetailed where
 spanBadge :: Text -> Text -> Html ()
 spanBadge val key = do
   div_
-    [ class_ "flex gap-2 items-center text-textStrong bg-fillWeak border border-strokeWeak text-xs rounded-lg whitespace-nowrap px-2 py-1"
+    [ class_ "flex gap-2 items-center text-textStrong bg-fillWeaker border border-strokeWeak text-xs rounded-lg whitespace-nowrap px-2 py-1"
     , term "data-tippy-content" key
     ]
     $ do
@@ -185,11 +185,11 @@ expandedItemView :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Maybe Te
 expandedItemView pid item aptSp leftM rightM = do
   let isLog = item.kind == Just "log"
       reqDetails = if isLog then Nothing else getRequestDetails item.attributes
-  div_ [class_ $ "w-full px-2 pb-2 relative" <> if isLog then " flex flex-col gap-2" else " pb-[50px]"] $ do
+  div_ [class_ $ "w-full pl-2 pb-2 relative" <> if isLog then " flex flex-col gap-2" else " pb-[50px]"] $ do
     div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
     unless isLog $ span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "loading-span-list"] ""
     span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
-    div_ [class_ "flex flex-col gap-4 bg-gray-50 py-2  px-2"] $ do
+    div_ [class_ "flex flex-col gap-4 bg-fillWeaker py-2  px-2"] $ do
       div_ [class_ "flex justify-between items-center"] do
         div_ [class_ "flex items-center gap-4"] $ do
           h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] $ if isLog then "Trace Log" else "Trace Span"
@@ -201,7 +201,9 @@ expandedItemView pid item aptSp leftM rightM = do
               , [__|on click add .hidden to #trace_expanded_view 
             then put '0px' into  #log_details_container.style.width 
             then put '100%' into #logs_list_container.style.width 
-            then add .hidden to #resizer-details_width
+            then add .hidden to #resizer-details_width-wrapper
+            then add .opacity-0 to #resizer-details_width-wrapper
+            then add .pointer-events-none to #resizer-details_width-wrapper
             then remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
             then call updateUrlState('details_width', '', 'delete')
             then call updateUrlState('target_event', '0px', 'delete')
@@ -216,28 +218,24 @@ expandedItemView pid item aptSp leftM rightM = do
           let svTxt = maybe "UNSET" (\x -> maybe "UNSET" show x.severity_text) item.severity
               cls = getSeverityColor svTxt
           span_ [class_ $ "rounded-lg border cbadge-sm text-sm px-2 py-1 shrink-0 " <> cls] $ toHtml $ T.toUpper svTxt
-          h4_ [class_ "text-slate-800 font-medium"] $ toHtml $ case item.body of
+          h4_ [class_ "text-textStrong"] $ toHtml $ case item.body of
             Just (AE.String x) -> x
             _ -> toStrict $ encodeToLazyText item.body
-        else div_ [class_ "flex items-center gap-4 text-sm font-medium text-slate-950"] $ do
+        else div_ [class_ "flex items-center gap-4 text-sm font-medium text-textStrong"] $ do
           case reqDetails of
             Just req -> do
               div_ [class_ "flex flex-wrap items-center gap-2"] do
                 whenJust reqDetails $ \case
                   ("HTTP", method, path, status) -> do
-                    let methodClass = getMethodColor method
-                        borderColor = getMethodBorderColor method
-                        extraClass = getStatusColor status
-                        stBorder = getStatusBorderColor status
-                    span_ [class_ $ "px-2 py-1 rounded-lg text-sm border " <> borderColor <> " " <> methodClass] $ toHtml method
-                    span_ [class_ $ "px-2 py-1 rounded-lg text-sm border " <> stBorder <> " " <> extraClass] $ toHtml $ T.take 3 $ show status
+                    span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap", term "data-tip" ""] $ toHtml method
+                    span_ [class_ $ "relative cbadge-sm badge-" <> T.take 1 (show status) <> "xx whitespace-nowrap", term "data-tip" ""] $ toHtml $ T.take 3 $ show status
                     div_ [class_ "flex items-center"] do
                       span_ [class_ "shrink-1 px-2 py-1.5 max-w-96 truncate mr-2 urlPath"] $ toHtml path
                       div_ [[__| install Copy(content:.urlPath )|]] do
-                        faSprite_ "copy" "regular" "h-8 w-8 border border-slate-300 bg-fillWeaker rounded-full p-2 text-slate-500"
+                        faSprite_ "copy" "regular" "h-8 w-8 border border-strokeWeak bg-fillWeakerer rounded-full p-2 text-textWeak"
                   (scheme, method, path, status) -> do
                     div_ [class_ "flex flex-wrap items-center"] do
-                      span_ [class_ "flex gap-2 items-center text-textStrong bg-fillWeak border border-strokeWeak rounded-lg whitespace-nowrap px-2 py-1"] $ toHtml method
+                      span_ [class_ "flex gap-2 items-center text-textStrong bg-fillWeaker border border-strokeWeak rounded-lg whitespace-nowrap px-2 py-1"] $ toHtml method
                       span_ [class_ "px-2 py-1.5 max-w-96"] $ toHtml path
                       let extraClass = getGrpcStatusColor status
                       when (scheme /= "DB") $ span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
@@ -306,7 +304,7 @@ expandedItemView pid item aptSp leftM rightM = do
           isHttp = case reqDetails of
             Just ("HTTP", _, _, _) -> True
             _ -> False
-          borderClass = if isLog then "border-b-slate-200" else "border-b-strokeWeak"
+          borderClass = if isLog then "border-b-strokeWeak" else "border-b-strokeWeak"
       div_ [class_ "flex", [__|on click halt|]] $ do
         when (not isLog && isHttp) $ button_ [class_ $ "a-tab cursor-pointer  border-b-2 " <> borderClass <> " px-4 py-1.5 t-tab-active", onpointerdown_ $ "navigatable(this, '#request-content', '#" <> tabContainerId <> "', 't-tab-active','.http')"] "Request"
         button_ [class_ $ "cursor-pointer a-tab border-b-2 " <> borderClass <> " px-4 py-1.5 " <> if isLog || not isHttp then "t-tab-active" else "", onpointerdown_ $ "navigatable(this, '#att-content', '#" <> tabContainerId <> "', 't-tab-active'" <> if isLog then ")" else ",'.http')"] "Attributes"
@@ -321,7 +319,7 @@ expandedItemView pid item aptSp leftM rightM = do
         unless isLog $ button_ [class_ $ "a-tab cursor-pointer border-b-2 whitespace-nowrap " <> borderClass <> " px-4 py-1.5", onpointerdown_ $ "navigatable(this, '#m-raw-content', '#" <> tabContainerId <> "', 't-tab-active','.http')"] "Raw data"
         div_ [class_ $ "w-full border-b-2 " <> borderClass] pass
 
-      div_ [class_ "grid my-4 text-slate-600 font"] $ do
+      div_ [class_ "grid my-4 text-textWeak font"] $ do
         unless isLog $ div_ [class_ "hidden a-tab-content", id_ "m-raw-content"] $ do
           jsonValueToHtmlTree (AE.toJSON item) Nothing
         div_ [class_ $ "a-tab-content" <> if not isLog && isHttp then " hidden" else "", id_ "att-content"] $ do
@@ -339,7 +337,7 @@ expandedItemView pid item aptSp leftM rightM = do
             let cSp = fromMaybe item aptSp
             div_ [class_ "a-tab-content nested-tab", id_ "request-content"] do
               div_ [id_ "http-content-container", class_ "flex flex-col gap-3 mt-2"] do
-                div_ [class_ "bg-fillWeak w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"] do
+                div_ [class_ "bg-fillWeaker w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"] do
                   div_ [class_ "justify-start items-start flex text-sm"] do
                     button_ [onpointerdown_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "http cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Res Body"
                     button_ [onpointerdown_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "http cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Req Body"
@@ -396,7 +394,7 @@ renderErrors errs = div_ [class_ "flex flex-col gap-1"] $ do
   forM_ errs $ \err -> do
     let (tye, message, stacktrace) = getErrorDetails err
     div_ [class_ "flex flex-col rounded-lg border overflow-hidden"] $ do
-      div_ [class_ "bg-red-100 text-red-600 px-4 py-2 flex gap-2 items-center"] do
+      div_ [class_ "bg-fillError-weak text-textError px-4 py-2 flex gap-2 items-center"] do
         span_ [class_ "font-bold"] $ toHtml (tye <> ":")
         span_ [] $ toHtml message
       div_ [] do

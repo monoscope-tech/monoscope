@@ -98,12 +98,13 @@ authHandler logger env =
       let cookies = getCookies req
       mbPersistentSessionId <- handlerToEff $ getSessionId cookies
       let isSidebarClosed = sidebarClosedFromCookie cookies
+      let theme = themeFromCookie cookies
       requestID <- liftIO $ getRequestID req
-      sessionByID mbPersistentSessionId requestID isSidebarClosed (Just $ getRequestUrl req)
+      sessionByID mbPersistentSessionId requestID isSidebarClosed theme (Just $ getRequestUrl req)
 
 
-sessionByID :: (DB :> es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Sessions.PersistentSessionId -> Text -> Bool -> Maybe ByteString -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
-sessionByID mbPersistentSessionId requestID isSidebarClosed url = do
+sessionByID :: (DB :> es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Sessions.PersistentSessionId -> Text -> Bool -> Text -> Maybe ByteString -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
+sessionByID mbPersistentSessionId requestID isSidebarClosed theme url = do
   mbPersistentSession <- join <$> mapM Sessions.getPersistentSession mbPersistentSessionId
   let mUser = mbPersistentSession <&> (.user.getUser)
   (user, sessionId, persistentSession) <- case (mUser, mbPersistentSession) of
@@ -146,6 +147,14 @@ sidebarClosedFromCookie cookies = case L.lookup "isSidebarClosed" cookies of
   Just "true" -> True
   Just _ -> False
   Nothing -> False
+
+
+themeFromCookie :: Cookies -> Text
+themeFromCookie cookies = case L.lookup "theme" cookies of
+  Just "dark" -> "dark"
+  Just "light" -> "light"
+  Just _ -> "dark"
+  Nothing -> "dark"
 
 
 getSessionId :: Cookies -> Handler (Maybe Sessions.PersistentSessionId)

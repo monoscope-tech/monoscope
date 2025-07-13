@@ -280,7 +280,7 @@ editAlert_ pid monitorM = do
                 -- [__|on click toggle .dropdown-open on the closest .dropdown|]
                 ]
                 "Add recipient"
-              ul_ [tabindex_ "0", style_ "bottom:100%;top:auto", class_ "bottom-full top-auto dropdown-content z-1 menu p-2 shadow-sm bg-base-100 rounded-box w-52 min-w-[15rem]"] do
+              ul_ [tabindex_ "0", style_ "bottom:100%;top:auto", class_ "bottom-full top-auto dropdown-content z-1 menu p-2 shadow-sm bg-Raised rounded-box w-52 min-w-[15rem]"] do
                 li_ $ a_ [[__|on click put #addRecipientEmailAllTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "Email everyone"
                 li_ $ a_ [[__|on click put #addRecipientEmailTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "Email ..."
                 li_ $ a_ [[__|on click put #addRecipientSlackTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "To default Slack channel"
@@ -395,7 +395,7 @@ triggerCondition = div_ [class_ "flex items-center space-x-2"] $ do
 
 thresholdInput_ :: Text -> Text -> Maybe Text -> Text -> Html ()
 thresholdInput_ sign label colorM placeholder = div_ [class_ "flex items-center space-x-4"] $ do
-  whenJust colorM \color -> div_ [class_ $ "w-1 h-6 rounded-sm bg-" <> color] mempty
+  whenJust colorM \color -> div_ [class_ $ "w-1 h-6 rounded-sm " <> if color == "red-500" then "bg-fillError-strong" else "bg-fillWarning-strong"] mempty
   span_ [class_ "w-52 inline-block"] $ toHtml $ label <> " threshold:"
   div_ [class_ "space-x-5"] do
     span_ $ toHtml sign
@@ -403,14 +403,14 @@ thresholdInput_ sign label colorM placeholder = div_ [class_ "flex items-center 
 
 
 recoveryThresholds :: Html ()
-recoveryThresholds = div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] do
+recoveryThresholds = div_ [class_ "border-l-2 border-l-strokeWeak pl-4 space-y-2"] do
   h3_ [class_ "font-normal text-base"] "Recovery Thresholds"
   thresholdInput_ "<=" "Alert recovery" Nothing "Optional"
   thresholdInput_ "<=" "Warning recovery" Nothing "Optional"
 
 
 evaluationOptions :: Html ()
-evaluationOptions = div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] do
+evaluationOptions = div_ [class_ "border-l-2 border-l-strokeWeak pl-4 space-y-2"] do
   h3_ [class_ "font-normal text-base"] "Evaluation options"
   div_ [class_ "flex items-center space-x-2"] $ do
     span_ "Delay monitor evaluation by"
@@ -422,8 +422,8 @@ evaluationOptions = div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"]
 
 
 selectClass, inputClass :: Text
-selectClass = "border border-gray-300 rounded-sm px-2 py-1"
-inputClass = "border border-gray-300 rounded-sm px-2 py-1"
+selectClass = "border border-strokeWeak rounded-sm px-2 py-1"
+inputClass = "border border-strokeWeak rounded-sm px-2 py-1"
 
 
 instance ToHtml MonitorCreate where
@@ -488,7 +488,7 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
               , updateUrl = False
               , targetWidgetPreview = Nothing
               }
-          div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] do
+          div_ [class_ "border-l-2 border-l-strokeWeak pl-4 space-y-2"] do
             h3_ [class_ "font-normal text-base"] "Evaluation Details"
             div_ [class_ "flex items-center gap-2"] do
               fieldset_ [class_ "fieldset"] do
@@ -535,7 +535,7 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
                   then [text| The alert's value is too high. Check the APItoolkit Alerts to debug |]
                   else monitor.alertConfig.message
 
-            div_ [class_ "border-l-2 border-l-slate-300 pl-4 space-y-2"] do
+            div_ [class_ "border-l-2 border-l-strokeWeak pl-4 space-y-2"] do
               h3_ [class_ "font-normal text-base"] "Recovery Thresholds"
               p_ [] "Send notifications for alert status periodically as long as the monitor has not recovered"
               div_ [class_ "flex items-center gap-2"] do
@@ -568,7 +568,7 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
                 -- [__|on click toggle .dropdown-open on the closest .dropdown|]
                 ]
                 "Add recipient"
-              ul_ [tabindex_ "0", style_ "bottom:100%;top:auto", class_ "bottom-full top-auto dropdown-content z-1 menu p-2 shadow-sm bg-base-100 rounded-box w-52 min-w-[15rem]"] do
+              ul_ [tabindex_ "0", style_ "bottom:100%;top:auto", class_ "bottom-full top-auto dropdown-content z-1 menu p-2 shadow-sm bg-Raised rounded-box w-52 min-w-[15rem]"] do
                 li_ $ a_ [[__|on click put #addRecipientEmailAllTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "Email everyone"
                 li_ $ a_ [[__|on click put #addRecipientEmailTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "Email ..."
                 li_ $ a_ [[__|on click put #addRecipientSlackTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "To default Slack channel"
@@ -578,7 +578,7 @@ monitorMetric_ pid monitorM = section_ [class_ "px-8 py-5 space-y-5 group/pg ove
             template_ [id_ "addRecipientSlackTmpl"] $ addRecipientSlackTmpl_ ""
             template_ [id_ "addRecipientEmailTmpl"] $ addRecipientEmailTmpl_ (CI.mk "")
             template_ [id_ "addRecipientEmailAllTmpl"] addRecipientEmailAllTmpl_
-  div_ [class_ "sticky bottom-4 p-5 bg-white border-t border-slate-500 flex space-between justify-between items-center"] do
+  div_ [class_ "sticky bottom-4 p-5 bg-Raised border-t border-strokeStrong flex space-between justify-between items-center"] do
     h3_ "Complete all steps to proceed"
     div_ [class_ "flex gap-5 mr-6"] do
       button_ [class_ "btn btn-sm btn-outline"] "Test Notifications"
@@ -676,7 +676,7 @@ monitorSelectType_ = section_ [class_ "px-8 py-5 space-y-5 group/pg"] do
 monitorTypeDetail_ :: Text -> Html () -> Text -> Html ()
 monitorTypeDetail_ title content uri = do
   let slug = slugify title
-  div_ [class_ [text|border divide-y divide-gray-100 rounded-md hidden group-has-[.${slug}:checked]/pg:block |]] do
+  div_ [class_ [text|border divide-y divide-strokeWeaker rounded-md hidden group-has-[.${slug}:checked]/pg:block |]] do
     h3_ [class_ "bg-base-200 px-4 py-2 text-lg"] $ toHtml title
     div_ [class_ "prose px-4 py-4"] content
     div_ [class_ "text-right px-4 py-3"] $ a_ [class_ "btn btn-sm btn-success", href_ uri] "Continue"

@@ -139,7 +139,7 @@ integrationsBody sess envCfg isUpdate cp notifChannel phones slackData = do
         , id_ "notifsForm"
         ]
         do
-          h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] "Project Notifications"
+          h2_ [class_ "text-textStrong text-3xl font-medium mb-5"] "Project Notifications"
           div_ [class_ "flex flex-col gap-4", [__| on click halt |]] do
             p_ [] "Select channels to receive updates on this project."
             renderNotificationOption "Email Notifications" "Receive project updates via email" "email" Projects.NEmail notifChannel (faSprite_ "envelope" "solid" "h-6 w-6") ""
@@ -170,14 +170,14 @@ integrationsBody sess envCfg isUpdate cp notifChannel phones slackData = do
 renderNotificationOption :: Text -> Text -> Text -> Projects.NotificationChannel -> Maybe (V.Vector Projects.NotificationChannel) -> Html () -> Html () -> Html ()
 renderNotificationOption title description value channel notifChannel icon extraContent = do
   let isChecked = channel `elem` fromMaybe [] notifChannel
-  div_ [class_ $ "bg-white rounded-lg border border-strokeWeak shadow-xs " <> if isChecked then "border-l-4 border-l-primary" else ""] do
+  div_ [class_ $ "bg-bgRaised rounded-lg border border-strokeWeak shadow-xs " <> if isChecked then "border-l-4 border-l-primary" else ""] do
     div_ [class_ "p-6 pb-3"] do
       div_ [class_ "flex items-center justify-between"] do
         div_ [class_ "flex items-center gap-3"] do
           div_ [class_ "flex h-10 w-10 items-center justify-center rounded-full bg-fillWeak"] icon
           div_ $ do
             h3_ [class_ "text-lg font-semibold"] $ toHtml title
-            p_ [class_ "text-sm text-gray-500"] $ toHtml description
+            p_ [class_ "text-sm text-textWeak"] $ toHtml description
         label_ [class_ "relative inline-flex items-center cursor-pointer"] do
           input_ [type_ "checkbox", value_ value, if isChecked then checked_ else title_ $ "Enable notification via " <> toText value, class_ "toggle toggle-primary"]
     div_ [class_ "px-6 pb-6"] do
@@ -195,7 +195,7 @@ renderWhatsappIntegration = do
 renderSlackIntegration :: EnvConfig -> Text -> Maybe SlackData -> Html ()
 renderSlackIntegration envCfg pid slackData = do
   case slackData of
-    Just _ -> p_ [class_ "text-sm text-gray-500 mb-4 text-green-500"] "Already connected, but you can add again to change workspace or channel."
+    Just _ -> p_ [class_ "text-sm text-textWeak mb-4 text-textSuccess"] "Already connected, but you can add again to change workspace or channel."
     Nothing -> pass
   a_ [target_ "_blank", href_ $ "https://slack.com/oauth/v2/authorize?client_id=" <> envCfg.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:history,groups:history,im:history,mpim:history&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> pid] do
     img_ [alt_ "Add to slack", height_ "40", width_ "139", src_ "https://platform.slack-edge.com/img/add_to_slack.png", term "srcSet" "https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"]
