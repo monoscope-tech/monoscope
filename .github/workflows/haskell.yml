@@ -90,7 +90,6 @@ jobs:
           sudo cp -r rust-interop/target/release/* /usr/lib || true
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib || true
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so || true
-          sudo cp rust-interop/target/release/* dist/build/
           # Ensure the static library is available for cabal install
           ls -la rust-interop/target/release/
 
