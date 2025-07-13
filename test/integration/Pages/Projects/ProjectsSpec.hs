@@ -40,9 +40,10 @@ spec = aroundAll withTestResources do
     it "Non empty project list" \TestResources{..} -> do
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger ListProjects.listProjectsGetH
-      length pg.unwrap.content `shouldBe` 2
+      let (projects, _demoProject) = pg.unwrap.content
+      length projects `shouldBe` 2
       -- Should have both demo project and test project created in testSessionHeader
-      let projectIds = map (.id.toText) (V.toList pg.unwrap.content)
+      let projectIds = map (.id.toText) (V.toList projects)
       projectIds `shouldContain` ["00000000-0000-0000-0000-000000000000"] -- demo project
       projectIds `shouldContain` ["12345678-9abc-def0-1234-56789abcdef0"] -- test project from testSessionHeader
     -- TODO: add more checks for the info we we display on list page
@@ -65,9 +66,10 @@ spec = aroundAll withTestResources do
     xit "Project in list should have new details" \TestResources{..} -> do
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger ListProjects.listProjectsGetH
-      length pg.unwrap.content `shouldBe` 2
-      (pg.unwrap.content V.! 0).id.toText `shouldBe` "00000000-0000-0000-0000-000000000001"
-      (pg.unwrap.content V.! 0).title `shouldBe` "Test Project CI2"
-      (pg.unwrap.content V.! 0).description `shouldBe` "Test Description2"
-      (pg.unwrap.content V.! 0).paymentPlan `shouldBe` "Free"
-      (pg.unwrap.content V.! 0).timeZone `shouldBe` "Africa/Accra"
+      let (projects, _demoProject) = pg.unwrap.content
+      length projects `shouldBe` 2
+      (projects V.! 0).id.toText `shouldBe` "00000000-0000-0000-0000-000000000001"
+      (projects V.! 0).title `shouldBe` "Test Project CI2"
+      (projects V.! 0).description `shouldBe` "Test Description2"
+      (projects V.! 0).paymentPlan `shouldBe` "Free"
+      (projects V.! 0).timeZone `shouldBe` "Africa/Accra"
