@@ -63,6 +63,7 @@ data BWConfig = BWConfig
   , docsLink :: Maybe Text
   , isSettingsPage :: Bool
   , freeTierExceeded :: Bool
+  , hideNavbar :: Bool -- When True, hides the entire navbar
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -289,7 +290,7 @@ bodyWrapper bcfg child = do
                   when
                     (currUser.email == "hello@apitoolkit.io")
                     loginBanner
-                  unless bcfg.isSettingsPage $ navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
+                  unless (bcfg.isSettingsPage || bcfg.hideNavbar) $ navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
                   section_ [class_ "overflow-y-hidden h-full flex-1"] do
                     when bcfg.freeTierExceeded $ whenJust bcfg.currProject (\p -> freeTierLimitExceededBanner p.id.toText)
                     if bcfg.isSettingsPage
@@ -348,14 +349,18 @@ bodyWrapper bcfg child = do
             document.body.setAttribute('data-theme', newTheme);
             setCookie('theme', newTheme, 365);
             
-            // Update both toggle states
+            // Update all toggle states
             const toggle = document.getElementById('dark-mode-toggle');
             const swapToggle = document.getElementById('dark-mode-toggle-swap');
+            const navbarToggle = document.getElementById('dark-mode-toggle-navbar');
             if (toggle) {
               toggle.checked = newTheme === 'dark';
             }
             if (swapToggle) {
               swapToggle.checked = newTheme === 'dark';
+            }
+            if (navbarToggle) {
+              navbarToggle.checked = newTheme === 'dark';
             }
           }
           
@@ -365,11 +370,15 @@ bodyWrapper bcfg child = do
             const currentTheme = document.body.getAttribute('data-theme');
             const toggle = document.getElementById('dark-mode-toggle');
             const swapToggle = document.getElementById('dark-mode-toggle-swap');
+            const navbarToggle = document.getElementById('dark-mode-toggle-navbar');
             if (toggle) {
               toggle.checked = currentTheme === 'dark';
             }
             if (swapToggle) {
               swapToggle.checked = currentTheme === 'dark';
+            }
+            if (navbarToggle) {
+              navbarToggle.checked = currentTheme === 'dark';
             }
           });
       |]
