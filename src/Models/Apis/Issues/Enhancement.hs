@@ -12,9 +12,7 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Transact qualified as PTR
-import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Issues
-import Models.Projects.Projects qualified as Projects
 import Pkg.AI qualified as AI
 import Relude hiding (id)
 import System.Config (AuthContext (..), EnvConfig (..))

@@ -721,7 +721,8 @@ apiLogsPage page = do
             span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
             "filters"
             input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked); setTimeout(() => { const editor = document.getElementById('filterElement'); if (editor && editor.refreshLayout) editor.refreshLayout(); }, 200);"]
-            script_ $ [text|
+            script_
+              $ [text|
               document.getElementById('toggle-filters').checked = localStorage.getItem('toggle-filter-checked') === 'true';
               // Ensure editor layout is correct on initial load
               setTimeout(() => {

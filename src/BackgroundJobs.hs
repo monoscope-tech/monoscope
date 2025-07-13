@@ -877,10 +877,6 @@ groupAnomaliesByEndpointHash anomalies =
         grouped
 
 
-
-
-
-
 -- | Process issues enhancement job - finds issues that need LLM enhancement
 processIssuesEnhancement :: UTCTime -> ATBackgroundCtx ()
 processIssuesEnhancement scheduledTime = do
