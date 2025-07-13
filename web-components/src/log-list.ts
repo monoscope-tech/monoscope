@@ -418,15 +418,16 @@ export class LogList extends LitElement {
   }
   toggleLogRow(event: any, targetInfo: [string, string, string], pid: string) {
     const sideView = document.querySelector('#log_details_container')! as HTMLElement;
-    const resizer = document.querySelector('#resizer-details_width');
+    const resizerWrapper = document.querySelector('#resizer-details_width-wrapper');
     const width = Number(getComputedStyle(sideView).width.replace('px', ''));
     this.shouldScrollToBottom = false;
     if (width < 50) {
       sideView.style.width = `550px`;
-      if (resizer) {
-        resizer.classList.remove('hidden');
-      }
       updateUrlState('details_width', '550');
+    }
+    // Always show the resizer when a log row is clicked
+    if (resizerWrapper) {
+      resizerWrapper.classList.remove('hidden', 'opacity-0', 'pointer-events-none');
     }
     const rows = document.querySelectorAll('.item-row.bg-fillBrand-strong');
     rows.forEach((row) => row.classList.remove('bg-fillBrand-strong'));

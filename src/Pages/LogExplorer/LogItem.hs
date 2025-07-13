@@ -185,7 +185,7 @@ expandedItemView :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Maybe Te
 expandedItemView pid item aptSp leftM rightM = do
   let isLog = item.kind == Just "log"
       reqDetails = if isLog then Nothing else getRequestDetails item.attributes
-  div_ [class_ $ "w-full px-2 pb-2 relative" <> if isLog then " flex flex-col gap-2" else " pb-[50px]"] $ do
+  div_ [class_ $ "w-full pl-2 pb-2 relative" <> if isLog then " flex flex-col gap-2" else " pb-[50px]"] $ do
     div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
     unless isLog $ span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "loading-span-list"] ""
     span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
@@ -201,7 +201,9 @@ expandedItemView pid item aptSp leftM rightM = do
               , [__|on click add .hidden to #trace_expanded_view 
             then put '0px' into  #log_details_container.style.width 
             then put '100%' into #logs_list_container.style.width 
-            then add .hidden to #resizer-details_width
+            then add .hidden to #resizer-details_width-wrapper
+            then add .opacity-0 to #resizer-details_width-wrapper
+            then add .pointer-events-none to #resizer-details_width-wrapper
             then remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
             then call updateUrlState('details_width', '', 'delete')
             then call updateUrlState('target_event', '0px', 'delete')

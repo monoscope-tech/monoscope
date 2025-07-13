@@ -263,8 +263,8 @@ onboardingCompleteBody pid = do
   div_ [class_ "w-[550px] h-full flex items-center mx-auto relative"] $ do
     canvas_ [id_ "drawing_canvas", class_ "absolute top-0 left-0  w-full"] pass
     div_ [class_ "flex-col gap-4 flex w-full p-14 my-auto border border-weak rounded-2xl"] $ do
-      div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"]
-        $ faSprite_ "circle-check" "regular" "h-8 w-8 text-textSuccess"
+      div_ [class_ "p-3 bg-fillSuccess-weak rounded-full w-max border-strokeSuccess-weak gap-2 inline-flex"]
+        $ faSprite_ "circle-check" "regular" "h-8 w-8 text-iconSuccess"
       div_ [class_ "flex flex-col gap-2"] do
         h3_ [class_ " text-textStrong font-semibold text-2xl"] "Onboarding completed!"
         p_ [class_ " text-textWeak text-sm"] "You're all set! You can now start using exploring the apitoolkit dashboard by clicking the button below."
@@ -415,20 +415,20 @@ integrationsPage pid apikey =
         $ div_ [class_ "max-w-[550px]"]
         $ stepIndicator 5 "Instrument your apps or servers"
         $ "/p/"
-        <> pid.toText
-        <> "/onboarding?step=NotifChannel"
+          <> pid.toText
+          <> "/onboarding?step=NotifChannel"
       div_ [class_ "flex-col w-full gap-4 flex mt-4 px-12 overflow-y-auto flex-grow"] do
         p_ [class_ "text-textStrong"] do
           "Send Logs, Metrics or Traces. Select an item below for instructions. "
           br_ []
           "Click proceed when you're done integrating your applications."
 
-        div_ [class_ "my-6 p-4 bg-fillWeak border border-[#001066]/10 rounded-xl"] do
+        div_ [class_ "my-6 p-4 bg-fillWeak border border-strokeWeak rounded-xl"] do
           div_ [class_ "mb-2 text-textStrong font-semibold"] "Your API Key"
           div_ [class_ "flex items-center gap-2"] do
-            div_ [class_ "flex-1 font-mono bg-bgBase p-3 border border-[#001066]/10 rounded-lg overflow-x-auto", id_ "api-key-display"] $ toHtml apikey
+            div_ [class_ "flex-1 font-mono bg-bgBase p-3 border border-strokeWeak rounded-lg overflow-x-auto", id_ "api-key-display"] $ toHtml apikey
             button_
-              [ class_ "px-4 py-2 bg-fillStrong rounded-xl text-white flex items-center gap-1 hover:bg-fillStronger cursor-pointer"
+              [ class_ "px-4 py-2 bg-fillBrand-strong rounded-xl text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90 cursor-pointer"
               , type_ "button"
               , onpointerdown_ "navigator.clipboard.writeText(document.getElementById('api-key-display').textContent); this.innerHTML = '<span>Copied!</span><svg class=\"h-4 w-4\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M5 13l4 4L19 7\"></path></svg>';"
               ]
@@ -520,7 +520,7 @@ integrationsPage pid apikey =
                           , hxSelect_ "#mainArticle"
                           , hxIndicator_ $ "#fw-indicator-" <> lang
                           ]
-                        <> [checked_ | idx == 0]
+                          <> [checked_ | idx == 0]
                       unless (T.null fwIcon) $ img_ [class_ "h-5 w-5", src_ $ "https://apitoolkit.io/assets/img/framework-logos/" <> fwIcon]
                       span_ $ toHtml fwName
 
@@ -541,7 +541,7 @@ integrationsPage pid apikey =
 languageItem :: Projects.ProjectId -> Text -> Text -> Html ()
 languageItem pid lang ext = do
   label_
-    [ class_ "group/li cols-span-1 h-12 px-3 py-2 bg-[#00157f]/0 rounded-xl border border-[#001066]/10 justify-start items-center gap-3 inline-flex cursor-pointer"
+    [ class_ "group/li cols-span-1 h-12 px-3 py-2 bg-transparent rounded-xl border border-strokeWeak justify-start items-center gap-3 inline-flex cursor-pointer"
     ]
     do
       input_
@@ -584,10 +584,10 @@ connectionStatusButton isConnected connectUrl
 -- Helper function to render integration card
 integrationCard :: Text -> Text -> Bool -> Text -> Html ()
 integrationCard serviceName iconPath isConnected connectUrl = do
-  div_ [class_ "px-3 py-2 rounded-xl border border-[#001066]/10 bg-fillWeak justify-between items-center flex"] $ do
+  div_ [class_ "px-3 py-2 rounded-xl border border-strokeWeak bg-fillWeak justify-between items-center flex"] $ do
     div_ [class_ "items-center gap-1.5 flex overflow-hidden"] $ do
       img_ [src_ iconPath]
-      span_ [class_ "text-center text-black text-xl font-semibold"] $ toHtml serviceName
+      span_ [class_ "text-center text-textStrong text-xl"] $ toHtml serviceName
     connectionStatusButton isConnected connectUrl
 
 
@@ -731,15 +731,15 @@ inviteTeamMemberModal pid emails = do
     input_ [type_ "checkbox", id_ "inviteModal", class_ "modal-toggle", checked_]
     div_ [class_ "modal p-8", role_ "dialog"] do
       universalIndicator
-      div_ [class_ "modal-box flex flex-col gap-4"] $ do
-        div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"]
-          $ faSprite_ "circle-check" "regular" "h-6 w-6 text-textSuccess"
+      div_ [class_ "modal-box bg-bgRaised flex flex-col gap-4"] $ do
+        div_ [class_ "p-3 bg-fillSuccess-weak rounded-full w-max border-strokeSuccess-weak gap-2 inline-flex"]
+          $ faSprite_ "circle-check" "regular" "h-6 w-6 text-iconSuccess"
         span_ [class_ " text-textStrong text-2xl font-semibold"] "We've sent you a test notification"
-        div_ [class_ "text-[#000833]/60"] "No notification? Close this modal and verify emails and channels."
+        div_ [class_ "text-textWeak"] "No notification? Close this modal and verify emails and channels."
         div_ [class_ "h-1 w-full  bg-fillWeak"] pass
         div_ [class_ "flex-col gap-4 flex"] $ do
           div_ [class_ "flex-col gap-5 flex"] $ do
-            div_ [class_ "w-full text-[#000833]/60"] "The users below will be added to your project as team members"
+            div_ [class_ "w-full text-textWeak"] "The users below will be added to your project as team members"
             div_ [class_ "w-full gap-4 flex flex-col"] $ do
               div_ [class_ "w-full gap-2 flex items-center"] $ do
                 div_ [class_ "flex-col gap-1 inline-flex w-full"]
@@ -784,10 +784,10 @@ locations =
 inviteMemberItem :: Text -> Html ()
 inviteMemberItem email = do
   let hide = email == "hidden"
-  div_ (class_ ("flex  py-1 w-full justify-between items-center border-b border-[#001066]/10 " <> if hide then "hidden" else "") : [id_ "member-template" | hide]) do
+  div_ (class_ ("flex  py-1 w-full justify-between items-center border-b border-strokeWeak " <> if hide then "hidden" else "") : [id_ "member-template" | hide]) do
     div_ [class_ "pr-6 py-1  w-full justify-start items-center inline-flex"] do
       input_ ([type_ "hidden", value_ email] ++ [name_ "emails" | not hide])
-      span_ [class_ "text-[#000626]/90 text-sm font-normal"]
+      span_ [class_ "text-textStrong text-sm font-normal"]
         $ toHtml email
     select_ [name_ "permissions", class_ "select select-xs"] do
       option_ [class_ "text-textWeak", value_ "admin"] "Admin"
@@ -838,7 +838,7 @@ stepIndicator step title prevUrl = do
     div_ [class_ "flex-col gap-2 flex w-full"] $ do
       div_ [class_ " text-textStrong text-base font-semibold"] $ "Step " <> show step <> " of 6"
       div_ [class_ "grid grid-cols-6 w-full gap-1"] $ do
-        forM_ [1 .. 6] $ \i -> div_ [class_ $ "h-2 w-full rounded-sm " <> if step >= i then "btn-primary rounded-sm" else " bg-fillWeak shadow-[inset_0px_1px_4px_0px_rgba(0,0,0,0.08)] border border-[#001066]/10"] pass
+        forM_ [1 .. 6] $ \i -> div_ [class_ $ "h-2 w-full rounded-sm " <> if step >= i then "btn-primary rounded-sm" else " bg-fillWeak shadow-sm border border-strokeWeak"] pass
       when (step > 1) $ do
         a_ [class_ "flex items-center gap-3 flex text-textBrand w-full mt-2", href_ prevUrl] $ do
           faSprite_ "arrow-left" "regular" "h-4 w-4"
