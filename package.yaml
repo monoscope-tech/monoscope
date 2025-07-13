@@ -290,6 +290,8 @@ tests:
       - -threaded
       - -rtsopts
       - -with-rtsopts=-N
+    build-tools:
+      - hspec-discover:hspec-discover
     dependencies:
       - base
       - apitoolkit-server
