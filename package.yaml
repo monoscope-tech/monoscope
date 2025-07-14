@@ -21,6 +21,7 @@ build-tools:
 extra-source-files:
   - proto/**/*.proto
   - README.md
+  - auto-instrument-config.toml
 
 # generated-other-modules:
 # generated-exposed-modules:

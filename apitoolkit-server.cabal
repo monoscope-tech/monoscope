@@ -27,6 +27,7 @@ extra-source-files:
     proto/opentelemetry/proto/resource/v1/resource.proto
     proto/opentelemetry/proto/trace/v1/trace.proto
     README.md
+    auto-instrument-config.toml
 
 source-repository head
   type: git
