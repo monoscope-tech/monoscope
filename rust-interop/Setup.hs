@@ -6,8 +6,9 @@ While it's an acceptable hack as this project is currently a prototype, this
 should be removed before `cargo-cabal` stable release.
 -}
 
-import Control.Monad (when, unless)
+import Control.Monad (when, unless, forM)
 import Data.Maybe
+import Data.List (isPrefixOf, isInfixOf)
 import System.Environment (setEnv, lookupEnv)
 import qualified Distribution.PackageDescription as PD
 import Distribution.Simple
@@ -31,7 +32,7 @@ main =
     simpleUserHooks
       { confHook = rustConfHook
       , copyHook = rustCopyHook
-      -- , buildHook = rustBuildHook
+      , buildHook = rustBuildHook
       }
 
 -- This hook could be removed at some point, likely if this issue is resolved
@@ -71,41 +72,57 @@ rustCopyHook description localBuildInfo hooks flags = do
   dir <- getCurrentDirectory
   let distBuildDir = buildDir localBuildInfo
       libName = "libCrust_interop"
-      srcDir = dir </> "target" </> "release"
   
   putStrLn $ "=== Copying Rust libraries for installation"
+  putStrLn $ "=== Current directory: " ++ dir
   putStrLn $ "=== Build directory: " ++ distBuildDir
+  
+  -- Try multiple possible locations for the Rust libraries
+  let possibleSrcDirs = [ dir </> "target" </> "release"           -- Local build
+                        , "/usr/local/lib"                          -- System install
+                        , "/usr/lib"                                -- Alternative system install
+                        , distBuildDir                              -- Already in build dir
+                        ]
   
   -- Create the destination directory if it doesn't exist
   createDirectoryIfMissing True distBuildDir
   
-  -- Copy static library (.a)
-  let srcPathA = srcDir </> (libName ++ ".a")
-      dstPathA = distBuildDir </> (libName ++ ".a")
-  srcExistsA <- doesFileExist srcPathA
-  when srcExistsA $ do
-    copyFile srcPathA dstPathA
-    putStrLn $ "=== Successfully copied " ++ libName ++ ".a"
+  -- Helper function to find and copy a library file
+  let findAndCopyLib :: String -> IO Bool
+      findAndCopyLib ext = do
+        let fileName = libName ++ ext
+            dstPath = distBuildDir </> fileName
+        -- Check if already exists in destination
+        dstExists <- doesFileExist dstPath
+        if dstExists
+          then do
+            putStrLn $ "=== " ++ fileName ++ " already exists in build directory"
+            return True
+          else do
+            -- Try to find the file in possible source directories
+            results <- mapM (\srcDir -> do
+              let srcPath = srcDir </> fileName
+              exists <- doesFileExist srcPath
+              if exists
+                then do
+                  putStrLn $ "=== Found " ++ fileName ++ " at " ++ srcPath
+                  copyFile srcPath dstPath
+                  putStrLn $ "=== Successfully copied " ++ fileName
+                  return True
+                else return False
+              ) possibleSrcDirs
+            return $ or results
   
-  -- Copy shared library (.so) if it exists (Linux)
-  let srcPathSO = srcDir </> (libName ++ ".so")
-      dstPathSO = distBuildDir </> (libName ++ ".so")
-  srcExistsSO <- doesFileExist srcPathSO
-  when srcExistsSO $ do
-    copyFile srcPathSO dstPathSO
-    putStrLn $ "=== Successfully copied " ++ libName ++ ".so"
-  
-  -- Copy dylib if it exists (macOS)
-  let srcPathDylib = srcDir </> (libName ++ ".dylib")
-      dstPathDylib = distBuildDir </> (libName ++ ".dylib")
-  srcExistsDylib <- doesFileExist srcPathDylib
-  when srcExistsDylib $ do
-    copyFile srcPathDylib dstPathDylib
-    putStrLn $ "=== Successfully copied " ++ libName ++ ".dylib"
+  -- Copy all library types
+  foundA <- findAndCopyLib ".a"
+  foundSO <- findAndCopyLib ".so"
+  foundDylib <- findAndCopyLib ".dylib"
   
   -- Warn if no library files were found
-  unless (srcExistsA || srcExistsSO || srcExistsDylib) $
-    putStrLn $ "=== WARNING: No library files found in " ++ srcDir
+  unless (foundA || foundSO || foundDylib) $ do
+    putStrLn $ "=== ERROR: No library files found in any of these locations:"
+    mapM_ (\dir -> putStrLn $ "===   - " ++ dir) possibleSrcDirs
+    error "Failed to find Rust library files"
 
 -- It would be nice to remove this hook at some point, e.g., if this RFC is merged
 -- in Cabal https://github.com/haskell/cabal/issues/7906
@@ -117,19 +134,61 @@ rustBuildHook ::
   BuildFlags ->
   IO ()
 rustBuildHook description localBuildInfo hooks flags = do
-  putStrLn "******************************************************************"
-  putStrLn "Call `cargo build --release` to build a dependency written in Rust"
-  -- FIXME: add `--target $TARGET` flag to support cross-compiling to $TARGET
-  rawSystemExit (fromFlag $ buildVerbosity flags) "cargo" ["build","--release"]
-  putStrLn "... `rustc` compilation seems to succeed 🦀! Back to Cabal build:"
-  putStrLn "******************************************************************"
-  putStrLn "Back to Cabal build"
-  print $ PD.libBuildInfo $ fromJust (PD.library $ localPkgDescr localBuildInfo)
-  let libDir = "/Users/tonyalaribe/Projects/apitoolkit/apitoolkit-server/rust-interop/target/release"
-  currentEnv <- lookupEnv "DYLD_LIBRARY_PATH"
-  print currentEnv
-  setEnv "DYLD_LIBRARY_PATH" (libDir ++ ":" ++ fromMaybe "" currentEnv)
-  putStrLn (libDir  ++ maybe "" (":"++) currentEnv)
+  dir <- getCurrentDirectory
+  let distBuildDir = buildDir localBuildInfo
+      libName = "libCrust_interop"
+  
+  putStrLn $ "=== Rust build hook"
+  putStrLn $ "=== Current directory: " ++ dir
+  putStrLn $ "=== Build directory: " ++ distBuildDir
+  
+  -- Check if we're in a temp directory (cabal install scenario)
+  -- Also check if the rust libraries don't exist locally (indicating we need pre-built ones)
+  localLibExists <- doesFileExist (dir </> "target" </> "release" </> (libName ++ ".a"))
+  let inTempDir = "/tmp/" `isPrefixOf` dir 
+                  || "cabal-install" `isInfixOf` dir 
+                  || "/var/folders/" `isPrefixOf` dir  -- macOS temp dirs
+                  || not localLibExists
+  
+  if inTempDir
+    then do
+      putStrLn "=== Detected cabal install from temp directory"
+      -- Try to find pre-built libraries in system directories
+      let systemDirs = ["/usr/local/lib", "/usr/lib"]
+      
+      -- Create build directory
+      createDirectoryIfMissing True distBuildDir
+      
+      -- Copy libraries from system directories
+      let copyLibFromSystem ext = do
+            let fileName = libName ++ ext
+            results <- forM systemDirs $ \sysDir -> do
+              let srcPath = sysDir </> fileName
+                  dstPath = distBuildDir </> fileName
+              exists <- doesFileExist srcPath
+              if exists
+                then do
+                  putStrLn $ "=== Copying " ++ fileName ++ " from " ++ srcPath
+                  copyFile srcPath dstPath
+                  return True
+                else return False
+            return $ or results
+      
+      foundA <- copyLibFromSystem ".a"
+      foundSO <- copyLibFromSystem ".so"
+      foundDylib <- copyLibFromSystem ".dylib"
+      
+      unless (foundA || foundSO || foundDylib) $
+        error "Failed to find pre-built Rust libraries in system directories"
+    else do
+      -- Normal build scenario - build the Rust library
+      putStrLn "******************************************************************"
+      putStrLn "Call `cargo build --release` to build a dependency written in Rust"
+      rawSystemExit (fromFlag $ buildVerbosity flags) "cargo" ["build","--release"]
+      putStrLn "... `rustc` compilation seems to succeed 🦀! Back to Cabal build:"
+      putStrLn "******************************************************************"
+  
+  -- Continue with normal build
   buildHook simpleUserHooks description localBuildInfo hooks flags
 
 -- This handy automation (particularly useful when you want to quickly prototype
