@@ -7,6 +7,7 @@ on:
 env:
   LANG: C.UTF-8
   LD_LIBRARY_PATH: '/usr/local/lib:$LD_LIBRARY_PATH'
+  CABAL_JOBS: 4
 
 jobs:
   build:
@@ -49,13 +50,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-node-
 
-      - run: npm install
-      - run: npx tailwindcss  -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
-      # - run: npx postcss-cli ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
+      - run: npm ci --prefer-offline --no-audit
+      - run: npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
       - name: Build web-components
         run: |
           cd web-components
-          npm install
+          npm ci --prefer-offline --no-audit
           npm run build
 
       - name: Cache Cabal dependencies
@@ -95,21 +95,13 @@ jobs:
             exit 1
           fi
 
-          # Copy libraries to system directories
-          sudo mkdir -p /usr/local/lib
-          sudo cp rust-interop/target/release/libCrust_interop.a /usr/local/lib/ || true
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/ || true
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so || true
-
-          sudo mkdir -p /usr/lib
-          sudo cp rust-interop/target/release/libCrust_interop.a /usr/lib/ || true
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/ || true
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so || true
-
-          # Create dist/build directory for Cabal
+          # Copy libraries for Cabal build
           mkdir -p dist/build
           cp rust-interop/target/release/libCrust_interop.a dist/build/
           cp rust-interop/target/release/libCrust_interop.so dist/build/ || true
+          
+          # Copy to system directories for linking
+          sudo cp rust-interop/target/release/libCrust_interop.* /usr/local/lib/ || true
 
           echo "=== Libraries copied to dist/build ==="
           ls -la dist/build/
@@ -117,13 +109,13 @@ jobs:
       - name: Configure project
         run: |
           cabal update
-          cabal configure --enable-tests --enable-benchmarks
+          cabal configure --enable-tests --enable-benchmarks --ghc-options="-O2 -j4"
 
       - name: Build dependencies
-        run: cabal build --only-dependencies all
+        run: cabal build --only-dependencies all -j4
 
       - name: Build project
-        run: cabal build all --ghc-options "-O3"
+        run: cabal build all -j4
 
       # Save cache even if subsequent steps fail
       - name: Save Cabal cache
@@ -146,35 +138,13 @@ jobs:
             ./web-components/dist
             ./rust-interop/target/release/libCrust_interop.so
             ./rust-interop/target/release/libCrust_interop.a
-          retention-days: 3
+          retention-days: 1
 
       - name: Install to build-output
         run: |
           mkdir -p ./build-output
+          cabal list-bins | xargs -I {} cp {} ./build-output/
 
-          # Ensure dist/build directory exists with the Rust libraries
-          mkdir -p dist/build
-          if [ -f "rust-interop/target/release/libCrust_interop.a" ]; then
-            cp rust-interop/target/release/libCrust_interop.a dist/build/
-          fi
-          if [ -f "rust-interop/target/release/libCrust_interop.so" ]; then
-            cp rust-interop/target/release/libCrust_interop.so dist/build/
-          fi
-
-          echo "=== Contents of dist/build before cabal install ==="
-          ls -la dist/build/ || echo "dist/build not found"
-
-          cabal install --install-method=copy --installdir=./build-output --ghc-options "-O3"
-
-      # Save cache even if cabal install fails
-      - name: Save Cabal cache after install
-        uses: actions/cache/save@v3
-        if: always()
-        with:
-          path: |
-            ~/.cabal/store
-            dist-newstyle
-          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project', '**/cabal.project.freeze') }}
 
   test:
     name: Test ${{ matrix.test-suite }}
@@ -226,26 +196,15 @@ jobs:
 
       - name: Build and setup Rust libraries
         run: |
-          cd rust-interop
-          cargo build --release
-          cd ..
-
-          # Verify libraries exist
-          echo "=== Rust build artifacts ==="
-          ls -la rust-interop/target/release/
-
-          # Copy to system directories
-          sudo cp rust-interop/target/release/libCrust_interop.a /usr/local/lib/ || true
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so
-          sudo cp rust-interop/target/release/libCrust_interop.a /usr/lib/ || true
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
-
+          # Only build if not cached
+          if [ ! -f "rust-interop/target/release/libCrust_interop.so" ]; then
+            cd rust-interop && cargo build --release -j4 && cd ..
+          fi
+          
           # Setup for Cabal
           mkdir -p dist/build
-          cp rust-interop/target/release/libCrust_interop.a dist/build/ || true
-          cp rust-interop/target/release/libCrust_interop.so dist/build/ || true
+          cp rust-interop/target/release/libCrust_interop.* dist/build/ || true
+          sudo cp rust-interop/target/release/libCrust_interop.* /usr/local/lib/ || true
 
       - name: Configure project
         run: |
@@ -253,7 +212,7 @@ jobs:
           cabal configure --enable-tests
 
       - name: Run ${{ matrix.test-suite }}
-        run: cabal test ${{ matrix.test-suite }}
+        run: cabal test ${{ matrix.test-suite }} -j4
 
   deploy:
     name: Deploy
@@ -270,39 +229,33 @@ jobs:
         with:
           name: build-artifacts
 
-      - name: Setup Rust libraries
-        run: |
-          sudo mkdir -p /usr/local/lib
-          sudo mkdir -p /usr/lib
-          # Copy both static and shared libraries
-          sudo cp rust-interop/target/release/libCrust_interop.a /usr/local/lib/ || true
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so
-          sudo cp rust-interop/target/release/libCrust_interop.a /usr/lib/ || true
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
 
       - name: Copy binary to root
         run: |
           cp ./build-output/* .
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Login to Container Registry
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GH_TOKEN }}
 
-      - name: Preset Image Name
-        run: echo "IMAGE_URL=$(echo ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:$(echo ${{ github.sha }} | cut -c1-7) | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
-
       - name: Build and push Docker Image
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ${{ env.IMAGE_URL }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
 
       - name: Deploy Image to CapRrover
         uses: caprover/deploy-from-github@v1.1.2
@@ -310,7 +263,4 @@ jobs:
           server: '${{ secrets.CAPTAINROVER_SERVER }}'
           app: '${{ secrets.CAPTAINROVER_APP_NAME }}'
           token: '${{ secrets.CAPTAINROVER_APP_TOKEN }}'
-          image: '${{ env.IMAGE_URL }}'
-
-      - name: Show Output
-        run: echo ${{ steps.deploy.outputs.url }}
+          image: 'ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ github.sha }}'
