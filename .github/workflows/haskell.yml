@@ -107,6 +107,9 @@ jobs:
           mkdir -p dist/build
           cp rust-interop/target/release/libCrust_interop.* dist/build/
           sudo cp rust-interop/target/release/libCrust_interop.* /usr/local/lib/
+          # Create symbolic links with the expected library name
+          cd dist/build && ln -sf libCrust_interop.a librust_interop.a && cd ../..
+          cd /usr/local/lib && sudo ln -sf libCrust_interop.a librust_interop.a && sudo ln -sf libCrust_interop.so librust_interop.so 2>/dev/null || true && cd -
           echo "::endgroup::"
 
       # Build Haskell project
@@ -209,6 +212,9 @@ jobs:
           mkdir -p dist/build
           cp rust-interop/target/release/libCrust_interop.* dist/build/ || true
           sudo cp rust-interop/target/release/libCrust_interop.* /usr/local/lib/ || true
+          # Create symbolic links with the expected library name
+          cd dist/build && ln -sf libCrust_interop.a librust_interop.a 2>/dev/null || true && cd ../..
+          cd /usr/local/lib && sudo ln -sf libCrust_interop.a librust_interop.a && sudo ln -sf libCrust_interop.so librust_interop.so 2>/dev/null || true && cd -
           echo "::endgroup::"
 
       - name: Configure for tests
