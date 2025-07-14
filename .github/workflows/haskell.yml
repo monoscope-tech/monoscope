@@ -81,17 +81,38 @@ jobs:
 
       - name: Build Rust interop library
         run: |
-          make prepare-rust-interop
-          sudo mkdir -p /usr/local/lib
-          sudo cp -r rust-interop/target/release/* /usr/local/lib || true
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib || true
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so || true
-          sudo mkdir -p /usr/lib
-          sudo cp -r rust-interop/target/release/* /usr/lib || true
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib || true
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so || true
-          # Ensure the static library is available for cabal install
+          cd rust-interop
+          cargo build --release
+          cd ..
+          
+          # Verify that both static and shared libraries were built
+          echo "=== Checking Rust build artifacts ==="
           ls -la rust-interop/target/release/
+          
+          # Ensure static library exists
+          if [ ! -f "rust-interop/target/release/libCrust_interop.a" ]; then
+            echo "ERROR: Static library libCrust_interop.a not found!"
+            exit 1
+          fi
+          
+          # Copy libraries to system directories
+          sudo mkdir -p /usr/local/lib
+          sudo cp rust-interop/target/release/libCrust_interop.a /usr/local/lib/ || true
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/ || true
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so || true
+          
+          sudo mkdir -p /usr/lib
+          sudo cp rust-interop/target/release/libCrust_interop.a /usr/lib/ || true
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/ || true
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so || true
+          
+          # Create dist/build directory for Cabal
+          mkdir -p dist/build
+          cp rust-interop/target/release/libCrust_interop.a dist/build/
+          cp rust-interop/target/release/libCrust_interop.so dist/build/ || true
+          
+          echo "=== Libraries copied to dist/build ==="
+          ls -la dist/build/
 
       - name: Configure project
         run: |
@@ -119,6 +140,19 @@ jobs:
       - name: Install to build-output
         run: |
           mkdir -p ./build-output
+          
+          # Ensure dist/build directory exists with the Rust libraries
+          mkdir -p dist/build
+          if [ -f "rust-interop/target/release/libCrust_interop.a" ]; then
+            cp rust-interop/target/release/libCrust_interop.a dist/build/
+          fi
+          if [ -f "rust-interop/target/release/libCrust_interop.so" ]; then
+            cp rust-interop/target/release/libCrust_interop.so dist/build/
+          fi
+          
+          echo "=== Contents of dist/build before cabal install ==="
+          ls -la dist/build/ || echo "dist/build not found"
+          
           cabal install --install-method=copy --installdir=./build-output --ghc-options "-O3"
 
   test:
@@ -169,12 +203,28 @@ jobs:
           sudo mkdir -p /usr/local/lib
           sudo mkdir -p /usr/lib
 
-      - run: |
-          make prepare-rust-interop
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib
+      - name: Build and setup Rust libraries
+        run: |
+          cd rust-interop
+          cargo build --release
+          cd ..
+          
+          # Verify libraries exist
+          echo "=== Rust build artifacts ==="
+          ls -la rust-interop/target/release/
+          
+          # Copy to system directories
+          sudo cp rust-interop/target/release/libCrust_interop.a /usr/local/lib/ || true
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib
+          sudo cp rust-interop/target/release/libCrust_interop.a /usr/lib/ || true
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
+          
+          # Setup for Cabal
+          mkdir -p dist/build
+          cp rust-interop/target/release/libCrust_interop.a dist/build/ || true
+          cp rust-interop/target/release/libCrust_interop.so dist/build/ || true
 
       - name: Configure project
         run: |
@@ -203,9 +253,12 @@ jobs:
         run: |
           sudo mkdir -p /usr/local/lib
           sudo mkdir -p /usr/lib
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib
+          # Copy both static and shared libraries
+          sudo cp rust-interop/target/release/libCrust_interop.a /usr/local/lib/ || true
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib
+          sudo cp rust-interop/target/release/libCrust_interop.a /usr/lib/ || true
+          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
 
       - name: Copy binary to root
