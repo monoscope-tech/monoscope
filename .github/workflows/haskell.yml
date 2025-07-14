@@ -121,24 +121,17 @@ jobs:
         run: |
           cabal configure --enable-tests --enable-benchmarks --ghc-options="-O2 -j4"
 
-      - name: Build Haskell dependencies
+      - name: Build and install executable
         run: |
-          echo "::group::Building Haskell dependencies"
-          cabal build --only-dependencies all -j4
+          echo "::group::Building executable and dependencies"
+          # Build only what we need for deployment
+          cabal build exe:apitoolkit-server-exe -j4
           echo "::endgroup::"
-
-      - name: Build Haskell project
-        run: |
-          echo "::group::Building Haskell project"
-          cabal build all -j4
-          echo "::endgroup::"
-
-      # Prepare deployment artifacts
-      - name: Prepare deployment
-        run: |
+          
           mkdir -p ./build-output
-          echo "::group::Install executable"
-          cabal install exe:apitoolkit-server-exe --install-method=copy --installdir=./build-output --overwrite-policy=always
+          echo "::group::Copy executable"
+          # Use find to locate the built executable and copy it
+          find dist-newstyle -name apitoolkit-server-exe -type f -executable | head -1 | xargs -I {} cp {} ./build-output/
           echo "::endgroup::"
           echo "::group::Verify executable"
           ls -la ./build-output/
@@ -225,15 +218,18 @@ jobs:
           fi
           echo "::endgroup::"
 
-      - name: Configure for tests
+      - name: Configure and build tests
         run: |
           cabal update
           cabal configure --enable-tests
+          # Build only the specific test suite we're about to run
+          cabal build ${{ matrix.test }} -j4
 
       - name: Run ${{ matrix.test }}
         run: |
           echo "::group::Running ${{ matrix.test }}"
-          cabal test ${{ matrix.test }} -j4 --test-show-details=always
+          # Run without rebuilding since we just built it
+          cabal test ${{ matrix.test }} -j4 --test-show-details=always --test-option=--color=always
           echo "::endgroup::"
 
   deploy:
