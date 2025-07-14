@@ -7,7 +7,9 @@ on:
 env:
   LANG: C.UTF-8
   LD_LIBRARY_PATH: '/usr/local/lib:$LD_LIBRARY_PATH'
-  CABAL_JOBS: 4
+  # GitHub Actions runners have 2 cores for Linux
+  CABAL_JOBS: 2
+  GHC_VERSION: 9.10.2
 
 jobs:
   build:
@@ -16,116 +18,139 @@ jobs:
     permissions:
       contents: 'read'
       id-token: 'write'
+    outputs:
+      cache-key: ${{ steps.cache-key.outputs.key }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Generate cache key
+        id: cache-key
+        run: |
+          echo "key=${{ runner.os }}-build-${{ hashFiles('**/*.cabal', '**/cabal.project*', 'rust-interop/Cargo.*', '**/package-lock.json') }}" >> $GITHUB_OUTPUT
+
+      # Setup all toolchains early to maximize parallel downloads
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          override: true
+        uses: dtolnay/rust-toolchain@stable
+
       - uses: haskell-actions/setup@v2
         with:
-          ghc-version: 9.10.2
+          ghc-version: ${{ env.GHC_VERSION }}
           cabal-version: 'latest'
-      - name: Install OpenSSL, protoc and snappy
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev librdkafka-dev protobuf-compiler libsnappy-dev # or "brew install openssl" for macOS
-      - name: Set OpenSSL Paths
-        run: |
-          export OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)
-          export OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)
+
       - name: Setup node env
         uses: actions/setup-node@v4
         with:
           node-version: 18
           cache: 'npm'
 
-      - name: Cache Node modules
-        uses: actions/cache@v3
-        with:
-          path: |
-            node_modules
-            web-components/node_modules
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
-
-      - run: npm ci --prefer-offline --no-audit
-      - run: npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
-      - name: Build web-components
-        run: |
-          cd web-components
-          npm ci --prefer-offline --no-audit
-          npm run build
-
-      - name: Cache Cabal dependencies
-        uses: actions/cache@v3
+      # Unified cache for all dependencies
+      - name: Cache all dependencies
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cabal/store
             dist-newstyle
-          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project', '**/cabal.project.freeze') }}
-          restore-keys: |
-            ${{ runner.os }}-cabal-
-
-      - name: Cache Rust build
-        uses: actions/cache@v3
-        with:
-          path: |
             rust-interop/target
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-rust-${{ hashFiles('rust-interop/Cargo.lock', 'rust-interop/Cargo.toml') }}
+            node_modules
+            web-components/node_modules
+          key: ${{ steps.cache-key.outputs.key }}
           restore-keys: |
-            ${{ runner.os }}-rust-
+            ${{ runner.os }}-build-
 
+      # Install all system dependencies at once
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev librdkafka-dev protobuf-compiler libsnappy-dev libgrpc-dev>=1.55
+          echo "OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)" >> $GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)" >> $GITHUB_ENV
+
+      # Update cabal index early
+      - name: Update cabal index
+        run: cabal update
+
+      # Build frontend assets
+      - name: Build frontend assets
+        run: |
+          echo "::group::NPM install"
+          npm ci --prefer-offline --no-audit
+          echo "::endgroup::"
+
+          echo "::group::Build Tailwind CSS"
+          npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
+          echo "::endgroup::"
+
+          echo "::group::Build web components"
+          cd web-components
+          npm ci --prefer-offline --no-audit
+          npm run build
+          cd ..
+          echo "::endgroup::"
+
+      # Build Rust only if not cached
       - name: Build Rust interop library
         run: |
-          cd rust-interop
-          cargo build --release
-          cd ..
-
-          # Verify that both static and shared libraries were built
-          echo "=== Checking Rust build artifacts ==="
-          ls -la rust-interop/target/release/
-
-          # Ensure static library exists
-          if [ ! -f "rust-interop/target/release/libCrust_interop.a" ]; then
-            echo "ERROR: Static library libCrust_interop.a not found!"
-            exit 1
+          echo "::group::Check Rust cache"
+          if [ -f "rust-interop/target/release/libCrust_interop.a" ]; then
+            echo "Rust library already built, using cache"
+          else
+            echo "Building Rust library..."
+            cd rust-interop
+            cargo build --release -j4
+            cd ..
           fi
+          echo "::endgroup::"
 
-          # Copy libraries for Cabal build
+          echo "::group::Setup libraries for Cabal"
           mkdir -p dist/build
-          cp rust-interop/target/release/libCrust_interop.a dist/build/
-          cp rust-interop/target/release/libCrust_interop.so dist/build/ || true
-          
-          # Copy to system directories for linking
-          sudo cp rust-interop/target/release/libCrust_interop.* /usr/local/lib/ || true
+          cp rust-interop/target/release/libCrust_interop.* dist/build/
+          sudo cp rust-interop/target/release/libCrust_interop.* /usr/local/lib/
+          echo "::endgroup::"
 
-          echo "=== Libraries copied to dist/build ==="
-          ls -la dist/build/
-
-      - name: Configure project
+      # Build Haskell project
+      - name: Configure Haskell project
         run: |
-          cabal update
           cabal configure --enable-tests --enable-benchmarks --ghc-options="-O2 -j4"
 
-      - name: Build dependencies
-        run: cabal build --only-dependencies all -j4
+      - name: Build Haskell dependencies
+        run: |
+          echo "::group::Building Haskell dependencies"
+          cabal build --only-dependencies all -j4
+          echo "::endgroup::"
 
-      - name: Build project
-        run: cabal build all -j4
+      - name: Build Haskell project
+        run: |
+          echo "::group::Building Haskell project"
+          cabal build all -j4
+          echo "::endgroup::"
 
-      # Save cache even if subsequent steps fail
-      - name: Save Cabal cache
-        uses: actions/cache/save@v3
+      # Prepare deployment artifacts
+      - name: Prepare deployment
+        run: |
+          mkdir -p ./build-output
+          echo "::group::Install executable"
+          cabal install exe:apitoolkit-server-exe --install-method=copy --installdir=./build-output --overwrite-policy=always
+          echo "::endgroup::"
+          echo "::group::Verify executable"
+          ls -la ./build-output/
+          echo "::endgroup::"
+
+      # Save cache always
+      - name: Save cache
+        uses: actions/cache/save@v4
         if: always()
         with:
           path: |
             ~/.cabal/store
             dist-newstyle
-          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project', '**/cabal.project.freeze') }}
+            rust-interop/target
+            ~/.cargo/registry
+            ~/.cargo/git
+            node_modules
+            web-components/node_modules
+          key: ${{ steps.cache-key.outputs.key }}
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -134,85 +159,68 @@ jobs:
           path: |
             ./build-output
             ./static
-            ./dist
             ./web-components/dist
-            ./rust-interop/target/release/libCrust_interop.so
-            ./rust-interop/target/release/libCrust_interop.a
+            ./rust-interop/target/release/*.so
+            ./rust-interop/target/release/*.a
           retention-days: 1
 
-      - name: Install to build-output
-        run: |
-          mkdir -p ./build-output
-          cabal list-bins | xargs -I {} cp {} ./build-output/
-
-
   test:
-    name: Test ${{ matrix.test-suite }}
+    name: Test
     needs: build
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        test-suite: [doctests, unit-tests, integration-tests]
+        test: [doctests, unit-tests, integration-tests]
     steps:
       - uses: actions/checkout@v4
+
+      # Install system dependencies
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev librdkafka-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev
+
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          override: true
+        uses: dtolnay/rust-toolchain@stable
+
       - uses: haskell-actions/setup@v2
         with:
-          ghc-version: 9.10.2
+          ghc-version: ${{ env.GHC_VERSION }}
           cabal-version: 'latest'
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev librdkafka-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev
 
-      - name: Cache Cabal dependencies
-        uses: actions/cache@v3
+      # Restore unified cache from build job
+      - name: Restore cache
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cabal/store
             dist-newstyle
-          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project', '**/cabal.project.freeze') }}
-          restore-keys: |
-            ${{ runner.os }}-cabal-
-
-      - name: Cache Rust build
-        uses: actions/cache@v3
-        with:
-          path: |
             rust-interop/target
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-rust-${{ hashFiles('rust-interop/Cargo.lock', 'rust-interop/Cargo.toml') }}
+          key: ${{ needs.build.outputs.cache-key }}
           restore-keys: |
-            ${{ runner.os }}-rust-
+            ${{ runner.os }}-build-
 
-      - name: Restore Rust libraries
+      - name: Setup Rust libraries
         run: |
-          sudo mkdir -p /usr/local/lib
-          sudo mkdir -p /usr/lib
-
-      - name: Build and setup Rust libraries
-        run: |
-          # Only build if not cached
-          if [ ! -f "rust-interop/target/release/libCrust_interop.so" ]; then
-            cd rust-interop && cargo build --release -j4 && cd ..
-          fi
-          
-          # Setup for Cabal
+          echo "::group::Setup Rust libraries"
           mkdir -p dist/build
           cp rust-interop/target/release/libCrust_interop.* dist/build/ || true
           sudo cp rust-interop/target/release/libCrust_interop.* /usr/local/lib/ || true
+          echo "::endgroup::"
 
-      - name: Configure project
+      - name: Configure for tests
         run: |
           cabal update
           cabal configure --enable-tests
 
-      - name: Run ${{ matrix.test-suite }}
-        run: cabal test ${{ matrix.test-suite }} -j4
+      - name: Run ${{ matrix.test }}
+        run: |
+          echo "::group::Running ${{ matrix.test }}"
+          cabal test ${{ matrix.test }} -j4 --test-show-details=always
+          echo "::endgroup::"
 
   deploy:
     name: Deploy
@@ -229,10 +237,12 @@ jobs:
         with:
           name: build-artifacts
 
-
       - name: Copy binary to root
         run: |
-          cp ./build-output/* .
+          echo "::group::Prepare binary for Docker"
+          cp ./build-output/apitoolkit-server-exe . || cp ./build-output/* ./apitoolkit-server-exe
+          ls -la apitoolkit-server-exe
+          echo "::endgroup::"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -245,7 +255,7 @@ jobs:
           password: ${{ secrets.GH_TOKEN }}
 
       - name: Build and push Docker Image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
@@ -256,6 +266,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
+          provenance: false
 
       - name: Deploy Image to CapRrover
         uses: caprover/deploy-from-github@v1.1.2
@@ -264,3 +275,4 @@ jobs:
           app: '${{ secrets.CAPTAINROVER_APP_NAME }}'
           token: '${{ secrets.CAPTAINROVER_APP_TOKEN }}'
           image: 'ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ github.sha }}'
+
