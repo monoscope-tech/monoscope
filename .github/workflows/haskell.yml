@@ -84,33 +84,33 @@ jobs:
           cd rust-interop
           cargo build --release
           cd ..
-          
+
           # Verify that both static and shared libraries were built
           echo "=== Checking Rust build artifacts ==="
           ls -la rust-interop/target/release/
-          
+
           # Ensure static library exists
           if [ ! -f "rust-interop/target/release/libCrust_interop.a" ]; then
             echo "ERROR: Static library libCrust_interop.a not found!"
             exit 1
           fi
-          
+
           # Copy libraries to system directories
           sudo mkdir -p /usr/local/lib
           sudo cp rust-interop/target/release/libCrust_interop.a /usr/local/lib/ || true
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/ || true
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so || true
-          
+
           sudo mkdir -p /usr/lib
           sudo cp rust-interop/target/release/libCrust_interop.a /usr/lib/ || true
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/ || true
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so || true
-          
+
           # Create dist/build directory for Cabal
           mkdir -p dist/build
           cp rust-interop/target/release/libCrust_interop.a dist/build/
           cp rust-interop/target/release/libCrust_interop.so dist/build/ || true
-          
+
           echo "=== Libraries copied to dist/build ==="
           ls -la dist/build/
 
@@ -125,6 +125,16 @@ jobs:
       - name: Build project
         run: cabal build all --ghc-options "-O3"
 
+      # Save cache even if subsequent steps fail
+      - name: Save Cabal cache
+        uses: actions/cache/save@v3
+        if: always()
+        with:
+          path: |
+            ~/.cabal/store
+            dist-newstyle
+          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project', '**/cabal.project.freeze') }}
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -132,6 +142,7 @@ jobs:
           path: |
             ./build-output
             ./static
+            ./dist
             ./web-components/dist
             ./rust-interop/target/release/libCrust_interop.so
             ./rust-interop/target/release/libCrust_interop.a
@@ -140,7 +151,7 @@ jobs:
       - name: Install to build-output
         run: |
           mkdir -p ./build-output
-          
+
           # Ensure dist/build directory exists with the Rust libraries
           mkdir -p dist/build
           if [ -f "rust-interop/target/release/libCrust_interop.a" ]; then
@@ -149,11 +160,21 @@ jobs:
           if [ -f "rust-interop/target/release/libCrust_interop.so" ]; then
             cp rust-interop/target/release/libCrust_interop.so dist/build/
           fi
-          
+
           echo "=== Contents of dist/build before cabal install ==="
           ls -la dist/build/ || echo "dist/build not found"
-          
+
           cabal install --install-method=copy --installdir=./build-output --ghc-options "-O3"
+
+      # Save cache even if cabal install fails
+      - name: Save Cabal cache after install
+        uses: actions/cache/save@v3
+        if: always()
+        with:
+          path: |
+            ~/.cabal/store
+            dist-newstyle
+          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project', '**/cabal.project.freeze') }}
 
   test:
     name: Test ${{ matrix.test-suite }}
@@ -208,11 +229,11 @@ jobs:
           cd rust-interop
           cargo build --release
           cd ..
-          
+
           # Verify libraries exist
           echo "=== Rust build artifacts ==="
           ls -la rust-interop/target/release/
-          
+
           # Copy to system directories
           sudo cp rust-interop/target/release/libCrust_interop.a /usr/local/lib/ || true
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/
@@ -220,7 +241,7 @@ jobs:
           sudo cp rust-interop/target/release/libCrust_interop.a /usr/lib/ || true
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
-          
+
           # Setup for Cabal
           mkdir -p dist/build
           cp rust-interop/target/release/libCrust_interop.a dist/build/ || true
