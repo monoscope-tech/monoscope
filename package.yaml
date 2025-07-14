@@ -22,7 +22,22 @@ extra-source-files:
   - proto/**/*.proto
   - README.md
   - auto-instrument-config.toml
-  - static/**/*
+  - static/migrations/**/*
+  - static/public/**/*.png
+  - static/public/**/*.css
+  - static/public/**/*.ttf
+  - static/public/**/*.woff
+  - static/public/**/*.woff2
+  - static/public/**/*.js
+  - static/public/**/*.json
+  - static/public/**/*.svg
+  - static/public/**/*.jpg
+  - static/public/**/*.webp
+  - static/public/**/*.html
+  - static/public/**/*.map
+  - static/public/**/*.yaml
+  - static/public/**/*.ico
+  - static/public/site.webmanifest
 
 # generated-other-modules:
 # generated-exposed-modules:

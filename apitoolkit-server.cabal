@@ -36,33 +36,9 @@ extra-source-files:
     static/public/android-chrome-192x192.png
     static/public/android-chrome-512x512.png
     static/public/apple-touch-icon.png
-    static/public/assets/css/tailwind.css
-    static/public/assets/css/tailwind.min.css
-    static/public/assets/css/thirdparty/notyf3.min.css
-    static/public/assets/deps/bakemono/Bakemono-Variable.ttf
-    static/public/assets/deps/bakemono/Bakemono-Variable.woff
-    static/public/assets/deps/bakemono/Bakemono-Variable.woff2
-    static/public/assets/deps/easepick/bundle.min.js
-    static/public/assets/deps/echarts/echarts.min.js
-    static/public/assets/deps/gridstack/gridstack-all.js
-    static/public/assets/deps/gridstack/gridstack.min.css
-    static/public/assets/deps/htmx/htmx-2.js
-    static/public/assets/deps/htmx/json-enc-2.js
-    static/public/assets/deps/htmx/json-enc.js
-    static/public/assets/deps/htmx/multi-swap.js
-    static/public/assets/deps/htmx/preload.js
-    static/public/assets/deps/lit/lit-html.js
-    static/public/assets/deps/tagify/tagify.min.js
-    static/public/assets/echart-theme.json
-    static/public/assets/fonts/InterVariable-Italic.ttf
-    static/public/assets/fonts/InterVariable.ttf
-    static/public/assets/fonts/JetBrainsMono[wght].ttf
-    static/public/assets/fonts/roboto-mono.woff2
-    static/public/assets/fonts/Roboto.ttf
     static/public/assets/framework-logos/actix-logo.png
     static/public/assets/framework-logos/adonis-logo.png
     static/public/assets/framework-logos/beego-logo.png
-    static/public/assets/framework-logos/cake-logo.jpg
     static/public/assets/framework-logos/django-logo.png
     static/public/assets/framework-logos/express-logo.png
     static/public/assets/framework-logos/fastapi-logo.png
@@ -72,38 +48,56 @@ extra-source-files:
     static/public/assets/framework-logos/gin-logo.png
     static/public/assets/framework-logos/go-logo.png
     static/public/assets/framework-logos/igniter-logo.png
-    static/public/assets/framework-logos/ihp-logo.svg
     static/public/assets/framework-logos/koa-logo.png
     static/public/assets/framework-logos/laravel-logo.png
-    static/public/assets/framework-logos/lumen-logo.webp
     static/public/assets/framework-logos/mux-logo.png
     static/public/assets/framework-logos/nestjs-logo.png
     static/public/assets/framework-logos/net-logo.png
-    static/public/assets/framework-logos/nextjs-logo.webp
     static/public/assets/framework-logos/phoenix-logo.png
-    static/public/assets/framework-logos/phoenix-logo.webp
     static/public/assets/framework-logos/phoenix.png
     static/public/assets/framework-logos/play-logo.png
     static/public/assets/framework-logos/pyramid-logo.png
     static/public/assets/framework-logos/rails-logo.png
-    static/public/assets/framework-logos/rocket-logo.webp
     static/public/assets/framework-logos/sails-logo.png
     static/public/assets/framework-logos/spring-logo.png
-    static/public/assets/framework-logos/spring-logo.svg
     static/public/assets/framework-logos/symfony-logo.png
-    static/public/assets/js/apitoolkit/index.html
+    static/public/assets/logo-mini.png
+    static/public/favicon-16x16.png
+    static/public/favicon-32x32.png
+    static/public/assets/css/tailwind.css
+    static/public/assets/css/tailwind.min.css
+    static/public/assets/css/thirdparty/notyf3.min.css
+    static/public/assets/deps/gridstack/gridstack.min.css
+    static/public/assets/js/monaco/vs/editor/editor.main.css
+    static/public/assets/web-components/dist/css/index.css
+    static/public/assets/deps/bakemono/Bakemono-Variable.ttf
+    static/public/assets/fonts/InterVariable-Italic.ttf
+    static/public/assets/fonts/InterVariable.ttf
+    static/public/assets/fonts/JetBrainsMono[wght].ttf
+    static/public/assets/fonts/Roboto.ttf
+    static/public/assets/js/monaco/vs/base/browser/ui/codicons/codicon/codicon.ttf
+    static/public/assets/web-components/dist/fonts/codicon.ttf
+    static/public/assets/deps/bakemono/Bakemono-Variable.woff
+    static/public/assets/deps/bakemono/Bakemono-Variable.woff2
+    static/public/assets/fonts/roboto-mono.woff2
+    static/public/assets/deps/easepick/bundle.min.js
+    static/public/assets/deps/echarts/echarts.min.js
+    static/public/assets/deps/gridstack/gridstack-all.js
+    static/public/assets/deps/htmx/htmx-2.js
+    static/public/assets/deps/htmx/json-enc-2.js
+    static/public/assets/deps/htmx/json-enc.js
+    static/public/assets/deps/htmx/multi-swap.js
+    static/public/assets/deps/htmx/preload.js
+    static/public/assets/deps/lit/lit-html.js
+    static/public/assets/deps/tagify/tagify.min.js
     static/public/assets/js/apitoolkit/query-parser.js
-    static/public/assets/js/apitoolkit/README.md
     static/public/assets/js/apitoolkit/tests.js
     static/public/assets/js/confetti.js
     static/public/assets/js/main.js
-    static/public/assets/js/monaco/config.json
-    static/public/assets/js/monaco/vs/base/browser/ui/codicons/codicon/codicon.ttf
     static/public/assets/js/monaco/vs/base/worker/workerMain.js
     static/public/assets/js/monaco/vs/basic-languages/hcl/hcl.js
     static/public/assets/js/monaco/vs/basic-languages/protobuf/protobuf.js
     static/public/assets/js/monaco/vs/basic-languages/yaml/yaml.js
-    static/public/assets/js/monaco/vs/editor/editor.main.css
     static/public/assets/js/monaco/vs/editor/editor.main.js
     static/public/assets/js/monaco/vs/editor/editor.main.nls.de.js
     static/public/assets/js/monaco/vs/editor/editor.main.nls.es.js
@@ -131,44 +125,7 @@ extra-source-files:
     static/public/assets/js/thirdparty/swagger-ui-bundle.js
     static/public/assets/js/thirdparty/tippy6_3_7.umd.min.js
     static/public/assets/js/thirdparty/virtualizer.js
-    static/public/assets/logo-mini.png
     static/public/assets/roma-echarts.js
-    static/public/assets/svgs/anomalies/archive.svg
-    static/public/assets/svgs/anomalies/endpoint.svg
-    static/public/assets/svgs/anomalies/fields.svg
-    static/public/assets/svgs/cs.svg
-    static/public/assets/svgs/discord.svg
-    static/public/assets/svgs/docker.svg
-    static/public/assets/svgs/drawn-arrow.svg
-    static/public/assets/svgs/elixir.svg
-    static/public/assets/svgs/fa-sprites/index.html
-    static/public/assets/svgs/fa-sprites/regular.svg
-    static/public/assets/svgs/fa-sprites/solid.svg
-    static/public/assets/svgs/go.svg
-    static/public/assets/svgs/java.svg
-    static/public/assets/svgs/js.svg
-    static/public/assets/svgs/kafka.svg
-    static/public/assets/svgs/kubernetes.svg
-    static/public/assets/svgs/linux.svg
-    static/public/assets/svgs/logo.svg
-    static/public/assets/svgs/logo_black.svg
-    static/public/assets/svgs/logo_mini.svg
-    static/public/assets/svgs/logo_mini_black.svg
-    static/public/assets/svgs/logo_mini_white.svg
-    static/public/assets/svgs/logo_white.svg
-    static/public/assets/svgs/mongodb.svg
-    static/public/assets/svgs/mysql.svg
-    static/public/assets/svgs/php.svg
-    static/public/assets/svgs/postgresql.svg
-    static/public/assets/svgs/py.svg
-    static/public/assets/svgs/screens/dashboard_blank.svg
-    static/public/assets/svgs/screens/http-stats.svg
-    static/public/assets/svgs/slack.svg
-    static/public/assets/svgs/teams.svg
-    static/public/assets/svgs/up_chevron.svg
-    static/public/assets/web-components/dist/css/index.css
-    static/public/assets/web-components/dist/fonts/codicon.ttf
-    static/public/assets/web-components/dist/index.html
     static/public/assets/web-components/dist/js/abap.BrgZPUOV.js
     static/public/assets/web-components/dist/js/apex.DyP6w7ZV.js
     static/public/assets/web-components/dist/js/azcli.BaLxmfj-.js
@@ -256,27 +213,68 @@ extra-source-files:
     static/public/assets/web-components/dist/js/wgsl.DYQUnd45.js
     static/public/assets/web-components/dist/js/xml.CEC405tG.js
     static/public/assets/web-components/dist/js/yaml.BWMSa9kO.js
-    static/public/dashboards/_overview.yaml
-    static/public/dashboards/endpoint-stats.yaml
-    static/public/dashboards/http-stats.yaml
-    static/public/dashboards/kitchensink.yaml
-    static/public/favicon-16x16.png
-    static/public/favicon-32x32.png
-    static/public/favicon.ico
-    static/public/otelcol.yaml
+    static/public/sw.js
+    static/public/workbox-de3660d1.js
+    static/public/workbox-ed58f0de.js
+    static/public/assets/echart-theme.json
+    static/public/assets/js/monaco/config.json
+    static/public/assets/framework-logos/ihp-logo.svg
+    static/public/assets/framework-logos/spring-logo.svg
+    static/public/assets/svgs/anomalies/archive.svg
+    static/public/assets/svgs/anomalies/endpoint.svg
+    static/public/assets/svgs/anomalies/fields.svg
+    static/public/assets/svgs/cs.svg
+    static/public/assets/svgs/discord.svg
+    static/public/assets/svgs/docker.svg
+    static/public/assets/svgs/drawn-arrow.svg
+    static/public/assets/svgs/elixir.svg
+    static/public/assets/svgs/fa-sprites/regular.svg
+    static/public/assets/svgs/fa-sprites/solid.svg
+    static/public/assets/svgs/go.svg
+    static/public/assets/svgs/java.svg
+    static/public/assets/svgs/js.svg
+    static/public/assets/svgs/kafka.svg
+    static/public/assets/svgs/kubernetes.svg
+    static/public/assets/svgs/linux.svg
+    static/public/assets/svgs/logo.svg
+    static/public/assets/svgs/logo_black.svg
+    static/public/assets/svgs/logo_mini.svg
+    static/public/assets/svgs/logo_mini_black.svg
+    static/public/assets/svgs/logo_mini_white.svg
+    static/public/assets/svgs/logo_white.svg
+    static/public/assets/svgs/mongodb.svg
+    static/public/assets/svgs/mysql.svg
+    static/public/assets/svgs/php.svg
+    static/public/assets/svgs/postgresql.svg
+    static/public/assets/svgs/py.svg
+    static/public/assets/svgs/screens/dashboard_blank.svg
+    static/public/assets/svgs/screens/http-stats.svg
+    static/public/assets/svgs/slack.svg
+    static/public/assets/svgs/teams.svg
+    static/public/assets/svgs/up_chevron.svg
     static/public/pages/monitors/alerts-wizard-errors.53d97ecbafeaae2f8328.svg
     static/public/pages/monitors/alerts-wizard-issues.022643ec283774262884.svg
     static/public/pages/monitors/alerts-wizard-throughput.bde64167ff79e5592399.svg
     static/public/pages/monitors/alerts-wizard-transaction-duration.bc8485680f884dedd379.svg
-    static/public/reload.trigger
     static/public/safari-pinned-tab.svg
-    static/public/site.webmanifest
-    static/public/sw.js
+    static/public/assets/framework-logos/cake-logo.jpg
+    static/public/assets/framework-logos/lumen-logo.webp
+    static/public/assets/framework-logos/nextjs-logo.webp
+    static/public/assets/framework-logos/phoenix-logo.webp
+    static/public/assets/framework-logos/rocket-logo.webp
+    static/public/assets/js/apitoolkit/index.html
+    static/public/assets/svgs/fa-sprites/index.html
+    static/public/assets/web-components/dist/index.html
     static/public/sw.js.map
-    static/public/workbox-de3660d1.js
     static/public/workbox-de3660d1.js.map
-    static/public/workbox-ed58f0de.js
     static/public/workbox-ed58f0de.js.map
+    static/public/dashboards/_overview.yaml
+    static/public/dashboards/endpoint-stats.yaml
+    static/public/dashboards/http-stats.yaml
+    static/public/dashboards/kitchensink.yaml
+    static/public/otelcol.yaml
+    static/public/favicon.ico
+    static/public/site.webmanifest
 
 source-repository head
   type: git
