@@ -251,6 +251,7 @@ jobs:
         run: |
           echo "::group::Prepare binary for Docker"
           cp ./build-output/apitoolkit-server-exe . || cp ./build-output/* ./apitoolkit-server-exe
+          chmod +x ./apitoolkit-server-exe
           ls -la apitoolkit-server-exe
           echo "::endgroup::"
 
