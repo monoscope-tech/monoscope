@@ -213,6 +213,11 @@ const chartWidget = (widgetData: WidGetData) => {
   opt.tooltip.borderColor = tooltipBorderColor || (isDarkMode ? '#555' : '#ccc');
   opt.tooltip.borderWidth = 1;
   
+  // Override server's background style with theme-appropriate one
+  if (opt.series?.[0]?.backgroundStyle) {
+    opt.series[0].backgroundStyle = isDarkMode ? DARK_BACKGROUND_STYLE : DEFAULT_BACKGROUND_STYLE;
+  }
+  
   chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source));
 
   const resizeObserver = new ResizeObserver(() => requestAnimationFrame(() => (window as any).echarts.getInstanceByDom(chartEl).resize()));

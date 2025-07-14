@@ -586,7 +586,7 @@ createSeries widgetType query =
         , "showBackground" AE..= not isStat
         , "backgroundStyle"
             AE..= AE.object
-              ["color" AE..= ("rgba(240,248,255, 0.4)" :: Text)]
+              ["color" AE..= ("rgba(240,248,255, 0.4)" :: Text)] -- This will be overridden in JS based on theme
         , "areaStyle" AE..= if isStat then gradientStyle else AE.Null
         , "lineStyle" AE..= AE.object ["width" AE..= if isStat then 0 else 1]
         ]
