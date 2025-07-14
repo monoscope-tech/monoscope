@@ -110,6 +110,10 @@ jobs:
           # Create symbolic links with the expected library name
           cd dist/build && ln -sf libCrust_interop.a librust_interop.a && cd ../..
           cd /usr/local/lib && sudo ln -sf libCrust_interop.a librust_interop.a && sudo ln -sf libCrust_interop.so librust_interop.so 2>/dev/null || true && cd -
+          # Create GHC-version-specific shared library
+          if [ -f /usr/local/lib/libCrust_interop.so ]; then
+            sudo cp /usr/local/lib/libCrust_interop.so /usr/local/lib/libCrust_interop-ghc${GHC_VERSION}.so
+          fi
           echo "::endgroup::"
 
       # Build Haskell project
@@ -215,6 +219,10 @@ jobs:
           # Create symbolic links with the expected library name
           cd dist/build && ln -sf libCrust_interop.a librust_interop.a 2>/dev/null || true && cd ../..
           cd /usr/local/lib && sudo ln -sf libCrust_interop.a librust_interop.a && sudo ln -sf libCrust_interop.so librust_interop.so 2>/dev/null || true && cd -
+          # Create GHC-version-specific shared library
+          if [ -f /usr/local/lib/libCrust_interop.so ]; then
+            sudo cp /usr/local/lib/libCrust_interop.so /usr/local/lib/libCrust_interop-ghc${GHC_VERSION}.so
+          fi
           echo "::endgroup::"
 
       - name: Configure for tests
