@@ -606,6 +606,7 @@ executable apitoolkit-server-exe
       DeriveGeneric
       BangPatterns
   ghc-options: -fwrite-ide-info -hiedir .hiefiles -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-error=ambiguous-fields -threaded -fplugin AutoInstrument -rtsopts -with-rtsopts=-N -j4 +RTS -N -A128m -n2m -RTS
+  ld-options: -static -pthread
   build-tool-depends:
       proto-lens-protoc:proto-lens-protoc
   build-depends:
