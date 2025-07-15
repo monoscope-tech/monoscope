@@ -20,13 +20,14 @@ import Database.PostgreSQL.Entity.DBT (execute, query, withPool)
 import Database.PostgreSQL.Simple (Only (Only), Query, SomePostgreSqlException)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact qualified as PTR
-import Effectful (Eff, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effectful.Ki qualified as Ki
 import Effectful.Log (Log, object)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
-import Log qualified
+import Log (LogLevel (..), Logger, runLogT)
+import Log qualified as LogLegacy
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Facets qualified as Facets
@@ -52,6 +53,8 @@ import Network.HTTP.Types (urlEncode)
 import Network.Wreq (defaults, header, postWith)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
+import OpenTelemetry.Attributes qualified as OA
+import OpenTelemetry.Trace (TracerProvider)
 import Pages.Reports qualified as RP
 import Pages.Specification.GenerateSwagger (generateSwagger)
 import Pkg.Mail (NotificationAlerts (EndpointAlert, ReportAlert, RuntimeErrorAlert), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
@@ -61,10 +64,9 @@ import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
 import System.Config qualified as Config
+import System.Logging qualified as Log
+import System.Tracing (SpanStatus (..), addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, runBackground)
-import System.Tracing (withSpan, addEvent, setStatus, SpanStatus(..))
-import OpenTelemetry.Attributes qualified as OA
-import OpenTelemetry.Trace (TracerProvider)
 import UnliftIO.Exception (try)
 import Utils (DBField)
 
@@ -118,23 +120,26 @@ sendMessageToDiscord msg = do
 jobTypeName :: BgJobs -> Text
 jobTypeName bgJob = T.takeWhile (/= ' ') $ T.pack $ show bgJob
 
-jobsRunner :: Log.Logger -> Config.AuthContext -> TracerProvider -> Job -> IO ()
+
+jobsRunner :: Logger -> Config.AuthContext -> TracerProvider -> Job -> IO ()
 jobsRunner logger authCtx tp job = Relude.when authCtx.config.enableBackgroundJobs $ do
   bgJob <- throwParsePayload job
   void $ runBackground logger authCtx tp $ do
     -- Create a span for the entire job execution
     let jobType = jobTypeName bgJob
-    withSpan ("background_job." <> jobType) 
+    withSpan
+      ("background_job." <> jobType)
       [ ("job.id", OA.toAttribute job.jobId)
       , ("job.type", OA.toAttribute jobType)
       , ("job.attempts", OA.toAttribute job.jobAttempts)
-      ] $ \sp -> do
+      ]
+      $ \sp -> do
         -- Add start event
         addEvent sp "job.started" []
-        
+
         -- Execute the job
         result <- try $ processBackgroundJob authCtx job bgJob
-        
+
         -- Set span status based on result
         case result of
           Left (e :: SomeException) -> do
@@ -281,7 +286,7 @@ processBackgroundJob authCtx job bgJob =
                 pass
               _ <- TestToDump.logTest collection.projectId col_id colStepsV (Right stepResults)
               pass
-        else Log.logAttention "RunCollectionTests failed.  Job was sheduled to run over 30 mins ago" $ collectionM <&> \c -> (c.title, c.id)
+        else Log.logAttention "RunCollectionTests failed.  Job was sheduled to run over 30 mins ago" $ maybe AE.Null (\c -> AE.object [("title", AE.toJSON c.title), ("id", AE.toJSON c.id)]) collectionM
     APITestFailed pid col_id stepResult -> do
       -- collectionM <- dbtToEff $ Testing.getCollectionById col_id
       -- whenJust collectionM \collection -> do
@@ -318,7 +323,7 @@ runHourlyJob scheduledTime hour = do
         (oneHourAgo, scheduledTime)
 
   -- Log count of projects to process
-  Log.logInfo "Projects with new data in the last hour window" (length activeProjects)
+  Log.logInfo "Projects with new data in the last hour window" ("count", AE.toJSON $ length activeProjects)
 
   -- Batch projects in groups of 100
   let batchSize = 100
@@ -330,14 +335,14 @@ runHourlyJob scheduledTime hour = do
       let batchJob = BackgroundJobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime
       createJob conn "background_jobs" batchJob
 
-  Log.logInfo "Completed hourly job scheduling for hour" hour
+  Log.logInfo "Completed hourly job scheduling for hour" ("hour", AE.toJSON hour)
 
 
 -- | Batch process facets generation for multiple projects using 24-hour window
-generateOtelFacetsBatch :: (DB :> es, Log :> es, UUID.UUIDEff :> es) => V.Vector Text -> UTCTime -> Eff es ()
+generateOtelFacetsBatch :: (DB :> es, IOE :> es, Log :> es, UUID.UUIDEff :> es) => V.Vector Text -> UTCTime -> Eff es ()
 generateOtelFacetsBatch projectIds timestamp = do
   forM_ projectIds \pid -> void $ Facets.generateAndSaveFacets (Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText pid) "otel_logs_and_spans" Facets.facetColumns 50 timestamp
-  Log.logInfo "Completed batch OTLP facets generation for projects" (V.length projectIds)
+  Log.logInfo "Completed batch OTLP facets generation for projects" ("project_count", AE.toJSON $ V.length projectIds)
 
 
 -- | Process HTTP spans from the last 5 minutes
@@ -362,18 +367,18 @@ processFiveMinuteSpans scheduledTime = do
           ORDER BY project_id |]
         (fiveMinutesAgo, scheduledTime)
 
-  Log.logInfo "Processing HTTP spans from 5-minute window" (V.length httpSpans)
+  Log.logInfo "Processing HTTP spans from 5-minute window" ("span_count", AE.toJSON $ V.length httpSpans)
 
   -- Group spans by project
   let spansByProject = V.groupBy (\a b -> a.project_id == b.project_id) httpSpans
 
-  Log.logInfo "Grouped spans by project" (length spansByProject)
+  Log.logInfo "Grouped spans by project" ("project_count", AE.toJSON $ length spansByProject)
 
   forM_ spansByProject \projectSpans -> case V.uncons projectSpans of
     Nothing -> pass
     Just (firstSpan, _) -> do
       let pid = Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText firstSpan.project_id
-      Log.logInfo "Processing project spans" (pid.toText, V.length projectSpans)
+      Log.logInfo "Processing project spans" $ AE.object [("project_id", AE.toJSON pid.toText), ("span_count", AE.toJSON $ V.length projectSpans)]
       processProjectSpans pid projectSpans
 
   Log.logInfo "Completed 5-minute span processing" ()
@@ -419,12 +424,12 @@ processOneMinuteErrors scheduledTime = do
           ORDER BY project_id |]
         (oneMinuteAgo, scheduledTime)
 
-  Log.logInfo "Processing spans with errors from 1-minute window" (V.length spansWithErrors)
+  Log.logInfo "Processing spans with errors from 1-minute window" ("span_count", AE.toJSON $ V.length spansWithErrors)
 
   -- Extract errors from all spans using the existing getAllATErrors function
   let allErrors = Telemetry.getAllATErrors spansWithErrors
 
-  Log.logInfo "Found errors to process" (V.length allErrors)
+  Log.logInfo "Found errors to process" ("error_count", AE.toJSON $ V.length allErrors)
 
   -- Group errors by project
   let errorsByProject = V.groupBy (\a b -> a.projectId == b.projectId) allErrors
@@ -454,9 +459,9 @@ processProjectErrors pid errors = do
 
   case result of
     Left (e :: SomePostgreSqlException) ->
-      Log.logAttention "Failed to insert errors" (show e)
+      Log.logAttention "Failed to insert errors" ("error", AE.toJSON $ show e)
     Right _ ->
-      Log.logInfo "Successfully inserted errors for project" (pid.toText, V.length errors)
+      Log.logInfo "Successfully inserted errors for project" $ AE.object [("project_id", AE.toJSON pid.toText), ("error_count", AE.toJSON $ V.length errors)]
   where
     -- Process a single error - the error already has requestMethod and requestPath
     -- set by getAllATErrors if it was extracted from span context
@@ -638,13 +643,13 @@ handleQueryMonitorThreshold monitorE isAlert = do
 -- way to get emails for company. for email all
 -- TODO: based on monitor send emails or slack
 
-jobsWorkerInit :: Log.Logger -> Config.AuthContext -> TracerProvider -> IO ()
+jobsWorkerInit :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 jobsWorkerInit logger appCtx tp =
   startJobRunner
     $ mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs 1) (jobsRunner logger appCtx tp) id
   where
-    jobLogger :: LogLevel -> LogEvent -> IO ()
-    jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)
+    jobLogger :: OddJobs.Job.LogLevel -> LogEvent -> IO ()
+    jobLogger logLevel logEvent = runLogT "OddJobs" logger LogAttention $ LogLegacy.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)
     -- jobLogger logLevel logEvent = print show (logLevel, logEvent) -- logger show (logLevel, logEvent)
 
 

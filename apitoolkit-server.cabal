@@ -500,6 +500,7 @@ library
     , gogol-pubsub
     , grapesy
     , hashtables
+    , hs-opentelemetry-api
     , hs-opentelemetry-instrumentation-auto
     , hs-opentelemetry-instrumentation-postgresql-simple
     , hs-opentelemetry-instrumentation-wai

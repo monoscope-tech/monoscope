@@ -21,6 +21,7 @@ import Effectful.Dispatch.Dynamic
 import Effectful.TH
 import OpenTelemetry.Attributes (Attribute)
 import OpenTelemetry.Context qualified as Context
+import OpenTelemetry.Context.ThreadLocal qualified as Context
 import OpenTelemetry.Trace (
   Span,
   SpanKind (..),
@@ -48,10 +49,21 @@ runTracing tp = interpret $ \env -> \case
   WithSpan name attrs f -> do
     let tracer = Trace.makeTracer tp "apitoolkit-server" $ Trace.TracerOptions Nothing
         attrMap = HM.fromList attrs
-    -- Use inSpan which handles the context management
+    -- Properly propagate context through the span lifecycle
     localSeqUnliftIO env $ \unlift -> liftIO $ do
-      sp <- Trace.createSpan tracer Context.empty name (defaultSpanArguments {Trace.kind = Server, Trace.attributes = attrMap})
+      -- Get current context
+      ctx <- Context.getContext
+      -- Create span with current context
+      sp <- Trace.createSpan tracer ctx name (defaultSpanArguments {Trace.kind = Server, Trace.attributes = attrMap})
+      -- Insert span into context for propagation
+      let newCtx = Context.insertSpan sp ctx
+      -- Set the new context
+      Context.adjustContext (const newCtx)
+      -- Run the action with the new context
       result <- unlift (f sp)
+      -- Restore the original context
+      Context.adjustContext (const ctx)
+      -- End the span
       Trace.endSpan sp Nothing
       pure result
   AddEvent span event attrs -> liftIO $ Trace.addEvent span $ Trace.NewEvent event (HM.fromList attrs) Nothing

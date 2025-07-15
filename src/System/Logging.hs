@@ -5,12 +5,19 @@ module System.Logging (
   makeLogger,
   runLog,
   logWithTrace,
+  logInfo,
+  logWarn,
+  logError,
+  logDebug,
+  logAttention,
   timeAction,
   LoggingDestination (..),
 )
 where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEK
+import Data.Aeson.KeyMap qualified as AEKM
 import Data.ByteString.Char8 qualified as BS
 import Data.Default (Default (..))
 import Data.Time.Clock as Time (NominalDiffTime, diffUTCTime)
@@ -30,7 +37,9 @@ import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Log.Internal.Logger (withLogger)
 import OpenTelemetry.Context qualified as Context
 import OpenTelemetry.Context.ThreadLocal qualified as Context
-import Relude
+import OpenTelemetry.Trace.Core qualified as Trace
+import OpenTelemetry.Trace.Id qualified as TraceId
+import Relude hiding (span, traceId)
 import System.Envy (ReadShowVar (..), Var)
 
 
@@ -85,17 +94,52 @@ withJSONFileBackend FileBackendConfig{destinationFile} action = withRunInIO $ \u
 
 
 -- | Log with trace context if available
-logWithTrace :: (IOE :> es, Log :> es) => Log.LogLevel -> Text -> [(Text, AE.Value)] -> Eff es ()
+logWithTrace :: (AE.ToJSON a, IOE :> es, Log :> es) => Log.LogLevel -> Text -> a -> Eff es ()
 logWithTrace level msg fields = do
   -- Get current context to extract trace information
   ctx <- liftIO Context.getContext
-  let traceFields = case Context.lookupSpan ctx of
-        Nothing -> []
-        Just span ->
-          -- For now, just add a marker that we're in a span
-          -- The actual trace/span IDs would need proper extraction based on the Span type
-          [("in_span", AE.Bool True)]
-  Log.logMessage level msg (AE.object $ map (\(k, v) -> (fromString (toString k), v)) (fields <> traceFields))
+  traceFields <- case Context.lookupSpan ctx of
+    Nothing -> pure []
+    Just currentSpan -> liftIO $ do
+      -- Extract SpanContext from the current span
+      spanCtx <- Trace.getSpanContext currentSpan
+      let tId = Trace.traceId spanCtx
+          sId = Trace.spanId spanCtx
+          -- Convert IDs to hex strings
+          traceIdHex = decodeUtf8 $ TraceId.traceIdBaseEncodedByteString TraceId.Base16 tId
+          spanIdHex = decodeUtf8 $ TraceId.spanIdBaseEncodedByteString TraceId.Base16 sId
+      pure
+        [ ("trace_id", AE.String traceIdHex)
+        , ("span_id", AE.String spanIdHex)
+        ]
+  -- Convert fields to JSON value and merge with trace fields
+  let fieldsValue = AE.toJSON fields
+      traceFieldsKeyMap = AEKM.fromList $ map (\(k, v) -> (AEK.fromText k, v)) traceFields
+      mergedObject = case fieldsValue of
+        AE.Object obj -> AE.Object $ obj <> traceFieldsKeyMap
+        _ -> AE.object $ (AEK.fromText "data", fieldsValue) : map (\(k, v) -> (AEK.fromText k, v)) traceFields
+  Log.logMessage level msg mergedObject
+
+
+-- | Convenience functions that automatically include trace context
+logInfo :: (AE.ToJSON a, IOE :> es, Log :> es) => Text -> a -> Eff es ()
+logInfo = logWithTrace Log.LogInfo
+
+
+logWarn :: (AE.ToJSON a, IOE :> es, Log :> es) => Text -> a -> Eff es ()
+logWarn = logWithTrace Log.LogAttention -- Using LogAttention for warnings
+
+
+logError :: (AE.ToJSON a, IOE :> es, Log :> es) => Text -> a -> Eff es ()
+logError = logWithTrace Log.LogAttention -- Using LogAttention for errors
+
+
+logDebug :: (AE.ToJSON a, IOE :> es, Log :> es) => Text -> a -> Eff es ()
+logDebug = logWithTrace Log.LogTrace -- Using LogTrace for debug
+
+
+logAttention :: (AE.ToJSON a, IOE :> es, Log :> es) => Text -> a -> Eff es ()
+logAttention = logWithTrace Log.LogAttention
 
 
 timeAction
