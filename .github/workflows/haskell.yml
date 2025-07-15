@@ -119,7 +119,7 @@ jobs:
       # Build Haskell project
       - name: Configure Haskell project
         run: |
-          cabal configure --enable-tests --enable-benchmarks --ghc-options="-O2 -j4 -optl-static -optl-pthread" --extra-lib-dirs=/usr/local/lib
+          cabal configure --enable-tests --enable-benchmarks --ghc-options="-O2 -j4" --extra-lib-dirs=/usr/local/lib
 
       - name: Build and install executable
         run: |
