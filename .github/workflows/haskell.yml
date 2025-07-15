@@ -116,15 +116,14 @@ jobs:
 
           echo "::group::Setup libraries for Cabal"
           mkdir -p dist/build
-          cp rust-interop/target/release/libCrust_interop.* dist/build/
-          sudo cp rust-interop/target/release/libCrust_interop.* /usr/local/lib/
-          # Create symbolic links with the expected library name
-          cd dist/build && ln -sf libCrust_interop.a librust_interop.a && cd ../..
-          cd /usr/local/lib && sudo ln -sf libCrust_interop.a librust_interop.a && sudo ln -sf libCrust_interop.so librust_interop.so 2>/dev/null || true && cd -
-          # Create GHC-version-specific shared library
-          if [ -f /usr/local/lib/libCrust_interop.so ]; then
-            sudo cp /usr/local/lib/libCrust_interop.so /usr/local/lib/libCrust_interop-ghc${GHC_VERSION}.so
-          fi
+          # Copy only the static library
+          cp rust-interop/target/release/libCrust_interop.a dist/build/
+          sudo cp rust-interop/target/release/libCrust_interop.a /usr/local/lib/
+          # List what was copied
+          echo "Libraries in dist/build:"
+          ls -la dist/build/
+          echo "Libraries in /usr/local/lib:"
+          ls -la /usr/local/lib/libCrust_interop*
           echo "::endgroup::"
 
       # Build Haskell project
@@ -218,15 +217,9 @@ jobs:
         run: |
           echo "::group::Setup Rust libraries"
           mkdir -p dist/build
-          cp rust-interop/target/release/libCrust_interop.* dist/build/ || true
-          sudo cp rust-interop/target/release/libCrust_interop.* /usr/local/lib/ || true
-          # Create symbolic links with the expected library name
-          cd dist/build && ln -sf libCrust_interop.a librust_interop.a 2>/dev/null || true && cd ../..
-          cd /usr/local/lib && sudo ln -sf libCrust_interop.a librust_interop.a && sudo ln -sf libCrust_interop.so librust_interop.so 2>/dev/null || true && cd -
-          # Create GHC-version-specific shared library
-          if [ -f /usr/local/lib/libCrust_interop.so ]; then
-            sudo cp /usr/local/lib/libCrust_interop.so /usr/local/lib/libCrust_interop-ghc${GHC_VERSION}.so
-          fi
+          # Copy only the static library
+          cp rust-interop/target/release/libCrust_interop.a dist/build/ || true
+          sudo cp rust-interop/target/release/libCrust_interop.a /usr/local/lib/ || true
           echo "::endgroup::"
 
       - name: Configure and build tests
