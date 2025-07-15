@@ -135,8 +135,11 @@ chartsPage pid metricList sources source mFilter nextUrl = do
                     <$> V.toList metricList
             option_ ([selected_ "all" | "all" == mFilter] ++ [value_ "all"]) "View By"
             forM_ (ordNub metricNames) $ \m -> option_ ([selected_ m | m == mFilter] ++ [value_ m]) $ toHtml m
-    div_ [class_ "w-full grid grid-cols-3 gap-4", id_ "metric_list_container"] $ do
-      chartList pid source metricList nextUrl
+    if V.null metricList
+      then div_ [class_ "w-full flex items-center justify-center h-96"] $ 
+        Components.emptyState_ "No metrics found" "There are no metrics to display at the moment. Metrics will appear here once your application starts sending telemetry data." Nothing ""
+      else div_ [class_ "w-full grid grid-cols-3 gap-4", id_ "metric_list_container"] $ 
+        chartList pid source metricList nextUrl
 
 
 chartList :: Projects.ProjectId -> Text -> V.Vector Telemetry.MetricChartListData -> Text -> Html ()
@@ -182,9 +185,12 @@ dataPointsPage pid metrics = do
           div_ [class_ "w-[10vw] "] "Sources"
           div_ [class_ "w-[8vw] ml-2"] "Datapoint"
           div_ [class_ "w-[10vw] ml-2"] "Referenced in"
-        div_ [class_ "w-full"] $ do
-          let metrMap = Map.fromList $ V.toList $ V.map (\mdp -> (mdp.metricName, mdp)) metrics
-          metricsTree pid metrics metrMap
+        if V.null metrics
+          then div_ [class_ "w-full flex items-center justify-center h-96"] $ 
+            Components.emptyState_ "No metrics found" "There are no metrics to display at the moment. Metrics will appear here once your application starts sending telemetry data." Nothing ""
+          else div_ [class_ "w-full"] $ do
+            let metrMap = Map.fromList $ V.toList $ V.map (\mdp -> (mdp.metricName, mdp)) metrics
+            metricsTree pid metrics metrMap
 
 
 metricDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
