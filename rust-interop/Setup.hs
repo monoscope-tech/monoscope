@@ -181,12 +181,20 @@ rustBuildHook description localBuildInfo hooks flags = do
       unless (foundA || foundSO || foundDylib) $
         error "Failed to find pre-built Rust libraries in system directories"
     else do
-      -- Normal build scenario - build the Rust library
-      putStrLn "******************************************************************"
-      putStrLn "Call `cargo build --release` to build a dependency written in Rust"
-      rawSystemExit (fromFlag $ buildVerbosity flags) "cargo" ["build","--release"]
-      putStrLn "... `rustc` compilation seems to succeed 🦀! Back to Cabal build:"
-      putStrLn "******************************************************************"
+      -- Normal build scenario - check if Rust library already exists
+      let releaseLibPath = dir </> "target" </> "release" </> (libName ++ ".a")
+      libExists <- doesFileExist releaseLibPath
+      
+      if libExists
+        then do
+          putStrLn "=== Rust library already built, skipping cargo build"
+          putStrLn $ "=== Found library at: " ++ releaseLibPath
+        else do
+          putStrLn "******************************************************************"
+          putStrLn "Call `cargo build --release` to build a dependency written in Rust"
+          rawSystemExit (fromFlag $ buildVerbosity flags) "cargo" ["build","--release"]
+          putStrLn "... `rustc` compilation seems to succeed 🦀! Back to Cabal build:"
+          putStrLn "******************************************************************"
   
   -- Continue with normal build
   buildHook simpleUserHooks description localBuildInfo hooks flags

@@ -124,6 +124,13 @@ jobs:
         run: |
           cabal configure --enable-tests --enable-benchmarks --ghc-options="-O2 -j4" --extra-lib-dirs=/usr/local/lib --extra-lib-dirs=$PWD/rust-interop/target/release
 
+      - name: Build dependencies only
+        run: |
+          echo "::group::Building Haskell dependencies"
+          # Build only dependencies first to fail fast
+          cabal build --only-dependencies exe:apitoolkit-server-exe -j4
+          echo "::endgroup::"
+
       - name: Build and install executable
         run: |
           echo "::group::Building executable and dependencies"
