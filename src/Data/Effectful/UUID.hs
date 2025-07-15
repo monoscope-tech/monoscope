@@ -1,4 +1,6 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Data.Effectful.UUID (
   UUID.UUID,
@@ -13,19 +15,16 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Effectful
 import Effectful.Dispatch.Dynamic
+import Effectful.TH
 import Relude
 
 
-type role UUIDEff phantom nominal
 data UUIDEff :: Effect where
   GenUUID :: UUIDEff m UUID.UUID
 
-
 type instance DispatchOf UUIDEff = 'Dynamic
 
-
-genUUID :: UUIDEff :> es => Eff es UUID.UUID
-genUUID = send GenUUID
+makeEffect ''UUIDEff
 
 
 runUUID :: IOE :> es => Eff (UUIDEff ': es) a -> Eff es a

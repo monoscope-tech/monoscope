@@ -6,6 +6,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
 
 module Data.Effectful.Notify (
@@ -37,6 +38,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Effectful
 import Effectful.Dispatch.Dynamic
+import Effectful.TH
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Log qualified
@@ -90,22 +92,13 @@ data Notification
 
 
 -- Effect definition
-type role Notify phantom nominal
 data Notify :: Effect where
   SendNotification :: Notification -> Notify m ()
   GetNotifications :: Notify m [Notification]
 
-
 type instance DispatchOf Notify = 'Dynamic
 
-
--- Effect operations
-sendNotification :: Notify :> es => Notification -> Eff es ()
-sendNotification = send . SendNotification
-
-
-getNotifications :: Notify :> es => Eff es [Notification]
-getNotifications = send GetNotifications
+makeEffect ''Notify
 
 
 -- Smart constructors
