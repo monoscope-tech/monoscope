@@ -136,17 +136,18 @@ integrationsBody sess envCfg isUpdate cp notifChannel phones slackData = do
         , hxPost_ [text|/p/$pid/notifications-channels|]
         , hxVals_ "js:{notificationsChannel: getChecked(), phones: getTags()}"
         , hxSwap_ "none"
+        , hxTrigger_ "submit"
         , id_ "notifsForm"
         ]
         do
           h2_ [class_ "text-textStrong text-3xl font-medium mb-5"] "Project Notifications"
-          div_ [class_ "flex flex-col gap-4", [__| on click halt |]] do
+          div_ [class_ "flex flex-col gap-4"] do
             p_ [] "Select channels to receive updates on this project."
             renderNotificationOption "Email Notifications" "Receive project updates via email" "email" Projects.NEmail notifChannel (faSprite_ "envelope" "solid" "h-6 w-6") ""
             renderNotificationOption "Slack" "Send notifications to Slack channels" "slack" Projects.NSlack notifChannel (faSprite_ "slack" "solid" "h-6 w-6") (renderSlackIntegration envCfg pid slackData)
             renderNotificationOption "Discord" "Send notifications to Discord servers" "discord" Projects.NDiscord notifChannel (faSprite_ "discord" "solid" "h-6 w-6") (renderDiscordIntegration envCfg pid)
             renderNotificationOption "WhatsApp" "Send notificataoin via WhatsApp" "phone" Projects.NPhone notifChannel (faSprite_ "whatsapp" "solid" "h-6 w-6") renderWhatsappIntegration
-            button_ [class_ "btn btn-primary w-max", [__| on click htmx.trigger("#notifsForm", "click")|]] "Save Selections"
+            button_ [class_ "btn btn-primary w-max", [__| on click htmx.trigger("#notifsForm", "submit")|]] "Save Selections"
   let tgs = decodeUtf8 $ AE.encode $ V.toList phones
   script_
     [text|
@@ -158,9 +159,8 @@ integrationsBody sess envCfg isUpdate cp notifChannel phones slackData = do
     })
 
    function getChecked() {
-     const checkedInputs = document.querySelectorAll('input[type="checkbox"]:checked');
+     const checkedInputs = document.querySelectorAll('input[name="notifChannel"]:checked');
      const vals = Array.from(checkedInputs).map(input => input.value);
-     console.log(vals)
      return vals
    }
 
@@ -179,7 +179,7 @@ renderNotificationOption title description value channel notifChannel icon extra
             h3_ [class_ "text-lg font-semibold"] $ toHtml title
             p_ [class_ "text-sm text-textWeak"] $ toHtml description
         label_ [class_ "relative inline-flex items-center cursor-pointer"] do
-          input_ [type_ "checkbox", value_ value, if isChecked then checked_ else title_ $ "Enable notification via " <> toText value, class_ "toggle toggle-primary"]
+          input_ [type_ "checkbox", value_ value, name_ "notifChannel", if isChecked then checked_ else title_ $ "Enable notification via " <> toText value, class_ "toggle toggle-primary"]
     div_ [class_ "px-6 pb-6"] do
       extraContent
 
