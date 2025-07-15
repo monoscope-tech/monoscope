@@ -59,22 +59,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-build-
 
-      # Install all system dependencies at once
+      # Install and cache system dependencies
       - name: Install system dependencies
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: libssl-dev librdkafka-dev protobuf-compiler libsnappy-dev libgrpc-dev libpq-dev libldap2-dev libsasl2-dev liblz4-dev libzstd-dev pkg-config
+          version: 1.0
+
+      - name: Set OpenSSL environment variables
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libssl-dev \
-            librdkafka-dev \
-            protobuf-compiler \
-            libsnappy-dev \
-            libgrpc-dev>=1.55 \
-            libpq-dev \
-            libldap2-dev \
-            libsasl2-dev \
-            liblz4-dev \
-            libzstd-dev \
-            pkg-config
           echo "OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)" >> $GITHUB_ENV
           echo "OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)" >> $GITHUB_ENV
 
@@ -185,21 +178,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Install system dependencies
+      # Install and cache system dependencies
       - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev librdkafka-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: libssl-dev librdkafka-dev libgrpc-dev protobuf-compiler libsnappy-dev libpq-dev libldap2-dev libsasl2-dev liblz4-dev libzstd-dev pkg-config
+          version: 1.0
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Set OpenSSL environment variables
+        run: |
+          echo "OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)" >> $GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)" >> $GITHUB_ENV
 
       - uses: haskell-actions/setup@v2
         with:
           ghc-version: ${{ env.GHC_VERSION }}
           cabal-version: 'latest'
 
-      # Restore unified cache from build job
+      # Restore unified cache from build job - this includes everything already built
       - name: Restore cache
         uses: actions/cache@v4
         with:
@@ -209,31 +205,24 @@ jobs:
             rust-interop/target
             ~/.cargo/registry
             ~/.cargo/git
+            node_modules
+            web-components/node_modules
           key: ${{ needs.build.outputs.cache-key }}
-          restore-keys: |
-            ${{ runner.os }}-build-
+          fail-on-cache-miss: true
 
       - name: Setup Rust libraries
         run: |
           echo "::group::Setup Rust libraries"
-          mkdir -p dist/build
-          # Copy only the static library
-          cp rust-interop/target/release/libCrust_interop.a dist/build/ || true
-          sudo cp rust-interop/target/release/libCrust_interop.a /usr/local/lib/ || true
+          # The libraries should already be in the cache
+          sudo cp rust-interop/target/release/libCrust_interop.a /usr/local/lib/
           echo "::endgroup::"
 
-      - name: Configure and build tests
-        run: |
-          cabal update
-          cabal configure --enable-tests
-          # Build only the specific test suite we're about to run
-          cabal build ${{ matrix.test }} -j4
-
+      # No need to update cabal or configure - reuse from build
       - name: Run ${{ matrix.test }}
         run: |
           echo "::group::Running ${{ matrix.test }}"
-          # Run without rebuilding since we just built it
-          cabal test ${{ matrix.test }} -j4 --test-show-details=always --test-option=--color=always
+          # Run test without rebuilding - everything should be cached
+          cabal test ${{ matrix.test }} --builddir=dist-newstyle -j4 --test-show-details=always --test-option=--color=always
           echo "::endgroup::"
 
   deploy:
