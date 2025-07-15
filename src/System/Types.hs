@@ -53,6 +53,9 @@ import Servant.Htmx (HXRedirect, HXTriggerAfterSettle)
 import Servant.Server.Experimental.Auth (AuthServerData)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
+import System.Tracing (Tracing)
+import System.Tracing qualified as Tracing
+import OpenTelemetry.Trace (TracerProvider)
 import Web.Cookie (SetCookie)
 
 
@@ -79,6 +82,7 @@ type CommonWebEffects =
    , Labeled "timefusion" DB
    , Time
    , Log
+   , Tracing
    , Concurrent
    , Ki.StructuredConcurrency
    , Error ServerError
@@ -109,8 +113,8 @@ atAuthToBase sessionWithCookies page =
 
 
 -- | `effToServantHandler` for live services
-effToServantHandler :: AuthContext -> Log.Logger -> ATBaseCtx a -> Servant.Handler a
-effToServantHandler env logger app =
+effToServantHandler :: AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx a -> Servant.Handler a
+effToServantHandler env logger tp app =
   app
     & Effectful.Reader.Static.runReader env
     & runUUID
@@ -119,6 +123,7 @@ effToServantHandler env logger app =
     & runLabeled @"timefusion" (runDB env.timefusionPgPool)
     & runTime
     & Logging.runLog (show env.config.environment) logger
+    & Tracing.runTracing tp
     & runConcurrent
     & Ki.runStructuredConcurrency
     & effToHandler
@@ -126,8 +131,8 @@ effToServantHandler env logger app =
 
 -- | `effToServantHandler` exists specifically to be used in tests,
 -- so the UUID and Time effects are fixed to constants.
-effToServantHandlerTest :: AuthContext -> Log.Logger -> ATBaseCtx a -> Servant.Handler a
-effToServantHandlerTest env logger app =
+effToServantHandlerTest :: AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx a -> Servant.Handler a
+effToServantHandlerTest env logger tp app =
   app
     & Effectful.Reader.Static.runReader env
     & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 10])
@@ -136,6 +141,7 @@ effToServantHandlerTest env logger app =
     & runLabeled @"timefusion" (runDB env.timefusionPgPool)
     & runFrozenTime (posixSecondsToUTCTime 0)
     & Logging.runLog (show env.config.environment) logger
+    & Tracing.runTracing tp
     & runConcurrent
     & Ki.runStructuredConcurrency
     & effToHandler
@@ -160,6 +166,7 @@ type ATBackgroundCtx =
      , Labeled "timefusion" DB
      , Time
      , Log
+     , Tracing
      , UUIDEff
      , HTTP
      , Ki.StructuredConcurrency
@@ -167,8 +174,8 @@ type ATBackgroundCtx =
      ]
 
 
-runBackground :: Log.Logger -> AuthContext -> ATBackgroundCtx a -> IO a
-runBackground logger appCtx process =
+runBackground :: Log.Logger -> AuthContext -> TracerProvider -> ATBackgroundCtx a -> IO a
+runBackground logger appCtx tp process =
   process
     & Data.Effectful.Notify.runNotifyProduction
     & Effectful.Reader.Static.runReader appCtx
@@ -176,6 +183,7 @@ runBackground logger appCtx process =
     & runLabeled @"timefusion" (runDB appCtx.timefusionPgPool)
     & runTime
     & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
+    & Tracing.runTracing tp
     & runUUID
     & runHTTPWreq
     & Ki.runStructuredConcurrency

@@ -4,6 +4,7 @@
 module System.Logging (
   makeLogger,
   runLog,
+  logWithTrace,
   timeAction,
   LoggingDestination (..),
 )
@@ -27,6 +28,8 @@ import Effectful.Time qualified as Time
 import Log (Logger)
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Log.Internal.Logger (withLogger)
+import OpenTelemetry.Context qualified as Context
+import OpenTelemetry.Context.ThreadLocal qualified as Context
 import Relude
 import System.Envy (ReadShowVar (..), Var)
 
@@ -54,7 +57,7 @@ runLog
   -> Logger
   -> Eff (Log ': es) a
   -> Eff es a
-runLog envTxt logger = Log.runLog ("[AT]-" <> envTxt) logger Log.LogTrace -- Log.defaultLogLevel
+runLog envTxt logger = Log.runLog ("[AT]-" <> envTxt) logger Log.LogTrace
 
 
 makeLogger :: IOE :> es => LoggingDestination -> (Logger -> Eff es a) -> Eff es a
@@ -79,6 +82,20 @@ withJSONFileBackend FileBackendConfig{destinationFile} action = withRunInIO $ \u
   liftIO $ BS.hPutStrLn stdout $ BS.pack $ "Redirecting logs to " <> destinationFile
   logger <- liftIO $ Log.mkLogger "file-json" $ \msg -> liftIO $ BS.appendFile destinationFile (toStrict $ AE.encode msg <> "\n")
   withLogger logger (unlift . action)
+
+
+-- | Log with trace context if available
+logWithTrace :: (IOE :> es, Log :> es) => Log.LogLevel -> Text -> [(Text, AE.Value)] -> Eff es ()
+logWithTrace level msg fields = do
+  -- Get current context to extract trace information
+  ctx <- liftIO Context.getContext
+  let traceFields = case Context.lookupSpan ctx of
+        Nothing -> []
+        Just span ->
+          -- For now, just add a marker that we're in a span
+          -- The actual trace/span IDs would need proper extraction based on the Span type
+          [("in_span", AE.Bool True)]
+  Log.logMessage level msg (AE.object $ map (\(k, v) -> (fromString (toString k), v)) (fields <> traceFields))
 
 
 timeAction

@@ -70,6 +70,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import OddJobs.Job (Job (..))
+import OpenTelemetry.Trace (getGlobalTracerProvider)
 import ProcessMessage qualified
 import Relude
 import RequestMessages qualified
@@ -80,6 +81,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Config qualified as Config
 import System.Directory (getFileSize, listDirectory)
 import System.Logging qualified as Logging
+import System.Tracing qualified as Tracing
 import System.Types (ATAuthCtx, ATBackgroundCtx, RespHeaders, atAuthToBase, effToServantHandlerTest)
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
@@ -357,10 +359,14 @@ testSessionHeader pool = do
          ON CONFLICT (project_id, user_id) DO UPDATE SET permission = 'admin'|]
         (Only testProjectId)
 
+  tp <- liftIO getGlobalTracerProvider
+  logger <- liftIO $ Log.mkLogger "test" (\_ -> pure ())
   Auth.sessionByID (Just pSessId) "requestID" False "light" Nothing
     & runErrorNoCallStack @Servant.ServerError
     & DB.runDB pool
     & runTime
+    & Logging.runLog "test" logger
+    & Tracing.runTracing tp
     & runUUID
     & runHTTPWreq
     & runEff
@@ -380,6 +386,7 @@ runTestBackground authCtx action = LogBulk.withBulkStdOutLogger \logger ->
 
 runTestBackgroundWithLogger :: Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO a
 runTestBackgroundWithLogger logger appCtx process = do
+  tp <- getGlobalTracerProvider
   (notifications, result) <-
     process
       & Data.Effectful.Notify.runNotifyTest
@@ -388,6 +395,7 @@ runTestBackgroundWithLogger logger appCtx process = do
       & runLabeled @"timefusion" (DB.runDB appCtx.timefusionPgPool)
       & runTime
       & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
+      & Tracing.runTracing tp
       & runUUID
       & runHTTPWreq
       & Ki.runStructuredConcurrency
@@ -449,8 +457,9 @@ toServantResponse
   -> ATAuthCtx (RespHeaders a)
   -> IO a
 toServantResponse trATCtx trSessAndHeader trLogger k = do
+  tp <- getGlobalTracerProvider
   ( atAuthToBase trSessAndHeader k
-      & effToServantHandlerTest trATCtx trLogger
+      & effToServantHandlerTest trATCtx trLogger tp
       & ServantS.runHandler
     )
     <&> Servant.getResponse

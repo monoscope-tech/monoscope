@@ -62,6 +62,9 @@ import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx, runBackground)
+import System.Tracing (withSpan, addEvent, setStatus, SpanStatus(..))
+import OpenTelemetry.Attributes qualified as OA
+import OpenTelemetry.Trace (TracerProvider)
 import UnliftIO.Exception (try)
 import Utils (DBField)
 
@@ -111,10 +114,36 @@ sendMessageToDiscord msg = do
   pass
 
 
-jobsRunner :: Log.Logger -> Config.AuthContext -> Job -> IO ()
-jobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs $ do
+-- | Get the constructor name of a BgJobs value
+jobTypeName :: BgJobs -> Text
+jobTypeName bgJob = T.takeWhile (/= ' ') $ T.pack $ show bgJob
+
+jobsRunner :: Log.Logger -> Config.AuthContext -> TracerProvider -> Job -> IO ()
+jobsRunner logger authCtx tp job = Relude.when authCtx.config.enableBackgroundJobs $ do
   bgJob <- throwParsePayload job
-  void $ runBackground logger authCtx (processBackgroundJob authCtx job bgJob)
+  void $ runBackground logger authCtx tp $ do
+    -- Create a span for the entire job execution
+    let jobType = jobTypeName bgJob
+    withSpan ("background_job." <> jobType) 
+      [ ("job.id", OA.toAttribute job.jobId)
+      , ("job.type", OA.toAttribute jobType)
+      , ("job.attempts", OA.toAttribute job.jobAttempts)
+      ] $ \sp -> do
+        -- Add start event
+        addEvent sp "job.started" []
+        
+        -- Execute the job
+        result <- try $ processBackgroundJob authCtx job bgJob
+        
+        -- Set span status based on result
+        case result of
+          Left (e :: SomeException) -> do
+            Log.logAttention "Background job failed" (show e)
+            addEvent sp "job.failed" [("error", OA.toAttribute $ T.pack (show e))]
+            setStatus sp (Error $ T.pack $ show e)
+          Right _ -> do
+            addEvent sp "job.completed" []
+            setStatus sp Ok
 
 
 -- | Process a background job - extracted so it can be run with different effect interpreters
@@ -609,10 +638,10 @@ handleQueryMonitorThreshold monitorE isAlert = do
 -- way to get emails for company. for email all
 -- TODO: based on monitor send emails or slack
 
-jobsWorkerInit :: Log.Logger -> Config.AuthContext -> IO ()
-jobsWorkerInit logger appCtx =
+jobsWorkerInit :: Log.Logger -> Config.AuthContext -> TracerProvider -> IO ()
+jobsWorkerInit logger appCtx tp =
   startJobRunner
-    $ mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
+    $ mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs 1) (jobsRunner logger appCtx tp) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
     jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)

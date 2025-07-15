@@ -157,6 +157,7 @@ library:
     - vector-algorithms
     - effectful
     - effectful-core
+    - effectful-th
     - monad-time-effectful
     - wai-log
     - pg-transact-effectful
@@ -256,6 +257,7 @@ library:
     - hs-opentelemetry-sdk
     - hs-opentelemetry-instrumentation-wai
     - hs-opentelemetry-instrumentation-auto
+    - hs-opentelemetry-instrumentation-postgresql-simple
     - postgresql-libpq
     - ki-effectful
     - grapesy
@@ -321,6 +323,7 @@ tests:
       - pg-entity
       - postgresql-simple
       - effectful
+      - effectful-th
       - servant-server
       - resource-pool
       - generic-lens

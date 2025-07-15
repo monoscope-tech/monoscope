@@ -1,6 +1,6 @@
 cabal-version: 2.0
 
--- This file has been generated from package.yaml by hpack version 0.38.1.
+-- This file has been generated from package.yaml by hpack version 0.38.0.
 --
 -- see: https://github.com/sol/hpack
 
@@ -379,6 +379,7 @@ library
       System.Config
       System.Logging
       System.Server
+      System.Tracing
       System.Types
       Utils
       Web.Auth
@@ -486,6 +487,7 @@ library
     , dotenv
     , effectful
     , effectful-core
+    , effectful-th
     , envy
     , errors
     , extra
@@ -499,6 +501,7 @@ library
     , grapesy
     , hashtables
     , hs-opentelemetry-instrumentation-auto
+    , hs-opentelemetry-instrumentation-postgresql-simple
     , hs-opentelemetry-instrumentation-wai
     , hs-opentelemetry-sdk
     , http-api-data
@@ -726,6 +729,7 @@ test-suite integration-tests
     , clock
     , data-default
     , effectful
+    , effectful-th
     , generic-lens
     , hs-opentelemetry-instrumentation-auto
     , hspec

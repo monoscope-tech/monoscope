@@ -24,6 +24,7 @@ import Log qualified
 import Relude
 import System.Config
 import System.Types (ATBackgroundCtx, runBackground)
+import OpenTelemetry.Trace (TracerProvider)
 import UnliftIO (throwIO)
 import UnliftIO.Exception (bracket, tryAny)
 
@@ -31,8 +32,8 @@ import UnliftIO.Exception (bracket, tryAny)
 -- pubsubService connects to the pubsub service and listens for  messages,
 -- then it calls the processMessage function to process the messages, and
 -- acknoleges the list message in one request.
-pubsubService :: Log.Logger -> AuthContext -> [Text] -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx [Text]) -> IO ()
-pubsubService appLogger appCtx topics fn = checkpoint "pubsubService" do
+pubsubService :: Log.Logger -> AuthContext -> TracerProvider -> [Text] -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx [Text]) -> IO ()
+pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
   let envConfig = appCtx.config
   env <- case envConfig.googleServiceAccountB64 of
     "" -> Google.newEnv <&> (Google.envScopes L..~ pubSubScope)
@@ -60,7 +61,7 @@ pubsubService appLogger appCtx topics fn = checkpoint "pubsubService" do
         let firstAttrs = messages ^? L.folded . field @"message" . _Just . field @"attributes" . _Just . field @"additional"
 
         msgIds <-
-          tryAny (liftIO $ runBackground appLogger appCtx $ fn (catMaybes msgsB64) (maybeToMonoid firstAttrs)) >>= \case
+          tryAny (liftIO $ runBackground appLogger appCtx tp $ fn (catMaybes msgsB64) (maybeToMonoid firstAttrs)) >>= \case
             Left e -> do
               liftIO
                 $ Log.runLogT "apitoolkit" appLogger Log.LogAttention
@@ -82,8 +83,8 @@ pubsubService appLogger appCtx topics fn = checkpoint "pubsubService" do
     pubSubScope = Proxy
 
 
-kafkaService :: Log.Logger -> AuthContext -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx [Text]) -> IO ()
-kafkaService appLogger appCtx fn = checkpoint "kafkaService" do
+kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx [Text]) -> IO ()
+kafkaService appLogger appCtx tp fn = checkpoint "kafkaService" do
   -- Generate unique client ID for logging/metrics
   instanceUuid <- UUID.toText <$> UUID.nextRandom
   let clientId = "apitoolkit-" <> T.take 8 instanceUuid
@@ -102,7 +103,7 @@ kafkaService appLogger appCtx fn = checkpoint "kafkaService" do
               allRecords = consumerRecordToTuple <$> rightRecords
 
           msgIds <-
-            tryAny (runBackground appLogger appCtx $ fn allRecords attributes) >>= \case
+            tryAny (runBackground appLogger appCtx tp $ fn allRecords attributes) >>= \case
               Left e -> do
                 Log.runLogT "apitoolkit" appLogger Log.LogAttention
                   $ Log.logAttention "kafkaService: CAUGHT EXCEPTION - Error processing Kafka messages, but continuing" (AE.object ["error" AE..= show e, "topic" AE..= topic, "ce-type" AE..= ceType, "record_count" AE..= length allRecords, "attributes" AE..= attributes, "checkpoint" AE..= ("kafkaService:exception" :: String)])

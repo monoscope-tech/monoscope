@@ -10,6 +10,33 @@ value = "ATAuthCtx"
 type = "constructor"
 value = "ATBackgroundCtx"
 
+[[targets]]
+type = "constructor"
+value = "ATBaseCtx"
+
+# For effectful operations, we can use constraints
+[[targets]]
+type = "constraints"
+value = ["DB :> _", "IOE :> _"]
+
+[[targets]]
+type = "constraints"
+value = ["Log :> _", "IOE :> _"]
+
+[[targets]]
+type = "constraints"
+value = ["HTTP :> _", "IOE :> _"]
+
+[[targets]]
+type = "constraints"
+value = ["Tracing :> _", "IOE :> _"]
+
 [global]
 service_name = "apitoolkit-server"
+
+[span_attributes]
+# Add useful attributes to all spans
+db.system = "postgresql"
+http.scheme = "https"
+deployment.environment = "${ENV:-development}"
 

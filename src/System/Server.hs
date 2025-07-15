@@ -51,7 +51,7 @@ runAPItoolkit tp =
 runServer :: IOE :> es => Log.Logger -> AuthContext -> TracerProvider -> Eff es ()
 runServer appLogger env tp = do
   loggingMiddleware <- Logging.runLog (show env.config.environment) appLogger WaiLog.mkLogMiddleware
-  let server = mkServer appLogger env
+  let server = mkServer appLogger env tp
   let warpSettings =
         defaultSettings
           & setPort env.config.port
@@ -64,7 +64,7 @@ runServer appLogger env tp = do
           -- . loggingMiddleware
           -- . const
           $ server
-  let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env
+  let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env tp
 
   -- let ojStartArgs =
   --       OJCli.UIStartArgs
@@ -82,11 +82,11 @@ runServer appLogger env tp = do
       $ concat @[]
         [ [async $ runSettings warpSettings wrappedServer]
         , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
-          [async $ Safe.withException (Queue.pubsubService appLogger env env.config.requestPubsubTopics processMessages) exceptionLogger | env.config.enablePubsubService]
+          [async $ Safe.withException (Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages) exceptionLogger | env.config.enablePubsubService]
         , [async $ Safe.withException bgJobWorker exceptionLogger | env.config.enableBackgroundJobs]
-        , [async $ Safe.withException (OtlpServer.runServer appLogger env) exceptionLogger]
-        , [async $ Safe.withException (Queue.kafkaService appLogger env OtlpServer.processList) exceptionLogger | env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics]
-        , [async $ Safe.withException (Queue.kafkaService appLogger env OtlpServer.processList) exceptionLogger | env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics]
+        , [async $ Safe.withException (OtlpServer.runServer appLogger env tp) exceptionLogger]
+        , [async $ Safe.withException (Queue.kafkaService appLogger env tp OtlpServer.processList) exceptionLogger | env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics]
+        , [async $ Safe.withException (Queue.kafkaService appLogger env tp OtlpServer.processList) exceptionLogger | env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics]
         ]
   void $ liftIO $ waitAnyCancel asyncs
 
@@ -95,10 +95,10 @@ instance FromHttpApiData ByteString where
   parseUrlPiece = Right . encodeUtf8
 
 
-mkServer :: Log.Logger -> AuthContext -> Servant.Application
-mkServer logger env = do
+mkServer :: Log.Logger -> AuthContext -> TracerProvider -> Servant.Application
+mkServer logger env tp = do
   genericServeTWithContext
-    (effToServantHandler env logger)
+    (effToServantHandler env logger tp)
     (Routes.server env.pool)
     (Routes.genAuthServerContext logger env)
 

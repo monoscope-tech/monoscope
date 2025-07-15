@@ -10,6 +10,7 @@ import Database.PostgreSQL.Simple.FromField (FromField (..), fromField, returnEr
 import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.ToField (ToField, toField)
 import GHC.TypeLits
+-- import OpenTelemetry.Instrumentation.PostgresqlSimple (postgreSQLSimpleInstrumentationConfig, wrapConnection)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Text.Casing
@@ -59,9 +60,9 @@ connectPostgreSQL connstr = do
       connectionObjects <- newMVar IntMap.empty
       connectionTempNameCounter <- newIORef 0
       let wconn = PGI.Connection{..}
-      -- version <- PQ.serverVersion conn
-      -- _ <- PGI.execute_ wconn ""
-      return wconn
+      -- Wrap the connection with OpenTelemetry instrumentation
+      -- wrapConnection postgreSQLSimpleInstrumentationConfig wconn
+      pure wconn
     _ -> do
       msg <- fromMaybe "connectPostgreSQL error" <$> PQ.errorMessage conn
       throwIO $ PGI.fatalError msg

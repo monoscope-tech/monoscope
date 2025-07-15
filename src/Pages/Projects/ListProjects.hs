@@ -14,9 +14,8 @@ import Fmt
 import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Models.Users.Users qualified as Users
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pkg.Components.Widget (Layout (..), Widget (..), WidgetType (..), widget_)
+import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
 import Relude hiding (ask, asks)
 import System.Types
 import Utils (faSprite_)

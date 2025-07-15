@@ -60,6 +60,7 @@ import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (runBackground)
+import OpenTelemetry.Trace (TracerProvider)
 import Utils (b64ToJson, freeTierDailyMaxEvents, nestedJsonFromDotNotation)
 
 
@@ -913,8 +914,8 @@ convertMetricToMetricRecords pid resourceM scopeM metric =
 -- Server
 ---------------------------------------------------------------------------------------
 
-runServer :: Log.Logger -> AuthContext -> IO ()
-runServer appLogger appCtx = runServerWithHandlers def config (services appLogger appCtx)
+runServer :: Log.Logger -> AuthContext -> TracerProvider -> IO ()
+runServer appLogger appCtx tp = runServerWithHandlers def config (services appLogger appCtx tp)
   where
     serverHost = "localhost"
     serverPort = appCtx.config.grpcPort
@@ -927,9 +928,9 @@ runServer appLogger appCtx = runServerWithHandlers def config (services appLogge
 
 
 -- | Trace service handler (Export)
-traceServiceExport :: Log.Logger -> AuthContext -> Proto TS.ExportTraceServiceRequest -> IO (Proto TS.ExportTraceServiceResponse)
-traceServiceExport appLogger appCtx (Proto req) = do
-  _ <- runBackground appLogger appCtx do
+traceServiceExport :: Log.Logger -> AuthContext -> TracerProvider -> Proto TS.ExportTraceServiceRequest -> IO (Proto TS.ExportTraceServiceResponse)
+traceServiceExport appLogger appCtx tp (Proto req) = do
+  _ <- runBackground appLogger appCtx tp do
     Log.logInfo "Received trace export request" AE.Null
 
     let !resourceSpans = V.fromList $ req ^. TSF.resourceSpans
@@ -957,9 +958,9 @@ traceServiceExport appLogger appCtx (Proto req) = do
 
 
 -- | Logs service handler (Export)
-logsServiceExport :: Log.Logger -> AuthContext -> Proto LS.ExportLogsServiceRequest -> IO (Proto LS.ExportLogsServiceResponse)
-logsServiceExport appLogger appCtx (Proto req) = do
-  _ <- runBackground appLogger appCtx do
+logsServiceExport :: Log.Logger -> AuthContext -> TracerProvider -> Proto LS.ExportLogsServiceRequest -> IO (Proto LS.ExportLogsServiceResponse)
+logsServiceExport appLogger appCtx tp (Proto req) = do
+  _ <- runBackground appLogger appCtx tp $ do
     Log.logInfo "Received logs export request" AE.Null
 
     let !resourceLogs = V.fromList $ req ^. PLF.resourceLogs
@@ -987,9 +988,9 @@ logsServiceExport appLogger appCtx (Proto req) = do
 
 
 -- | Metrics service handler (Export)
-metricsServiceExport :: Log.Logger -> AuthContext -> Proto MS.ExportMetricsServiceRequest -> IO (Proto MS.ExportMetricsServiceResponse)
-metricsServiceExport appLogger appCtx (Proto req) = do
-  _ <- runBackground appLogger appCtx do
+metricsServiceExport :: Log.Logger -> AuthContext -> TracerProvider -> Proto MS.ExportMetricsServiceRequest -> IO (Proto MS.ExportMetricsServiceResponse)
+metricsServiceExport appLogger appCtx tp (Proto req) = do
+  _ <- runBackground appLogger appCtx tp $ do
     Log.logInfo "Received metrics export request" AE.Null
 
     let !resourceMetrics = V.fromList $ req ^. PMF.resourceMetrics
@@ -1017,19 +1018,19 @@ metricsServiceExport appLogger appCtx (Proto req) = do
   pure defMessage
 
 
-services :: Log.Logger -> AuthContext -> [SomeRpcHandler IO]
-services appLogger appCtx =
+services :: Log.Logger -> AuthContext -> TracerProvider -> [SomeRpcHandler IO]
+services appLogger appCtx tp =
   fromMethods
     ( simpleMethods
-        (mkNonStreaming $ traceServiceExport appLogger appCtx :: ServerHandler IO (Protobuf TS.TraceService "export"))
+        (mkNonStreaming $ traceServiceExport appLogger appCtx tp :: ServerHandler IO (Protobuf TS.TraceService "export"))
     )
     <> fromMethods
       ( simpleMethods
-          (mkNonStreaming $ logsServiceExport appLogger appCtx :: ServerHandler IO (Protobuf LS.LogsService "export"))
+          (mkNonStreaming $ logsServiceExport appLogger appCtx tp :: ServerHandler IO (Protobuf LS.LogsService "export"))
       )
     <> fromMethods
       ( simpleMethods
-          (mkNonStreaming $ metricsServiceExport appLogger appCtx :: ServerHandler IO (Protobuf MS.MetricsService "export"))
+          (mkNonStreaming $ metricsServiceExport appLogger appCtx tp :: ServerHandler IO (Protobuf MS.MetricsService "export"))
       )
 
 
