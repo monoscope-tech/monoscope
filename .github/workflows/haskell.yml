@@ -63,7 +63,18 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev librdkafka-dev protobuf-compiler libsnappy-dev libgrpc-dev>=1.55
+          sudo apt-get install -y \
+            libssl-dev \
+            librdkafka-dev \
+            protobuf-compiler \
+            libsnappy-dev \
+            libgrpc-dev>=1.55 \
+            libpq-dev \
+            libldap2-dev \
+            libsasl2-dev \
+            liblz4-dev \
+            libzstd-dev \
+            pkg-config
           echo "OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)" >> $GITHUB_ENV
           echo "OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)" >> $GITHUB_ENV
 
@@ -119,7 +130,7 @@ jobs:
       # Build Haskell project
       - name: Configure Haskell project
         run: |
-          cabal configure --enable-tests --enable-benchmarks --ghc-options="-O2 -j4" --extra-lib-dirs=/usr/local/lib
+          cabal configure --enable-tests --enable-benchmarks --ghc-options="-O2 -j4" --extra-lib-dirs=/usr/local/lib --extra-lib-dirs=$PWD/rust-interop/target/release
 
       - name: Build and install executable
         run: |

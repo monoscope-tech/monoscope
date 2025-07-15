@@ -277,9 +277,6 @@ executables:
       - '+RTS -N -A128m -n2m -RTS'
       # - -O2
       # - -fPIC
-    ld-options:
-      - -static
-      - -pthread
     dependencies:
       - apitoolkit-server
       - hs-opentelemetry-instrumentation-auto
