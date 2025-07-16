@@ -1,0 +1,204 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+  hostmetrics:
+    root_path: /hostfs
+    collection_interval: 30s
+    scrapers:
+      paging:
+        metrics:
+          system.paging.utilization:
+            enabled: true
+      cpu:
+        metrics:
+          system.cpu.utilization:
+            enabled: true
+      disk:
+      filesystem:
+        metrics:
+          system.filesystem.utilization:
+            enabled: true
+      load:
+      memory:
+      network:
+      processes:
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'otelcol'
+          scrape_interval: 10s
+          static_configs:
+            - targets: ['0.0.0.0:8888']
+  filelog:
+    include_file_path: true
+    poll_interval: 500ms
+    include:
+      - /var/lib/docker/containers/*/*-json.log
+    operators:
+      # Parse the JSON log entry
+      - type: json_parser
+        id: parser-docker
+        timestamp:
+          parse_from: attributes.time
+          layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+
+      # Extract container ID from the file path
+      - type: regex_parser
+        id: extract_container_id
+        regex: '^/var/lib/docker/containers/(?P<container_id>[^/]+)/.*'
+        parse_from: attributes["log.file.path"]
+
+      # Move the log content to body
+      - type: move
+        from: attributes.log
+        to: body
+
+      # Move container_id to resource attributes for the docker detector
+      - type: move
+        from: attributes.container_id
+        to: resource["container.id"]
+
+  docker_stats:
+    endpoint: unix:///var/run/docker.sock
+    collection_interval: 10s
+    timeout: 20s
+
+processors:
+  batch:
+    send_batch_max_size: 100
+    send_batch_size: 10
+    timeout: 10s
+
+  # This processor enriches logs with Docker metadata
+  resourcedetection/docker:
+    detectors: [docker]
+    timeout: 2s
+    override: false
+
+  # System detection for host info
+  resourcedetection/system:
+    detectors: [env, system]
+    system:
+      hostname_sources: [os]
+    timeout: 2s
+    override: false
+
+  # Transform attributes
+  attributes:
+    actions:
+      # Set service.name as attribute - handle nested attrs structure
+      - key: service.name
+        from_attribute: attrs.com.docker.swarm.service.name
+        action: insert
+      - key: service.name
+        from_attribute: com.docker.swarm.service.name
+        action: upsert
+      - key: service.name
+        from_attribute: container.label.com.docker.swarm.service.name
+        action: upsert
+      - key: service.name
+        from_attribute: container.name
+        action: insert
+      # Add deployment environment
+      - key: deployment.environment
+        value: 'production'
+        action: insert
+
+  # Add global resource attributes
+  resource:
+    attributes:
+      - key: at-project-key
+        value: ${env:AT_PROJECT_KEY:-xxx}
+        action: insert
+
+  # Transform processor to move attributes to resources
+  transform:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          # Try multiple sources for service.name in order of preference
+          # 1. First try attributes["service.name"] if already set by attributes processor
+          - set(resource.attributes["service.name"], attributes["service.name"]) where attributes["service.name"] != nil
+          # 2. Try nested attrs structure first (most common in your logs)
+          - set(resource.attributes["service.name"], attributes["attrs"]["com.docker.swarm.service.name"]) where resource.attributes["service.name"] == nil and attributes["attrs"]["com.docker.swarm.service.name"] != nil
+          # 3. Try direct swarm service name attribute
+          - set(resource.attributes["service.name"], attributes["com.docker.swarm.service.name"]) where resource.attributes["service.name"] == nil and attributes["com.docker.swarm.service.name"] != nil
+          # 3. Try container labels with swarm service name
+          - set(resource.attributes["service.name"], resource.attributes["container.labels.com.docker.swarm.service.name"]) where resource.attributes["service.name"] == nil and resource.attributes["container.labels.com.docker.swarm.service.name"] != nil
+          # 4. Try app-name label
+          - set(resource.attributes["service.name"], resource.attributes["container.labels.app-name"]) where resource.attributes["service.name"] == nil and resource.attributes["container.labels.app-name"] != nil
+          # 5. Try container.labels.app
+          - set(resource.attributes["service.name"], resource.attributes["container.labels.app"]) where resource.attributes["service.name"] == nil and resource.attributes["container.labels.app"] != nil
+          # 6. Try container.labels.service
+          - set(resource.attributes["service.name"], resource.attributes["container.labels.service"]) where resource.attributes["service.name"] == nil and resource.attributes["container.labels.service"] != nil
+          # 7. Fall back to container name
+          - set(resource.attributes["service.name"], resource.attributes["container.name"]) where resource.attributes["service.name"] == nil and resource.attributes["container.name"] != nil
+          # 8. Copy deployment.environment to resource if it exists
+          - set(resource.attributes["deployment.environment"], attributes["deployment.environment"]) where attributes["deployment.environment"] != nil
+
+  # Optional: Add more Docker Swarm specific attributes
+  attributes/swarm:
+    actions:
+      # Extract Swarm-specific labels (try nested attrs first)
+      - key: swarm.service
+        from_attribute: attrs.com.docker.swarm.service.name
+        action: insert
+      - key: swarm.service
+        from_attribute: com.docker.swarm.service.name
+        action: insert
+      - key: swarm.service
+        from_attribute: container.label.com.docker.swarm.service.name
+        action: upsert
+      - key: swarm.task
+        from_attribute: attrs.com.docker.swarm.task.name
+        action: insert
+      - key: swarm.task
+        from_attribute: com.docker.swarm.task.name
+        action: upsert
+      - key: swarm.task
+        from_attribute: container.label.com.docker.swarm.task.name
+        action: upsert
+      - key: swarm.node
+        from_attribute: attrs.com.docker.swarm.node.id
+        action: insert
+      - key: swarm.node
+        from_attribute: com.docker.swarm.node.id
+        action: upsert
+      - key: swarm.node
+        from_attribute: container.label.com.docker.swarm.node.id
+        action: upsert
+
+connectors:
+  datadog/connector:
+
+exporters:
+  datadog/exporter:
+    api:
+      site: datadoghq.eu
+      key: ${env:DD_API_KEY}
+  otlp:
+    endpoint: ${env:OTLP_ENDPOINT}
+    tls:
+      insecure: ${env:OTLP_INSECURE:-false}
+    headers:
+      Authorization: ${env:OTLP_AUTH_HEADER}
+
+service:
+  pipelines:
+    metrics:
+      receivers: [hostmetrics, prometheus, otlp, datadog/connector, docker_stats]
+      processors: [batch, resourcedetection/system, attributes, resource]
+      exporters: [datadog/exporter, otlp]
+    traces:
+      receivers: [otlp]
+      processors: [batch, resource]
+      exporters: [datadog/connector, datadog/exporter, otlp]
+    logs:
+      receivers: [otlp, filelog]
+      processors: [batch, resourcedetection/docker, resourcedetection/system, attributes, attributes/swarm, resource, transform]
+      exporters: [datadog/exporter, otlp]
