@@ -76,7 +76,7 @@ logQueryBox_ config = do
                   on keydown[key=='Space' and shiftKey] from document set #ai-search-chkbox.checked to true
                   |]
               ]
-            <> [checked_ | isJust config.targetWidgetPreview]
+              <> [checked_ | isJust config.targetWidgetPreview]
           script_
             [text|
             document.addEventListener('keydown', function(e) {
@@ -197,6 +197,22 @@ logQueryBox_ config = do
         div_ [class_ "flex justify-end gap-2"] do
           fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[#viz-logs:checked]/pg:block"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "timeline"
+          fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1"] do
+            input_
+              [ type_ "checkbox"
+              , id_ "create-alert-toggle"
+              , class_ "checkbox checkbox-sm rounded-sm"
+              , [__|on change 
+                     if me.checked
+                       -- Force switch to chart visualization when creating alert
+                       set #viz-timeseries_line.checked to true
+                       call updateVizTypeInUrl('timeseries_line', true)
+                       set widgetJSON.type to 'timeseries_line'
+                       send 'update-widget' to #visualization-widget-container
+                     end
+                  |]
+              ]
+            span_ "create alert"
 
   -- Include initialization code for the query editor
   queryEditorInitializationCode config.queryLibRecent config.queryLibSaved config.vizType
@@ -217,14 +233,14 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId =
           , term "data-update-url" (if updateUrl then "true" else "false")
           , term "data-container-id" containerSelector
           , [__| on change
-                    if my.checked
-                      call updateVizTypeInUrl(my.value, @data-update-url === 'true')
-                      set widgetJSON.type to my.value
-                      send 'update-widget' to #{@data-container-id}
-                    end
-                 |]
+                      if my.checked
+                        call updateVizTypeInUrl(my.value, @data-update-url === 'true')
+                        set widgetJSON.type to my.value
+                        send 'update-widget' to #{@data-container-id}
+                      end
+                   |]
           ]
-        <> [checked_ | vizType == defaultVizType]
+          <> [checked_ | vizType == defaultVizType]
       span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
       span_ [] $ toHtml label
 

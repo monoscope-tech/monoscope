@@ -220,6 +220,9 @@ const chartWidget = (widgetData: WidGetData) => {
   
   chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source));
 
+  // Expose threshold functionality on chart element
+  (chartEl as any).applyThresholds = (thresholds: Record<string, number>) => applyThresholds(chart, thresholds);
+
   const resizeObserver = new ResizeObserver(() => requestAnimationFrame(() => (window as any).echarts.getInstanceByDom(chartEl).resize()));
   if (chartEl) {
     resizeObserver.observe(chartEl);
@@ -447,3 +450,33 @@ function bindFunctionsToObjects(rootObj: any, obj: any) {
   return obj;
 }
 window.bindFunctionsToObjects = bindFunctionsToObjects;
+
+// Threshold line configurations
+const THRESHOLDS = {
+  alert: { color: '#dc2626', formatter: 'Alert: {c}' },
+  warning: { color: '#f59e0b', formatter: 'Warning: {c}' }
+} as const;
+
+// Create threshold markLines for ECharts
+export const createThresholdMarkLines = (thresholds: Record<string, number>) =>
+  Object.entries(thresholds)
+    .filter(([_, value]) => !isNaN(value))
+    .map(([type, value]) => ({
+      yAxis: value,
+      name: type,
+      label: { formatter: THRESHOLDS[type as keyof typeof THRESHOLDS]?.formatter || `${type}: {c}`, position: 'end' },
+      lineStyle: { color: THRESHOLDS[type as keyof typeof THRESHOLDS]?.color || '#999', width: 2, type: 'dashed' }
+    }));
+
+// Apply thresholds to a chart
+export const applyThresholds = (chart: any, thresholds: Record<string, number>) => {
+  const option = chart?.getOption();
+  if (!option?.series?.length) return;
+  
+  chart.setOption({
+    series: option.series.map((s: any) => ({
+      ...s,
+      markLine: { silent: true, symbol: 'none', data: createThresholdMarkLines(thresholds) }
+    }))
+  });
+};
