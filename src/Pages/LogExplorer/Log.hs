@@ -1060,7 +1060,7 @@ alertConfigurationForm_ pid = do
                   ]
                   do
                     option_ [value_ "has_matches", selected_ ""] "the query has any results"
-                    option_ [value_ "matches_changed"] "the query's results change"
+                    -- option_ [value_ "matches_changed"] "the query's results change"
                     option_ [value_ "threshold_exceeded"] "threshold is exceeded"
 
           -- Thresholds (collapsible, only visible when threshold_exceeded is selected)
