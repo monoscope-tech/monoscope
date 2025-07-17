@@ -713,42 +713,39 @@ apiLogsPage page = do
 
       let dW = fromMaybe "100%" page.detailsWidth
           showTrace = isJust page.showTrace
-      div_ [class_ "grow relative flex flex-col shrink-1 min-w-0 w-full h-full", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
-        -- Common scrollable container for both views
-        div_ [class_ "flex flex-col h-full overflow-y-auto"] do
-          -- Alert configuration section (visible in charts view when alert toggle is checked)
-          div_ [class_ "shrink-0 group-has-[#viz-logs:checked]/pg:hidden"] do
-            alertConfigurationForm_ page.pid
+      div_ [class_ "grow relative flex flex-col shrink-1 min-w-0 w-full h-full ", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
+        -- Alert configuration section (visible in charts view when alert toggle is checked)
+        div_ [class_ "shrink-0 group-has-[#viz-logs:checked]/pg:hidden"] $ alertConfigurationForm_ page.pid
 
-          -- Visualization widget that shows when not in logs view
-          div_ [class_ "flex-1 min-h-0 group-has-[#viz-logs:checked]/pg:hidden"] do
-            let pid = page.pid.toText
-            let vizType = maybe "\"timeseries\"" show page.vizType
-            script_
-              [text| var widgetJSON = {
-                    "id": "visualization-widget",
-                    "type": ${vizType}, 
-                    "title": "Visualization",
-                    "standalone": true,
-                    "allow_zoom": true,
-                    "_project_id": "$pid",
-                    "_center_title": true, 
-                    "layout": {"w": 6, "h": 4}
-                  };
-                  |]
-            div_
-              [ id_ "visualization-widget-container"
-              , class_ " w-full"
-              , style_ "aspect-ratio: 4 / 2;"
-              , hxPost_ ("/p/" <> page.pid.toText <> "/widget")
-              , hxTrigger_ "intersect once, update-widget"
-              , hxTarget_ "this"
-              , hxSwap_ "innerHTML"
-              , hxVals_ "js:{...widgetJSON}"
-              , hxExt_ "json-enc"
-              , term "hx-sync" "this:replace"
-              ]
-              ""
+        -- Visualization widget that shows when not in logs view
+        div_ [class_ "flex-1 min-h-0 group-has-[#viz-logs:checked]/pg:hidden"] do
+          let pid = page.pid.toText
+          let vizType = maybe "\"timeseries\"" show page.vizType
+          script_
+            [text| var widgetJSON = {
+                  "id": "visualization-widget",
+                  "type": ${vizType}, 
+                  "title": "Visualization",
+                  "standalone": true,
+                  "allow_zoom": true,
+                  "_project_id": "$pid",
+                  "_center_title": true, 
+                  "layout": {"w": 6, "h": 4}
+                };
+                |]
+          div_
+            [ id_ "visualization-widget-container"
+            , class_ " w-full"
+            , style_ "aspect-ratio: 4 / 2;"
+            , hxPost_ ("/p/" <> page.pid.toText <> "/widget")
+            , hxTrigger_ "intersect once, update-widget"
+            , hxTarget_ "this"
+            , hxSwap_ "innerHTML"
+            , hxVals_ "js:{...widgetJSON}"
+            , hxExt_ "json-enc"
+            , term "hx-sync" "this:replace"
+            ]
+            ""
 
         -- Filters and row count header
         div_ [class_ "flex gap-2  pt-1 text-sm -mb-6 z-10 w-max bg-bgBase"] do
@@ -779,15 +776,13 @@ apiLogsPage page = do
             span_ [class_ "loading loading-dots loading-md"] ""
             div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one", term "hx-sync" "this:replace"] pass
 
-          -- Logs view section (also within the scrollable container)
-          div_ [class_ "flex-1 min-h-0 group-has-[#viz-logs:not(:checked)]/pg:hidden flex flex-col"] do
-            -- Alert configuration for logs view (only shows when alert toggle is checked)
-            div_ [class_ "shrink-0"] do
-              alertConfigurationForm_ page.pid
+        -- Logs view section (also within the scrollable container)
+        div_ [class_ "flex-1 min-h-0 flex flex-col"] do
+          -- Alert configuration for logs view (only shows when alert toggle is checked)
+          div_ [class_ "shrink-0"] $ alertConfigurationForm_ page.pid
 
-            -- Virtual table for logs
-            div_ [class_ "flex-1 min-h-0"] do
-              virtualTable page
+          -- Virtual table for logs
+          div_ [class_ "flex-1 min-h-0 hidden group-has-[#viz-logs:checked]/pg:block"] $ virtualTable page
 
       div_ [class_ $ "transition-opacity duration-200 " <> if isJust page.targetEvent then "" else "opacity-0 pointer-events-none hidden", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
 
@@ -986,7 +981,7 @@ jsonTreeAuxillaryCode pid query = do
 -- | Render alert configuration form for creating log-based alerts
 alertConfigurationForm_ :: Projects.ProjectId -> Html ()
 alertConfigurationForm_ pid = do
-  div_ [class_ "alert-configuration bg-fillWeaker rounded-2xl p-4 mb-3 border border-strokeWeak hidden group-has-[#create-alert-toggle:checked]/pg:block shrink-0 group/alt"] do
+  div_ [class_ "bg-fillWeaker rounded-2xl p-4 mb-3 border border-strokeWeak hidden group-has-[#create-alert-toggle:checked]/pg:block shrink-0 group/alt"] do
     -- Header section (more compact)
     div_ [class_ "flex items-center justify-between mb-3"] do
       div_ [class_ "flex items-center gap-2.5"] do
