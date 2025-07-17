@@ -539,16 +539,16 @@ packages:
     git: https://github.com/tonyalaribe/tmp-postgres
     subdir: .
 - completed:
-    commit: 8182563f4648fcc34952ccaf06a2247e6514727f
+    commit: ccf3caf3eff61b88e6e2e2e1390d6acac1ae431c
     git: https://github.com/tusharad/langchain-hs
     name: langchain-hs
     pantry-tree:
-      sha256: 208b46ee0263e113846cb362157ff9ee0de6d3356709250ad5d7213c374e3b74
-      size: 7440
+      sha256: 3d4f7ebddea8d205d5c9f3b0dcb38449d4485427aaff7d22e155ff61f1fdd278
+      size: 8979
     subdir: .
     version: 0.0.2.0
   original:
-    commit: 8182563f4648fcc34952ccaf06a2247e6514727f
+    commit: ccf3caf3eff61b88e6e2e2e1390d6acac1ae431c
     git: https://github.com/tusharad/langchain-hs
     subdir: .
 snapshots:
