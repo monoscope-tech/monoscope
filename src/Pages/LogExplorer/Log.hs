@@ -714,8 +714,30 @@ apiLogsPage page = do
       let dW = fromMaybe "100%" page.detailsWidth
           showTrace = isJust page.showTrace
       div_ [class_ "grow relative flex flex-col shrink-1 min-w-0 w-full h-full ", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
-        -- Alert configuration section (visible in charts view when alert toggle is checked)
-        div_ [class_ "shrink-0 group-has-[#viz-logs:checked]/pg:hidden"] $ alertConfigurationForm_ page.pid
+        -- Alert configuration section at the top of the content area
+        div_ [class_ "shrink-0"] $ alertConfigurationForm_ page.pid
+
+        -- Filters and row count header
+        div_ [class_ "flex gap-2  pt-1 text-sm -mb-6 z-10 w-max bg-bgBase"] do
+          label_ [class_ "gap-1 flex items-center cursor-pointer"] do
+            faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
+            span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
+            span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
+            "filters"
+            input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked); setTimeout(() => { const editor = document.getElementById('filterElement'); if (editor && editor.refreshLayout) editor.refreshLayout(); }, 200);"]
+            script_
+              $ [text|
+              document.getElementById('toggle-filters').checked = localStorage.getItem('toggle-filter-checked') === 'true';
+              // Ensure editor layout is correct on initial load
+              setTimeout(() => {
+                const editor = document.getElementById('filterElement');
+                if (editor && editor.refreshLayout) {
+                  editor.refreshLayout();
+                }
+              }, 300);
+            |]
+          span_ [class_ "text-strokeWeak "] "|"
+          div_ [class_ ""] $ span_ [class_ "text-textStrong"] (toHtml $ prettyPrintCount page.resultCount) >> span_ [class_ "text-textStrong"] (toHtml " rows")
 
         -- Visualization widget that shows when not in logs view
         div_ [class_ "flex-1 min-h-0 group-has-[#viz-logs:checked]/pg:hidden"] do
@@ -747,28 +769,6 @@ apiLogsPage page = do
             ]
             ""
 
-        -- Filters and row count header
-        div_ [class_ "flex gap-2  pt-1 text-sm -mb-6 z-10 w-max bg-bgBase"] do
-          label_ [class_ "gap-1 flex items-center cursor-pointer"] do
-            faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
-            span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
-            span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
-            "filters"
-            input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked); setTimeout(() => { const editor = document.getElementById('filterElement'); if (editor && editor.refreshLayout) editor.refreshLayout(); }, 200);"]
-            script_
-              $ [text|
-              document.getElementById('toggle-filters').checked = localStorage.getItem('toggle-filter-checked') === 'true';
-              // Ensure editor layout is correct on initial load
-              setTimeout(() => {
-                const editor = document.getElementById('filterElement');
-                if (editor && editor.refreshLayout) {
-                  editor.refreshLayout();
-                }
-              }, 300);
-            |]
-          span_ [class_ "text-strokeWeak "] "|"
-          div_ [class_ ""] $ span_ [class_ "text-textStrong"] (toHtml $ prettyPrintCount page.resultCount) >> span_ [class_ "text-textStrong"] (toHtml " rows")
-
         -- Trace view container
         div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-bgBase transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
           whenJust page.showTrace \trId -> do
@@ -778,9 +778,6 @@ apiLogsPage page = do
 
         -- Logs view section (also within the scrollable container)
         div_ [class_ "flex-1 min-h-0 flex flex-col"] do
-          -- Alert configuration for logs view (only shows when alert toggle is checked)
-          div_ [class_ "shrink-0"] $ alertConfigurationForm_ page.pid
-
           -- Virtual table for logs
           div_ [class_ "flex-1 min-h-0 hidden group-has-[#viz-logs:checked]/pg:block"] $ virtualTable page
 
