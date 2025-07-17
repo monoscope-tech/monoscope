@@ -205,9 +205,9 @@ logQueryBox_ config = do
               , [__|on change 
                      if me.checked
                        -- Force switch to chart visualization when creating alert
-                       set #viz-timeseries_line.checked to true
-                       call updateVizTypeInUrl('timeseries_line', true)
-                       set widgetJSON.type to 'timeseries_line'
+                       set #viz-timeseries.checked to true
+                       call updateVizTypeInUrl('timeseries', true)
+                       set widgetJSON.type to 'timeseries'
                        send 'update-widget' to #visualization-widget-container
                      end
                   |]

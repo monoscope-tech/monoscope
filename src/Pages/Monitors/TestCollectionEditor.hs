@@ -43,7 +43,6 @@ import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Monitors.MetricMonitors qualified as MetricMonitors
 import Pkg.Components.ItemsList qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
@@ -282,9 +281,47 @@ timelineSteps pid col =
   Components.TimelineSteps
     [ Components.TimelineStep "Define API test" $ defineTestSteps_ col
     , Components.TimelineStep "Name and tag your test" $ nameOfTest_ (maybe "" (.title) col) (maybe V.empty (.tags) col)
-    , Components.TimelineStep "Set Alert Message and Recovery Threshold" $ MetricMonitors.configureNotificationMessage_ col
+    , Components.TimelineStep "Set Alert Message and Recovery Threshold" $ configureNotificationMessage_ col
     ]
     col
+
+
+configureNotificationMessage_ :: Maybe Testing.Collection -> Html ()
+configureNotificationMessage_ colM = do
+  let (severity, subject, message, naf, saf, nfc, sfc) = case colM of
+        Just col -> (col.alertSeverity, col.alertSubject, col.alertMessage, col.notifyAfter, col.stopAfter, col.notifyAfterCheck, col.stopAfterCheck)
+        Nothing -> ("Info", "Error: Error subject", "Alert Message", "10 minutes", "0", False, False)
+  div_ [class_ "space-y-4 bg-fillWeaker p-4 rounded-2xl"] do
+    div_ [class_ "p-4 bg-fillWeaker rounded-xl"] do
+      div_ [class_ "flex items-center w-full gap-2"] do
+        fieldset_ [class_ "fieldset"] do
+          label_ [class_ "label"] $ span_ [class_ "label-text font-medium"] "Severity"
+          select_ [class_ "select select-sm shadow-none w-28", name_ "alertSeverity"] do
+            option_ [selected_ "" | severity == "Info"] "Info"
+            option_ [selected_ "" | severity == "Warning"] "Warning"
+            option_ [selected_ "" | severity == "Error"] "Error"
+            option_ [selected_ "" | severity == "Critical"] "Critical"
+        fieldset_ [class_ "fieldset w-full"] do
+          label_ [class_ "label font-medium"] "Subject"
+          input_ [placeholder_ "Error: Error subject", class_ "input shadow-none input-sm w-full", name_ "alertSubject", value_ subject]
+      fieldset_ [class_ "fieldset w-full my-3"] do
+        label_ [class_ "label"] "Message"
+        textarea_
+          [placeholder_ "Alert Message", class_ "textarea  shadow-none p-2 rounded-2xl textarea-xs w-full", name_ "alertMessage", value_ message]
+          $ toHtml message
+      div_ [class_ "space-y-2 py-4"] do
+        h3_ [class_ "text-textWeak font-medium"] "Recovery Thresholds"
+        p_ [class_ "text-sm font-medium"] "Send notifications for alert status periodically as long as the monitor has not recovered"
+        div_ [class_ "flex items-center gap-2 pt-4"] do
+          input_ $ [class_ "checkbox checkbox-sm", type_ "checkbox", name_ "notifyAfterCheck"] ++ [checked_ | nfc]
+          span_ "If this monitor is not acknowleged or resoved, notify renotify every"
+          select_ [class_ "select select-xs shadow-none", name_ "notifyAfter"]
+            $ mapM_ (\v -> option_ [selected_ "" | v == naf] $ toHtml v) ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"]
+        div_ [class_ "flex items-center gap-2"] do
+          input_ $ [class_ "checkbox checkbox-sm", type_ "checkbox", name_ "stopAfterCheck"] ++ [checked_ | sfc]
+          span_ "Stop renotifying after "
+          input_ [type_ "number", class_ "input input-xs shadow-none w-20", value_ saf, name_ "stopAfter"]
+          span_ "occurences."
 
 
 nameOfTest_ :: Text -> V.Vector Text -> Html ()

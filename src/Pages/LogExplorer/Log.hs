@@ -1041,10 +1041,21 @@ alertConfigurationForm_ pid = do
               -- Time window
               fieldset_ [class_ "fieldset flex-1"] do
                 label_ [class_ "label text-xs"] "Include rows from"
-                select_ [name_ "timeWindow", class_ "select select-sm"] do
-                  forM_
-                    (zip timeOpts [False, False, True, False, False, False, False, False, False, False])
-                    \((m, l), sel) -> option_ ([value_ (show m <> "m")] ++ [selected_ "" | sel]) ("the last " <> l)
+                select_
+                  [ name_ "timeWindow"
+                  , class_ "select select-sm"
+                  , id_ "timeWindow"
+                  , [__|on change
+                       set qb to document.querySelector('query-builder')
+                       if qb exists then
+                         call qb.updateBinInQuery('timestamp', my.value)
+                       end
+                     |]
+                  ]
+                  do
+                    forM_
+                      (zip timeOpts [False, False, True, False, False, False, False, False, False, False])
+                      \((m, l), sel) -> option_ ([value_ (show m <> "m")] ++ [selected_ "" | sel]) ("the last " <> l)
 
               -- Condition type
               fieldset_ [class_ "fieldset flex-1"] do
@@ -1059,12 +1070,12 @@ alertConfigurationForm_ pid = do
                      |]
                   ]
                   do
-                    option_ [value_ "has_matches", selected_ ""] "the query has any results"
                     -- option_ [value_ "matches_changed"] "the query's results change"
-                    option_ [value_ "threshold_exceeded"] "threshold is exceeded"
+                    option_ [value_ "threshold_exceeded", selected_ ""] "threshold is exceeded"
+                    option_ [value_ "has_matches"] "the query has any results"
 
           -- Thresholds (collapsible, only visible when threshold_exceeded is selected)
-          div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden hidden", id_ "thresholds"] do
+          div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden", id_ "thresholds"] do
             label_ [class_ "flex items-center justify-between p-3 cursor-pointer hover:bg-fillWeak transition-colors peer"] do
               div_ [class_ "flex items-center gap-2"] do
                 faSprite_ "chart-line" "regular" "w-4 h-4 text-iconNeutral"
@@ -1153,8 +1164,36 @@ alertConfigurationForm_ pid = do
                   ]
                   "The alert threshold has been exceeded. Check the APItoolkit dashboard for details."
 
+              -- Recovery Thresholds section
+              div_ [class_ "border-t border-strokeWeak pt-2 mt-3 text-xs"] do
+                div_ [class_ "flex items-center gap-3 text-textWeak mb-1.5"] do
+                  h4_ [class_ "font-medium text-textStrong"] "Recovery Thresholds"
+                  span_ [] "Continue notifications until monitor recovers"
+
+                div_ [class_ "flex items-center gap-5 pt-1"] do
+                  -- Renotify option
+                  label_ [class_ "flex items-center gap-2"] do
+                    input_ [type_ "checkbox", class_ "checkbox checkbox-xs", name_ "notifyAfterCheck"]
+                    span_ [] "Renotify every"
+                    select_ [class_ "select select-xs w-24 ", name_ "notifyAfter", id_ "notifyAfterInterval"]
+                      $ forM_ (zip ["10m", "20m", "30m", "1h", "6h", "24h"] ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"])
+                      $ \(v, t) -> option_ ([value_ v] ++ [selected_ "" | v == "30m"]) (toHtml t)
+
+                  -- Stop after option
+                  label_ [class_ "flex items-center gap-2"] do
+                    input_
+                      [ type_ "checkbox"
+                      , class_ "checkbox checkbox-xs"
+                      , name_ "stopAfterCheck"
+                      , [__|on change if my.checked then remove .hidden from #stopAfterInput else add .hidden to #stopAfterInput end|]
+                      ]
+                    span_ [] "Stop after"
+                    div_ [class_ "items-center gap-1 hidden", id_ "stopAfterInput", style_ "display:inline-flex"] do
+                      input_ [type_ "number", class_ "input input-xs w-14", value_ "5", name_ "stopAfter", min_ "1", max_ "100"]
+                      span_ [class_ "text-textWeak"] "occurrences"
+
               -- Recipients checkbox
-              div_ [class_ "flex items-center gap-2"] do
+              div_ [class_ "flex items-center gap-2 mt-3"] do
                 label_ [class_ "label cursor-pointer flex items-center gap-2"] do
                   input_ [type_ "checkbox", class_ "checkbox checkbox-xs", name_ "recipientEmailAll", value_ "true", checked_]
                   span_ [class_ "text-xs"] "Send to all team members"

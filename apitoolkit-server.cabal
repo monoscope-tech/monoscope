@@ -1,6 +1,6 @@
 cabal-version: 2.0
 
--- This file has been generated from package.yaml by hpack version 0.38.0.
+-- This file has been generated from package.yaml by hpack version 0.38.1.
 --
 -- see: https://github.com/sol/hpack
 
@@ -340,7 +340,6 @@ library
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
       Pages.Monitors.Alerts
-      Pages.Monitors.MetricMonitors
       Pages.Monitors.TestCollectionEditor
       Pages.Monitors.Testing
       Pages.Onboarding.Onboarding

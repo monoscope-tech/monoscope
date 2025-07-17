@@ -30,7 +30,7 @@ export class QueryBuilderComponent extends LitElement {
   @state() private visualizationType: string = '';
   @state() private newSortField: string = '';
   @state() private newSortDirection: 'asc' | 'desc' = 'asc';
-  
+
   // New Group By UI state
   @state() private groupBySearchTerm: string = '';
   @state() private showGroupByFieldsColumn: boolean = false;
@@ -110,13 +110,13 @@ export class QueryBuilderComponent extends LitElement {
         });
       }
     });
-    
+
     // Set up additional behavior for nested popovers
     setTimeout(() => {
       const moreSettingsPopover = document.getElementById('more-settings-popover');
       const sortByButton = document.getElementById('sort-by-button');
       const sortByPopover = document.getElementById('sort-by-popover') as HTMLElement;
-      
+
       if (moreSettingsPopover && sortByButton && sortByPopover) {
         // When more settings popover is hidden, also hide the sort popover
         moreSettingsPopover.addEventListener('beforetoggle', (e) => {
@@ -126,7 +126,7 @@ export class QueryBuilderComponent extends LitElement {
             }
           }
         });
-        
+
         // Position the sort popover relative to the button
         const positionSortPopover = () => {
           const buttonRect = sortByButton.getBoundingClientRect();
@@ -134,12 +134,12 @@ export class QueryBuilderComponent extends LitElement {
           sortByPopover.style.left = `${buttonRect.right + 5}px`;
           sortByPopover.style.top = `${buttonRect.top}px`;
         };
-        
+
         // Click event for the sort by button
         sortByButton.addEventListener('pointerdown', (e) => {
           e.stopPropagation();
           positionSortPopover();
-          
+
           // Toggle the popover
           if ((sortByPopover as any).matches?.(':popover-open')) {
             sortByPopover.hidePopover?.();
@@ -147,7 +147,7 @@ export class QueryBuilderComponent extends LitElement {
             sortByPopover.showPopover?.();
           }
         });
-        
+
         // Event to make the subpopover keyboard-accessible
         sortByButton.addEventListener('keydown', (e) => {
           if (e.key === 'Enter' || e.key === ' ') {
@@ -156,22 +156,20 @@ export class QueryBuilderComponent extends LitElement {
             sortByPopover.showPopover?.();
           }
         });
-        
+
         // Stop propagation for clicks inside the sort popover without closing it
         sortByPopover.addEventListener('pointerdown', (e) => {
           // Don't close popovers when selecting options - we'll close them after selection is complete
           // The actual closing will happen in the @pointerdown handler for each field item
           e.stopPropagation();
         });
-        
+
         // Add event listener to close the sort popover only when clicking outside of sort-by-popover AND more-settings-popover
         document.addEventListener('pointerdown', (e) => {
           if (sortByPopover.matches?.(':popover-open')) {
             const target = e.target as HTMLElement;
             // Only close if the click is outside both popovers and not on the trigger button
-            if (!target.closest('#sort-by-popover') && 
-                !target.closest('#sort-by-button') && 
-                !target.closest('#more-settings-popover')) {
+            if (!target.closest('#sort-by-popover') && !target.closest('#sort-by-button') && !target.closest('#more-settings-popover')) {
               sortByPopover.hidePopover?.();
             }
           }
@@ -202,51 +200,51 @@ export class QueryBuilderComponent extends LitElement {
       console.error('Failed to load schema fields:', error);
     }
   }
-  
+
   /**
    * Extract all fields including deeply nested ones from schema data
    */
   private extractAllFields(schema: any, prefix: string = ''): { label: string; value: string; type: string }[] {
     let fields: { label: string; value: string; type: string }[] = [];
-    
+
     if (!schema || typeof schema !== 'object') return fields;
-    
+
     // Check if this is a schema with 'fields' property (format from schema manager)
     if (schema.fields && typeof schema.fields === 'object') {
       for (const [key, info] of Object.entries(schema.fields)) {
         const fieldType = (info as any).fieldType || (info as any).type || 'string';
-        
+
         fields.push({
           label: `${key} (${fieldType})`,
           value: key,
-          type: fieldType
+          type: fieldType,
         });
       }
       return fields;
     }
-    
+
     // Process properties if this is an object with properties
     if (schema.properties && typeof schema.properties === 'object') {
       for (const [key, value] of Object.entries(schema.properties)) {
         const fieldPath = prefix ? `${prefix}.${key}` : key;
         const fieldType = (value as any).type || 'object';
-        
+
         // Add this field
         fields.push({
           label: `${fieldPath} (${fieldType})`,
           value: fieldPath,
-          type: fieldType
+          type: fieldType,
         });
-        
+
         // Recursively process nested objects
         if (fieldType === 'object' && (value as any).properties) {
-          fields = fields.concat(this.extractAllFields((value as any), fieldPath));
+          fields = fields.concat(this.extractAllFields(value as any, fieldPath));
         }
-        
+
         // Handle arrays with items
         if (fieldType === 'array' && (value as any).items) {
           const itemsType = (value as any).items.type || 'any';
-          
+
           // For array of objects, extract their properties too
           if (itemsType === 'object' && (value as any).items.properties) {
             fields = fields.concat(this.extractAllFields((value as any).items, `${fieldPath}[]`));
@@ -254,7 +252,7 @@ export class QueryBuilderComponent extends LitElement {
         }
       }
     }
-    
+
     // Log fields count
     console.log(`Extracted ${fields.length} fields with prefix: ${prefix || 'root'}`);
     return fields;
@@ -270,7 +268,7 @@ export class QueryBuilderComponent extends LitElement {
 
       // Get raw schema data
       const schemaData = schemaManager.getSchemaData(schemaManager.getDefaultSchema());
-      
+
       // If we're refreshing root fields, update the fieldsOptions property
       if (!path) {
         const fields = this.extractAllFields(schemaData);
@@ -280,7 +278,7 @@ export class QueryBuilderComponent extends LitElement {
         // For specific paths, navigate to that path in the schema
         let targetSchema = schemaData;
         const pathParts = path.split('.');
-        
+
         for (const part of pathParts) {
           if (targetSchema?.properties?.[part]) {
             targetSchema = targetSchema.properties[part];
@@ -290,7 +288,7 @@ export class QueryBuilderComponent extends LitElement {
             return;
           }
         }
-        
+
         // Extract fields from this specific path
         const fields = this.extractAllFields(targetSchema, path);
         // Add these fields to the options without replacing everything
@@ -299,57 +297,6 @@ export class QueryBuilderComponent extends LitElement {
       }
     } catch (error) {
       console.error(`Failed to refresh schema fields for path ${path}:`, error);
-    }
-  }
-
-  /**
-   * Handles input in field suggestions
-   */
-  private async handleFieldInput(e: Event, fieldType: 'group' | 'agg' | 'sort'): Promise<void> {
-    try {
-      const input = e.target as HTMLInputElement;
-      const value = input.value;
-      console.log(`Field input (${fieldType}):`, value);
-
-      // Update the appropriate field value
-      switch (fieldType) {
-        case 'group':
-          this.newGroupByField = value;
-          break;
-        case 'agg':
-          this.newAggField = value;
-          break;
-        case 'sort':
-          this.newSortField = value;
-          break;
-      }
-
-      // Check if we need to update the suggestions based on dot notation
-      if (value.endsWith('.')) {
-        // Extract the parent path
-        const parentPath = value.substring(0, value.length - 1);
-        console.log(`Getting nested fields for path: ${parentPath}`);
-
-        // Fetch nested fields from schema manager
-        try {
-          const nestedFields = await schemaManager.resolveNested(schemaManager.getDefaultSchema(), parentPath);
-          console.log(`Found ${nestedFields.length} nested fields for ${parentPath}`);
-
-          // Update the fieldsOptions property directly for template rendering
-          // This is safer than direct DOM manipulation
-          this.fieldsOptions = nestedFields.map((field) => ({
-            label: `${field.name} (${field.type})`,
-            value: `${parentPath}.${field.name}`,
-          }));
-
-          // Request a UI update
-          this.requestUpdate();
-        } catch (error) {
-          console.error(`Failed to get nested fields for ${parentPath}:`, error);
-        }
-      }
-    } catch (error) {
-      console.error(`Error in handleFieldInput for ${fieldType}:`, error);
     }
   }
 
@@ -366,7 +313,7 @@ export class QueryBuilderComponent extends LitElement {
     // Look for both KQL style summarize and older group by format
     const summarizeMatch = query.match(/\|?\s*summarize\s+([^|]+?)(?:by\s+([^|]+?))?(?:\||$)/i);
     const groupByMatch = query.match(/\bgroup\s+by\s+([^|]+?)(?:\||$)/i);
-    
+
     // First try to extract from summarize statement (KQL style)
     if (summarizeMatch && summarizeMatch[2]) {
       // We have a "by" clause in the summarize statement
@@ -374,11 +321,11 @@ export class QueryBuilderComponent extends LitElement {
       const fields: string[] = [];
       let currentField = '';
       let parenCount = 0;
-      
+
       // Process character by character to handle nested parentheses correctly
       for (let i = 0; i < groupByText.length; i++) {
         const char = groupByText[i];
-        
+
         if (char === '(') {
           parenCount++;
           currentField += char;
@@ -395,14 +342,14 @@ export class QueryBuilderComponent extends LitElement {
           currentField += char;
         }
       }
-      
+
       // Add the last field if there is one
       if (currentField.trim()) {
         fields.push(currentField.trim());
       }
-      
+
       this.groupByFields = fields.filter(Boolean);
-    } 
+    }
     // If not found in summarize statement, check for standalone group by (backward compatibility)
     else if (groupByMatch) {
       // Process group by fields with special handling for bin functions
@@ -410,11 +357,11 @@ export class QueryBuilderComponent extends LitElement {
       const fields: string[] = [];
       let currentField = '';
       let parenCount = 0;
-      
+
       // Process character by character to handle nested parentheses correctly
       for (let i = 0; i < groupByText.length; i++) {
         const char = groupByText[i];
-        
+
         if (char === '(') {
           parenCount++;
           currentField += char;
@@ -431,12 +378,12 @@ export class QueryBuilderComponent extends LitElement {
           currentField += char;
         }
       }
-      
+
       // Add the last field if there is one
       if (currentField.trim()) {
         fields.push(currentField.trim());
       }
-      
+
       this.groupByFields = fields.filter(Boolean);
     } else {
       this.groupByFields = [];
@@ -448,7 +395,7 @@ export class QueryBuilderComponent extends LitElement {
       // For the aggregation part, we need to handle the case where there's a "by" clause
       // Extract just the aggregation part by splitting on " by " if it exists
       const aggregationPart = summarizeMatch[1].split(/\s+by\s+/i)[0].trim();
-      
+
       const summarizeParts = aggregationPart
         .split(',')
         .map((part) => part.trim())
@@ -518,18 +465,20 @@ export class QueryBuilderComponent extends LitElement {
     // Make summarize clause with GROUP BY
     if (this.aggregations.length > 0) {
       // The summarize clause will include both aggregations AND group by
-      const aggPart = this.aggregations.map((agg) => {
-        // Special handling for count() with empty field
-        if (agg.function === 'count' && agg.field === '') {
-          return 'count()';
-        } else {
-          return `${agg.function}(${agg.field})`;
-        }
-      }).join(', ');
+      const aggPart = this.aggregations
+        .map((agg) => {
+          // Special handling for count() with empty field
+          if (agg.function === 'count' && agg.field === '') {
+            return 'count()';
+          } else {
+            return `${agg.function}(${agg.field})`;
+          }
+        })
+        .join(', ');
       const groupByPart = this.groupByFields.length > 0 ? ` by ${this.groupByFields.join(', ')}` : '';
-      
+
       const summarizeStr = `summarize ${aggPart}${groupByPart}`;
-      
+
       // Check if a summarize clause already exists in the query
       if (query.match(/\|?\s*summarize\s+[^|]+/i)) {
         query = query.replace(/\|?\s*summarize\s+[^|]+?(?=\||$)/i, ` | ${summarizeStr}`);
@@ -542,7 +491,7 @@ export class QueryBuilderComponent extends LitElement {
       // If we have group by fields but no aggregations, add count() aggregation
       const groupByPart = this.groupByFields.join(', ');
       const summarizeStr = `summarize count() by ${groupByPart}`;
-      
+
       // Check if a summarize clause already exists in the query
       if (query.match(/\|?\s*summarize\s+[^|]+/i)) {
         query = query.replace(/\|?\s*summarize\s+[^|]+?(?=\||$)/i, ` | ${summarizeStr}`);
@@ -561,7 +510,7 @@ export class QueryBuilderComponent extends LitElement {
     // Replace or add SORT BY clause (KQL uses "sort by" instead of "order by")
     if (this.sortFields.length > 0) {
       const sortStr = `sort by ${this.sortFields.map((sort) => `${sort.field} ${sort.direction}`).join(', ')}`;
-      
+
       // Match both "sort by" and "order by" for backward compatibility
       if (query.match(/\|?\s*(sort|order)\s+by\s+[^|]+/i)) {
         query = query.replace(/\|?\s*(sort|order)\s+by\s+[^|]+?(?=\||$)/i, ` | ${sortStr}`);
@@ -579,7 +528,7 @@ export class QueryBuilderComponent extends LitElement {
     // Only add if limitValue is explicitly set (not null)
     if (this.limitValue !== null) {
       const takeStr = `take ${this.limitValue}`;
-      
+
       // Check if there's an existing take clause
       if (query.match(/\|?\s*take\s+\d+/i)) {
         query = query.replace(/\|?\s*take\s+\d+(?=\||$)/i, ` | ${takeStr}`);
@@ -598,7 +547,7 @@ export class QueryBuilderComponent extends LitElement {
 
     // Update the editor
     queryEditor.handleAddQuery(query, true);
-    
+
     // Dispatch an event so listeners know the query has been updated programmatically
     queryEditor.dispatchEvent(new CustomEvent('update-query'));
   }
@@ -614,7 +563,7 @@ export class QueryBuilderComponent extends LitElement {
     if (this.newGroupByField?.trim()) {
       try {
         let fieldValue = this.newGroupByField;
-        
+
         // If binning is enabled, add bin function wrapper
         if (this.enableBinning) {
           if (this.enableAutoBin) {
@@ -623,28 +572,28 @@ export class QueryBuilderComponent extends LitElement {
             fieldValue = `bin(${fieldValue}, ${this.binValue})`;
           }
         }
-        
+
         // Check if the exact field or binned version of it already exists
-        const isDuplicate = this.groupByFields.some(existingField => {
+        const isDuplicate = this.groupByFields.some((existingField) => {
           if (existingField === fieldValue) {
             return true; // Exact match
           }
-          
+
           // Check if it's the same field but with different binning
           if (this.enableBinning) {
             const fieldWithoutBin = fieldValue.replace(/bin(_auto)?\([^,]+(?:, \d+)?\)/, '').trim();
             const existingWithoutBin = existingField.replace(/bin(_auto)?\([^,]+(?:, \d+)?\)/, '').trim();
             return fieldWithoutBin === existingWithoutBin;
           }
-          
+
           return false;
         });
-        
+
         if (isDuplicate) {
           console.warn('Cannot add duplicate group by field:', fieldValue);
           return;
         }
-        
+
         // Add to fields array
         this.groupByFields = [...this.groupByFields, fieldValue];
         // Clear the input
@@ -686,7 +635,26 @@ export class QueryBuilderComponent extends LitElement {
     this.groupByFields = this.groupByFields.filter((_, i) => i !== index);
     this.updateQuery();
   }
-  
+
+  /**
+   * Update bin value in existing query
+   * Looks for bin(fieldName, ...) or bin_auto(fieldName) and updates it to bin(fieldName, newValue)
+   */
+  public updateBinInQuery(fieldName: string, binValue: string): void {
+    const queryEditor = document.querySelector(this.queryEditorSelector) as any;
+    if (!queryEditor?.editor) return;
+    
+    let query = queryEditor.editor.getValue();
+    const binPattern = new RegExp(`bin(_auto)?\\(\\s*${fieldName}\\s*(?:,\\s*[^)]+)?\\)`, 'gi');
+    
+    query = query.replace(binPattern, `bin(${fieldName}, ${binValue})`);
+    queryEditor.handleAddQuery(query, true);
+    queryEditor.dispatchEvent(new CustomEvent('update-query'));
+    
+    // Extract query parts to update UI
+    setTimeout(() => this.extractQueryParts(), 0);
+  }
+
   /**
    * Toggle a field in the group by clause
    * Adds the field if not present, removes it if already exists
@@ -695,38 +663,38 @@ export class QueryBuilderComponent extends LitElement {
   public toggleGroupByField(field: string): void {
     const queryEditor = document.querySelector(this.queryEditorSelector) as any;
     if (!queryEditor?.editor) return;
-    
+
     // First ensure we're using a timeseries visualization type
     const vizType = (window as any).currentVisualizationType;
     if (!['timeseries', 'timeseries_line'].includes(vizType)) {
       // Set visualization type to timeseries if it's not already a timeseries type
       (window as any).handleVisualizationUpdate('timeseries');
     }
-    
+
     // Normalize field names for comparison (handle bin functions)
     const normalizeField = (f: string) => f.replace(/bin(_auto)?\([^,]+(?:, \d+)?\)/, '').trim();
     const normalizedField = normalizeField(field);
-    
+
     // Check if field exists in current group by fields
-    const fieldIndex = this.groupByFields.findIndex(f => normalizeField(f) === normalizedField);
-    
+    const fieldIndex = this.groupByFields.findIndex((f) => normalizeField(f) === normalizedField);
+
     if (fieldIndex >= 0) {
       // Remove field if present
       this.groupByFields.splice(fieldIndex, 1);
-      
+
       // Remove entire summarize if no fields and no aggregations left
       if (this.groupByFields.length === 0 && this.aggregations.length === 0) {
         const query = queryEditor.editor.getValue().replace(/\|?\s*summarize\s+[^|]+?(?=\||$)/i, '');
         queryEditor.handleAddQuery(query, true);
-        
+
         // Make sure to extract query parts after updating
         setTimeout(() => this.extractQueryParts(), 0);
         return;
       }
     } else {
       // First check if we have a summarize with bin_auto or bin for timestamp
-      const hasBinnedTimestamp = this.groupByFields.some(f => /bin(_auto)?\(timestamp(?:,\s*\d+)?\)/.test(f));
-      
+      const hasBinnedTimestamp = this.groupByFields.some((f) => /bin(_auto)?\(timestamp(?:,\s*\d+)?\)/.test(f));
+
       // If we already have a summarize with bin, just add the field
       if (hasBinnedTimestamp) {
         // Add the requested field
@@ -735,15 +703,15 @@ export class QueryBuilderComponent extends LitElement {
         // No existing bin_auto(timestamp) - create a new summarize with bin_auto(timestamp) and the field
         this.groupByFields = ['bin_auto(timestamp)', field];
       }
-      
+
       // Ensure at least count() aggregation exists (note: using count() instead of count(*) as specified)
       if (this.aggregations.length === 0) {
         this.aggregations = [{ function: 'count', field: '' }];
       }
     }
-    
+
     this.updateQuery();
-    
+
     // Extract query parts after updating the query to refresh the UI state
     setTimeout(() => this.extractQueryParts(), 0);
   }
@@ -756,10 +724,10 @@ export class QueryBuilderComponent extends LitElement {
     if (this.newAggFunction !== func) {
       this.newAggField = '';
     }
-    
+
     // Set new function
     this.newAggFunction = func;
-    
+
     if (func === 'count') {
       // For count(), complete immediately
       this.completeAggregation();
@@ -768,7 +736,7 @@ export class QueryBuilderComponent extends LitElement {
       this.showFieldsColumn = true;
       this.aggSearchTerm = ''; // Clear search to start fresh for fields
       this.filteredFields = []; // Reset filtered fields
-      
+
       // Make sure we have fields loaded
       if (this.fieldsOptions.length === 0) {
         // If fields aren't loaded yet, try loading them again
@@ -777,7 +745,7 @@ export class QueryBuilderComponent extends LitElement {
           this.requestUpdate();
         });
       }
-      
+
       this.requestUpdate();
     }
   }
@@ -789,7 +757,7 @@ export class QueryBuilderComponent extends LitElement {
     this.showGroupByFieldsColumn = true;
     this.groupBySearchTerm = ''; // Clear search term
     this.filteredGroupByFields = []; // Reset filtered fields
-    
+
     // Make sure we have fields loaded
     if (this.fieldsOptions.length === 0) {
       this.initializeFields().then(() => {
@@ -797,10 +765,10 @@ export class QueryBuilderComponent extends LitElement {
         this.requestUpdate();
       });
     }
-    
+
     this.requestUpdate();
   }
-  
+
   /**
    * Reset the aggregation state
    */
@@ -814,19 +782,19 @@ export class QueryBuilderComponent extends LitElement {
     this.showFieldsColumn = false;
     this.requestUpdate();
   }
-  
+
   /**
    * Filter aggregation options based on search term
    */
   private filterAggregationOptions(e: Event): void {
     const searchTerm = (e.target as HTMLInputElement).value.toLowerCase();
     this.aggSearchTerm = searchTerm;
-    
+
     // When the fields column is showing, filter fields
     if (this.showFieldsColumn) {
       if (this.fieldsOptions.length === 0) {
         // Try to load fields if they're not available
-        console.log("Field options are empty, trying to load them");
+        console.log('Field options are empty, trying to load them');
         this.initializeFields().then(() => {
           this.filterFieldsBySearchTerm(searchTerm);
           this.requestUpdate();
@@ -835,20 +803,20 @@ export class QueryBuilderComponent extends LitElement {
         this.filterFieldsBySearchTerm(searchTerm);
       }
     }
-    
+
     this.requestUpdate();
   }
-  
+
   /**
    * Filter group by field options based on search term
    */
   private filterGroupByOptions(e: Event): void {
     const searchTerm = (e.target as HTMLInputElement).value.toLowerCase();
     this.groupBySearchTerm = searchTerm;
-    
+
     if (this.fieldsOptions.length === 0) {
       // Try to load fields if they're not available
-      console.log("Field options are empty, trying to load them");
+      console.log('Field options are empty, trying to load them');
       this.initializeFields().then(() => {
         this.filterGroupByFieldsBySearchTerm(searchTerm);
         this.requestUpdate();
@@ -856,32 +824,34 @@ export class QueryBuilderComponent extends LitElement {
     } else {
       this.filterGroupByFieldsBySearchTerm(searchTerm);
     }
-    
+
     this.requestUpdate();
   }
-  
+
   /**
    * Filter group by fields by search term
    */
   private filterGroupByFieldsBySearchTerm(searchTerm: string): void {
-    this.filteredGroupByFields = this.fieldsOptions.filter(field => 
-      field.value.toLowerCase().includes(searchTerm) || 
-      field.label.toLowerCase().includes(searchTerm)
+    this.filteredGroupByFields = this.fieldsOptions.filter(
+      (field) => field.value.toLowerCase().includes(searchTerm) || field.label.toLowerCase().includes(searchTerm)
     );
-    console.log(`Filtered group by fields by "${searchTerm}": found ${this.filteredGroupByFields.length} matches out of ${this.fieldsOptions.length} total fields`);
+    console.log(
+      `Filtered group by fields by "${searchTerm}": found ${this.filteredGroupByFields.length} matches out of ${this.fieldsOptions.length} total fields`
+    );
   }
-  
+
   /**
    * Filter fields by search term
    */
   private filterFieldsBySearchTerm(searchTerm: string): void {
-    this.filteredFields = this.fieldsOptions.filter(field => 
-      field.value.toLowerCase().includes(searchTerm) || 
-      field.label.toLowerCase().includes(searchTerm)
+    this.filteredFields = this.fieldsOptions.filter(
+      (field) => field.value.toLowerCase().includes(searchTerm) || field.label.toLowerCase().includes(searchTerm)
     );
-    console.log(`Filtered fields by "${searchTerm}": found ${this.filteredFields.length} matches out of ${this.fieldsOptions.length} total fields`);
+    console.log(
+      `Filtered fields by "${searchTerm}": found ${this.filteredFields.length} matches out of ${this.fieldsOptions.length} total fields`
+    );
   }
-  
+
   /**
    * Handle Enter key in the aggregation search
    */
@@ -901,7 +871,7 @@ export class QueryBuilderComponent extends LitElement {
       }
     }
   }
-  
+
   /**
    * Get an icon for a field based on its type and name
    */
@@ -912,17 +882,17 @@ export class QueryBuilderComponent extends LitElement {
     if (fieldValue.includes('status')) return 'N';
     if (fieldValue.includes('code')) return 'N';
     if (fieldValue.includes('error')) return 'N';
-    
+
     // Then check by field type
     if (fieldType === 'number' || fieldType === 'integer') return 'N';
     if (fieldType === 'string') return '';
     if (fieldType === 'boolean') return '';
     if (fieldType === 'object') return '';
     if (fieldType === 'array') return '';
-    
+
     return '';
   }
-  
+
   /**
    * Completes the aggregation process
    */
@@ -949,16 +919,16 @@ export class QueryBuilderComponent extends LitElement {
       // If we don't have required info, return without doing anything
       return;
     }
-    
+
     // Reset form fields
     this.resetAggregationState();
-    
+
     // Close the popover if open
     const popover = document.getElementById('agg-popover');
     if (popover) {
       (popover as any).hidePopover?.();
     }
-    
+
     // Update the query in the editor
     this.updateQuery();
   }
@@ -1012,8 +982,8 @@ export class QueryBuilderComponent extends LitElement {
 
     if (this.newSortField?.trim()) {
       // Check if this field is already being sorted
-      const existingIndex = this.sortFields.findIndex(sort => sort.field === this.newSortField);
-      
+      const existingIndex = this.sortFields.findIndex((sort) => sort.field === this.newSortField);
+
       if (existingIndex >= 0) {
         // If field already exists, update its direction instead of adding a duplicate
         this.sortFields[existingIndex].direction = this.newSortDirection;
@@ -1027,7 +997,7 @@ export class QueryBuilderComponent extends LitElement {
           },
         ];
       }
-      
+
       // Clear input
       this.newSortField = '';
       // Force UI update
@@ -1109,15 +1079,14 @@ export class QueryBuilderComponent extends LitElement {
       e.stopPropagation();
     }
   };
-  
+
   /**
    * Toggle between sort directions
    */
   private toggleSortDirection(index: number): void {
     // Toggle between 'asc' and 'desc'
-    this.sortFields[index].direction = 
-      this.sortFields[index].direction === 'asc' ? 'desc' : 'asc';
-    
+    this.sortFields[index].direction = this.sortFields[index].direction === 'asc' ? 'desc' : 'asc';
+
     // Update query
     this.updateQuery();
   }
@@ -1133,7 +1102,9 @@ export class QueryBuilderComponent extends LitElement {
               (agg, index) => html`
                 <div class="text-xs text-textDisabled monospace bg-bgWeaker">
                   [<span class="text-textStrong">${agg.function}(${agg.field})</span>
-                  <span class="cursor-pointer" data-tippy-content="Remove aggregation" @pointerdown="${() => this.removeAggregation(index)}">✕</span>]
+                  <span class="cursor-pointer" data-tippy-content="Remove aggregation" @pointerdown="${() => this.removeAggregation(index)}"
+                    >✕</span
+                  >]
                 </div>
               `
             )}
@@ -1161,261 +1132,314 @@ export class QueryBuilderComponent extends LitElement {
                   class="input input-bordered input-md w-full px-3 py-2 focus:outline-none"
                   placeholder="Visualization type..."
                   .value="${this.visualizationType}"
-                  @input="${(e: Event) => this.visualizationType = (e.target as HTMLInputElement).value}"
+                  @input="${(e: Event) => (this.visualizationType = (e.target as HTMLInputElement).value)}"
                   autofocus
                 />
               </div>
-              
+
               <!-- Two-column layout -->
               <div class="flex mb-3 border rounded">
                 <!-- Aggregations column -->
                 <div class="w-1/2 border-r">
                   <div class="p-1 bg-bgWeaker font-medium border-b monospace">Aggregation</div>
                   <div class="max-h-60 overflow-y-auto">
-                    ${this.aggFunctions.map((func) => html`
-                      <div 
-                        class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newAggFunction === func ? 'bg-fillHover font-medium' : ''}"
-                        @pointerdown="${() => this.handleAggFunctionClick(func)}"
-                      >
-                        ${this.newAggFunction === func ? '✓ ' : ''}${func}${func !== 'count' ? '(...)' : '(*)'}
-                      </div>
-                    `)}
+                    ${this.aggFunctions.map(
+                      (func) => html`
+                        <div
+                          class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newAggFunction === func
+                            ? 'bg-fillHover font-medium'
+                            : ''}"
+                          @pointerdown="${() => this.handleAggFunctionClick(func)}"
+                        >
+                          ${this.newAggFunction === func ? '✓ ' : ''}${func}${func !== 'count' ? '(...)' : '(*)'}
+                        </div>
+                      `
+                    )}
                   </div>
                 </div>
-                
+
                 <!-- Fields column -->
                 <div class="w-1/2">
                   <div class="p-1 bg-bgWeaker font-medium border-b monospace">Fields</div>
                   <div class="max-h-60 overflow-y-auto">
-                    ${this.showFieldsColumn && this.fieldsOptions.length > 0 ? 
-                      (this.filteredFields.length > 0 ? this.filteredFields : this.fieldsOptions).map((field) => html`
-                        <div 
-                          class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newAggField === field.value ? 'bg-fillHover font-medium' : ''}"
-                          @pointerdown="${() => { 
-                            this.newAggField = field.value; 
-                            this.completeAggregation();
-                          }}"
-                        >
-                          ${field.value} 
-                          <span class="float-right text-xs text-textDisabled p-1 rounded-sm bg-bgWeaker">
-                            ${this.getFieldIcon(field.type, field.value)}
-                          </span>
-                        </div>
-                      `)
-                      : html`<div class="p-2 text-center text-textDisabled">Select an aggregation first</div>`
+                    ${
+                      this.showFieldsColumn && this.fieldsOptions.length > 0
+                        ? (this.filteredFields.length > 0 ? this.filteredFields : this.fieldsOptions).map(
+                            (field) => html`
+                              <div
+                                class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newAggField === field.value
+                                  ? 'bg-fillHover font-medium'
+                                  : ''}"
+                                @pointerdown="${() => {
+                                  this.newAggField = field.value;
+                                  this.completeAggregation();
+                                }}"
+                              >
+                                ${field.value}
+                                <span class="float-right text-xs text-textDisabled p-1 rounded-sm bg-bgWeaker">
+                                  ${this.getFieldIcon(field.type, field.value)}
+                                </span>
+                              </div>
+                            `
+                          )
+                        : html`<div class="p-2 text-center text-textDisabled">Select an aggregation first</div>`
                     }
                   </div>
                 </div>
               </div>
-              
+
               <!-- No action buttons -->
             </div>
           </div>
         </div>
 
         <!-- GROUP BY Section -->
-        ${this.aggregations.length > 0 ? html`
-        <div class="flex items-center ml-4 gap-1">
-          <span class="text-xs text-textDisabled monospace" data-tippy-content="Group results by field value">by:</span>
-          <div class="flex flex-wrap gap-1">
-            ${this.groupByFields.map(
-              (field, index) => {
-                // Determine if this is a binned field
-                const isBinned = field.includes('bin(') || field.includes('bin_auto(');
-                // For display purposes, ensure we show the full function with parameter
-                return html`
-                  <div class="text-xs text-textDisabled monospace bg-bgWeaker">
-                    [<span class="text-textStrong">${field}</span>
-                    <span class="cursor-pointer" data-tippy-content="Remove group by field" @pointerdown="${() => this.removeGroupByField(index)}">✕</span>]
-                  </div>
-                `;
-              }
-            )}
-            <button
-              type="button"
-              class="text-xs text-textDisabled monospace bg-bgWeaker rounded hover:bg-fillHover cursor-pointer"
-              popovertarget="group-by-popover"
-              style="anchor-name: --group-by-anchor"
-              data-tippy-content="Add a group by field"
-            >
-              [+]
-            </button>
-
-            <!-- GROUP BY Dropdown (Now styled like AGG dropdown) -->
-            <div
-              popover
-              id="group-by-popover"
-              class="dropdown menu p-2 shadow-md bg-bgRaised rounded-box w-[500px] z-50 border border-strokeWeak"
-              style="position: absolute; position-anchor: --group-by-anchor"
-            >
-              <!-- Compact Binning Options at the Very Top -->
-              <div class="flex items-center mb-3 p-2 border rounded bg-bgWeaker whitespace-nowrap">
-                <label class="flex items-center cursor-pointer mr-4">
-                  <input 
-                    type="radio" 
-                    name="bin-type" 
-                    class="radio radio-sm mr-2" 
-                    ?checked="${!this.enableBinning}"
-                    @change="${() => {
-                      this.enableBinning = false;
-                      this.requestUpdate();
-                    }}"
-                  />
-                  <span class="label-text">no bin</span>
-                </label>
-                
-                <label class="flex items-center cursor-pointer mr-4">
-                  <input 
-                    type="radio" 
-                    name="bin-type" 
-                    class="radio radio-sm mr-2" 
-                    ?checked="${this.enableBinning && !this.enableAutoBin}"
-                    @change="${() => {
-                      this.enableBinning = true;
-                      this.enableAutoBin = false;
-                      this.requestUpdate();
-                    }}"
-                  />
-                  <span class="label-text inline-flex items-center">bin(_,
-                    <select
-                      class="select select-xs bg-bgWeaker border-none p-0 mx-1 focus:outline-none"
-                      @change="${(e: Event) => {
-                        this.binValue = parseInt((e.target as HTMLSelectElement).value) || 5;
-                      }}"
+        ${
+          this.aggregations.length > 0
+            ? html`
+                <div class="flex items-center ml-4 gap-1">
+                  <span class="text-xs text-textDisabled monospace" data-tippy-content="Group results by field value">by:</span>
+                  <div class="flex flex-wrap gap-1">
+                    ${this.groupByFields.map((field, index) => {
+                      // Determine if this is a binned field
+                      const isBinned = field.includes('bin(') || field.includes('bin_auto(');
+                      // For display purposes, ensure we show the full function with parameter
+                      return html`
+                        <div class="text-xs text-textDisabled monospace bg-bgWeaker">
+                          [<span class="text-textStrong">${field}</span>
+                          <span
+                            class="cursor-pointer"
+                            data-tippy-content="Remove group by field"
+                            @pointerdown="${() => this.removeGroupByField(index)}"
+                            >✕</span
+                          >]
+                        </div>
+                      `;
+                    })}
+                    <button
+                      type="button"
+                      class="text-xs text-textDisabled monospace bg-bgWeaker rounded hover:bg-fillHover cursor-pointer"
+                      popovertarget="group-by-popover"
+                      style="anchor-name: --group-by-anchor"
+                      data-tippy-content="Add a group by field"
                     >
-                      <option value="5">5</option>
-                      <option value="10">10</option>
-                      <option value="20">20</option>
-                      <option value="30">30</option>
-                      <option value="60">1h</option>
-                      <option value="120">2h</option>
-                      <option value="360">6h</option>
-                      <option value="720">12h</option>
-                      <option value="1440">1d</option>
-                    </select>)</span>
-                </label>
-                
-                <label class="flex items-center cursor-pointer">
-                  <input 
-                    type="radio" 
-                    name="bin-type" 
-                    class="radio radio-sm mr-2" 
-                    ?checked="${this.enableBinning && this.enableAutoBin}"
-                    @change="${() => {
-                      this.enableBinning = true;
-                      this.enableAutoBin = true;
-                      this.requestUpdate();
-                    }}"
-                  />
-                  <span class="label-text">bin_auto(_)</span>
-                </label>
-              </div>
-              
-              <div class="mb-3">
-                <input
-                  type="text"
-                  class="input input-bordered input-md w-full px-3 py-2 focus:outline-none"
-                  placeholder="Search fields..."
-                  .value="${this.groupBySearchTerm}"
-                  @input="${(e: Event) => this.filterGroupByOptions(e)}"
-                  autofocus
-                />
-              </div>
-              
-              <!-- Fields List -->
-              <div class="border rounded">
-                <div class="p-1 bg-bgWeaker font-medium border-b monospace">Fields</div>
-                <div class="max-h-60 overflow-y-auto">
-                  ${this.fieldsOptions.length > 0 ? 
-                    ((this.groupBySearchTerm && this.filteredGroupByFields.length > 0) ? this.filteredGroupByFields : this.fieldsOptions).map((field) => html`
-                      <div 
-                        class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newGroupByField === field.value ? 'bg-fillHover font-medium' : ''}"
-                        @pointerdown="${() => { 
-                          this.newGroupByField = field.value; 
-                          this.addGroupByField();
-                        }}"
-                      >
-                        ${field.value} 
-                        <span class="float-right text-xs text-textDisabled p-1 rounded-sm bg-bgWeaker">
-                          ${this.getFieldIcon(field.type, field.value)}
-                        </span>
+                      [+]
+                    </button>
+
+                    <!-- GROUP BY Dropdown (Now styled like AGG dropdown) -->
+                    <div
+                      popover
+                      id="group-by-popover"
+                      class="dropdown menu p-2 shadow-md bg-bgRaised rounded-box w-[500px] z-50 border border-strokeWeak"
+                      style="position: absolute; position-anchor: --group-by-anchor"
+                    >
+                      <!-- Compact Binning Options at the Very Top -->
+                      <div class="flex items-center mb-3 p-2 border rounded bg-bgWeaker whitespace-nowrap">
+                        <label class="flex items-center cursor-pointer mr-4">
+                          <input
+                            type="radio"
+                            name="bin-type"
+                            class="radio radio-sm mr-2"
+                            ?checked="${!this.enableBinning}"
+                            @change="${() => {
+                              this.enableBinning = false;
+                              this.requestUpdate();
+                            }}"
+                          />
+                          <span class="label-text">no bin</span>
+                        </label>
+
+                        <label class="flex items-center cursor-pointer mr-4">
+                          <input
+                            type="radio"
+                            name="bin-type"
+                            class="radio radio-sm mr-2"
+                            ?checked="${this.enableBinning && !this.enableAutoBin}"
+                            @change="${() => {
+                              this.enableBinning = true;
+                              this.enableAutoBin = false;
+                              this.requestUpdate();
+                            }}"
+                          />
+                          <span class="label-text inline-flex items-center"
+                            >bin(_,
+                            <select
+                              class="select select-xs bg-bgWeaker border-none p-0 mx-1 focus:outline-none"
+                              @change="${(e: Event) => {
+                                this.binValue = parseInt((e.target as HTMLSelectElement).value) || 5;
+                              }}"
+                            >
+                              <option value="5">5</option>
+                              <option value="10">10</option>
+                              <option value="20">20</option>
+                              <option value="30">30</option>
+                              <option value="60">1h</option>
+                              <option value="120">2h</option>
+                              <option value="360">6h</option>
+                              <option value="720">12h</option>
+                              <option value="1440">1d</option></select
+                            >)</span
+                          >
+                        </label>
+
+                        <label class="flex items-center cursor-pointer">
+                          <input
+                            type="radio"
+                            name="bin-type"
+                            class="radio radio-sm mr-2"
+                            ?checked="${this.enableBinning && this.enableAutoBin}"
+                            @change="${() => {
+                              this.enableBinning = true;
+                              this.enableAutoBin = true;
+                              this.requestUpdate();
+                            }}"
+                          />
+                          <span class="label-text">bin_auto(_)</span>
+                        </label>
                       </div>
-                    `)
-                    : html`<div class="p-2 text-center text-textDisabled">No fields available</div>`
-                  }
+
+                      <div class="mb-3">
+                        <input
+                          type="text"
+                          class="input input-bordered input-md w-full px-3 py-2 focus:outline-none"
+                          placeholder="Search fields..."
+                          .value="${this.groupBySearchTerm}"
+                          @input="${(e: Event) => this.filterGroupByOptions(e)}"
+                          autofocus
+                        />
+                      </div>
+
+                      <!-- Fields List -->
+                      <div class="border rounded">
+                        <div class="p-1 bg-bgWeaker font-medium border-b monospace">Fields</div>
+                        <div class="max-h-60 overflow-y-auto">
+                          ${this.fieldsOptions.length > 0
+                            ? (this.groupBySearchTerm && this.filteredGroupByFields.length > 0
+                                ? this.filteredGroupByFields
+                                : this.fieldsOptions
+                              ).map(
+                                (field) => html`
+                                  <div
+                                    class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newGroupByField === field.value
+                                      ? 'bg-fillHover font-medium'
+                                      : ''}"
+                                    @pointerdown="${() => {
+                                      this.newGroupByField = field.value;
+                                      this.addGroupByField();
+                                    }}"
+                                  >
+                                    ${field.value}
+                                    <span class="float-right text-xs text-textDisabled p-1 rounded-sm bg-bgWeaker">
+                                      ${this.getFieldIcon(field.type, field.value)}
+                                    </span>
+                                  </div>
+                                `
+                              )
+                            : html`<div class="p-2 text-center text-textDisabled">No fields available</div>`}
+                        </div>
+                      </div>
+
+                      <!-- Add Group button is now removed as we're using direct field selection -->
+                    </div>
+                  </div>
                 </div>
-              </div>
-              
-              <!-- Add Group button is now removed as we're using direct field selection -->
-            </div>
-          </div>
-        </div>
-        ` : ''}
+              `
+            : ''
+        }
 
         <!-- Sort Section (if sort fields exist) -->
-        ${this.sortFields.length > 0 ? html`
-          <div class="flex items-center ml-4 gap-1">
-            <div class="flex flex-wrap gap-1">
-              ${this.sortFields.map(
-                (sort, index) => html`
-                  <div class="text-xs text-textDisabled monospace bg-bgWeaker">
-                    [<span class="text-textDisabled">sort:</span> <span class="text-textStrong">${sort.field} 
-                    <span class="cursor-pointer hover:bg-fillHover px-1" 
-                      data-tippy-content="Toggle sort direction" 
-                      @pointerdown="${() => {
-                        // Toggle direction
-                        this.sortFields[index].direction = this.sortFields[index].direction === 'asc' ? 'desc' : 'asc';
-                        this.updateQuery();
-                        this.requestUpdate();
-                      }}">${sort.direction}</span></span>
-                    <span class="cursor-pointer" data-tippy-content="Remove sort field" @pointerdown="${() => this.removeSortField(index)}">✕</span>]
+        ${
+          this.sortFields.length > 0
+            ? html`
+                <div class="flex items-center ml-4 gap-1">
+                  <div class="flex flex-wrap gap-1">
+                    ${this.sortFields.map(
+                      (sort, index) => html`
+                        <div class="text-xs text-textDisabled monospace bg-bgWeaker">
+                          [<span class="text-textDisabled">sort:</span>
+                          <span class="text-textStrong"
+                            >${sort.field}
+                            <span
+                              class="cursor-pointer hover:bg-fillHover px-1"
+                              data-tippy-content="Toggle sort direction"
+                              @pointerdown="${() => {
+                                // Toggle direction
+                                this.sortFields[index].direction = this.sortFields[index].direction === 'asc' ? 'desc' : 'asc';
+                                this.updateQuery();
+                                this.requestUpdate();
+                              }}"
+                              >${sort.direction}</span
+                            ></span
+                          >
+                          <span
+                            class="cursor-pointer"
+                            data-tippy-content="Remove sort field"
+                            @pointerdown="${() => this.removeSortField(index)}"
+                            >✕</span
+                          >]
+                        </div>
+                      `
+                    )}
                   </div>
-                `
-              )}
-            </div>
-          </div>
-        ` : ''}
+                </div>
+              `
+            : ''
+        }
 
         <!-- Limit Section (if take is set) -->
-        ${this.limitValue !== null ? html`
-          <div class="flex items-center ml-4 gap-1">
-            <div class="flex flex-wrap gap-1">
-              <div class="text-xs text-textDisabled monospace bg-bgWeaker">
-                [<span class="text-textDisabled">limit:</span> <input
-                  type="number"
-                  class="w-16 bg-transparent border-none focus:outline-none text-textStrong"
-                  min="1"
-                  max="10000"
-                  .value="${this.limitValue.toString()}"
-                  @change="${(e: Event) => {
-                    const value = parseInt((e.target as HTMLInputElement).value);
-                    this.limitValue = isNaN(value) ? null : value;
-                    this.updateLimit();
-                  }}"
-                />
-                <span class="cursor-pointer" data-tippy-content="Remove limit" @pointerdown="${() => {
-                  this.limitValue = null; // Remove limit
-                  this.updateLimit();
-                }}">✕</span>]
-              </div>
-            </div>
-          </div>
-        ` : ''}
+        ${
+          this.limitValue !== null
+            ? html`
+                <div class="flex items-center ml-4 gap-1">
+                  <div class="flex flex-wrap gap-1">
+                    <div class="text-xs text-textDisabled monospace bg-bgWeaker">
+                      [<span class="text-textDisabled">limit:</span>
+                      <input
+                        type="number"
+                        class="w-16 bg-transparent border-none focus:outline-none text-textStrong"
+                        min="1"
+                        max="10000"
+                        .value="${this.limitValue.toString()}"
+                        @change="${(e: Event) => {
+                          const value = parseInt((e.target as HTMLInputElement).value);
+                          this.limitValue = isNaN(value) ? null : value;
+                          this.updateLimit();
+                        }}"
+                      />
+                      <span
+                        class="cursor-pointer"
+                        data-tippy-content="Remove limit"
+                        @pointerdown="${() => {
+                          this.limitValue = null; // Remove limit
+                          this.updateLimit();
+                        }}"
+                        >✕</span
+                      >]
+                    </div>
+                  </div>
+                </div>
+              `
+            : ''
+        }
 
         <!-- More Options Button - Hide when all options are already set -->
-        ${(this.sortFields.length === 0 || this.limitValue === null) ? html`
-        <div class="ml-auto">
-          <button
-            type="button"
-            class="text-xs text-textDisabled monospace bg-bgWeaker rounded hover:bg-fillHover cursor-pointer"
-            popovertarget="more-settings-popover"
-            style="anchor-name: --more-settings-anchor"
-            data-tippy-content="Additional options: sorting and limits"
-          >
-            [more ▾]
-          </button>
-        </div>
-        ` : ''}
+        ${
+          this.sortFields.length === 0 || this.limitValue === null
+            ? html`
+                <div class="ml-auto">
+                  <button
+                    type="button"
+                    class="text-xs text-textDisabled monospace bg-bgWeaker rounded hover:bg-fillHover cursor-pointer"
+                    popovertarget="more-settings-popover"
+                    style="anchor-name: --more-settings-anchor"
+                    data-tippy-content="Additional options: sorting and limits"
+                  >
+                    [more ▾]
+                  </button>
+                </div>
+              `
+            : ''
+        }
 
           <!-- More Settings Dropdown -->
           <div
@@ -1427,41 +1451,46 @@ export class QueryBuilderComponent extends LitElement {
             <!-- Main Menu Options -->
             <div id="more-main-menu">
               <!-- Sort By Option - only show if no sort fields exist -->
-              ${this.sortFields.length === 0 ? html`
-                <div 
-                  class="p-2 hover:bg-fillHover cursor-pointer monospace flex items-center justify-between"
-                  id="sort-by-button"
-                >
-                  <span>Sort by...</span>
-                  <span class="text-xs">▶</span>
-                </div>
-              ` : ''}
+              ${
+                this.sortFields.length === 0
+                  ? html`
+                      <div class="p-2 hover:bg-fillHover cursor-pointer monospace flex items-center justify-between" id="sort-by-button">
+                        <span>Sort by...</span>
+                        <span class="text-xs">▶</span>
+                      </div>
+                    `
+                  : ''
+              }
 
               <!-- Take Option - only show if take is not set -->
-              ${this.limitValue === null ? html`
-                <div 
-                  class="p-2 hover:bg-fillHover cursor-pointer monospace"
-                  @pointerdown="${() => {
-                    // Add take with a reasonable default value
-                    this.limitValue = 1000;
-                    this.updateLimit();
-                    // Close popover
-                    const popover = document.getElementById('more-settings-popover');
-                    if (popover) {
-                      (popover as any).hidePopover?.();
-                    }
-                  }}"
-                >
-                  Limit results...
-                </div>
-              ` : ''}
-              
+              ${
+                this.limitValue === null
+                  ? html`
+                      <div
+                        class="p-2 hover:bg-fillHover cursor-pointer monospace"
+                        @pointerdown="${() => {
+                          // Add take with a reasonable default value
+                          this.limitValue = 1000;
+                          this.updateLimit();
+                          // Close popover
+                          const popover = document.getElementById('more-settings-popover');
+                          if (popover) {
+                            (popover as any).hidePopover?.();
+                          }
+                        }}"
+                      >
+                        Limit results...
+                      </div>
+                    `
+                  : ''
+              }
+
               <!-- Show a message if all options are set -->
-              ${this.sortFields.length > 0 && this.limitValue !== null ? html`
-                <div class="p-2 text-center text-textDisabled monospace">
-                  All options are set
-                </div>
-              ` : ''}
+              ${
+                this.sortFields.length > 0 && this.limitValue !== null
+                  ? html` <div class="p-2 text-center text-textDisabled monospace">All options are set</div> `
+                  : ''
+              }
             </div>
           </div>
 
@@ -1483,46 +1512,51 @@ export class QueryBuilderComponent extends LitElement {
                 autofocus
               />
             </div>
-            
+
             <!-- Fields List -->
             <div class="border rounded">
               <div class="p-1 bg-bgWeaker font-medium border-b monospace">Fields</div>
               <div class="max-h-60 overflow-y-auto">
-                ${this.fieldsOptions.length > 0 ? 
-                  ((this.aggSearchTerm && this.filteredFields.length > 0) ? this.filteredFields : this.fieldsOptions).map((field) => html`
-                    <div 
-                      class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newSortField === field.value ? 'bg-fillHover font-medium' : ''}"
-                      @pointerdown="${(e: Event) => { 
-                        e.stopPropagation(); // Stop event propagation
-                        
-                        this.newSortField = field.value; 
-                        // Always use asc as default direction
-                        this.newSortDirection = 'asc';
-                        
-                        // Set field value first, then add sort field, and only close popovers after the operation is complete
-                        setTimeout(() => {
-                          this.addSortField();
-                          // Only close popovers after the sort field has been added
-                          setTimeout(() => {
-                            const popover = document.getElementById('sort-by-popover');
-                            if (popover) {
-                              (popover as any).hidePopover?.();
-                            }
-                            const morePopover = document.getElementById('more-settings-popover');
-                            if (morePopover) {
-                              (morePopover as any).hidePopover?.();
-                            }
-                          }, 100);
-                        }, 0);
-                      }}"
-                    >
-                      ${field.value} 
-                      <span class="float-right text-xs text-textDisabled p-1 rounded-sm bg-bgWeaker">
-                        ${this.getFieldIcon(field.type, field.value)}
-                      </span>
-                    </div>
-                  `)
-                  : html`<div class="p-2 text-center text-textDisabled">No fields available</div>`
+                ${
+                  this.fieldsOptions.length > 0
+                    ? (this.aggSearchTerm && this.filteredFields.length > 0 ? this.filteredFields : this.fieldsOptions).map(
+                        (field) => html`
+                          <div
+                            class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newSortField === field.value
+                              ? 'bg-fillHover font-medium'
+                              : ''}"
+                            @pointerdown="${(e: Event) => {
+                              e.stopPropagation(); // Stop event propagation
+
+                              this.newSortField = field.value;
+                              // Always use asc as default direction
+                              this.newSortDirection = 'asc';
+
+                              // Set field value first, then add sort field, and only close popovers after the operation is complete
+                              setTimeout(() => {
+                                this.addSortField();
+                                // Only close popovers after the sort field has been added
+                                setTimeout(() => {
+                                  const popover = document.getElementById('sort-by-popover');
+                                  if (popover) {
+                                    (popover as any).hidePopover?.();
+                                  }
+                                  const morePopover = document.getElementById('more-settings-popover');
+                                  if (morePopover) {
+                                    (morePopover as any).hidePopover?.();
+                                  }
+                                }, 100);
+                              }, 0);
+                            }}"
+                          >
+                            ${field.value}
+                            <span class="float-right text-xs text-textDisabled p-1 rounded-sm bg-bgWeaker">
+                              ${this.getFieldIcon(field.type, field.value)}
+                            </span>
+                          </div>
+                        `
+                      )
+                    : html`<div class="p-2 text-center text-textDisabled">No fields available</div>`
                 }
               </div>
             </div>
