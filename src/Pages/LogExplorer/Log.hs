@@ -978,106 +978,114 @@ jsonTreeAuxillaryCode pid query = do
 -- | Render alert configuration form for creating log-based alerts
 alertConfigurationForm_ :: Projects.ProjectId -> Html ()
 alertConfigurationForm_ pid = do
-  div_ [class_ "bg-fillWeaker rounded-2xl p-4 mb-3 border border-strokeWeak hidden group-has-[#create-alert-toggle:checked]/pg:block shrink-0 group/alt"] do
+  div_ [class_ "bg-fillWeaker rounded-2xl mb-3 border border-strokeWeak hidden group-has-[#create-alert-toggle:checked]/pg:block shrink-0 group/alt"] do
     -- Header section (more compact)
-    div_ [class_ "flex items-center justify-between mb-3"] do
+    div_ [class_ "flex items-center justify-between px-4 py-2.5"] do
       div_ [class_ "flex items-center gap-2.5"] do
         div_ [class_ "w-8 h-8 rounded-full bg-fillBrand-weak flex items-center justify-center shrink-0"]
           $ faSprite_ "bell" "regular" "w-4 h-4 text-iconBrand"
         div_ [] do
           h3_ [class_ "text-base font-semibold text-textStrong"] "Create Alert"
           p_ [class_ "text-xs text-textWeak hidden sm:block"] "Monitor logs and get notified on thresholds"
-      button_
-        [ type_ "button"
-        , class_ "p-1 rounded-lg hover:bg-fillWeak transition-colors"
-        , [__|on click set #create-alert-toggle.checked to false|]
+      div_ [class_ "flex items-center gap-2"] do
+        -- Collapse/expand button
+        label_ [class_ "cursor-pointer p-1 rounded-lg hover:bg-fillWeak transition-colors peer", term "data-tippy-content" "Collapse/expand form"] do
+          input_ [type_ "checkbox", class_ "hidden peer", id_ "alert-form-collapsed"]
+          faSprite_ "chevron-down" "regular" "w-4 h-4 text-textWeak peer-checked:rotate-180 transition-transform"
+        -- Close button
+        button_
+          [ type_ "button"
+          , class_ "p-1 rounded-lg hover:bg-fillWeak transition-colors"
+          , [__|on click set #create-alert-toggle.checked to false|]
+          ]
+          $ faSprite_ "xmark" "regular" "w-4 h-4 text-textWeak"
+
+    -- Form content wrapper that can be collapsed
+    div_ [class_ "p-4 pt-3 group-has-[#alert-form-collapsed:checked]/alt:hidden"] do
+      form_
+        [ id_ "alert-form"
+        , hxPost_ $ "/p/" <> pid.toText <> "/alerts"
+        , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans'}"
+        , class_ "flex flex-col gap-3"
         ]
-        $ faSprite_ "xmark" "regular" "w-4 h-4 text-textWeak"
+        do
+          -- Alert name field (more compact)
+          fieldset_ [class_ "fieldset"] do
+            label_ [class_ "label text-xs font-medium text-textStrong mb-1"] "Alert name"
+            input_
+              [ type_ "text"
+              , name_ "title"
+              , placeholder_ "e.g. High error rate on checkout API"
+              , class_ "input input-sm w-full"
+              , required_ ""
+              ]
 
-    form_
-      [ id_ "alert-form"
-      , hxPost_ $ "/p/" <> pid.toText <> "/alerts"
-      , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans'}"
-      , class_ "flex flex-col gap-3"
-      ]
-      do
-        -- Alert name field (more compact)
-        fieldset_ [class_ "fieldset"] do
-          label_ [class_ "label text-xs font-medium text-textStrong mb-1"] "Alert name"
-          input_
-            [ type_ "text"
-            , name_ "title"
-            , placeholder_ "e.g. High error rate on checkout API"
-            , class_ "input input-sm w-full"
-            , required_ ""
-            ]
+          -- Monitor Schedule (collapsible)
+          div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
+            label_ [class_ "flex items-center justify-between p-3 cursor-pointer hover:bg-fillWeak transition-colors peer"] do
+              div_ [class_ "flex items-center gap-2"] do
+                faSprite_ "clock" "regular" "w-4 h-4 text-iconNeutral"
+                span_ [class_ "text-sm font-medium text-textStrong"] "Monitor Schedule"
+              input_ [type_ "checkbox", class_ "hidden peer", checked_]
+              faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral peer-checked:rotate-180 transition-transform"
 
-        -- Monitor Schedule (collapsible)
-        div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
-          label_ [class_ "flex items-center justify-between p-3 cursor-pointer hover:bg-fillWeak transition-colors peer"] do
-            div_ [class_ "flex items-center gap-2"] do
-              faSprite_ "clock" "regular" "w-4 h-4 text-iconNeutral"
-              span_ [class_ "text-sm font-medium text-textStrong"] "Monitor Schedule"
-            input_ [type_ "checkbox", class_ "hidden peer", checked_]
-            faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral peer-checked:rotate-180 transition-transform"
+            div_ [class_ "gap-3 p-3 pt-0 peer-has-[:checked]:flex hidden"] do
+              let timeOpts = [(1, "minute"), (2, "2 minutes"), (5, "5 minutes"), (10, "10 minutes"), (15, "15 minutes"), (30, "30 minutes"), (60, "hour"), (360, "6 hours"), (720, "12 hours"), (1440, "day")]
+                  mkOpt (m, l) = option_ [value_ (show m <> "m")] ("every " <> l)
 
-          div_ [class_ "gap-3 p-3 pt-0 peer-has-[:checked]:flex hidden"] do
-            let timeOpts = [(1, "minute"), (2, "2 minutes"), (5, "5 minutes"), (10, "10 minutes"), (15, "15 minutes"), (30, "30 minutes"), (60, "hour"), (360, "6 hours"), (720, "12 hours"), (1440, "day")]
-                mkOpt (m, l) = option_ [value_ (show m <> "m")] ("every " <> l)
+              -- Frequency
+              fieldset_ [class_ "fieldset flex-1"] do
+                label_ [class_ "label text-xs"] "Execute the query"
+                select_ [name_ "frequency", class_ "select select-sm"] $ forM_ timeOpts mkOpt
 
-            -- Frequency
-            fieldset_ [class_ "fieldset flex-1"] do
-              label_ [class_ "label text-xs"] "Execute the query"
-              select_ [name_ "frequency", class_ "select select-sm"] $ forM_ timeOpts mkOpt
+              -- Time window
+              fieldset_ [class_ "fieldset flex-1"] do
+                label_ [class_ "label text-xs"] "Include rows from"
+                select_ [name_ "timeWindow", class_ "select select-sm"] do
+                  forM_
+                    (zip timeOpts [False, False, True, False, False, False, False, False, False, False])
+                    \((m, l), sel) -> option_ ([value_ (show m <> "m")] ++ [selected_ "" | sel]) ("the last " <> l)
 
-            -- Time window
-            fieldset_ [class_ "fieldset flex-1"] do
-              label_ [class_ "label text-xs"] "Include rows from"
-              select_ [name_ "timeWindow", class_ "select select-sm"] do
-                forM_
-                  (zip timeOpts [False, False, True, False, False, False, False, False, False, False])
-                  \((m, l), sel) -> option_ ([value_ (show m <> "m")] ++ [selected_ "" | sel]) ("the last " <> l)
-
-            -- Condition type
-            fieldset_ [class_ "fieldset flex-1"] do
-              label_ [class_ "label text-xs"] "Notify me when"
-              select_
-                [ name_ "conditionType"
-                , class_ "select select-sm"
-                , id_ "condType"
-                , [__|on change 
+              -- Condition type
+              fieldset_ [class_ "fieldset flex-1"] do
+                label_ [class_ "label text-xs"] "Notify me when"
+                select_
+                  [ name_ "conditionType"
+                  , class_ "select select-sm"
+                  , id_ "condType"
+                  , [__|on change 
                      if my value == 'threshold_exceeded' then remove .hidden from #thresholds
                      else add .hidden to #thresholds end
                      |]
-                ]
-                do
-                  option_ [value_ "has_matches", selected_ ""] "the query has any results"
-                  option_ [value_ "matches_changed"] "the query's results change"
-                  option_ [value_ "threshold_exceeded"] "threshold is exceeded"
+                  ]
+                  do
+                    option_ [value_ "has_matches", selected_ ""] "the query has any results"
+                    option_ [value_ "matches_changed"] "the query's results change"
+                    option_ [value_ "threshold_exceeded"] "threshold is exceeded"
 
-        -- Thresholds (collapsible, only visible when threshold_exceeded is selected)
-        div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden hidden", id_ "thresholds"] do
-          label_ [class_ "flex items-center justify-between p-3 cursor-pointer hover:bg-fillWeak transition-colors peer"] do
-            div_ [class_ "flex items-center gap-2"] do
-              faSprite_ "chart-line" "regular" "w-4 h-4 text-iconNeutral"
-              span_ [class_ "text-sm font-medium text-textStrong"] "Thresholds"
-            input_ [type_ "checkbox", class_ "hidden peer", checked_]
-            faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral peer-checked:rotate-180 transition-transform"
+          -- Thresholds (collapsible, only visible when threshold_exceeded is selected)
+          div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden hidden", id_ "thresholds"] do
+            label_ [class_ "flex items-center justify-between p-3 cursor-pointer hover:bg-fillWeak transition-colors peer"] do
+              div_ [class_ "flex items-center gap-2"] do
+                faSprite_ "chart-line" "regular" "w-4 h-4 text-iconNeutral"
+                span_ [class_ "text-sm font-medium text-textStrong"] "Thresholds"
+              input_ [type_ "checkbox", class_ "hidden peer", checked_]
+              faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral peer-checked:rotate-180 transition-transform"
 
-          div_ [class_ "p-3 pt-0 peer-has-[:checked]:block hidden"] do
-            div_ [class_ "flex flex-row gap-3"] do
-              let thresholdInput name color label req = fieldset_ [class_ "fieldset flex-1"] do
-                    label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] do
-                      div_ [class_ $ "w-1.5 h-1.5 rounded-full " <> color] ""
-                      span_ [class_ "font-medium"] label
-                      when req $ span_ [class_ "text-textWeak"] "*"
-                    div_ [class_ "relative"] do
-                      input_
-                        $ [ type_ "number"
-                          , name_ name
-                          , id_ name
-                          , class_ "input input-sm pr-14"
-                          , [__|on input 
+            div_ [class_ "p-3 pt-0 peer-has-[:checked]:block hidden"] do
+              div_ [class_ "flex flex-row gap-3"] do
+                let thresholdInput name color label req = fieldset_ [class_ "fieldset flex-1"] do
+                      label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] do
+                        div_ [class_ $ "w-1.5 h-1.5 rounded-full " <> color] ""
+                        span_ [class_ "font-medium"] label
+                        when req $ span_ [class_ "text-textWeak"] "*"
+                      div_ [class_ "relative"] do
+                        input_
+                          $ [ type_ "number"
+                            , name_ name
+                            , id_ name
+                            , class_ "input input-sm pr-14"
+                            , [__|on input 
                                    set chart to #visualization-widget
                                    if chart exists
                                      call chart.applyThresholds({
@@ -1085,87 +1093,87 @@ alertConfigurationForm_ pid = do
                                        warning: parseFloat(#warningThreshold.value)
                                      })
                                    end|]
-                          ]
-                          ++ [required_ "" | req]
-                      span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
+                            ]
+                            ++ [required_ "" | req]
+                        span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
-              thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True
-              thresholdInput "warningThreshold" "bg-fillWarning-strong" "Warning threshold" False
+                thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True
+                thresholdInput "warningThreshold" "bg-fillWarning-strong" "Warning threshold" False
 
-              fieldset_ [class_ "fieldset flex-1"] do
-                label_ [class_ "label text-xs font-medium mb-1"] "Trigger condition"
-                select_ [name_ "direction", class_ "select select-sm"] do
-                  option_ [value_ "above", selected_ ""] "Above threshold"
-                  option_ [value_ "below"] "Below threshold"
+                fieldset_ [class_ "fieldset flex-1"] do
+                  label_ [class_ "label text-xs font-medium mb-1"] "Trigger condition"
+                  select_ [name_ "direction", class_ "select select-sm"] do
+                    option_ [value_ "above", selected_ ""] "Above threshold"
+                    option_ [value_ "below"] "Below threshold"
 
-            -- Info banner (more compact)
-            div_ [class_ "flex items-start gap-2 p-2.5 bg-bgAlternate rounded-lg mt-3"] do
-              faSprite_ "lightbulb" "regular" "w-3.5 h-3.5 text-iconBrand mt-0.5 shrink-0"
-              div_ [class_ "flex-1 text-xs"] do
-                p_ [class_ "text-textStrong font-medium"] "Preview thresholds on chart"
-                p_ [class_ "text-textWeak mt-0.5"] "Colored lines show threshold values"
+              -- Info banner (more compact)
+              div_ [class_ "flex items-start gap-2 p-2.5 bg-bgAlternate rounded-lg mt-3"] do
+                faSprite_ "lightbulb" "regular" "w-3.5 h-3.5 text-iconBrand mt-0.5 shrink-0"
+                div_ [class_ "flex-1 text-xs"] do
+                  p_ [class_ "text-textStrong font-medium"] "Preview thresholds on chart"
+                  p_ [class_ "text-textWeak mt-0.5"] "Colored lines show threshold values"
 
-        -- Notification settings (collapsible)
-        div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
-          label_ [class_ "flex items-center justify-between p-3 cursor-pointer hover:bg-fillWeak transition-colors peer"] do
-            div_ [class_ "flex items-center gap-2"] do
-              faSprite_ "envelope" "regular" "w-4 h-4 text-iconNeutral"
-              span_ [class_ "text-sm font-medium text-textStrong"] "Notification Settings"
-            input_ [type_ "checkbox", class_ "hidden peer"]
-            faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral peer-checked:rotate-180 transition-transform"
+          -- Notification settings (collapsible)
+          div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
+            label_ [class_ "flex items-center justify-between p-3 cursor-pointer hover:bg-fillWeak transition-colors peer"] do
+              div_ [class_ "flex items-center gap-2"] do
+                faSprite_ "envelope" "regular" "w-4 h-4 text-iconNeutral"
+                span_ [class_ "text-sm font-medium text-textStrong"] "Notification Settings"
+              input_ [type_ "checkbox", class_ "hidden peer"]
+              faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral peer-checked:rotate-180 transition-transform"
 
-          div_ [class_ "p-3 pt-0 peer-has-[:checked]:block hidden"] do
-            -- Severity and Subject row
-            div_ [class_ "flex items-center w-full gap-2 mb-3"] do
-              fieldset_ [class_ "fieldset"] do
-                label_ [class_ "label text-xs font-medium mb-1"] "Severity"
-                select_ [class_ "select select-sm w-28", name_ "severity"] do
-                  option_ [] "Info"
-                  option_ [selected_ ""] "Error"
-                  option_ [] "Warning"
-                  option_ [] "Critical"
+            div_ [class_ "p-3 pt-0 peer-has-[:checked]:block hidden"] do
+              -- Severity and Subject row
+              div_ [class_ "flex items-center w-full gap-2 mb-3"] do
+                fieldset_ [class_ "fieldset"] do
+                  label_ [class_ "label text-xs font-medium mb-1"] "Severity"
+                  select_ [class_ "select select-sm w-28", name_ "severity"] do
+                    option_ [] "Info"
+                    option_ [selected_ ""] "Error"
+                    option_ [] "Warning"
+                    option_ [] "Critical"
 
-              fieldset_ [class_ "fieldset w-full"] do
-                label_ [class_ "label text-xs font-medium mb-1"] "Subject"
-                input_
-                  [ placeholder_ "e.g. Alert triggered for high error rate"
-                  , class_ "input input-sm w-full"
-                  , name_ "subject"
-                  , value_ "Alert triggered"
+                fieldset_ [class_ "fieldset w-full"] do
+                  label_ [class_ "label text-xs font-medium mb-1"] "Subject"
+                  input_
+                    [ placeholder_ "e.g. Alert triggered for high error rate"
+                    , class_ "input input-sm w-full"
+                    , name_ "subject"
+                    , value_ "Alert triggered"
+                    ]
+
+              -- Message field
+              fieldset_ [class_ "fieldset w-full mb-3"] do
+                label_ [class_ "label text-xs font-medium mb-1"] "Message"
+                textarea_
+                  [ placeholder_ "Alert message details"
+                  , class_ "textarea textarea-sm p-2 rounded-lg w-full"
+                  , name_ "message"
+                  , rows_ "3"
                   ]
+                  "The alert threshold has been exceeded. Check the APItoolkit dashboard for details."
 
-            -- Message field
-            fieldset_ [class_ "fieldset w-full mb-3"] do
-              label_ [class_ "label text-xs font-medium mb-1"] "Message"
-              textarea_
-                [ placeholder_ "Alert message details"
-                , class_ "textarea textarea-sm p-2 rounded-lg w-full"
-                , name_ "message"
-                , rows_ "3"
-                ]
-                "The alert threshold has been exceeded. Check the APItoolkit dashboard for details."
+              -- Recipients checkbox
+              div_ [class_ "flex items-center gap-2"] do
+                label_ [class_ "label cursor-pointer flex items-center gap-2"] do
+                  input_ [type_ "checkbox", class_ "checkbox checkbox-xs", name_ "recipientEmailAll", value_ "true", checked_]
+                  span_ [class_ "text-xs"] "Send to all team members"
 
-            -- Recipients checkbox
-            div_ [class_ "flex items-center gap-2"] do
-              label_ [class_ "label cursor-pointer flex items-center gap-2"] do
-                input_ [type_ "checkbox", class_ "checkbox checkbox-xs", name_ "recipientEmailAll", value_ "true", checked_]
-                span_ [class_ "text-xs"] "Send to all team members"
+                span_ [class_ "tooltip", term "data-tip" "Configure specific recipients in alert settings after creation"]
+                  $ faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-iconNeutral"
 
-              span_ [class_ "tooltip", term "data-tip" "Configure specific recipients in alert settings after creation"]
-                $ faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-iconNeutral"
-
-        -- Action buttons (more compact)
-        div_ [class_ "flex items-center justify-end gap-2 pt-1"] do
-          button_
-            [ type_ "button"
-            , class_ "btn btn-outline btn-xs"
-            , [__|on click set #create-alert-toggle.checked to false|]
-            ]
-            "Cancel"
-          button_
-            [ type_ "submit"
-            , class_ "btn btn-primary btn-xs"
-            ]
-            do
-              faSprite_ "plus" "regular" "w-3.5 h-3.5"
-              "Create Alert"
+          -- Action buttons (more compact)
+          div_ [class_ "flex items-center justify-end gap-2 pt-1"] do
+            button_
+              [ type_ "button"
+              , class_ "btn btn-outline btn-xs"
+              , [__|on click set #create-alert-toggle.checked to false|]
+              ]
+              "Cancel"
+            button_
+              [ type_ "submit"
+              , class_ "btn btn-primary btn-xs"
+              ]
+              do
+                faSprite_ "plus" "regular" "w-3.5 h-3.5"
+                "Create Alert"
