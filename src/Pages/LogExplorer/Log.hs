@@ -1119,10 +1119,41 @@ alertConfigurationForm_ pid = do
             div_ [class_ "flex items-center gap-2"] do
               faSprite_ "envelope" "regular" "w-4 h-4 text-iconNeutral"
               span_ [class_ "text-sm font-medium text-textStrong"] "Notification Settings"
-            input_ [type_ "checkbox", class_ "hidden peer", checked_]
+            input_ [type_ "checkbox", class_ "hidden peer"]
             faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral peer-checked:rotate-180 transition-transform"
 
           div_ [class_ "p-3 pt-0 peer-has-[:checked]:block hidden"] do
+            -- Severity and Subject row
+            div_ [class_ "flex items-center w-full gap-2 mb-3"] do
+              fieldset_ [class_ "fieldset"] do
+                label_ [class_ "label text-xs font-medium mb-1"] "Severity"
+                select_ [class_ "select select-sm w-28", name_ "severity"] do
+                  option_ [] "Info"
+                  option_ [selected_ ""] "Error"
+                  option_ [] "Warning"
+                  option_ [] "Critical"
+
+              fieldset_ [class_ "fieldset w-full"] do
+                label_ [class_ "label text-xs font-medium mb-1"] "Subject"
+                input_
+                  [ placeholder_ "e.g. Alert triggered for high error rate"
+                  , class_ "input input-sm w-full"
+                  , name_ "subject"
+                  , value_ "Alert triggered"
+                  ]
+
+            -- Message field
+            fieldset_ [class_ "fieldset w-full mb-3"] do
+              label_ [class_ "label text-xs font-medium mb-1"] "Message"
+              textarea_
+                [ placeholder_ "Alert message details"
+                , class_ "textarea textarea-sm p-2 rounded-lg w-full"
+                , name_ "message"
+                , rows_ "3"
+                ]
+                "The alert threshold has been exceeded. Check the APItoolkit dashboard for details."
+
+            -- Recipients checkbox
             div_ [class_ "flex items-center gap-2"] do
               label_ [class_ "label cursor-pointer flex items-center gap-2"] do
                 input_ [type_ "checkbox", class_ "checkbox checkbox-xs", name_ "recipientEmailAll", value_ "true", checked_]
@@ -1133,12 +1164,6 @@ alertConfigurationForm_ pid = do
 
         -- Action buttons (more compact)
         div_ [class_ "flex items-center justify-end gap-2 pt-1"] do
-          -- Hidden fields
-          div_ [class_ "hidden"] do
-            input_ [type_ "hidden", name_ "severity", value_ "Error"]
-            input_ [type_ "hidden", name_ "subject", value_ "Alert triggered"]
-            input_ [type_ "hidden", name_ "message", value_ "The alert threshold has been exceeded. Check the APItoolkit dashboard for details."]
-
           button_
             [ type_ "button"
             , class_ "btn btn-outline btn-xs"
