@@ -4,6 +4,7 @@ module Pages.Monitors.Alerts (
   alertSingleToggleActiveH,
   alertListGetH,
   alertUpsertPostH,
+  alertOverviewGetH,
   AlertUpsertForm (..),
   Alert (..),
 )
@@ -23,10 +24,22 @@ import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions qualified as Sessions
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.Components (statBox_)
+import Pages.Monitors.Testing (statusBadge_)
+import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_)
+import Pkg.Components.Widget (Widget (..))
+import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
 import Relude
 import System.Types
+import Text.Time.Pretty (prettyTimeAuto)
+import Utils (checkFreeTierExceeded, faSprite_)
 import Web.FormUrlEncoded (FromForm)
+import Data.Default (def)
+import Fmt.Internal.Core (fmt)
+import Fmt.Internal.Numeric (commaizeF)
 
 
 data AlertUpsertForm = AlertUpsertForm
@@ -138,12 +151,15 @@ data Alert
   = AlertListGet (V.Vector Monitors.QueryMonitor)
   | AlertSingle Projects.ProjectId (Maybe Monitors.QueryMonitor)
   | AlertNoContent Text
+  | AlertRedirect Text
 
 
 instance ToHtml Alert where
   toHtml (AlertListGet monitors) = toHtml $ queryMonitors_ monitors
   toHtml (AlertSingle pid monitor) = toHtml $ alertSingleComp pid monitor
   toHtml (AlertNoContent msg) = toHtml msg
+  toHtml (AlertRedirect url) = do
+    script_ $ "window.location.href = '" <> url <> "';"
   toHtmlRaw = toHtml
 
 
@@ -194,3 +210,15 @@ end
             , hxPost_ $ "/p/" <> monitor.projectId.toText <> "/alerts/" <> monitor.id.toText <> "/toggle_active"
             ]
             if isJust monitor.deactivatedAt then "reactivate" else "deactivate"
+
+
+-- | Alert overview page handler - redirects to unified monitor overview
+alertOverviewGetH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders Alert)
+alertOverviewGetH pid alertId = do
+  -- Redirect to the unified monitor overview page
+  addRespHeaders $ AlertRedirect $ "/p/" <> pid.toText <> "/monitors/" <> alertId.toText <> "/overview"
+
+
+-- Removed old alert overview page components as they are now handled in the unified Testing module
+
+

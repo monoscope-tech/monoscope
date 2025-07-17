@@ -1086,9 +1086,9 @@ alertConfigurationForm_ pid = do
             div_ [class_ "p-3 pt-0 peer-has-[:checked]:block hidden"] do
               div_ [class_ "flex flex-row gap-3"] do
                 let thresholdInput name color label req = fieldset_ [class_ "fieldset flex-1"] do
-                      label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] do
-                        div_ [class_ $ "w-1.5 h-1.5 rounded-full " <> color] ""
-                        span_ [class_ "font-medium"] label
+                      _ <- label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] do
+                        _ <- div_ [class_ $ "w-1.5 h-1.5 rounded-full " <> color] ""
+                        _ <- span_ [class_ "font-medium"] label
                         when req $ span_ [class_ "text-textWeak"] "*"
                       div_ [class_ "relative"] do
                         input_
