@@ -4,11 +4,19 @@
 
 ## Advanced Monitoring & Observability Platform
 
+
 [![Haskell](https://img.shields.io/badge/Built%20with-Haskell-5e5086?logo=haskell)](https://www.haskell.org/) [![S3 Compatible](https://img.shields.io/badge/Storage-S3%20Compatible-EC912E?logo=amazons3)](https://aws.amazon.com/s3/) [![LLM Powered](https://img.shields.io/badge/AI-LLM%20Anomaly%20Detection-412991)](https://github.com/apitoolkit/apitoolkit-server)
+
+<img width="2732" height="2048" alt="app apitoolkit io_p_00000000-0000-0000-0000-000000000000_log_explorer(ipad but pc) (1)" src="https://github.com/user-attachments/assets/6175c23b-f3ac-450a-9ae3-4b86371f4f54" />
+
 
 [Monoscope](https://github.com/apitoolkit/apitoolkit-server) is a powerful monitoring and observability platform that leverages LLMs to intelligently identify anomalies in your systems. With efficient data storage to S3-compatible buckets and real-time analytics powered by our custom timefusion storage engine, Monoscope provides deep insights into your infrastructure and applications.
 
 </div>
+
+
+<img width="2732" height="2048" alt="app apitoolkit io_p_00000000-0000-0000-0000-000000000000_log_explorer(ipad but pc)" src="https://github.com/user-attachments/assets/baf78e6f-2b75-4b6f-be56-94a0b3da9f31" />
+<img width="3034" height="2274" alt="app apitoolkit io_p_00000000-0000-0000-0000-000000000000_dashboards_b6b33e15-100b-4c3d-8764-a7b60d5cfd87_(ipad but pc)" src="https://github.com/user-attachments/assets/3dae136a-e627-4278-91a1-81c5af5f8cd6" />
 
 ---
 
