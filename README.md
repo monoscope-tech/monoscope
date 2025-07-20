@@ -4,8 +4,7 @@
 
 ### Open-source monitoring and observability platform that understands your systems
 
-**Monoscope uses AI to automatically detect anomalies in your logs, metrics, and traces — no configuration required.**  
-**Get instant insights with natural language queries and reduce alert fatigue by 90%.**
+Monoscope lets you ingest and explore your logs, traces and metrics in S3 buckets. Query in natural language via LLMs. Monoscope also let's you create AI agents that run at an interval to automatically detect anomalies in your logs, metrics, and traces. The most important actions and logs and insight are sent as reports to your email every day or week.
 
 [![GitHub Release](https://img.shields.io/github/v/release/monoscope-tech/monoscope)](https://github.com/monoscope-tech/monoscope/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -38,7 +37,8 @@
 
 Monoscope is an open-source observability platform that uses artificial intelligence to understand and monitor your systems automatically. Unlike traditional monitoring tools that require extensive configuration and generate overwhelming alerts, Monoscope learns your system's normal behavior and only alerts you when something is genuinely wrong.
 
-### Key Capabilities:
+### Key Capabilities
+
 - **Universal Data Ingestion**: Native support for OpenTelemetry means compatibility with 750+ integrations out of the box
 - **AI-Powered Understanding**: Our LLM engine understands context, not just thresholds
 - **Natural Language Interface**: Query your data in plain English
@@ -63,12 +63,13 @@ Visit `http://localhost:8080` to access Monoscope. [Full installation guide →]
 
 Monoscope is built on **OpenTelemetry**, the industry-standard observability framework. This means you get instant compatibility with **750+ integrations** including all major languages, frameworks, and infrastructure components.
 
-### Supported Data Types:
+### Supported Data Types
+
 - **Logs**: Application logs, system logs, audit trails
 - **Metrics**: Performance counters, business KPIs, custom metrics
 - **Traces**: Distributed request flows, latency tracking, dependency mapping
 
-### Quick Integration Examples:
+### Quick Integration Examples
 
 ```bash
 # For Python applications
@@ -101,7 +102,8 @@ The AI runs continuously in the background, requiring no configuration or traini
 
 Query your observability data using plain English instead of complex query languages:
 
-### Example Queries:
+### Example Queries
+
 - "Show me all errors in the payment service in the last hour"
 - "What caused the spike in response time yesterday at 3 PM?"
 - "Which services are consuming the most memory?"
