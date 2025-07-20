@@ -2,7 +2,10 @@
 
 <img src="/static/public/assets/svgs/logo_black.svg" alt="Monoscope Logo" width="400" />
 
-### Open-source observability platform that understands your systems
+### Open-source monitoring and observability platform that understands your systems
+
+**Monoscope uses AI to automatically detect anomalies in your logs, metrics, and traces — no configuration required.**  
+**Get instant insights with natural language queries and reduce alert fatigue by 90%.**
 
 [![GitHub Release](https://img.shields.io/github/v/release/monoscope-tech/monoscope)](https://github.com/monoscope-tech/monoscope/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -20,8 +23,8 @@
 </p>
 
 <div align="center" style="margin-top: 1em; margin-bottom: 1em;">
-<a href="#-quick-start">🚀 Quick Start</a> • <a href="#-key-features">🎯 Key Features</a> • <a href="#-architecture-overview">🏗️ Architecture</a> • <a href="#-why-monoscope">🌟 Why Monoscope?</a><br>
-<a href="#-installation">🛠️ Installation</a> • <a href="#-community">🤝 Community</a> • <a href="#-contributing">💪 Contributing</a> • <a href="#-roadmap">🚀 Roadmap</a>
+<a href="#-what-is-monoscope">🚀 What is Monoscope?</a> • <a href="#-quick-start-installation">🛠️ Quick Start Installation</a> • <a href="#-ingesting-logs-metrics--traces">📊 Ingesting Logs, Metrics & Traces</a><br>
+<a href="#-ai-anomaly-detection">🤖 AI Anomaly Detection</a> • <a href="#-natural-language-search">💬 Natural Language Search</a> • <a href="https://github.com/monoscope-tech/monoscope">⭐ Star Us</a> • <a href="#-contributing">🤝 Contributing</a>
 </div>
 
 <br />
@@ -31,7 +34,18 @@
   <p><i>Monoscope automatically detects anomalies in your logs, metrics, and traces using AI — no configuration required.</i></p>
 </div>
 
-## 🚀 Quick Start
+## 🚀 What is Monoscope?
+
+Monoscope is an open-source observability platform that uses artificial intelligence to understand and monitor your systems automatically. Unlike traditional monitoring tools that require extensive configuration and generate overwhelming alerts, Monoscope learns your system's normal behavior and only alerts you when something is genuinely wrong.
+
+### Key Capabilities:
+- **Universal Data Ingestion**: Native support for OpenTelemetry means compatibility with 750+ integrations out of the box
+- **AI-Powered Understanding**: Our LLM engine understands context, not just thresholds
+- **Natural Language Interface**: Query your data in plain English
+- **Cost-Effective Storage**: Store years of data affordably with S3-compatible object storage
+- **Zero Configuration**: Start getting insights immediately without complex setup
+
+## 🛠️ Quick Start Installation
 
 ```bash
 # Run with Docker (recommended)
@@ -44,6 +58,56 @@ docker-compose up
 ```
 
 Visit `http://localhost:8080` to access Monoscope. [Full installation guide →](docs/installation.md)
+
+## 📊 Ingesting Logs, Metrics & Traces
+
+Monoscope is built on **OpenTelemetry**, the industry-standard observability framework. This means you get instant compatibility with **750+ integrations** including all major languages, frameworks, and infrastructure components.
+
+### Supported Data Types:
+- **Logs**: Application logs, system logs, audit trails
+- **Metrics**: Performance counters, business KPIs, custom metrics
+- **Traces**: Distributed request flows, latency tracking, dependency mapping
+
+### Quick Integration Examples:
+
+```bash
+# For Python applications
+pip install opentelemetry-api opentelemetry-sdk
+export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:8080"
+
+# For Node.js applications
+npm install @opentelemetry/api @opentelemetry/sdk-node
+export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:8080"
+
+# For Kubernetes clusters
+helm install opentelemetry-collector open-telemetry/opentelemetry-collector \
+  --set config.exporters.otlp.endpoint="monoscope:8080"
+```
+
+Monoscope automatically correlates logs, metrics, and traces from the same service, giving you a complete picture of your system's behavior. No manual correlation or configuration required.
+
+## 🤖 AI Anomaly Detection
+
+Monoscope's AI engine continuously learns your system's normal behavior patterns and automatically alerts you to genuine issues:
+
+- **Context-Aware Detection**: Understands that high CPU during deployments is normal, but high CPU at 3 AM is not
+- **Seasonal Pattern Recognition**: Learns daily, weekly, and monthly patterns in your data
+- **Cross-Signal Correlation**: Detects anomalies by analyzing logs, metrics, and traces together
+- **Noise Reduction**: Reduces alert fatigue by 90% compared to threshold-based monitoring
+
+The AI runs continuously in the background, requiring no configuration or training from you.
+
+## 💬 Natural Language Search
+
+Query your observability data using plain English instead of complex query languages:
+
+### Example Queries:
+- "Show me all errors in the payment service in the last hour"
+- "What caused the spike in response time yesterday at 3 PM?"
+- "Which services are consuming the most memory?"
+- "Find all database queries taking longer than 1 second"
+
+Monoscope translates your natural language into optimized queries across logs, metrics, and traces, returning relevant results with explanations.
 
 ## 🎯 Key Features
 
