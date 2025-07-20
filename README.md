@@ -1,22 +1,22 @@
 <div align="right">
 
-[Website](https://apitoolkit.io) • [Discord](https://discord.gg/monoscope) • [Twitter](https://twitter.com/apitoolkit) • [Changelog](CHANGELOG.md) • [Documentation](https://docs.apitoolkit.io)
+[Website](https://monoscope.tech) • [Discord](https://discord.gg/monoscope) • [Twitter](https://twitter.com/monoscope) • [Changelog](CHANGELOG.md) • [Documentation](https://docs.monoscope.tech)
 
 </div>
 
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/apitoolkit/.github/main/images/apitoolkit-logo.svg" alt="Monoscope Logo" width="300" />
+<img src="/static/public/assets/svgs/logo_black.svg" alt="Monoscope Logo" width="300" />
 
 # Monoscope
 
 ### Open-source observability platform that understands your systems
 
-[![GitHub Release](https://img.shields.io/github/v/release/apitoolkit/apitoolkit-server)](https://github.com/apitoolkit/apitoolkit-server/releases)
+[![GitHub Release](https://img.shields.io/github/v/release/monoscope-tech/monoscope)](https://github.com/monoscope-tech/monoscope/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Haskell](https://img.shields.io/badge/Built%20with-Haskell-5e5086?logo=haskell)](https://www.haskell.org/)
 [![Discord](https://img.shields.io/discord/123456789?color=7289da&logo=discord&logoColor=white)](https://discord.gg/monoscope)
-[![CI Status](https://github.com/apitoolkit/apitoolkit-server/workflows/CI/badge.svg)](https://github.com/apitoolkit/apitoolkit-server/actions)
+[![CI Status](https://github.com/monoscope-tech/monoscope/workflows/CI/badge.svg)](https://github.com/monoscope-tech/monoscope/actions)
 
 </div>
 
@@ -41,11 +41,11 @@
 
 ```bash
 # Run with Docker (recommended)
-docker run -p 8080:8080 apitoolkit/monoscope:latest
+docker run -p 8080:8080 monoscope/monoscope:latest
 
 # Or clone and run locally
-git clone https://github.com/apitoolkit/apitoolkit-server.git
-cd apitoolkit-server
+git clone https://github.com/monoscope-tech/monoscope.git
+cd monoscope
 docker-compose up
 ```
 
@@ -96,8 +96,8 @@ Visit `http://localhost:8080` to access Monoscope. [Full installation guide →]
       <p align="center"><i>Dashboard Analytics</i></p>
     </td>
     <td width="50%">
-      <img src="https://raw.githubusercontent.com/apitoolkit/.github/main/images/apitoolkit-logo.svg" alt="Monoscope Logo" />
-      <p align="center"><i>Monoscope - Powered by APIToolkit</i></p>
+      <img src="/static/public/assets/svgs/logo_black.svg" alt="Monoscope Logo" />
+      <p align="center"><i>Monoscope - Open Source Observability</i></p>
     </td>
   </tr>
 </table>
@@ -196,7 +196,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
 2. **Clone the Repository**
 
 ```bash
-git clone https://github.com/apitoolkit/apitoolkit-server.git monoscope
+git clone https://github.com/monoscope-tech/monoscope.git
 cd monoscope
 ```
 
@@ -353,15 +353,15 @@ stack test --ta "--match=SeedingConfig" apitoolkit-server:tests
 ## 🤝 Community
 
 - 💬 [Discord](https://discord.gg/monoscope) - Chat with users and contributors
-- 🐛 [Issues](https://github.com/apitoolkit/apitoolkit-server/issues) - Report bugs or request features
-- 🐦 [Twitter](https://twitter.com/apitoolkit) - Follow for updates
-- 📝 [Blog](https://blog.apitoolkit.io) - Tutorials and case studies
+- 🐛 [Issues](https://github.com/monoscope-tech/monoscope/issues) - Report bugs or request features
+- 🐦 [Twitter](https://twitter.com/monoscope) - Follow for updates
+- 📝 [Blog](https://blog.monoscope.tech) - Tutorials and case studies
 
 ## 🌍 Contributing
 
 We welcome contributions to Monoscope! Please feel free to:
 
-- Report bugs and request features via [GitHub Issues](https://github.com/apitoolkit/apitoolkit-server/issues)
+- Report bugs and request features via [GitHub Issues](https://github.com/monoscope-tech/monoscope/issues)
 - Submit pull requests for bug fixes and new features
 - Improve documentation and examples
 - Share your use cases and feedback
@@ -380,7 +380,7 @@ Monoscope is open source software. Please see the LICENSE file for details.
 - [ ] Distributed Tracing Support
 - [ ] Custom ML Model Training
 
-See our [public roadmap](https://github.com/apitoolkit/apitoolkit-server/projects) for more details.
+See our [public roadmap](https://github.com/monoscope-tech/monoscope/projects) for more details.
 
 ## 🏆 Comparisons
 
@@ -396,7 +396,7 @@ See our [public roadmap](https://github.com/apitoolkit/apitoolkit-server/project
 
 <div align="center">
   <h3>Ready to transform your observability?</h3>
-  <a href="https://github.com/apitoolkit/apitoolkit-server"><img src="https://img.shields.io/github/stars/apitoolkit/apitoolkit-server?style=social" alt="Star on GitHub" /></a>
+  <a href="https://github.com/monoscope-tech/monoscope"><img src="https://img.shields.io/github/stars/monoscope-tech/monoscope?style=social" alt="Star on GitHub" /></a>
   <br />
-  <sub>Built with ❤️ by the <a href="https://apitoolkit.io">APIToolkit</a> team</sub>
+  <sub>Built with ❤️ by the <a href="https://monoscope.tech">Monoscope</a> team</sub>
 </div>
