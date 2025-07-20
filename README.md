@@ -1,9 +1,3 @@
-<div align="right">
-
-[Website](https://monoscope.tech) • [Discord](https://discord.gg/monoscope) • [Twitter](https://twitter.com/monoscope) • [Changelog](CHANGELOG.md) • [Documentation](https://docs.monoscope.tech)
-
-</div>
-<br/><br/><br/><br/><br/>
 <div align="center">
 
 <img src="/static/public/assets/svgs/logo_black.svg" alt="Monoscope Logo" width="400" />
@@ -14,18 +8,20 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Haskell](https://img.shields.io/badge/Built%20with-Haskell-5e5086?logo=haskell)](https://www.haskell.org/)
 [![Discord](https://img.shields.io/discord/123456789?color=7289da&logo=discord&logoColor=white)](https://discord.gg/monoscope)
-[![CI Status](https://github.com/monoscope-tech/monoscope/workflows/CI/badge.svg)](https://github.com/monoscope-tech/monoscope/actions)
 
 </div>
 
-<div align="center">
-  <strong>
-    <a href="#-quick-start">Quick Start</a> •
-    <a href="#-key-features">Features</a> •
-    <a href="#-demo">Demo</a> •
-    <a href="#-documentation">Docs</a> •
-    <a href="#-community">Community</a>
-  </strong>
+<p align="center">
+    <a href="https://monoscope.tech"><b>Website</b></a> •
+    <a href="https://discord.gg/monoscope"><b>Discord</b></a> •
+    <a href="https://twitter.com/monoscope"><b>Twitter</b></a> •
+    <a href="https://github.com/monoscope-tech/monoscope/releases"><b>Changelog</b></a> •
+    <a href="https://docs.monoscope.tech"><b>Documentation</b></a>
+</p>
+
+<div align="center" style="margin-top: 1em; margin-bottom: 1em;">
+<a href="#-quick-start">🚀 Quick Start</a> • <a href="#-key-features">🎯 Key Features</a> • <a href="#-architecture-overview">🏗️ Architecture</a> • <a href="#-why-monoscope">🌟 Why Monoscope?</a><br>
+<a href="#-installation">🛠️ Installation</a> • <a href="#-community">🤝 Community</a> • <a href="#-contributing">💪 Contributing</a> • <a href="#-roadmap">🚀 Roadmap</a>
 </div>
 
 <br />
