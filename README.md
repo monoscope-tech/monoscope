@@ -3,12 +3,10 @@
 [Website](https://monoscope.tech) • [Discord](https://discord.gg/monoscope) • [Twitter](https://twitter.com/monoscope) • [Changelog](CHANGELOG.md) • [Documentation](https://docs.monoscope.tech)
 
 </div>
-
+<br/><br/><br/><br/><br/>
 <div align="center">
 
-<img src="/static/public/assets/svgs/logo_black.svg" alt="Monoscope Logo" width="300" />
-
-# Monoscope
+<img src="/static/public/assets/svgs/logo_black.svg" alt="Monoscope Logo" width="400" />
 
 ### Open-source observability platform that understands your systems
 
@@ -22,10 +20,10 @@
 
 <div align="center">
   <strong>
-    <a href="#-quick-start">Quick Start</a> • 
-    <a href="#-key-features">Features</a> • 
-    <a href="#-demo">Demo</a> • 
-    <a href="#-documentation">Docs</a> • 
+    <a href="#-quick-start">Quick Start</a> •
+    <a href="#-key-features">Features</a> •
+    <a href="#-demo">Demo</a> •
+    <a href="#-documentation">Docs</a> •
     <a href="#-community">Community</a>
   </strong>
 </div>
@@ -125,9 +123,11 @@ graph LR
 ## 🌟 Why Monoscope?
 
 ### The Problem
+
 Traditional monitoring tools require extensive configuration, generate overwhelming alerts, and still miss critical issues. You spend more time managing your monitoring than actually using it.
 
 ### Our Solution
+
 Monoscope uses AI to understand your system's behavior, automatically detect anomalies, and provide actionable insights - all without complex configuration.
 
 ### Who Uses Monoscope?
@@ -160,12 +160,14 @@ Monoscope uses AI to understand your system's behavior, automatically detect ano
 - 🔌 **Extensible**: Easy to integrate with existing monitoring infrastructure
 
 ### Getting Started
+
 - [Installation Guide](docs/installation.md)
 - [Configuration](docs/configuration.md)
 - [API Reference](docs/api.md)
 - [Architecture Deep Dive](docs/architecture.md)
 
 ### Tutorials
+
 - [5-Minute Quick Start](docs/quickstart.md)
 - [Monitoring Kubernetes](docs/kubernetes.md)
 - [Custom Dashboards](docs/dashboards.md)
@@ -384,13 +386,13 @@ See our [public roadmap](https://github.com/monoscope-tech/monoscope/projects) f
 
 ## 🏆 Comparisons
 
-| Feature | Monoscope | Datadog | Elastic | Prometheus |
-|---------|-----------|---------|---------|-------------|
-| AI Anomaly Detection | ✅ Built-in | ❌ Add-on | ❌ | ❌ |
-| Natural Language Search | ✅ | ❌ | ❌ | ❌ |
-| Cost-Effective Storage | ✅ S3 | ❌ Proprietary | ✅ | ✅ |
-| No Configuration Alerts | ✅ | ❌ | ❌ | ❌ |
-| Open Source | ✅ | ❌ | ✅ | ✅ |
+| Feature                 | Monoscope   | Datadog        | Elastic | Prometheus |
+| ----------------------- | ----------- | -------------- | ------- | ---------- |
+| AI Anomaly Detection    | ✅ Built-in | ❌ Add-on      | ❌      | ❌         |
+| Natural Language Search | ✅          | ❌             | ❌      | ❌         |
+| Cost-Effective Storage  | ✅ S3       | ❌ Proprietary | ✅      | ✅         |
+| No Configuration Alerts | ✅          | ❌             | ❌      | ❌         |
+| Open Source             | ✅          | ❌             | ✅      | ✅         |
 
 ---
 
