@@ -146,10 +146,11 @@ expandAPIlogItemH pid rdId createdAt sourceM = do
           aptSpan <- case getRequestDetails record.attributes of
             Just ("HTTP", _, _, _) -> do
               let trIdM = record.context >>= (.trace_id)
-              if record.name /= Just "apitoolkit-http-span"
+              if record.name /= Just "apitoolkit-http-span" || 
+                 record.name /= Just "monoscope-http-span"
                 then do
                   case trIdM of
-                    Just trId -> Telemetry.spanRecordByName pid trId "apitoolkit-http-span"
+                    Just trId -> Telemetry.spanRecordByName pid trId (fromMabe "apitoolkit-http-span" record.name)
                     _ -> pure Nothing
                 else pure Nothing
             _ -> pure Nothing
@@ -304,7 +305,7 @@ expandedItemView pid item aptSp leftM rightM = do
           isHttp = case reqDetails of
             Just ("HTTP", _, _, _) -> True
             _ -> False
-          borderClass = if isLog then "border-b-strokeWeak" else "border-b-strokeWeak"
+          borderClass = "border-b-strokeWeak"
       div_ [class_ "flex", [__|on click halt|]] $ do
         when (not isLog && isHttp) $ button_ [class_ $ "a-tab cursor-pointer  border-b-2 " <> borderClass <> " px-4 py-1.5 t-tab-active", onpointerdown_ $ "navigatable(this, '#request-content', '#" <> tabContainerId <> "', 't-tab-active','.http')"] "Request"
         button_ [class_ $ "cursor-pointer a-tab border-b-2 " <> borderClass <> " px-4 py-1.5 " <> if isLog || not isHttp then "t-tab-active" else "", onpointerdown_ $ "navigatable(this, '#att-content', '#" <> tabContainerId <> "', 't-tab-active'" <> if isLog then ")" else ",'.http')"] "Attributes"

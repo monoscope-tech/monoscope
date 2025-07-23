@@ -54,7 +54,7 @@ widgets:
 
   - type: 'timeseries'
     title: 'All requests (Incoming)'
-    query: kind=="server" OR name=="apitoolkit-http-span" AND attributes.http.response.status_code != null | summarize count() by bin_auto(timestamp), attributes.http.response.status_code
+    query: kind=="server" OR name=="apitoolkit-http-span" OR name=="monoscope-http-span" AND attributes.http.response.status_code != null | summarize count() by bin_auto(timestamp), attributes.http.response.status_code
     unit: reqs
     layout: { w: 6, h: 4 }
 
@@ -76,7 +76,7 @@ widgets:
                ] AS values,
                ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
         FROM otel_logs_and_spans
-        WHERE project_id='{{project_id}}' AND (kind='server' OR name='apitoolkit-http-span') AND attributes___http___response___status_code is not null
+        WHERE project_id='{{project_id}}' AND (kind='server' OR name='apitoolkit-http-span' OR name=="monoscope-http-span") AND attributes___http___response___status_code is not null
           {{time_filter}}
         GROUP BY timeB
       ) s,
@@ -87,10 +87,10 @@ widgets:
     title: 'HTTP Errors (Incoming)'
     eager: true
     theme: 'roma'
-    query: (kind=="server" OR name=="apitoolkit-http-span") AND attributes.http.response.status_code != null AND attributes.http.response.status_code > 399.0 | summarize count() by bin_auto(timestamp), attributes.http.response.status_code
+    query: (kind=="server" OR name=="apitoolkit-http-span" OR name=="monoscope-http-span") AND attributes.http.response.status_code != null AND attributes.http.response.status_code > 399.0 | summarize count() by bin_auto(timestamp), attributes.http.response.status_code
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Incoming Requests by Endpoint'
-    query: (kind=="server" OR name=="apitoolkit-http-span") AND attributes.http.response.status_code != null | summarize count() by bin_auto(timestamp), attributes.http.request.method, attributes.url.path
+    query: (kind=="server" OR name=="apitoolkit-http-span" OR name=="monoscope-http-span") AND attributes.http.response.status_code != null | summarize count() by bin_auto(timestamp), attributes.http.request.method, attributes.url.path
     layout: { w: 6, h: 4 }
