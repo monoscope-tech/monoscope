@@ -760,7 +760,7 @@ convertSpanToOtelLog !pid resourceM scopeM pSpan =
         Just (AE.Object http) -> (KEM.lookup "request" http, KEM.lookup "response" http)
         _ -> (Nothing, Nothing)
       body =
-        if pSpan ^. PTF.name == "apitoolkit-http-span" || pSpan ^. PTF.name == "monoscope-http-span"
+        if pSpan ^. PTF.name == "apitoolkit-http-span" || pSpan ^. PTF.name == "monoscope.http"
           then
             Just
               $ AE.object
@@ -776,7 +776,7 @@ convertSpanToOtelLog !pid resourceM scopeM pSpan =
               _ -> AE.Null
           extractBody _ = AE.Null
       newAttributes =
-        if pSpan ^. PTF.name == "apitoolkit-http-span" || pSpan ^. PTF.name == "monoscope-http-span"
+        if pSpan ^. PTF.name == "apitoolkit-http-span" || pSpan ^. PTF.name == "monoscope.http"
           then
             let htt = Map.lookup "http" (fromMaybe Map.empty attributes)
              in case htt of
