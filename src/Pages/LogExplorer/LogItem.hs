@@ -150,7 +150,7 @@ expandAPIlogItemH pid rdId createdAt sourceM = do
                  record.name /= Just "monoscope.http"
                 then do
                   case trIdM of
-                    Just trId -> Telemetry.spanRecordByName pid trId (fromMabe "apitoolkit-http-span" record.name)
+                    Just trId -> Telemetry.spanRecordByName pid trId (fromMaybe "apitoolkit-http-span" record.name)
                     _ -> pure Nothing
                 else pure Nothing
             _ -> pure Nothing
