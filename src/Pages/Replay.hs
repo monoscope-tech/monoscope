@@ -59,7 +59,8 @@ replayPostH pid body = do
     Right replayData@ReplayPost{..} -> do
       pubResult <- publishReplayEvent replayData pid
       case pubResult of
-        Left errMsg -> pure $ AE.object ["status" AE..= ("warning" :: Text), "message" AE..= errMsg]
+        Left errMsg -> do 
+          pure $ AE.object ["status" AE..= ("warning" :: Text), "message" AE..= errMsg]
         Right messageId -> do pure $ AE.object ["status" AE..= ("ok" :: Text), "messageId" AE..= messageId, "sessionId" AE..= sessionId]
 
 
@@ -71,7 +72,7 @@ processReplayEvents msgs attrs = do
           let sanitizedJsonStr = replaceNullChars $ decodeUtf8 msg
           rrMsg <- eitherStrToText $ AE.eitherDecode $ encodeUtf8 sanitizedJsonStr
           Right (ackId, rrMsg)
-
+  
   if null $ rights msgs'
     then pure []
     else mapM saveReplayEvent (rights msgs')
