@@ -7,7 +7,9 @@ receivers:
       http:
         endpoint: :4318
         include_metadata: true
-
+        cors:
+          allowed_origins:
+            - '*'
 processors:
   batch:
     send_batch_size: 1024
