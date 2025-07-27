@@ -14,12 +14,16 @@ import Effectful.Concurrent (runConcurrent)
 import Effectful.Fail (runFailIO)
 import Effectful.Time (runTime)
 import Log qualified
+import Network.HTTP.Types (status204)
+import Network.Wai (Application, Middleware, Request (..), responseLBS)
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setOnException, setPort)
 import Network.Wai.Log qualified as WaiLog
+import Network.Wai.Middleware.Cors
 import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
 import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
 import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
+import Pages.Replay (processReplayEvents)
 import Pkg.Queue qualified as Queue
 import ProcessMessage (processMessages)
 import Relude
@@ -55,37 +59,28 @@ runServer appLogger env tp = do
   let warpSettings =
         defaultSettings
           & setPort env.config.port
-          & setOnException \mRequest exception -> Log.runLogT "apitoolkit" appLogger Log.LogAttention $ do
-            Log.logAttention "Unhandled exception" $ AE.object ["exception" AE..= show @String exception]
-            Safe.throw exception
+          & setOnException \_ exception ->
+            Log.runLogT "apitoolkit" appLogger Log.LogAttention
+              $ Log.logAttention "Unhandled exception"
+              $ AE.object ["exception" AE..= show @String exception]
   let wrappedServer =
         heartbeatMiddleware
           . newOpenTelemetryWaiMiddleware' tp
           -- . loggingMiddleware
-          -- . const
           $ server
+
   let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env tp
-
-  -- let ojStartArgs =
-  --       OJCli.UIStartArgs
-  --         { uistartAuth = OJCli.AuthNone
-  --         , uistartPort = 8081
-  --         }
-
-  -- let ojLogger logLevel logEvent = logger <& show (logLevel, logEvent)
-  -- let ojTable = "background_jobs" :: OJTypes.TableName
-  -- let ojCfg = OJConfig.mkUIConfig ojLogger ojTable poolConn id
   let exceptionLogger = logException env.config.environment appLogger
+
   asyncs <-
     liftIO
       $ sequence
-      $ concat @[]
+      $ concat
         [ [async $ runSettings warpSettings wrappedServer]
-        , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
-          [async $ Safe.withException (Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages) exceptionLogger | env.config.enablePubsubService]
+        , [async $ Safe.withException (Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages) exceptionLogger | env.config.enablePubsubService]
+        , [async $ Safe.withException (Queue.pubsubService appLogger env tp env.config.rrwebPubsubTopics processReplayEvents) exceptionLogger | env.config.enablePubsubService]
         , [async $ Safe.withException bgJobWorker exceptionLogger | env.config.enableBackgroundJobs]
         , [async $ Safe.withException (OtlpServer.runServer appLogger env tp) exceptionLogger]
-        , [async $ Safe.withException (Queue.kafkaService appLogger env tp OtlpServer.processList) exceptionLogger | env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics]
         , [async $ Safe.withException (Queue.kafkaService appLogger env tp OtlpServer.processList) exceptionLogger | env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics]
         ]
   void $ liftIO $ waitAnyCancel asyncs

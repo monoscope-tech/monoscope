@@ -347,6 +347,7 @@ library
       Pages.Projects.Integrations
       Pages.Projects.ListProjects
       Pages.Projects.ManageMembers
+      Pages.Replay
       Pages.Reports
       Pages.Share
       Pages.Specification.Documentation
@@ -574,6 +575,7 @@ library
     , wreq
     , xxhash
     , yaml
+    , wai-cors
   default-language: GHC2021
 
 executable apitoolkit-server-exe

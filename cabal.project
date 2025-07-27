@@ -137,9 +137,13 @@ source-repository-package
   subdir:   utils/exceptions
   subdir:   propagators/datadog
   subdir:   propagators/b3
-  
+
+source-repository-package head
+  type: git 
+  location: https://github.com/brendanhay/amazonka
+  subdir: lib/amazonka
+  subdir: lib/services/amazonka-s3
+
 constraints:
   streamly ^>=0.10.0
-
-
 allow-newer: all 

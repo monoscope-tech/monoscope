@@ -89,6 +89,7 @@ data EnvConfig = EnvConfig
   , whatsappBotText :: Text
   , whatsappDashboardList :: Text
   , whatsappShareWidget :: Text
+  , rrwebPubsubTopics :: [Text]
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)
