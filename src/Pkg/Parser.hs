@@ -487,6 +487,7 @@ defaultSelectSqlQuery (Just SSpans) =
   , "EXISTS(SELECT 1 FROM jsonb_array_elements(events) elem  WHERE elem->>'event_name' = 'exception') as errors"
   , "summary"
   , "context___span_id as latency_breakdown"
+  , "attributes___session___id as session_id"
   ]
 
 
