@@ -43,6 +43,7 @@ import Network.GRPC.Common.Protobuf
 import Network.GRPC.Server (SomeRpcHandler)
 import Network.GRPC.Server.Run hiding (runServer)
 import Network.GRPC.Server.StreamType
+import OpenTelemetry.Trace (TracerProvider)
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
 import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService qualified as TS
@@ -60,7 +61,6 @@ import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (runBackground)
-import OpenTelemetry.Trace (TracerProvider)
 import Utils (b64ToJson, freeTierDailyMaxEvents, nestedJsonFromDotNotation)
 
 
@@ -173,6 +173,12 @@ processList msgs !attrs = checkpoint "processList" $ do
                     | (_, Right logReq) <- decodedMsgs
                     ]
               !uniqueProjectKeys = V.force $ V.fromList $ L.nub $ V.toList allProjectKeys
+              atIds' =
+                V.concat
+                  [ getLogAttributeValue "at-project-id" (V.fromList $ logReq ^. PLF.resourceLogs)
+                  | (_, Right logReq) <- decodedMsgs
+                  ]
+              atIds = V.catMaybes $ Projects.projectIdFromText <$> atIds'
 
           -- Batch fetch all project data in one go
           (!allProjectIdsAndKeys, !projectCachesMap) <-
@@ -185,7 +191,7 @@ processList msgs !attrs = checkpoint "processList" $ do
                     $ ProjectApiKeys.projectIdsByProjectApiKeys uniqueProjectKeys
 
                 -- Get unique project IDs
-                let !projectIds = L.nub [pid | (_, pid) <- V.toList projectIdsAndKeys]
+                let !projectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
 
                 -- Batch fetch all project caches in parallel
                 projectCaches <- checkpoint "processList:logs:getProjectCaches" $ do
@@ -261,6 +267,12 @@ processList msgs !attrs = checkpoint "processList" $ do
                     | (_, Right traceReq) <- decodedMsgs
                     ]
               !uniqueProjectKeys = V.force $ V.fromList $ L.nub $ V.toList allProjectKeys
+              atIds' =
+                V.concat
+                  [ getSpanAttributeValue "at-project-id" (V.fromList $ traceReq ^. PTF.resourceSpans)
+                  | (_, Right traceReq) <- decodedMsgs
+                  ]
+              atIds = V.catMaybes $ Projects.projectIdFromText <$> atIds'
 
           -- Batch fetch all project data in one go
           (!allProjectIdsAndKeys, !projectCachesMap) <-
@@ -273,7 +285,7 @@ processList msgs !attrs = checkpoint "processList" $ do
                     $ ProjectApiKeys.projectIdsByProjectApiKeys uniqueProjectKeys
 
                 -- Get unique project IDs
-                let !projectIds = L.nub [pid | (_, pid) <- V.toList projectIdsAndKeys]
+                let !projectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
 
                 -- Batch fetch all project caches in parallel
                 projectCaches <- checkpoint "processList:traces:getProjectCaches" $ do
@@ -286,9 +298,7 @@ processList msgs !attrs = checkpoint "processList" $ do
                     -- Force evaluation of cache pairs
                     pure (zip projectIds cachePairs `using` parList rpar)
                   pure $ HashMap.fromList caches
-
                 pure (projectIdsAndKeys, projectCaches)
-
           -- Process messages in parallel chunks
           let !chunkSize = max 10 (msgsCount `div` 4) -- Process in chunks for better parallelism
               !chunks = chunksOf chunkSize (zip [0 ..] decodedMsgs)
@@ -935,13 +945,16 @@ traceServiceExport appLogger appCtx tp (Proto req) = do
 
     let !resourceSpans = V.fromList $ req ^. TSF.resourceSpans
         !projectKeys = getSpanAttributeValue "at-project-key" resourceSpans
+        atIds' = getSpanAttributeValue "at-project-id" resourceSpans
+        atIds = V.catMaybes $ Projects.projectIdFromText <$> atIds'
 
     projectIdsAndKeys <-
       checkpoint "processList:traces:getProjectIds"
         $ ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
     -- Fetch project caches for limit checking
     projectCaches <- checkpoint "processList:traces:getProjectCaches" $ do
-      let projectIds = [pid | (_, pid) <- V.toList projectIdsAndKeys]
+      let projectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
+
       caches <- forM projectIds $ \pid -> do
         cache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
           mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
@@ -965,12 +978,14 @@ logsServiceExport appLogger appCtx tp (Proto req) = do
 
     let !resourceLogs = V.fromList $ req ^. PLF.resourceLogs
         !projectKeys = getLogAttributeValue "at-project-key" resourceLogs
+        atIds' = getLogAttributeValue "at-project-id" resourceLogs
+        atIds = V.catMaybes $ Projects.projectIdFromText <$> atIds'
 
     projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
 
     -- Fetch project caches using cache pattern
     projectCaches <- checkpoint "processList:logs:getProjectCaches" $ do
-      let projectIds = [pid | (_, pid) <- V.toList projectIdsAndKeys]
+      let projectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
       caches <- forM projectIds $ \pid -> do
         cache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
           mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
