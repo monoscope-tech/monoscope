@@ -93,38 +93,38 @@ processReplayEvents msgs attrs = do
     else mapM saveReplayEvent (rights msgs')
 
 
--- saveReplayEvent :: IOE :> es => (Text, ReplayPost) -> Eff es Text
--- saveReplayEvent (ackId, replayData) = do
---   let timestamp = formatTime defaultTimeLocale "%Y%m%d%H%M%S" replayData.timestamp
---   let sessionDir = "static/public/sessions/" <> toString (UUID.toText replayData.sessionId)
---   let filePath = sessionDir <> "/" <> timestamp <> ".json"
---   liftIO $ createDirectoryIfMissing True sessionDir
---   liftIO $ BL8.writeFile filePath (AE.encode replayData.events)
---   pure ackId
-
-saveReplayEventSimple :: IOE :> es => AWS.Env -> (Text, ReplayPost) -> Eff es (Either Text Text)
-saveReplayEventSimple awsEnv  (ackId, replayData) = do
+saveReplayEvent :: IOE :> es => (Text, ReplayPost) -> Eff es Text
+saveReplayEvent (ackId, replayData) = do
   let timestamp = formatTime defaultTimeLocale "%Y%m%d%H%M%S" replayData.timestamp
-  let sessionDir = "sessions/" <> (UUID.toText replayData.sessionId)
-  let objectKey = toString $ sessionDir <> "/" <> timestamp <> ".json"
-  let jsonData = AE.encode replayData.events
+  let sessionDir = "static/public/sessions/" <> toString (UUID.toText replayData.sessionId)
+  let filePath = sessionDir <> "/" <> timestamp <> ".json"
+  liftIO $ createDirectoryIfMissing True sessionDir
+  liftIO $ BL8.writeFile filePath (AE.encode replayData.events)
+  pure ackId
+
+-- saveReplayEventSimple :: IOE :> es => AWS.Env -> (Text, ReplayPost) -> Eff es (Either Text Text)
+-- saveReplayEventSimple awsEnv  (ackId, replayData) = do
+--   let timestamp = formatTime defaultTimeLocale "%Y%m%d%H%M%S" replayData.timestamp
+--   let sessionDir = "sessions/" <> (UUID.toText replayData.sessionId)
+--   let objectKey = toString $ sessionDir <> "/" <> timestamp <> ".json"
+--   let jsonData = AE.encode replayData.events
   
-  -- Upload to S3 (exceptions will be thrown as IO exceptions)
-  let putObjectReq = S3.newPutObject 
-            (S3.BucketName "rrweb") 
-            (S3.ObjectKey objectKey) 
-            (AWS.toBody jsonData)
-  let o = newPutObject
+--   -- Upload to S3 (exceptions will be thrown as IO exceptions)
+--   let putObjectReq = S3.newPutObject 
+--             (S3.BucketName "rrweb") 
+--             (S3.ObjectKey objectKey) 
+--             (AWS.toBody jsonData)
+--   let o = newPutObject
       
-      putObjectReq' = putObjectReq 
-            { S3.putObject_contentType = Just "application/json"
-            , S3.putObject_contentLength = Just (fromIntegral $ BL.length jsonData)
-            }
+--       putObjectReq' = putObjectReq 
+--             { S3.putObject_contentType = Just "application/json"
+--             , S3.putObject_contentLength = Just (fromIntegral $ BL.length jsonData)
+--             }
       
-  res <- AWS.send putObjectReq'
-  case res of 
-    Right -> pure $ Right ackId 
-    Left err -> pure $ Left err
+--   res <- AWS.send putObjectReq'
+--   case res of 
+--     Right -> pure $ Right ackId 
+--     Left err -> pure $ Left err
 
 replaySessionGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
 replaySessionGetH pid sessionId = do

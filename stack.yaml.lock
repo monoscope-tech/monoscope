@@ -616,13 +616,6 @@ packages:
     commit: 7a34e4e378da54b231d23099cceb4a8c176ec998
     git: https://github.com/brendanhay/amazonka
     subdir: lib/services/amazonka-s3
-- completed:
-    hackage: microlens-pro-0.2.0.4@sha256:af8fc5760d913704c5283e649dd90feaf6bddd739f9b75bf52495b7964830bea,3377
-    pantry-tree:
-      sha256: 6fc091c70de2fc1db2af16e5b64780f7dbdb570e4da02614f28bfb1ecd65db46
-      size: 430
-  original:
-    hackage: microlens-pro-0.2.0.4
 snapshots:
 - completed:
     sha256: d6177430c3f6c69ff32d9ed4d757148916306d1fe36d34b3105892bc7281e1ff
