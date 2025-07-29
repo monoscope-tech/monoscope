@@ -576,6 +576,8 @@ library
     , xxhash
     , yaml
     , wai-cors
+    , amazonka 
+    , amazonka-s3
   default-language: GHC2021
 
 executable apitoolkit-server-exe

@@ -1,7 +1,7 @@
 'use strict';
 import { virtualize } from '@lit-labs/virtualizer/virtualize.js';
 import { LitElement, html, css, TemplateResult, nothing } from 'lit';
-import { customElement, state, query } from 'lit/decorators.js';
+import { customElement, state, query, property } from 'lit/decorators.js';
 import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, Trace, TraceDataMap } from './types/types';
 import { RangeChangedEvent, VisibilityChangedEvent } from '@lit-labs/virtualizer';
 
@@ -17,6 +17,8 @@ const _ensureBadgeClasses = html`
 
 @customElement('log-list')
 export class LogList extends LitElement {
+  @property({ type: String }) private windowTarget: string | null = null;
+
   @state() private expandedTraces: Record<string, boolean> = {};
   @state() private flipDirection: boolean = false;
   @state() private isLoadingRecent: boolean = false;
@@ -62,6 +64,7 @@ export class LogList extends LitElement {
       'logItemCol',
     ];
     methods.forEach((m) => (this[m] = this[m].bind(this)));
+
     const liveBtn = document.querySelector('#streamLiveData') as HTMLInputElement;
     if (liveBtn) {
       liveBtn.addEventListener('change', () => {
@@ -192,22 +195,25 @@ export class LogList extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    if (window.virtualListData) {
-      const logs = window.virtualListData.requestVecs;
-      this.logsColumns = window.virtualListData.cols;
-      this.colIdxMap = window.virtualListData.colIdxMap;
-      this.serviceColors = window.virtualListData.serviceColors;
-      this.nextFetchUrl = window.virtualListData.nextFetchUrl;
-      this.recentFetchUrl = window.virtualListData.recentFetchUrl;
-      this.projectId = window.virtualListData.projectId;
+    console.log(this.windowTarget);
+    const globalKey = `${this.windowTarget}Data`;
+    const data = (window as any)[globalKey];
+    if (this.windowTarget && data) {
+      const logs = data.requestVecs ?? [];
+
+      this.logsColumns = data.cols ?? [];
+      this.colIdxMap = data.colIdxMap ?? {};
+      this.serviceColors = data.serviceColors ?? {};
+      this.nextFetchUrl = data.nextFetchUrl ?? '';
+      this.recentFetchUrl = data.recentFetchUrl ?? '';
+      this.projectId = data.projectId ?? '';
       this.expandedTraces = {};
       this.spanListTree = this.buildSpanListTree(logs);
       this.updateColumnMaxWidthMap(logs);
       this.hasMore = logs.length > 0;
       this.requestUpdate();
       this.fetchedNew = false;
-
-      window.virtualListData = null;
+      (window as any)[globalKey] = null;
     }
   }
 
@@ -523,7 +529,6 @@ export class LogList extends LitElement {
           ${list.length === 1 ? emptyState(this.logsColumns.length) : nothing}
           <tbody
             class="min-w-0 text-sm"
-            id="log-item-table-body"
             @rangeChanged=${(event: RangeChangedEvent) => {
               this.setupIntersectionObserver();
             }}
@@ -765,7 +770,7 @@ export class LogList extends LitElement {
   }
 
   renderLoadMore() {
-    return this.hasMore
+    return this.hasMore && this.windowTarget != 'sessionList'
       ? html`<tr class="w-full flex relative">
           <td colspan=${String(this.logsColumns.length)} class="relative  pl-[calc(40vw-10ch)]">
             <div
@@ -788,24 +793,26 @@ export class LogList extends LitElement {
   }
 
   fetchRecent() {
-    return html`<tr class="w-full flex relative" id="recent-logs">
-      <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]" id="recent-logs">
-        ${this.isLiveStreaming
-          ? html`<p>Live streaming latest data...</p>`
-          : this.isLoadingRecent
-          ? html`<div class="loading loading-dots loading-md"></div>`
-          : html`
-              <button
-                class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-                @pointerdown=${() => {
-                  this.fetchData(this.recentFetchUrl, true);
-                }}
-              >
-                Check for recent data
-              </button>
-            `}
-      </td>
-    </tr>`;
+    return this.windowTarget != 'sessionList'
+      ? html`<tr class="w-full flex relative" id="recent-logs">
+          <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]" id="recent-logs">
+            ${this.isLiveStreaming
+              ? html`<p>Live streaming latest data...</p>`
+              : this.isLoadingRecent
+              ? html`<div class="loading loading-dots loading-md"></div>`
+              : html`
+                  <button
+                    class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
+                    @pointerdown=${() => {
+                      this.fetchData(this.recentFetchUrl, true);
+                    }}
+                  >
+                    Check for recent data
+                  </button>
+                `}
+          </td>
+        </tr>`
+      : html`<tr></tr>`;
   }
 
   logTableHeading(column: string) {

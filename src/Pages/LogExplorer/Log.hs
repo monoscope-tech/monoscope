@@ -584,6 +584,7 @@ virtualTable page = do
     "log-list"
     [ id_ "resultTable"
     , class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0"
+    , term "windowTarget" "logList"
     ]
     ("" :: Text)
   let logs = decodeUtf8 $ AE.encode page.requestVecs
@@ -596,7 +597,7 @@ virtualTable page = do
       projectid = page.pid.toText
   script_
     [text|
-      window.virtualListData = {
+      window.logListData = {
        requestVecs: $logs,
        cols: $cols,
        colIdxMap: $colIdxMap,
@@ -623,11 +624,8 @@ apiLogsPage page = do
           faSprite_ "play" "regular" "w-4 h-4 fill-textWeak"
       div_ [class_ "drawer-side z-[9999999999]"] $ do
         label_ [Lucid.for_ $ "session_replay_drawer", class_ "drawer-overlay"] pass
-        div_ [class_ "bg-white overflow-y-scroll min-h-full w-[800px] p-0", id_ "replay_session_container"] $ do
+        div_ [class_ "bg-white overflow-y-scroll min-h-full w-[900px] p-0", id_ "replay_session_container"] $ do
           span_ [class_ "htmx-indicator query-indicator  loading  loading-dots mt-4 mx-auto", id_ "replay_session_indicator"] ""
-          li_ $ a_ [] "Sidebar Item 1"
-          li_ $ a_ [] "Sidebar Item 2"
-
     div_
       [ style_ "z-index:26"
       , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"

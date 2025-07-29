@@ -138,6 +138,37 @@ source-repository-package
   subdir:   propagators/datadog
   subdir:   propagators/b3
 
+source-repository-package
+  type: git
+  location: https://github.com/brendanhay/amazonka
+  tag: 7a34e4e378da54b231d23099cceb4a8c176ec998
+  subdir: lib/amazonka
+
+source-repository-package
+  type: git
+  location: https://github.com/brendanhay/amazonka
+  tag: 7a34e4e378da54b231d23099cceb4a8c176ec998
+  subdir: lib/amazonka-core
+
+source-repository-package
+  type: git
+  location: https://github.com/brendanhay/amazonka
+  tag: 7a34e4e378da54b231d23099cceb4a8c176ec998
+  subdir: lib/services/amazonka-sso
+
+source-repository-package
+  type: git
+  location: https://github.com/brendanhay/amazonka
+  tag: 7a34e4e378da54b231d23099cceb4a8c176ec998
+  subdir: lib/services/amazonka-sts
+
+-- If you also need S3:
+source-repository-package
+  type: git
+  location: https://github.com/brendanhay/amazonka
+  tag: 7a34e4e378da54b231d23099cceb4a8c176ec998
+  subdir: lib/services/amazonka-s3
+
 constraints:
   streamly ^>=0.10.0
 allow-newer: all 

@@ -582,7 +582,7 @@ queryToValues pid traceIds
     q =
       [sql|
       SELECT json_build_array(id, timestamp, context___trace_id, context___span_id, CAST(EXTRACT(EPOCH FROM (timestamp)) * 1_000_000_000 AS BIGINT), severity___severity_text, body, resource->>'service.name')
-      FROM otel_logs_and_spans WHERE project_id = ? AND context___trace_id = ANY(?);
+      FROM otel_logs_and_spans WHERE project_id = ? AND context___trace_id = ANY(?) and attributes___session___id is null;
     |]
 
 
@@ -1100,5 +1100,5 @@ getSpandRecordsByTraceIds pid trIds = dbtToEff $ query q (pid.toText, trIds)
       [sql|
       SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
                   hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
-              FROM otel_logs_and_spans where project_id=? and context___trace_id=Any(?) and attributes___session___id = null ORDER BY start_time ASC;
+              FROM otel_logs_and_spans where project_id=? and context___trace_id=Any(?) and attributes___session___id is null ORDER BY start_time ASC;
     |]
