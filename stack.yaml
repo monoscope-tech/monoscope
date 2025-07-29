@@ -101,6 +101,13 @@ extra-deps:
     commit: b0d490111477b8e5766b64da933fd0548fc5e0f5
     subdirs:
       - .
-flags:
+  - git: https://github.com/brendanhay/amazonka
+    commit: 7a34e4e378da54b231d23099cceb4a8c176ec998
+    subdirs:
+      - lib/amazonka
+      - lib/amazonka-core
+      - lib/services/amazonka-sso
+      - lib/services/amazonka-sts
+      - lib/services/amazonka-s3
 
 allow-newer: true

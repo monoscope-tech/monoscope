@@ -266,6 +266,9 @@ library:
     - bytestring
     - base16-bytestring
     - process
+    - amazonka
+    - amazonka-s3
+    - wai-cors
 
 executables:
   apitoolkit-server-exe:
