@@ -104,15 +104,6 @@ processReplayEvents msgs attrs = do
   pure $ catMaybes vs
 
 
--- saveReplayEvent :: IOE :> es => (Text, ReplayPost) -> Eff es Text
--- saveReplayEvent (ackId, replayData) = do
---   let timestamp = formatTime defaultTimeLocale "%Y%m%d%H%M%S" replayData.timestamp
---   let sessionDir = "static/public/sessions/" <> toString (UUID.toText replayData.sessionId)
---   let filePath = sessionDir <> "/" <> timestamp <> ".json"
---   liftIO $ createDirectoryIfMissing True sessionDir
---   liftIO $ BL8.writeFile filePath (AE.encode replayData.events)
---   pure ackId
-
 getMinioFile :: IOE :> es => Minio.ConnectInfo -> Minio.Bucket -> Minio.Object -> Eff es AE.Array
 getMinioFile conn bucket object = do
   res <- liftIO $ Minio.runMinio conn do
@@ -157,46 +148,6 @@ saveReplayMinio envCfg (ackId, replayData) = do
   case res of
     Right _ -> pure $ Just ackId
     Left e -> pure Nothing
-
-
---   liftIO $ putStrLn "finished"
-
--- _ <- putObject bucket object  Nothing defaultPutObjectOptions
-
--- saveReplayEventSimple :: AWS.Env -> (Text, ReplayPost) -> IO (Either Text Text)
--- saveReplayEventSimple awsEnv (ackId, replayData) = do
---   let timestamp = toText $ formatTime defaultTimeLocale "%Y%m%d%H%M%S" replayData.timestamp
---       sessionDir = "sessions/" <> (UUID.toText replayData.sessionId)
---       objectKey = sessionDir <> "/" <> timestamp <> ".json"
---       jsonData = AE.encode replayData.events
---       -- Upload to S3 (exceptions will be thrown as IO exceptions)
-
---       putObjectReq =
---         S3.newPutObject
---           (S3.BucketName "rrweb")
---           (S3.ObjectKey objectKey)
---           (AWS.toBody jsonData)
---   res <- AWS.runResourceT $ AWS.send awsEnv putObjectReq
---   pure $ if res.httpStatus > 399 then Left "Something went wrong" else Right ackId
-
-saveReplayEventDirect :: HTTP :> es => (Text, ReplayPost) -> Eff es (Maybe Text)
-saveReplayEventDirect (ackId, replayData) = do
-  traceShowM "replay----eveeeentss"
-  let timestampStr = formatTime defaultTimeLocale "%Y%m%d%H%M%S" (timestamp replayData)
-      session = toString $ UUID.toText (sessionId replayData)
-      fileName = session <> "/" <> timestampStr <> ".json"
-      fullUrl = "http://localhost:9000/rrweb" <> fileName
-      authHeader = encodeUtf8 $ "Basic " <> B64.extractBase64 (B64.encodeBase64 (encodeUtf8 "myminioadmin:minio-secret-key-change-me"))
-
-      opts =
-        defaults
-          & header "Content-Type" .~ ["application/json"]
-          & header "Authorization" .~ [authHeader]
-
-  r <- putWith opts fullUrl (AE.encode replayData.events)
-  traceShowM r
-  let status = r ^. Wreq.responseStatus . Wreq.statusCode
-  pure $ if status >= 200 && status < 300 then Just ackId else Nothing
 
 
 replaySessionGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
