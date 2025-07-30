@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Pages.Replay (replayPostH, ReplayPost, processReplayEvents, replaySessionGetH) where
 
 import Control.Lens
@@ -6,38 +8,46 @@ import Data.ByteString.Lazy.Char8 qualified as BL8
 import Data.UUID qualified as UUID
 import Relude
 
+import Control.Error (hush)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
+import Data.Containers.ListUtils (nubOrd)
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
-import Control.Error (hush)
-import Data.Containers.ListUtils (nubOrd)
-import  Amazonka qualified as AWS
-import  Amazonka.S3 qualified as S3
+import Network.Minio
+import Network.Minio qualified as Minio
 
+import Data.ByteString.Base64 qualified as B64
 import Data.Time (UTCTime, formatTime, getCurrentTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Vector qualified as V
-import Lucid.Base (TermRaw (termRaw))
 import Effectful (Eff, IOE, liftIO, (:>))
 import Effectful.Reader.Static qualified
 import Lucid
+import Lucid.Base (TermRaw (termRaw))
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import OpenTelemetry.Resource.Telemetry (Telemetry (Telemetry))
+import Pages.LogExplorer.Log (curateCols)
 import Pkg.Queue (publishJSONToPubsub)
 import RequestMessages (replaceNullChars)
-import System.Config (AuthContext (config), EnvConfig (rrwebPubsubTopics))
+import System.Config (AuthContext (config), EnvConfig (..))
 import System.Directory (createDirectoryIfMissing)
-import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, addErrorToast)
-import Models.Apis.RequestDumps qualified as RequestDumps
-import Utils (eitherStrToText,checkFreeTierExceeded, faSprite_, getServiceColors, listToIndexHashMap, lookupVecTextByKey, onpointerdown_, prettyPrintCount)
-import Pages.LogExplorer.Log (curateCols)
+import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders)
+import Utils (checkFreeTierExceeded, eitherStrToText, faSprite_, getServiceColors, listToIndexHashMap, lookupVecTextByKey, onpointerdown_, prettyPrintCount)
 
+import Amazonka.S3 (PutObjectResponse (..))
+import Conduit (runConduit)
+import Data.Base64.Types qualified as B64
+import Data.Conduit (($$+-), (.|))
+import Data.Conduit.Combinators (sourceLazy)
+import Data.Conduit.Combinators qualified as CC
+import Data.Effectful.Wreq
+import Network.Wreq qualified as Wreq
 import Pkg.Parser (parseQueryToAST, toQText)
 import Text.Megaparsec (parseMaybe)
-
 
 
 data ReplayPost = ReplayPost
@@ -79,52 +89,115 @@ replayPostH pid body = do
         Right messageId -> do pure $ AE.object ["status" AE..= ("ok" :: Text), "messageId" AE..= messageId, "sessionId" AE..= sessionId]
 
 
-processReplayEvents :: IOE :> es => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
+processReplayEvents :: [(Text, ByteString)] -> HashMap Text Text -> ATBaseCtx [Text]
 processReplayEvents [] _ = pure []
 processReplayEvents msgs attrs = do
+  ctx <- Effectful.Reader.Static.ask @AuthContext
+  let envCfg = ctx.config
   let msgs' =
         msgs <&> \(ackId, msg) -> do
           let sanitizedJsonStr = replaceNullChars $ decodeUtf8 msg
           rrMsg <- eitherStrToText $ AE.eitherDecode $ encodeUtf8 sanitizedJsonStr
           Right (ackId, rrMsg)
 
-  if null $ rights msgs'
-    then pure []
-    else mapM saveReplayEvent (rights msgs')
+  vs <- mapM (saveReplayMinio envCfg) (rights msgs')
+  pure $ catMaybes vs
 
 
-saveReplayEvent :: IOE :> es => (Text, ReplayPost) -> Eff es Text
-saveReplayEvent (ackId, replayData) = do
-  let timestamp = formatTime defaultTimeLocale "%Y%m%d%H%M%S" replayData.timestamp
-  let sessionDir = "static/public/sessions/" <> toString (UUID.toText replayData.sessionId)
-  let filePath = sessionDir <> "/" <> timestamp <> ".json"
-  liftIO $ createDirectoryIfMissing True sessionDir
-  liftIO $ BL8.writeFile filePath (AE.encode replayData.events)
-  pure ackId
-
--- saveReplayEventSimple :: IOE :> es => AWS.Env -> (Text, ReplayPost) -> Eff es (Either Text Text)
--- saveReplayEventSimple awsEnv  (ackId, replayData) = do
+-- saveReplayEvent :: IOE :> es => (Text, ReplayPost) -> Eff es Text
+-- saveReplayEvent (ackId, replayData) = do
 --   let timestamp = formatTime defaultTimeLocale "%Y%m%d%H%M%S" replayData.timestamp
---   let sessionDir = "sessions/" <> (UUID.toText replayData.sessionId)
---   let objectKey = toString $ sessionDir <> "/" <> timestamp <> ".json"
---   let jsonData = AE.encode replayData.events
-  
---   -- Upload to S3 (exceptions will be thrown as IO exceptions)
---   let putObjectReq = S3.newPutObject 
---             (S3.BucketName "rrweb") 
---             (S3.ObjectKey objectKey) 
---             (AWS.toBody jsonData)
---   let o = newPutObject
-      
---       putObjectReq' = putObjectReq 
---             { S3.putObject_contentType = Just "application/json"
---             , S3.putObject_contentLength = Just (fromIntegral $ BL.length jsonData)
---             }
-      
---   res <- AWS.send putObjectReq'
---   case res of 
---     Right -> pure $ Right ackId 
---     Left err -> pure $ Left err
+--   let sessionDir = "static/public/sessions/" <> toString (UUID.toText replayData.sessionId)
+--   let filePath = sessionDir <> "/" <> timestamp <> ".json"
+--   liftIO $ createDirectoryIfMissing True sessionDir
+--   liftIO $ BL8.writeFile filePath (AE.encode replayData.events)
+--   pure ackId
+
+getMinioFile :: IOE :> es => Minio.ConnectInfo -> Minio.Bucket -> Minio.Object -> Eff es AE.Array
+getMinioFile conn bucket object = do
+  res <- liftIO $ Minio.runMinio conn do
+    src <- getObject bucket object defaultGetObjectOptions
+    let sld = gorObjectStream src
+    bs <- runConduit $ sld .| CC.foldMap fromStrict
+
+    let v = case AE.eitherDecode bs of
+          Right v' -> case v' of
+            AE.Array a -> a
+            _ -> V.empty
+          Left _ -> V.empty
+    pure v
+  whenRight V.empty res pure
+
+
+getMinioConnectInfo :: EnvConfig -> Minio.ConnectInfo
+getMinioConnectInfo envCfg = Minio.setCreds (Minio.CredentialValue accessKey secretKey Nothing) info
+  where
+    info = fromString $ toString envCfg.s3Endpoint
+    accessKey = fromString $ toString envCfg.s3AccessKey
+    secretKey = fromString $ toString envCfg.s3SecretKey
+
+
+saveReplayMinio :: IOE :> es => EnvConfig -> (Text, ReplayPost) -> Eff es (Maybe Text)
+saveReplayMinio envCfg (ackId, replayData) = do
+  let session = UUID.toText (sessionId replayData)
+      object = session <> ".json"
+  let conn = getMinioConnectInfo envCfg
+      bucket = fromString $ toString envCfg.s3Bucket
+  ds <- getMinioFile conn bucket object
+  res <- liftIO $ Minio.runMinio conn do
+    bExist <- Minio.bucketExists bucket
+    unless bExist $ void $ Minio.makeBucket bucket Nothing
+    let finalBody = case replayData.events of
+          AE.Array a -> ds <> a
+          _ -> ds
+    let body = AE.encode (AE.Array finalBody)
+        bodySize = BL.length body
+    _ <- Minio.putObject bucket object (sourceLazy body) (Just bodySize) Minio.defaultPutObjectOptions
+    pass
+  case res of
+    Right _ -> pure $ Just ackId
+    Left e -> pure Nothing
+
+
+--   liftIO $ putStrLn "finished"
+
+-- _ <- putObject bucket object  Nothing defaultPutObjectOptions
+
+-- saveReplayEventSimple :: AWS.Env -> (Text, ReplayPost) -> IO (Either Text Text)
+-- saveReplayEventSimple awsEnv (ackId, replayData) = do
+--   let timestamp = toText $ formatTime defaultTimeLocale "%Y%m%d%H%M%S" replayData.timestamp
+--       sessionDir = "sessions/" <> (UUID.toText replayData.sessionId)
+--       objectKey = sessionDir <> "/" <> timestamp <> ".json"
+--       jsonData = AE.encode replayData.events
+--       -- Upload to S3 (exceptions will be thrown as IO exceptions)
+
+--       putObjectReq =
+--         S3.newPutObject
+--           (S3.BucketName "rrweb")
+--           (S3.ObjectKey objectKey)
+--           (AWS.toBody jsonData)
+--   res <- AWS.runResourceT $ AWS.send awsEnv putObjectReq
+--   pure $ if res.httpStatus > 399 then Left "Something went wrong" else Right ackId
+
+saveReplayEventDirect :: HTTP :> es => (Text, ReplayPost) -> Eff es (Maybe Text)
+saveReplayEventDirect (ackId, replayData) = do
+  traceShowM "replay----eveeeentss"
+  let timestampStr = formatTime defaultTimeLocale "%Y%m%d%H%M%S" (timestamp replayData)
+      session = toString $ UUID.toText (sessionId replayData)
+      fileName = session <> "/" <> timestampStr <> ".json"
+      fullUrl = "http://localhost:9000/rrweb" <> fileName
+      authHeader = encodeUtf8 $ "Basic " <> B64.extractBase64 (B64.encodeBase64 (encodeUtf8 "myminioadmin:minio-secret-key-change-me"))
+
+      opts =
+        defaults
+          & header "Content-Type" .~ ["application/json"]
+          & header "Authorization" .~ [authHeader]
+
+  r <- putWith opts fullUrl (AE.encode replayData.events)
+  traceShowM r
+  let status = r ^. Wreq.responseStatus . Wreq.statusCode
+  pure $ if status >= 200 && status < 300 then Just ackId else Nothing
+
 
 replaySessionGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
 replaySessionGetH pid sessionId = do
@@ -147,22 +220,24 @@ replaySessionGetH pid sessionId = do
           traceIds = V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
       extraEvents <- Telemetry.getLogsByTraceIds pid (V.catMaybes traceIds)
 
-      let finalVecs = requestVecs  <> extraEvents
+      let finalVecs = requestVecs <> extraEvents
           serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
           colors = getServiceColors (V.catMaybes serviceNames)
-         
-          page = ReplayPage
-            { requestVecs = finalVecs
-            , cols = curatedColNames
-            , colIdxMap = colIdxMap
-            , serviceColors = colors
-            , nextLogsURL = Nothing
-            , recentLogsURL = Nothing
-            , resetLogsURL = Nothing
-            , pid = pid
-            }
+
+          page =
+            ReplayPage
+              { requestVecs = finalVecs
+              , cols = curatedColNames
+              , colIdxMap = colIdxMap
+              , serviceColors = colors
+              , nextLogsURL = Nothing
+              , recentLogsURL = Nothing
+              , resetLogsURL = Nothing
+              , pid = pid
+              }
       addRespHeaders $ replaySessionPage pid sessionId (Just page)
     Nothing -> addRespHeaders $ replaySessionPage pid sessionId Nothing
+
 
 data ReplayPage = ReplayPage
   { requestVecs :: V.Vector (V.Vector AE.Value)
@@ -196,17 +271,17 @@ replaySessionPage pid sessionId page = do
       button_ [class_ "px-3 py-1.5 text-sm border border-gray-300 rounded-md hover:bg-gray-50 flex items-center gap-2"] $ do
         "Filter"
     whenJust page $ \p -> do
-     div_ [class_ "flex flex-col h-[400px]"] do
-        termRaw "log-list" [ id_ "resultTable" , class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0", term "windowTarget" "sessionList"] ("" :: Text)
+      div_ [class_ "flex flex-col h-[400px]"] do
+        termRaw "log-list" [id_ "resultTable", class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0", term "windowTarget" "sessionList"] ("" :: Text)
 
-     let logs = decodeUtf8 $ AE.encode p.requestVecs
-         cols = decodeUtf8 $ AE.encode p.cols
-         colIdxMap = decodeUtf8 $ AE.encode p.colIdxMap
-         serviceColors = decodeUtf8 $ AE.encode p.serviceColors
-         projectid = p.pid.toText
-   
-     script_
-       [text|
+      let logs = decodeUtf8 $ AE.encode p.requestVecs
+          cols = decodeUtf8 $ AE.encode p.cols
+          colIdxMap = decodeUtf8 $ AE.encode p.colIdxMap
+          serviceColors = decodeUtf8 $ AE.encode p.serviceColors
+          projectid = p.pid.toText
+
+      script_
+        [text|
          window.sessionListData = {
           requestVecs: $logs,
           cols: $cols,

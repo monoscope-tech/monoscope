@@ -148,6 +148,12 @@ source-repository-package
   subdir: lib/services/amazonka-sts
   subdir: lib/services/amazonka-s3
 
+source-repository-package
+  type: git 
+  location: https://github.com/minio/minio-hs
+  tag: 3e665784228cba7261560c104b8f1d928e7b5bd4
+  subdir: .
+
 constraints:
   streamly ^>=0.10.0
 allow-newer: all 

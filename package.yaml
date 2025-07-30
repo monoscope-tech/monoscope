@@ -269,6 +269,8 @@ library:
     - amazonka
     - amazonka-s3
     - wai-cors
+    - minio-hs
+    - conduit
 
 executables:
   apitoolkit-server-exe:

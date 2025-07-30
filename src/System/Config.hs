@@ -90,6 +90,10 @@ data EnvConfig = EnvConfig
   , whatsappDashboardList :: Text
   , whatsappShareWidget :: Text
   , rrwebPubsubTopics :: [Text]
+  , s3Endpoint :: Text
+  , s3Bucket :: Text
+  , s3AccessKey :: Text
+  , s3SecretKey :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)

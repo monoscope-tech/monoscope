@@ -42,6 +42,7 @@ extra-deps:
   - ki-effectful-0.1.1.0@sha256:15a4bc01c4195d9e3ed3d0ae25e419b0c035c897494dadefc2d676a43f1f5082,1815
   - http2-tls-0.4.5@sha256:2084af1e64a4f4c2523cd0aa264fe1bebca8333e4dde0e25cf4820f27c012c97,2398
   - snappy-c-0.1.1@sha256:b113aa1c7c095325cc218e8fcc4ad05e719f5ed0d2febb910d42e21387759ac9,3993
+  - microlens-pro-0.2.0.4@sha256:af8fc5760d913704c5283e649dd90feaf6bddd739f9b75bf52495b7964830bea,3377
   - git: https://github.com/iand675/hs-opentelemetry
     commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
     subdirs:
@@ -109,5 +110,10 @@ extra-deps:
       - lib/services/amazonka-sso
       - lib/services/amazonka-sts
       - lib/services/amazonka-s3
+
+  - git: https://github.com/minio/minio-hs
+    commit: 3e665784228cba7261560c104b8f1d928e7b5bd4
+    subdirs:
+      - .
 
 allow-newer: true
