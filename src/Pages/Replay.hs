@@ -35,7 +35,7 @@ import Pkg.Queue (publishJSONToPubsub)
 import RequestMessages (replaceNullChars)
 import System.Config (AuthContext (config), EnvConfig (..))
 import System.Directory (createDirectoryIfMissing)
-import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders)
+import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders)
 import Utils (checkFreeTierExceeded, eitherStrToText, faSprite_, getServiceColors, listToIndexHashMap, lookupVecTextByKey, onpointerdown_, prettyPrintCount)
 
 import Amazonka.S3 (PutObjectResponse (..))
@@ -89,7 +89,7 @@ replayPostH pid body = do
         Right messageId -> do pure $ AE.object ["status" AE..= ("ok" :: Text), "messageId" AE..= messageId, "sessionId" AE..= sessionId]
 
 
-processReplayEvents :: [(Text, ByteString)] -> HashMap Text Text -> ATBaseCtx [Text]
+processReplayEvents :: [(Text, ByteString)] -> HashMap Text Text -> ATBackgroundCtx [Text]
 processReplayEvents [] _ = pure []
 processReplayEvents msgs attrs = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
