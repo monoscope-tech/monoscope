@@ -1092,7 +1092,6 @@ getEventsBySessionId pid sessionId = dbtToEff $ query q (pid, sessionId)
     |]
 
 
-
 getSpandRecordsByTraceIds :: DB :> es => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector OtelLogsAndSpans)
 getSpandRecordsByTraceIds pid trIds = dbtToEff $ query q (pid.toText, trIds)
   where

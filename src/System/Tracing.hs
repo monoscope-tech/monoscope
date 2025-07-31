@@ -1,8 +1,8 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module System.Tracing (
   Tracing,
@@ -39,7 +39,9 @@ data Tracing :: Effect where
   AddAttribute :: Span -> Text -> Attribute -> Tracing m ()
   SetStatus :: Span -> SpanStatus -> Tracing m ()
 
+
 type instance DispatchOf Tracing = 'Dynamic
+
 
 makeEffect ''Tracing
 
@@ -54,7 +56,7 @@ runTracing tp = interpret $ \env -> \case
       -- Get current context
       ctx <- Context.getContext
       -- Create span with current context
-      sp <- Trace.createSpan tracer ctx name (defaultSpanArguments {Trace.kind = Server, Trace.attributes = attrMap})
+      sp <- Trace.createSpan tracer ctx name (defaultSpanArguments{Trace.kind = Server, Trace.attributes = attrMap})
       -- Insert span into context for propagation
       let newCtx = Context.insertSpan sp ctx
       -- Set the new context

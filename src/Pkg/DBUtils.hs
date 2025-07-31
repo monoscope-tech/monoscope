@@ -10,6 +10,7 @@ import Database.PostgreSQL.Simple.FromField (FromField (..), fromField, returnEr
 import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.ToField (ToField, toField)
 import GHC.TypeLits
+
 -- import OpenTelemetry.Instrumentation.PostgresqlSimple (postgreSQLSimpleInstrumentationConfig, wrapConnection)
 import Relude
 import Relude.Unsafe qualified as Unsafe

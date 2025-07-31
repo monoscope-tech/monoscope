@@ -1116,7 +1116,7 @@ alertConfigurationForm_ pid = do
                                      })
                                    end|]
                             ]
-                            ++ [required_ "" | req]
+                          ++ [required_ "" | req]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True

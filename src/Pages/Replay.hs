@@ -72,7 +72,8 @@ publishReplayEvent replayData pid = do
     [] -> pure $ Left "No rrweb pubsub topics configured"
     (topicName : _) -> do
       liftIO
-        $ publishJSONToPubsub ctx topicName messagePayload attributes >>= \case
+        $ publishJSONToPubsub ctx topicName messagePayload attributes
+        >>= \case
           Left err -> pure $ Left $ "Failed to publish replay event: " <> err
           Right messageId -> pure $ Right messageId
 

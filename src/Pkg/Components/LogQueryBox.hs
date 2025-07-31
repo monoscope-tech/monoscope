@@ -76,7 +76,7 @@ logQueryBox_ config = do
                   on keydown[key=='Space' and shiftKey] from document set #ai-search-chkbox.checked to true
                   |]
               ]
-              <> [checked_ | isJust config.targetWidgetPreview]
+            <> [checked_ | isJust config.targetWidgetPreview]
           script_
             [text|
             document.addEventListener('keydown', function(e) {
@@ -240,7 +240,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId =
                       end
                    |]
           ]
-          <> [checked_ | vizType == defaultVizType]
+        <> [checked_ | vizType == defaultVizType]
       span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
       span_ [] $ toHtml label
 

@@ -5,8 +5,8 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
 
 module Data.Effectful.Notify (
@@ -38,9 +38,9 @@ import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Effectful
 import Effectful.Dispatch.Dynamic
-import Effectful.TH
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
+import Effectful.TH
 import Log qualified
 import Network.Wreq (FormParam ((:=)), auth, basicAuth, defaults, header, postWith)
 import Relude hiding (Reader, State, ask, get, modify, put, runState)
@@ -96,7 +96,9 @@ data Notify :: Effect where
   SendNotification :: Notification -> Notify m ()
   GetNotifications :: Notify m [Notification]
 
+
 type instance DispatchOf Notify = 'Dynamic
+
 
 makeEffect ''Notify
 

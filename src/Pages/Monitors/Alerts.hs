@@ -11,6 +11,7 @@ module Pages.Monitors.Alerts (
 where
 
 import Data.CaseInsensitive qualified as CI
+import Data.Default (def)
 import Data.Either.Extra (fromRight')
 import Data.Text qualified as T
 import Data.Time.Clock (UTCTime)
@@ -19,6 +20,8 @@ import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
+import Fmt.Internal.Core (fmt)
+import Fmt.Internal.Numeric (commaizeF)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
@@ -37,9 +40,6 @@ import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (checkFreeTierExceeded, faSprite_)
 import Web.FormUrlEncoded (FromForm)
-import Data.Default (def)
-import Fmt.Internal.Core (fmt)
-import Fmt.Internal.Numeric (commaizeF)
 
 
 data AlertUpsertForm = AlertUpsertForm
@@ -218,7 +218,4 @@ alertOverviewGetH pid alertId = do
   -- Redirect to the unified monitor overview page
   addRespHeaders $ AlertRedirect $ "/p/" <> pid.toText <> "/monitors/" <> alertId.toText <> "/overview"
 
-
 -- Removed old alert overview page components as they are now handled in the unified Testing module
-
-

@@ -22,7 +22,9 @@ import Relude
 data UUIDEff :: Effect where
   GenUUID :: UUIDEff m UUID.UUID
 
+
 type instance DispatchOf UUIDEff = 'Dynamic
+
 
 makeEffect ''UUIDEff
 
