@@ -576,8 +576,6 @@ library
     , xxhash
     , yaml
     , wai-cors
-    , amazonka 
-    , amazonka-s3
     , minio-hs
     , conduit
   default-language: GHC2021
