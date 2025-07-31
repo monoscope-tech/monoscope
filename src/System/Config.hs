@@ -94,6 +94,8 @@ data EnvConfig = EnvConfig
   , s3Bucket :: Text
   , s3AccessKey :: Text
   , s3SecretKey :: Text
+  , s3Region :: Text
+  , enableReplayService :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)

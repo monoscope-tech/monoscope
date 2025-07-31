@@ -116,8 +116,9 @@ getMinioFile conn bucket object = do
 
 
 getMinioConnectInfo :: EnvConfig -> Minio.ConnectInfo
-getMinioConnectInfo envCfg = Minio.setCreds (Minio.CredentialValue accessKey secretKey Nothing) info
+getMinioConnectInfo envCfg = Minio.setCreds (Minio.CredentialValue accessKey secretKey Nothing) withRegion
   where
+    withRegion = Minio.setRegion (fromString $ toString envCfg.s3Region) info
     info = fromString $ toString envCfg.s3Endpoint
     accessKey = fromString $ toString envCfg.s3AccessKey
     secretKey = fromString $ toString envCfg.s3SecretKey
