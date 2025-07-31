@@ -584,6 +584,7 @@ virtualTable page = do
     "log-list"
     [ id_ "resultTable"
     , class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0"
+    , term "windowTarget" "logList"
     ]
     ("" :: Text)
   let logs = decodeUtf8 $ AE.encode page.requestVecs
@@ -596,7 +597,7 @@ virtualTable page = do
       projectid = page.pid.toText
   script_
     [text|
-      window.virtualListData = {
+      window.logListData = {
        requestVecs: $logs,
        cols: $cols,
        colIdxMap: $colIdxMap,
@@ -615,6 +616,16 @@ apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
   section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-hidden overflow-x-hidden pb-2 group/pg", id_ "apiLogsPage"] do
     template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
+
+    div_ [class_ "drawer drawer-end"] $ do
+      input_ [id_ "session_replay_drawer", type_ "checkbox", class_ "drawer-toggle w-0 h-0"]
+      div_ [class_ "drawer-content"]
+        $ label_ [Lucid.for_ $ "session_replay_drawer", class_ "drawer-button hidden group-hover:block absolute right-2 top-1/2 -translate-y-1/2"] do
+          faSprite_ "play" "regular" "w-4 h-4 fill-textWeak"
+      div_ [class_ "drawer-side z-[9999999999]"] $ do
+        label_ [Lucid.for_ $ "session_replay_drawer", class_ "drawer-overlay"] pass
+        div_ [class_ "bg-white overflow-y-scroll min-h-full w-[900px] p-0", id_ "replay_session_container"] $ do
+          span_ [class_ "htmx-indicator query-indicator  loading  loading-dots mt-4 mx-auto", id_ "replay_session_indicator"] ""
     div_
       [ style_ "z-index:26"
       , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
@@ -1105,7 +1116,7 @@ alertConfigurationForm_ pid = do
                                      })
                                    end|]
                             ]
-                            ++ [required_ "" | req]
+                          ++ [required_ "" | req]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True

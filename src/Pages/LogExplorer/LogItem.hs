@@ -146,8 +146,10 @@ expandAPIlogItemH pid rdId createdAt sourceM = do
           aptSpan <- case getRequestDetails record.attributes of
             Just ("HTTP", _, _, _) -> do
               let trIdM = record.context >>= (.trace_id)
-              if record.name /= Just "apitoolkit-http-span" || 
-                 record.name /= Just "monoscope.http"
+              if record.name
+                /= Just "apitoolkit-http-span"
+                || record.name
+                /= Just "monoscope.http"
                 then do
                   case trIdM of
                     Just trId -> Telemetry.spanRecordByName pid trId (fromMaybe "apitoolkit-http-span" record.name)

@@ -201,6 +201,13 @@ packages:
   original:
     hackage: snappy-c-0.1.1@sha256:b113aa1c7c095325cc218e8fcc4ad05e719f5ed0d2febb910d42e21387759ac9,3993
 - completed:
+    hackage: microlens-pro-0.2.0.4@sha256:af8fc5760d913704c5283e649dd90feaf6bddd739f9b75bf52495b7964830bea,3377
+    pantry-tree:
+      sha256: 6fc091c70de2fc1db2af16e5b64780f7dbdb570e4da02614f28bfb1ecd65db46
+      size: 430
+  original:
+    hackage: microlens-pro-0.2.0.4@sha256:af8fc5760d913704c5283e649dd90feaf6bddd739f9b75bf52495b7964830bea,3377
+- completed:
     commit: ee8a6dad7db306eb67748ddcd77df4974ad8259e
     git: https://github.com/iand675/hs-opentelemetry
     name: hs-opentelemetry-api
@@ -550,6 +557,19 @@ packages:
   original:
     commit: b0d490111477b8e5766b64da933fd0548fc5e0f5
     git: https://github.com/tusharad/langchain-hs
+    subdir: .
+- completed:
+    commit: 3e665784228cba7261560c104b8f1d928e7b5bd4
+    git: https://github.com/minio/minio-hs
+    name: minio-hs
+    pantry-tree:
+      sha256: b40b79fedd757eac8825f89eafc5ee13f3991898e407cb3d1c9b5a3b15bffdfc
+      size: 4744
+    subdir: .
+    version: 1.7.0
+  original:
+    commit: 3e665784228cba7261560c104b8f1d928e7b5bd4
+    git: https://github.com/minio/minio-hs
     subdir: .
 snapshots:
 - completed:

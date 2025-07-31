@@ -266,6 +266,9 @@ library:
     - bytestring
     - base16-bytestring
     - process
+    - wai-cors
+    - minio-hs
+    - conduit
 
 executables:
   apitoolkit-server-exe:

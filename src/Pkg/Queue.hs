@@ -1,7 +1,7 @@
-module Pkg.Queue (pubsubService, kafkaService) where
+module Pkg.Queue (pubsubService, kafkaService, publishJSONToPubsub) where
 
 import Control.Exception.Annotated (checkpoint)
-import Control.Lens ((^?), _Just)
+import Control.Lens ((^.), (^?), _Just)
 import Control.Lens qualified as L
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Aeson qualified as AE
@@ -21,10 +21,10 @@ import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
 import Kafka.Consumer qualified as K
 import Log qualified
+import OpenTelemetry.Trace (TracerProvider)
 import Relude
 import System.Config
 import System.Types (ATBackgroundCtx, runBackground)
-import OpenTelemetry.Trace (TracerProvider)
 import UnliftIO (throwIO)
 import UnliftIO.Exception (bracket, tryAny)
 
@@ -83,6 +83,47 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
     pubSubScope = Proxy
 
 
+publishJSONToPubsub :: AE.ToJSON a => AuthContext -> Text -> a -> HM.HashMap Text Text -> IO (Either Text Text)
+publishJSONToPubsub appCtx topicName jsonData attributes = checkpoint "publishJSONToPubsub" do
+  let envConfig = appCtx.config
+  env <- case (toLazy envConfig.apitoolkitPusherServiceAccountB64) of
+    "" -> Google.newEnv <&> (Google.envScopes L..~ pubSubScope)
+    sa -> do
+      let credJSON = either error id $ LB64.decodeBase64Untyped (LT.encodeUtf8 sa)
+      let credsE = Google.fromJSONCredentials credJSON
+      let creds = either (error . toText) id credsE
+      managerG <- Google.newManager Google.tlsManagerSettings
+      Google.newEnvWith creds (\_ _ -> pass) managerG <&> (Google.envScopes L..~ pubSubScope)
+
+  result <- tryAny $ runResourceT $ checkpoint (toAnnotation $ "publishJSONToPubsub: " <> topicName) do
+    let topic = "projects/past-3/topics/" <> topicName
+
+    let messageData = BC.toStrict $ LT.encodeUtf8 $ LT.decodeUtf8 $ AE.encode jsonData
+
+    let message =
+          PubSub.newPubsubMessage
+            & field @"data'"
+            L.?~ Google.Base64 messageData
+              & field @"attributes"
+            L.?~ PubSub.PubsubMessage_Attributes (HM.map toText attributes)
+
+    let publishReq = PubSub.newPublishRequest & field @"messages" L..~ Just [message]
+
+    publishResp <- Google.send env $ PubSub.newPubSubProjectsTopicsPublish publishReq topic
+
+    case publishResp ^. field @"messageIds" of
+      Just (msgId : _) -> pure $ Right msgId
+      _ -> pure $ Left "No message ID returned from Pub/Sub"
+
+  case result of
+    Left e -> pure $ Left $ toText $ show e
+    Right res -> pure res
+  where
+    -- pubSubScope :: Proxy PubSub.Pubsub'FullControl
+    pubSubScope :: Proxy '["https://www.googleapis.com/auth/pubsub"]
+    pubSubScope = Proxy
+
+
 kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx [Text]) -> IO ()
 kafkaService appLogger appCtx tp fn = checkpoint "kafkaService" do
   -- Generate unique client ID for logging/metrics
@@ -96,10 +137,10 @@ kafkaService appLogger appCtx tp fn = checkpoint "kafkaService" do
       pollResult@(leftRecords, rightRecords) <- partitionEithers <$> K.pollMessageBatch consumer (K.Timeout 100) (K.BatchSize appCtx.config.messagesPerPubsubPullBatch) -- timeout in milliseconds
       case rightRecords of
         [] -> pass
-        (rec : _) -> do
-          let topic = rec.crTopic.unTopicName
+        (recc : _) -> do
+          let topic = recc.crTopic.unTopicName
               ceType = topicToCeType topic
-              attributes = HM.insert "ce-type" ceType $ consumerRecordHeadersToHashMap rec
+              attributes = HM.insert "ce-type" ceType $ consumerRecordHeadersToHashMap recc
               allRecords = consumerRecordToTuple <$> rightRecords
 
           msgIds <-

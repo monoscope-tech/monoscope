@@ -49,7 +49,6 @@ import Text.Time.Pretty (prettyTimeAuto)
 import Utils (checkFreeTierExceeded, faSprite_, listToIndexHashMap, lookupVecTextByKey)
 
 
-
 stepsBox_ :: Int -> Int -> Int -> Html ()
 stepsBox_ total passed failed = do
   div_ [class_ "flex gap-2 px-6 py-2 items-center border rounded-3xl"] do
@@ -752,7 +751,7 @@ unifiedOverviewPage pid monitorData currTime = do
     div_ [class_ "relative p-1 flex gap-10 items-start"] do
       case monitorData of
         Left alert -> alertStats_ pid alert currTime
-        Right (col, _) -> 
+        Right (col, _) ->
           let (Testing.CollectionSteps steps) = col.collectionSteps
            in dStats pid (V.length steps) col.lastRunPassed col.lastRunFailed col.schedule
 

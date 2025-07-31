@@ -1,7 +1,7 @@
 'use strict';
 import { virtualize } from '@lit-labs/virtualizer/virtualize.js';
 import { LitElement, html, css, TemplateResult, nothing } from 'lit';
-import { customElement, state, query } from 'lit/decorators.js';
+import { customElement, state, query, property } from 'lit/decorators.js';
 import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, Trace, TraceDataMap } from './types/types';
 import { RangeChangedEvent, VisibilityChangedEvent } from '@lit-labs/virtualizer';
 
@@ -17,6 +17,8 @@ const _ensureBadgeClasses = html`
 
 @customElement('log-list')
 export class LogList extends LitElement {
+  @property({ type: String }) private windowTarget: string | null = null;
+
   @state() private expandedTraces: Record<string, boolean> = {};
   @state() private flipDirection: boolean = false;
   @state() private isLoadingRecent: boolean = false;
@@ -62,6 +64,7 @@ export class LogList extends LitElement {
       'logItemCol',
     ];
     methods.forEach((m) => (this[m] = this[m].bind(this)));
+
     const liveBtn = document.querySelector('#streamLiveData') as HTMLInputElement;
     if (liveBtn) {
       liveBtn.addEventListener('change', () => {
@@ -192,22 +195,25 @@ export class LogList extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    if (window.virtualListData) {
-      const logs = window.virtualListData.requestVecs;
-      this.logsColumns = window.virtualListData.cols;
-      this.colIdxMap = window.virtualListData.colIdxMap;
-      this.serviceColors = window.virtualListData.serviceColors;
-      this.nextFetchUrl = window.virtualListData.nextFetchUrl;
-      this.recentFetchUrl = window.virtualListData.recentFetchUrl;
-      this.projectId = window.virtualListData.projectId;
+    console.log(this.windowTarget);
+    const globalKey = `${this.windowTarget}Data`;
+    const data = (window as any)[globalKey];
+    if (this.windowTarget && data) {
+      const logs = data.requestVecs ?? [];
+
+      this.logsColumns = data.cols ?? [];
+      this.colIdxMap = data.colIdxMap ?? {};
+      this.serviceColors = data.serviceColors ?? {};
+      this.nextFetchUrl = data.nextFetchUrl ?? '';
+      this.recentFetchUrl = data.recentFetchUrl ?? '';
+      this.projectId = data.projectId ?? '';
       this.expandedTraces = {};
       this.spanListTree = this.buildSpanListTree(logs);
       this.updateColumnMaxWidthMap(logs);
       this.hasMore = logs.length > 0;
       this.requestUpdate();
       this.fetchedNew = false;
-
-      window.virtualListData = null;
+      (window as any)[globalKey] = null;
     }
   }
 
@@ -523,7 +529,6 @@ export class LogList extends LitElement {
           ${list.length === 1 ? emptyState(this.logsColumns.length) : nothing}
           <tbody
             class="min-w-0 text-sm"
-            id="log-item-table-body"
             @rangeChanged=${(event: RangeChangedEvent) => {
               this.setupIntersectionObserver();
             }}
@@ -707,8 +712,8 @@ export class LogList extends LitElement {
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
-            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
+          ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         return html`<div class="flex w-full ${this.wrapLines ? 'items-start' : 'items-center'} gap-1">
           ${this.view === 'tree'
             ? html`
@@ -746,8 +751,8 @@ export class LogList extends LitElement {
                         ${children}
                       </button>`
                     : depth === 0
-                      ? nothing
-                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                    ? nothing
+                    : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
                 </div>
               `
             : nothing}
@@ -765,7 +770,7 @@ export class LogList extends LitElement {
   }
 
   renderLoadMore() {
-    return this.hasMore
+    return this.hasMore && this.windowTarget != 'sessionList'
       ? html`<tr class="w-full flex relative">
           <td colspan=${String(this.logsColumns.length)} class="relative  pl-[calc(40vw-10ch)]">
             <div
@@ -788,24 +793,26 @@ export class LogList extends LitElement {
   }
 
   fetchRecent() {
-    return html`<tr class="w-full flex relative" id="recent-logs">
-      <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]" id="recent-logs">
-        ${this.isLiveStreaming
-          ? html`<p>Live streaming latest data...</p>`
-          : this.isLoadingRecent
-            ? html`<div class="loading loading-dots loading-md"></div>`
-            : html`
-                <button
-                  class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-                  @pointerdown=${() => {
-                    this.fetchData(this.recentFetchUrl, true);
-                  }}
-                >
-                  Check for recent data
-                </button>
-              `}
-      </td>
-    </tr>`;
+    return this.windowTarget != 'sessionList'
+      ? html`<tr class="w-full flex relative" id="recent-logs">
+          <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]" id="recent-logs">
+            ${this.isLiveStreaming
+              ? html`<p>Live streaming latest data...</p>`
+              : this.isLoadingRecent
+              ? html`<div class="loading loading-dots loading-md"></div>`
+              : html`
+                  <button
+                    class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
+                    @pointerdown=${() => {
+                      this.fetchData(this.recentFetchUrl, true);
+                    }}
+                  >
+                    Check for recent data
+                  </button>
+                `}
+          </td>
+        </tr>`
+      : html`<tr></tr>`;
   }
 
   logTableHeading(column: string) {
@@ -843,11 +850,38 @@ export class LogList extends LitElement {
     const s = rowData.type === 'log' ? 'logs' : 'spans';
     const targetInfo = requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s);
     let isNew = rowData.isNew;
+    const sessionId = lookupVecTextByKey(rowData.data, this.colIdxMap, 'session_id');
     return html`
       <tr
-        class=${`item-row relative p-0 flex items-center cursor-pointer whitespace-nowrap ${isNew ? 'animate-fadeBg' : ''}`}
+        class=${`item-row relative p-0 flex items-center group cursor-pointer whitespace-nowrap ${isNew ? 'animate-fadeBg' : ''}`}
         @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
       >
+        ${sessionId
+          ? html`<button
+              class="absolute left-0 top-1/2 -translate-y-1/2 w-max z-10 hidden group-hover:block"
+              data-tippy-content="Session ID: ${sessionId}"
+              @click=${(e: any) => {
+                e.stopPropagation();
+                e.preventDefault();
+              }}
+              @pointerdown=${(e: any) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const input = document.getElementById('session_replay_drawer') as HTMLInputElement;
+                input.checked = true;
+
+                const url = `/p/${this.projectId}/replay_session/${sessionId}`;
+                updateUrlState('session_replay', sessionId);
+                (window as any).htmx.ajax('GET', url, {
+                  target: '#replay_session_container',
+                  swap: 'innerHTML',
+                  indicator: '#replay_session_indicator',
+                });
+              }}
+            >
+              ${faSprite('play', 'regular', 'w-4 h-4 fill-textWeak')}
+            </button>`
+          : nothing}
         ${this.logsColumns
           .filter((v) => v !== 'latency_breakdown')
           .map((column) => {
@@ -1194,8 +1228,8 @@ const errorClass = (reqVec: any[], colIdxMap: ColIdxMap) => {
     hasErrors || errStatus === 'ERROR'
       ? 'w-1 bg-fillError-strong'
       : status >= 400
-        ? 'w-1 bg-fillWarning-strong'
-        : 'w-1 bg-fillBrand-weak status-indicator';
+      ? 'w-1 bg-fillWarning-strong'
+      : 'w-1 bg-fillBrand-weak status-indicator';
 
   return [status, hasErrors, errClass];
 };
@@ -1221,7 +1255,7 @@ function spanLatencyBreakdown({
 }) {
   const width = (duration / traceEnd) * barWidth;
   const left = (start / traceEnd) * barWidth;
-  
+
   // Base visualization that's always rendered
   const baseVisualization = html`
     <div class="flex h-5 relative bg-fillWeak overflow-x-hidden" style=${`width:${barWidth}px`}>
@@ -1242,18 +1276,12 @@ function spanLatencyBreakdown({
     return html`<div class="-mt-1 shrink-0">
       <div class="flex h-5 relative" style=${`width:${barWidth}px`}>
         ${baseVisualization}
-        
+
         <!-- Overlay frame elements on top -->
         <!-- Full width boundary markers at the start and end -->
-        <div 
-          class="absolute top-0 h-full border-l-2 border-strokeBrand-strong pointer-events-none" 
-          style="left:0"
-        ></div>
-        <div 
-          class="absolute top-0 h-full border-r-2 border-strokeBrand-strong pointer-events-none" 
-          style=${`left:${barWidth - 2}px`}
-        ></div>
-        
+        <div class="absolute top-0 h-full border-l-2 border-strokeBrand-strong pointer-events-none" style="left:0"></div>
+        <div class="absolute top-0 h-full border-r-2 border-strokeBrand-strong pointer-events-none" style=${`left:${barWidth - 2}px`}></div>
+
         <!-- Horizontal line representing the full timeline -->
         <div
           class="absolute top-1/2 -translate-y-1/2 h-[1px] bg-strokeBrand-strong pointer-events-none"
@@ -1262,7 +1290,7 @@ function spanLatencyBreakdown({
       </div>
     </div>`;
   }
-  
+
   // For root spans that are not expanded, return just the base visualization
   return html`<div class="-mt-1 shrink-0">${baseVisualization}</div>`;
 }

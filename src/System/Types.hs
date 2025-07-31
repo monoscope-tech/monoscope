@@ -46,6 +46,7 @@ import Effectful.State.Static.Local qualified as State
 import Effectful.Time (Time, runFrozenTime, runTime)
 import Log qualified
 import Models.Users.Sessions qualified as Sessions
+import OpenTelemetry.Trace (TracerProvider)
 import Relude
 import Servant (AuthProtect, Header, Headers, ServerError, addHeader, noHeader)
 import Servant qualified
@@ -55,7 +56,6 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
-import OpenTelemetry.Trace (TracerProvider)
 import Web.Cookie (SetCookie)
 
 

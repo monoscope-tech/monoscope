@@ -94,6 +94,11 @@ bodyWrapper bcfg child = do
         link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/theme/elegant.min.css"]
         link_ [rel_ "stylesheet", href_ "https://cdn.jsdelivr.net/npm/@yaireo/tagify/dist/tagify.css", type_ "text/css"]
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css")]
+
+        -- rrweb
+        link_ [rel_ "stylesheet", href_ "https://cdn.jsdelivr.net/npm/rrweb-player@latest/dist/style.css"]
+        script_ [src_ "https://cdn.jsdelivr.net/npm/rrweb-player@latest/dist/index.js"] ("" :: Text)
+
         link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css")]
         link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/web-components/dist/css/index.css")]
 

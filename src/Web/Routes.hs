@@ -74,6 +74,7 @@ import Pages.Projects.CreateProject qualified as CreateProject
 import Pages.Projects.Integrations qualified as Integrations
 import Pages.Projects.ListProjects qualified as ListProjects
 import Pages.Projects.ManageMembers qualified as ManageMembers
+import Pages.Replay qualified as Replay
 import Pages.Reports qualified as Reports
 import Pages.Share qualified as Share
 import Pages.Specification.Documentation qualified as Documentation
@@ -156,6 +157,7 @@ data Routes mode = Routes
   , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
   , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[JSON] LemonSqueezy.WebhookData :> Post '[HTML] (Html ())
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
+  , rrwebPost :: mode :- "rrweb" :> ProjectId :> ReqBody '[PlainText] Text :> Post '[JSON] AE.Value
   }
   deriving stock (Generic)
 
@@ -199,6 +201,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
     manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> QPT "from" :> Get '[HTML] (RespHeaders LemonSqueezy.BillingGet)
   , -- Swagger/documentation
     swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] (RespHeaders AE.Value)
+  , replaySessionGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[HTML] (RespHeaders (Html ()))
   , -- Sub-route groups
     projects :: mode :- ProjectsRoutes
   , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes
@@ -360,6 +363,7 @@ server pool =
     , clientMetadata = ClientMetadata.clientMetadataH
     , lemonWebhook = LemonSqueezy.webhookPostH
     , chartsDataShot = Charts.queryMetrics
+    , rrwebPost = Replay.replayPostH
     , cookieProtected = \sessionWithCookies ->
         Servant.hoistServerWithContext
           (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
@@ -407,6 +411,7 @@ cookieProtectedServer =
     , shareLinkPost = Share.shareLinkPostH
     , -- Swagger handlers
       swaggerGenerateGet = GenerateSwagger.generateGetH
+    , replaySessionGet = Replay.replaySessionGetH
     , -- Billing handlers
       manageBillingGet = LemonSqueezy.manageBillingGetH
     , -- Endpoint handlers
