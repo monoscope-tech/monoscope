@@ -14,10 +14,13 @@ import Data.ByteString.Lazy qualified as BL
 import Data.Containers.ListUtils (nubOrd)
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
-import Network.Minio
 import Network.Minio qualified as Minio
 
+import Conduit (runConduit)
+import Data.Base64.Types qualified as B64
 import Data.ByteString.Base64 qualified as B64
+import Data.Conduit ((.|))
+import Data.Conduit.Combinators qualified as CC
 import Data.Time (UTCTime, formatTime, getCurrentTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Vector qualified as V
@@ -31,23 +34,14 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import OpenTelemetry.Resource.Telemetry (Telemetry (Telemetry))
 import Pages.LogExplorer.Log (curateCols)
+import Pkg.Parser (parseQueryToAST, toQText)
 import Pkg.Queue (publishJSONToPubsub)
 import RequestMessages (replaceNullChars)
 import System.Config (AuthContext (config), EnvConfig (..))
 import System.Directory (createDirectoryIfMissing)
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders)
-import Utils (checkFreeTierExceeded, eitherStrToText, faSprite_, getServiceColors, listToIndexHashMap, lookupVecTextByKey, onpointerdown_, prettyPrintCount)
-
-import Amazonka.S3 (PutObjectResponse (..))
-import Conduit (runConduit)
-import Data.Base64.Types qualified as B64
-import Data.Conduit (($$+-), (.|))
-import Data.Conduit.Combinators (sourceLazy)
-import Data.Conduit.Combinators qualified as CC
-import Data.Effectful.Wreq
-import Network.Wreq qualified as Wreq
-import Pkg.Parser (parseQueryToAST, toQText)
 import Text.Megaparsec (parseMaybe)
+import Utils (checkFreeTierExceeded, eitherStrToText, faSprite_, getServiceColors, listToIndexHashMap, lookupVecTextByKey, onpointerdown_, prettyPrintCount)
 
 
 data ReplayPost = ReplayPost
@@ -73,9 +67,9 @@ publishReplayEvent replayData pid = do
     (topicName : _) -> do
       liftIO
         $ publishJSONToPubsub ctx topicName messagePayload attributes
-        >>= \case
-          Left err -> pure $ Left $ "Failed to publish replay event: " <> err
-          Right messageId -> pure $ Right messageId
+          >>= \case
+            Left err -> pure $ Left $ "Failed to publish replay event: " <> err
+            Right messageId -> pure $ Right messageId
 
 
 replayPostH :: Projects.ProjectId -> Text -> ATBaseCtx AE.Value
@@ -108,8 +102,8 @@ processReplayEvents msgs attrs = do
 getMinioFile :: IOE :> es => Minio.ConnectInfo -> Minio.Bucket -> Minio.Object -> Eff es AE.Array
 getMinioFile conn bucket object = do
   res <- liftIO $ Minio.runMinio conn do
-    src <- getObject bucket object defaultGetObjectOptions
-    let sld = gorObjectStream src
+    src <- Minio.getObject bucket object Minio.defaultGetObjectOptions
+    let sld = Minio.gorObjectStream src
     bs <- runConduit $ sld .| CC.foldMap fromStrict
 
     let v = case AE.eitherDecode bs of
@@ -144,7 +138,7 @@ saveReplayMinio envCfg (ackId, replayData) = do
           _ -> ds
     let body = AE.encode (AE.Array finalBody)
         bodySize = BL.length body
-    _ <- Minio.putObject bucket object (sourceLazy body) (Just bodySize) Minio.defaultPutObjectOptions
+    _ <- Minio.putObject bucket object (CC.sourceLazy body) (Just bodySize) Minio.defaultPutObjectOptions
     pass
   case res of
     Right _ -> pure $ Just ackId
@@ -253,17 +247,3 @@ replaySessionPage pid sessionId page eventsJson = do
       var videoContainer = document.getElementById('videoContainer');
       new rrwebPlayer({target: videoContainer, props: {autoPlay:true, width:852, height:300, events: $eventsJson }});
   |]
-
-
--- Helper Components
-
-statCard :: Text -> Text -> Text -> Html () -> Html ()
-statCard elementId value label icon =
-  div_ [class_ "bg-white rounded-lg p-3 border"] $ do
-    div_ [class_ "flex items-center gap-2"] $ do
-      icon
-      div_ $ do
-        div_ [id_ elementId, class_ "text-lg font-bold"] (toHtml value)
-        div_ [class_ "text-xs text-gray-600"] (toHtml label)
-
--- Icons (SVG placeholders)
