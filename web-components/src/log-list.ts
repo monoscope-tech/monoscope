@@ -684,7 +684,33 @@ export class LogList extends LitElement {
             // Only process elements with styles starting with "right-"
             if (style.startsWith('right-')) {
               const badgeStyle = this.getStyleClass(style);
-              rightAlignedBadges.push(renderBadge(`cbadge-sm ${badgeStyle}`, value));
+              if (field === 'session') {
+                const pB = html`<button
+                  class="flex items-center gap-1 shrink-0 cbadge-sm badge-neutral cursor-pointer"
+                  @click=${(e: any) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                  }}
+                  @pointerdown=${(e: any) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    const input = document.getElementById('session_replay_drawer') as HTMLInputElement;
+                    input.checked = true;
+                    const url = `/p/${this.projectId}/replay_session/${value}`;
+                    updateUrlState('session_replay', value);
+                    (window as any).htmx.ajax('GET', url, {
+                      target: '#replay_session_container',
+                      swap: 'innerHTML',
+                      indicator: '#replay_session_indicator',
+                    });
+                  }}
+                >
+                  ${faSprite('play', 'regular', 'w-4 h-4')} Play recording
+                </button>`;
+                rightAlignedBadges.push(pB);
+              } else {
+                rightAlignedBadges.push(renderBadge(`cbadge-sm ${badgeStyle}`, value));
+              }
             }
           }
         });
@@ -856,32 +882,6 @@ export class LogList extends LitElement {
         class=${`item-row relative p-0 flex items-center group cursor-pointer whitespace-nowrap ${isNew ? 'animate-fadeBg' : ''}`}
         @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
       >
-        ${sessionId
-          ? html`<button
-              class="absolute left-0 top-1/2 -translate-y-1/2 w-max z-10 hidden group-hover:block"
-              data-tippy-content="Session ID: ${sessionId}"
-              @click=${(e: any) => {
-                e.stopPropagation();
-                e.preventDefault();
-              }}
-              @pointerdown=${(e: any) => {
-                e.stopPropagation();
-                e.preventDefault();
-                const input = document.getElementById('session_replay_drawer') as HTMLInputElement;
-                input.checked = true;
-
-                const url = `/p/${this.projectId}/replay_session/${sessionId}`;
-                updateUrlState('session_replay', sessionId);
-                (window as any).htmx.ajax('GET', url, {
-                  target: '#replay_session_container',
-                  swap: 'innerHTML',
-                  indicator: '#replay_session_indicator',
-                });
-              }}
-            >
-              ${faSprite('play', 'regular', 'w-4 h-4 fill-textWeak')}
-            </button>`
-          : nothing}
         ${this.logsColumns
           .filter((v) => v !== 'latency_breakdown')
           .map((column) => {
