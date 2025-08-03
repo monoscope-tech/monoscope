@@ -877,7 +877,7 @@ code, pre, .code, .monospace {
   
   [data-theme="dark"] .btn-primary {
     background-color: var(--color-iconBrand);
-    @apply hover:opacity-90 text-textInverse-strong ring-1 ring-strokeBrand-weak;
+    @apply hover:opacity-90 text-textInverse-weak ring-1 ring-strokeBrand-weak;
   }
   .input, .select, .checkbox, .textarea {
     @apply shadow-none;

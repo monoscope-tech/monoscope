@@ -149,7 +149,7 @@ expandAPIlogItemH pid rdId createdAt sourceM = do
               if record.name
                 /= Just "apitoolkit-http-span"
                 || record.name
-                /= Just "monoscope.http"
+                  /= Just "monoscope.http"
                 then do
                   case trIdM of
                     Just trId -> Telemetry.spanRecordByName pid trId (fromMaybe "apitoolkit-http-span" record.name)
@@ -246,18 +246,18 @@ expandedItemView pid item aptSp leftM rightM = do
               h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" item.name
 
       div_ [class_ "flex gap-2 flex-wrap"] $ do
-        if isLog
-          then do
-            spanBadge (fromMaybe "" $ atMapText "service.name" item.resource) "Service"
-            spanBadge ("Span ID: " <> maybe "" (\z -> fromMaybe "" z.span_id) item.context) "Span ID"
-            spanBadge ("Trace ID: " <> maybe "" (\z -> fromMaybe "" z.trace_id) item.context) "Trace ID"
-          else do
-            spanBadge (toText $ getDurationNSMS $ maybe 0 fromIntegral item.duration) "Span duration"
-            spanBadge (getServiceName item.resource) "Service"
-            spanBadge ("Span ID: " <> maybe "" (\c -> fromMaybe "" c.span_id) item.context) "Span ID"
-            spanBadge (fromMaybe "" item.kind) "Span Kind"
+        unless isLog $ do
+          spanBadge (toText $ getDurationNSMS $ maybe 0 fromIntegral item.duration) "Span duration"
+          spanBadge (fromMaybe "" item.kind) "Span Kind"
+        spanBadge (getServiceName item.resource) "Service"
+        spanBadge ("Span ID: " <> maybe "" (\c -> fromMaybe "" c.span_id) item.context) "Span ID"
+        spanBadge ("Trace ID: " <> maybe "" (\z -> fromMaybe "" z.trace_id) item.context) "Trace ID"
+      div_ [class_ "flex flex-wrap gap-2 items-center text-textBrand font-medium text-xs"] do
+        whenJust (atMapText "session.id" item.attributes) $ \v -> do
+          button_ [class_ "cursor-pointer flex items-center gap-1"] do
+            "Filter by session"
+            faSprite_ "filter" "regular" "w-3 h-3"
 
-      div_ [class_ "flex gap-2 items-center text-textBrand font-medium text-xs"] do
         unless isLog $ whenJust reqDetails $ \case
           ("HTTP", _, _, _) -> do
             let json = decodeUtf8 $ AE.encode $ AE.toJSON item
