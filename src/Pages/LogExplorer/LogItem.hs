@@ -252,9 +252,9 @@ expandedItemView pid item aptSp leftM rightM = do
         spanBadge (getServiceName item.resource) "Service"
         spanBadge ("Span ID: " <> maybe "" (\c -> fromMaybe "" c.span_id) item.context) "Span ID"
         spanBadge ("Trace ID: " <> maybe "" (\z -> fromMaybe "" z.trace_id) item.context) "Trace ID"
-      div_ [class_ "flex flex-wrap gap-2 items-center text-textBrand font-medium text-xs"] do
+      div_ [class_ "flex flex-wrap gap-3 items-center text-textBrand font-medium text-xs"] do
         whenJust (atMapText "session.id" item.attributes) $ \v -> do
-          button_ [class_ "cursor-pointer flex items-center gap-1"] do
+          button_ [class_ "cursor-pointer flex items-center gap-1", term "data-field-path" "attributes.session.id", term "data-field-value" ("\"" <> v <> "\""), onpointerdown_ "filterByField(event, 'Eq')"] do
             "Filter by session"
             faSprite_ "filter" "regular" "w-3 h-3"
 
