@@ -625,7 +625,7 @@ apiLogsPage page = do
       div_ [class_ "drawer-side z-[9999999999]"] $ do
         label_ [Lucid.for_ $ "session_replay_drawer", class_ "drawer-overlay"] pass
         div_ [class_ "shadow-[rgba(128, 128, 209, 0.5)_-10px_0px_4px_0px] border-l-2 bg-bgBase overflow-y-scroll min-h-full w-[min(1200px,80vw)] dark:shadow-[rgba(186, 186, 228, 0.5)_-10px_0px_4px_0px]", id_ "replay_session_container"] $ do
-          span_ [class_ "htmx-indicator query-indicator  loading  loading-dots mt-4 mx-auto", id_ "replay_session_indicator"] ""
+          span_ [class_ "absolute left-1/2 -translate-x-1/2 loading  loading-dots mt-4 mx-auto", id_ "replay_session_indicator"] ""
     div_
       [ style_ "z-index:26"
       , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
@@ -1116,7 +1116,7 @@ alertConfigurationForm_ pid = do
                                      })
                                    end|]
                             ]
-                          ++ [required_ "" | req]
+                            ++ [required_ "" | req]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True

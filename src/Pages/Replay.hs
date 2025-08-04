@@ -208,6 +208,7 @@ replaySessionPage :: Projects.ProjectId -> UUID.UUID -> Maybe ReplayPage -> Text
 replaySessionPage pid sessionId page eventsJson = do
   div_ [class_ "w-full flex flex-col"] $ do
     div_ [class_ "p-4 border-b"] $ do
+      span_ [class_ "htmx-indicator query-indicator loading loading-dots mt-4 mx-auto z-50 absolute left-1/2 -translate-x-1/2", id_ "replay_session_indicator"] ""
       div_ [class_ "flex items-center justify-between"] $ do
         div_ $ do
           h2_ [id_ "sessionTitle", class_ "text-xl font-bold"] "Session replay"
