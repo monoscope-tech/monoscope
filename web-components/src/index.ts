@@ -1,7 +1,7 @@
 // Re-export everything from query-editor
 export * from './query-editor/query-editor';
 export * from './query-editor/query-builder';
-
+export * from './session-replay';
 // Re-export the config functions
 export { initializeDefaultSchema } from './query-editor/query-editor-config';
 export * from './log-list';
