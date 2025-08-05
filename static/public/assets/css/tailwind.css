@@ -512,6 +512,10 @@ code, pre, .code, .monospace {
   overflow: hidden;
 }
 
+.player-frame{
+  overflow: hidden;
+}
+
 .replayer-wrapper {
   float: left;
   clear: both;
