@@ -499,6 +499,42 @@ code, pre, .code, .monospace {
   @apply bg-cyan-100 text-cyan-700 dark:bg-cyan-900/20 dark:text-cyan-300;
 }
 
+
+.rr-player {
+  position: relative;
+  background: black;
+  float: left;
+  border-radius: 5px;
+  box-shadow: none;
+}
+
+.rr-player__frame {
+  overflow: hidden;
+}
+
+.replayer-wrapper {
+  float: left;
+  clear: both;
+  transform-origin: top left;
+  left: 50%;
+  top: 50%;
+  background-color: white;
+}
+
+.replayer-wrapper > iframe {
+  border: none;
+}
+.event-container.expanded {
+  @apply border border-strokeBrand-strong
+}
+.event-container.expanded  button > svg {
+  @apply rotate-180
+}
+.event-container.expanded > .event-detail {
+  display: flex;
+}
+
+
 /* Database-specific badges - neutral background with colored borders */
 .badge-postgres {
   @apply bg-fillWeak text-textStrong border border-strokeBrand-strong;
@@ -1139,8 +1175,6 @@ code, pre, .code, .monospace {
 .gradient-border {
   border-image: linear-gradient(45deg, rgb(255 204 0), rgb(51 204 51), rgb(51 153 255)) 1;
 }
-
-
 
 
 

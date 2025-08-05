@@ -624,7 +624,7 @@ apiLogsPage page = do
           faSprite_ "play" "regular" "w-4 h-4 fill-textWeak"
       div_ [class_ "drawer-side z-[9999999999]"] $ do
         label_ [Lucid.for_ $ "session_replay_drawer", class_ "drawer-overlay"] pass
-        div_ [class_ "shadow-[rgba(128, 128, 209, 0.5)_-10px_0px_4px_0px] border-l-2 bg-bgBase overflow-y-scroll min-h-full w-[min(1200px,80vw)] dark:shadow-[rgba(186, 186, 228, 0.5)_-10px_0px_4px_0px]", id_ "replay_session_container"] $ do
+        div_ [class_ "shadow-[rgba(128, 128, 209, 0.5)_-10px_0px_4px_0px] border-l-2 bg-bgBase overflow-y-scroll h-full w-[1200px] dark:shadow-[rgba(186, 186, 228, 0.5)_-10px_0px_4px_0px]", id_ "replay_session_container"] $ do
           span_ [class_ "absolute left-1/2 -translate-x-1/2 loading  loading-dots mt-4 mx-auto", id_ "replay_session_indicator"] ""
     div_
       [ style_ "z-index:26"

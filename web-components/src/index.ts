@@ -11,6 +11,8 @@ export * from './widgets';
 import { flameGraphChart, waterFallGraphChart } from './charts';
 export * from './main';
 
+export * from "./session-replay"
+
 if (typeof window !== 'undefined') {
   window.flameGraphChart = flameGraphChart;
   window.waterFallGraphChart = waterFallGraphChart;

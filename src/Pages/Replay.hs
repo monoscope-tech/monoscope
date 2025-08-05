@@ -206,41 +206,42 @@ data ReplayPage = ReplayPage
 
 replaySessionPage :: Projects.ProjectId -> UUID.UUID -> Maybe ReplayPage -> Text -> Html ()
 replaySessionPage pid sessionId page eventsJson = do
-  div_ [class_ "w-full flex flex-col"] $ do
-    div_ [class_ "p-4 border-b"] $ do
-      span_ [class_ "htmx-indicator query-indicator loading loading-dots mt-4 mx-auto z-50 absolute left-1/2 -translate-x-1/2", id_ "replay_session_indicator"] ""
-      div_ [class_ "flex items-center justify-between"] $ do
-        div_ $ do
-          h2_ [id_ "sessionTitle", class_ "text-xl font-bold"] "Session replay"
-    div_ [class_ "rounded-lg overflow-hidden ml-4 border p-2 border-strokeWeak bg-gradient-to-br from-slate-900 via-blue-900 to-purple-900 cursor-pointer"] do
-      div_ [id_ "videoContainer", class_ "overflow-hidden w-max mx-auto"] pass
-    div_ [class_ "p-4 border-b flex items-center justify-between"] $ do
-      div_ [class_ "flex items-center gap-2"] $ do
-        h3_ [class_ "font-semibold"] "Session Events"
-        span_ [id_ "logCount", class_ "bg-fillWeak text-textWeak px-2 py-1 rounded text-sm"] $ show (maybe 0 (.count) page)
-        span_ [id_ "errorCount", class_ "bg-red-100 text-red-800 px-2 py-1 rounded text-sm hidden"] "2 errors"
-    whenJust page $ \p -> do
-      div_ [class_ "flex flex-col h-[400px]"] do
-        termRaw "log-list" [id_ "resultTable", class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0", term "windowTarget" "sessionList"] ("" :: Text)
+  div_ [class_ "w-full flex flex-col h-full"] $ do
+    termRaw "session-replay" [ id_ "resultTable", class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0", term "events" eventsJson]("" :: Text)
+  --   div_ [class_ "p-4 border-b"] $ do
+  --     span_ [class_ "htmx-indicator query-indicator loading loading-dots mt-4 mx-auto z-50 absolute left-1/2 -translate-x-1/2", id_ "replay_session_indicator"] ""
+  --     div_ [class_ "flex items-center justify-between"] $ do
+  --       div_ $ do
+  --         h2_ [id_ "sessionTitle", class_ "text-xl font-bold"] "Session replay"
+  --   div_ [class_ "rounded-lg overflow-hidden ml-4 border p-2 border-strokeWeak bg-gradient-to-br from-slate-900 via-blue-900 to-purple-900 cursor-pointer"] do
+  --     div_ [id_ "videoContainer", class_ "overflow-hidden w-max mx-auto"] pass
+  --   div_ [class_ "p-4 border-b flex items-center justify-between"] $ do
+  --     div_ [class_ "flex items-center gap-2"] $ do
+  --       h3_ [class_ "font-semibold"] "Session Events"
+  --       span_ [id_ "logCount", class_ "bg-fillWeak text-textWeak px-2 py-1 rounded text-sm"] $ show (maybe 0 (.count) page)
+  --       span_ [id_ "errorCount", class_ "bg-red-100 text-red-800 px-2 py-1 rounded text-sm hidden"] "2 errors"
+  --   whenJust page $ \p -> do
+  --     div_ [class_ "flex flex-col h-[400px]"] do
+  --       termRaw "log-list" [id_ "resultTable", class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0", term "windowTarget" "sessionList"] ("" :: Text)
 
-      let logs = decodeUtf8 $ AE.encode p.requestVecs
-          cols = decodeUtf8 $ AE.encode p.cols
-          colIdxMap = decodeUtf8 $ AE.encode p.colIdxMap
-          serviceColors = decodeUtf8 $ AE.encode p.serviceColors
-          projectid = p.pid.toText
+  --     let logs = decodeUtf8 $ AE.encode p.requestVecs
+  --         cols = decodeUtf8 $ AE.encode p.cols
+  --         colIdxMap = decodeUtf8 $ AE.encode p.colIdxMap
+  --         serviceColors = decodeUtf8 $ AE.encode p.serviceColors
+  --         projectid = p.pid.toText
 
-      script_
-        [text|
-         window.sessionListData = {
-          requestVecs: $logs,
-          cols: $cols,
-          colIdxMap: $colIdxMap,
-          serviceColors: $serviceColors,
-          projectId: "$projectid",
-         }
-      |]
-  script_
-    [text|
-      var videoContainer = document.getElementById('videoContainer');
-      new rrwebPlayer({target: videoContainer, props: {autoPlay:true, width:1152, height:400, events: $eventsJson }});
-  |]
+  --     script_
+  --       [text|
+  --        window.sessionListData = {
+  --         requestVecs: $logs,
+  --         cols: $cols,
+  --         colIdxMap: $colIdxMap,
+  --         serviceColors: $serviceColors,
+  --         projectId: "$projectid",
+  --        }
+  --     |]
+  -- script_
+  --   [text|
+  --     var videoContainer = document.getElementById('videoContainer');
+  --     new rrwebPlayer({target: videoContainer, props: {autoPlay:true, width:1152, height:400, events: $eventsJson }});
+  -- |]

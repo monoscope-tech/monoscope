@@ -3,7 +3,6 @@ import { customElement, property, query, state } from 'lit/decorators.js';
 import rrwebPlayer from 'rrweb-player';
 import { EventType, eventWithTime } from '@rrweb/types';
 import { faSprite_ } from './monitors/test-editor-utils';
-import 'rrweb-player/dist/style.css';
 import { ConsoleEvent } from './types/types';
 
 @customElement('session-replay')
@@ -84,31 +83,32 @@ export class SessionReplay extends LitElement {
       case 'error':
         return html`
           <div class="text-sm flex flex-col min-w-0 event-container">
-            <div class="flex items-center gap-2 w-full px-1">
-              <span>6:25</span>
-              <span class="w-full min-w-0 py-1 truncate px-2 overflow-ellipsis bg-red-200 hover:bg-red-100"
+            <div class="flex items-center w-full">
+              <span class="text-xs font-medium text-center text-textWeak min-w-11">6:25</span>
+              ${faSprite_('copy', 'regular', 'w-2.5 h-2.5 mx-1 font-semibold')}
+              <span class="w-full min-w-0 truncate px-2 pb-1 overflow-ellipsis hover:bg-fillError-weak bg-red-100"
                 >${payload.payload.join('').substring(0, 100)}</span
               >
               <button
                 @click=${(e: any) => {
                   const container = e.currentTarget.closest('.event-container');
-                  console.log(container);
                   container?.classList.toggle('expanded');
                 }}
+                class="cursor-pointer h-full flex flex-col px-1 rounded-lg shrink-0 items-center justify-center hover:bg-fillWeak"
               >
-                ^
+                ${faSprite_('chevron-up', 'regular', 'w-2.5 h-2.5 text-textWeak')}
               </button>
             </div>
-            <div class="flex-col bg-red-200 p-2 w-full min-w-0 hidden event-detail">
-              <div class="bg-white rounded-xl p-3 whitespace-pre-wraps text-red-500 font-medium">${payload.payload.join('\n')}</div>
-              <span class="mt-4 mb-1">Stack trace</span>
-              <div class="bg-white rounded-xl p-3 whitespace-pre-wraps font-medium">${payload.trace.join('\n')}</div>
+            <div class="flex-col bg-red-100 p-2 w-full min-w-0 hidden event-detail">
+              <div class="bg-bgBase rounded-xl p-3 whitespace-pre-wraps text-textError font-medium">${payload.payload.join('\n')}</div>
+              <span class="mt-4 mb-1 font-semibold">Stack trace</span>
+              <div class="bg-bgBase rounded-xl p-3 whitespace-pre-wraps font-medium">${payload.trace.join('\n')}</div>
             </div>
           </div>
         `;
 
       default:
-        return html`<p>${payload.payload.join('')}</p>`;
+        return html`<p>..</p>`;
     }
   };
 
@@ -120,7 +120,7 @@ export class SessionReplay extends LitElement {
     this.player = new rrwebPlayer({
       target, // customizable root element
       props: {
-        events: JSON.parse(localStorage.getItem('vvv') || '[]'),
+        events: JSON.parse(this.events || '[]'),
         height,
         width,
         plugins: [{ handler: this.handleConsoleEvents }],
@@ -131,32 +131,32 @@ export class SessionReplay extends LitElement {
   render() {
     return html`<div class="w-full h-full flex overflow-x-hidden" id="replayerOuterContainer">
       <div class="w-full h-full shrink-1">
-        <div class="bg-fillWeak w-full px-4 py-1 flex items-center border-b gap-4 justify-between">
-          <div class="flex items-center gap-4">
-            <h3 class="text-xl font-medium">Session recording</h3>
-            <div class="rounded-lg flex items-center text-sm ">
-              ${faSprite_('copy', 'regular', 'h-4 w-4')}
-              <span class="text-textInverse-strong">https://example.com</span>
-            </div>
+        <div class="bg-fillWeaker w-full px-2 py-1 flex items-center border-b gap-4 justify-between">
+          <div class="flex items-center gap-4 shrink-1">
+            <h3 class="font-medium h-full truncate overflow-ellipsis min-w-0">Session recording</h3>
           </div>
 
-          <div class="flex items-center gap-4 text-sm font-semibold text-textInverse-weak">
+          <div class="flex items-center gap-4 text-xs font-semibold">
             <div class="dropdown">
-              <div tabindex="0" role="button" class="">Speed 1x</div>
-              <!-- <ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-box z-1 w-52 p-2 shadow-sm">
+              <div tabindex="0" role="button" class="cursor-pointer flex items-center gap-1">
+                ${faSprite_('gauge', 'regular', 'w-2.5 h-2.5')} Speed 1x
+              </div>
+              <ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-box z-1 w-52 p-2 shadow-sm">
                 <li><a>Item 1</a></li>
                 <li><a>Item 2</a></li>
-              </ul> -->
+              </ul>
             </div>
-            <button class="flex items-center ">
+            <button class="flex items-center cursor-pointer gap-1">
+              ${faSprite_('gauge', 'regular', 'w-2.5 h-2.5')}
               <span>Skip inactivity</span>
             </button>
             <button
               @click=${() => {
                 this.activityWidth = this.activityWidth <= 0 ? 500 : this.activityWidth;
               }}
+              class="cursor-pointer flex items-center gap-1"
             >
-              Activity
+              ${faSprite_('side-chevron-left-in-box', 'regular', 'w-2.5 h-2.5')} Activity
             </button>
           </div>
         </div>
@@ -164,28 +164,37 @@ export class SessionReplay extends LitElement {
         <div id="playerWrapper" class="w-full bg-black border-b-2 border-amber-200"></div>
       </div>
 
-      <div class="shrink-0 h-full flex items-start border-l" id="replay-activity-bar" style="width:${this.activityWidth}px">
+      <div class="shrink-0 h-full relative flex items-start border-l" id="replay-activity-bar" style="width:${this.activityWidth}px">
         <div
-          class="w-1 h-full hover:bg-blue-400"
+          class="w-1 h-full absolute z-10 left-0 top-0 hover:bg-blue-400"
           @mousedown=${(e: any) => {
             document.body.style.userSelect = 'none';
             this.startX = e.clientX;
           }}
         ></div>
         <div class="w-full h-full overflow-hidden">
-          <div class="bg-fillWeak w-full px-4 py-1 flex items-center border-b gap-4 justify-between">
-            <div class="flex items-center gap-4 text-sm font-semibold text-textInverse-weak">
+          <div class="bg-fillWeaker w-full px-4 py-1 flex items-center border-b gap-4 justify-between">
+            <div class="flex items-center gap-4 text-xs font-semibold">
               <div class="dropdown">
-                <div tabindex="0" role="button" class="">Console</div>
-                <!-- <ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-box z-1 w-52 p-2 shadow-sm">
-                <li><a>Item 1</a></li>
-                <li><a>Item 2</a></li>
-              </ul> -->
+                <div tabindex="0" role="button" class="cursor-pointer">Console</div>
+                <ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-box z-1 w-52 p-2 shadow-sm">
+                  <li><a>Item 1</a></li>
+                  <li><a>Item 2</a></li>
+                </ul>
+              </div>
+              <div class="dropdown">
+                <div tabindex="0" role="button" class="cursor-pointer">Network</div>
+                <ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-box z-1 w-52 p-2 shadow-sm">
+                  <li><a>Item 1</a></li>
+                  <li><a>Item 2</a></li>
+                </ul>
               </div>
             </div>
-            <h3 class="text-xl font-medium">.</h3>
+            <h3 class="font-medium">.</h3>
           </div>
-          <div class="flex flex-col h-full overflow-y-auto">${this.consoleEvents.map((e) => this.displayConsoleEvent(e))}</div>
+          <div class="flex flex-col h-full overflow-y-auto w-full overflow-x-hidden c-scroll">
+            ${this.consoleEvents.map((e) => this.displayConsoleEvent(e))}
+          </div>
         </div>
       </div>
     </div>`;
