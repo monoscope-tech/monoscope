@@ -1,5 +1,5 @@
 import { TemplateResult } from 'lit';
-import type { pluginEvent } from '@rrweb/types';
+import type { eventWithTime, pluginEvent } from '@rrweb/types';
 
 export {};
 declare global {
@@ -154,4 +154,4 @@ export type Trace = {
 
 export type ChildrenForLatency = { startNs: number; duration: number; data: any[] };
 
-export type ConsoleEvent = pluginEvent<{ level: string; trace: string[]; payload: string[] }>;
+export type ConsoleEvent = eventWithTime & pluginEvent<{ level: 'error' | 'warn' | 'info'; trace: string[]; payload: string[] }>;

@@ -150,15 +150,15 @@ replaySessionGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (
 replaySessionGetH pid sessionId = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let envCfg = ctx.config
-  events <- Telemetry.getEventsBySessionId pid (UUID.toText sessionId)
+  let events = V.empty -- Telemetry.getEventsBySessionId pid (UUID.toText sessionId)
   let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
   queryAST <- parseQuery $ "attributes___session___id ==\"" <> UUID.toText sessionId <> "\""
   let queryText = toQText queryAST
 
   -- child spans might not have session id but are part of the session
 
-  tableAsVecE <- RequestDumps.selectLogTable pid queryAST queryText Nothing (Nothing, Nothing) [] Nothing Nothing
-  let tableAsVecM = hush tableAsVecE
+  -- tableAsVecE <- RequestDumps.selectLogTable pid queryAST queryText Nothing (Nothing, Nothing) [] Nothing Nothing
+  let tableAsVecM = Nothing
 
   case tableAsVecM of
     Just tableAsVec -> do
@@ -169,8 +169,8 @@ replaySessionGetH pid sessionId = do
       extraEvents <- Telemetry.getLogsByTraceIds pid (V.catMaybes traceIds)
 
       let conn = getMinioConnectInfo ctx.config
-      replayEvents <- getMinioFile conn (fromString $ toString envCfg.s3Bucket) (fromString $ toString $ UUID.toText sessionId <> ".json")
-      let eventsJson = decodeUtf8 $ AE.encode (AE.Array replayEvents)
+      -- replayEvents <- getMinioFile conn (fromString $ toString envCfg.s3Bucket) (fromString $ toString $ UUID.toText sessionId <> ".json")
+      -- let eventsJson = decodeUtf8 $ AE.encode (AE.Array replayEvents)
       let finalVecs = requestVecs <> extraEvents
           serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
           colors = getServiceColors (V.catMaybes serviceNames)
@@ -187,7 +187,7 @@ replaySessionGetH pid sessionId = do
               , resetLogsURL = Nothing
               , pid = pid
               }
-      addRespHeaders $ replaySessionPage pid sessionId (Just page) eventsJson
+      addRespHeaders $ replaySessionPage pid sessionId (Just page) "[]"
     Nothing -> addRespHeaders $ replaySessionPage pid sessionId Nothing "[]"
 
 

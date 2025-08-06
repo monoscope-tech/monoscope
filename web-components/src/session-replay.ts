@@ -6,6 +6,8 @@ import { faSprite_ } from './monitors/test-editor-utils';
 import { ConsoleEvent } from './types/types';
 // import 'rrweb-player/dist/style.css';
 import { Replayer } from '@rrweb/replay';
+
+const MS_10 = 10000;
 @customElement('session-replay')
 export class SessionReplay extends LitElement {
   @property({ type: String }) private events: string = '[]';
@@ -18,14 +20,18 @@ export class SessionReplay extends LitElement {
   @state() private paused = false;
 
   @state() private consoleEvents: ConsoleEvent[] = [];
+  @state() private currentEventTime: number = 0;
+  @state() private currentTime = 0;
 
   private startX: number | null = null;
-  private currentTime = 0;
-  private player;
+  private player: Replayer | null = null;
   private containerWidth = 1024;
   private containerHeight = 500;
   private iframeWidth = 1117;
   private iframeHeight = 927;
+  private timer: number | null = null;
+  private consoleTypesCounts = { error: 0, warn: 0, info: 0 };
+  private metaData: { startTime: number; endTime: number; totalTime: number } = { startTime: 0, endTime: 0, totalTime: 0 };
   constructor() {
     super();
     this.activityWidth = 0;
@@ -39,6 +45,11 @@ export class SessionReplay extends LitElement {
 
     this.updateScale = this.updateScale.bind(this);
     this.handleConsoleEvents = this.handleConsoleEvents.bind(this);
+    this.loopTimer = this.loopTimer.bind(this);
+    this.stopTimer = this.stopTimer.bind(this);
+    this.play = this.play.bind(this);
+    this.pause = this.pause.bind(this);
+    this.goTo = this.goTo.bind(this);
 
     document.addEventListener('mousemove', (e) => {
       if (this.startX !== null) {
@@ -52,7 +63,43 @@ export class SessionReplay extends LitElement {
 
   handleConsoleEvents(event: eventWithTime) {
     if (event.type === EventType.Plugin && event.data.plugin === 'rrweb/console@1') {
-      this.consoleEvents = [...this.consoleEvents, event as ConsoleEvent];
+      this.currentEventTime = event.timestamp;
+    }
+  }
+
+  play(tm?: number) {
+    this.player?.play(tm ? tm : this.currentTime);
+    this.loopTimer();
+  }
+
+  pause() {
+    this.player?.pause();
+    this.stopTimer();
+  }
+
+  goTo(tm: number) {
+    this.pause();
+    this.play(tm);
+  }
+
+  loopTimer() {
+    this.stopTimer();
+
+    const update = () => {
+      this.currentTime = this.player?.getCurrentTime() || 0;
+
+      if (this.currentTime < this.metaData.totalTime) {
+        this.timer = requestAnimationFrame(update);
+      }
+    };
+
+    this.timer = requestAnimationFrame(update);
+  }
+
+  stopTimer() {
+    if (this.timer) {
+      cancelAnimationFrame(this.timer);
+      this.timer = null;
     }
   }
 
@@ -64,10 +111,12 @@ export class SessionReplay extends LitElement {
   updateScale = () => {
     this.updateContainerWidths();
 
-    const el = this.player.wrapper;
+    const el = this.player?.wrapper;
     const widthScale = this.containerWidth / this.iframeWidth;
     const heightScale = this.containerHeight / this.iframeHeight;
-    el.style.transform = `scale(${Math.min(widthScale, heightScale)})` + 'translate(-50%, -50%)';
+    if (el) {
+      el.style.transform = `scale(${Math.min(widthScale, heightScale)})` + 'translate(-50%, -50%)';
+    }
   };
 
   protected updated(changedProperties: PropertyValues): void {
@@ -79,28 +128,52 @@ export class SessionReplay extends LitElement {
         this.updateScale();
       }
       if (changedProperties.has('skipInactive')) {
-        this.player.toggleSkipInactive();
+        this.player?.setConfig({ skipInactive: this.skipInactive });
       }
       if (changedProperties.has('playSpeed')) {
-        this.player.setSpeed(this.playSpeed);
+        this.pause();
+        this.player?.setConfig({ speed: this.playSpeed });
+        this.play();
       }
       if (changedProperties.has('paused')) {
         if (this.paused) {
           this.currentTime = this.player.getCurrentTime();
         }
-        this.paused ? this.player.pause() : this.player.play(this.currentTime);
+        this.paused ? this.pause() : this.play();
       }
+    }
+  }
+
+  static formatTime(timestamp: number): string {
+    const totalSeconds = Math.floor(timestamp / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    const pad = (num: number) => String(num).padStart(2, '0');
+
+    if (hours > 0) {
+      return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+    } else {
+      return `${pad(minutes)}:${pad(seconds)}`;
     }
   }
 
   displayConsoleEvent = (event: ConsoleEvent) => {
     const payload = event.data.payload;
+    if (payload.level === 'error' && !this.consoleEventsEnable[0]) return nothing;
+    if (payload.level === 'warn' && !this.consoleEventsEnable[1]) return nothing;
+    if (payload.level === 'info' && !this.consoleEventsEnable[2]) return nothing;
+
     switch (payload.level) {
       case 'error':
         return html`
           <div class="text-sm flex flex-col min-w-0 event-container">
             <div class="flex items-center w-full">
-              <span class="text-xs font-medium text-center text-textWeak min-w-11">6:25</span>
+              <span class="h-2 w-2 rounded-full ${this.currentEventTime === event.timestamp ? 'bg-blue-500' : ''} ml-1"></span>
+              <span class="text-xs font-medium text-center text-textWeak min-w-11"
+                >${SessionReplay.formatTime(event.timestamp - this.metaData.startTime)}</span
+              >
               ${faSprite_('console', 'regular', 'w-2.5 h-2.5 mx-1 font-semibold')}
               <span class="w-full min-w-0 truncate px-2 pb-1 overflow-ellipsis hover:bg-fillError-weak bg-red-100"
                 >${payload.payload.join('').substring(0, 100)}</span
@@ -137,7 +210,18 @@ export class SessionReplay extends LitElement {
     const target = document.querySelector('#playerWrapper') as HTMLElement;
     const mContainer = Number(getComputedStyle(this.replayerOuterContainer).width.replace('px', ''));
     this.containerWidth = mContainer - this.activityWidth;
-    this.player = new Replayer(JSON.parse(localStorage.getItem('vvv') || '[]'), {
+
+    const events = JSON.parse(localStorage.getItem('vvv') || '[]') as eventWithTime[];
+
+    events.forEach((event) => {
+      if (event.type === EventType.Plugin && event.data.plugin === 'rrweb/console@1') {
+        const level = (event as ConsoleEvent).data.payload.level;
+        this.consoleTypesCounts[level] += 1;
+        this.consoleEvents = [...this.consoleEvents, event as ConsoleEvent];
+      }
+    });
+
+    this.player = new Replayer(events, {
       root: target, // customizable root element
       // props: {
       // events:
@@ -145,8 +229,9 @@ export class SessionReplay extends LitElement {
       skipInactive: this.skipInactive,
       // },
     });
+    this.metaData = this.player.getMetaData();
     this.updateScale();
-    this.player.play();
+    this.play();
   }
 
   render() {
@@ -197,20 +282,36 @@ export class SessionReplay extends LitElement {
         <div class="relative" style="height:${this.containerHeight + 80}px">
           <div class="border-b relative bg-black">
             <div
-              class="player-frame border-y"
+              class="player-frame border-y overflow-hidden"
               id="playerWrapper"
               style="height:${this.containerHeight}px; width: ${this.containerWidth}px"
             ></div>
-            <div class="absolute inset-0 flex bg-fillInverse-weak items-center justify-center ${this.paused ? '' : 'hidden'}">
-              <button>${faSprite_('play', 'regular', 'w-20 h-20')}</button>
+            <div class="absolute inset-0 flex bg-black opacity-25 items-center  justify-center ${this.paused ? '' : 'hidden'}">
+              <button @click=${() => (this.paused = false)}>${faSprite_('p-play', 'regular', 'w-14 h-14 text-textInverse-weak')}</button>
             </div>
           </div>
-          <div class="w-full border-b flex items-center justify-center">
-            <button>prv</button>
-            <button class="w-14 h-14 flex justify-center items-center" @click=${() => (this.paused = !this.paused)}>
-              ${this.paused ? faSprite_('play', 'regular', 'h-12 w-12') : faSprite_('play', 'regular', 'h-12 w-12')}
-            </button>
-            <button>next</button>
+          <div class="flex p-2  border-b items-center justify-between">
+            <div>
+              <div class="text-xs flex gap-0.5 font-mono font-medium flex-nowrap w-max">
+                <span>${SessionReplay.formatTime(this.currentTime)}</span>
+                <span>/</span>
+                <span>${SessionReplay.formatTime(this.metaData.totalTime)}</span>
+              </div>
+            </div>
+            <div class="w-full gap-3 flex items-center justify-center">
+              <button class="relative" @click=${() => this.goTo(this.currentTime - MS_10)}>
+                <span style="font-size:8px" class="absolute top-1/2  left-1/2 -translate-x-1/2 -translate-y-1/2 font-semibold">10</span>
+                ${faSprite_('time-skip', 'regular', 'h-5 w-5')}
+              </button>
+              <button class="flex justify-center items-center" @click=${() => (this.paused = !this.paused)}>
+                ${faSprite_('p-play', 'regular', 'h-5 w-5')}
+              </button>
+              <button class="relative" @click=${() => this.goTo(this.currentTime + MS_10)}>
+                <span style="font-size: 8px" class="absolute top-1/2  left-1/2 -translate-x-1/2 -translate-y-1/2 font-semibold">10</span>
+                ${faSprite_('time-skip', 'regular', 'h-5 w-5 rotate-y-180')}
+              </button>
+            </div>
+            <div></div>
           </div>
         </div>
       </div>
@@ -228,13 +329,13 @@ export class SessionReplay extends LitElement {
             <div class="flex items-center gap-4 text-xs font-semibold">
               <div class="dropdown">
                 <div tabindex="0" role="button" class="cursor-pointer">Console</div>
-                <ul tabindex="0" class="dropdown-content menu space-y-1 text-xs bg-base-100 border rounded-box z-1 p-1 shadow">
+                <ul tabindex="0" class="dropdown-content menu space-y-1 text-xs bg-base-100 border w-max rounded-box z-1 p-1 shadow">
                   <li>
                     <button
                       class="px-4 hover:bg-fillweak py-1 ${this.consoleEventsEnable[0] ? 'bg-blue-100 text-blue-700' : ''}"
                       @click=${() => this.toggleConsoleEvent(0)}
                     >
-                      Error
+                      Error (${this.consoleTypesCounts.error})
                     </button>
                   </li>
                   <li>
@@ -242,7 +343,7 @@ export class SessionReplay extends LitElement {
                       class="px-4 rounded hover:bg-fillweak py-1 ${this.consoleEventsEnable[1] ? 'bg-blue-100 text-blue-700' : ''}"
                       @click=${() => this.toggleConsoleEvent(1)}
                     >
-                      Warn
+                      Warn (${this.consoleTypesCounts.warn})
                     </button>
                   </li>
                   <li>
@@ -250,7 +351,7 @@ export class SessionReplay extends LitElement {
                       class="px-4 rounded hover:bg-fillweak py-1 ${this.consoleEventsEnable[2] ? 'bg-blue-100 text-blue-700' : ''}"
                       @click=${() => this.toggleConsoleEvent(2)}
                     >
-                      Info
+                      Info (${this.consoleTypesCounts.info})
                     </button>
                   </li>
                 </ul>
