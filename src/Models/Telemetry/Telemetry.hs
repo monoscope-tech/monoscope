@@ -808,7 +808,7 @@ bulkInsertOtelLogsAndSpansTF :: (DB :> es, Labeled "timefusion" DB :> es, UUIDEf
 bulkInsertOtelLogsAndSpansTF records = do
   updatedRecords <- updateIds records
   _ <- bulkInsertOtelLogsAndSpans updatedRecords
-  _ <- labeled @"timefusion" @DB $ pass -- bulkInsertOtelLogsAndSpans updatedRecords
+  _ <- labeled @"timefusion" @DB $ bulkInsertOtelLogsAndSpans updatedRecords
   pass
   where
     updateIds :: UUIDEff :> es => V.Vector OtelLogsAndSpans -> Eff es (V.Vector OtelLogsAndSpans)
