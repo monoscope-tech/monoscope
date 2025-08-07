@@ -14,7 +14,8 @@ export class SessionReplay extends LitElement {
   @property({ type: String }) private projectId: string = '';
 
   @state() private activityWidth = 0;
-  @query('#replayerOuterContainer') private replayerOuterContainer;
+  @query('#replayerOuterContainer') private replayerOuterContainer: HTMLElement;
+  @query('#progressBar') private progressBar: HTMLElement;
   @state() private playSpeed = 1;
   @state() private skipInactive = true;
   @state() private consoleEventsEnable = [true, true, true]; // error, warn, info;
@@ -61,6 +62,7 @@ export class SessionReplay extends LitElement {
     this.goTo = this.goTo.bind(this);
     this.fetchNewSessionData = this.fetchNewSessionData.bind(this);
     this.initiatePlayer = this.initiatePlayer.bind(this);
+    this.handleTimeSeek = this.handleTimeSeek.bind(this);
 
     document.addEventListener('mousemove', (e) => {
       if (this.startX !== null) {
@@ -197,6 +199,9 @@ export class SessionReplay extends LitElement {
     events.forEach((event) => {
       if (event.type === EventType.Plugin && event.data.plugin === 'rrweb/console@1') {
         const level = (event as ConsoleEvent).data.payload.level;
+        if (!['error', 'info', 'warn'].includes(level)) {
+          console.log(event);
+        }
         this.consoleTypesCounts[level] += 1;
         this.consoleEvents = [...this.consoleEvents, event as ConsoleEvent];
       }
@@ -239,6 +244,14 @@ export class SessionReplay extends LitElement {
     this.initiatePlayer(events);
   }
 
+  handleTimeSeek(e: any) {
+    const x = e.clientX;
+    const bounding = this.progressBar.getBoundingClientRect();
+    const toWidth = x - bounding.x;
+    const toGo = (toWidth * this.metaData.totalTime) / bounding.width;
+    this.goTo(toGo);
+  }
+
   displayConsoleEvent = (event: ConsoleEvent) => {
     const payload = event.data.payload;
     if (payload.level === 'error' && !this.consoleEventsEnable[0]) return nothing;
@@ -260,17 +273,19 @@ export class SessionReplay extends LitElement {
         textColor = 'text-textWarn';
         hoverColor = 'hover:bg-fillWarn-weak';
         break;
-      default:
-        bgColor = 'bg-blue-100';
+      case 'info':
+        bgColor = 'bg-fillBrand-weak';
         textColor = 'text-textInfo';
         hoverColor = 'hover:bg-fillBrand-weak';
         break;
+      default:
+        return html`...`;
     }
 
     return html`
       <div class="text-sm flex flex-col min-w-0 event-container" id="a-${event.timestamp}">
         <div class="flex items-center w-full">
-          <span class="h-2 w-2 shrink-0 rounded-full ${this.currentEventTime === event.timestamp ? 'bg-blue-500' : ''} ml-1"></span>
+          <span class="h-2 w-2 shrink-0 rounded-full ${this.currentEventTime === event.timestamp ? 'bg-fillBrand-strong' : ''} ml-1"></span>
           <span class="text-xs font-medium text-center text-textWeak min-w-11">
             ${SessionReplay.formatTime(event.timestamp - this.metaData.startTime)}
           </span>
@@ -318,16 +333,16 @@ export class SessionReplay extends LitElement {
   };
 
   render() {
-    return html`<div class="flex overflow-x-hidden " id="replayerOuterContainer" style="width:1124px; height:750px">
+    return html`<div class="flex overflow-x-hidden " id="replayerOuterContainer" style="width:1124px; height:770px">
       <div class="w-full  flex flex-col justify-start shrink-1 min-w-0 overflow-hidden">
-        <div class="bg-fillWeak w-full px-2 h-10 flex items-center border-b gap-4 justify-between playerHeader">
+        <div class="bg-fillWeak w-full px-2 h-10 min-h-10 flex items-center border-b gap-4 justify-between playerHeader">
           <div class="flex items-center gap-4 shrink-1">
             <h3 class="font-medium h-full truncate overflow-ellipsis min-w-0">Session recording</h3>
           </div>
 
           <div class="flex items-center gap-4 text-xs font-semibold">
             <div class="dropdown">
-              <div tabindex="0" role="button" class="cursor-pointer flex items-center gap-1 ${this.playSpeed != 1 ? 'text-blue-500' : ''}">
+              <div tabindex="0" role="button" class="cursor-pointer flex items-center gap-1 ${this.playSpeed != 1 ? 'text-textBrand' : ''}">
                 ${faSprite_('gauge', 'regular', 'w-3 h-3')} Speed ${this.playSpeed}x
               </div>
               <ul tabindex="0" class="dropdown-content menu bg-base-100 border text-xs rounded-box z-1 w-max p-2 shadow">
@@ -335,7 +350,7 @@ export class SessionReplay extends LitElement {
                   (s) =>
                     html`<li>
                       <button
-                        class="px-4 rounded py-1 hover:bg-fillWeak ${this.playSpeed == s ? 'bg-blue-500 text-white' : ''}"
+                        class="px-4 rounded py-1 hover:bg-fillWeak ${this.playSpeed == s ? 'bg-fillBrand-strong text-white' : ''}"
                         @click=${() => (this.playSpeed = s)}
                       >
                         ${s}x
@@ -345,7 +360,7 @@ export class SessionReplay extends LitElement {
               </ul>
             </div>
             <button
-              class="flex items-center cursor-pointer gap-1 ${this.skipInactive ? 'text-blue-500' : ''}"
+              class="flex items-center cursor-pointer gap-1 ${this.skipInactive ? 'text-textBrand' : ''}"
               @click=${() => (this.skipInactive = !this.skipInactive)}
             >
               ${faSprite_('skip', 'regular', 'w-3 h-3')}
@@ -355,7 +370,7 @@ export class SessionReplay extends LitElement {
               @click=${() => {
                 this.activityWidth = this.activityWidth <= 0 ? 300 : 0;
               }}
-              class="cursor-pointer flex items-center gap-1 ${this.activityWidth > 0 ? 'text-blue-500' : ''}"
+              class="cursor-pointer flex items-center gap-1 ${this.activityWidth > 0 ? 'text-textBrand' : ''}"
             >
               ${faSprite_('side-chevron-left-in-box', 'regular', 'w-3 h-3')} Activity
             </button>
@@ -386,9 +401,14 @@ export class SessionReplay extends LitElement {
             </div>
           </div>
           <div class="flex flex-col items-center w-full py-4">
-            <div class="relative progress-container h-1 rounded  bg-gray-200" style="width:calc(100% - 32px)">
-              <div class="relative h-full bg-blue-500" style="width:${(this.currentTime / this.metaData.totalTime) * 100}%">
-                <span class="absolute right-0 h-3 w-3 top-1/2 -translate-y-1/2 rounded-full bg-blue-500"></span>
+            <div
+              id="progressBar"
+              @click=${this.handleTimeSeek}
+              class="relative progress-container h-1.5 cursor-pointer rounded  bg-gray-200"
+              style="width:calc(100% - 32px)"
+            >
+              <div class="relative h-full bg-fillBrand-strong" style="width:${(this.currentTime / this.metaData.totalTime) * 100}%">
+                <span class="absolute right-0 h-4 w-4 top-1/2 -translate-y-1/2 rounded-full bg-fillBrand-strong"></span>
               </div>
             </div>
             <div class="flex p-4 w-full items-center justify-between">
@@ -426,7 +446,7 @@ export class SessionReplay extends LitElement {
 
       <div class="shrink-0 h-full relative flex items-start border-l" id="replay-activity-bar" style="width:${this.activityWidth}px">
         <div
-          class="w-1 h-full absolute z-10 left-0 top-0 hover:bg-blue-400"
+          class="w-1 h-full absolute z-10 cursor-col-resize left-0 top-0 hover:bg-fillBrand-strong"
           @mousedown=${(e: any) => {
             document.body.style.userSelect = 'none';
             this.startX = e.clientX;
@@ -440,7 +460,7 @@ export class SessionReplay extends LitElement {
                 <ul tabindex="0" class="dropdown-content menu space-y-1 text-xs bg-base-100 border w-max rounded-box z-1 p-1 shadow">
                   <li>
                     <button
-                      class="px-4 hover:bg-fillweak py-1 ${this.consoleEventsEnable[0] ? 'bg-blue-100 text-blue-700' : ''}"
+                      class="px-4 hover:bg-fillweak py-1 ${this.consoleEventsEnable[0] ? 'bg-fillBrand-weak text-blue-700' : ''}"
                       @click=${() => this.toggleConsoleEvent(0)}
                     >
                       Error (${this.consoleTypesCounts.error})
@@ -448,7 +468,7 @@ export class SessionReplay extends LitElement {
                   </li>
                   <li>
                     <button
-                      class="px-4 rounded hover:bg-fillweak py-1 ${this.consoleEventsEnable[1] ? 'bg-blue-100 text-blue-700' : ''}"
+                      class="px-4 rounded hover:bg-fillweak py-1 ${this.consoleEventsEnable[1] ? 'bg-fillBrand-weak text-blue-700' : ''}"
                       @click=${() => this.toggleConsoleEvent(1)}
                     >
                       Warn (${this.consoleTypesCounts.warn})
@@ -456,7 +476,7 @@ export class SessionReplay extends LitElement {
                   </li>
                   <li>
                     <button
-                      class="px-4 rounded hover:bg-fillweak py-1 ${this.consoleEventsEnable[2] ? 'bg-blue-100 text-blue-700' : ''}"
+                      class="px-4 rounded hover:bg-fillweak py-1 ${this.consoleEventsEnable[2] ? 'bg-fillBrand-weak text-blue-700' : ''}"
                       @click=${() => this.toggleConsoleEvent(2)}
                     >
                       Info (${this.consoleTypesCounts.info})
@@ -482,7 +502,7 @@ export class SessionReplay extends LitElement {
           <div class="flex items-center h-10 bg-fillWeak border-t">
             <button
               @click=${() => (this.syncScrolling = !this.syncScrolling)}
-              class="text-xs font-semibold h-full px-2 hover:bg-fillWeaker ${this.syncScrolling ? 'text-blue-500' : ''}"
+              class="text-xs font-semibold h-full px-2 hover:bg-fillWeaker ${this.syncScrolling ? 'text-textBrand' : ''}"
             >
               Sync scrolling
             </button>
