@@ -13,6 +13,7 @@ import Effectful
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.Reader.Static qualified as Eff
 import Effectful.Time qualified as Time
 import Foreign.C.String (peekCString, withCString)
 import Log qualified
@@ -23,6 +24,7 @@ import ProcessMessage qualified
 import Relude
 import RequestMessages (RequestMessage (..))
 import RustInterop (run_testkit)
+import System.Config (AuthContext)
 
 
 methodPath :: Testing.CollectionStepData -> Maybe (Text, Text)
@@ -84,7 +86,7 @@ runCollectionTest collection_steps col_vars cold_id = do
 
 
 logTest
-  :: (DB :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, Time.Time :> es, UUIDEff :> es)
+  :: (DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, Time.Time :> es, UUIDEff :> es)
   => Projects.ProjectId
   -> Testing.CollectionId
   -> V.Vector Testing.CollectionStepData

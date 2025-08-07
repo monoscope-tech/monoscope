@@ -8,6 +8,7 @@ module ProcessMessage (
 where
 
 import Control.Lens ((^?))
+import Control.Parallel.Strategies (parList, rpar, using)
 import Data.Aeson qualified as AE
 import Data.Aeson.Extra (lodashMerge)
 import Data.Aeson.Key qualified as AEK
@@ -16,16 +17,22 @@ import Data.Aeson.Lens (key, _Object, _String)
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.Aeson.Types qualified as AE
 import Data.ByteString.Lazy.Char8 qualified as BL
+
+import Data.Cache qualified as Cache
 import Data.Effectful.UUID (UUIDEff)
 import Data.Effectful.UUID qualified as UUID
+import Data.HashMap.Strict qualified as HashMap
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Database.PostgreSQL.Entity.DBT (withPool)
 import Effectful
 import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
+import Effectful.Reader.Static qualified as Eff
+
 import Log qualified
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields
@@ -40,7 +47,8 @@ import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages (ensureUrlParams, fieldsToFieldDTO, redactJSON, sortVector, valueToFields)
 import RequestMessages qualified
-import Utils (b64ToJson, eitherStrToText, nestedJsonFromDotNotation, toXXHash)
+import System.Config (AuthContext (..))
+import Utils (b64ToJson, eitherStrToText, freeTierDailyMaxEvents, nestedJsonFromDotNotation, toXXHash)
 
 
 {--
@@ -102,14 +110,29 @@ import Utils (b64ToJson, eitherStrToText, nestedJsonFromDotNotation, toXXHash)
 
     We could also maintain hashes of all the formats in the cache, and check each field format within this list.🤔
  --}
+
+defaultProjectCache :: Projects.ProjectCache
+defaultProjectCache =
+  Projects.ProjectCache
+    { hosts = []
+    , endpointHashes = []
+    , shapeHashes = []
+    , redactFieldslist = []
+    , dailyEventCount = 0
+    , dailyMetricCount = 0
+    , paymentPlan = "Free"
+    }
+
+
 processMessages
   -- :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
-  :: (DB :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es)
+  :: (DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es)
   => [(Text, ByteString)]
   -> HashMap Text Text
   -> Eff es [Text]
 processMessages [] _ = pure []
 processMessages msgs attrs = do
+  appCtx <- Eff.ask @AuthContext
   let msgs' =
         msgs <&> \(ackId, msg) -> do
           let sanitizedJsonStr = replaceNullChars $ decodeUtf8 msg
@@ -120,18 +143,42 @@ processMessages msgs attrs = do
     let leftMsgs = [(a, b) | (Left a, b) <- zip msgs' msgs]
     forM_ leftMsgs \(a, (ackId, msg)) -> Log.logAttention "Error parsing json msgs" (object ["AckId" .= ackId, "Error" .= a, "OriginalMsg" .= decodeUtf8 @Text msg])
 
-  if null $ rights msgs'
+  let rMsgs = rights msgs'
+  if null rMsgs
     then pure []
     else do
-      spans <- forM (rights msgs') \(rmAckId, msg) -> do
-        spanId <- UUID.genUUID
-        trId <- UUID.toText <$> UUID.genUUID
-        pure $ convertRequestMessageToSpan msg (spanId, trId)
+      caches <- liftIO $ do
+        -- Use parallel evaluation for cache fetching
+        let projectIds = (\(_, m) -> Projects.ProjectId m.projectId) <$> rMsgs
+        cachePairs <- forM projectIds $ \pid ->
+          Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
+            mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
+            pure $! fromMaybe defaultProjectCache mpjCache
+        -- Force evaluation of cache pairs
+        pure (zip projectIds cachePairs `using` parList rpar)
+      let projectCaches = HashMap.fromList caches
+
+      spans <- forM rMsgs \(rmAckId, msg) -> do
+        let pid = Projects.ProjectId msg.projectId
+        case HashMap.lookup pid projectCaches of
+          Just cache ->
+            -- Check if project has exceeded daily limit for free tier
+            let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
+                !isFreeTier = cache.paymentPlan == "Free"
+                !hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
+             in if hasExceededLimit
+                  then pure Nothing -- Discard events for projects that exceeded limits
+                  else do
+                    spanId <- UUID.genUUID
+                    trId <- UUID.toText <$> UUID.genUUID
+                    pure $ Just $ convertRequestMessageToSpan msg (spanId, trId)
+          Nothing -> pure Nothing
+
       let spanVec = V.fromList spans
       unless (V.null spanVec)
-        $ Telemetry.bulkInsertOtelLogsAndSpansTF spanVec
+        $ Telemetry.bulkInsertOtelLogsAndSpansTF (V.catMaybes spanVec)
 
-      pure $ map fst (rights msgs')
+      pure $ map fst rMsgs
 
 
 -- Replace null characters in a Text
@@ -151,7 +198,7 @@ processSpanToEntities pjc otelSpan dumpId =
   let !projectId = Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText otelSpan.project_id
 
       -- Extract HTTP attributes from nested JSON structure
-      !attributes = fromMaybe mempty otelSpan.attributes
+      !attributes = maybeToMonoid otelSpan.attributes
       !attrValue = AE.Object $ AEKM.fromMapText attributes
 
       -- Navigate nested JSON to extract values using lens
@@ -161,13 +208,13 @@ processSpanToEntities pjc otelSpan dumpId =
 
       !statusCode = fromMaybe 200 $ do
         statusStr <- attrValue ^? key "http" . key "response" . key "status_code" . _String
-        readMaybe $ T.unpack statusStr
+        readMaybe $ toString statusStr
 
       !host = fromMaybe "" $ attrValue ^? key "net" . key "host" . key "name" . _String
 
       -- Extract SDK type from attributes (needed for URL normalization)
       !sdkTypeStr = fromMaybe "unknown" $ attrValue ^? key "apitoolkit" . key "sdk_type" . _String
-      !sdkType = fromMaybe RequestDumps.SDKUnknown $ readMaybe $ T.unpack sdkTypeStr
+      !sdkType = fromMaybe RequestDumps.SDKUnknown $ readMaybe $ toString sdkTypeStr
 
       -- URL normalization and dynamic path parameter extraction
       !urlPath' = RequestDumps.normalizeUrlPath sdkType statusCode method rawPath
@@ -281,7 +328,7 @@ processSpanToEntities pjc otelSpan dumpId =
             [ Just endpointHash
             , if isJust shape then Just shapeHash else Nothing
             ]
-          <> V.toList fieldHashes
+            <> V.toList fieldHashes
    in (endpoint, shape, fields', formats', hashes)
   where
     -- Helper function to extract headers from nested attribute structure
@@ -388,7 +435,7 @@ createSpanAttributes rm =
         reqHeaders =
           fromMaybe (AE.object [])
             $ rm.requestHeaders
-            ^? _Object
+              ^? _Object
               >>= \obj ->
                 let pairs = [("http.request.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
                  in Just $ nestedJsonFromDotNotation pairs
@@ -397,7 +444,7 @@ createSpanAttributes rm =
         respHeaders =
           fromMaybe (AE.object [])
             $ rm.responseHeaders
-            ^? _Object
+              ^? _Object
               >>= \obj ->
                 let pairs = [("http.response.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
                  in Just $ nestedJsonFromDotNotation pairs
