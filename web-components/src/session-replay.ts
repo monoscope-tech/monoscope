@@ -25,6 +25,7 @@ export class SessionReplay extends LitElement {
   @state() private currentEventTime: number = 0;
   @state() private currentTime = 0;
   @state() private finished = false;
+  @state() private syncScrolling = true;
 
   private startX: number | null = null;
   private player: Replayer | null = null;
@@ -455,8 +456,16 @@ export class SessionReplay extends LitElement {
               </div>
             </div>
           </div>
-          <div class="flex flex-col h-full overflow-y-auto w-full overflow-x-hidden c-scroll" style="height:calc(100% - 40px)">
+          <div class="flex flex-col h-full overflow-y-auto w-full overflow-x-hidden c-scroll" style="height:calc(100% - 80px)">
             ${this.consoleEvents.map((e) => this.displayConsoleEvent(e))}
+          </div>
+          <div class="flex items-center h-10 bg-fillWeak border-t">
+            <button
+              @click=${() => (this.syncScrolling = !this.syncScrolling)}
+              class="text-xs font-semibold h-full px-2 hover:bg-fillWeaker ${this.syncScrolling ? 'text-blue-500' : ''}"
+            >
+              Sync scrolling
+            </button>
           </div>
         </div>
       </div>
