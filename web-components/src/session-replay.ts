@@ -11,6 +11,7 @@ const MS_10 = 10000;
 @customElement('session-replay')
 export class SessionReplay extends LitElement {
   @property({ type: String }) private events: string = '[]';
+  @property({ type: String }) private projectId: string = '';
 
   @state() private activityWidth = 0;
   @query('#replayerOuterContainer') private replayerOuterContainer;
@@ -18,6 +19,7 @@ export class SessionReplay extends LitElement {
   @state() private skipInactive = true;
   @state() private consoleEventsEnable = [true, true, true]; // error, warn, info;
   @state() private paused = false;
+  @state() private isLoading = true;
 
   @state() private consoleEvents: ConsoleEvent[] = [];
   @state() private currentEventTime: number = 0;
@@ -64,6 +66,12 @@ export class SessionReplay extends LitElement {
         this.activityWidth = curr;
         this.startX = e.clientX;
       }
+    });
+
+    window.addEventListener('loadingSessionReplay', (e) => {
+      const { sessionId } = (e as CustomEvent<{ sessionId: string }>).detail;
+      this.fetchNewSessionData(sessionId);
+      updateUrlState('session_replay', sessionId);
     });
   }
 
@@ -168,6 +176,60 @@ export class SessionReplay extends LitElement {
     }
   }
 
+  toggleConsoleEvent(indx: number) {
+    this.consoleEventsEnable[indx] = !this.consoleEventsEnable[indx];
+    this.consoleEventsEnable = [...this.consoleEventsEnable];
+  }
+
+  initiatePlayer(events: eventWithTime[]) {
+    const target = document.querySelector('#playerWrapper') as HTMLElement;
+    this.player?.destroy();
+    events.forEach((event) => {
+      if (event.type === EventType.Plugin && event.data.plugin === 'rrweb/console@1') {
+        const level = (event as ConsoleEvent).data.payload.level;
+        this.consoleTypesCounts[level] += 1;
+        this.consoleEvents = [...this.consoleEvents, event as ConsoleEvent];
+      }
+    });
+    if (events.length < 2) {
+      console.error('Need at least two events to play session');
+      return;
+    }
+    this.player = new Replayer(events, {
+      root: target,
+      plugins: [{ handler: this.handleConsoleEvents }],
+      skipInactive: this.skipInactive,
+    });
+    this.metaData = this.player.getMetaData();
+    this.updateScale();
+    this.play();
+  }
+
+  fetchNewSessionData(sessionId: string) {
+    if (this.isLoading) return;
+    this.isLoading = true;
+    this.player?.destroy();
+    const url = `/p/${this.projectId}/replay_session/${sessionId}`;
+
+    fetch(url, { method: 'GET', headers: { Accept: 'application/json' } })
+      .then((response) => response.json())
+      .then((data) => {
+        const events = data.events;
+        this.initiatePlayer(events);
+      })
+      .finally(() => {
+        this.isLoading = false;
+      });
+  }
+
+  protected firstUpdated(_changedProperties: PropertyValues): void {
+    const mContainer = Number(getComputedStyle(this.replayerOuterContainer).width.replace('px', ''));
+    this.containerWidth = mContainer - this.activityWidth;
+
+    const events = JSON.parse(localStorage.getItem('qq') || '[]') as eventWithTime[];
+    this.initiatePlayer(events);
+  }
+
   displayConsoleEvent = (event: ConsoleEvent) => {
     const payload = event.data.payload;
     if (payload.level === 'error' && !this.consoleEventsEnable[0]) return nothing;
@@ -221,9 +283,9 @@ export class SessionReplay extends LitElement {
           <div class="bg-bgBase rounded-xl p-3 whitespace-pre-wraps relative ${textColor} font-medium">
             <button
               class="absolute right-2 cursor-pointer"
-              _="on click call navigator.clipboard.writeText(${payload.payload.join(
-                ''
-              )}) then send successToast(value:['API Key has been added to the Clipboard']) to <body/>"
+              @click=${() => {
+                navigator.clipboard.writeText(payload.payload.join('\n'));
+              }}
             >
               ${faSprite_('copy', 'regular', 'h-5 w-5')}
             </button>
@@ -246,48 +308,15 @@ export class SessionReplay extends LitElement {
     `;
   };
 
-  toggleConsoleEvent(indx: number) {
-    this.consoleEventsEnable[indx] = !this.consoleEventsEnable[indx];
-    this.consoleEventsEnable = [...this.consoleEventsEnable];
-  }
-
-  protected firstUpdated(_changedProperties: PropertyValues): void {
-    const target = document.querySelector('#playerWrapper') as HTMLElement;
-    const mContainer = Number(getComputedStyle(this.replayerOuterContainer).width.replace('px', ''));
-    this.containerWidth = mContainer - this.activityWidth;
-
-    const events = JSON.parse(localStorage.getItem('vvv') || '[]') as eventWithTime[];
-
-    events.forEach((event) => {
-      if (event.type === EventType.Plugin && event.data.plugin === 'rrweb/console@1') {
-        const level = (event as ConsoleEvent).data.payload.level;
-        this.consoleTypesCounts[level] += 1;
-        this.consoleEvents = [...this.consoleEvents, event as ConsoleEvent];
-      }
-    });
-
-    this.player = new Replayer(events, {
-      root: target, // customizable root element
-      // props: {
-      // events:
-      plugins: [{ handler: this.handleConsoleEvents }],
-      skipInactive: this.skipInactive,
-      // },
-    });
-    this.metaData = this.player.getMetaData();
-    this.updateScale();
-    this.play();
-  }
-
   render() {
     return html`<div class="flex overflow-x-hidden " id="replayerOuterContainer" style="width:1124px; height:750px">
-      <div class="w-full h-full flex flex-col justify-start shrink-1">
-        <div class="bg-fillWeak w-full px-2 h-10 flex items-center border-b gap-4 justify-between" id="playerHeader">
+      <div class="w-full h-full flex flex-col justify-start shrink-1 min-w-0 overflow-x-hidden">
+        <div class="bg-fillWeak w-full px-2 h-10 flex items-center border-b gap-4 justify-between playerHeader">
           <div class="flex items-center gap-4 shrink-1">
             <h3 class="font-medium h-full truncate overflow-ellipsis min-w-0">Session recording</h3>
           </div>
 
-          <div class="flex items-center gap-4 text-xs font-semibold" @click=${(e: any) => e.stopPropagation()}>
+          <div class="flex items-center gap-4 text-xs font-semibold">
             <div class="dropdown">
               <div tabindex="0" role="button" class="cursor-pointer flex items-center gap-1 ${this.playSpeed != 1 ? 'text-blue-500' : ''}">
                 ${faSprite_('gauge', 'regular', 'w-3 h-3')} Speed ${this.playSpeed}x
@@ -315,7 +344,7 @@ export class SessionReplay extends LitElement {
             </button>
             <button
               @click=${() => {
-                this.activityWidth = this.activityWidth <= 0 ? 500 : 0;
+                this.activityWidth = this.activityWidth <= 0 ? 300 : 0;
               }}
               class="cursor-pointer flex items-center gap-1 ${this.activityWidth > 0 ? 'text-blue-500' : ''}"
             >
@@ -332,9 +361,13 @@ export class SessionReplay extends LitElement {
               style="height:${this.containerHeight}px; width: ${this.containerWidth}px"
             ></div>
             <div
-              class="absolute inset-0 flex bg-black opacity-25 items-center  justify-center ${this.paused || this.finished ? '' : 'hidden'}"
+              class="absolute inset-0 flex bg-black opacity-25 items-center  justify-center ${this.paused || this.finished || this.isLoading
+                ? ''
+                : 'hidden'}"
             >
-              ${this.finished
+              ${this.isLoading
+                ? html`<div class="italic text-7xl font-medium text-red-500">Loading...</div>`
+                : this.finished
                 ? html` <button @click=${() => this.goTo(0)}>${faSprite_('replay', 'regular', 'w-14 h-14 text-textInverse-weak')}</button> `
                 : html`
                     <button @click=${() => (this.paused = false)}>
@@ -384,7 +417,7 @@ export class SessionReplay extends LitElement {
           }}
         ></div>
         <div class="w-full h-full overflow-hidden">
-          <div class="bg-fillWeak w-full px-4 h-10  flex items-center border-b gap-4 justify-between">
+          <div class="bg-fillWeak w-full px-4 h-10  flex items-center border-b gap-4 justify-between playerHeader">
             <div class="flex items-center gap-4 text-xs font-semibold">
               <div class="dropdown">
                 <div tabindex="0" role="button" class="cursor-pointer">Console</div>
@@ -437,23 +470,25 @@ export class SessionReplay extends LitElement {
 
   makeDraggable() {
     const element = document.querySelector('#sessionPlayerWrapper') as HTMLElement;
-    const header = element.querySelector('#playerHeader') as HTMLElement;
+    const headers = element.querySelectorAll<HTMLElement>('.playerHeader');
 
     let isDragging = false;
     let offsetX: number, offsetY: number;
 
-    header.addEventListener('mousedown', (e: any) => {
-      isDragging = true;
-      offsetX = e.clientX - element.getBoundingClientRect().left;
-      offsetY = e.clientY - element.getBoundingClientRect().top;
+    headers.forEach((h) =>
+      h.addEventListener('mousedown', (e: any) => {
+        isDragging = true;
+        offsetX = e.clientX - element.getBoundingClientRect().left;
+        offsetY = e.clientY - element.getBoundingClientRect().top;
 
-      // Add temporary event listeners
-      document.addEventListener('mousemove', onMouseMove);
-      document.addEventListener('mouseup', onMouseUp);
-
-      // Prevent text selection during drag
-      e.preventDefault();
-    });
+        // Add temporary event listeners
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+        document.body.style.userSelect = 'none';
+        // Prevent text selection during drag
+        // e.preventDefault();
+      })
+    );
 
     const onMouseMove = (e: any) => {
       if (isDragging) {
@@ -464,6 +499,7 @@ export class SessionReplay extends LitElement {
 
     const onMouseUp = () => {
       isDragging = false;
+      document.body.style.userSelect = '';
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseup', onMouseUp);
     };

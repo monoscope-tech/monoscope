@@ -694,15 +694,7 @@ export class LogList extends LitElement {
                   @pointerdown=${(e: any) => {
                     e.stopPropagation();
                     e.preventDefault();
-                    const input = document.getElementById('session_replay_drawer') as HTMLInputElement;
-                    input.checked = true;
-                    const url = `/p/${this.projectId}/replay_session/${value}`;
-                    updateUrlState('session_replay', value);
-                    (window as any).htmx.ajax('GET', url, {
-                      target: '#replay_session_container',
-                      swap: 'innerHTML',
-                      indicator: '#replay_session_indicator',
-                    });
+                    dispatchEvent(new CustomEvent('loadSessionReplay', { detail: { sessionId: value } }));
                   }}
                 >
                   ${faSprite('play', 'regular', 'w-4 h-4')} Play recording
