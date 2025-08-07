@@ -1,10 +1,8 @@
 import { html, LitElement, nothing, PropertyValues } from 'lit';
 import { customElement, property, query, state } from 'lit/decorators.js';
-import rrwebPlayer from 'rrweb-player';
 import { EventType, eventWithTime } from '@rrweb/types';
 import { faSprite_ } from './monitors/test-editor-utils';
 import { ConsoleEvent } from './types/types';
-// import 'rrweb-player/dist/style.css';
 import { Replayer } from '@rrweb/replay';
 
 const MS_10 = 10000;
@@ -390,7 +388,7 @@ export class SessionReplay extends LitElement {
                 : 'hidden'}"
             >
               ${this.isLoading
-                ? html`<div class="italic text-7xl font-medium text-red-500">Loading...</div>`
+                ? html`<div class="italic text-7xl font-medium text-gray-100">Loading...</div>`
                 : this.finished
                 ? html` <button @click=${() => this.goTo(0)}>${faSprite_('replay', 'regular', 'w-14 h-14 text-textInverse-weak')}</button> `
                 : html`

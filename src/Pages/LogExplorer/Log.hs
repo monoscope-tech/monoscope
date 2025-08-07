@@ -619,18 +619,8 @@ apiLogsPage page = do
 
     div_ [class_"fixed z-[9999] hidden right-0 w-max h-max border rounded top-32 bg-bgBase shadow-lg" ,id_ "sessionPlayerWrapper"] do
         div_ [class_"relative"] do
-          button_ [class_"rounded-full h-10 w-10 border shadow hover:bg-gray-100 absolute top-0 -translate-y-10 right-0", onclick_"(()=>{document.querySelector('#sessionPlayerWrapper').style.display='none'})()"] "x"
+          button_ [class_"rounded-full h-10 w-10 border shadow hover:bg-gray-100 absolute top-0 -translate-y-10 right-0", [__|on click add .hidden to #sessionPlayerWrapper|]] "x"
           termRaw "session-replay" [ id_ "resultTable", class_ "shrink-1 flex flex-col", term "projectId"  page.pid.toText]("" :: Text)
-
-    -- div_ [class_ "drawer drawer-end"] $ do
-    --   input_ [id_ "session_replay_drawer", type_ "checkbox", class_ "drawer-toggle w-0 h-0"]
-    --   div_ [class_ "drawer-content"]
-    --     $ label_ [Lucid.for_ $ "session_replay_drawer", class_ "drawer-button hidden group-hover:block absolute right-2 top-1/2 -translate-y-1/2"] do
-    --       faSprite_ "play" "regular" "w-4 h-4 fill-textWeak"
-    --   div_ [class_ "drawer-side "] $ do
-    --     label_ [Lucid.for_ $ "session_replay_drawer", class_ "drawer-overlay"] pass
-    --     div_ [class_ "shadow-[rgba(128, 128, 209, 0.5)_-10px_0px_4px_0px] border-l-2 bg-bgBase overflow-y-scroll h-full w-[1200px] dark:shadow-[rgba(186, 186, 228, 0.5)_-10px_0px_4px_0px]", id_ "replay_session_container"] $ do
-    --       span_ [class_ "absolute left-1/2 -translate-x-1/2 loading  loading-dots mt-4 mx-auto", id_ "replay_session_indicator"] ""
     div_
       [ style_ "z-index:26"
       , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
