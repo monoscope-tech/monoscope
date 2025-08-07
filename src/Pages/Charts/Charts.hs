@@ -17,6 +17,7 @@ import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple.Types (Only (..), Query (Query))
 import Database.PostgreSQL.Transact qualified as DBT
+import Effectful.PostgreSQL.Transact.Effect (DB)
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
@@ -200,7 +201,8 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
 
 
 fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> IO MetricsData
-fetchMetricsData respDataType sqlQuery now fromD toD authCtx = do
+fetchMetricsData respDataType sqlQuery now fromD toD authCtx =  do
+  let pool = authCtx.timefusionPgPool
   let baseMetricsData =
         def
           { from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
@@ -216,7 +218,7 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx = do
           , rowsCount = 1
           }
     DTMetric -> do
-      chartData <- withPool authCtx.pool $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
+      chartData <- withPool pool $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
       let chartsDataV = V.fromList chartData
       let (hdrs, groupedData, rowsCount, rpm) = pivot' chartsDataV
       pure

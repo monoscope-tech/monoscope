@@ -42,6 +42,7 @@ import Database.PostgreSQL.Transact (DBT)
 import Database.PostgreSQL.Transact qualified as DBT
 import Deriving.Aeson qualified as DAE
 import Effectful
+import Effectful.Labeled (labeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Time qualified as Time

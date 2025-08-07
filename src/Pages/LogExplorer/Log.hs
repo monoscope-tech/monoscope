@@ -20,7 +20,8 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Vector qualified as V
 import Effectful.Error.Static (throwError)
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Labeled (labeled)
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Lucid
@@ -400,7 +401,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
   now <- Time.currentTime
   let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
-  tableAsVecE <- RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+  tableAsVecE <- labeled @"timefusion" @DB $ RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
 
   -- FIXME: we're silently ignoring parse errors and the likes.
   let tableAsVecM = hush tableAsVecE
