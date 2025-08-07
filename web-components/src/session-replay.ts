@@ -60,6 +60,7 @@ export class SessionReplay extends LitElement {
     this.pause = this.pause.bind(this);
     this.goTo = this.goTo.bind(this);
     this.fetchNewSessionData = this.fetchNewSessionData.bind(this);
+    this.initiatePlayer = this.initiatePlayer.bind(this);
 
     document.addEventListener('mousemove', (e) => {
       if (this.startX !== null) {
@@ -84,7 +85,9 @@ export class SessionReplay extends LitElement {
   }
 
   play(tm?: number) {
-    this.player?.play(tm !== undefined ? tm : this.currentTime);
+    const to = tm !== undefined ? tm : this.currentTime;
+    const seek = Math.max(0, Math.min(to, this.metaData.totalTime));
+    this.player?.play(seek);
     this.loopTimer();
   }
 
@@ -160,6 +163,11 @@ export class SessionReplay extends LitElement {
         }
         this.paused ? this.pause() : this.play();
       }
+      if (changedProperties.has('currentEventTime')) {
+        if (this.syncScrolling) {
+          document.querySelector('#a-' + this.currentEventTime)?.scrollIntoView();
+        }
+      }
     }
   }
 
@@ -227,6 +235,8 @@ export class SessionReplay extends LitElement {
   protected firstUpdated(_changedProperties: PropertyValues): void {
     const mContainer = Number(getComputedStyle(this.replayerOuterContainer).width.replace('px', ''));
     this.containerWidth = mContainer - this.activityWidth;
+    const events = JSON.parse(localStorage.getItem('qq') || '[]');
+    this.initiatePlayer(events);
   }
 
   displayConsoleEvent = (event: ConsoleEvent) => {
@@ -258,7 +268,7 @@ export class SessionReplay extends LitElement {
     }
 
     return html`
-      <div class="text-sm flex flex-col min-w-0 event-container">
+      <div class="text-sm flex flex-col min-w-0 event-container" id="a-${event.timestamp}">
         <div class="flex items-center w-full">
           <span class="h-2 w-2 shrink-0 rounded-full ${this.currentEventTime === event.timestamp ? 'bg-blue-500' : ''} ml-1"></span>
           <span class="text-xs font-medium text-center text-textWeak min-w-11">
@@ -456,7 +466,10 @@ export class SessionReplay extends LitElement {
               </div>
             </div>
           </div>
-          <div class="flex flex-col h-full overflow-y-auto w-full overflow-x-hidden c-scroll" style="height:calc(100% - 80px)">
+          <div
+            class="flex flex-col h-full overflow-y-auto w-full overflow-x-hidden c-scroll scroll-smooth"
+            style="height:calc(100% - 80px)"
+          >
             ${this.consoleEvents.map((e) => this.displayConsoleEvent(e))}
           </div>
           <div class="flex items-center h-10 bg-fillWeak border-t">
