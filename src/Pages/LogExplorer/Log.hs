@@ -617,10 +617,10 @@ apiLogsPage page = do
   section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-hidden overflow-x-hidden pb-2 group/pg", id_ "apiLogsPage"] do
     template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
-    div_ [class_"fixed z-[9999999999] right-0 w-max h-max border rounded top-32 bg-bgBase shadow-lg" ,id_ "sessionPlayerWrapper"] do
+    div_ [class_"fixed z-[9999] hidden right-0 w-max h-max border rounded top-32 bg-bgBase shadow-lg" ,id_ "sessionPlayerWrapper"] do
         div_ [class_"relative"] do
           button_ [class_"rounded-full h-10 w-10 border shadow hover:bg-gray-100 absolute top-0 -translate-y-10 right-0", onclick_"(()=>{document.querySelector('#sessionPlayerWrapper').style.display='none'})()"] "x"
-          termRaw "session-replay" [ id_ "resultTable", class_ "shrink-1 flex flex-col"]("" :: Text)
+          termRaw "session-replay" [ id_ "resultTable", class_ "shrink-1 flex flex-col", term "projectId"  page.pid.toText]("" :: Text)
 
     -- div_ [class_ "drawer drawer-end"] $ do
     --   input_ [id_ "session_replay_drawer", type_ "checkbox", class_ "drawer-toggle w-0 h-0"]

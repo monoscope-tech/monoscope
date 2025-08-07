@@ -146,102 +146,93 @@ saveReplayMinio envCfg (ackId, replayData) = do
     Left e -> pure Nothing
 
 
-replaySessionGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
+replaySessionGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders AE.Value)
 replaySessionGetH pid sessionId = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let envCfg = ctx.config
-  let events = V.empty -- Telemetry.getEventsBySessionId pid (UUID.toText sessionId)
-  let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
-  queryAST <- parseQuery $ "attributes___session___id ==\"" <> UUID.toText sessionId <> "\""
-  let queryText = toQText queryAST
+      conn = getMinioConnectInfo ctx.config
+  replayEvents <- getMinioFile conn (fromString $ toString envCfg.s3Bucket) (fromString $ toString $ UUID.toText sessionId <> ".json")
+  addRespHeaders $ AE.object["events" AE..= AE.Array replayEvents] 
 
-  -- child spans might not have session id but are part of the session
+  
+  -- case tableAsVecM of
+  --   Just tableAsVec -> do
+  --     let (requestVecs, colNames, resultCount) = tableAsVec
+  --         curatedColNames = nubOrd $ curateCols [] colNames
+  --         colIdxMap = listToIndexHashMap colNames
+  --         traceIds = V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
+  --     extraEvents <- Telemetry.getLogsByTraceIds pid (V.catMaybes traceIds)
 
-  -- tableAsVecE <- RequestDumps.selectLogTable pid queryAST queryText Nothing (Nothing, Nothing) [] Nothing Nothing
-  let tableAsVecM = Nothing
+  --     let finalVecs = requestVecs <> extraEvents
+  --         serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
+  --         colors = getServiceColors (V.catMaybes serviceNames)
 
-  case tableAsVecM of
-    Just tableAsVec -> do
-      let (requestVecs, colNames, resultCount) = tableAsVec
-          curatedColNames = nubOrd $ curateCols [] colNames
-          colIdxMap = listToIndexHashMap colNames
-          traceIds = V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
-      extraEvents <- Telemetry.getLogsByTraceIds pid (V.catMaybes traceIds)
-
-      let conn = getMinioConnectInfo ctx.config
-      -- replayEvents <- getMinioFile conn (fromString $ toString envCfg.s3Bucket) (fromString $ toString $ UUID.toText sessionId <> ".json")
-      -- let eventsJson = decodeUtf8 $ AE.encode (AE.Array replayEvents)
-      let finalVecs = requestVecs <> extraEvents
-          serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
-          colors = getServiceColors (V.catMaybes serviceNames)
-
-          page =
-            ReplayPage
-              { requestVecs = finalVecs
-              , cols = curatedColNames
-              , colIdxMap = colIdxMap
-              , serviceColors = colors
-              , nextLogsURL = Nothing
-              , count = resultCount
-              , recentLogsURL = Nothing
-              , resetLogsURL = Nothing
-              , pid = pid
-              }
-      addRespHeaders $ replaySessionPage pid sessionId (Just page) "[]"
-    Nothing -> addRespHeaders $ replaySessionPage pid sessionId Nothing "[]"
+  --         page =
+  --           ReplayPage
+  --             { requestVecs = finalVecs
+  --             , cols = curatedColNames
+  --             , colIdxMap = colIdxMap
+  --             , serviceColors = colors
+  --             , nextLogsURL = Nothing
+  --             , count = resultCount
+  --             , recentLogsURL = Nothing
+  --             , resetLogsURL = Nothing
+  --             , pid = pid
+  --             }
+  --   Nothing -> addRespHeaders $ AE.object["events" AE..= AE.Array V.empty]
 
 
-data ReplayPage = ReplayPage
-  { requestVecs :: V.Vector (V.Vector AE.Value)
-  , cols :: [Text]
-  , colIdxMap :: HashMap Text Int
-  , serviceColors :: HashMap Text Text
-  , nextLogsURL :: Maybe Text
-  , count :: Int
-  , recentLogsURL :: Maybe Text
-  , resetLogsURL :: Maybe Text
-  , pid :: Projects.ProjectId
-  }
+-- data ReplayPage = ReplayPage
+--   { requestVecs :: V.Vector (V.Vector AE.Value)
+--   , cols :: [Text]
+--   , colIdxMap :: HashMap Text Int
+--   , serviceColors :: HashMap Text Text
+--   , nextLogsURL :: Maybe Text
+--   , count :: Int
+--   , recentLogsURL :: Maybe Text
+--   , resetLogsURL :: Maybe Text
+--   , pid :: Projects.ProjectId
+--   }
 
 
-replaySessionPage :: Projects.ProjectId -> UUID.UUID -> Maybe ReplayPage -> Text -> Html ()
-replaySessionPage pid sessionId page eventsJson = do
-  div_ [class_ "w-full flex flex-col h-full"] $ do
-    termRaw "session-replay" [ id_ "resultTable", class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0", term "events" eventsJson]("" :: Text)
-  --   div_ [class_ "p-4 border-b"] $ do
-  --     span_ [class_ "htmx-indicator query-indicator loading loading-dots mt-4 mx-auto z-50 absolute left-1/2 -translate-x-1/2", id_ "replay_session_indicator"] ""
-  --     div_ [class_ "flex items-center justify-between"] $ do
-  --       div_ $ do
-  --         h2_ [id_ "sessionTitle", class_ "text-xl font-bold"] "Session replay"
-  --   div_ [class_ "rounded-lg overflow-hidden ml-4 border p-2 border-strokeWeak bg-gradient-to-br from-slate-900 via-blue-900 to-purple-900 cursor-pointer"] do
-  --     div_ [id_ "videoContainer", class_ "overflow-hidden w-max mx-auto"] pass
-  --   div_ [class_ "p-4 border-b flex items-center justify-between"] $ do
-  --     div_ [class_ "flex items-center gap-2"] $ do
-  --       h3_ [class_ "font-semibold"] "Session Events"
-  --       span_ [id_ "logCount", class_ "bg-fillWeak text-textWeak px-2 py-1 rounded text-sm"] $ show (maybe 0 (.count) page)
-  --       span_ [id_ "errorCount", class_ "bg-red-100 text-red-800 px-2 py-1 rounded text-sm hidden"] "2 errors"
-  --   whenJust page $ \p -> do
-  --     div_ [class_ "flex flex-col h-[400px]"] do
-  --       termRaw "log-list" [id_ "resultTable", class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0", term "windowTarget" "sessionList"] ("" :: Text)
+-- replaySessionPage :: Projects.ProjectId -> UUID.UUID -> Maybe ReplayPage -> Text -> ()
+-- replaySessionPage pid sessionId page eventsJson = do
+--   div_ [class_ "w-full flex flex-col h-full"] $ do
+--     termRaw "session-replay" [ id_ "resultTable", class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0", term "events" eventsJson]("" :: Text)
+--   --   div_ [class_ "p-4 border-b"] $ do
+--   --     span_ [class_ "htmx-indicator query-indicator loading loading-dots mt-4 mx-auto z-50 absolute left-1/2 -translate-x-1/2", id_ "replay_session_indicator"] ""
+--   --     div_ [class_ "flex items-center justify-between"] $ do
+--   --       div_ $ do
+--   --         h2_ [id_ "sessionTitle", class_ "text-xl font-bold"] "Session replay"
+--   --   div_ [class_ "rounded-lg overflow-hidden ml-4 border p-2 border-strokeWeak bg-gradient-to-br from-slate-900 via-blue-900 to-purple-900 cursor-pointer"] do
+--   --     div_ [id_ "videoContainer", class_ "overflow-hidden w-max mx-auto"] pass
+--   --   div_ [class_ "p-4 border-b flex items-center justify-between"] $ do
+--   --     div_ [class_ "flex items-center gap-2"] $ do
+--   --       h3_ [class_ "font-semibold"] "Session Events"
+--   --       span_ [id_ "logCount", class_ "bg-fillWeak text-textWeak px-2 py-1 rounded text-sm"] $ show (maybe 0 (.count) page)
+--   --       span_ [id_ "errorCount", class_ "bg-red-100 text-red-800 px-2 py-1 rounded text-sm hidden"] "2 errors"
+--   --   whenJust page $ \p -> do
+--   --     div_ [class_ "flex flex-col h-[400px]"] do
+--   --       termRaw "log-list" [id_ "resultTable", class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0", term "windowTarget" "sessionList"] ("" :: Text)
 
-  --     let logs = decodeUtf8 $ AE.encode p.requestVecs
-  --         cols = decodeUtf8 $ AE.encode p.cols
-  --         colIdxMap = decodeUtf8 $ AE.encode p.colIdxMap
-  --         serviceColors = decodeUtf8 $ AE.encode p.serviceColors
-  --         projectid = p.pid.toText
+--   --     let logs = decodeUtf8 $ AE.encode p.requestVecs
+--   --         cols = decodeUtf8 $ AE.encode p.cols
+--   --         colIdxMap = decodeUtf8 $ AE.encode p.colIdxMap
+--   --         serviceColors = decodeUtf8 $ AE.encode p.serviceColors
+--   --         projectid = p.pid.toText
 
-  --     script_
-  --       [text|
-  --        window.sessionListData = {
-  --         requestVecs: $logs,
-  --         cols: $cols,
-  --         colIdxMap: $colIdxMap,
-  --         serviceColors: $serviceColors,
-  --         projectId: "$projectid",
-  --        }
-  --     |]
-  -- script_
-  --   [text|
-  --     var videoContainer = document.getElementById('videoContainer');
-  --     new rrwebPlayer({target: videoContainer, props: {autoPlay:true, width:1152, height:400, events: $eventsJson }});
-  -- |]
+--   --     script_
+--   --       [text|
+--   --        window.sessionListData = {
+--   --         requestVecs: $logs,
+--   --         cols: $cols,
+--   --         colIdxMap: $colIdxMap,
+--   --         serviceColors: $serviceColors,
+--   --         projectId: "$projectid",
+--   --        }
+--   --     |]
+--   -- script_
+--   --   [text|
+--   --     var videoContainer = document.getElementById('videoContainer');
+--   --     new rrwebPlayer({target: videoContainer, props: {autoPlay:true, width:1152, height:400, events: $eventsJson }});
+--   -- |]

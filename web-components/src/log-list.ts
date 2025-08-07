@@ -694,7 +694,10 @@ export class LogList extends LitElement {
                   @pointerdown=${(e: any) => {
                     e.stopPropagation();
                     e.preventDefault();
-                    dispatchEvent(new CustomEvent('loadSessionReplay', { detail: { sessionId: value } }));
+                    window.dispatchEvent(
+                      new CustomEvent('loadSessionReplay', { detail: { sessionId: value }, bubbles: true, cancelable: false })
+                    );
+                    document.querySelector('#sessionPlayerWrapper')!.classList.remove('hidden');
                   }}
                 >
                   ${faSprite('play', 'regular', 'w-4 h-4')} Play recording

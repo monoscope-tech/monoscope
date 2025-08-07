@@ -19,7 +19,7 @@ export class SessionReplay extends LitElement {
   @state() private skipInactive = true;
   @state() private consoleEventsEnable = [true, true, true]; // error, warn, info;
   @state() private paused = false;
-  @state() private isLoading = true;
+  @state() private isLoading = false;
 
   @state() private consoleEvents: ConsoleEvent[] = [];
   @state() private currentEventTime: number = 0;
@@ -58,6 +58,7 @@ export class SessionReplay extends LitElement {
     this.play = this.play.bind(this);
     this.pause = this.pause.bind(this);
     this.goTo = this.goTo.bind(this);
+    this.fetchNewSessionData = this.fetchNewSessionData.bind(this);
 
     document.addEventListener('mousemove', (e) => {
       if (this.startX !== null) {
@@ -68,7 +69,7 @@ export class SessionReplay extends LitElement {
       }
     });
 
-    window.addEventListener('loadingSessionReplay', (e) => {
+    window.addEventListener('loadSessionReplay', (e) => {
       const { sessionId } = (e as CustomEvent<{ sessionId: string }>).detail;
       this.fetchNewSessionData(sessionId);
       updateUrlState('session_replay', sessionId);
@@ -207,8 +208,8 @@ export class SessionReplay extends LitElement {
 
   fetchNewSessionData(sessionId: string) {
     if (this.isLoading) return;
+    this.pause();
     this.isLoading = true;
-    this.player?.destroy();
     const url = `/p/${this.projectId}/replay_session/${sessionId}`;
 
     fetch(url, { method: 'GET', headers: { Accept: 'application/json' } })
@@ -225,9 +226,6 @@ export class SessionReplay extends LitElement {
   protected firstUpdated(_changedProperties: PropertyValues): void {
     const mContainer = Number(getComputedStyle(this.replayerOuterContainer).width.replace('px', ''));
     this.containerWidth = mContainer - this.activityWidth;
-
-    const events = JSON.parse(localStorage.getItem('qq') || '[]') as eventWithTime[];
-    this.initiatePlayer(events);
   }
 
   displayConsoleEvent = (event: ConsoleEvent) => {
