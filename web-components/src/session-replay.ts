@@ -105,7 +105,7 @@ export class SessionReplay extends LitElement {
     this.stopTimer();
 
     const update = () => {
-      this.currentTime = this.player?.getCurrentTime() || 0;
+      this.currentTime = Math.min(this.metaData.totalTime, this.player?.getCurrentTime() || 0);
 
       if (this.currentTime < this.metaData.totalTime) {
         this.finished = false;
@@ -319,7 +319,7 @@ export class SessionReplay extends LitElement {
 
   render() {
     return html`<div class="flex overflow-x-hidden " id="replayerOuterContainer" style="width:1124px; height:750px">
-      <div class="w-full h-full flex flex-col justify-start shrink-1 min-w-0 overflow-x-hidden">
+      <div class="w-full  flex flex-col justify-start shrink-1 min-w-0 overflow-hidden">
         <div class="bg-fillWeak w-full px-2 h-10 flex items-center border-b gap-4 justify-between playerHeader">
           <div class="flex items-center gap-4 shrink-1">
             <h3 class="font-medium h-full truncate overflow-ellipsis min-w-0">Session recording</h3>
@@ -385,34 +385,41 @@ export class SessionReplay extends LitElement {
                   `}
             </div>
           </div>
-          <div class="flex p-2  items-center justify-between">
-            <div>
-              <div class="text-xs flex gap-0.5 font-mono font-medium flex-nowrap w-max">
-                <span>${SessionReplay.formatTime(this.currentTime)}</span>
-                <span>/</span>
-                <span>${SessionReplay.formatTime(this.metaData.totalTime)}</span>
+          <div class="flex flex-col items-center w-full py-4">
+            <div class="relative progress-container h-1 rounded  bg-gray-200" style="width:calc(100% - 32px)">
+              <div class="relative h-full bg-blue-500" style="width:${(this.currentTime / this.metaData.totalTime) * 100}%">
+                <span class="absolute right-0 h-3 w-3 top-1/2 -translate-y-1/2 rounded-full bg-blue-500"></span>
               </div>
             </div>
-            <div class="w-full gap-3 flex items-center justify-center">
-              <button class="relative" @click=${() => this.goTo(this.currentTime - MS_10)}>
-                <span style="font-size:8px" class="absolute top-1/2  left-1/2 -translate-x-1/2 -translate-y-1/2 font-semibold">10</span>
-                ${faSprite_('time-skip', 'regular', 'h-5 w-5')}
-              </button>
-              ${this.finished
-                ? html`<button class="flex justify-center items-center" @click=${() => this.goTo(0)}>
-                    ${faSprite_('replay', 'regular', 'h-5 w-5')}
-                  </button>`
-                : html`
-                    <button class="flex justify-center items-center" @click=${() => (this.paused = !this.paused)}>
-                      ${this.paused ? faSprite_('p-play', 'regular', 'h-5 w-5') : faSprite_('p-pause', 'regular', 'h-5 w-5')}
-                    </button>
-                  `}
-              <button class="relative" @click=${() => this.goTo(this.currentTime + MS_10)}>
-                <span style="font-size: 8px" class="absolute top-1/2  left-1/2 -translate-x-1/2 -translate-y-1/2 font-semibold">10</span>
-                ${faSprite_('time-skip', 'regular', 'h-5 w-5 rotate-y-180')}
-              </button>
+            <div class="flex p-4 w-full items-center justify-between">
+              <div>
+                <div class="text-xs flex gap-0.5 font-mono font-medium flex-nowrap w-max">
+                  <span>${SessionReplay.formatTime(this.currentTime)}</span>
+                  <span>/</span>
+                  <span>${SessionReplay.formatTime(this.metaData.totalTime)}</span>
+                </div>
+              </div>
+              <div class="w-full gap-3 flex items-center justify-center">
+                <button class="relative" @click=${() => this.goTo(this.currentTime - MS_10)}>
+                  <span style="font-size:8px" class="absolute top-1/2  left-1/2 -translate-x-1/2 -translate-y-1/2 font-semibold">10</span>
+                  ${faSprite_('time-skip', 'regular', 'h-5 w-5')}
+                </button>
+                ${this.finished
+                  ? html`<button class="flex justify-center items-center" @click=${() => this.goTo(0)}>
+                      ${faSprite_('replay', 'regular', 'h-5 w-5')}
+                    </button>`
+                  : html`
+                      <button class="flex justify-center items-center" @click=${() => (this.paused = !this.paused)}>
+                        ${this.paused ? faSprite_('p-play', 'regular', 'h-5 w-5') : faSprite_('p-pause', 'regular', 'h-5 w-5')}
+                      </button>
+                    `}
+                <button class="relative" @click=${() => this.goTo(this.currentTime + MS_10)}>
+                  <span style="font-size: 8px" class="absolute top-1/2  left-1/2 -translate-x-1/2 -translate-y-1/2 font-semibold">10</span>
+                  ${faSprite_('time-skip', 'regular', 'h-5 w-5 rotate-y-180')}
+                </button>
+              </div>
+              <div></div>
             </div>
-            <div></div>
           </div>
         </div>
       </div>
@@ -457,13 +464,13 @@ export class SessionReplay extends LitElement {
                   </li>
                 </ul>
               </div>
-              <div class="dropdown">
+              <!-- <div class="dropdown">
                 <div tabindex="0" role="button" class="cursor-pointer">Network</div>
                 <ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-box z-1 w-52 p-2 shadow-sm">
                   <li><a>Item 1</a></li>
                   <li><a>Item 2</a></li>
                 </ul>
-              </div>
+              </div> -->
             </div>
           </div>
           <div
