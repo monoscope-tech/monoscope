@@ -76,6 +76,7 @@ import Pages.Projects.ListProjects qualified as ListProjects
 import Pages.Projects.ManageMembers qualified as ManageMembers
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as Reports
+import Pages.S3 qualified as S3
 import Pages.Share qualified as Share
 import Pages.Specification.Documentation qualified as Documentation
 import Pages.Specification.GenerateSwagger qualified as GenerateSwagger
@@ -202,6 +203,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , -- Swagger/documentation
     swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] (RespHeaders AE.Value)
   , replaySessionGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] (RespHeaders AE.Value)
+  , bringS3 :: mode :- "p" :> ProjectId :> "byob_s3" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Sub-route groups
     projects :: mode :- ProjectsRoutes
   , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes
@@ -412,6 +414,7 @@ cookieProtectedServer =
     , -- Swagger handlers
       swaggerGenerateGet = GenerateSwagger.generateGetH
     , replaySessionGet = Replay.replaySessionGetH
+    , bringS3 = S3.bringS3GetH
     , -- Billing handlers
       manageBillingGet = LemonSqueezy.manageBillingGetH
     , -- Endpoint handlers
