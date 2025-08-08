@@ -35,7 +35,7 @@ import NeatInterpolation (text)
 import OpenTelemetry.Resource.Telemetry (Telemetry (Telemetry))
 import Pages.LogExplorer.Log (curateCols)
 import Pkg.Parser (parseQueryToAST, toQText)
-import Pkg.Queue (publishJSONToPubsub)
+import Pkg.Queue (publishJSONToKafka)
 import RequestMessages (replaceNullChars)
 import System.Config (AuthContext (config), EnvConfig (..))
 import System.Directory (createDirectoryIfMissing)
@@ -62,11 +62,11 @@ publishReplayEvent replayData pid = do
 
   let messagePayload = AE.object ["events" AE..= replayData.events, "sessionId" AE..= replayData.sessionId, "projectId" AE..= pid, "timestamp" AE..= replayData.timestamp]
   let attributes = HM.fromList [("eventType", "replay")]
-  case envCfg.rrwebPubsubTopics of
+  case envCfg.rrwebTopics of
     [] -> pure $ Left "No rrweb pubsub topics configured"
     (topicName : _) -> do
       liftIO
-        $ publishJSONToPubsub ctx topicName messagePayload attributes
+        $ publishJSONToKafka ctx topicName messagePayload attributes
           >>= \case
             Left err -> pure $ Left $ "Failed to publish replay event: " <> err
             Right messageId -> pure $ Right messageId
@@ -79,8 +79,7 @@ replayPostH pid body = do
     Right replayData@ReplayPost{..} -> do
       pubResult <- publishReplayEvent replayData pid
       case pubResult of
-        Left errMsg -> do
-          pure $ AE.object ["status" AE..= ("warning" :: Text), "message" AE..= errMsg]
+        Left errMsg -> pure $ AE.object ["status" AE..= ("warning" :: Text), "message" AE..= errMsg]
         Right messageId -> do pure $ AE.object ["status" AE..= ("ok" :: Text), "messageId" AE..= messageId, "sessionId" AE..= sessionId]
 
 
@@ -152,5 +151,4 @@ replaySessionGetH pid sessionId = do
   let envCfg = ctx.config
       conn = getMinioConnectInfo ctx.config
   replayEvents <- getMinioFile conn (fromString $ toString envCfg.s3Bucket) (fromString $ toString $ UUID.toText sessionId <> ".json")
-  addRespHeaders $ AE.object["events" AE..= AE.Array replayEvents] 
-
+  addRespHeaders $ AE.object ["events" AE..= AE.Array replayEvents]

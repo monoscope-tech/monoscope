@@ -89,7 +89,7 @@ data EnvConfig = EnvConfig
   , whatsappBotText :: Text
   , whatsappDashboardList :: Text
   , whatsappShareWidget :: Text
-  , rrwebPubsubTopics :: [Text]
+  , rrwebTopics :: [Text]
   , s3Endpoint :: Text
   , s3Bucket :: Text
   , s3AccessKey :: Text

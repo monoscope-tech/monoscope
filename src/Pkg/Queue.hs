@@ -1,4 +1,4 @@
-module Pkg.Queue (pubsubService, kafkaService, publishJSONToPubsub) where
+module Pkg.Queue (pubsubService, kafkaService, publishJSONToKafka) where
 
 import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((^.), (^?), _Just)
@@ -20,6 +20,7 @@ import Gogol.Auth.ApplicationDefault qualified as Google
 import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
 import Kafka.Consumer qualified as K
+import Kafka.Producer qualified as KP
 import Log qualified
 import OpenTelemetry.Trace (TracerProvider)
 import Relude
@@ -83,53 +84,61 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
     pubSubScope = Proxy
 
 
-publishJSONToPubsub :: AE.ToJSON a => AuthContext -> Text -> a -> HM.HashMap Text Text -> IO (Either Text Text)
-publishJSONToPubsub appCtx topicName jsonData attributes = checkpoint "publishJSONToPubsub" do
-  let envConfig = appCtx.config
-  env <- case (toLazy envConfig.apitoolkitPusherServiceAccountB64) of
-    "" -> Google.newEnv <&> (Google.envScopes L..~ pubSubScope)
-    sa -> do
-      let credJSON = either error id $ LB64.decodeBase64Untyped (LT.encodeUtf8 sa)
-      let credsE = Google.fromJSONCredentials credJSON
-      let creds = either (error . toText) id credsE
-      managerG <- Google.newManager Google.tlsManagerSettings
-      Google.newEnvWith creds (\_ _ -> pass) managerG <&> (Google.envScopes L..~ pubSubScope)
+publishJSONToKafka :: AE.ToJSON a => AuthContext -> Text -> a -> HM.HashMap Text Text -> IO (Either Text Text)
+publishJSONToKafka appCtx topicName jsonData attributes = checkpoint "publishJSONToKafka" do
+  result <- tryAny
+    $ bracket
+      (either throwIO pure =<< KP.newProducer (producerProps appCtx.config))
+      KP.closeProducer
+    $ \producer -> checkpoint (toAnnotation $ "publishJSONToKafka: " <> topicName) do
+      let messageData = BC.toStrict $ LT.encodeUtf8 $ LT.decodeUtf8 $ AE.encode jsonData
 
-  result <- tryAny $ runResourceT $ checkpoint (toAnnotation $ "publishJSONToPubsub: " <> topicName) do
-    let topic = "projects/past-3/topics/" <> topicName
+      let headers = KP.headersFromList $ map (\(k, v) -> (BC.pack $ toString k, BC.pack $ toString v)) $ HM.toList attributes
 
-    let messageData = BC.toStrict $ LT.encodeUtf8 $ LT.decodeUtf8 $ AE.encode jsonData
+      let record =
+            KP.ProducerRecord
+              { prTopic = K.TopicName topicName
+              , prPartition = KP.UnassignedPartition -- Let Kafka choose partition
+              , prKey = Nothing
+              , prValue = Just messageData
+              , prHeaders = headers
+              }
 
-    let message =
-          PubSub.newPubsubMessage
-            & field @"data'"
-            L.?~ Google.Base64 messageData
-              & field @"attributes"
-            L.?~ PubSub.PubsubMessage_Attributes (HM.map toText attributes)
+      sendResult <- KP.produceMessage producer record
 
-    let publishReq = PubSub.newPublishRequest & field @"messages" L..~ Just [message]
-
-    publishResp <- Google.send env $ PubSub.newPubSubProjectsTopicsPublish publishReq topic
-
-    case publishResp ^. field @"messageIds" of
-      Just (msgId : _) -> pure $ Right msgId
-      _ -> pure $ Left "No message ID returned from Pub/Sub"
+      case sendResult of
+        Just er -> pure $ Left $ "Failed to send message to Kafka: " <> toText (show er)
+        _ -> pure $ Right ""
 
   case result of
     Left e -> pure $ Left $ toText $ show e
     Right res -> pure res
   where
-    -- pubSubScope :: Proxy PubSub.Pubsub'FullControl
-    pubSubScope :: Proxy '["https://www.googleapis.com/auth/pubsub"]
-    pubSubScope = Proxy
+    producerProps :: EnvConfig -> KP.ProducerProperties
+    producerProps cfg =
+      KP.brokersList (map K.BrokerAddress cfg.kafkaBrokers)
+        <> KP.extraProp "security.protocol" "sasl_plaintext"
+        <> KP.extraProp "sasl.mechanism" "SCRAM-SHA-256"
+        <> KP.extraProp "sasl.username" cfg.kafkaUsername
+        <> KP.extraProp "sasl.password" cfg.kafkaPassword
+        <> KP.extraProp "acks" "all" -- Wait for all replicas to acknowledge
+        <> KP.extraProp "retries" "2147483647" -- Max retries
+        <> KP.extraProp "max.in.flight.requests.per.connection" "5"
+        <> KP.extraProp "enable.idempotence" "true" -- Exactly-once semantics
+        <> KP.extraProp "compression.type" "snappy" -- Compress messages
+        <> KP.extraProp "batch.size" "16384" -- Batch size in bytes
+        <> KP.extraProp "linger.ms" "5" -- Wait up to 5ms to batch messages
+        <> KP.extraProp "request.timeout.ms" "30000" -- 30 second timeout
+        <> KP.extraProp "delivery.timeout.ms" "120000" -- 2 minute total timeout
+        <> KP.logLevel KP.KafkaLogInfo
 
 
-kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx [Text]) -> IO ()
-kafkaService appLogger appCtx tp fn = checkpoint "kafkaService" do
+kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> [Text] -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx [Text]) -> IO ()
+kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
   -- Generate unique client ID for logging/metrics
   instanceUuid <- UUID.toText <$> UUID.nextRandom
   let clientId = "apitoolkit-" <> T.take 8 instanceUuid
-  let consumerSub = K.topics (map K.TopicName appCtx.config.kafkaTopics) <> K.offsetReset K.Earliest
+  let consumerSub = K.topics (map K.TopicName kafkaTopics) <> K.offsetReset K.Earliest
   bracket
     (either throwIO pure =<< K.newConsumer (consumerProps appCtx.config clientId) consumerSub)
     K.closeConsumer
