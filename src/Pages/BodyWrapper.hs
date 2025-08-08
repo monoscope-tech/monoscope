@@ -94,12 +94,10 @@ bodyWrapper bcfg child = do
         link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/theme/elegant.min.css"]
         link_ [rel_ "stylesheet", href_ "https://cdn.jsdelivr.net/npm/@yaireo/tagify/dist/tagify.css", type_ "text/css"]
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css")]
+        link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/css/thirdparty/rrweb.css")]
 
-        -- rrweb
-        link_ [rel_ "stylesheet", href_ "https://cdn.jsdelivr.net/npm/rrweb-player@latest/dist/style.css"]
-        script_ [src_ "https://cdn.jsdelivr.net/npm/rrweb-player@latest/dist/index.js"] ("" :: Text)
 
-        link_ [rel_ "stylesheet", type_ "text/css", href_ "/public/assets/css/tailwind.min.css"]
+        link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile"/public/assets/css/tailwind.min.css")]
         link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/web-components/dist/css/index.css")]
 
         script_ [src_ $(hashAssetFile "/public/assets/deps/tagify/tagify.min.js")] ("" :: Text)
@@ -131,7 +129,7 @@ bodyWrapper bcfg child = do
         -- script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/instantpage5_1_0.js"), type_ "module", defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/main.js")] ("" :: Text)
 
-        script_ [type_ "module", src_ "/public/assets/web-components/dist/js/index.js"] ("" :: Text)
+        script_ [type_ "module", src_ $(hashAssetFile "/public/assets/web-components/dist/js/index.js")] ("" :: Text)
 
         script_
           [text|

@@ -5,40 +5,52 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Monaco AQL Editor</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css" />
+    <link href="https://cdn.jsdelivr.net/npm/rrweb-player/dist/style.css" rel="stylesheet" type="text/css" />
+
     <style>
+.rr-player {
+  position: relative;
+  float: left;
+  box-shadow: none;
+}
 
-  .rr-player {
-    position: relative;
-    background: black;
-    float: left;
-    border-radius: 5px;
-    box-shadow: none;
-  }
+.play-frame {
+  overflow: hidden;
+}
 
-  .rr-player__frame {
-    overflow: hidden;
-  }
+/* .replayer-wrapper {
+  float: left;
+  clear: both;
+  transform-origin: top left;
+  left: 50%;
+  top: 50%;
+  background-color: white;
+} */
 
-  .replayer-wrapper {
-    float: left;
-    clear: both;
-    transform-origin: top left;
-    left: 50%;
-    top: 50%;
-    background-color: white;
-  }
+.replayer-wrapper > iframe {
+  border: none;
+}
+.event-container.expanded {
+  @apply border border-strokeBrand-strong
+}
+.event-container.expanded  button > svg {
+  @apply rotate-180
+}
+.event-container.expanded > .event-detail {
+  display: flex;
+}
 
-  .replayer-wrapper > iframe {
-    border: none;
-  }
-  .event-container.expanded > .event-detail {
-    display: flex;
-  }
     </style>
   </head>
   <body class="h-screen w-screen m-0 p-0 overflow-hidden flex flex-col">
-    <div class="flex-1 relative h-full w-full min-h-0 justify-center flex">
-      <div class="w-3/4 border-l-2 ml-auto h-screen">
+    <div class="flex-1 relative h-full w-full  justify-center flex">
+      <div class="fixed right-0 w-max bottom-18 border rounded shadow-lg" id="sessionPlayerWrapper">
+        <div class="relative">
+          <button class="rounded-full h-10 w-10 border shadow hover:bg-gray-100 absolute top-0 -translate-y-10 right-0" onclick="(()=>{document.querySelector('#sessionPlayerWrapper').style.display='none'})()">
+            X
+          </button>
+        </div>
         <session-replay></session-replay>
       </div>
 
