@@ -615,21 +615,22 @@ kqlTimespanToInterval timespan =
     "INTERVAL '" <> intervalExpr <> "'"
 
 
--- | Convert KQL timespan to PostgreSQL time bucket string
+-- | Convert KQL timespan to seconds
 -- This is used for bin() function in summarize queries
 kqlTimespanToTimeBucket :: Text -> Text
 kqlTimespanToTimeBucket timespan =
-  case T.strip timespan of
-    ts | T.isSuffixOf "w" ts -> T.dropEnd 1 ts <> " weeks"
-    ts | T.isSuffixOf "d" ts -> T.dropEnd 1 ts <> " days"
-    ts | T.isSuffixOf "h" ts -> T.dropEnd 1 ts <> " hours"
-    ts | T.isSuffixOf "m" ts -> T.dropEnd 1 ts <> " minutes"
-    ts | T.isSuffixOf "s" ts -> T.dropEnd 1 ts <> " seconds"
-    ts | T.isSuffixOf "ms" ts -> T.dropEnd 2 ts <> " milliseconds"
-    ts | T.isSuffixOf "µs" ts -> T.dropEnd 2 ts <> " microseconds"
-    ts | T.isSuffixOf "us" ts -> T.dropEnd 2 ts <> " microseconds"
-    ts | T.isSuffixOf "ns" ts -> T.dropEnd 2 ts <> " nanoseconds"
-    _ -> "5 minutes" -- Default to 5 minutes if parsing fails
+  let parseNumber t = fromMaybe 1 (readMaybe $ toString t :: Maybe Double)
+  in case T.strip timespan of
+    ts | T.isSuffixOf "w" ts -> toText $ show (parseNumber (T.dropEnd 1 ts) * 604800) -- weeks to seconds
+    ts | T.isSuffixOf "d" ts -> toText $ show (parseNumber (T.dropEnd 1 ts) * 86400)  -- days to seconds
+    ts | T.isSuffixOf "h" ts -> toText $ show (parseNumber (T.dropEnd 1 ts) * 3600)   -- hours to seconds
+    ts | T.isSuffixOf "m" ts -> toText $ show (parseNumber (T.dropEnd 1 ts) * 60)     -- minutes to seconds
+    ts | T.isSuffixOf "s" ts -> T.dropEnd 1 ts                                         -- already seconds
+    ts | T.isSuffixOf "ms" ts -> toText $ show (parseNumber (T.dropEnd 2 ts) / 1000)  -- milliseconds to seconds
+    ts | T.isSuffixOf "µs" ts -> toText $ show (parseNumber (T.dropEnd 2 ts) / 1000000) -- microseconds to seconds
+    ts | T.isSuffixOf "us" ts -> toText $ show (parseNumber (T.dropEnd 2 ts) / 1000000) -- microseconds to seconds
+    ts | T.isSuffixOf "ns" ts -> toText $ show (parseNumber (T.dropEnd 2 ts) / 1000000000) -- nanoseconds to seconds
+    _ -> "300" -- Default to 5 minutes (300 seconds) if parsing fails
 
 
 instance Display Values where

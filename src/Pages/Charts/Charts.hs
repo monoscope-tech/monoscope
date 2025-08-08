@@ -14,9 +14,9 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
-import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Simple.Types (Only (..), Query (Query))
-import Database.PostgreSQL.Transact qualified as DBT
+import Database.PostgreSQL.Simple.Types (Only (..), Query (Query), fromOnly)
+import Database.PostgreSQL.Simple (query_)
+import Data.Pool (withResource)
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
@@ -211,14 +211,14 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx =  do
 
   checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
     DTFloat -> do
-      chartData <- withPool authCtx.pool $ DBT.queryOne_ (Query $ encodeUtf8 sqlQuery)
+      chartData <- withResource authCtx.pool $ \conn -> query_ conn (Query $ encodeUtf8 sqlQuery) :: IO [Only Double]
       pure
         baseMetricsData
-          { dataFloat = chartData <&> \(Only v) -> v
+          { dataFloat = fromOnly <$> listToMaybe chartData
           , rowsCount = 1
           }
     DTMetric -> do
-      chartData <- withPool pool $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
+      chartData <- withResource pool $ \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
       let chartsDataV = V.fromList chartData
       let (hdrs, groupedData, rowsCount, rpm) = pivot' chartsDataV
       pure
@@ -230,14 +230,14 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx =  do
           , stats = Just $ statsTriple chartsDataV
           }
     DTText -> do
-      chartData <- withPool authCtx.pool $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
+      chartData <- withResource authCtx.pool $ \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
       pure
         baseMetricsData
           { dataText = V.fromList chartData
           , rowsCount = fromIntegral $ length chartData
           }
     DTJson -> do
-      chartData <- withPool authCtx.pool $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
+      chartData <- withResource authCtx.pool $ \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
       pure
         baseMetricsData
           { dataJSON = V.fromList chartData

@@ -672,24 +672,60 @@ apiLogsPage page = do
             , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
             , Widget.sql =
                 Just
-                  [text| SELECT timeB, quantile,COALESCE(value, 0)::float AS value
-                              FROM ( SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
-                                      ARRAY[
-                                        COALESCE((approx_percentile(0.50, percentile_agg(duration)) / 1000000.0), 0)::float,
-                                        COALESCE((approx_percentile(0.75, percentile_agg(duration)) / 1000000.0), 0)::float,
-                                        COALESCE((approx_percentile(0.90, percentile_agg(duration)) / 1000000.0), 0)::float,
-                                        COALESCE((approx_percentile(0.95, percentile_agg(duration)) / 1000000.0), 0)::float
-                                      ] AS values,
-                                      ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
-                                FROM otel_logs_and_spans
-                                WHERE project_id='{{project_id}}'
-                                  {{time_filter}} {{query_ast_filters}}
-                                  AND duration IS NOT NULL
-                                GROUP BY timeB
-                                HAVING COUNT(*) > 0
-                              ) s,
-                            LATERAL unnest(s.values, s.quantiles) AS u(value, quantile)
-                            WHERE value IS NOT NULL;|]
+                  [text| SELECT timeB, quantile, COALESCE(value, 0)::float AS value
+                            FROM ( 
+                              SELECT 
+                                floor(extract(epoch from timestamp) / 3600) * 3600 AS timeB,
+                                'p50' AS quantile,
+                                COALESCE((approx_percentile_cont(0.50) WITHIN GROUP (ORDER BY duration) / 1000000.0), 0)::float AS value
+                              FROM otel_logs_and_spans
+                              WHERE project_id='{{project_id}}'
+                                {{time_filter}} {{query_ast_filters}}
+                                AND duration IS NOT NULL
+                              GROUP BY floor(extract(epoch from timestamp) / 3600) * 3600
+                              HAVING COUNT(*) > 0
+                              
+                              UNION ALL
+                              
+                              SELECT 
+                                floor(extract(epoch from timestamp) / 3600) * 3600 AS timeB,
+                                'p75' AS quantile,
+                                COALESCE((approx_percentile_cont(0.75) WITHIN GROUP (ORDER BY duration) / 1000000.0), 0)::float AS value
+                              FROM otel_logs_and_spans
+                              WHERE project_id='{{project_id}}'
+                                {{time_filter}} {{query_ast_filters}}
+                                AND duration IS NOT NULL
+                              GROUP BY floor(extract(epoch from timestamp) / 3600) * 3600
+                              HAVING COUNT(*) > 0
+                              
+                              UNION ALL
+                              
+                              SELECT 
+                                floor(extract(epoch from timestamp) / 3600) * 3600 AS timeB,
+                                'p90' AS quantile,
+                                COALESCE((approx_percentile_cont(0.90) WITHIN GROUP (ORDER BY duration) / 1000000.0), 0)::float AS value
+                              FROM otel_logs_and_spans
+                              WHERE project_id='{{project_id}}'
+                                {{time_filter}} {{query_ast_filters}}
+                                AND duration IS NOT NULL
+                              GROUP BY floor(extract(epoch from timestamp) / 3600) * 3600
+                              HAVING COUNT(*) > 0
+                              
+                              UNION ALL
+                              
+                              SELECT 
+                                floor(extract(epoch from timestamp) / 3600) * 3600 AS timeB,
+                                'p95' AS quantile,
+                                COALESCE((approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY duration) / 1000000.0), 0)::float AS value
+                              FROM otel_logs_and_spans
+                              WHERE project_id='{{project_id}}'
+                                {{time_filter}} {{query_ast_filters}}
+                                AND duration IS NOT NULL
+                              GROUP BY floor(extract(epoch from timestamp) / 3600) * 3600
+                              HAVING COUNT(*) > 0
+                            ) s
+                          WHERE value IS NOT NULL
+                          ORDER BY timeB, quantile;|]
             , Widget.unit = Just "ms"
             , Widget.hideLegend = Just True
             , Widget._projectId = Just page.pid

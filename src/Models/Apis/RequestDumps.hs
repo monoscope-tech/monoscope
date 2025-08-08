@@ -8,6 +8,7 @@ module Models.Apis.RequestDumps (
   ATError (..),
   normalizeUrlPath,
   selectLogTable,
+  executeArbitraryQuery,
   requestDumpLogUrlPath,
   getRequestDumpForReports,
   getRequestDumpsForPreviousReportPeriod,
@@ -18,11 +19,15 @@ module Models.Apis.RequestDumps (
 )
 where
 
+import Control.Applicative ((<|>))
 import Control.Exception.Annotated (checkpoint)
+import Control.Monad (replicateM)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Default
 import Data.Default.Instances ()
+import Data.Int (Int64)
+import Data.List (sortOn)
 import Data.Text qualified as T
 import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
@@ -32,8 +37,9 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (query, queryOne)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple (Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField (fromField))
+import Database.PostgreSQL.Simple.FromRow (FromRow(..), RowParser, field, numFieldsRemaining)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
@@ -52,7 +58,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.Parser
 import Pkg.Parser.Stats (Section, Sources)
-import Relude hiding (many, some)
+import Relude hiding (many, some, sortOn)
 import Web.HttpApiData (ToHttpApiData (..))
 
 
@@ -442,6 +448,58 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query (Query $ encodeUt
     |]
 
 
+-- | Custom field parser that tries multiple types
+data FieldValue 
+  = FText Text
+  | FInt Int64
+  | FDouble Double
+  | FBool Bool
+  | FTime UTCTime
+  | FUUID UUID.UUID
+  | FJson AE.Value
+  | FNull
+  deriving (Show, Generic)
+  deriving anyclass (NFData)
+
+-- | Convert FieldValue to JSON
+fieldValueToJson :: FieldValue -> AE.Value
+fieldValueToJson (FText t) = AE.String t
+fieldValueToJson (FInt i) = AE.Number (fromIntegral i)
+fieldValueToJson (FDouble d) = AE.Number (realToFrac d)
+fieldValueToJson (FBool b) = AE.Bool b
+fieldValueToJson (FTime t) = AE.String (T.pack $ iso8601Show t)
+fieldValueToJson (FUUID u) = AE.String (UUID.toText u)
+fieldValueToJson (FJson v) = v
+fieldValueToJson FNull = AE.Null
+
+-- | FromField instance that tries multiple types
+instance FromField FieldValue where
+  fromField f mdata = do
+    -- First check if it's NULL
+    case mdata of
+      Nothing -> pure FNull
+      Just _ -> 
+        -- Try parsing as different types
+        (FText <$> fromField f mdata)
+        <|> (FInt <$> fromField f mdata)
+        <|> (FDouble <$> fromField f mdata)
+        <|> (FBool <$> fromField f mdata)
+        <|> (FTime <$> fromField f mdata)
+        <|> (FUUID <$> fromField f mdata)
+        <|> (FJson <$> fromField f mdata)
+        <|> pure FNull
+
+-- | Execute arbitrary SQL query and return results as vector of vectors
+-- Each inner vector represents a row with all columns as JSON values
+-- This is a pure Haskell solution that doesn't modify the SQL query
+executeArbitraryQuery :: DB :> es => Text -> Eff es (V.Vector (V.Vector AE.Value))
+executeArbitraryQuery queryText = do
+  -- Execute the query and parse each field using our FieldValue type
+  results <- dbtToEff $ V.fromList <$> DBT.query_ @[FieldValue] (Query $ encodeUtf8 queryText)
+  -- Convert each row of FieldValues to a vector of JSON values
+  pure $ V.map (V.fromList . map fieldValueToJson) results
+
+
 selectLogTable :: (DB :> es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
 selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser source targetSpansM = do
   now <- Time.currentTime
@@ -461,9 +519,9 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
         ]
     )
 
-  logItems <- checkpoint (toAnnotation ("selectLogTable", q)) $ queryToValues q
+  -- Use the new flexible query execution that doesn't modify SQL
+  logItemsV <- checkpoint (toAnnotation ("selectLogTable", q)) $ executeArbitraryQuery q
   Only c <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
-  let logItemsV = V.mapMaybe valueToVector logItems
   pure $ Right (logItemsV, queryComponents.toColNames, c)
 
 

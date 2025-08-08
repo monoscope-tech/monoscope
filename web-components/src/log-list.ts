@@ -135,7 +135,6 @@ export class LogList extends LitElement {
   }
 
   handleChartZoom(params: { batch?: { startValue: string; endValue: string }[] }) {
-    console.log('handleChartZoom');
     const zoom = params.batch ? params.batch[0] : undefined;
     if (!zoom) return;
     let startValue = zoom.startValue;
@@ -195,7 +194,6 @@ export class LogList extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    console.log(this.windowTarget);
     const globalKey = `${this.windowTarget}Data`;
     const data = (window as any)[globalKey];
     if (this.windowTarget && data) {
@@ -323,7 +321,6 @@ export class LogList extends LitElement {
 
           // Validate required fields
           if (!logsData || !Array.isArray(logsData)) {
-            console.error('Invalid response: missing or invalid logsData');
             return;
           }
           if (!isNewData) {
@@ -367,12 +364,10 @@ export class LogList extends LitElement {
 
           this.updateColumnMaxWidthMap(logsData);
         } else {
-          console.error('Server returned error:', data.message || 'Unknown error');
           if (isRefresh && data.message) this.showErrorToast(data.message);
         }
       })
       .catch((error) => {
-        console.error('Error fetching logs:', error);
         if (isRefresh) this.showErrorToast('Network error: Unable to fetch logs');
       })
       .finally(() => {
@@ -501,8 +496,9 @@ export class LogList extends LitElement {
             }
           }
         }}
-        class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-scroll"
+        class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto"
         id="logs_list_container_inner"
+        style="min-height: 500px;"
       >
         ${this.recentDataToBeAdded.length > 0 && !this.flipDirection
           ? html` <div class="sticky left-1/2 -translate-y-1/2 top-[30px] z-50">
@@ -526,7 +522,7 @@ export class LogList extends LitElement {
               ${this.logTableHeading('latency_breakdown')}
             </tr>
           </thead>
-          ${list.length === 1 ? emptyState(this.logsColumns.length) : nothing}
+          ${list.length === 2 ? emptyState(this.logsColumns.length) : nothing}
           <tbody
             class="min-w-0 text-sm"
             @rangeChanged=${(event: RangeChangedEvent) => {
@@ -580,7 +576,9 @@ export class LogList extends LitElement {
       })
       .map((element) => {
         if (!element.includes(';') || !element.includes('⇒')) {
-          return html`<span class=${`fill-textStrong ${wrapClass}`}>${element}</span>`;
+          // Unescape any JSON content in plain text elements
+          const unescapedElement = element.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+          return html`<span class=${`fill-textStrong ${wrapClass}`}>${unescapedElement}</span>`;
         }
 
         const [fieldAndStyle, value] = element.split('⇒');
@@ -607,7 +605,9 @@ export class LogList extends LitElement {
 
         // Text rendering
         if (style === 'text-weak' || style === 'text-textWeak') {
-          return html`<span class="text-textWeak">${value}</span>`;
+          // Unescape JSON strings
+          const unescapedValue = value.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+          return html`<span class="text-textWeak">${unescapedValue}</span>`;
         }
 
         if (style === 'text-textStrong') {
@@ -641,10 +641,10 @@ export class LogList extends LitElement {
   }
 
   logItemCol(rowData: any, key: string): any {
-    const { data: dataArr, depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData;
-    const wrapClass = this.wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
+      const { data: dataArr, depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData;
+      const wrapClass = this.wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
 
-    switch (key) {
+      switch (key) {
       case 'id':
         let [status, errCount, errClass] = errorClass(dataArr, this.colIdxMap);
         return html`
@@ -673,7 +673,25 @@ export class LogList extends LitElement {
         const width = this.columnMaxWidthMap['latency_breakdown'] || 200;
 
         // Extract right-aligned badges from summary array
-        const summaryArr = lookupVecTextByKey(dataArr, this.colIdxMap, 'summary') || [];
+        const summaryData = lookupVecTextByKey(dataArr, this.colIdxMap, 'summary');
+        let summaryArr: string[] = [];
+        
+        if (Array.isArray(summaryData)) {
+          summaryArr = summaryData;
+        } else if (typeof summaryData === 'string') {
+          // Handle new format: "\"[item1, item2, ...]\""
+          let cleaned = summaryData;
+          if (summaryData.startsWith('"') && summaryData.endsWith('"')) {
+            cleaned = summaryData.slice(1, -1); // Remove outer quotes
+          }
+          if (cleaned.startsWith('[') && cleaned.endsWith(']')) {
+            cleaned = cleaned.slice(1, -1); // Remove brackets
+          }
+          // Split by comma, but not commas inside braces {}
+          summaryArr = cleaned.match(/[^,]+(?:{[^}]*}[^,]*)?/g) || [];
+          summaryArr = summaryArr.map(s => s.trim());
+        }
+        
         const rightAlignedBadges: TemplateResult[] = [];
 
         summaryArr.forEach((element: string) => {
@@ -704,14 +722,14 @@ export class LogList extends LitElement {
                 </button>`;
                 rightAlignedBadges.push(pB);
               } else {
-                rightAlignedBadges.push(renderBadge(`cbadge-sm ${badgeStyle}`, value));
+                rightAlignedBadges.push(renderBadge(`cbadge-sm ${badgeStyle} bg-opacity-100`, value));
               }
             }
           }
         });
 
-        return html`
-          <div class="flex justify-end items-center gap-1 text-textWeak pl-1 rounded-lg bg-bgBase " style="min-width:${width}px">
+        const latencyHtml = html`
+          <div class="flex justify-end items-center gap-1 text-textWeak pl-1 rounded-lg bg-bgBase" style="min-width:${width}px">
             ${rightAlignedBadges}
             ${spanLatencyBreakdown({
               start: startNs - traceStart,
@@ -726,15 +744,31 @@ export class LogList extends LitElement {
             <span class="w-1"></span>
           </div>
         `;
+        return latencyHtml;
       case 'summary':
-        const summaryData = lookupVecTextByKey(dataArr, this.colIdxMap, key) || '';
-        // Check if summary is already an array, otherwise parse it
-        const summaryArray = Array.isArray(summaryData) ? summaryData : summaryData ? String(summaryData).split(',') : [];
+        const summaryData2 = lookupVecTextByKey(dataArr, this.colIdxMap, key);
+        let summaryArray: string[] = [];
+        
+        if (Array.isArray(summaryData2)) {
+          summaryArray = summaryData2;
+        } else if (typeof summaryData2 === 'string') {
+          // Handle new format: "\"[item1, item2, ...]\""
+          let cleaned = summaryData2;
+          if (summaryData2.startsWith('"') && summaryData2.endsWith('"')) {
+            cleaned = summaryData2.slice(1, -1); // Remove outer quotes
+          }
+          if (cleaned.startsWith('[') && cleaned.endsWith(']')) {
+            cleaned = cleaned.slice(1, -1); // Remove brackets
+          }
+          // Split by comma, but not commas inside braces {}
+          summaryArray = cleaned.match(/[^,]+(?:{[^}]*}[^,]*)?/g) || [];
+          summaryArray = summaryArray.map(s => s.trim());
+        }
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
-          ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
+            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         return html`<div class="flex w-full ${this.wrapLines ? 'items-start' : 'items-center'} gap-1">
           ${this.view === 'tree'
             ? html`
@@ -772,8 +806,8 @@ export class LogList extends LitElement {
                         ${children}
                       </button>`
                     : depth === 0
-                    ? nothing
-                    : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                      ? nothing
+                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
                 </div>
               `
             : nothing}
@@ -787,7 +821,7 @@ export class LogList extends LitElement {
       default:
         let v = lookupVecTextByKey(dataArr, this.colIdxMap, key);
         return html`<span class=${wrapClass} title=${key}>${v}</span>`;
-    }
+      }
   }
 
   renderLoadMore() {
@@ -820,17 +854,17 @@ export class LogList extends LitElement {
             ${this.isLiveStreaming
               ? html`<p>Live streaming latest data...</p>`
               : this.isLoadingRecent
-              ? html`<div class="loading loading-dots loading-md"></div>`
-              : html`
-                  <button
-                    class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-                    @pointerdown=${() => {
-                      this.fetchData(this.recentFetchUrl, true);
-                    }}
-                  >
-                    Check for recent data
-                  </button>
-                `}
+                ? html`<div class="loading loading-dots loading-md"></div>`
+                : html`
+                    <button
+                      class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
+                      @pointerdown=${() => {
+                        this.fetchData(this.recentFetchUrl, true);
+                      }}
+                    >
+                      Check for recent data
+                    </button>
+                  `}
           </td>
         </tr>`
       : html`<tr></tr>`;
@@ -868,39 +902,46 @@ export class LogList extends LitElement {
       }
       return this.fetchRecent();
     }
-    const s = rowData.type === 'log' ? 'logs' : 'spans';
-    const targetInfo = requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s);
-    let isNew = rowData.isNew;
-    const sessionId = lookupVecTextByKey(rowData.data, this.colIdxMap, 'session_id');
-    return html`
-      <tr
-        class=${`item-row relative p-0 flex items-center group cursor-pointer whitespace-nowrap ${isNew ? 'animate-fadeBg' : ''}`}
-        @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
-      >
-        ${this.logsColumns
-          .filter((v) => v !== 'latency_breakdown')
-          .map((column) => {
-            const tableDataWidth = getColumnWidth(column);
-            let width = this.columnMaxWidthMap[column];
-            return html`<td
-              class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-bgBase relative ${
-                column === 'summary' ? '' : tableDataWidth
-              }`}
-              style=${width ? `width: ${width}px;` : ''}
-            >
-              ${this.logItemCol(rowData, column)}
-            </td>`;
-          })}
-        ${this.logsColumns.includes('latency_breakdown')
-          ? html`<td
-              class="sticky right-0 "
-              style=${this.columnMaxWidthMap['latency_breakdown'] ? "width: ${this.columnMaxWidthMap['latency_breakdown']}px;" : ''}
-            >
-              ${this.logItemCol(rowData, 'latency_breakdown')}
-            </td>`
-          : nothing}
-      </tr>
-    `;
+    try {
+      const s = rowData.type === 'log' ? 'logs' : 'spans';
+      const targetInfo = requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s);
+      let isNew = rowData.isNew;
+      const sessionId = lookupVecTextByKey(rowData.data, this.colIdxMap, 'session_id');
+      const rowHtml = html`
+        <tr
+          class=${`item-row relative p-0 flex items-center group cursor-pointer whitespace-nowrap ${isNew ? 'animate-fadeBg' : ''}`}
+          @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
+        >
+          ${this.logsColumns
+            .filter((v) => v !== 'latency_breakdown')
+            .map((column) => {
+              const tableDataWidth = getColumnWidth(column);
+              let width = this.columnMaxWidthMap[column];
+              return html`<td
+                class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-bgBase relative ${
+                  column === 'summary' ? '' : tableDataWidth
+                }`}
+                style=${width ? `width: ${width}px;` : ''}
+              >
+                ${this.logItemCol(rowData, column)}
+              </td>`;
+            })}
+          ${this.logsColumns.includes('latency_breakdown')
+            ? html`<td
+                class="sticky right-0 bg-bgBase z-10"
+              >
+                ${this.logItemCol(rowData, 'latency_breakdown')}
+              </td>`
+            : nothing}
+        </tr>
+      `;
+      return rowHtml;
+    } catch (error) {
+      console.error('Error in logItemRow:', error);
+      console.error('rowData:', rowData);
+      console.error('Stack trace:', error.stack);
+      return html`<tr><td colspan="${this.logsColumns.length}">Error rendering row: ${error.message}</td></tr>`;
+    }
   }
 
   tableHeadingWrapper(title: string, column: string, classes: string) {
@@ -1203,7 +1244,7 @@ const displayTimestamp = (input: string) => {
 };
 
 function renderBadge(classes: string, title: string, tippy = '') {
-  return html`<span class=${`relative  ${classes} ${tippy ? 'tooltip tooltip-right' : ''}`} data-tip=${tippy}>${title}</span>`;
+  return html`<span class=${`relative ${classes} ${tippy ? 'tooltip tooltip-right' : ''}`} data-tip=${tippy}>${title}</span>`;
 }
 
 const lookupVecText = (vec: any[], idx: number) => (Array.isArray(vec) && idx >= 0 && idx < vec.length ? vec[idx] : '');
@@ -1223,8 +1264,8 @@ const errorClass = (reqVec: any[], colIdxMap: ColIdxMap) => {
     hasErrors || errStatus === 'ERROR'
       ? 'w-1 bg-fillError-strong'
       : status >= 400
-      ? 'w-1 bg-fillWarning-strong'
-      : 'w-1 bg-fillBrand-weak status-indicator';
+        ? 'w-1 bg-fillWarning-strong'
+        : 'w-1 bg-fillBrand-weak status-indicator';
 
   return [status, hasErrors, errClass];
 };
