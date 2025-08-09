@@ -25,6 +25,7 @@ import Data.Time (UTCTime, formatTime, getCurrentTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Vector qualified as V
 import Effectful (Eff, IOE, liftIO, (:>))
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static qualified
 import Lucid
 import Lucid.Base (TermRaw (termRaw))
@@ -34,6 +35,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import OpenTelemetry.Resource.Telemetry (Telemetry (Telemetry))
 import Pages.LogExplorer.Log (curateCols)
+import Pages.S3 (getMinioConnectInfo)
 import Pkg.Parser (parseQueryToAST, toQText)
 import Pkg.Queue (publishJSONToKafka)
 import RequestMessages (replaceNullChars)
@@ -48,6 +50,16 @@ data ReplayPost = ReplayPost
   { events :: AE.Value
   , sessionId :: UUID.UUID
   , timestamp :: UTCTime
+  }
+  deriving (Generic, Show)
+  deriving anyclass (AE.FromJSON)
+
+
+data ReplayPost' = ReplayPost'
+  { events :: AE.Value
+  , sessionId :: UUID.UUID
+  , timestamp :: UTCTime
+  , projectId :: Projects.ProjectId
   }
   deriving (Generic, Show)
   deriving anyclass (AE.FromJSON)
@@ -93,7 +105,6 @@ processReplayEvents msgs attrs = do
           let sanitizedJsonStr = replaceNullChars $ decodeUtf8 msg
           rrMsg <- eitherStrToText $ AE.eitherDecode $ encodeUtf8 sanitizedJsonStr
           Right (ackId, rrMsg)
-
   vs <- mapM (saveReplayMinio envCfg) (rights msgs')
   pure $ catMaybes vs
 
@@ -114,41 +125,43 @@ getMinioFile conn bucket object = do
   whenRight V.empty res pure
 
 
-getMinioConnectInfo :: EnvConfig -> Minio.ConnectInfo
-getMinioConnectInfo envCfg = Minio.setCreds (Minio.CredentialValue accessKey secretKey Nothing) withRegion
-  where
-    withRegion = Minio.setRegion (fromString $ toString envCfg.s3Region) info
-    info = fromString $ toString envCfg.s3Endpoint
-    accessKey = fromString $ toString envCfg.s3AccessKey
-    secretKey = fromString $ toString envCfg.s3SecretKey
-
-
-saveReplayMinio :: IOE :> es => EnvConfig -> (Text, ReplayPost) -> Eff es (Maybe Text)
+saveReplayMinio :: (DB :> es, IOE :> es) => EnvConfig -> (Text, ReplayPost') -> Eff es (Maybe Text)
 saveReplayMinio envCfg (ackId, replayData) = do
-  let session = UUID.toText (sessionId replayData)
-      object = session <> ".json"
-  let conn = getMinioConnectInfo envCfg
-      bucket = fromString $ toString envCfg.s3Bucket
-  ds <- getMinioFile conn bucket object
-  res <- liftIO $ Minio.runMinio conn do
-    bExist <- Minio.bucketExists bucket
-    unless bExist $ void $ Minio.makeBucket bucket Nothing
-    let finalBody = case replayData.events of
-          AE.Array a -> ds <> a
-          _ -> ds
-    let body = AE.encode (AE.Array finalBody)
-        bodySize = BL.length body
-    _ <- Minio.putObject bucket object (CC.sourceLazy body) (Just bodySize) Minio.defaultPutObjectOptions
-    pass
-  case res of
-    Right _ -> pure $ Just ackId
-    Left e -> pure Nothing
+  project <- dbtToEff $ Projects.projectById replayData.projectId
+  case project of
+    Just p -> do
+      let session = UUID.toText replayData.sessionId
+          object = session <> ".json"
+          (acc, sec, region, bucket', endpoint) = maybe (envCfg.s3AccessKey, envCfg.s3SecretKey, envCfg.s3Region, envCfg.s3Bucket, envCfg.s3Endpoint) (\x -> (x.accessKey, x.secretKey, x.region, x.bucket, x.endpointUrl)) p.s3Bucket
+      let conn = getMinioConnectInfo acc sec region bucket' endpoint
+          bucket = fromString $ toString envCfg.s3Bucket
+      ds <- getMinioFile conn bucket object
+      res <- liftIO $ Minio.runMinio conn do
+        bExist <- Minio.bucketExists bucket
+        unless bExist $ void $ Minio.makeBucket bucket Nothing
+        let finalBody = case replayData.events of
+              AE.Array a -> ds <> a
+              _ -> ds
+        let body = AE.encode (AE.Array finalBody)
+            bodySize = BL.length body
+        _ <- Minio.putObject bucket object (CC.sourceLazy body) (Just bodySize) Minio.defaultPutObjectOptions
+        pass
+      case res of
+        Right _ -> pure $ Just ackId
+        Left e -> pure Nothing
+    Nothing -> pure $ Just ackId
 
 
 replaySessionGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders AE.Value)
 replaySessionGetH pid sessionId = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let envCfg = ctx.config
-      conn = getMinioConnectInfo ctx.config
-  replayEvents <- getMinioFile conn (fromString $ toString envCfg.s3Bucket) (fromString $ toString $ UUID.toText sessionId <> ".json")
-  addRespHeaders $ AE.object ["events" AE..= AE.Array replayEvents]
+  project <- dbtToEff $ Projects.projectById pid
+  case project of
+    Just p -> do
+      let (acc, sec, region, bucket', endpoint) = maybe (envCfg.s3AccessKey, envCfg.s3SecretKey, envCfg.s3Region, envCfg.s3Bucket, envCfg.s3Endpoint) (\x -> (x.accessKey, x.secretKey, x.region, x.bucket, x.endpointUrl)) p.s3Bucket
+          conn = getMinioConnectInfo acc sec region bucket' endpoint
+      replayEvents <- getMinioFile conn (fromString $ toString envCfg.s3Bucket) (fromString $ toString $ UUID.toText sessionId <> ".json")
+      addRespHeaders $ AE.object ["events" AE..= AE.Array replayEvents]
+    Nothing -> do
+      addRespHeaders $ AE.object ["events" AE..= AE.Array V.empty]

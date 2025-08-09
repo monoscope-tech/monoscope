@@ -1,4 +1,4 @@
-module Pages.S3 (bringS3GetH, brings3PostH) where
+module Pages.S3 (bringS3GetH, brings3PostH, getMinioConnectInfo) where
 
 import Data.Default (Default (def))
 import Data.Text qualified as T
@@ -17,18 +17,18 @@ import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addS
 import Utils (faSprite_)
 
 
-getMinioConnectInfo :: Projects.ProjectS3Bucket -> Minio.ConnectInfo
-getMinioConnectInfo Projects.ProjectS3Bucket{..} = Minio.setCreds (Minio.CredentialValue accessKey' secretKey' Nothing) withRegion
+getMinioConnectInfo :: Text -> Text -> Text -> Text -> Text -> Minio.ConnectInfo
+getMinioConnectInfo accessKey secretKey region bucket endpoint = Minio.setCreds (Minio.CredentialValue accessKey' secretKey' Nothing) withRegion
   where
     withRegion = Minio.setRegion (fromString $ toString region) info
-    info = if T.null endpointUrl then Minio.awsCI else fromString $ toString endpointUrl
+    info = if T.null endpoint then Minio.awsCI else fromString $ toString endpoint
     accessKey' = fromString $ toString accessKey
     secretKey' = fromString $ toString secretKey
 
 
 brings3PostH :: Projects.ProjectId -> Projects.ProjectS3Bucket -> ATAuthCtx (RespHeaders (Html ()))
 brings3PostH pid s3Form = do
-  let connectInfo = getMinioConnectInfo s3Form
+  let connectInfo = getMinioConnectInfo s3Form.accessKey s3Form.secretKey s3Form.region s3Form.bucket s3Form.endpointUrl
   res <- liftIO $ Minio.runMinio connectInfo do
     Minio.bucketExists s3Form.bucket
   case res of
