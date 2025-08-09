@@ -349,6 +349,7 @@ library
       Pages.Projects.ManageMembers
       Pages.Replay
       Pages.Reports
+      Pages.S3
       Pages.Share
       Pages.Specification.Documentation
       Pages.Specification.GenerateSwagger
