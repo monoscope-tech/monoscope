@@ -411,8 +411,6 @@ projectsDropDown currProject projects = do
             strong_ [class_ "block"] $ toHtml currProject.title
             small_ [class_ "block"] $ toHtml currProject.paymentPlan
         nav_ [] do
-          a_ [href_ [text| /p/$pidTxt/integrations|], class_ "p-3 flex gap-3 items-center rounded-sm hover:bg-fillHover"] do
-            faSprite_ "arrows-turn-right" "regular" "h-5 w-5" >> span_ "Integrations"
           when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing")
             $ a_
               [class_ "p-3 flex gap-3 items-center rounded-sm hover:bg-fillHover cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
@@ -626,8 +624,8 @@ navBottomList pidTxt =
   , ("user-plus", "bg-fillWarning-weak", "text-textWarning", "Manage members", "/p/" <> pidTxt <> "/manage_members", Nothing, Nothing, Nothing)
   , ("dollar", "bg-fillWarning-weak", "text-textWarning", "Manage billing", "/p/" <> pidTxt <> "/manage_billing", Nothing, Nothing, Nothing)
   , ("arrows-turn-right", "bg-fillBrand-weak", "text-textBrand", "Integrations", "/p/" <> pidTxt <> "/integrations", Nothing, Nothing, Nothing)
-  , -- , ("user-plus", "", "", "Bring your S3", "/p/" <> pidTxt <> "/byob_s3", Nothing, Nothing, Nothing)
-    ("trash", "bg-fillError-weak", "text-textError", "Delete project", "/p/" <> pidTxt <> "/settings/delete", Nothing, Nothing, Nothing)
+  , ("bucket", "", "", "Your S3 bucket", "/p/" <> pidTxt <> "/byob_s3", Nothing, Nothing, Nothing)
+  , ("trash", "bg-fillError-weak", "text-textError", "Delete project", "/p/" <> pidTxt <> "/settings/delete", Nothing, Nothing, Nothing)
   ]
 
 

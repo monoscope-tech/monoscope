@@ -5,7 +5,7 @@ import Data.Text qualified as T
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Lucid
-import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
+import Lucid.Htmx (hxIndicator_, hxPost_, hxSwap_, hxTarget_)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Network.Minio qualified as Minio
@@ -56,15 +56,13 @@ bringS3GetH pid = do
 
 bringS3Page :: Projects.ProjectId -> Maybe Projects.ProjectS3Bucket -> Html ()
 bringS3Page pid s3BucketM = div_ [class_ "space-y-6 mx-auto w-full max-w-5xl px-4 py-10 md:py-14"] $ do
-  -- Header
   div_ [class_ "space-y-2"] $ do
     div_ [class_ "flex items-center gap-2"] $ do
       faSprite_ "cloud" "regular" "h-8 w-8"
       h1_ [class_ "text-2xl font-semibold tracking-tight"] "Bring Your Own S3 Bucket"
-    p_ [class_ "text-textWeak text-sm max-w-3xl leading-tight"] "Connect your own S3 or S3-compatible bucket, validate access, upload a test file, and browse objects. Your keys are only held in-memory in this demo and never persisted."
+    p_ [class_ "text-textWeak text-sm max-w-3xl leading-tight"] "Connect your own S3 or S3-compatible bucket, validate access. Your project's data opentelemetry and session replay events will be store in this bucket"
 
-  -- Connection Card
-  form_ [class_ "rounded-lg border bg-bgBase w-full", hxPost_ "", hxSwap_ "innerHtml", hxTarget_ "#connectedInd"] $ do
+  form_ [class_ "rounded-lg border bg-bgBase w-full", hxPost_ "", hxSwap_ "innerHtml", hxTarget_ "#connectedInd", hxIndicator_ "#indicator"] $ do
     div_ [class_ "flex flex-wrap items-center w-full justify-between gap-3 border-b p-5"] $ do
       div_ [class_ "flex items-center w-full justify-between"] $ do
         div_ [class_ "space-y-1"] $ do
@@ -79,14 +77,16 @@ bringS3Page pid s3BucketM = div_ [class_ "space-y-6 mx-auto w-full max-w-5xl px-
 
     div_ [class_ "p-5"] $ do
       div_ [class_ "grid grid-cols-1 gap-4 md:grid-cols-2"] $ do
-        connectionField "Access Key ID" "accessKey" True (maybe "" (.accessKey) s3BucketM)
-        connectionField "Secret Access Key" "secretKey" True (maybe "" (.secretKey) s3BucketM)
-        connectionField "Region" "region" True (maybe "" (.region) s3BucketM)
-        connectionField "Bucket" "bucket" True (maybe "" (.bucket) s3BucketM)
+        connectionField "Access Key ID" "accessKey" True (maybe "" (.accessKey) s3BucketM) False
+        connectionField "Secret Access Key" "secretKey" True (maybe "" (.secretKey) s3BucketM) True
+        connectionField "Region" "region" True (maybe "" (.region) s3BucketM) False
+        connectionField "Bucket" "bucket" True (maybe "" (.bucket) s3BucketM) False
         div_ [class_ "space-y-2 md:col-span-2"] $ do
-          connectionField "Custom Endpoint (optional, for S3-compatible providers)" "endpointUrl" False (maybe "" (.endpointUrl) s3BucketM)
+          connectionField "Custom Endpoint (optional, for S3-compatible providers)" "endpointUrl" False (maybe "" (.endpointUrl) s3BucketM) False
       div_ [class_ "mt-4 flex flex-wrap items-center gap-3"] $ do
-        button_ [class_ "btn btn-sm btn-primary"] "Validate Connection"
+        button_ [class_ "btn btn-sm btn-primary"] do
+          "Validate Connection"
+          span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-sm", id_ "indicator"] ""
         span_ [class_ "text-sm text-textWeak"] "Auto saves if credentials are valid"
 
 
@@ -107,13 +107,13 @@ bringS3Page pid s3BucketM = div_ [class_ "space-y-6 mx-auto w-full max-w-5xl px-
 --       button_ [class_ "btn btn-sm btn-primary"] "Upload"
 --       span_ [class_ "text-sm text-textWeak"] "Make sure to enter credentials first"
 
-connectionField :: Text -> Text -> Bool -> Text -> Html ()
-connectionField lbl name required defVal =
+connectionField :: Text -> Text -> Bool -> Text -> Bool -> Html ()
+connectionField lbl name required defVal isPass =
   div_ [class_ "space-y-2"] $ do
     label_ [class_ "flex items-center gap-2 text-sm font-medium"] do
       toHtml lbl
       when required $ span_ [class_ "text-textError"] "*"
-    input_ ([class_ "input rounded-lg w-full border border-strokeStrong", value_ defVal, name_ name, type_ "text", placeholder_ lbl] <> [required_ "true" | required])
+    input_ ([class_ "input rounded-lg w-full border border-strokeStrong", value_ defVal, name_ name, type_ $ if isPass then "password" else "text", placeholder_ lbl] <> [required_ "true" | required])
 
 
 connected :: Html ()
