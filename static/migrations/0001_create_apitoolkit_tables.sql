@@ -120,6 +120,7 @@ ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS onboarding_steps_complete
 ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS notify_phone_number TEXT DEFAULT NULL;
 ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS notify_emails TEXT[] DEFAULT ARRAY[]::TEXT[];
 ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS whatsapp_numbers TEXT[] DEFAULT ARRAY[]::TEXT[];
+ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS s3_bucket JSONB DEFAULT NULL;
 
 
 -----------------------------------------------------------------------

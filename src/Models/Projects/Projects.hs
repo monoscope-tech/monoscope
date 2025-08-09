@@ -5,6 +5,7 @@ module Models.Projects.Projects (
   CreateProject (..),
   NotificationChannel (..),
   OnboardingStep (..),
+  ProjectS3Bucket (..),
   insertProject,
   projectIdFromText,
   usersByProjectId,
@@ -21,6 +22,7 @@ module Models.Projects.Projects (
   ProjectCache (..),
   updateNotificationsChannel,
   updateUsageLastReported,
+  updateProjectS3Bucket,
   QueryLibItemId (..),
   QueryLibType (..),
   QueryLibItem (..),
@@ -39,11 +41,11 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (..), ToRow)
+import Database.PostgreSQL.Simple.FromField (FromField, fromField, fromJSONField, returnError)
 import Database.PostgreSQL.Simple.Newtypes
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (ToField)
+import Database.PostgreSQL.Simple.ToField (Action (EscapeByteA), ToField, toField, toJSONField)
 import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import Effectful
@@ -54,6 +56,7 @@ import Models.Users.Users qualified as Users
 import Pkg.DBUtils (WrappedEnumSC (..))
 import Pkg.Parser.Stats (Section)
 import Relude
+import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData
 
 
@@ -123,6 +126,7 @@ data Project = Project
   , notifyPhoneNumber :: Maybe Text
   , notifyEmails :: V.Vector Text
   , whatsappNumbers :: V.Vector Text
+  , s3Bucket :: Maybe ProjectS3Bucket
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData)
@@ -161,11 +165,31 @@ data Project' = Project'
   , notifyPhoneNumber :: Maybe Text
   , notifyEmails :: V.Vector Text
   , whatsappNumbers :: V.Vector Text
+  , s3Bucket :: Maybe ProjectS3Bucket
   , hasIntegrated :: Bool
   , usersDisplayImages :: V.Vector Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, NFData)
+
+
+data ProjectS3Bucket = ProjectS3Bucket
+  { accessKey :: Text
+  , secretKey :: Text
+  , region :: Text
+  , bucket :: Text
+  , endpointUrl :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, FromForm, NFData)
+
+
+instance FromField ProjectS3Bucket where
+  fromField = fromJSONField
+
+
+instance ToField ProjectS3Bucket where
+  toField = toJSONField
 
 
 data ProjectCache = ProjectCache
@@ -333,6 +357,12 @@ updateUsageLastReported :: ProjectId -> ZonedTime -> DBT IO Int64
 updateUsageLastReported pid lastReported = execute q (lastReported, pid)
   where
     q = [sql| UPDATE projects.projects SET usage_last_reported=? WHERE id=?;|]
+
+
+updateProjectS3Bucket :: DB :> es => ProjectId -> ProjectS3Bucket -> Eff es Int64
+updateProjectS3Bucket pid bucket = dbtToEff $ execute q (bucket, pid)
+  where
+    q = [sql| UPDATE projects.projects SET s3_bucket=? WHERE id=?|]
 
 
 ---------------------------------
