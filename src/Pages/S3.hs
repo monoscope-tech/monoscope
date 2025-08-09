@@ -1,6 +1,7 @@
 module Pages.S3 (bringS3GetH, brings3PostH) where
 
 import Data.Default (Default (def))
+import Data.Text qualified as T
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Lucid
@@ -20,7 +21,7 @@ getMinioConnectInfo :: Projects.ProjectS3Bucket -> Minio.ConnectInfo
 getMinioConnectInfo Projects.ProjectS3Bucket{..} = Minio.setCreds (Minio.CredentialValue accessKey' secretKey' Nothing) withRegion
   where
     withRegion = Minio.setRegion (fromString $ toString region) info
-    info = fromString $ toString (fromMaybe "" endpointUrl)
+    info = if T.null endpointUrl then Minio.awsCI else fromString $ toString endpointUrl
     accessKey' = fromString $ toString accessKey
     secretKey' = fromString $ toString secretKey
 
@@ -83,7 +84,7 @@ bringS3Page pid s3BucketM = div_ [class_ "space-y-6 mx-auto w-full max-w-5xl px-
         connectionField "Region" "region" True (maybe "" (.region) s3BucketM)
         connectionField "Bucket" "bucket" True (maybe "" (.bucket) s3BucketM)
         div_ [class_ "space-y-2 md:col-span-2"] $ do
-          connectionField "Custom Endpoint (optional, for S3-compatible providers)" "endpointUrl" False (maybe "" (\x -> fromMaybe "" x.endpointUrl) s3BucketM)
+          connectionField "Custom Endpoint (optional, for S3-compatible providers)" "endpointUrl" False (maybe "" (.endpointUrl) s3BucketM)
       div_ [class_ "mt-4 flex flex-wrap items-center gap-3"] $ do
         button_ [class_ "btn btn-sm btn-primary"] "Validate Connection"
         span_ [class_ "text-sm text-textWeak"] "Auto saves if credentials are valid"

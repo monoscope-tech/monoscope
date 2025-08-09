@@ -178,7 +178,7 @@ data ProjectS3Bucket = ProjectS3Bucket
   , secretKey :: Text
   , region :: Text
   , bucket :: Text
-  , endpointUrl :: Maybe Text
+  , endpointUrl :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON, FromForm, NFData)
