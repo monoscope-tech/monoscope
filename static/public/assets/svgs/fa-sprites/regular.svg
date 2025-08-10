@@ -285,51 +285,29 @@
   </symbol>
 
   <symbol id="xmark" viewBox="0 0 8 8">
-    <!--!Font
-    Awesome Pro 6.5.2 by @fontawesome - https://fontawesome.com License -
-    https://fontawesome.com/license (Commercial License) Copyright 2024 Fonticons, Inc.-->
-
     <path d="M7 1L1 7M1 1L7 7" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round" />
   </symbol>
   <symbol id="filter" viewBox="0 0 512 512">
-    <!--!Font
-    Awesome Pro 6.5.2 by @fontawesome - https://fontawesome.com License -
-    https://fontawesome.com/license (Commercial License) Copyright 2024 Fonticons, Inc.-->
     <path
       d="M0 73.7C0 50.7 18.7 32 41.7 32l428.6 0c23 0 41.7 18.7 41.7 41.7c0 9.6-3.3 18.9-9.4 26.3L336 304.5l0 143.2c0 17.8-14.5 32.3-32.3 32.3c-7.3 0-14.4-2.5-20.1-7l-92.5-73.4c-9.6-7.6-15.1-19.1-15.1-31.3l0-63.7L9.4 100C3.3 92.6 0 83.3 0 73.7zM55 80L218.6 280.8c3.5 4.3 5.4 9.6 5.4 15.2l0 68.4 64 50.8L288 296c0-5.5 1.9-10.9 5.4-15.2L457 80 55 80z"></path>
   </symbol>
   <symbol id="grip-dots-vertical" viewBox="0 0 256 512">
-    <!--!Font
-    Awesome Pro 6.5.2 by @fontawesome - https://fontawesome.com License -
-    https://fontawesome.com/license (Commercial License) Copyright 2024 Fonticons, Inc.-->
     <path
       d="M64 128a32 32 0 1 0 0-64 32 32 0 1 0 0 64zm0 160a32 32 0 1 0 0-64 32 32 0 1 0 0 64zM96 416a32 32 0 1 0 -64 0 32 32 0 1 0 64 0zm96-288a32 32 0 1 0 0-64 32 32 0 1 0 0 64zm32 128a32 32 0 1 0 -64 0 32 32 0 1 0 64 0zM192 448a32 32 0 1 0 0-64 32 32 0 1 0 0 64z" />
   </symbol>
   <symbol id="sliders" viewBox="0 0 512 512">
-    <!--!Font
-    Awesome Pro 6.5.2 by @fontawesome - https://fontawesome.com License -
-    https://fontawesome.com/license (Commercial License) Copyright 2024 Fonticons, Inc.-->
     <path
       d="M0 416c0 13.3 10.7 24 24 24l59.7 0c10.2 32.5 40.5 56 76.3 56s66.1-23.5 76.3-56L488 440c13.3 0 24-10.7 24-24s-10.7-24-24-24l-251.7 0c-10.2-32.5-40.5-56-76.3-56s-66.1 23.5-76.3 56L24 392c-13.3 0-24 10.7-24 24zm128 0a32 32 0 1 1 64 0 32 32 0 1 1 -64 0zM320 256a32 32 0 1 1 64 0 32 32 0 1 1 -64 0zm32-80c-35.8 0-66.1 23.5-76.3 56L24 232c-13.3 0-24 10.7-24 24s10.7 24 24 24l251.7 0c10.2 32.5 40.5 56 76.3 56s66.1-23.5 76.3-56l59.7 0c13.3 0 24-10.7 24-24s-10.7-24-24-24l-59.7 0c-10.2-32.5-40.5-56-76.3-56zM192 128a32 32 0 1 1 0-64 32 32 0 1 1 0 64zm76.3-56C258.1 39.5 227.8 16 192 16s-66.1 23.5-76.3 56L24 72C10.7 72 0 82.7 0 96s10.7 24 24 24l91.7 0c10.2 32.5 40.5 56 76.3 56s66.1-23.5 76.3-56L488 120c13.3 0 24-10.7 24-24s-10.7-24-24-24L268.3 72z" />
   </symbol>
   <symbol id="clock" viewBox="0 0 512 512">
-    <!--!Font
-    Awesome Free 6.5.2 by @fontawesome - https://fontawesome.com License -
-    https://fontawesome.com/license/free Copyright 2024 Fonticons, Inc.-->
     <path
       d="M464 256A208 208 0 1 1 48 256a208 208 0 1 1 416 0zM0 256a256 256 0 1 0 512 0A256 256 0 1 0 0 256zM232 120V256c0 8 4 15.5 10.7 20l96 64c11 7.4 25.9 4.4 33.3-6.7s4.4-25.9-6.7-33.3L280 243.2V120c0-13.3-10.7-24-24-24s-24 10.7-24 24z" />
   </symbol>
   <symbol id="magnifying-glass" viewBox="0 0 512 512">
-    <!--!Font
-    Awesome Pro 6.5.2 by @fontawesome - https://fontawesome.com License -
-    https://fontawesome.com/license (Commercial License) Copyright 2024 Fonticons, Inc.-->
     <path
       d="M368 208A160 160 0 1 0 48 208a160 160 0 1 0 320 0zM337.1 371.1C301.7 399.2 256.8 416 208 416C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208c0 48.8-16.8 93.7-44.9 129.1L505 471c9.4 9.4 9.4 24.6 0 33.9s-24.6 9.4-33.9 0L337.1 371.1z" />
   </symbol>
   <symbol id="circle-info" viewBox="0 0 20 20">
-    <!--!Font
-    Awesome Pro 6.5.2 by @fontawesome - https://fontawesome.com License -
-    https://fontawesome.com/license (Commercial License) Copyright 2024 Fonticons, Inc.-->
     <path
       d="M10.0001 13.3334V10.0001M10.0001 6.66675H10.0084M18.3334 10.0001C18.3334 14.6025 14.6025 18.3334 10.0001 18.3334C5.39771 18.3334 1.66675 14.6025 1.66675 10.0001C1.66675 5.39771 5.39771 1.66675 10.0001 1.66675C14.6025 1.66675 18.3334 5.39771 18.3334 10.0001Z"
       fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
@@ -343,9 +321,6 @@
       d="M64 80c-8.8 0-16 7.2-16 16l0 320c0 8.8 7.2 16 16 16l320 0c8.8 0 16-7.2 16-16l0-320c0-8.8-7.2-16-16-16L64 80zM0 96C0 60.7 28.7 32 64 32l320 0c35.3 0 64 28.7 64 64l0 320c0 35.3-28.7 64-64 64L64 480c-35.3 0-64-28.7-64-64L0 96zm137.8 69.3c7.9-22.3 29.1-37.3 52.8-37.3l58.3 0c34.9 0 63.1 28.3 63.1 63.1c0 22.6-12.1 43.5-31.7 54.8L248 264.4c-.2 13-10.9 23.6-24 23.6c-13.3 0-24-10.7-24-24l0-13.5c0-8.6 4.6-16.5 12.1-20.8l44.3-25.4c4.7-2.7 7.6-7.7 7.6-13.1c0-8.4-6.8-15.1-15.1-15.1l-58.3 0c-3.4 0-6.4 2.1-7.5 5.3l-.4 1.2c-4.4 12.5-18.2 19-30.6 14.6s-19-18.2-14.6-30.6l.4-1.2zM192 352a32 32 0 1 1 64 0 32 32 0 1 1 -64 0z" />
   </symbol>
   <symbol id="arrow-right-from-bracket" viewBox="0 0 512 512">
-    <!--!Font
-    Awesome Pro 6.6.0 by @fontawesome - https://fontawesome.com License -
-    https://fontawesome.com/license (Commercial License) Copyright 2024 Fonticons, Inc.-->
     <path
       d="M505 273c9.4-9.4 9.4-24.6 0-33.9L377 111c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9l87 87L184 232c-13.3 0-24 10.7-24 24s10.7 24 24 24l246.1 0-87 87c-9.4 9.4-9.4 24.6 0 33.9s24.6 9.4 33.9 0L505 273zM168 80c13.3 0 24-10.7 24-24s-10.7-24-24-24L88 32C39.4 32 0 71.4 0 120L0 392c0 48.6 39.4 88 88 88l80 0c13.3 0 24-10.7 24-24s-10.7-24-24-24l-80 0c-22.1 0-40-17.9-40-40l0-272c0-22.1 17.9-40 40-40l80 0z" />
   </symbol>

@@ -617,10 +617,8 @@ apiLogsPage page = do
   section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-hidden overflow-x-hidden pb-2 group/pg", id_ "apiLogsPage"] do
     template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
-    div_ [class_"fixed z-[9999] hidden right-0 w-max h-max border rounded top-32 bg-bgBase shadow-lg" ,id_ "sessionPlayerWrapper"] do
-        div_ [class_"relative"] do
-          button_ [class_"rounded-full h-10 w-10 border shadow hover:bg-gray-100 absolute top-0 -translate-y-10 right-0", [__|on click add .hidden to #sessionPlayerWrapper|]] "x"
-          termRaw "session-replay" [ id_ "resultTable", class_ "shrink-1 flex flex-col", term "projectId"  page.pid.toText]("" :: Text)
+    div_ [class_ "fixed z-[9999] hidden right-0 w-max h-max border rounded top-32 bg-bgBase shadow-lg", id_ "sessionPlayerWrapper"] do
+      termRaw "session-replay" [id_ "resultTable", class_ "shrink-1 flex flex-col", term "projectId" page.pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
     div_
       [ style_ "z-index:26"
       , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"

@@ -46,12 +46,7 @@
   <body class="h-screen w-screen m-0 p-0 overflow-hidden flex flex-col">
     <div class="flex-1 relative h-full w-full  justify-center flex">
       <div class="fixed right-0 w-max bottom-18 border rounded shadow-lg" id="sessionPlayerWrapper">
-        <div class="relative">
-          <button class="rounded-full h-10 w-10 border shadow hover:bg-gray-100 absolute top-0 -translate-y-10 right-0" onclick="(()=>{document.querySelector('#sessionPlayerWrapper').style.display='none'})()">
-            X
-          </button>
-        </div>
-        <session-replay></session-replay>
+        <session-replay containerId="sessionPlayerWrapper"></session-replay>
       </div>
 
     </div>

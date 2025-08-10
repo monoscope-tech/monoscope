@@ -82,7 +82,7 @@ runServer appLogger env tp = do
           [async $ Safe.withException bgJobWorker exceptionLogger | env.config.enableBackgroundJobs]
         , [async $ Safe.withException (OtlpServer.runServer appLogger env tp) exceptionLogger]
         , [async $ Safe.withException (Queue.kafkaService appLogger env tp env.config.kafkaTopics OtlpServer.processList) exceptionLogger | env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics]
-        , [async $ Safe.withException (Queue.kafkaService appLogger env tp env.config.rrwebTopics processReplayEvents) exceptionLogger | env.config.enableReplayService && (not . any T.null) env.config.rrwebTopics]
+        , [async $ Safe.withException (Queue.kafkaService appLogger env tp env.config.rrwebTopics processReplayEvents) exceptionLogger]
         ]
   void $ liftIO $ waitAnyCancel asyncs
 
