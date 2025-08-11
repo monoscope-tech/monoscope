@@ -208,7 +208,7 @@ sqlFromQueryComponents sqlCfg qc =
                 -- Include the time bucket expression as the first column
                 let selectCols = T.intercalate "," (filter (\s -> not ("time_bucket" `T.isInfixOf` s)) qc.select)
                  in [fmt|SELECT 
-                       floor(extract(epoch from {timeBucketExpr}))::int as bucket_timestamp,
+                       extract(epoch from {timeBucketExpr})::integer,
                        {selectCols}
                    FROM {fromTable}
                    WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition})
@@ -287,7 +287,7 @@ sqlFromQueryComponents sqlCfg qc =
              in
               [fmt|
                 SELECT 
-                  floor(extract(epoch from {timeBucketExpr}))::int as bucket_timestamp, 
+                  extract(epoch from {timeBucketExpr})::integer, 
                   {groupCol},
                   ({aggCol})::float
                 FROM {fromTable}
@@ -466,7 +466,7 @@ defSqlQueryCfg pid currentTime source spanT =
 
 
 timestampLogFmt :: Text -> Text
-timestampLogFmt colName = [fmt|to_char({colName} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as {colName}|]
+timestampLogFmt colName = [fmt|to_char({colName} AT TIME ZONE 'UTC', 'YYYY-MM-DDTHH24:MI:SS.USZ') as {colName}|]
 
 
 defaultSelectSqlQuery :: Maybe Sources -> [Text]
