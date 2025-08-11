@@ -156,10 +156,10 @@ sqlFromQueryComponents sqlCfg qc =
         Nothing ->
           -- If there's a bin function on timestamp, order by that instead of raw timestamp
           case qc.finalSummarizeQuery of
-            Just binInterval -> "ORDER BY " <> "floor(extract(epoch from " <> timestampCol <> ") / " <> binInterval <> ") * " <> binInterval <> " desc"
+            Just binInterval -> "ORDER BY " <> "time_bucket('" <> binInterval <> "', " <> timestampCol <> ") desc"
             Nothing ->
-              if any (\s -> "floor(extract(epoch" `T.isInfixOf` s) qc.select
-                then "ORDER BY " <> "floor(extract(epoch from " <> timestampCol <> ") / " <> defaultBinSize <> ") * " <> defaultBinSize <> " desc"
+              if any (\s -> "time_bucket" `T.isInfixOf` s) qc.select
+                then "ORDER BY " <> "time_bucket('" <> defaultBinSize <> "', " <> timestampCol <> ") desc"
                 else "ORDER BY " <> timestampCol <> " desc"
 
       -- Handle limit - only apply for non-summarize queries by default
@@ -202,13 +202,13 @@ sqlFromQueryComponents sqlCfg qc =
             Just binInterval ->
               -- For summarize queries with bin functions, create a special format
               let
-                -- Create time bucket expression using floor/extract approach
-                timeBucketExpr = "floor(extract(epoch from " <> timestampCol <> ") / " <> binInterval <> ") * " <> binInterval
+                -- Create time bucket expression
+                timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
                in
                 -- Include the time bucket expression as the first column
-                let selectCols = T.intercalate "," (filter (\s -> not ("floor(extract(epoch" `T.isInfixOf` s)) qc.select)
+                let selectCols = T.intercalate "," (filter (\s -> not ("time_bucket" `T.isInfixOf` s)) qc.select)
                  in [fmt|SELECT 
-                       {timeBucketExpr} as bucket_timestamp,
+                       floor(extract(epoch from {timeBucketExpr}))::int as bucket_timestamp,
                        {selectCols}
                    FROM {fromTable}
                    WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition})
@@ -224,8 +224,8 @@ sqlFromQueryComponents sqlCfg qc =
           Just binInterval ->
             -- For summarize with time bucket, count the number of unique time buckets
             let
-              -- Create time bucket expression using floor/extract approach
-              timeBucketExpr = "floor(extract(epoch from " <> timestampCol <> ") / " <> binInterval <> ") * " <> binInterval
+              -- Create time bucket expression
+              timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
 
               -- Create the subquery column list and GROUP BY clause
               -- Including group by columns if present
@@ -275,8 +275,8 @@ sqlFromQueryComponents sqlCfg qc =
                   then "count(*)"
                   else fromMaybe "count(*)" (listToMaybe qc.select)
 
-              -- Create time bucket expression using floor/extract approach
-              timeBucketExpr = "floor(extract(epoch from " <> timestampCol <> ") / " <> binInterval <> ") * " <> binInterval
+              -- Create time bucket expression
+              timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
 
               -- Create GROUP BY clause with conditional logic outside PyF template
               firstGroupCol = fromMaybe "status_code" (listToMaybe qc.groupByClause)
@@ -287,7 +287,7 @@ sqlFromQueryComponents sqlCfg qc =
              in
               [fmt|
                 SELECT 
-                  {timeBucketExpr} as bucket_timestamp, 
+                  floor(extract(epoch from {timeBucketExpr}))::int as bucket_timestamp, 
                   {groupCol},
                   ({aggCol})::float
                 FROM {fromTable}
@@ -322,8 +322,8 @@ sqlFromQueryComponents sqlCfg qc =
           Just binInterval ->
             -- For queries with bin functions, create a time-bucketed alert query
             let
-              -- Create time bucket expression using floor/extract approach
-              timeBucketExpr = "floor(extract(epoch from " <> timestampCol <> ") / " <> binInterval <> ") * " <> binInterval
+              -- Create time bucket expression
+              timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
              in
               [fmt|
                 SELECT GREATEST({alertSelect}) FROM {fromTable}
@@ -465,9 +465,8 @@ defSqlQueryCfg pid currentTime source spanT =
     }
 
 
--- timestampLogFmt colName = [fmt|to_char({colName} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as {colName}|]
 timestampLogFmt :: Text -> Text
-timestampLogFmt colName = [fmt|date_format({colName}, '%Y-%m-%dT%H:%M:%S.%fZ') as {colName}|]
+timestampLogFmt colName = [fmt|to_char({colName} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as {colName}|]
 
 
 defaultSelectSqlQuery :: Maybe Sources -> [Text]

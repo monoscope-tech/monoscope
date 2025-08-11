@@ -34,9 +34,9 @@ import Text.Megaparsec.Char (alphaNumChar, char, digitChar, space, string)
 -- >>> :set -XOverloadedStrings
 
 
--- Default bin size for auto binning if not otherwise specified (in seconds)
+-- Default bin size for auto binning if not otherwise specified
 defaultBinSize :: Text
-defaultBinSize = "300" -- 5 minutes in seconds
+defaultBinSize = "5 minutes"
 
 
 -- Modify Aggregation Functions to include optional aliases
@@ -240,10 +240,10 @@ instance ToQueryText BinFunction where
 
 
 instance Display BinFunction where
-  displayPrec _prec (Bin subj interval) = displayBuilder $ "floor(extract(epoch from " <> display subj <> ") / " <> kqlTimespanToTimeBucket interval <> ") * " <> kqlTimespanToTimeBucket interval
+  displayPrec _prec (Bin subj interval) = displayBuilder $ "time_bucket('" <> kqlTimespanToTimeBucket interval <> "', " <> display subj <> ")"
   -- Use default bin size for auto binning (defined in Parser.hs)
   -- Don't include "as bin_timestamp" here as it causes syntax errors in GROUP BY
-  displayPrec _prec (BinAuto subj) = displayBuilder $ "floor(extract(epoch from " <> display subj <> ") / " <> defaultBinSize <> ") * " <> defaultBinSize
+  displayPrec _prec (BinAuto subj) = displayBuilder $ "time_bucket('" <> defaultBinSize <> "', " <> display subj <> ")"
 
 
 -- | Parse a summarize by clause which can contain fields and bin functions

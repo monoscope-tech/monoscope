@@ -70,9 +70,6 @@ pivot' rows
 
 
 -- Helper to convert from Double timestamp to Int timestamp tuples
-pivotFromDouble :: V.Vector (Double, Text, Double) -> (V.Vector Text, V.Vector (V.Vector (Maybe Double)), Double, Double)
-pivotFromDouble rows = pivot' $ V.map (\(ts, txt, val) -> (round ts :: Int, txt, val)) rows
-
 
 transform :: V.Vector Text -> V.Vector (Int, Text, Double) -> V.Vector (Maybe Double)
 transform fields tuples =
@@ -225,16 +222,14 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx = do
     DTMetric -> do
       chartData <- withResource pool $ \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
       let chartsDataV = V.fromList chartData
-      let (hdrs, groupedData, rowsCount, rpm) = pivotFromDouble chartsDataV
-      -- For stats, we need to convert to Int tuples
-      let chartsDataVInt = V.map (\(ts, txt, val) -> (round ts :: Int, txt, val)) chartsDataV
+      let (hdrs, groupedData, rowsCount, rpm) = pivot' chartsDataV
       pure
         baseMetricsData
           { dataset = groupedData
           , headers = V.cons "timestamp" hdrs
           , rowsCount
           , rowsPerMin = Just rpm
-          , stats = Just $ statsTriple chartsDataVInt
+          , stats = Just $ statsTriple chartsDataV
           }
     DTText -> do
       chartData <- withResource authCtx.pool $ \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)

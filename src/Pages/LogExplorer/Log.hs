@@ -618,10 +618,10 @@ apiLogsPage page = do
   section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-hidden overflow-x-hidden pb-2 group/pg", id_ "apiLogsPage"] do
     template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
-    div_ [class_"fixed z-[9999] hidden right-0 w-max h-max border rounded top-32 bg-bgBase shadow-lg" ,id_ "sessionPlayerWrapper"] do
-        div_ [class_"relative"] do
-          button_ [class_"rounded-full h-10 w-10 border shadow hover:bg-gray-100 absolute top-0 -translate-y-10 right-0", [__|on click add .hidden to #sessionPlayerWrapper|]] "x"
-          termRaw "session-replay" [ id_ "resultTable", class_ "shrink-1 flex flex-col", term "projectId"  page.pid.toText]("" :: Text)
+    div_ [class_ "fixed z-[9999] hidden right-0 w-max h-max border rounded top-32 bg-bgBase shadow-lg", id_ "sessionPlayerWrapper"] do
+      div_ [class_ "relative"] do
+        button_ [class_ "rounded-full h-10 w-10 border shadow hover:bg-gray-100 absolute top-0 -translate-y-10 right-0", [__|on click add .hidden to #sessionPlayerWrapper|]] "x"
+        termRaw "session-replay" [id_ "resultTable", class_ "shrink-1 flex flex-col", term "projectId" page.pid.toText] ("" :: Text)
     div_
       [ style_ "z-index:26"
       , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
@@ -672,60 +672,24 @@ apiLogsPage page = do
             , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
             , Widget.sql =
                 Just
-                  [text| SELECT timeB, quantile, COALESCE(value, 0)::float AS value
-                            FROM ( 
-                              SELECT 
-                                floor(extract(epoch from timestamp) / 3600) * 3600 AS timeB,
-                                'p50' AS quantile,
-                                COALESCE((approx_percentile_cont(0.50) WITHIN GROUP (ORDER BY duration) / 1000000.0), 0)::float AS value
-                              FROM otel_logs_and_spans
-                              WHERE project_id='{{project_id}}'
-                                {{time_filter}} {{query_ast_filters}}
-                                AND duration IS NOT NULL
-                              GROUP BY floor(extract(epoch from timestamp) / 3600) * 3600
-                              HAVING COUNT(*) > 0
-                              
-                              UNION ALL
-                              
-                              SELECT 
-                                floor(extract(epoch from timestamp) / 3600) * 3600 AS timeB,
-                                'p75' AS quantile,
-                                COALESCE((approx_percentile_cont(0.75) WITHIN GROUP (ORDER BY duration) / 1000000.0), 0)::float AS value
-                              FROM otel_logs_and_spans
-                              WHERE project_id='{{project_id}}'
-                                {{time_filter}} {{query_ast_filters}}
-                                AND duration IS NOT NULL
-                              GROUP BY floor(extract(epoch from timestamp) / 3600) * 3600
-                              HAVING COUNT(*) > 0
-                              
-                              UNION ALL
-                              
-                              SELECT 
-                                floor(extract(epoch from timestamp) / 3600) * 3600 AS timeB,
-                                'p90' AS quantile,
-                                COALESCE((approx_percentile_cont(0.90) WITHIN GROUP (ORDER BY duration) / 1000000.0), 0)::float AS value
-                              FROM otel_logs_and_spans
-                              WHERE project_id='{{project_id}}'
-                                {{time_filter}} {{query_ast_filters}}
-                                AND duration IS NOT NULL
-                              GROUP BY floor(extract(epoch from timestamp) / 3600) * 3600
-                              HAVING COUNT(*) > 0
-                              
-                              UNION ALL
-                              
-                              SELECT 
-                                floor(extract(epoch from timestamp) / 3600) * 3600 AS timeB,
-                                'p95' AS quantile,
-                                COALESCE((approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY duration) / 1000000.0), 0)::float AS value
-                              FROM otel_logs_and_spans
-                              WHERE project_id='{{project_id}}'
-                                {{time_filter}} {{query_ast_filters}}
-                                AND duration IS NOT NULL
-                              GROUP BY floor(extract(epoch from timestamp) / 3600) * 3600
-                              HAVING COUNT(*) > 0
-                            ) s
-                          WHERE value IS NOT NULL
-                          ORDER BY timeB, quantile;|]
+                  [text| SELECT timeB, quantile,COALESCE(value, 0)::float AS value
+                              FROM ( SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
+                                      ARRAY[
+                                        COALESCE((approx_percentile(0.50, percentile_agg(duration)) / 1000000.0), 0)::float,
+                                        COALESCE((approx_percentile(0.75, percentile_agg(duration)) / 1000000.0), 0)::float,
+                                        COALESCE((approx_percentile(0.90, percentile_agg(duration)) / 1000000.0), 0)::float,
+                                        COALESCE((approx_percentile(0.95, percentile_agg(duration)) / 1000000.0), 0)::float
+                                      ] AS values,
+                                      ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
+                                FROM otel_logs_and_spans
+                                WHERE project_id='{{project_id}}'
+                                  {{time_filter}} {{query_ast_filters}}
+                                  AND duration IS NOT NULL
+                                GROUP BY timeB
+                                HAVING COUNT(*) > 0
+                              ) s,
+                            unnest(s.values, s.quantiles) AS u(value, quantile)
+                            WHERE value IS NOT NULL;|]
             , Widget.unit = Just "ms"
             , Widget.hideLegend = Just True
             , Widget._projectId = Just page.pid
