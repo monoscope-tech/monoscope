@@ -1,4 +1,4 @@
-module Pages.Endpoints.ApiCatalog (apiCatalogH, HostEventsVM (..), endpointListGetH, renderEndpoint, EndpointRequestStatsVM (..), EnpReqStatsVM (..)) where
+module Pages.Endpoints.ApiCatalog (apiCatalogH, HostEventsVM (..), endpointListGetH, renderEndpoint, CatalogList, EndpointRequestStatsVM (..), EnpReqStatsVM (..)) where
 
 import Data.Default (def)
 import Data.Text qualified as T
@@ -24,13 +24,13 @@ import Utils (checkFreeTierExceeded)
 import Utils qualified
 
 
-apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (ItemsList.ItemsPage HostEventsVM)))
-apiCatalogH pid sortM timeFilter requestTypeM = do
+apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders CatalogList)
+apiCatalogH pid sortM timeFilter requestTypeM skipM = do
   (sess, project) <- Sessions.sessionAndProject pid
 
   let requestType = fromMaybe "Incoming" requestTypeM
 
-  hostsAndEvents <- dbtToEff $ Endpoints.dependenciesAndEventsCount pid requestType (fromMaybe "events" sortM)
+  hostsAndEvents <- dbtToEff $ Endpoints.dependenciesAndEventsCount pid requestType (fromMaybe "events" sortM) (fromMaybe 0 skipM)
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
 
   currTime <- Time.currentTime
@@ -38,7 +38,8 @@ apiCatalogH pid sortM timeFilter requestTypeM = do
   let sortV = fromMaybe "events" sortM
   let filterV = fromMaybe "14d" timeFilter
 
-  let currentURL = "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=" <> requestType
+  let currentURL = "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=" <> requestType <> "&since=" <> filterV
+      nextFetchUrl = Just $ currentURL <> "&skip=" <> maybe "10" (\x -> show $ 10 + x) skipM
 
   let listCfg =
         ItemsList.ItemsListCfg
@@ -52,7 +53,7 @@ apiCatalogH pid sortM timeFilter requestTypeM = do
               , ItemsList.BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
               ]
           , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
-          , nextFetchUrl = Nothing
+          , nextFetchUrl
           , heading = Nothing
           , zeroState =
               Just
@@ -76,11 +77,21 @@ apiCatalogH pid sortM timeFilter requestTypeM = do
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Incoming", role_ "tab", class_ $ "tab " <> if requestType == "Incoming" then "tab-active text-textStrong border border-strokeStrong" else ""] "Incoming"
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Outgoing", role_ "tab", class_ $ "tab " <> if requestType == "Outgoing" then "tab-active text-textStrong border border-strokeStrong" else ""] "Outgoing"
           }
-
-  addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (\host -> HostEventsVM pid host filterV requestType) hostsAndEvents)
+  case skipM of
+    Just _ -> addRespHeaders $ CatalogListRows $ ItemsList.ItemsRows nextFetchUrl $ V.map (\host -> HostEventsVM pid host filterV requestType) hostsAndEvents
+    _ -> addRespHeaders $ CatalogListPage $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (\host -> HostEventsVM pid host filterV requestType) hostsAndEvents)
 
 
 data HostEventsVM = HostEventsVM Projects.ProjectId Endpoints.HostEvents Text Text
+
+
+data CatalogList = CatalogListPage (PageCtx (ItemsList.ItemsPage HostEventsVM)) | CatalogListRows (ItemsList.ItemsRows HostEventsVM)
+
+
+instance ToHtml CatalogList where
+  toHtml (CatalogListPage pg) = toHtml pg
+  toHtml (CatalogListRows r) = toHtml r
+  toHtmlRaw = toHtml
 
 
 instance ToHtml HostEventsVM where
