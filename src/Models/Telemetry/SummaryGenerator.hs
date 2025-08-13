@@ -192,6 +192,16 @@ generateSpanSummary otel =
             case atMapText "session.id" otel.attributes of
               Just v -> Just $ "session;right-badge-neutral⇒" <> v
               _ -> Nothing
+          , case atMapText "user.email" otel.attributes of
+              Just eml -> Just $ "user email;right-badge-neutral⇒" <> eml
+              _ -> case atMapText "user.id" otel.attributes of
+                Just s -> Just $ "user name;right-badge-neutral⇒" <> s
+                _ -> Nothing
+          , case atMapText "user.full_name" otel.attributes of
+              Just s -> Just $ "user name;right-badge-neutral⇒" <> s
+              _ -> case atMapText "user.name" otel.attributes of
+                Just s -> Just $ "user name;right-badge-neutral⇒" <> s
+                _ -> Nothing
           , -- Error status (if ERROR)
             case otel.status_code of
               Just "ERROR" -> Just "status;right-badge-error⇒ERROR"

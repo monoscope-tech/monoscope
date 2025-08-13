@@ -332,18 +332,19 @@ getProjectHosts pid = query q (Only pid)
     q = [sql| SELECT DISTINCT host FROM apis.endpoints where  project_id = ? AND outgoing=false AND host!= '' |]
 
 
-dependenciesAndEventsCount :: Projects.ProjectId -> Text -> Text -> DBT IO (V.Vector HostEvents)
-dependenciesAndEventsCount pid requestType sortT = query (Query $ encodeUtf8 q) (pid, isOutgoing, pid)
+dependenciesAndEventsCount :: Projects.ProjectId -> Text -> Text -> Int -> DBT IO (V.Vector HostEvents)
+dependenciesAndEventsCount pid requestType sortT skip =
+  query (Query $ encodeUtf8 q) (pid, isOutgoing, pid, skip)
   where
     orderBy = case sortT of
-      "first_seen" -> "first_seen ASC;"
-      "last_seen" -> "last_seen DESC;"
-      _ -> "eventsCount DESC;"
+      "first_seen" -> "first_seen ASC"
+      "last_seen" -> "last_seen DESC"
+      _ -> "eventsCount DESC"
 
     endpointFilter = case requestType of
       "Outgoing" -> "ep.outgoing = true"
       "Incoming" -> "ep.outgoing = false"
-      _ -> "ep.outgoing =  false"
+      _ -> "ep.outgoing = false"
 
     isOutgoing = requestType == "Outgoing"
 
@@ -363,15 +364,16 @@ WITH filtered_requests AS (
     GROUP BY 1
 )
 SELECT DISTINCT ep.host,
-       COALESCE(fr.eventsCount, 0) eventsCount,
-       fr.last_seen last_seen,
-       fr.first_seen first_seen
+       COALESCE(fr.eventsCount, 0) AS eventsCount,
+       fr.last_seen,
+       fr.first_seen
 FROM apis.endpoints ep
 LEFT JOIN filtered_requests fr ON ep.host = fr.host
 WHERE ep.project_id = ?
   AND ep.host != ''
   AND $endpointFilter
-  ORDER BY $orderBy
+ORDER BY $orderBy
+LIMIT 10 OFFSET ?
       |]
 
 

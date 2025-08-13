@@ -103,7 +103,6 @@ getMinioFile conn bucket object = do
     src <- Minio.getObject bucket object Minio.defaultGetObjectOptions
     let sld = Minio.gorObjectStream src
     bs <- runConduit $ sld .| CC.foldMap fromStrict
-
     let v = case AE.eitherDecode bs of
           Right v' -> case v' of
             AE.Array a -> a
@@ -120,9 +119,8 @@ saveReplayMinio envCfg (ackId, replayData) = do
     Just p -> do
       let session = UUID.toText replayData.sessionId
           object = session <> ".json"
-          (acc, sec, region, bucket', endpoint) = maybe (envCfg.s3AccessKey, envCfg.s3SecretKey, envCfg.s3Region, envCfg.s3Bucket, envCfg.s3Endpoint) (\x -> (x.accessKey, x.secretKey, x.region, x.bucket, x.endpointUrl)) p.s3Bucket
-      let conn = getMinioConnectInfo acc sec region bucket' endpoint
-          bucket = fromString $ toString envCfg.s3Bucket
+          (acc, sec, region, bucket, endpoint) = maybe (envCfg.s3AccessKey, envCfg.s3SecretKey, envCfg.s3Region, envCfg.s3Bucket, envCfg.s3Endpoint) (\x -> (x.accessKey, x.secretKey, x.region, x.bucket, x.endpointUrl)) p.s3Bucket
+      let conn = getMinioConnectInfo acc sec region bucket endpoint
       ds <- getMinioFile conn bucket object
       res <- liftIO $ Minio.runMinio conn do
         bExist <- Minio.bucketExists bucket
@@ -147,9 +145,9 @@ replaySessionGetH pid sessionId = do
   project <- dbtToEff $ Projects.projectById pid
   case project of
     Just p -> do
-      let (acc, sec, region, bucket', endpoint) = maybe (envCfg.s3AccessKey, envCfg.s3SecretKey, envCfg.s3Region, envCfg.s3Bucket, envCfg.s3Endpoint) (\x -> (x.accessKey, x.secretKey, x.region, x.bucket, x.endpointUrl)) p.s3Bucket
-          conn = getMinioConnectInfo acc sec region bucket' endpoint
-      replayEvents <- getMinioFile conn (fromString $ toString envCfg.s3Bucket) (fromString $ toString $ UUID.toText sessionId <> ".json")
+      let (acc, sec, region, bucket, endpoint) = maybe (envCfg.s3AccessKey, envCfg.s3SecretKey, envCfg.s3Region, envCfg.s3Bucket, envCfg.s3Endpoint) (\x -> (x.accessKey, x.secretKey, x.region, x.bucket, x.endpointUrl)) p.s3Bucket
+          conn = getMinioConnectInfo acc sec region bucket endpoint
+      replayEvents <- getMinioFile conn bucket (fromString $ toString $ UUID.toText sessionId <> ".json")
       addRespHeaders $ AE.object ["events" AE..= AE.Array replayEvents]
     Nothing -> do
       addRespHeaders $ AE.object ["events" AE..= AE.Array V.empty]

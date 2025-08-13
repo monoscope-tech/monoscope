@@ -10,6 +10,7 @@ const MS_10 = 10000;
 export class SessionReplay extends LitElement {
   @property({ type: String }) private events: string = '[]';
   @property({ type: String }) private projectId: string = '';
+  @property({ type: String }) private containerId: String = '';
 
   @state() private activityWidth = 0;
   @query('#replayerOuterContainer') private replayerOuterContainer: HTMLElement;
@@ -31,6 +32,18 @@ export class SessionReplay extends LitElement {
   private containerWidth = 1124;
   private containerHeight = 650;
   private iframeWidth = 1117;
+  private observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      if (mutation.type === 'attributes' && (mutation.attributeName === 'width' || mutation.attributeName === 'height')) {
+        const iframe = this.player?.iframe;
+        if (iframe) {
+          this.iframeWidth = Number(iframe.getAttribute('width'));
+          this.iframeHeight = Number(iframe.getAttribute('height'));
+          this.updateScale();
+        }
+      }
+    }
+  });
 
   private iframeHeight = 927;
   private timer: number | null = null;
@@ -61,6 +74,7 @@ export class SessionReplay extends LitElement {
     this.fetchNewSessionData = this.fetchNewSessionData.bind(this);
     this.initiatePlayer = this.initiatePlayer.bind(this);
     this.handleTimeSeek = this.handleTimeSeek.bind(this);
+    this.closePlayerWindow = this.closePlayerWindow.bind(this);
 
     document.addEventListener('mousemove', (e) => {
       if (this.startX !== null) {
@@ -132,7 +146,6 @@ export class SessionReplay extends LitElement {
   }
   updateScale = () => {
     this.updateContainerWidths();
-
     const el = this.player?.wrapper;
     const widthScale = this.containerWidth / this.iframeWidth;
     const heightScale = this.containerHeight / this.iframeHeight;
@@ -192,43 +205,43 @@ export class SessionReplay extends LitElement {
   }
 
   initiatePlayer(events: eventWithTime[]) {
+    if (events.length < 2) return;
     const target = document.querySelector('#playerWrapper') as HTMLElement;
-    this.player?.destroy();
+    this.currentTime = 0;
+    this.consoleEvents = [];
     events.forEach((event) => {
       if (event.type === EventType.Plugin && event.data.plugin === 'rrweb/console@1') {
         const level = (event as ConsoleEvent).data.payload.level;
-        if (!['error', 'info', 'warn'].includes(level)) {
-          console.log(event);
-        }
         this.consoleTypesCounts[level] += 1;
         this.consoleEvents = [...this.consoleEvents, event as ConsoleEvent];
       }
     });
-    if (events.length < 2) {
-      console.error('Need at least two events to play session');
-      return;
-    }
+
     this.player = new Replayer(events, {
       root: target,
       plugins: [{ handler: this.handleConsoleEvents }],
       skipInactive: this.skipInactive,
     });
     this.metaData = this.player.getMetaData();
-    this.updateScale();
     this.play();
+    this.updateScale();
+    this.observer.disconnect();
+    this.observer.observe(this.player.iframe, { attributes: true, attributeFilter: ['width', 'height'] });
   }
 
   fetchNewSessionData(sessionId: string) {
     if (this.isLoading) return;
     this.pause();
+    try {
+      this.player?.destroy();
+    } catch (error) {}
     this.isLoading = true;
     const url = `/p/${this.projectId}/replay_session/${sessionId}`;
 
     fetch(url, { method: 'GET', headers: { Accept: 'application/json' } })
       .then((response) => response.json())
       .then((data) => {
-        const events = data.events;
-        this.initiatePlayer(events);
+        this.initiatePlayer(data.events);
       })
       .finally(() => {
         this.isLoading = false;
@@ -250,6 +263,14 @@ export class SessionReplay extends LitElement {
     this.goTo(toGo);
   }
 
+  closePlayerWindow() {
+    document.querySelector(`#${this.containerId}`)?.classList.add('hidden');
+    this.currentTime = 0;
+    this.stopTimer();
+    this.consoleEvents = [];
+    this.player?.destroy();
+  }
+
   displayConsoleEvent = (event: ConsoleEvent) => {
     const payload = event.data.payload;
     if (payload.level === 'error' && !this.consoleEventsEnable[0]) return nothing;
@@ -262,7 +283,7 @@ export class SessionReplay extends LitElement {
 
     switch (payload.level) {
       case 'error':
-        bgColor = 'bg-red-100';
+        bgColor = 'bg-red-100 dark:bg-red-900';
         textColor = 'text-textError';
         hoverColor = 'hover:bg-fillError-weak';
         break;
@@ -272,7 +293,7 @@ export class SessionReplay extends LitElement {
         hoverColor = 'hover:bg-fillWarn-weak';
         break;
       case 'info':
-        bgColor = 'bg-fillBrand-weak';
+        bgColor = 'bg-fillBrand-weak dark:bg-blue-900';
         textColor = 'text-textInfo';
         hoverColor = 'hover:bg-fillBrand-weak';
         break;
@@ -298,7 +319,7 @@ export class SessionReplay extends LitElement {
             }}
             class="cursor-pointer h-full flex flex-col px-1 rounded-lg shrink-0 items-center justify-center hover:bg-fillWeak"
           >
-            ${faSprite_('chevron-up', 'regular', 'w-2.5 h-2.5 text-textWeak')}
+            ${faSprite_('chevron-up', 'regular', 'w-2.5 h-2.5 dark:fill-gray-200')}
           </button>
         </div>
         <div class="flex-col ${bgColor} p-2 w-full min-w-0 hidden event-detail">
@@ -333,7 +354,7 @@ export class SessionReplay extends LitElement {
   render() {
     return html`<div class="flex overflow-x-hidden " id="replayerOuterContainer" style="width:1124px; height:770px">
       <div class="w-full  flex flex-col justify-start shrink-1 min-w-0 overflow-hidden">
-        <div class="bg-fillWeak w-full px-2 h-10 min-h-10 flex items-center border-b gap-4 justify-between playerHeader">
+        <div class="bg-fillWeak w-full px-2 h-10 min-h-10 flex items-center border-b gap-4 cursor-move  justify-between playerHeader">
           <div class="flex items-center gap-4 shrink-1">
             <h3 class="font-medium h-full truncate overflow-ellipsis min-w-0">Session recording</h3>
           </div>
@@ -372,6 +393,11 @@ export class SessionReplay extends LitElement {
             >
               ${faSprite_('side-chevron-left-in-box', 'regular', 'w-3 h-3')} Activity
             </button>
+            ${this.activityWidth === 0
+              ? html`<button class=" hover:bg-fillWeak" @click=${this.closePlayerWindow}>
+                  ${faSprite_('circle-xmark', 'regular', 'w-4 h-4')}
+                </button>`
+              : nothing}
           </div>
         </div>
         <!-- End nav controls -->
@@ -390,11 +416,9 @@ export class SessionReplay extends LitElement {
               ${this.isLoading
                 ? html`<div class="italic text-7xl font-medium text-gray-100">Loading...</div>`
                 : this.finished
-                ? html` <button @click=${() => this.goTo(0)}>${faSprite_('replay', 'regular', 'w-14 h-14 text-textInverse-weak')}</button> `
+                ? html` <button @click=${() => this.goTo(0)}>${faSprite_('replay', 'regular', 'w-14 h-14 text-gray-100')}</button> `
                 : html`
-                    <button @click=${() => (this.paused = false)}>
-                      ${faSprite_('p-play', 'regular', 'w-14 h-14 text-textInverse-weak')}
-                    </button>
+                    <button @click=${() => (this.paused = false)}>${faSprite_('p-play', 'regular', 'w-14 h-14 text-gray-100')}</button>
                   `}
             </div>
           </div>
@@ -451,7 +475,7 @@ export class SessionReplay extends LitElement {
           }}
         ></div>
         <div class="w-full h-full overflow-hidden">
-          <div class="bg-fillWeak w-full px-4 h-10  flex items-center border-b gap-4 justify-between playerHeader">
+          <div class="bg-fillWeak w-full px-4 h-10 cursor-move flex items-center border-b gap-4 justify-between playerHeader">
             <div class="flex items-center gap-4 text-xs font-semibold">
               <div class="dropdown">
                 <div tabindex="0" role="button" class="cursor-pointer">Console</div>
@@ -490,6 +514,11 @@ export class SessionReplay extends LitElement {
                 </ul>
               </div> -->
             </div>
+            ${this.activityWidth > 0
+              ? html`<button class="cursor-pointer hover:bg-fillWeak" @click=${this.closePlayerWindow}>
+                  ${faSprite_('circle-xmark', 'regular', 'w-4 h-4')}
+                </button>`
+              : nothing}
           </div>
           <div
             class="flex flex-col h-full overflow-y-auto w-full overflow-x-hidden c-scroll scroll-smooth"
