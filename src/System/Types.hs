@@ -35,7 +35,7 @@ import Data.Map qualified as Map
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
 import Effectful
-import Effectful.Concurrent.Async
+import Effectful.Concurrent.Async (Concurrent, runConcurrent)
 import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, runLabeled)
@@ -169,6 +169,7 @@ type ATBackgroundCtx =
      , Tracing
      , UUIDEff
      , HTTP
+     , Concurrent
      , Ki.StructuredConcurrency
      , Effectful.IOE
      ]
@@ -186,6 +187,7 @@ runBackground logger appCtx tp process =
     & Tracing.runTracing tp
     & runUUID
     & runHTTPWreq
+    & runConcurrent
     & Ki.runStructuredConcurrency
     & Effectful.runEff
 

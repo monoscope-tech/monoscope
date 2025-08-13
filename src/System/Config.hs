@@ -96,6 +96,7 @@ data EnvConfig = EnvConfig
   , s3SecretKey :: Text
   , s3Region :: Text
   , enableReplayService :: Bool
+  , enableTimefusionReads :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)

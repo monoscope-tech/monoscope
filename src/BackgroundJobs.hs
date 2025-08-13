@@ -22,9 +22,11 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact qualified as PTR
 import Effectful (Eff, IOE, (:>))
 import Effectful.Ki qualified as Ki
+import Effectful.Labeled (Labeled)
 import Effectful.Log (Log, object)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (ask)
+import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogLegacy
@@ -339,7 +341,7 @@ runHourlyJob scheduledTime hour = do
 
 
 -- | Batch process facets generation for multiple projects using 24-hour window
-generateOtelFacetsBatch :: (DB :> es, IOE :> es, Log :> es, UUID.UUIDEff :> es) => V.Vector Text -> UTCTime -> Eff es ()
+generateOtelFacetsBatch :: (DB :> es, Labeled "timefusion" DB :> es, Effectful.Reader.Static.Reader Config.AuthContext :> es, IOE :> es, Log :> es, UUID.UUIDEff :> es) => V.Vector Text -> UTCTime -> Eff es ()
 generateOtelFacetsBatch projectIds timestamp = do
   forM_ projectIds \pid -> void $ Facets.generateAndSaveFacets (Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText pid) "otel_logs_and_spans" Facets.facetColumns 50 timestamp
   Log.logInfo "Completed batch OTLP facets generation for projects" ("project_count", AE.toJSON $ V.length projectIds)

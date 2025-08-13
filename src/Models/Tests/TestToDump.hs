@@ -10,6 +10,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful
+import Effectful.Concurrent (Concurrent)
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
@@ -86,7 +87,7 @@ runCollectionTest collection_steps col_vars cold_id = do
 
 
 logTest
-  :: (DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, Time.Time :> es, UUIDEff :> es)
+  :: (DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, Time.Time :> es, UUIDEff :> es, Concurrent :> es)
   => Projects.ProjectId
   -> Testing.CollectionId
   -> V.Vector Testing.CollectionStepData

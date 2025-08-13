@@ -42,7 +42,7 @@ import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
 import Servant.Server (ServerError (errBody), err400)
-import System.Config (AuthContext (..))
+import System.Config (AuthContext (..), EnvConfig (..))
 import Text.Megaparsec (parseMaybe)
 import Utils (JSONHttpApiData (..))
 
@@ -204,7 +204,7 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
 
 fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> IO MetricsData
 fetchMetricsData respDataType sqlQuery now fromD toD authCtx = do
-  let pool = authCtx.timefusionPgPool
+  let pool = if authCtx.env.enableTimefusionReads then authCtx.timefusionPgPool else authCtx.pool
   let baseMetricsData =
         def
           { from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
@@ -213,7 +213,7 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx = do
 
   checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
     DTFloat -> do
-      chartData <- withResource authCtx.pool \conn -> query_ conn (Query $ encodeUtf8 sqlQuery) :: IO [Only Double]
+      chartData <- withResource pool \conn -> query_ conn (Query $ encodeUtf8 sqlQuery) :: IO [Only Double]
       pure
         baseMetricsData
           { dataFloat = fromOnly <$> listToMaybe chartData
@@ -232,14 +232,14 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx = do
           , stats = Just $ statsTriple chartsDataV
           }
     DTText -> do
-      chartData <- withResource authCtx.pool $ \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
+      chartData <- withResource pool $ \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
       pure
         baseMetricsData
           { dataText = V.fromList chartData
           , rowsCount = fromIntegral $ length chartData
           }
     DTJson -> do
-      chartData <- withResource authCtx.pool $ \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
+      chartData <- withResource pool $ \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
       pure
         baseMetricsData
           { dataJSON = V.fromList chartData

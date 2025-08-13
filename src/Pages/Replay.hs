@@ -2,42 +2,30 @@
 
 module Pages.Replay (replayPostH, ReplayPost, processReplayEvents, replaySessionGetH) where
 
+import Conduit (runConduit)
 import Control.Lens
 import Data.Aeson qualified as AE
-import Data.ByteString.Lazy.Char8 qualified as BL8
-import Data.UUID qualified as UUID
-import Relude
-
-import Control.Error (hush)
-import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
-import Data.Containers.ListUtils (nubOrd)
-import Data.HashMap.Strict qualified as HM
-import Data.Text qualified as T
-import Network.Minio qualified as Minio
-
-import Conduit (runConduit)
-import Data.Base64.Types qualified as B64
-import Data.ByteString.Base64 qualified as B64
 import Data.Conduit ((.|))
 import Data.Conduit.Combinators qualified as CC
-import Data.Time (UTCTime, formatTime, getCurrentTime)
-import Data.Time.Format (defaultTimeLocale)
+import Data.Containers.ListUtils (nubOrd)
+import Data.HashMap.Strict qualified as HM
+import Data.Time (UTCTime, getCurrentTime)
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Effectful (Eff, IOE, liftIO, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static qualified
-import Lucid
-import Lucid.Base (TermRaw (termRaw))
-import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
+import Network.Minio qualified as Minio
 import OpenTelemetry.Resource.Telemetry (Telemetry (Telemetry))
 import Pages.LogExplorer.Log (curateCols)
 import Pages.S3 (getMinioConnectInfo)
 import Pkg.Parser (parseQueryToAST, toQText)
 import Pkg.Queue (publishJSONToKafka)
+import Relude
 import RequestMessages (replaceNullChars)
 import System.Config (AuthContext (config), EnvConfig (..))
 import System.Directory (createDirectoryIfMissing)

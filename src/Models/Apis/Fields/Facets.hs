@@ -15,10 +15,13 @@ import Database.PostgreSQL.Entity.DBT (execute, query)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (Only (..), Query)
 import Effectful (Eff, (:>))
+import Effectful.Labeled (Labeled, labeled)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.Reader.Static qualified
 import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Projects.Projects (ProjectId)
 import Relude
+import System.Config (AuthContext (..), EnvConfig (..))
 
 
 -- | Centralized list of facet columns for OTLP data
@@ -85,7 +88,7 @@ facetColumns =
 
 -- | Generate facets for a project from a specified table and save to database
 generateAndSaveFacets
-  :: (DB :> es, UUID.UUIDEff :> es)
+  :: (DB :> es, Labeled "timefusion" DB :> es, UUID.UUIDEff :> es, Effectful.Reader.Static.Reader AuthContext :> es)
   => ProjectId
   -> Text
   -> [Text]
@@ -98,9 +101,16 @@ generateAndSaveFacets pid tableName columns maxValues timestamp = do
       dayStart = addUTCTime (-86400) dayEnd
 
   -- Generate facets for the last 24 hours
+  authCtx <- Effectful.Reader.Static.ask @AuthContext
   facetMap <- do
-    values <-
-      checkpoint (toAnnotation (buildOptimizedFacetQuery tableName (length columns)))
+    values <- if authCtx.env.enableTimefusionReads
+      then checkpoint (toAnnotation (buildOptimizedFacetQuery tableName (length columns)))
+        $ labeled @"timefusion" @DB
+        $ dbtToEff
+        $ query
+          (buildOptimizedFacetQuery tableName (length columns))
+          (V.fromList columns, pid.toText, dayStart, dayEnd, maxValues)
+      else checkpoint (toAnnotation (buildOptimizedFacetQuery tableName (length columns)))
         $ dbtToEff
         $ query
           (buildOptimizedFacetQuery tableName (length columns))
@@ -115,10 +125,10 @@ generateAndSaveFacets pid tableName columns maxValues timestamp = do
               WHERE project_id = ? AND table_name = ?
               LIMIT 1 |]
         (pid.toText, tableName)
-      <&> \case
-        v
-          | V.null v -> Nothing
-          | otherwise -> Just (V.head v)
+        <&> \case
+          v
+            | V.null v -> Nothing
+            | otherwise -> Just (V.head v)
 
   -- Create a summary object with either existing or new ID
   facetId <- case existingIdM of

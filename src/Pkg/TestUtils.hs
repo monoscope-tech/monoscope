@@ -56,6 +56,7 @@ import Database.PostgreSQL.Transact qualified as PgT
 import Database.Postgres.Temp (cacheAction, cacheConfig, toConnectionString, withConfig, withDbCache)
 import Database.Postgres.Temp qualified as TmpPostgres
 import Effectful
+import Effectful.Concurrent (runConcurrent)
 import Effectful.Error.Static (runErrorNoCallStack)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (runLabeled)
@@ -398,6 +399,7 @@ runTestBackgroundWithLogger logger appCtx process = do
       & Tracing.runTracing tp
       & runUUID
       & runHTTPWreq
+      & runConcurrent
       & Ki.runStructuredConcurrency
       & Effectful.runEff
   -- Log the notifications that would have been sent

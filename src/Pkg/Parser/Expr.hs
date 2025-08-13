@@ -615,21 +615,20 @@ kqlTimespanToInterval timespan =
     "INTERVAL '" <> intervalExpr <> "'"
 
 
--- | Convert KQL timespan to PostgreSQL time_bucket interval format
+-- | Convert KQL timespan to PostgreSQL time bucket string
 -- This is used for bin() function in summarize queries
 kqlTimespanToTimeBucket :: Text -> Text
 kqlTimespanToTimeBucket timespan =
-  let parseNumber t = T.dropEnd 1 t  -- Remove unit suffix
-  in case T.strip timespan of
-    ts | T.isSuffixOf "w" ts -> parseNumber ts <> " weeks"
-    ts | T.isSuffixOf "d" ts -> parseNumber ts <> " days"
-    ts | T.isSuffixOf "h" ts -> parseNumber ts <> " hours"
-    ts | T.isSuffixOf "m" ts -> parseNumber ts <> " minutes"
-    ts | T.isSuffixOf "s" ts -> parseNumber ts <> " seconds"
-    ts | T.isSuffixOf "ms" ts -> parseNumber (T.dropEnd 1 ts) <> " milliseconds"
-    ts | T.isSuffixOf "µs" ts -> parseNumber (T.dropEnd 1 ts) <> " microseconds"
-    ts | T.isSuffixOf "us" ts -> parseNumber (T.dropEnd 1 ts) <> " microseconds"
-    ts | T.isSuffixOf "ns" ts -> parseNumber (T.dropEnd 1 ts) <> " nanoseconds"
+  case T.strip timespan of
+    ts | T.isSuffixOf "w" ts -> T.dropEnd 1 ts <> " weeks"
+    ts | T.isSuffixOf "d" ts -> T.dropEnd 1 ts <> " days"
+    ts | T.isSuffixOf "h" ts -> T.dropEnd 1 ts <> " hours"
+    ts | T.isSuffixOf "m" ts -> T.dropEnd 1 ts <> " minutes"
+    ts | T.isSuffixOf "s" ts -> T.dropEnd 1 ts <> " seconds"
+    ts | T.isSuffixOf "ms" ts -> T.dropEnd 2 ts <> " milliseconds"
+    ts | T.isSuffixOf "µs" ts -> T.dropEnd 2 ts <> " microseconds"
+    ts | T.isSuffixOf "us" ts -> T.dropEnd 2 ts <> " microseconds"
+    ts | T.isSuffixOf "ns" ts -> T.dropEnd 2 ts <> " nanoseconds"
     _ -> "5 minutes" -- Default to 5 minutes if parsing fails
 
 

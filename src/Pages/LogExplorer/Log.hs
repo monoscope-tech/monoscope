@@ -401,7 +401,10 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
   now <- Time.currentTime
   let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
-  tableAsVecE <- labeled @"timefusion" @DB $ RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+  authCtx <- Effectful.Reader.Static.ask @AuthContext
+  tableAsVecE <- if authCtx.env.enableTimefusionReads
+    then labeled @"timefusion" @DB $ RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+    else RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
 
   -- FIXME: we're silently ignoring parse errors and the likes.
   let tableAsVecM = hush tableAsVecE
@@ -672,7 +675,7 @@ apiLogsPage page = do
             , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
             , Widget.sql =
                 Just
-                  [text| SELECT timeB::integer, array_element(quantiles, idx) AS quantile, COALESCE(array_element(values, idx), 0)::float AS value
+                  [text| SELECT timeB::integer, quantiles[idx] AS quantile, COALESCE(values[idx], 0)::float AS value
                               FROM ( SELECT extract(epoch from time_bucket('1 hour', timestamp))::integer AS timeB,
                                       ARRAY[
                                         COALESCE(((approx_percentile(0.50, percentile_agg(duration))::float / 1000000.0)::float), 0)::float,
@@ -689,7 +692,7 @@ apiLogsPage page = do
                                 HAVING COUNT(*) > 0
                               ) s
                               CROSS JOIN (VALUES (1), (2), (3), (4)) AS t(idx)
-                              WHERE array_element(values, idx) IS NOT NULL; |]
+                              WHERE values[idx] IS NOT NULL; |]
             , Widget.unit = Just "ms"
             , Widget.hideLegend = Just True
             , Widget._projectId = Just page.pid
