@@ -14,11 +14,8 @@ import Effectful.Concurrent (runConcurrent)
 import Effectful.Fail (runFailIO)
 import Effectful.Time (runTime)
 import Log qualified
-import Network.HTTP.Types (status204)
-import Network.Wai (Application, Middleware, Request (..), responseLBS)
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setOnException, setPort)
 import Network.Wai.Log qualified as WaiLog
-import Network.Wai.Middleware.Cors
 import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
 import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
 import OpenTelemetry.Trace (TracerProvider)

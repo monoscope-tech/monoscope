@@ -156,10 +156,10 @@ sqlFromQueryComponents sqlCfg qc =
         Nothing ->
           -- If there's a bin function on timestamp, order by that instead of raw timestamp
           case qc.finalSummarizeQuery of
-            Just binInterval -> "ORDER BY " <> "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")" <> " desc"
+            Just binInterval -> "ORDER BY " <> "time_bucket('" <> binInterval <> "', " <> timestampCol <> ") desc"
             Nothing ->
               if any (\s -> "time_bucket" `T.isInfixOf` s) qc.select
-                then "ORDER BY " <> "time_bucket('" <> defaultBinSize <> "', " <> timestampCol <> ")" <> " desc"
+                then "ORDER BY " <> "time_bucket('" <> defaultBinSize <> "', " <> timestampCol <> ") desc"
                 else "ORDER BY " <> timestampCol <> " desc"
 
       -- Handle limit - only apply for non-summarize queries by default
@@ -195,31 +195,28 @@ sqlFromQueryComponents sqlCfg qc =
                 FROM telemetry.spans where project_id='{sqlCfg.pid.toText}' and ({whereCondition})
                 {groupByClause}
                 )
-               SELECT json_build_array({selectClause}) FROM ranked_spans
+               SELECT {selectClause} FROM ranked_spans
                   WHERE rn = 1 {sortOrder} {limitClause} |]
         _ ->
           case qc.finalSummarizeQuery of
             Just binInterval ->
               -- For summarize queries with bin functions, create a special format
               let
-                -- Create time bucket expression with the specified interval
+                -- Create time bucket expression
                 timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
                in
-                -- We need to make sure the first item in json_build_array is the timestamp
-                -- and we exclude any time_bucket expressions from the original select columns
+                -- Include the time bucket expression as the first column
                 let selectCols = T.intercalate "," (filter (\s -> not ("time_bucket" `T.isInfixOf` s)) qc.select)
                  in [fmt|SELECT 
-                     json_build_array(
-                       {timeBucketExpr},
+                       extract(epoch from {timeBucketExpr})::integer,
                        {selectCols}
-                     ) 
                    FROM {fromTable}
                    WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition})
                    GROUP BY {timeBucketExpr}
                    ORDER BY {timeBucketExpr} DESC
                    {limitClause} |]
             Nothing ->
-              [fmt|SELECT json_build_array({selectClause}) FROM {fromTable}
+              [fmt|SELECT {selectClause} FROM {fromTable}
                  WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition})
                  {groupByClause} {sortOrder} {limitClause} |]
       countQuery =
@@ -227,7 +224,7 @@ sqlFromQueryComponents sqlCfg qc =
           Just binInterval ->
             -- For summarize with time bucket, count the number of unique time buckets
             let
-              -- Create time bucket expression with the specified interval
+              -- Create time bucket expression
               timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
 
               -- Create the subquery column list and GROUP BY clause
@@ -278,7 +275,7 @@ sqlFromQueryComponents sqlCfg qc =
                   then "count(*)"
                   else fromMaybe "count(*)" (listToMaybe qc.select)
 
-              -- Create time bucket expression with the specified interval
+              -- Create time bucket expression
               timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
 
               -- Create GROUP BY clause with conditional logic outside PyF template
@@ -325,7 +322,7 @@ sqlFromQueryComponents sqlCfg qc =
           Just binInterval ->
             -- For queries with bin functions, create a time-bucketed alert query
             let
-              -- Create time bucket expression with the specified interval
+              -- Create time bucket expression
               timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
              in
               [fmt|
@@ -469,7 +466,7 @@ defSqlQueryCfg pid currentTime source spanT =
 
 
 timestampLogFmt :: Text -> Text
-timestampLogFmt colName = [fmt|to_char({colName} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as {colName}|]
+timestampLogFmt colName = [fmt|to_char({colName} AT TIME ZONE 'UTC', 'YYYY-MM-DDTHH24:MI:SS.USZ') as {colName}|]
 
 
 defaultSelectSqlQuery :: Maybe Sources -> [Text]
@@ -483,9 +480,10 @@ defaultSelectSqlQuery (Just SSpans) =
   , "duration"
   , "resource___service___name as service"
   , "parent_id as parent_span_id"
-  , "CAST(EXTRACT(EPOCH FROM (start_time)) * 1_000_000_000 AS BIGINT) as start_time_ns"
-  , "EXISTS(SELECT 1 FROM jsonb_array_elements(events) elem  WHERE elem->>'event_name' = 'exception') as errors"
-  , "summary"
+  , "CAST(EXTRACT(EPOCH FROM (start_time)) * 1000000000 AS BIGINT) as start_time_ns"
+  , "false as errors"
+  , -- , "EXISTS(SELECT 1 FROM jsonb_array_elements(events) elem  WHERE elem->>'event_name' = 'exception') as errors"
+    "summary"
   , "context___span_id as latency_breakdown"
   ]
 

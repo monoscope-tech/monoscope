@@ -11,7 +11,6 @@ module Pages.Monitors.Alerts (
 where
 
 import Data.CaseInsensitive qualified as CI
-import Data.Default (def)
 import Data.Either.Extra (fromRight')
 import Data.Text qualified as T
 import Data.Time.Clock (UTCTime)
@@ -20,20 +19,12 @@ import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
-import Fmt.Internal.Core (fmt)
-import Fmt.Internal.Numeric (commaizeF)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (statBox_)
-import Pages.Monitors.Testing (statusBadge_)
-import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_)
-import Pkg.Components.Widget (Widget (..))
-import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
 import Relude
 import System.Types

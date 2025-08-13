@@ -26,6 +26,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Effectful
+import Effectful.Concurrent (Concurrent)
 import Effectful.Exception (onException)
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
@@ -125,7 +126,7 @@ getMetricAttributeValue !attribute !rms = listToMaybe $ V.toList $ V.mapMaybe ge
 
 
 -- | Process a list of messages
-processList :: (DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
+processList :: (DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es, Concurrent :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs !attrs = checkpoint "processList" $ do
   startTime <- liftIO getCurrentTime
@@ -212,13 +213,13 @@ processList msgs !attrs = checkpoint "processList" $ do
               !chunks = chunksOf chunkSize (zip [0 ..] decodedMsgs)
               processChunk chunk =
                 [ case decodeResult of
-                  Left err -> (ackId, V.empty)
-                  Right logReq ->
-                    let !resourceLogs = V.force $ V.fromList $ logReq ^. PLF.resourceLogs
-                        !projectKeys = getLogAttributeValue "at-project-key" resourceLogs
-                        !relevantProjectIdsAndKeys = V.filter (\(k, _) -> k `V.elem` projectKeys) allProjectIdsAndKeys
-                        !logs = V.force $ V.concatMap (V.fromList . convertResourceLogsToOtelLogs projectCachesMap relevantProjectIdsAndKeys) resourceLogs
-                     in (ackId, logs)
+                    Left err -> (ackId, V.empty)
+                    Right logReq ->
+                      let !resourceLogs = V.force $ V.fromList $ logReq ^. PLF.resourceLogs
+                          !projectKeys = getLogAttributeValue "at-project-key" resourceLogs
+                          !relevantProjectIdsAndKeys = V.filter (\(k, _) -> k `V.elem` projectKeys) allProjectIdsAndKeys
+                          !logs = V.force $ V.concatMap (V.fromList . convertResourceLogsToOtelLogs projectCachesMap relevantProjectIdsAndKeys) resourceLogs
+                       in (ackId, logs)
                 | (_, (ackId, decodeResult)) <- chunk
                 ]
 
@@ -227,8 +228,8 @@ processList msgs !attrs = checkpoint "processList" $ do
           -- Log errors for failed decodings
           sequence_
             [ Log.logAttention
-              "processList:logs: unable to parse logs service request"
-              (createProtoErrorInfo err (snd $ msgs L.!! idx))
+                "processList:logs: unable to parse logs service request"
+                (createProtoErrorInfo err (snd $ msgs L.!! idx))
             | (idx, (_, Left err)) <- zip [0 ..] decodedMsgs
             ]
 
@@ -304,13 +305,13 @@ processList msgs !attrs = checkpoint "processList" $ do
               !chunks = chunksOf chunkSize (zip [0 ..] decodedMsgs)
               processChunk chunk =
                 [ case decodeResult of
-                  Left err -> (ackId, V.empty)
-                  Right traceReq ->
-                    let !resourceSpans = V.force $ V.fromList $ traceReq ^. PTF.resourceSpans
-                        !projectKeys = getSpanAttributeValue "at-project-key" resourceSpans
-                        !relevantProjectIdsAndKeys = V.filter (\(k, _) -> k `V.elem` projectKeys) allProjectIdsAndKeys
-                        !spans = V.force $ V.fromList $ convertResourceSpansToOtelLogs projectCachesMap relevantProjectIdsAndKeys resourceSpans
-                     in (ackId, spans)
+                    Left err -> (ackId, V.empty)
+                    Right traceReq ->
+                      let !resourceSpans = V.force $ V.fromList $ traceReq ^. PTF.resourceSpans
+                          !projectKeys = getSpanAttributeValue "at-project-key" resourceSpans
+                          !relevantProjectIdsAndKeys = V.filter (\(k, _) -> k `V.elem` projectKeys) allProjectIdsAndKeys
+                          !spans = V.force $ V.fromList $ convertResourceSpansToOtelLogs projectCachesMap relevantProjectIdsAndKeys resourceSpans
+                       in (ackId, spans)
                 | (_, (ackId, decodeResult)) <- chunk
                 ]
 
@@ -319,8 +320,8 @@ processList msgs !attrs = checkpoint "processList" $ do
           -- Log errors for failed decodings
           sequence_
             [ Log.logAttention
-              "processList:traces: unable to parse traces service request"
-              (createProtoErrorInfo err (snd $ msgs L.!! idx))
+                "processList:traces: unable to parse traces service request"
+                (createProtoErrorInfo err (snd $ msgs L.!! idx))
             | (idx, (_, Left err)) <- zip [0 ..] decodedMsgs
             ]
 
@@ -336,7 +337,7 @@ processList msgs !attrs = checkpoint "processList" $ do
               then pure 0
               else do
                 dbInsertStartTime <- liftIO getCurrentTime
-                checkpoint "processList:traces:bulkInsertSpans" $ Telemetry.bulkInsertOtelLogsAndSpansTF spans'
+                checkpoint "processList:traces:bulkInsertOtelLogsAndSpansTF" $ Telemetry.bulkInsertOtelLogsAndSpansTF spans'
                 dbInsertEndTime <- liftIO getCurrentTime
                 pure $ diffUTCTime dbInsertEndTime dbInsertStartTime
 

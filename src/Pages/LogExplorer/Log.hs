@@ -20,7 +20,8 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Vector qualified as V
 import Effectful.Error.Static (throwError)
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Labeled (labeled)
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Lucid
@@ -400,7 +401,10 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
   now <- Time.currentTime
   let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
-  tableAsVecE <- RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+  authCtx <- Effectful.Reader.Static.ask @AuthContext
+  tableAsVecE <- if authCtx.env.enableTimefusionReads
+    then labeled @"timefusion" @DB $ RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+    else RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
 
   -- FIXME: we're silently ignoring parse errors and the likes.
   let tableAsVecM = hush tableAsVecE
@@ -669,13 +673,13 @@ apiLogsPage page = do
             , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
             , Widget.sql =
                 Just
-                  [text| SELECT timeB, quantile,COALESCE(value, 0)::float AS value
-                              FROM ( SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
+                  [text| SELECT timeB::integer, quantiles[idx] AS quantile, COALESCE(values[idx], 0)::float AS value
+                              FROM ( SELECT extract(epoch from time_bucket('1 hour', timestamp))::integer AS timeB,
                                       ARRAY[
-                                        COALESCE((approx_percentile(0.50, percentile_agg(duration)) / 1000000.0), 0)::float,
-                                        COALESCE((approx_percentile(0.75, percentile_agg(duration)) / 1000000.0), 0)::float,
-                                        COALESCE((approx_percentile(0.90, percentile_agg(duration)) / 1000000.0), 0)::float,
-                                        COALESCE((approx_percentile(0.95, percentile_agg(duration)) / 1000000.0), 0)::float
+                                        COALESCE(((approx_percentile(0.50, percentile_agg(duration))::float / 1000000.0)::float), 0)::float,
+                                        COALESCE(((approx_percentile(0.75, percentile_agg(duration))::float / 1000000.0)::float), 0)::float,
+                                        COALESCE(((approx_percentile(0.90, percentile_agg(duration))::float / 1000000.0)::float), 0)::float,
+                                        COALESCE(((approx_percentile(0.95, percentile_agg(duration))::float / 1000000.0)::float), 0)::float
                                       ] AS values,
                                       ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
                                 FROM otel_logs_and_spans
@@ -684,9 +688,9 @@ apiLogsPage page = do
                                   AND duration IS NOT NULL
                                 GROUP BY timeB
                                 HAVING COUNT(*) > 0
-                              ) s,
-                            LATERAL unnest(s.values, s.quantiles) AS u(value, quantile)
-                            WHERE value IS NOT NULL;|]
+                              ) s
+                              CROSS JOIN (VALUES (1), (2), (3), (4)) AS t(idx)
+                              WHERE values[idx] IS NOT NULL; |]
             , Widget.unit = Just "ms"
             , Widget.hideLegend = Just True
             , Widget._projectId = Just page.pid

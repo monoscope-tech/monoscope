@@ -8,20 +8,21 @@ import Data.Annotation (toAnnotation)
 import Data.Default
 import Data.List qualified as L (maximum)
 import Data.Map.Strict qualified as M
+import Data.Pool (withResource)
 import Data.Semigroup (Max (Max))
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
-import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Simple.Types (Only (..), Query (Query))
-import Database.PostgreSQL.Transact qualified as DBT
+import Database.PostgreSQL.Simple (query_)
+import Database.PostgreSQL.Simple.Types (Only (..), Query (Query), fromOnly)
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
 import Effectful qualified as Effectful.Internal.Monad
 import Effectful.Error.Static (Error, throwError)
+import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Language.Haskell.TH.Syntax qualified as THS
@@ -41,7 +42,7 @@ import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
 import Servant.Server (ServerError (errBody), err400)
-import System.Config (AuthContext (..))
+import System.Config (AuthContext (..), EnvConfig (..))
 import Text.Megaparsec (parseMaybe)
 import Utils (JSONHttpApiData (..))
 
@@ -67,6 +68,8 @@ pivot' rows
           rate = if timeSpanMinutes > 0 then numRows / timeSpanMinutes else 0.0
        in (headers, V.fromList ngrouped, totalSum, rate)
 
+
+-- Helper to convert from Double timestamp to Int timestamp tuples
 
 transform :: V.Vector Text -> V.Vector (Int, Text, Double) -> V.Vector (Maybe Double)
 transform fields tuples =
@@ -201,6 +204,7 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
 
 fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> IO MetricsData
 fetchMetricsData respDataType sqlQuery now fromD toD authCtx = do
+  let pool = if authCtx.env.enableTimefusionReads then authCtx.timefusionPgPool else authCtx.pool
   let baseMetricsData =
         def
           { from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
@@ -209,14 +213,14 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx = do
 
   checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
     DTFloat -> do
-      chartData <- withPool authCtx.pool $ DBT.queryOne_ (Query $ encodeUtf8 sqlQuery)
+      chartData <- withResource pool \conn -> query_ conn (Query $ encodeUtf8 sqlQuery) :: IO [Only Double]
       pure
         baseMetricsData
-          { dataFloat = chartData <&> \(Only v) -> v
+          { dataFloat = fromOnly <$> listToMaybe chartData
           , rowsCount = 1
           }
     DTMetric -> do
-      chartData <- withPool authCtx.pool $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
+      chartData <- withResource pool $ \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
       let chartsDataV = V.fromList chartData
       let (hdrs, groupedData, rowsCount, rpm) = pivot' chartsDataV
       pure
@@ -228,14 +232,14 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx = do
           , stats = Just $ statsTriple chartsDataV
           }
     DTText -> do
-      chartData <- withPool authCtx.pool $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
+      chartData <- withResource pool $ \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
       pure
         baseMetricsData
           { dataText = V.fromList chartData
           , rowsCount = fromIntegral $ length chartData
           }
     DTJson -> do
-      chartData <- withPool authCtx.pool $ DBT.query_ (Query $ encodeUtf8 sqlQuery)
+      chartData <- withResource pool $ \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
       pure
         baseMetricsData
           { dataJSON = V.fromList chartData

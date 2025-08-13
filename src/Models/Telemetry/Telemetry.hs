@@ -80,6 +80,8 @@ import Database.PostgreSQL.Transact qualified as DBT
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
+import Effectful.Concurrent (Concurrent, threadDelay)
+import Effectful.Internal.Monad (unsafeEff)
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -88,6 +90,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..))
 import Relude hiding (ask)
+import UnliftIO (throwIO, tryAny)
 import Utils (lookupValueText, toXXHash)
 
 
@@ -804,17 +807,21 @@ instance ToRow OtelLogsAndSpans where
       parseSeverityNumber = fmap (show . severity_number)
 
 
-bulkInsertOtelLogsAndSpansTF :: (DB :> es, Labeled "timefusion" DB :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
+bulkInsertOtelLogsAndSpansTF :: (DB :> es, IOE :> es, Labeled "timefusion" DB :> es, UUIDEff :> es, Concurrent :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
 bulkInsertOtelLogsAndSpansTF records = do
-  updatedRecords <- updateIds records
+  updatedRecords <- V.mapM (\r -> genUUID >>= \uid -> pure (r & #id .~ uid)) records
   _ <- bulkInsertOtelLogsAndSpans updatedRecords
-  _ <- labeled @"timefusion" @DB $ bulkInsertOtelLogsAndSpans updatedRecords
+  _ <- retryTimefusion 3 updatedRecords
   pass
   where
-    updateIds :: UUIDEff :> es => V.Vector OtelLogsAndSpans -> Eff es (V.Vector OtelLogsAndSpans)
-    updateIds = V.mapM \record -> do
-      newId <- genUUID
-      pure $ record & #id .~ newId
+    retryTimefusion 0 recs = labeled @"timefusion" @DB $ bulkInsertOtelLogsAndSpans recs
+    retryTimefusion n recs = do
+      tryAny (labeled @"timefusion" @DB $ bulkInsertOtelLogsAndSpans recs) >>= \case
+        Left e | "port 12345" `T.isInfixOf` T.pack (show e) -> do
+          threadDelay (1000000 * (4 - n))
+          retryTimefusion (n - 1) recs
+        Left e -> throwIO e
+        Right count -> pure count
 
 
 -- Function to insert OtelLogsAndSpans records with all fields in flattened structure
