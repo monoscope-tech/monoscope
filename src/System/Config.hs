@@ -97,6 +97,7 @@ data EnvConfig = EnvConfig
   , s3Region :: Text
   , enableReplayService :: Bool
   , enableTimefusionReads :: Bool
+  , kafkaDeadLetterTopic :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)

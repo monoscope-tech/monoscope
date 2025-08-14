@@ -1,4 +1,4 @@
-module Pkg.Queue (pubsubService, kafkaService, publishJSONToKafka) where
+module Pkg.Queue (pubsubService, kafkaService, publishJSONToKafka, publishToDeadLetterQueue) where
 
 import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((^?), _Just)
@@ -12,6 +12,7 @@ import Data.Generics.Product (field)
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Text.Lazy.Encoding qualified as LT
+import Data.Time (getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Effectful
@@ -66,8 +67,13 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
             Left e -> do
               liftIO
                 $ Log.runLogT "apitoolkit" appLogger Log.LogAttention
-                $ Log.logAttention "pubsubService: CAUGHT EXCEPTION - Error processing messages, but continuing" (AE.object ["error" AE..= show e, "message_count" AE..= length (catMaybes msgsB64), "first_attrs" AE..= firstAttrs, "checkpoint" AE..= ("pubsubService:exception" :: String)])
-              -- Return all message IDs so they're acknowledged anyway to prevent reprocessing
+                $ Log.logAttention "pubsubService: CAUGHT EXCEPTION - Error processing messages" (AE.object ["error" AE..= show e, "message_count" AE..= length (catMaybes msgsB64), "first_attrs" AE..= firstAttrs, "checkpoint" AE..= ("pubsubService:exception" :: String)])
+              
+              -- Send to dead letter queue unless it's an unrecoverable error
+              unless (isUnrecoverableError e) $
+                liftIO $ publishToDeadLetterQueue appCtx (catMaybes msgsB64) (maybeToMonoid firstAttrs) (toText $ show e)
+              
+              -- Always return all message IDs so they're acknowledged
               pure $ map fst $ catMaybes msgsB64
             Right ids -> pure ids
 
@@ -138,7 +144,9 @@ kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
   -- Generate unique client ID for logging/metrics
   instanceUuid <- UUID.toText <$> UUID.nextRandom
   let clientId = "apitoolkit-" <> T.take 8 instanceUuid
-  let consumerSub = K.topics (map K.TopicName kafkaTopics) <> K.offsetReset K.Earliest
+  -- Include dead letter topic in the list of topics to consume
+  let allTopics = kafkaTopics <> [appCtx.config.kafkaDeadLetterTopic]
+  let consumerSub = K.topics (map K.TopicName allTopics) <> K.offsetReset K.Earliest
   bracket
     (either throwIO pure =<< K.newConsumer (consumerProps appCtx.config clientId) consumerSub)
     K.closeConsumer
@@ -148,16 +156,27 @@ kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
         [] -> pass
         (recc : _) -> do
           let topic = recc.crTopic.unTopicName
-              ceType = topicToCeType topic
-              attributes = HM.insert "ce-type" ceType $ consumerRecordHeadersToHashMap recc
+              headers = consumerRecordHeadersToHashMap recc
+              -- For dead letter queue messages, get ce-type from headers or derive from original-topic
+              ceType = if topic == appCtx.config.kafkaDeadLetterTopic
+                        then case HM.lookup "ce-type" headers of
+                               Just existingCeType -> existingCeType  -- PubSub messages have ce-type
+                               Nothing -> maybe "" topicToCeType (HM.lookup "original-topic" headers)  -- Kafka messages need derivation
+                        else topicToCeType topic
+              attributes = HM.insert "ce-type" ceType headers
               allRecords = consumerRecordToTuple <$> rightRecords
 
           msgIds <-
             tryAny (runBackground appLogger appCtx tp $ fn allRecords attributes) >>= \case
               Left e -> do
                 Log.runLogT "apitoolkit" appLogger Log.LogAttention
-                  $ Log.logAttention "kafkaService: CAUGHT EXCEPTION - Error processing Kafka messages, but continuing" (AE.object ["error" AE..= show e, "topic" AE..= topic, "ce-type" AE..= ceType, "record_count" AE..= length allRecords, "attributes" AE..= attributes, "checkpoint" AE..= ("kafkaService:exception" :: String)])
-                -- Return all message IDs so they're acknowledged anyway
+                  $ Log.logAttention "kafkaService: CAUGHT EXCEPTION - Error processing Kafka messages" (AE.object ["error" AE..= show e, "topic" AE..= topic, "ce-type" AE..= ceType, "record_count" AE..= length allRecords, "attributes" AE..= attributes, "checkpoint" AE..= ("kafkaService:exception" :: String)])
+                
+                -- Send to dead letter queue unless it's an unrecoverable error
+                unless (isUnrecoverableError e) $
+                  liftIO $ publishToDeadLetterQueue appCtx allRecords attributes (toText $ show e)
+                
+                -- Always return all message IDs so they're acknowledged
                 pure $ map fst allRecords
               Right ids -> pure ids
 
@@ -199,3 +218,31 @@ kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
       "otlp_logs" -> "org.opentelemetry.otlp.logs.v1"
       "otlp_metrics" -> "org.opentelemetry.otlp.metrics.v1"
       _ -> ""
+
+
+-- | Publish failed messages to dead letter queue
+publishToDeadLetterQueue :: AuthContext -> [(Text, ByteString)] -> HM.HashMap Text Text -> Text -> IO ()
+publishToDeadLetterQueue appCtx messages attributes errorReason = do
+  let deadLetterTopic = appCtx.config.kafkaDeadLetterTopic
+  currentTime <- getCurrentTime
+  forM_ messages \(origTopicOrAckId, msgData) -> do
+    let deadLetterAttrs = attributes 
+          <> HM.fromList [ ("original-topic", origTopicOrAckId)  -- For Kafka, this stores the original topic name
+                         , ("original-ack-id", origTopicOrAckId)  -- For PubSub, this stores the ack ID
+                         , ("error-reason", errorReason)
+                         , ("failed-at", toText $ show currentTime)
+                         ]
+    _ <- publishJSONToKafka appCtx deadLetterTopic (BC.unpack msgData) deadLetterAttrs
+    pure ()
+
+
+-- | Check if exception is unrecoverable and should be discarded
+isUnrecoverableError :: SomeException -> Bool
+isUnrecoverableError e = 
+  let errorMsg = show e
+  in any (`T.isInfixOf` toText errorMsg) 
+       [ "Unknown wire type"
+       , "project API Key and project ID not available"
+       , "Unexpected end of input"
+       , "Invalid UTF-8 stream"
+       ]
