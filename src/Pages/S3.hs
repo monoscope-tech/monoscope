@@ -2,7 +2,6 @@ module Pages.S3 (bringS3GetH, brings3PostH, getMinioConnectInfo) where
 
 import Data.Default (Default (def))
 import Data.Text qualified as T
-import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxIndicator_, hxPost_, hxSwap_, hxTarget_)
@@ -11,7 +10,6 @@ import Models.Users.Sessions qualified as Sessions
 import Network.Minio qualified as Minio
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (ask)
-import Servant qualified
 import System.Config (AuthContext)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Utils (faSprite_)

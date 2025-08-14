@@ -41,11 +41,11 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (..), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField, fromField, fromJSONField, returnError)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple.FromField (FromField, fromField, fromJSONField)
 import Database.PostgreSQL.Simple.Newtypes
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (Action (EscapeByteA), ToField, toField, toJSONField)
+import Database.PostgreSQL.Simple.ToField (ToField, toField, toJSONField)
 import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import Effectful

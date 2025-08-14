@@ -19,15 +19,11 @@ module Models.Apis.RequestDumps (
 )
 where
 
-import Control.Applicative ((<|>))
 import Control.Exception.Annotated (checkpoint)
-import Control.Monad (replicateM)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Default
 import Data.Default.Instances ()
-import Data.Int (Int64)
-import Data.List (sortOn)
 import Data.Text qualified as T
 import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
@@ -39,7 +35,7 @@ import Database.PostgreSQL.Entity.DBT (query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField (fromField))
-import Database.PostgreSQL.Simple.FromRow (FromRow(..), RowParser, field, numFieldsRemaining)
+import Database.PostgreSQL.Simple.FromRow (FromRow(..))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
@@ -48,7 +44,6 @@ import Database.PostgreSQL.Transact (DBT)
 import Database.PostgreSQL.Transact qualified as DBT
 import Deriving.Aeson qualified as DAE
 import Effectful
-import Effectful.Labeled (labeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Time qualified as Time
@@ -58,7 +53,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.Parser
 import Pkg.Parser.Stats (Section, Sources)
-import Relude hiding (many, some, sortOn)
+import Relude hiding (many, some)
 import Web.HttpApiData (ToHttpApiData (..))
 
 
@@ -525,14 +520,6 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
   pure $ Right (logItemsV, queryComponents.toColNames, c)
 
 
-valueToVector :: Only AE.Value -> Maybe (V.Vector AE.Value)
-valueToVector (Only val) = case val of
-  AE.Array arr -> Just arr
-  _ -> Nothing
-
-
-queryToValues :: DB :> es => Text -> Eff es (V.Vector (Only AE.Value))
-queryToValues q = dbtToEff $ V.fromList <$> DBT.query_ (Query $ encodeUtf8 q)
 
 
 queryCount :: DB :> es => Text -> Eff es (Maybe (Only Int))

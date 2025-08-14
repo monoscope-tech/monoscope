@@ -22,7 +22,6 @@ import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
 import Effectful qualified as Effectful.Internal.Monad
 import Effectful.Error.Static (Error, throwError)
-import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Language.Haskell.TH.Syntax qualified as THS

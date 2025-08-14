@@ -65,6 +65,12 @@ import System.Types (runBackground)
 import Utils (b64ToJson, freeTierDailyMaxEvents, nestedJsonFromDotNotation)
 
 
+-- | Minimum valid timestamp in nanoseconds (Year 2000)
+-- We consider any timestamp before this as invalid/unset
+minValidTimestampNanos :: Word64
+minValidTimestampNanos = 946684800000000000
+
+
 -- | Default project cache for when none is found
 defaultProjectCache :: Projects.ProjectCache
 defaultProjectCache =
@@ -131,7 +137,7 @@ processList [] _ = pure []
 processList msgs !attrs = checkpoint "processList" $ do
   startTime <- liftIO getCurrentTime
 
-  (result, processingTime, dbInsertTime) <- process `onException` handleException
+  (result, processingTime, dbInsertTime) <- process startTime `onException` handleException
 
   endTime <- liftIO getCurrentTime
   let duration = diffUTCTime endTime startTime
@@ -153,7 +159,7 @@ processList msgs !attrs = checkpoint "processList" $ do
       Log.logAttention "processList: caught exception" (AE.object ["ce-type" AE..= HashMap.lookup "ce-type" attrs, "msg_count" AE..= length msgs, "attrs" AE..= attrs])
       pure (map fst msgs, 0, 0)
 
-    process = do
+    process fallbackTime = do
       appCtx <- ask @AuthContext
 
       case HashMap.lookup "ce-type" attrs of
@@ -218,7 +224,7 @@ processList msgs !attrs = checkpoint "processList" $ do
                       let !resourceLogs = V.force $ V.fromList $ logReq ^. PLF.resourceLogs
                           !projectKeys = getLogAttributeValue "at-project-key" resourceLogs
                           !relevantProjectIdsAndKeys = V.filter (\(k, _) -> k `V.elem` projectKeys) allProjectIdsAndKeys
-                          !logs = V.force $ V.concatMap (V.fromList . convertResourceLogsToOtelLogs projectCachesMap relevantProjectIdsAndKeys) resourceLogs
+                          !logs = V.force $ V.concatMap (V.fromList . convertResourceLogsToOtelLogs fallbackTime projectCachesMap relevantProjectIdsAndKeys) resourceLogs
                        in (ackId, logs)
                 | (_, (ackId, decodeResult)) <- chunk
                 ]
@@ -310,7 +316,7 @@ processList msgs !attrs = checkpoint "processList" $ do
                       let !resourceSpans = V.force $ V.fromList $ traceReq ^. PTF.resourceSpans
                           !projectKeys = getSpanAttributeValue "at-project-key" resourceSpans
                           !relevantProjectIdsAndKeys = V.filter (\(k, _) -> k `V.elem` projectKeys) allProjectIdsAndKeys
-                          !spans = V.force $ V.fromList $ convertResourceSpansToOtelLogs projectCachesMap relevantProjectIdsAndKeys resourceSpans
+                          !spans = V.force $ V.fromList $ convertResourceSpansToOtelLogs fallbackTime projectCachesMap relevantProjectIdsAndKeys resourceSpans
                        in (ackId, spans)
                 | (_, (ackId, decodeResult)) <- chunk
                 ]
@@ -365,7 +371,7 @@ processList msgs !attrs = checkpoint "processList" $ do
                           mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
                           pure $ fromMaybe defaultProjectCache mpjCache
                         let !projectCaches = HashMap.singleton pid projectCache
-                            !metrics = convertResourceMetricsToMetricRecords projectCaches pid resourceMetrics
+                            !metrics = convertResourceMetricsToMetricRecords fallbackTime projectCaches pid resourceMetrics
                         pure (ackId, V.fromList metrics)
                       Nothing -> checkpoint "processList:metrics:missing-project-info" $ do
                         Log.logAttention_ "processList:metrics: project API Key and project ID not available in metrics"
@@ -474,6 +480,16 @@ nanosecondsToUTC :: Word64 -> UTCTime
 nanosecondsToUTC !ns = posixSecondsToUTCTime (fromIntegral ns / 1e9)
 
 
+-- | Get a valid timestamp with fallback logic
+-- Priority: timestamp -> observed_timestamp -> fallback time
+getValidTimestamp :: UTCTime -> Word64 -> Word64 -> UTCTime
+getValidTimestamp !fallbackTime !timeNano !observedTimeNano =
+  let isValid ns = ns >= minValidTimestampNanos && ns /= 0
+   in if isValid timeNano then nanosecondsToUTC timeNano
+      else if isValid observedTimeNano then nanosecondsToUTC observedTimeNano
+      else fallbackTime
+
+
 -- Convert ByteString to hex Text
 byteStringToHexText :: BS.ByteString -> Text
 byteStringToHexText !bs = decodeUtf8 (B16.encode bs)
@@ -565,8 +581,8 @@ parseSeverityLevel input = case T.toUpper input of
 
 
 -- | Convert ResourceLogs to OtelLogsAndSpans
-convertResourceLogsToOtelLogs :: HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId) -> PL.ResourceLogs -> [OtelLogsAndSpans]
-convertResourceLogsToOtelLogs !projectCaches !pids resourceLogs =
+convertResourceLogsToOtelLogs :: UTCTime -> HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId) -> PL.ResourceLogs -> [OtelLogsAndSpans]
+convertResourceLogsToOtelLogs !fallbackTime !projectCaches !pids resourceLogs =
   let projectKey = fromMaybe "" $ listToMaybe $ V.toList $ getLogAttributeValue "at-project-key" (V.singleton resourceLogs)
       projectId = case find (\(k, _) -> k == projectKey) pids of
         Just (_, v) -> Just v
@@ -584,38 +600,42 @@ convertResourceLogsToOtelLogs !projectCaches !pids resourceLogs =
                   !hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
                in if hasExceededLimit
                     then [] -- Discard events for projects that exceeded limits
-                    else convertScopeLogsToOtelLogs pid (Just $ resourceLogs ^. PLF.resource) resourceLogs
+                    else convertScopeLogsToOtelLogs fallbackTime pid (Just $ resourceLogs ^. PLF.resource) resourceLogs
             Nothing -> [] -- No cache found, discard
         _ -> []
 
 
 -- | Convert ScopeLogs to OtelLogsAndSpans
-convertScopeLogsToOtelLogs :: Projects.ProjectId -> Maybe PR.Resource -> PL.ResourceLogs -> [OtelLogsAndSpans]
-convertScopeLogsToOtelLogs pid resourceM resourceLogs =
+convertScopeLogsToOtelLogs :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> PL.ResourceLogs -> [OtelLogsAndSpans]
+convertScopeLogsToOtelLogs fallbackTime pid resourceM resourceLogs =
   join
     $ V.toList
     $ V.map
       ( \scopeLog ->
           let scope = Just $ scopeLog ^. PLF.scope
               logRecords = V.fromList $ scopeLog ^. PLF.logRecords
-           in V.toList $ V.map (convertLogRecordToOtelLog pid resourceM scope) logRecords
+           in V.toList $ V.map (convertLogRecordToOtelLog fallbackTime pid resourceM scope) logRecords
       )
       (V.fromList $ resourceLogs ^. PLF.scopeLogs)
 
 
 -- | Convert LogRecord to OtelLogsAndSpans
-convertLogRecordToOtelLog :: Projects.ProjectId -> Maybe PR.Resource -> Maybe PC.InstrumentationScope -> PL.LogRecord -> OtelLogsAndSpans
-convertLogRecordToOtelLog !pid resourceM scopeM logRecord =
+convertLogRecordToOtelLog :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> Maybe PC.InstrumentationScope -> PL.LogRecord -> OtelLogsAndSpans
+convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
   let !timeNano = logRecord ^. PLF.timeUnixNano
       !observedTimeNano = logRecord ^. PLF.observedTimeUnixNano
       !severityText = logRecord ^. PLF.severityText
       !severityNumber = fromEnum (logRecord ^. PLF.severityNumber)
+      !validTimestamp = getValidTimestamp fallbackTime timeNano observedTimeNano
+      !validObservedTimestamp = if observedTimeNano >= minValidTimestampNanos && observedTimeNano /= 0
+                                    then nanosecondsToUTC observedTimeNano
+                                    else fallbackTime
       otelLog =
         OtelLogsAndSpans
           { project_id = pid.toText
           , id = UUID.nil -- Will be replaced in bulkInsertOtelLogsAndSpansTF
-          , timestamp = if timeNano == 0 then nanosecondsToUTC observedTimeNano else nanosecondsToUTC timeNano
-          , observed_timestamp = Just $ nanosecondsToUTC observedTimeNano
+          , timestamp = validTimestamp
+          , observed_timestamp = Just validObservedTimestamp
           , context =
               Just
                 $ Context
@@ -640,21 +660,21 @@ convertLogRecordToOtelLog !pid resourceM scopeM logRecord =
           , status_code = Nothing
           , status_message = Nothing
           , duration = Nothing
-          , start_time = nanosecondsToUTC observedTimeNano
+          , start_time = validObservedTimestamp
           , end_time = Nothing
           , events = Nothing
           , links = Nothing
           , name = Nothing
           , parent_id = Nothing
           , summary = V.empty -- Will be populated after creation
-          , date = if timeNano == 0 then nanosecondsToUTC observedTimeNano else nanosecondsToUTC timeNano
+          , date = validTimestamp
           }
    in otelLog{summary = generateSummary otelLog}
 
 
 -- | Convert ResourceSpans to OtelLogsAndSpans
-convertResourceSpansToOtelLogs :: HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId) -> V.Vector PT.ResourceSpans -> [OtelLogsAndSpans]
-convertResourceSpansToOtelLogs !projectCaches !pids !resourceSpans =
+convertResourceSpansToOtelLogs :: UTCTime -> HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId) -> V.Vector PT.ResourceSpans -> [OtelLogsAndSpans]
+convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans =
   join
     $ V.toList
     $ V.map
@@ -676,7 +696,7 @@ convertResourceSpansToOtelLogs !projectCaches !pids !resourceSpans =
                           !hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
                        in if hasExceededLimit
                             then [] -- Discard events for projects that exceeded limits
-                            else convertScopeSpansToOtelLogs pid (Just $ rs ^. PTF.resource) rs
+                            else convertScopeSpansToOtelLogs fallbackTime pid (Just $ rs ^. PTF.resource) rs
                     Nothing -> [] -- No cache found, discard
                 _ -> []
       )
@@ -684,25 +704,33 @@ convertResourceSpansToOtelLogs !projectCaches !pids !resourceSpans =
 
 
 -- | Convert ScopeSpans to OtelLogsAndSpans
-convertScopeSpansToOtelLogs :: Projects.ProjectId -> Maybe PR.Resource -> PT.ResourceSpans -> [OtelLogsAndSpans]
-convertScopeSpansToOtelLogs pid resourceM resourceSpans =
+convertScopeSpansToOtelLogs :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> PT.ResourceSpans -> [OtelLogsAndSpans]
+convertScopeSpansToOtelLogs fallbackTime pid resourceM resourceSpans =
   join
     $ V.toList
     $ V.map
       ( \scopeSpan ->
           let scope = Just $ scopeSpan ^. PTF.scope
               spans = V.fromList $ scopeSpan ^. PTF.spans
-           in V.toList $ V.map (convertSpanToOtelLog pid resourceM scope) spans
+           in V.toList $ V.map (convertSpanToOtelLog fallbackTime pid resourceM scope) spans
       )
       (V.fromList $ resourceSpans ^. PTF.scopeSpans)
 
 
 -- | Convert Span to OtelLogsAndSpans
-convertSpanToOtelLog :: Projects.ProjectId -> Maybe PR.Resource -> Maybe PC.InstrumentationScope -> PT.Span -> OtelLogsAndSpans
-convertSpanToOtelLog !pid resourceM scopeM pSpan =
+convertSpanToOtelLog :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> Maybe PC.InstrumentationScope -> PT.Span -> OtelLogsAndSpans
+convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
   let !startTimeNano = pSpan ^. PTF.startTimeUnixNano
       !endTimeNano = pSpan ^. PTF.endTimeUnixNano
-      !durationNanos = endTimeNano - startTimeNano
+      !validStartTime = if startTimeNano >= minValidTimestampNanos && startTimeNano /= 0
+                          then nanosecondsToUTC startTimeNano
+                          else fallbackTime
+      !validEndTime = if endTimeNano >= minValidTimestampNanos && endTimeNano /= 0
+                        then nanosecondsToUTC endTimeNano
+                        else validStartTime  -- If end time is invalid, use start time
+      !durationNanos = if startTimeNano > 0 && endTimeNano > startTimeNano 
+                        then endTimeNano - startTimeNano
+                        else 0
       spanKind = pSpan ^. PTF.kind
       spanKindText = case spanKind of
         PT.Span'SPAN_KIND_INTERNAL -> Just "internal"
@@ -739,7 +767,10 @@ convertSpanToOtelLog !pid resourceM scopeM pSpan =
                     ( \ev ->
                         AE.object
                           [ "event_name" AE..= (ev ^. PTF.name)
-                          , "event_time" AE..= nanosecondsToUTC (ev ^. PTF.timeUnixNano)
+                          , "event_time" AE..= let evTimeNano = ev ^. PTF.timeUnixNano
+                                                   in if evTimeNano >= minValidTimestampNanos && evTimeNano /= 0
+                                                      then nanosecondsToUTC evTimeNano
+                                                      else fallbackTime
                           , "event_attributes" AE..= keyValueToJSON (V.fromList $ ev ^. PTF.attributes)
                           , "event_dropped_attributes_count" AE..= (ev ^. PTF.droppedAttributesCount)
                           ]
@@ -805,8 +836,8 @@ convertSpanToOtelLog !pid resourceM scopeM pSpan =
         OtelLogsAndSpans
           { project_id = pid.toText
           , id = UUID.nil -- Will be replaced in bulkInsertOtelLogsAndSpansTF
-          , timestamp = nanosecondsToUTC startTimeNano
-          , observed_timestamp = Just $ nanosecondsToUTC startTimeNano
+          , timestamp = validStartTime
+          , observed_timestamp = Just validStartTime
           , context =
               Just
                 $ Context
@@ -826,21 +857,21 @@ convertSpanToOtelLog !pid resourceM scopeM pSpan =
           , status_code = statusCodeText
           , status_message = statusMsgText
           , duration = Just $ fromIntegral durationNanos
-          , start_time = nanosecondsToUTC startTimeNano
-          , end_time = Just $ nanosecondsToUTC endTimeNano
+          , start_time = validStartTime
+          , end_time = Just validEndTime
           , events = eventsJson
           , links = linksJson
           , name = Just $ pSpan ^. PTF.name
           , parent_id = parentId
           , summary = V.empty -- Will be populated after creation
-          , date = nanosecondsToUTC startTimeNano
+          , date = validStartTime
           }
    in otelSpan{summary = generateSummary otelSpan}
 
 
 -- | Convert ResourceMetrics to MetricRecords
-convertResourceMetricsToMetricRecords :: HashMap Projects.ProjectId Projects.ProjectCache -> Projects.ProjectId -> V.Vector PM.ResourceMetrics -> [Telemetry.MetricRecord]
-convertResourceMetricsToMetricRecords !projectCaches !pid !resourceMetrics =
+convertResourceMetricsToMetricRecords :: UTCTime -> HashMap Projects.ProjectId Projects.ProjectCache -> Projects.ProjectId -> V.Vector PM.ResourceMetrics -> [Telemetry.MetricRecord]
+convertResourceMetricsToMetricRecords !fallbackTime !projectCaches !pid !resourceMetrics =
   case HashMap.lookup pid projectCaches of
     Just cache ->
       -- Check if project has exceeded daily limit for free tier
@@ -849,13 +880,13 @@ convertResourceMetricsToMetricRecords !projectCaches !pid !resourceMetrics =
           !hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
        in if hasExceededLimit
             then [] -- Discard metrics for projects that exceeded limits
-            else join $ V.toList $ V.map (convertResourceMetricToMetricRecords pid) resourceMetrics
+            else join $ V.toList $ V.map (convertResourceMetricToMetricRecords fallbackTime pid) resourceMetrics
     Nothing -> [] -- No cache found, discard
 
 
 -- | Convert a single ResourceMetrics to MetricRecords
-convertResourceMetricToMetricRecords :: Projects.ProjectId -> PM.ResourceMetrics -> [Telemetry.MetricRecord]
-convertResourceMetricToMetricRecords pid resourceMetric =
+convertResourceMetricToMetricRecords :: UTCTime -> Projects.ProjectId -> PM.ResourceMetrics -> [Telemetry.MetricRecord]
+convertResourceMetricToMetricRecords fallbackTime pid resourceMetric =
   let resourceM = Just $ resourceMetric ^. PMF.resource
       scopeMetrics = V.fromList $ resourceMetric ^. PMF.scopeMetrics
    in join
@@ -864,14 +895,14 @@ convertResourceMetricToMetricRecords pid resourceMetric =
           ( \sm ->
               let scope = Just $ sm ^. PMF.scope
                   metrics = V.fromList $ sm ^. PMF.metrics
-               in join $ V.toList $ V.map (convertMetricToMetricRecords pid resourceM scope) metrics
+               in join $ V.toList $ V.map (convertMetricToMetricRecords fallbackTime pid resourceM scope) metrics
           )
           scopeMetrics
 
 
 -- | Convert a single Metric to MetricRecords
-convertMetricToMetricRecords :: Projects.ProjectId -> Maybe PR.Resource -> Maybe PC.InstrumentationScope -> PM.Metric -> [Telemetry.MetricRecord]
-convertMetricToMetricRecords pid resourceM scopeM metric =
+convertMetricToMetricRecords :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> Maybe PC.InstrumentationScope -> PM.Metric -> [Telemetry.MetricRecord]
+convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
   -- For brevity, implementing only gauge metrics as an example
   -- In a complete implementation, you would handle all metric types
   case metric ^. PMF.maybe'data' of
@@ -883,6 +914,9 @@ convertMetricToMetricRecords pid resourceM scopeM metric =
                 $ V.map
                   ( \point ->
                       let !timeNano = point ^. PMF.timeUnixNano
+                          !validTime = if timeNano >= minValidTimestampNanos && timeNano /= 0
+                                         then nanosecondsToUTC timeNano
+                                         else fallbackTime
                           !value = case point ^. PMF.maybe'value of
                             Just (PM.NumberDataPoint'AsDouble d) -> d
                             Just (PM.NumberDataPoint'AsInt i) -> fromIntegral i
@@ -894,8 +928,8 @@ convertMetricToMetricRecords pid resourceM scopeM metric =
                             , metricName = metric ^. PMF.name
                             , metricDescription = metric ^. PMF.description
                             , metricUnit = metric ^. PMF.unit
-                            , timestamp = nanosecondsToUTC timeNano
-                            , metricTime = nanosecondsToUTC timeNano
+                            , timestamp = validTime
+                            , metricTime = validTime
                             , resource = removeProjectId $ resourceToJSON resourceM
                             , instrumentationScope = case scopeM of
                                 Just scope ->
@@ -943,6 +977,8 @@ traceServiceExport :: Log.Logger -> AuthContext -> TracerProvider -> Proto TS.Ex
 traceServiceExport appLogger appCtx tp (Proto req) = do
   _ <- runBackground appLogger appCtx tp do
     Log.logInfo "Received trace export request" AE.Null
+    
+    currentTime <- liftIO getCurrentTime
 
     let !resourceSpans = V.fromList $ req ^. TSF.resourceSpans
         !projectKeys = getSpanAttributeValue "at-project-key" resourceSpans
@@ -962,7 +998,7 @@ traceServiceExport appLogger appCtx tp (Proto req) = do
           pure $ fromMaybe defaultProjectCache mpjCache
         pure (pid, cache)
       pure $ HashMap.fromList caches
-    let !spans = convertResourceSpansToOtelLogs projectCaches projectIdsAndKeys resourceSpans
+    let !spans = convertResourceSpansToOtelLogs currentTime projectCaches projectIdsAndKeys resourceSpans
         !spans' = V.fromList spans
 
     unless (V.null spans') $ Telemetry.bulkInsertOtelLogsAndSpansTF spans'
@@ -976,6 +1012,8 @@ logsServiceExport :: Log.Logger -> AuthContext -> TracerProvider -> Proto LS.Exp
 logsServiceExport appLogger appCtx tp (Proto req) = do
   _ <- runBackground appLogger appCtx tp $ do
     Log.logInfo "Received logs export request" AE.Null
+    
+    currentTime <- liftIO getCurrentTime
 
     let !resourceLogs = V.fromList $ req ^. PLF.resourceLogs
         !projectKeys = getLogAttributeValue "at-project-key" resourceLogs
@@ -994,7 +1032,7 @@ logsServiceExport appLogger appCtx tp (Proto req) = do
         pure (pid, cache)
       pure $ HashMap.fromList caches
 
-    let !logs = join $ V.toList $ V.map (convertResourceLogsToOtelLogs projectCaches projectIdsAndKeys) resourceLogs
+    let !logs = join $ V.toList $ V.map (convertResourceLogsToOtelLogs currentTime projectCaches projectIdsAndKeys) resourceLogs
 
     unless (null logs) do
       Telemetry.bulkInsertOtelLogsAndSpansTF (V.fromList logs)
@@ -1008,6 +1046,8 @@ metricsServiceExport :: Log.Logger -> AuthContext -> TracerProvider -> Proto MS.
 metricsServiceExport appLogger appCtx tp (Proto req) = do
   _ <- runBackground appLogger appCtx tp $ do
     Log.logInfo "Received metrics export request" AE.Null
+    
+    currentTime <- liftIO getCurrentTime
 
     let !resourceMetrics = V.fromList $ req ^. PMF.resourceMetrics
         !projectKey = getMetricAttributeValue "at-project-key" resourceMetrics
@@ -1024,7 +1064,7 @@ metricsServiceExport appLogger appCtx tp (Proto req) = do
           mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
           pure $ fromMaybe defaultProjectCache mpjCache
         let !projectCaches = HashMap.singleton pid projectCache
-            !metricRecords = convertResourceMetricsToMetricRecords projectCaches pid resourceMetrics
+            !metricRecords = convertResourceMetricsToMetricRecords currentTime projectCaches pid resourceMetrics
 
         unless (null metricRecords)
           $ Telemetry.bulkInsertMetrics (V.fromList metricRecords)

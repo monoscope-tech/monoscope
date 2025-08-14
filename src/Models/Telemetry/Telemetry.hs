@@ -81,9 +81,10 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Concurrent (Concurrent, threadDelay)
-import Effectful.Internal.Monad (unsafeEff)
 import Effectful.Labeled (Labeled, labeled)
+import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Log qualified
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects (ProjectId (unProjectId))
 import Models.Projects.Projects qualified as Projects
@@ -807,17 +808,18 @@ instance ToRow OtelLogsAndSpans where
       parseSeverityNumber = fmap (show . severity_number)
 
 
-bulkInsertOtelLogsAndSpansTF :: (DB :> es, IOE :> es, Labeled "timefusion" DB :> es, UUIDEff :> es, Concurrent :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
+bulkInsertOtelLogsAndSpansTF :: (Concurrent :> es, DB :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
 bulkInsertOtelLogsAndSpansTF records = do
   updatedRecords <- V.mapM (\r -> genUUID >>= \uid -> pure (r & #id .~ uid)) records
   _ <- bulkInsertOtelLogsAndSpans updatedRecords
-  _ <- retryTimefusion 3 updatedRecords
+  _ <- retryTimefusion 10 updatedRecords
   pass
   where
     retryTimefusion 0 recs = labeled @"timefusion" @DB $ bulkInsertOtelLogsAndSpans recs
     retryTimefusion n recs = do
       tryAny (labeled @"timefusion" @DB $ bulkInsertOtelLogsAndSpans recs) >>= \case
-        Left e | "port 12345" `T.isInfixOf` T.pack (show e) -> do
+        Left e | "Connection refused" `T.isInfixOf` T.pack (show e) -> do
+          Log.logAttention "Retrying bulkInsertOtelLogsAndSpans" $ AE.object [("remaining_retries", show n), ("error", show e)]
           threadDelay (1000000 * (4 - n))
           retryTimefusion (n - 1) recs
         Left e -> throwIO e

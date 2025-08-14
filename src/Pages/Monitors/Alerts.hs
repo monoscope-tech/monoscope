@@ -24,12 +24,9 @@ import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
-import Pages.Components (statBox_)
 import Pkg.Parser (defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
 import Relude
 import System.Types
-import Text.Time.Pretty (prettyTimeAuto)
-import Utils (checkFreeTierExceeded, faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
 

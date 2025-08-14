@@ -8,7 +8,6 @@ import Data.Aeson qualified as AE
 import Data.ByteString.Lazy qualified as BL
 import Data.Conduit ((.|))
 import Data.Conduit.Combinators qualified as CC
-import Data.Containers.ListUtils (nubOrd)
 import Data.HashMap.Strict qualified as HM
 import Data.Time (UTCTime, getCurrentTime)
 import Data.UUID qualified as UUID
@@ -17,21 +16,14 @@ import Effectful (Eff, IOE, (:>))
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static qualified
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry qualified as Telemetry
-import NeatInterpolation (text)
 import Network.Minio qualified as Minio
-import OpenTelemetry.Resource.Telemetry (Telemetry (Telemetry))
-import Pages.LogExplorer.Log (curateCols)
 import Pages.S3 (getMinioConnectInfo)
-import Pkg.Parser (parseQueryToAST, toQText)
 import Pkg.Queue (publishJSONToKafka)
 import Relude
 import RequestMessages (replaceNullChars)
 import System.Config (AuthContext (config), EnvConfig (..))
-import System.Directory (createDirectoryIfMissing)
-import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders)
-import Text.Megaparsec (parseMaybe)
-import Utils (checkFreeTierExceeded, eitherStrToText, faSprite_, getServiceColors, listToIndexHashMap, lookupVecTextByKey, onpointerdown_, prettyPrintCount)
+import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, addRespHeaders)
+import Utils (eitherStrToText)
 
 
 data ReplayPost = ReplayPost

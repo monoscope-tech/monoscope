@@ -1,7 +1,7 @@
 module Pkg.Queue (pubsubService, kafkaService, publishJSONToKafka) where
 
 import Control.Exception.Annotated (checkpoint)
-import Control.Lens ((^.), (^?), _Just)
+import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Aeson qualified as AE
