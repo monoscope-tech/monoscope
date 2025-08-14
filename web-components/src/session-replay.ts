@@ -4,6 +4,7 @@ import { EventType, eventWithTime } from '@rrweb/types';
 import { faSprite_ } from './monitors/test-editor-utils';
 import { ConsoleEvent } from './types/types';
 import { Replayer } from '@rrweb/replay';
+import html2canvas from 'html2canvas';
 
 const MS_10 = 10000;
 @customElement('session-replay')
@@ -26,7 +27,9 @@ export class SessionReplay extends LitElement {
   @state() private currentTime = 0;
   @state() private finished = false;
   @state() private syncScrolling = true;
+  @state() private trickTarget = 0;
 
+  private thumbnails: { timeOffset: number; dataURL: string }[] = [];
   private startX: number | null = null;
   private player: Replayer | null = null;
   private containerWidth = 1124;
@@ -75,6 +78,8 @@ export class SessionReplay extends LitElement {
     this.initiatePlayer = this.initiatePlayer.bind(this);
     this.handleTimeSeek = this.handleTimeSeek.bind(this);
     this.closePlayerWindow = this.closePlayerWindow.bind(this);
+    this.getClosestThumbnail = this.getClosestThumbnail.bind(this);
+    this.generateTrickPlayThumbnails = this.generateTrickPlayThumbnails.bind(this);
 
     document.addEventListener('mousemove', (e) => {
       if (this.startX !== null) {
@@ -110,9 +115,11 @@ export class SessionReplay extends LitElement {
     this.stopTimer();
   }
 
-  goTo(tm: number) {
+  goTo(tm: number, paused?: boolean) {
     this.pause();
-    this.play(tm);
+    if (!paused) {
+      this.play(tm);
+    }
   }
 
   loopTimer() {
@@ -204,7 +211,7 @@ export class SessionReplay extends LitElement {
     this.consoleEventsEnable = [...this.consoleEventsEnable];
   }
 
-  initiatePlayer(events: eventWithTime[]) {
+  async initiatePlayer(events: eventWithTime[]) {
     if (events.length < 2) return;
     const target = document.querySelector('#playerWrapper') as HTMLElement;
     this.currentTime = 0;
@@ -223,8 +230,12 @@ export class SessionReplay extends LitElement {
       skipInactive: this.skipInactive,
     });
     this.metaData = this.player.getMetaData();
-    this.play();
+    console.log('generating thumnail');
     this.updateScale();
+    const val = await this.generateTrickPlayThumbnails();
+    console.log(val);
+    this.thumbnails = val.thumbnails;
+    this.play();
     this.observer.disconnect();
     this.observer.observe(this.player.iframe, { attributes: true, attributeFilter: ['width', 'height'] });
   }
@@ -261,6 +272,14 @@ export class SessionReplay extends LitElement {
     const toWidth = x - bounding.x;
     const toGo = (toWidth * this.metaData.totalTime) / bounding.width;
     this.goTo(toGo);
+  }
+
+  handleTrickPlay(e: any) {
+    const x = e.clientX;
+    const bounding = this.progressBar.getBoundingClientRect();
+    const toWidth = x - bounding.x;
+    const toGo = (toWidth * this.metaData.totalTime) / bounding.width;
+    this.trickTarget = toGo;
   }
 
   closePlayerWindow() {
@@ -416,9 +435,15 @@ export class SessionReplay extends LitElement {
               ${this.isLoading
                 ? html`<div class="italic text-7xl font-medium text-gray-100">Loading...</div>`
                 : this.finished
-                ? html` <button @click=${() => this.goTo(0)}>${faSprite_('replay', 'regular', 'w-14 h-14 text-gray-100')}</button> `
+                ? html`
+                    <button @click=${() => this.goTo(0)} class="cursor-pointer">
+                      ${faSprite_('replay', 'regular', 'w-14 h-14 text-gray-100')}
+                    </button>
+                  `
                 : html`
-                    <button @click=${() => (this.paused = false)}>${faSprite_('p-play', 'regular', 'w-14 h-14 text-gray-100')}</button>
+                    <button @click=${() => (this.paused = false)} class="cursor-pointer">
+                      ${faSprite_('p-play', 'regular', 'w-14 h-14 text-gray-100')}
+                    </button>
                   `}
             </div>
           </div>
@@ -426,9 +451,17 @@ export class SessionReplay extends LitElement {
             <div
               id="progressBar"
               @click=${this.handleTimeSeek}
-              class="relative progress-container h-1.5 cursor-pointer rounded  bg-gray-200"
+              @mouseover=${this.handleTrickPlay}
+              class="relative progress-container h-1.5 cursor-pointer rounded group bg-gray-200"
               style="width:calc(100% - 32px)"
             >
+              <div
+                class="bg-slate-700 absolute text-sm -translate-x-1/2 font-medium rounded hidden group-hover:block"
+                style="left:${(this.trickTarget / this.metaData.totalTime) * 100}%; top:-200px"
+              >
+                <img src=${this.getClosestThumbnail() || ''} class="w-40 h-40 object-contain" />
+                <span class="text-gray-100 text-center w-full">${SessionReplay.formatTime(this.trickTarget)}</span>
+              </div>
               <div class="relative h-full bg-fillBrand-strong" style="width:${(this.currentTime / this.metaData.totalTime) * 100}%">
                 <span class="absolute right-0 h-4 w-4 top-1/2 -translate-y-1/2 rounded-full bg-fillBrand-strong"></span>
               </div>
@@ -442,20 +475,20 @@ export class SessionReplay extends LitElement {
                 </div>
               </div>
               <div class="w-full gap-3 flex items-center justify-center">
-                <button class="relative" @click=${() => this.goTo(this.currentTime - MS_10)}>
+                <button class="relative cursor-pointer" @click=${() => this.goTo(this.currentTime - MS_10)}>
                   <span style="font-size:8px" class="absolute top-1/2  left-1/2 -translate-x-1/2 -translate-y-1/2 font-semibold">10</span>
                   ${faSprite_('time-skip', 'regular', 'h-5 w-5')}
                 </button>
                 ${this.finished
-                  ? html`<button class="flex justify-center items-center" @click=${() => this.goTo(0)}>
+                  ? html`<button class="flex justify-center cursor-pointer items-center" @click=${() => this.goTo(0)}>
                       ${faSprite_('replay', 'regular', 'h-5 w-5')}
                     </button>`
                   : html`
-                      <button class="flex justify-center items-center" @click=${() => (this.paused = !this.paused)}>
+                      <button class="flex justify-center cursor-pointer items-center" @click=${() => (this.paused = !this.paused)}>
                         ${this.paused ? faSprite_('p-play', 'regular', 'h-5 w-5') : faSprite_('p-pause', 'regular', 'h-5 w-5')}
                       </button>
                     `}
-                <button class="relative" @click=${() => this.goTo(this.currentTime + MS_10)}>
+                <button class="relative cursor-pointer" @click=${() => this.goTo(this.currentTime + MS_10)}>
                   <span style="font-size: 8px" class="absolute top-1/2  left-1/2 -translate-x-1/2 -translate-y-1/2 font-semibold">10</span>
                   ${faSprite_('time-skip', 'regular', 'h-5 w-5 rotate-y-180')}
                 </button>
@@ -506,13 +539,6 @@ export class SessionReplay extends LitElement {
                   </li>
                 </ul>
               </div>
-              <!-- <div class="dropdown">
-                <div tabindex="0" role="button" class="cursor-pointer">Network</div>
-                <ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-box z-1 w-52 p-2 shadow-sm">
-                  <li><a>Item 1</a></li>
-                  <li><a>Item 2</a></li>
-                </ul>
-              </div> -->
             </div>
             ${this.activityWidth > 0
               ? html`<button class="cursor-pointer hover:bg-fillWeak" @click=${this.closePlayerWindow}>
@@ -577,5 +603,54 @@ export class SessionReplay extends LitElement {
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseup', onMouseUp);
     };
+  }
+  async generateTrickPlayThumbnails({ intervalMs = 5000, quality = 0.65, format = 'image/png' } = {}) {
+    const meta = this.metaData;
+    const duration = meta.totalTime;
+    console.log('loopoing', duration);
+    const thumbnails = [];
+
+    setTimeout(async () => {
+      for (let t = 0; t <= duration; t += intervalMs) {
+        this.goTo(t, true);
+
+        const replayerRoot = this.player?.iframe;
+        console.log(replayerRoot);
+        if (!replayerRoot) continue;
+
+        const iframeDoc = replayerRoot.contentDocument;
+        const rootEl = iframeDoc?.documentElement || iframeDoc?.body;
+        console.log(rootEl);
+        if (!rootEl) continue;
+
+        const canvas = await html2canvas(rootEl, {
+          scale: 1,
+          useCORS: true,
+          logging: false,
+        });
+        console.log(t);
+        const dataURL = canvas.toDataURL(format, quality);
+
+        thumbnails.push({ timeOffset: t, dataURL });
+      }
+    }, 1000);
+    console.log(thumbnails);
+    return { duration, thumbnails };
+  }
+
+  getClosestThumbnail() {
+    if (!this.thumbnails || this.thumbnails.length === 0) return null;
+
+    let closest = this.thumbnails[0];
+    let minDiff = Math.abs(this.trickTarget - closest.timeOffset);
+
+    for (let i = 1; i < this.thumbnails.length; i++) {
+      const diff = Math.abs(this.trickTarget - this.thumbnails[i].timeOffset);
+      if (diff < minDiff) {
+        closest = this.thumbnails[i];
+        minDiff = diff;
+      }
+    }
+    return closest.dataURL;
   }
 }

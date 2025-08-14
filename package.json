@@ -10,6 +10,7 @@
   "dependencies": {
     "@opentelemetry/auto-instrumentations-node": "^0.50.0",
     "@tailwindcss/cli": "^4.0.14",
+    "html2canvas": "^1.4.1",
     "workbox-cli": "^6.5.4"
   },
   "scripts": {
