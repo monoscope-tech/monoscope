@@ -1049,7 +1049,6 @@ export class QueryEditorComponent extends LitElement {
         horizontal: 'hidden',
         alwaysConsumeMouseWheel: false,
       },
-      automaticLayout: true,
       lineDecorationsWidth: 0,
       lineNumbersMinChars: 0,
     });

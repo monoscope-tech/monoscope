@@ -466,7 +466,12 @@ defSqlQueryCfg pid currentTime source spanT =
 
 
 timestampLogFmt :: Text -> Text
-timestampLogFmt colName = [fmt|to_char({colName} AT TIME ZONE 'UTC', 'YYYY-MM-DDTHH24:MI:SS.USZ') as {colName}|]
+timestampLogFmt colName =
+  [fmt|CASE 
+        WHEN RIGHT(TRIM('"' FROM CAST(to_json({colName} at time zone 'UTC') AS VARCHAR)), 1) = 'Z'
+        THEN TRIM('"' FROM CAST(to_json({colName} at time zone 'UTC') AS VARCHAR))
+        ELSE TRIM('"' FROM CAST(to_json({colName} at time zone 'UTC') AS VARCHAR)) || 'Z'
+    END as {colName}|]
 
 
 defaultSelectSqlQuery :: Maybe Sources -> [Text]

@@ -239,24 +239,30 @@ renderFacets facetSummary = do
                 span_ [term "data-tippy-content" dotKey] (toHtml displayName)
               -- Add vertical ellipsis dropdown menu
               div_ [class_ "dropdown dropdown-end"] do
-                label_ [tabindex_ "0", class_ "cursor-pointer"] do
+                a_ [tabindex_ "0", class_ "cursor-pointer"] do
                   faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
                 ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow bg-base-100 rounded-box w-52"] do
                   li_
                     $ a_
-                      [ term "data-key" key
-                      , term "data-field" (T.replace "___" "." key)
+                      [ term "data-field" (T.replace "___" "." key)
                       , class_ "flex gap-2 items-center"
-                      , hxGet_ $ "/p/" <> facetSummary.projectId <> "/log_explorer"
-                      , hxPushUrl_ "true"
-                      , hxVals_ "js:{...{...params(), layout:'resultTable',cols:toggleColumnToSummary(event)}}"
-                      , hxTarget_ "#resultTableInner"
-                      , hxSwap_ "outerHTML"
-                      , [__|init set fp to @data-field then
-                                if params().cols.split(",").includes(fp) then 
-                                  set my.querySelector('span').innerHTML to "Remove column"
-                                end
-                          |]
+                      , [__|
+                       init 
+                          set cols to params().cols or '' then 
+                          set colsX to cols.split(',') then
+                          if colsX contains @data-field
+                            set innerHTML of first <span/> in me to 'Remove column'
+                          end
+                        on click
+                          call #resultTable.toggleColumnOnTable(@data-field) then
+                          set cols to params().cols or '' then
+                          set colsX to cols.split(',')
+                          if colsX contains @data-field
+                            set innerHTML of first <span/> in me to 'Remove column'
+                          else
+                            set innerHTML of first <span/> in me to 'Add as table column'
+                          end
+                        |]
                       ]
                       do
                         faSprite_ "table-column" "regular" "w-4 h-4 text-iconNeutral"
@@ -402,9 +408,18 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   now <- Time.currentTime
   let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   authCtx <- Effectful.Reader.Static.ask @AuthContext
-  tableAsVecE <- if authCtx.env.enableTimefusionReads
-    then labeled @"timefusion" @DB $ RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
-    else RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+
+  -- Skip table load on initial page load unless it's a JSON request
+  let shouldSkipLoad = layoutM == Nothing && hxRequestM == Nothing && jsonM /= Just "true"
+      fetchLogs =
+        if authCtx.env.enableTimefusionReads
+          then labeled @"timefusion" @DB $ RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+          else RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+
+  tableAsVecE <-
+    if shouldSkipLoad
+      then pure $ Right (V.empty, ["timestamp", "summary", "duration"], 0)
+      else fetchLogs
 
   -- FIXME: we're silently ignoring parse errors and the likes.
   let tableAsVecM = hush tableAsVecE
@@ -480,29 +495,26 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
               , facets = facetSummary
               , vizType = vizTypeM
               }
-      case (layoutM, hxRequestM, hxBoostedM, jsonM) of
-        (Just "SaveQuery", _, _, _) -> addRespHeaders $ LogsQueryLibrary pid queryLibSaved queryLibRecent
-        (Just "resultTable", Just "true", _, _) -> addRespHeaders $ LogsGetResultTable page False
-        (Just "virtualTable", _, _, _) -> addRespHeaders $ LogsGetVirtuaTable page
-        (Just "all", Just "true", _, Nothing) -> addRespHeaders $ LogsGetResultTable page True
-        (_, _, _, Just _) -> addRespHeaders $ LogsGetJson requestVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap
-        _ -> addRespHeaders $ LogPage $ PageCtx bwconf page
+      let jsonResponse = LogsGetJson requestVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap
+      addRespHeaders $ case (layoutM, hxRequestM, jsonM) of
+        (Just "SaveQuery", _, _) -> LogsQueryLibrary pid queryLibSaved queryLibRecent
+        (Just "virtualTable", _, _) -> LogsGetVirtuaTable page
+        (Just "resultTable", Just "true", _) -> jsonResponse
+        (Just "all", Just "true", _) -> jsonResponse
+        (_, _, Just "true") -> jsonResponse
+        _ -> LogPage $ PageCtx bwconf page
     Nothing -> do
       case (layoutM, hxRequestM, hxBoostedM, jsonM) of
-        (Just "loadmore", Just "true", _, _) -> do
+        (_, _, _, Just "true") -> do
           addErrorToast "Something went wrong" Nothing
-          addRespHeaders $ LogsGetErrorSimple ""
-        (Just "resultTable", Just "true", _, _) -> addRespHeaders $ LogsGetErrorSimple "Something went wrong"
-        (Just "all", Just "true", _, _) -> do
+          addRespHeaders $ LogsGetErrorSimple "Failed to fetch logs data"
+        _ -> do
           addErrorToast "Something went wrong" Nothing
-          addRespHeaders $ LogsGetErrorSimple ""
-        (_, _, _, Just _) -> addRespHeaders $ LogsGetErrorSimple "Failed to fetch logs data"
-        _ -> addRespHeaders $ LogsGetError $ PageCtx bwconf "Something went wrong"
+          addRespHeaders $ LogsGetError $ PageCtx bwconf "Something went wrong"
 
 
 data LogsGet
   = LogPage (PageCtx ApiLogsPageData)
-  | LogsGetResultTable ApiLogsPageData Bool
   | LogsGetVirtuaTable ApiLogsPageData
   | LogsGetError (PageCtx Text)
   | LogsGetErrorSimple Text
@@ -512,12 +524,12 @@ data LogsGet
 
 instance ToHtml LogsGet where
   toHtml (LogPage (PageCtx conf pa_dat)) = toHtml $ PageCtx conf $ apiLogsPage pa_dat
-  toHtml (LogsGetResultTable page bol) = toHtml $ virtualTableTrigger page
   toHtml (LogsGetVirtuaTable page) = toHtml $ virtualTable page
   toHtml (LogsGetErrorSimple err) = span_ [class_ "text-textError"] $ toHtml err
   toHtml (LogsGetError (PageCtx conf err)) = toHtml $ PageCtx conf err
   toHtml (LogsQueryLibrary pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent
-  toHtml (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL cols colIdxMap) = span_ [] $ show $ AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL, "recentUrl" AE..= recentLogsURL]
+  toHtml (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL cols colIdxMap) =
+    span_ [] $ toHtml (decodeUtf8 $ AE.encode $ AE.toJSON (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL cols colIdxMap) :: Text)
   toHtmlRaw = toHtml
 
 
@@ -561,26 +573,7 @@ data ApiLogsPageData = ApiLogsPageData
   }
 
 
-virtualTableTrigger :: ApiLogsPageData -> Html ()
-virtualTableTrigger page = do
-  div_ [id_ "resultTableInner"] do
-    let vecs = decodeUtf8 $ AE.encode page.requestVecs
-        cols = decodeUtf8 $ AE.encode page.cols
-        colIdxMap = decodeUtf8 $ AE.encode page.colIdxMap
-        serviceColors = decodeUtf8 $ AE.encode page.serviceColors
-        nextLogsURL = decodeUtf8 $ AE.encode page.nextLogsURL
-        recentFetchUrl = decodeUtf8 $ AE.encode page.recentLogsURL
-    script_
-      [text|
-        if(window.logListTable) {
-           window.logListTable.updateTableData($vecs, $cols, $colIdxMap, $serviceColors, $nextLogsURL, $recentFetchUrl)
-           setTimeout(()=> {
-           tippy('[data-tippy-content]').forEach(t => t.destroy());
-           tippy('[data-tippy-content]');
-           },100)
-          }
-    |]
-
+-- virtualTableTrigger is deprecated - we now use JSON responses for all data updates
 
 virtualTable :: ApiLogsPageData -> Html ()
 virtualTable page = do
@@ -591,24 +584,10 @@ virtualTable page = do
     , term "windowTarget" "logList"
     ]
     ("" :: Text)
-  let logs = decodeUtf8 $ AE.encode page.requestVecs
-      cols = decodeUtf8 $ AE.encode page.cols
-      colIdxMap = decodeUtf8 $ AE.encode page.colIdxMap
-      serviceColors = decodeUtf8 $ AE.encode page.serviceColors
-      nextfetchurl = page.nextLogsURL
-      recentFetchUrl = page.recentLogsURL
-      resetLogsURL = page.resetLogsURL
-      projectid = page.pid.toText
+  let projectid = page.pid.toText
   script_
     [text|
       window.logListData = {
-       requestVecs: $logs,
-       cols: $cols,
-       colIdxMap: $colIdxMap,
-       serviceColors: $serviceColors,
-       nextFetchUrl: `$nextfetchurl`,
-       recentFetchUrl: `$recentFetchUrl`,
-       resetLogsUrl: `$resetLogsURL`,
        projectId: "$projectid"
       }
    |]
@@ -622,7 +601,7 @@ apiLogsPage page = do
     template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
     div_ [class_ "fixed z-[9999] hidden right-0 w-max h-max border rounded top-32 bg-bgBase shadow-lg", id_ "sessionPlayerWrapper"] do
-      termRaw "session-replay" [id_ "resultTable", class_ "shrink-1 flex flex-col", term "projectId" page.pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
+      termRaw "session-replay" [id_ "sessionReplay", class_ "shrink-1 flex flex-col", term "projectId" page.pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
     div_
       [ style_ "z-index:26"
       , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
@@ -887,15 +866,24 @@ jsonTreeAuxillaryCode pid query = do
       li_
         $ a_
           [ class_ "flex gap-2 items-center"
-          , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
-          , hxPushUrl_ "true"
-          , hxVals_ "js:{...{...params(), layout:'resultTable',cols:toggleColumnToSummary(event)}}"
-          , hxTarget_ "#resultTableInner"
-          , hxSwap_ "outerHTML"
-          , [__|init set fp to (closest @data-field-path) then
-              if params().cols.split(",").includes(fp) then 
-                set my.querySelector('span').innerHTML to "Remove column"
-              end|]
+          , [__|
+              init set fp to (closest @data-field-path) then
+                  set cols to params().cols or '' then 
+                  set colsX to cols.split(',') then
+                  if colsX contains fp 
+                    set innerHTML of first <span/> in me to 'Remove column'
+                  end
+              on click
+                  set fp to (closest @data-field-path)
+                  call #resultTable.toggleColumnOnTable(fp) then
+                  set cols to params().cols or '' then
+                  set colsX to cols.split(',')
+                  if colsX contains fp
+                    set innerHTML of first <span/> in me to 'Remove column'
+                  else
+                    set innerHTML of first <span/> in me to 'Add as table column'
+                  end
+            |]
           ]
           do
             faSprite_ "table-column" "regular" "w-4 h-4 text-iconNeutral"

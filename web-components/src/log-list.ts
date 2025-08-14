@@ -21,17 +21,15 @@ export class LogList extends LitElement {
 
   @state() private expandedTraces: Record<string, boolean> = {};
   @state() private flipDirection: boolean = false;
-  @state() private isLoadingRecent: boolean = false;
   @state() private spanListTree: EventLine[] = [];
   @state() private recentDataToBeAdded: any[] = [];
-  @state() private isLoading: boolean = false;
   @state() private view: 'tree' | 'list' = 'tree';
   @state() private shouldScrollToBottom: boolean = false;
   @state() private logsColumns: string[] = [];
   @state() private wrapLines: boolean = false;
   @state() private hasMore: boolean = false;
   @state() private isLiveStreaming: boolean = false;
-  @state() private isLoadingReplace: boolean = false;
+  @state() private loadingState: 'idle' | 'loading' | 'loading-recent' | 'loading-replace' = 'idle';
 
   private resizeTarget: string | null = null;
   private mouseState: { x: number } = { x: 0 };
@@ -44,26 +42,26 @@ export class LogList extends LitElement {
   private liveStreamInterval: NodeJS.Timeout | null = null;
   private barChart: any = null;
   private projectId: string = '';
+  private resetLogsUrl: string = '';
   private lineChart: any = null;
   private _observer: IntersectionObserver | null = null;
 
   constructor() {
     super();
 
-    // Bind all methods at once
-    const methods = [
+    // Initialize log list component
+
+    // Bind methods that need this context
+    [
       'logItemRow',
       'fetchData',
       'expandTrace',
-      'renderLoadMore',
-      'updateTableData',
       'handleChartZoom',
       'updateColumnMaxWidthMap',
-      'addWithFlipDirection',
       'toggleLogRow',
       'logItemCol',
-    ];
-    methods.forEach((m) => (this[m] = this[m].bind(this)));
+      'toggleColumnOnTable',
+    ].forEach((m) => (this[m] = this[m].bind(this)));
 
     const liveBtn = document.querySelector('#streamLiveData') as HTMLInputElement;
     if (liveBtn) {
@@ -127,11 +125,34 @@ export class LogList extends LitElement {
     // Chart data zoom functionality - currently disabled
   }
 
-  async refetchLogs() {
+  private buildJsonUrl(): string {
+    // Preserve all existing query parameters and add json=true
     const p = new URLSearchParams(window.location.search);
+    p.set('json', 'true');
     const pathName = window.location.pathname;
-    const url = `${window.location.origin}${pathName}?json=true&${p.toString()}`;
-    this.fetchData(url, false, true);
+    return `${window.location.origin}${pathName}?${p.toString()}`;
+  }
+
+  async fetchInitialData() {
+    this.fetchData(this.buildJsonUrl(), false, true);
+  }
+
+  async refetchLogs() {
+    this.fetchData(this.buildJsonUrl(), false, true);
+  }
+
+  toggleColumnOnTable(col: string) {
+    console.log('toggleColumnOnTable', col);
+    const p = new URLSearchParams(window.location.search);
+    const cols = (p.get('cols') || '').split(',').filter(Boolean);
+    const idx = cols.indexOf(col);
+    const newCols =
+      idx > -1
+        ? cols.filter((_, i) => i !== idx)
+        : [...cols.slice(0, cols.indexOf('summary')), col, ...cols.slice(cols.indexOf('summary'))];
+    p.set('cols', newCols.join(','));
+    window.history.replaceState({}, '', `${window.location.pathname}?${p}${window.location.hash}`);
+    this.fetchData(this.buildJsonUrl(), false, true);
   }
 
   handleChartZoom(params: { batch?: { startValue: string; endValue: string }[] }) {
@@ -166,26 +187,7 @@ export class LogList extends LitElement {
     // set from and to to the startValue and endValue in search params
   }
 
-  updateTableData = (
-    ves: any[][],
-    cols: string[],
-    colIdxMap: ColIdxMap,
-    serviceColors: Record<string, string>,
-    nextFetchUrl: string,
-    recentFetchUrl: string
-  ) => {
-    Object.assign(this, {
-      isLoadingReplace: false,
-      logsColumns: [...cols],
-      colIdxMap: { ...colIdxMap },
-      hasMore: ves.length > 0,
-      serviceColors: { ...serviceColors },
-      nextFetchUrl,
-      recentFetchUrl,
-      spanListTree: this.buildSpanListTree(ves),
-    });
-    this.updateColumnMaxWidthMap(ves);
-  };
+  // updateTableData method is no longer needed as we fetch data directly
 
   toggleWrapLines = () => {
     this.wrapLines = !this.wrapLines;
@@ -197,28 +199,30 @@ export class LogList extends LitElement {
     const globalKey = `${this.windowTarget}Data`;
     const data = (window as any)[globalKey];
     if (this.windowTarget && data) {
-      const logs = data.requestVecs ?? [];
-
-      this.logsColumns = data.cols ?? [];
-      this.colIdxMap = data.colIdxMap ?? {};
-      this.serviceColors = data.serviceColors ?? {};
-      this.nextFetchUrl = data.nextFetchUrl ?? '';
-      this.recentFetchUrl = data.recentFetchUrl ?? '';
+      // Store the initial configuration
       this.projectId = data.projectId ?? '';
-      this.expandedTraces = {};
-      this.spanListTree = this.buildSpanListTree(logs);
-      this.updateColumnMaxWidthMap(logs);
-      this.hasMore = logs.length > 0;
-      this.requestUpdate();
-      this.fetchedNew = false;
+
+      // Clear the global data early to free memory
       (window as any)[globalKey] = null;
+
+      // Initialize with empty state
+      this.logsColumns = [];
+      this.colIdxMap = {};
+      this.serviceColors = {};
+      this.nextFetchUrl = '';
+      this.recentFetchUrl = '';
+      this.expandedTraces = {};
+      this.spanListTree = [];
+      this.hasMore = false;
+      this.fetchedNew = false;
+
+      // Fetch initial data from the JSON endpoint
+      this.fetchInitialData();
     }
   }
 
   firstUpdated() {
-    this.scrollToBottom();
     this.setupIntersectionObserver();
-    window.logListTable = document.querySelector('#resultTable');
   }
 
   updated(changedProperties: Map<string, any>) {
@@ -305,9 +309,9 @@ export class LogList extends LitElement {
   }
 
   fetchData(url: string, isNewData = false, isRefresh = false) {
-    const loadingKey = isNewData ? 'isLoadingRecent' : isRefresh ? 'isLoadingReplace' : 'isLoading';
-    if (this[loadingKey]) return;
-    this[loadingKey] = true;
+    const loadingState = isNewData ? 'loading-recent' : isRefresh ? 'loading-replace' : 'loading';
+    if (this.loadingState !== 'idle') return;
+    this.loadingState = loadingState;
     fetch(url, {
       method: 'GET',
       headers: {
@@ -317,20 +321,23 @@ export class LogList extends LitElement {
       .then((response) => response.json())
       .then((data) => {
         if (!data.error) {
-          let { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap } = data;
+          let { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, resetLogsUrl } = data;
 
           // Validate required fields
           if (!logsData || !Array.isArray(logsData)) {
+            this.showErrorToast('Invalid data format received');
             return;
           }
+
+          // Update state
           if (!isNewData) {
             this.hasMore = logsData.length > 0;
-          }
-          if (!isNewData) {
-            this.nextFetchUrl = nextUrl;
+            this.nextFetchUrl = nextUrl || '';
           } else if (isNewData && logsData.length > 0) {
-            this.recentFetchUrl = recentUrl;
+            this.recentFetchUrl = recentUrl || '';
           }
+
+          this.resetLogsUrl = resetLogsUrl || this.resetLogsUrl;
 
           this.serviceColors = { ...serviceColors, ...this.serviceColors };
           let tree = this.buildSpanListTree([...logsData]);
@@ -341,6 +348,10 @@ export class LogList extends LitElement {
             this.nextFetchUrl = nextUrl;
             this.recentFetchUrl = recentUrl;
             this.spanListTree = tree;
+            // Scroll to bottom after initial load
+            if (this.spanListTree.length > 0) {
+              this.scrollToBottom();
+            }
           } else {
             if (isNewData) {
               this.fetchedNew = true;
@@ -364,19 +375,19 @@ export class LogList extends LitElement {
 
           this.updateColumnMaxWidthMap(logsData);
         } else {
-          if (isRefresh && data.message) this.showErrorToast(data.message);
+          this.showErrorToast(data.message || 'Failed to fetch logs');
         }
       })
       .catch((error) => {
-        if (isRefresh) this.showErrorToast('Network error: Unable to fetch logs');
+        this.showErrorToast('Network error: Unable to fetch logs');
       })
       .finally(() => {
-        this[loadingKey] = false;
+        this.loadingState = 'idle';
         this.requestUpdate();
       });
   }
 
-  showErrorToast(message: string) {
+  private showErrorToast(message: string) {
     document.body.dispatchEvent(
       new CustomEvent('errorToast', {
         detail: { value: [message] },
@@ -491,9 +502,7 @@ export class LogList extends LitElement {
               this.handleRecentConcatenation();
             }
           } else {
-            if (container.scrollTop === 0) {
-              this.handleRecentConcatenation();
-            }
+            if (container.scrollTop === 0) this.handleRecentConcatenation();
           }
         }}
         class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto"
@@ -510,7 +519,7 @@ export class LogList extends LitElement {
               </button>
             </div>`
           : nothing}
-        ${this.isLoadingReplace
+        ${this.loadingState === 'loading-replace'
           ? html`<div class="absolute z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
               <span class="loading loading-dots"></span>
             </div>`
@@ -610,9 +619,7 @@ export class LogList extends LitElement {
           return html`<span class="text-textWeak">${unescapedValue}</span>`;
         }
 
-        if (style === 'text-textStrong') {
-          return html`<span class="text-textStrong">${value}</span>`;
-        }
+        if (style === 'text-textStrong') return html`<span class="text-textStrong">${value}</span>`;
 
         return renderBadge(`cbadge-sm ${this.getStyleClass(style)} ${wrapClass}`, value);
       });
@@ -641,10 +648,10 @@ export class LogList extends LitElement {
   }
 
   logItemCol(rowData: any, key: string): any {
-      const { data: dataArr, depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData;
-      const wrapClass = this.wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
+    const { data: dataArr, depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData;
+    const wrapClass = this.wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
 
-      switch (key) {
+    switch (key) {
       case 'id':
         let [status, errCount, errClass] = errorClass(dataArr, this.colIdxMap);
         return html`
@@ -675,7 +682,7 @@ export class LogList extends LitElement {
         // Extract right-aligned badges from summary array
         const summaryData = lookupVecTextByKey(dataArr, this.colIdxMap, 'summary');
         let summaryArr: string[] = [];
-        
+
         if (Array.isArray(summaryData)) {
           summaryArr = summaryData;
         } else if (typeof summaryData === 'string') {
@@ -689,9 +696,9 @@ export class LogList extends LitElement {
           }
           // Split by comma, but not commas inside braces {}
           summaryArr = cleaned.match(/[^,]+(?:{[^}]*}[^,]*)?/g) || [];
-          summaryArr = summaryArr.map(s => s.trim());
+          summaryArr = summaryArr.map((s) => s.trim());
         }
-        
+
         const rightAlignedBadges: TemplateResult[] = [];
 
         summaryArr.forEach((element: string) => {
@@ -748,7 +755,7 @@ export class LogList extends LitElement {
       case 'summary':
         const summaryData2 = lookupVecTextByKey(dataArr, this.colIdxMap, key);
         let summaryArray: string[] = [];
-        
+
         if (Array.isArray(summaryData2)) {
           summaryArray = summaryData2;
         } else if (typeof summaryData2 === 'string') {
@@ -762,7 +769,7 @@ export class LogList extends LitElement {
           }
           // Split by comma, but not commas inside braces {}
           summaryArray = cleaned.match(/[^,]+(?:{[^}]*}[^,]*)?/g) || [];
-          summaryArray = summaryArray.map(s => s.trim());
+          summaryArray = summaryArray.map((s) => s.trim());
         }
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
@@ -821,53 +828,42 @@ export class LogList extends LitElement {
       default:
         let v = lookupVecTextByKey(dataArr, this.colIdxMap, key);
         return html`<span class=${wrapClass} title=${key}>${v}</span>`;
-      }
+    }
   }
 
   renderLoadMore() {
-    return this.hasMore && this.windowTarget != 'sessionList'
-      ? html`<tr class="w-full flex relative">
-          <td colspan=${String(this.logsColumns.length)} class="relative  pl-[calc(40vw-10ch)]">
-            <div
-              class="absolute -top-[500px] w-[1px] h-[500px] left-0 flex flex-col justify-end bg-transparent items-center"
-              id="loader"
-            ></div>
-            ${this.isLoading
-              ? html`<div class="loading loading-dots loading-md"></div>`
-              : html`
-                  <button
-                    class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-                    @pointerdown=${() => this.fetchData(this.nextFetchUrl)}
-                  >
-                    Load more
-                  </button>
-                `}
-          </td>
-        </tr>`
-      : html`<tr></tr>`;
+    if (!this.hasMore || this.windowTarget === 'sessionList') return html`<tr></tr>`;
+    return html`<tr class="w-full flex relative">
+      <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
+        <div class="absolute -top-[500px] w-[1px] h-[500px] left-0" id="loader"></div>
+        ${this.loadingState === 'loading'
+          ? html`<div class="loading loading-dots loading-md"></div>`
+          : html`<button
+              class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
+              @pointerdown=${() => this.fetchData(this.nextFetchUrl)}
+            >
+              Load more
+            </button>`}
+      </td>
+    </tr>`;
   }
 
   fetchRecent() {
-    return this.windowTarget != 'sessionList'
-      ? html`<tr class="w-full flex relative" id="recent-logs">
-          <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]" id="recent-logs">
-            ${this.isLiveStreaming
-              ? html`<p>Live streaming latest data...</p>`
-              : this.isLoadingRecent
-                ? html`<div class="loading loading-dots loading-md"></div>`
-                : html`
-                    <button
-                      class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-                      @pointerdown=${() => {
-                        this.fetchData(this.recentFetchUrl, true);
-                      }}
-                    >
-                      Check for recent data
-                    </button>
-                  `}
-          </td>
-        </tr>`
-      : html`<tr></tr>`;
+    if (this.windowTarget === 'sessionList') return html`<tr></tr>`;
+    return html`<tr class="w-full flex relative" id="recent-logs">
+      <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
+        ${this.isLiveStreaming
+          ? html`<p>Live streaming latest data...</p>`
+          : this.loadingState === 'loading-recent'
+            ? html`<div class="loading loading-dots loading-md"></div>`
+            : html`<button
+                class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
+                @pointerdown=${() => this.fetchData(this.recentFetchUrl, true)}
+              >
+                Check for recent data
+              </button>`}
+      </td>
+    </tr>`;
   }
 
   logTableHeading(column: string) {
@@ -927,11 +923,7 @@ export class LogList extends LitElement {
               </td>`;
             })}
           ${this.logsColumns.includes('latency_breakdown')
-            ? html`<td
-                class="sticky right-0 bg-bgBase z-10"
-              >
-                ${this.logItemCol(rowData, 'latency_breakdown')}
-              </td>`
+            ? html`<td class="sticky right-0 bg-bgBase z-10">${this.logItemCol(rowData, 'latency_breakdown')}</td>`
             : nothing}
         </tr>
       `;
@@ -940,7 +932,9 @@ export class LogList extends LitElement {
       console.error('Error in logItemRow:', error);
       console.error('rowData:', rowData);
       console.error('Stack trace:', error.stack);
-      return html`<tr><td colspan="${this.logsColumns.length}">Error rendering row: ${error.message}</td></tr>`;
+      return html`<tr>
+        <td colspan="${this.logsColumns.length}">Error rendering row: ${error.message}</td>
+      </tr>`;
     }
   }
 
