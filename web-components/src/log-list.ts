@@ -989,7 +989,7 @@ export class LogList extends LitElement {
 
   renderLoadMore() {
     // Check if we have no data (empty state)
-    if (this.spanListTree.length === 0 && this.initialDataLoaded && !this.hasMore) {
+    if (this.spanListTree.length === 0 && this.initialDataLoaded && !this.hasMore && !this.flipDirection) {
       return emptyState(this.logsColumns.length);
     }
     
@@ -1011,7 +1011,7 @@ export class LogList extends LitElement {
 
   fetchRecent() {
     // Check if we have no data (empty state) when flipped
-    if (this.spanListTree.length === 0 && this.initialDataLoaded && !this.hasMore) {
+    if (this.spanListTree.length === 0 && this.initialDataLoaded && !this.hasMore && this.flipDirection) {
       return emptyState(this.logsColumns.length);
     }
     
