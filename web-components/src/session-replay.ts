@@ -457,14 +457,12 @@ export class SessionReplay extends LitElement {
               @mousemove=${this.handleTrickPlay}
               @mouseleave=${() => {
                 this.trickPlayer?.pause();
-                this.trickPlayer?.destroy();
-                this.trickPlayer = null;
               }}
               class="relative progress-container h-1.5 cursor-pointer rounded group bg-gray-200"
               style="width:calc(100% - 32px)"
             >
               <div
-                class="bg-slate-700 absolute text-sm font-medium rounded -translate-x-1/2 overflow-hidden border border-slate-700 hidden group-hover:block"
+                class="bg-slate-800 absolute text-sm font-medium rounded -translate-x-1/2 overflow-hidden border border-slate-800 hidden group-hover:block"
                 style="left:${(this.trickTarget / this.metaData.totalTime) * 100}%; top:-200px"
               >
                 <div id="trickPlayerContainer" class="h-40 w-60 bg-black overflow-hidden"></div>
