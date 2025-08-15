@@ -1133,6 +1133,10 @@ export class LogList extends LitElement {
                     : nothing}
                   ${children > 0
                     ? html`<button
+                        @click=${(e: any) => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                        }}
                         @pointerdown=${(e: any) => {
                           e.stopPropagation();
                           e.preventDefault();
