@@ -498,7 +498,6 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
       let jsonResponse = LogsGetJson requestVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap
       addRespHeaders $ case (layoutM, hxRequestM, jsonM) of
         (Just "SaveQuery", _, _) -> LogsQueryLibrary pid queryLibSaved queryLibRecent
-        (Just "virtualTable", _, _) -> LogsGetVirtuaTable page
         (Just "resultTable", Just "true", _) -> jsonResponse
         (Just "all", Just "true", _) -> jsonResponse
         (_, _, Just "true") -> jsonResponse
@@ -515,7 +514,6 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
 data LogsGet
   = LogPage (PageCtx ApiLogsPageData)
-  | LogsGetVirtuaTable ApiLogsPageData
   | LogsGetError (PageCtx Text)
   | LogsGetErrorSimple Text
   | LogsGetJson (V.Vector (V.Vector AE.Value)) (HM.HashMap Text Text) Text Text Text [Text] (HM.HashMap Text Int)
@@ -524,7 +522,6 @@ data LogsGet
 
 instance ToHtml LogsGet where
   toHtml (LogPage (PageCtx conf pa_dat)) = toHtml $ PageCtx conf $ apiLogsPage pa_dat
-  toHtml (LogsGetVirtuaTable page) = toHtml $ virtualTable page
   toHtml (LogsGetErrorSimple err) = span_ [class_ "text-textError"] $ toHtml err
   toHtml (LogsGetError (PageCtx conf err)) = toHtml $ PageCtx conf err
   toHtml (LogsQueryLibrary pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent

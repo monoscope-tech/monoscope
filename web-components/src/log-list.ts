@@ -867,7 +867,7 @@ export class LogList extends LitElement {
   }
 
   logTableHeading(column: string) {
-    if (column === 'id') return html`<td class="p-0 m-0 whitespace-nowrap w-3"></td>`;
+    if (column === 'id') return html`<td class="p-0 m-0 whitespace-nowrap w-3 pl-2.5"></td>`;
 
     const config = {
       timestamp: { title: 'timestamp', classes: 'w-[17ch] shrink-0' },
@@ -914,7 +914,7 @@ export class LogList extends LitElement {
               const tableDataWidth = getColumnWidth(column);
               let width = this.columnMaxWidthMap[column];
               return html`<td
-                class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-bgBase relative ${
+                class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-bgBase relative pl-2 ${
                   column === 'summary' ? '' : tableDataWidth
                 }`}
                 style=${width ? `width: ${width}px;` : ''}
@@ -923,7 +923,7 @@ export class LogList extends LitElement {
               </td>`;
             })}
           ${this.logsColumns.includes('latency_breakdown')
-            ? html`<td class="sticky right-0 bg-bgBase z-10">${this.logItemCol(rowData, 'latency_breakdown')}</td>`
+            ? html`<td class="sticky right-0 bg-bgBase z-10 pl-2">${this.logItemCol(rowData, 'latency_breakdown')}</td>`
             : nothing}
         </tr>
       `;
@@ -946,7 +946,7 @@ export class LogList extends LitElement {
 
     return html`
       <td
-        class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-1 text-sm font-normal bg-bgBase ${
+        class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${
           classes ? classes : ''
         }`}
         style=${width ? `width: ${width}px` : ''}
