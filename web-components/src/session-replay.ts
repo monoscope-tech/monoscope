@@ -30,10 +30,11 @@ export class SessionReplay extends LitElement {
 
   private startX: number | null = null;
   private player: Replayer | null = null;
+  private events: eventWithTime[] = [];
   private containerWidth = 1124;
   private containerHeight = 650;
   private iframeWidth = 1117;
-  private trickPlayer: Replayer;
+  private trickPlayer: Replayer | null = null;
   private observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
       if (mutation.type === 'attributes' && (mutation.attributeName === 'width' || mutation.attributeName === 'height')) {
@@ -223,7 +224,6 @@ export class SessionReplay extends LitElement {
     });
 
     this.player = new Replayer(events, { root: target, plugins: [{ handler: this.handleConsoleEvents }], skipInactive: this.skipInactive });
-    this.trickPlayer = new Replayer(events, { root: document.querySelector('#trickPlayerContainer')! });
     this.metaData = this.player.getMetaData();
     this.updateScale();
     this.play();
@@ -266,20 +266,22 @@ export class SessionReplay extends LitElement {
   }
 
   handleTrickPlay(e: any) {
+    if (!this.trickPlayer) {
+      this.trickPlayer = new Replayer(this.events, { root: document.querySelector('#trickPlayerContainer')! });
+    }
     const x = e.clientX;
     const bounding = this.progressBar.getBoundingClientRect();
     const toWidth = x - bounding.x;
     const toGo = (toWidth * this.metaData.totalTime) / bounding.width;
-    this.trickTarget = toGo;
-    const el = this.trickPlayer?.wrapper;
+    const el = this.trickPlayer.wrapper;
     const iframe = this.trickPlayer.iframe;
-    const widthSc = 192 / Number(iframe.getAttribute('width'));
-    const heightSc = 192 / Number(iframe.getAttribute('height'));
+    const widthSc = 240 / Number(iframe.getAttribute('width'));
+    const heightSc = 160 / Number(iframe.getAttribute('height'));
     if (el) {
       el.style.transform = `scale(${Math.min(widthSc, heightSc)}) translate(-50%, -50%)`;
     }
-    this.trickPlayer?.play(this.trickTarget);
-    this.trickPlayer?.pause();
+    this.trickPlayer?.play(toGo);
+    this.trickTarget = toGo;
   }
 
   closePlayerWindow() {
@@ -453,6 +455,11 @@ export class SessionReplay extends LitElement {
               @click=${this.handleTimeSeek}
               @mouseover=${this.handleTrickPlay}
               @mousemove=${this.handleTrickPlay}
+              @mouseleave=${() => {
+                this.trickPlayer?.pause();
+                this.trickPlayer?.destroy();
+                this.trickPlayer = null;
+              }}
               class="relative progress-container h-1.5 cursor-pointer rounded group bg-gray-200"
               style="width:calc(100% - 32px)"
             >
