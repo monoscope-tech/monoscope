@@ -30,6 +30,7 @@ export class LogList extends LitElement {
   @state() private hasMore: boolean = false;
   @state() private isLiveStreaming: boolean = false;
   @state() private loadingState: 'idle' | 'loading' | 'loading-recent' | 'loading-replace' = 'idle';
+  @state() private initialDataLoaded: boolean = false;
 
   private resizeTarget: string | null = null;
   private mouseState: { x: number } = { x: 0 };
@@ -323,9 +324,11 @@ export class LogList extends LitElement {
         if (!data.error) {
           let { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, resetLogsUrl } = data;
 
-          // Validate required fields
-          if (!logsData || !Array.isArray(logsData)) {
+          // Validate required fields - but allow empty arrays
+          if (!Array.isArray(logsData)) {
             this.showErrorToast('Invalid data format received');
+            this.initialDataLoaded = true; // Mark as loaded even on error
+            this.requestUpdate();
             return;
           }
 
@@ -376,6 +379,9 @@ export class LogList extends LitElement {
           this.updateColumnMaxWidthMap(logsData);
         } else {
           this.showErrorToast(data.message || 'Failed to fetch logs');
+          // Still need to mark as loaded to hide skeleton
+          this.initialDataLoaded = true;
+          this.requestUpdate();
         }
       })
       .catch((error) => {
@@ -383,6 +389,7 @@ export class LogList extends LitElement {
       })
       .finally(() => {
         this.loadingState = 'idle';
+        this.initialDataLoaded = true;
         this.requestUpdate();
       });
   }
@@ -488,6 +495,9 @@ export class LogList extends LitElement {
     // end is used to render the load more button"
     list.unshift('start');
     list.push('end');
+    
+    // Check if we're in initial loading state
+    const isInitialLoading = !this.initialDataLoaded;
 
     return html`
       ${this.options()}
@@ -519,33 +529,45 @@ export class LogList extends LitElement {
               </button>
             </div>`
           : nothing}
-        ${this.loadingState === 'loading-replace'
-          ? html`<div class="absolute z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
-              <span class="loading loading-dots"></span>
-            </div>`
-          : nothing}
         <table class="table-auto w-max relative ctable table-pin-rows table-pin-cols">
           <thead class="z-10 sticky top-0">
             <tr class="text-textStrong border-b flex min-w-0 relative font-medium ">
-              ${this.logsColumns.filter((v) => v !== 'latency_breakdown').map((column) => this.logTableHeading(column))}
-              ${this.logTableHeading('latency_breakdown')}
+              ${isInitialLoading
+                ? html`
+                    ${[...Array(6)].map((_, idx) => html`
+                      <td class="p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${getSkeletonColumnWidth(idx)}">
+                        <div class="h-4 bg-fillWeak rounded animate-pulse w-16"></div>
+                      </td>
+                    `)}
+                  `
+                : html`
+                    ${this.logsColumns.filter((v) => v !== 'latency_breakdown').map((column) => this.logTableHeading(column))}
+                    ${this.logsColumns.length > 0 ? this.logTableHeading('latency_breakdown') : nothing}
+                  `
+              }
             </tr>
           </thead>
-          ${list.length === 2 ? emptyState(this.logsColumns.length) : nothing}
-          <tbody
-            class="min-w-0 text-sm"
-            @rangeChanged=${(event: RangeChangedEvent) => {
-              this.setupIntersectionObserver();
-            }}
-            @visibilityChanged=${(event: VisibilityChangedEvent) => {
-              this.updateChartDataZoom(event.first, event.last);
-            }}
-          >
-            ${virtualize({
-              items: list,
-              renderItem: this.logItemRow,
-            })}
-          </tbody>
+          ${isInitialLoading
+            ? loadingSkeleton(this.logsColumns.length || 6)
+            : html`
+                <tbody
+                  class="min-w-0 text-sm"
+                  @rangeChanged=${(event: RangeChangedEvent) => {
+                    this.setupIntersectionObserver();
+                  }}
+                  @visibilityChanged=${(event: VisibilityChangedEvent) => {
+                    this.updateChartDataZoom(event.first, event.last);
+                  }}
+                >
+                  ${list.length === 2 
+                    ? emptyState(this.logsColumns.length)
+                    : virtualize({
+                        items: list,
+                        renderItem: this.logItemRow,
+                      })
+                  }
+                </tbody>
+              `}
         </table>
 
         ${!this.shouldScrollToBottom && this.flipDirection
@@ -832,7 +854,7 @@ export class LogList extends LitElement {
   }
 
   renderLoadMore() {
-    if (!this.hasMore || this.windowTarget === 'sessionList') return html`<tr></tr>`;
+    if (!this.hasMore || this.windowTarget === 'sessionList' || !this.initialDataLoaded) return html`<tr></tr>`;
     return html`<tr class="w-full flex relative">
       <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
         <div class="absolute -top-[500px] w-[1px] h-[500px] left-0" id="loader"></div>
@@ -849,7 +871,7 @@ export class LogList extends LitElement {
   }
 
   fetchRecent() {
-    if (this.windowTarget === 'sessionList') return html`<tr></tr>`;
+    if (this.windowTarget === 'sessionList' || !this.initialDataLoaded) return html`<tr></tr>`;
     return html`<tr class="w-full flex relative" id="recent-logs">
       <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
         ${this.isLiveStreaming
@@ -1323,6 +1345,36 @@ function spanLatencyBreakdown({
 
   // For root spans that are not expanded, return just the base visualization
   return html`<div class="-mt-1 shrink-0">${baseVisualization}</div>`;
+}
+
+function loadingSkeleton(cols: number) {
+  const actualCols = cols || 6;
+  return html`
+    <tbody class="min-w-0 text-sm">
+      <tr class="w-full flex justify-center">
+        <td colspan=${String(actualCols)} class="w-full">
+          <div class="text-center py-4">
+            <span class="loading loading-spinner loading-md text-textBrand"></span>
+            <p class="text-sm text-textWeak mt-2">Loading events...</p>
+          </div>
+        </td>
+      </tr>
+      ${[...Array(8)].map((_, rowIdx) => html`
+        <tr class="item-row relative p-0 flex items-center group whitespace-nowrap animate-pulse" style="opacity: ${1 - rowIdx * 0.1}">
+          ${[...Array(actualCols)].map((_, idx) => html`
+            <td class="bg-bgBase relative pl-2 ${idx === 0 ? 'w-3' : idx === actualCols - 1 ? 'sticky right-0 z-10' : getSkeletonColumnWidth(idx)}">
+              <div class="${idx === 0 ? 'w-1 h-5' : 'h-4'} bg-fillWeak rounded ${idx === actualCols - 1 ? 'w-24' : idx === 0 ? '' : 'w-3/4'}"></div>
+            </td>
+          `)}
+        </tr>
+      `)}
+    </tbody>
+  `;
+}
+
+function getSkeletonColumnWidth(idx: number) {
+  const widths = ['w-[17ch]', 'w-[16ch]', 'w-[25ch]', 'w-[12ch]', 'w-[450px]'];
+  return widths[idx % widths.length] + ' shrink-0';
 }
 
 function emptyState(cols: number) {
