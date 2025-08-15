@@ -31,6 +31,7 @@ export class LogList extends LitElement {
   @state() private isLiveStreaming: boolean = false;
   @state() private loadingState: 'idle' | 'loading' | 'loading-recent' | 'loading-replace' = 'idle';
   @state() private initialDataLoaded: boolean = false;
+  @state() private showRefreshLoader: boolean = false;
 
   private resizeTarget: string | null = null;
   private mouseState: { x: number } = { x: 0 };
@@ -46,6 +47,8 @@ export class LogList extends LitElement {
   private resetLogsUrl: string = '';
   private lineChart: any = null;
   private _observer: IntersectionObserver | null = null;
+  private fetchDebounceTimer: NodeJS.Timeout | null = null;
+  private pendingFetchUrl: string | null = null;
 
   constructor() {
     super();
@@ -82,19 +85,19 @@ export class LogList extends LitElement {
       });
     }
 
-    // Listen to all relevant events
-    ['submit', 'add-query', 'update-query'].forEach((ev) => window.addEventListener(ev, () => this.refetchLogs()));
+    // Listen to all relevant events with debouncing
+    ['submit', 'add-query', 'update-query'].forEach((ev) => window.addEventListener(ev, () => this.debouncedRefetchLogs()));
     
     // Also listen to form submit and update-query from filterElement
     document.addEventListener('submit', (e) => {
       if ((e.target as HTMLElement)?.id === 'log_explorer_form') {
         e.preventDefault();
-        this.refetchLogs();
+        this.debouncedRefetchLogs();
       }
     });
     
     document.addEventListener('update-query', (e) => {
-      if ((e.target as HTMLElement)?.id === 'filterElement') this.refetchLogs();
+      if ((e.target as HTMLElement)?.id === 'filterElement') this.debouncedRefetchLogs();
     });
 
     window.addEventListener('pagehide', () => {
@@ -152,7 +155,28 @@ export class LogList extends LitElement {
   }
 
   async refetchLogs() {
+    this.showRefreshLoader = true;
+    this.requestUpdate();
+    this.showLoadingSpinner(true);
     this.fetchData(this.buildJsonUrl(), false, true);
+  }
+
+  debouncedRefetchLogs() {
+    // Clear any existing timer
+    if (this.fetchDebounceTimer) {
+      clearTimeout(this.fetchDebounceTimer);
+    }
+    
+    // Show refresh loader and spinner immediately for user feedback
+    this.showRefreshLoader = true;
+    this.requestUpdate();
+    this.showLoadingSpinner(true);
+    
+    // Set new timer
+    this.fetchDebounceTimer = setTimeout(() => {
+      this.fetchDebounceTimer = null;
+      this.refetchLogs();
+    }, 300);
   }
 
   toggleColumnOnTable(col: string) {
@@ -199,7 +223,7 @@ export class LogList extends LitElement {
     );
 
     // Refetch logs with the new time range
-    this.refetchLogs();
+    this.debouncedRefetchLogs();
   }
 
   // updateTableData method is no longer needed as we fetch data directly
@@ -241,6 +265,27 @@ export class LogList extends LitElement {
     const countElement = document.getElementById('row-count-display');
     if (countElement) {
       countElement.textContent = this.formatCount(count);
+    }
+  }
+
+  private showLoadingSpinner(show: boolean) {
+    // Find or create the spinner element next to row count
+    const countElement = document.getElementById('row-count-display');
+    if (!countElement) return;
+    
+    const spinnerId = 'log-list-loading-spinner';
+    let spinner = document.getElementById(spinnerId);
+    
+    if (show && !spinner) {
+      // Create spinner if it doesn't exist
+      spinner = document.createElement('span');
+      spinner.id = spinnerId;
+      spinner.className = 'ml-2 inline-block';
+      spinner.innerHTML = '<svg class="inline-block icon w-4 h-4 animate-spin text-textBrand"><use href="/public/assets/svgs/fa-sprites/regular.svg?v=ecf9d105#spinner"></use></svg>';
+      countElement.parentElement?.appendChild(spinner);
+    } else if (!show && spinner) {
+      // Remove spinner
+      spinner.remove();
     }
   }
 
@@ -313,6 +358,9 @@ export class LogList extends LitElement {
     if (this._observer) {
       this._observer.disconnect();
     }
+    if (this.fetchDebounceTimer) {
+      clearTimeout(this.fetchDebounceTimer);
+    }
     super.disconnectedCallback();
   }
 
@@ -342,8 +390,15 @@ export class LogList extends LitElement {
 
   fetchData(url: string, isNewData = false, isRefresh = false) {
     const loadingState = isNewData ? 'loading-recent' : isRefresh ? 'loading-replace' : 'loading';
-    if (this.loadingState !== 'idle') return;
+    if (this.loadingState !== 'idle') {
+      // If a request is already in flight, store this URL to fetch after current one completes
+      if (isRefresh) {
+        this.pendingFetchUrl = url;
+      }
+      return;
+    }
     this.loadingState = loadingState;
+    this.showLoadingSpinner(true);
     fetch(url, {
       method: 'GET',
       headers: {
@@ -427,7 +482,16 @@ export class LogList extends LitElement {
       .finally(() => {
         this.loadingState = 'idle';
         this.initialDataLoaded = true;
+        this.showRefreshLoader = false;
+        this.showLoadingSpinner(false);
         this.requestUpdate();
+        
+        // If there's a pending fetch, execute it now
+        if (this.pendingFetchUrl) {
+          const url = this.pendingFetchUrl;
+          this.pendingFetchUrl = null;
+          setTimeout(() => this.fetchData(url, false, true), 100);
+        }
       });
   }
 
@@ -602,12 +666,10 @@ export class LogList extends LitElement {
                     this.updateChartDataZoom(event.first, event.last);
                   }}
                 >
-                  ${list.length === 2 
-                    ? emptyState(this.logsColumns.length)
-                    : virtualize({
-                        items: list,
-                        renderItem: this.logItemRow,
-                      })
+                  ${virtualize({
+                      items: list,
+                      renderItem: this.logItemRow,
+                    })
                   }
                 </tbody>
               `}
@@ -637,6 +699,27 @@ export class LogList extends LitElement {
                 </span>
               </button>
             </div>`
+          : nothing}
+          
+        ${this.showRefreshLoader
+          ? html`
+              <div class="absolute inset-0 z-50 flex items-center justify-center bg-black/5 backdrop-blur-sm">
+                <div class="relative">
+                  <!-- Outer rotating ring -->
+                  <div class="absolute inset-0 rounded-full border-4 border-transparent border-t-fillBrand-strong animate-spin"></div>
+                  <!-- Inner pulsing circle -->
+                  <div class="absolute inset-2 rounded-full bg-gradient-to-br from-fillBrand-strong to-fillBrand-weak opacity-20 animate-pulse"></div>
+                  <!-- Center spinner -->
+                  <div class="relative flex items-center justify-center w-20 h-20">
+                    <span class="loading loading-spinner loading-lg text-fillBrand-strong"></span>
+                  </div>
+                  <!-- Loading text -->
+                  <div class="absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap">
+                    <p class="text-sm font-medium text-textBrand animate-pulse">Refreshing logs...</p>
+                  </div>
+                </div>
+              </div>
+            `
           : nothing}
       </div>
     `;
@@ -905,6 +988,11 @@ export class LogList extends LitElement {
   }
 
   renderLoadMore() {
+    // Check if we have no data (empty state)
+    if (this.spanListTree.length === 0 && this.initialDataLoaded && !this.hasMore) {
+      return emptyState(this.logsColumns.length);
+    }
+    
     if (!this.hasMore || this.windowTarget === 'sessionList' || !this.initialDataLoaded) return html`<tr></tr>`;
     return html`<tr class="w-full flex relative">
       <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
@@ -922,6 +1010,11 @@ export class LogList extends LitElement {
   }
 
   fetchRecent() {
+    // Check if we have no data (empty state) when flipped
+    if (this.spanListTree.length === 0 && this.initialDataLoaded && !this.hasMore) {
+      return emptyState(this.logsColumns.length);
+    }
+    
     if (this.windowTarget === 'sessionList' || !this.initialDataLoaded) return html`<tr></tr>`;
     return html`<tr class="w-full flex relative" id="recent-logs">
       <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
