@@ -4,6 +4,15 @@ import { LitElement, html, css, TemplateResult, nothing } from 'lit';
 import { customElement, state, query, property } from 'lit/decorators.js';
 import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, Trace, TraceDataMap } from './types/types';
 import { RangeChangedEvent, VisibilityChangedEvent } from '@lit-labs/virtualizer';
+import debounce from 'lodash/debounce';
+import memoize from 'lodash/memoize';
+
+// TypeScript declarations for global functions
+declare global {
+  interface Window {
+    updateUrlState: (key: string, value: string, action?: 'set' | 'delete') => void;
+  }
+}
 
 // Ensure all badge classes are included in the final CSS build
 // prettier-ignore
@@ -32,6 +41,13 @@ export class LogList extends LitElement {
   @state() private loadingState: 'idle' | 'loading' | 'loading-recent' | 'loading-replace' = 'idle';
   @state() private initialDataLoaded: boolean = false;
   @state() private showRefreshLoader: boolean = false;
+  
+  // Refs for DOM elements
+  @query('#logs_list_container_inner') private logsContainer?: HTMLElement;
+  @query('#loader') private loaderElement?: HTMLElement;
+  @query('#log_details_container') private logDetailsContainer?: HTMLElement;
+  @query('#resizer-details_width-wrapper') private resizerWrapper?: HTMLElement;
+  @query('#details_indicator') private detailsIndicator?: HTMLElement;
 
   private resizeTarget: string | null = null;
   private mouseState: { x: number } = { x: 0 };
@@ -49,6 +65,18 @@ export class LogList extends LitElement {
   private _observer: IntersectionObserver | null = null;
   private fetchDebounceTimer: NodeJS.Timeout | null = null;
   private pendingFetchUrl: string | null = null;
+  private totalCount: number = 0;
+  private updateBatchTimer: NodeJS.Timeout | null = null;
+  private pendingUpdates: Set<string> = new Set();
+  
+  // Memoized functions
+  private memoizedBuildSpanListTree: any;
+  private memoizedRenderSummaryElements: any;
+  
+  // Debounced functions
+  private debouncedHandleScroll: any;
+  private debouncedHandleResize: any;
+  private debouncedFetchData: any;
 
   constructor() {
     super();
@@ -66,6 +94,23 @@ export class LogList extends LitElement {
       'logItemCol',
       'toggleColumnOnTable',
     ].forEach((m) => (this[m] = this[m].bind(this)));
+    
+    // Initialize debounced functions
+    this.debouncedHandleScroll = debounce(this.handleScroll.bind(this), 150);
+    this.debouncedHandleResize = debounce(this.handleResize.bind(this), 50);
+    this.debouncedFetchData = debounce(this.fetchData.bind(this), 300);
+    
+    // Initialize memoized functions
+    this.memoizedBuildSpanListTree = memoize(
+      (logs: any[][]) => groupSpans(logs, this.colIdxMap, this.expandedTraces, this.flipDirection),
+      (logs) => {
+        // Create a stable cache key based on log IDs and expansion state
+        const logIds = logs.slice(0, 10).map(l => l[this.colIdxMap['id']] || '').join(',');
+        const expandedKeys = Object.keys(this.expandedTraces).filter(k => this.expandedTraces[k]).join(',');
+        return `${logIds}-${expandedKeys}-${this.flipDirection}`;
+      }
+    );
+    this.memoizedRenderSummaryElements = memoize((key: string) => null);
 
     const liveBtn = document.querySelector('#streamLiveData') as HTMLInputElement;
     if (liveBtn) {
@@ -108,18 +153,7 @@ export class LogList extends LitElement {
       this.resizeTarget = null;
       document.body.style.userSelect = 'auto';
     });
-    window.addEventListener('mousemove', (event) => {
-      if (this.resizeTarget === null) return;
-      const diff = event.clientX - this.mouseState.x;
-      let width = this.columnMaxWidthMap[this.resizeTarget];
-      if (!width) width = 16;
-      width += diff;
-      if (width > 100) {
-        this.columnMaxWidthMap[this.resizeTarget] = width;
-        this.requestUpdate();
-      }
-      this.mouseState = { x: event.clientX };
-    });
+    window.addEventListener('mousemove', this.debouncedHandleResize);
 
     window.addEventListener('load', () => {
       this.barChart = (window as any).barChart;
@@ -319,9 +353,9 @@ export class LogList extends LitElement {
   }
 
   scrollToBottom() {
-    const container = document.getElementById('logs_list_container_inner');
-    if (container) {
-      container.scrollTop = container.scrollHeight;
+    // Use ref instead of DOM query
+    if (this.logsContainer) {
+      this.logsContainer.scrollTop = this.logsContainer.scrollHeight;
     }
   }
 
@@ -330,9 +364,8 @@ export class LogList extends LitElement {
       this._observer.disconnect();
     }
 
-    const loader = document.querySelector('#loader');
-    const container = document.querySelector('#logs_list_container_inner');
-    if (!loader || !container) {
+    // Use refs instead of DOM queries
+    if (!this.loaderElement || !this.logsContainer) {
       setTimeout(() => {
         this.setupIntersectionObserver();
       }, 1000);
@@ -342,15 +375,15 @@ export class LogList extends LitElement {
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          this.fetchData(this.nextFetchUrl);
+          this.debouncedFetchData(this.nextFetchUrl);
         }
       },
       {
-        root: container,
+        root: this.logsContainer,
         threshold: [0, 0.2, 0.4, 0.6, 0.8, 1],
       }
     );
-    observer.observe(loader);
+    observer.observe(this.loaderElement);
     this._observer = observer;
   }
 
@@ -361,11 +394,56 @@ export class LogList extends LitElement {
     if (this.fetchDebounceTimer) {
       clearTimeout(this.fetchDebounceTimer);
     }
+    if (this.updateBatchTimer) {
+      clearTimeout(this.updateBatchTimer);
+    }
+    // Clean up event listeners
+    window.removeEventListener('mousemove', this.debouncedHandleResize);
     super.disconnectedCallback();
+  }
+  
+  private handleResize(event: MouseEvent) {
+    if (this.resizeTarget === null) return;
+    const diff = event.clientX - this.mouseState.x;
+    let width = this.columnMaxWidthMap[this.resizeTarget];
+    if (!width) width = 16;
+    width += diff;
+    if (width > 100) {
+      this.columnMaxWidthMap[this.resizeTarget] = width;
+      this.batchRequestUpdate('columnResize');
+    }
+    this.mouseState = { x: event.clientX };
+  }
+  
+  private handleScroll(event: any) {
+    const container = event.target;
+    if (this.flipDirection) {
+      if (container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
+        this.shouldScrollToBottom = true;
+      } else {
+        this.shouldScrollToBottom = false;
+        this.handleRecentConcatenation();
+      }
+    } else {
+      if (container.scrollTop === 0) this.handleRecentConcatenation();
+    }
+  }
+  
+  private batchRequestUpdate(source: string) {
+    this.pendingUpdates.add(source);
+    if (this.updateBatchTimer) {
+      clearTimeout(this.updateBatchTimer);
+    }
+    this.updateBatchTimer = setTimeout(() => {
+      this.updateBatchTimer = null;
+      this.pendingUpdates.clear();
+      this.requestUpdate();
+    }, 16); // ~60fps
   }
 
   buildSpanListTree(logs: any[][]) {
-    return groupSpans(logs, this.colIdxMap, this.expandedTraces, this.flipDirection);
+    // Use memoized version for better performance
+    return this.memoizedBuildSpanListTree(logs);
   }
 
   expandTrace(tracId: string, spanId: string) {
@@ -385,7 +463,7 @@ export class LogList extends LitElement {
       }
     });
 
-    this.requestUpdate();
+    this.batchRequestUpdate('expandTrace');
   }
 
   fetchData(url: string, isNewData = false, isRefresh = false) {
@@ -435,7 +513,7 @@ export class LogList extends LitElement {
           }
 
           this.serviceColors = { ...serviceColors, ...this.serviceColors };
-          let tree = this.buildSpanListTree([...logsData]);
+          let tree = this.buildSpanListTree(logsData); // Don't spread unnecessarily
 
           if (isRefresh) {
             this.logsColumns = cols;
@@ -473,7 +551,7 @@ export class LogList extends LitElement {
           this.showErrorToast(data.message || 'Failed to fetch logs');
           // Still need to mark as loaded to hide skeleton
           this.initialDataLoaded = true;
-          this.requestUpdate();
+          this.batchRequestUpdate('fetchError');
         }
       })
       .catch((error) => {
@@ -730,7 +808,18 @@ export class LogList extends LitElement {
 
   renderSummaryElements(summaryArray: string[], wrapLines: boolean): any {
     if (!Array.isArray(summaryArray)) return nothing;
-
+    
+    // Use memoized version for better performance
+    const cacheKey = `${JSON.stringify(summaryArray).substring(0, 200)}-${wrapLines}`;
+    const cached = this.memoizedRenderSummaryElements(cacheKey);
+    if (cached) return cached;
+    
+    const result = this._renderSummaryElementsImpl(summaryArray, wrapLines);
+    this.memoizedRenderSummaryElements.cache.set(cacheKey, result);
+    return result;
+  }
+  
+  private _renderSummaryElementsImpl(summaryArray: string[], wrapLines: boolean): any {
     const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
 
     return summaryArray
@@ -878,7 +967,9 @@ export class LogList extends LitElement {
                     window.dispatchEvent(
                       new CustomEvent('loadSessionReplay', { detail: { sessionId: value }, bubbles: true, cancelable: false })
                     );
-                    document.querySelector('#sessionPlayerWrapper')!.classList.remove('hidden');
+                    // Use ref if available, fall back to querySelector
+                    const wrapper = document.querySelector('#sessionPlayerWrapper');
+                    if (wrapper) wrapper.classList.remove('hidden');
                   }}
                 >
                   ${faSprite('play', 'regular', 'w-4 h-4')} Play recording
@@ -957,11 +1048,8 @@ export class LogList extends LitElement {
                     ? html`<button
                         @pointerdown=${(e: any) => {
                           e.stopPropagation();
-                          this.expandTrace(traceId, id);
-                        }}
-                        @click=${(e: any) => {
-                          e.stopPropagation();
                           e.preventDefault();
+                          this.expandTrace(traceId, id);
                         }}
                         class=${`hover:border-strokeBrand-strong rounded-sm ml-1 cursor-pointer shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
                       >
