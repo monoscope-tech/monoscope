@@ -512,7 +512,8 @@ export class LogList extends LitElement {
       }
     });
 
-    this.batchRequestUpdate('expandTrace');
+    // For user interactions, update immediately
+    this.requestUpdate();
   }
 
   fetchData(url: string, isNewData = false, isRefresh = false) {
