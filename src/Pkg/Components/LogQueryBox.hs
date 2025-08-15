@@ -176,7 +176,10 @@ logQueryBox_ config = do
                 ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-1 w-60 p-2 shadow-lg"] do
                   li_ $ label_ [Lucid.for_ "saveQueryMdl"] "Save query to Query Library"
             button_
-              [type_ "submit", class_ "leading-none rounded-lg px-3 py-2 cursor-pointer !h-auto btn btn-primary"]
+              [ type_ "submit"
+              , class_ "leading-none rounded-lg px-3 py-2 cursor-pointer !h-auto btn btn-primary"
+              , onpointerdown_ "this.form.dispatchEvent(new Event('submit', {bubbles: true}))"
+              ]
               do
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
       div_ [class_ "flex items-between justify-between"] do
