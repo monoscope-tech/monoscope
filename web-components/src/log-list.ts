@@ -222,6 +222,23 @@ export class LogList extends LitElement {
     }
   }
 
+  private updateRowCountDisplay(count: number) {
+    // Find the row count element in the parent page and update it
+    const countElement = document.getElementById('row-count-display');
+    if (countElement) {
+      countElement.textContent = this.formatCount(count);
+    }
+  }
+
+  private formatCount(count: number): string {
+    if (count >= 1000000) {
+      return (count / 1000000).toFixed(1) + 'M';
+    } else if (count >= 1000) {
+      return (count / 1000).toFixed(1) + 'K';
+    }
+    return count.toString();
+  }
+
   firstUpdated() {
     this.setupIntersectionObserver();
   }
@@ -322,7 +339,7 @@ export class LogList extends LitElement {
       .then((response) => response.json())
       .then((data) => {
         if (!data.error) {
-          let { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, resetLogsUrl } = data;
+          let { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, resetLogsUrl, count } = data;
 
           // Validate required fields - but allow empty arrays
           if (!Array.isArray(logsData)) {
@@ -341,6 +358,12 @@ export class LogList extends LitElement {
           }
 
           this.resetLogsUrl = resetLogsUrl || this.resetLogsUrl;
+
+          // Update the count if provided
+          if (count !== undefined) {
+            this.totalCount = count;
+            this.updateRowCountDisplay(count);
+          }
 
           this.serviceColors = { ...serviceColors, ...this.serviceColors };
           let tree = this.buildSpanListTree([...logsData]);
