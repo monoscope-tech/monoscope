@@ -9,7 +9,6 @@ import html2canvas from 'html2canvas';
 const MS_10 = 10000;
 @customElement('session-replay')
 export class SessionReplay extends LitElement {
-  @property({ type: String }) private events: string = '[]';
   @property({ type: String }) private projectId: string = '';
   @property({ type: String }) private containerId: String = '';
 
@@ -29,12 +28,12 @@ export class SessionReplay extends LitElement {
   @state() private syncScrolling = true;
   @state() private trickTarget = 0;
 
-  private thumbnails: { timeOffset: number; dataURL: string }[] = [];
   private startX: number | null = null;
   private player: Replayer | null = null;
   private containerWidth = 1124;
   private containerHeight = 650;
   private iframeWidth = 1117;
+  private trickPlayer: Replayer;
   private observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
       if (mutation.type === 'attributes' && (mutation.attributeName === 'width' || mutation.attributeName === 'height')) {
@@ -78,8 +77,6 @@ export class SessionReplay extends LitElement {
     this.initiatePlayer = this.initiatePlayer.bind(this);
     this.handleTimeSeek = this.handleTimeSeek.bind(this);
     this.closePlayerWindow = this.closePlayerWindow.bind(this);
-    this.getClosestThumbnail = this.getClosestThumbnail.bind(this);
-    this.generateTrickPlayThumbnails = this.generateTrickPlayThumbnails.bind(this);
 
     document.addEventListener('mousemove', (e) => {
       if (this.startX !== null) {
@@ -157,7 +154,7 @@ export class SessionReplay extends LitElement {
     const widthScale = this.containerWidth / this.iframeWidth;
     const heightScale = this.containerHeight / this.iframeHeight;
     if (el) {
-      el.style.transform = `scale(${Math.min(widthScale, heightScale)})` + 'translate(-50%, -50%)';
+      el.style.transform = `scale(${Math.min(widthScale, heightScale)}) translate(-50%, -50%)`;
     }
   };
 
@@ -213,6 +210,7 @@ export class SessionReplay extends LitElement {
 
   async initiatePlayer(events: eventWithTime[]) {
     if (events.length < 2) return;
+    this.events = events;
     const target = document.querySelector('#playerWrapper') as HTMLElement;
     this.currentTime = 0;
     this.consoleEvents = [];
@@ -224,17 +222,10 @@ export class SessionReplay extends LitElement {
       }
     });
 
-    this.player = new Replayer(events, {
-      root: target,
-      plugins: [{ handler: this.handleConsoleEvents }],
-      skipInactive: this.skipInactive,
-    });
+    this.player = new Replayer(events, { root: target, plugins: [{ handler: this.handleConsoleEvents }], skipInactive: this.skipInactive });
+    this.trickPlayer = new Replayer(events, { root: document.querySelector('#trickPlayerContainer')! });
     this.metaData = this.player.getMetaData();
-    console.log('generating thumnail');
     this.updateScale();
-    const val = await this.generateTrickPlayThumbnails();
-    console.log(val);
-    this.thumbnails = val.thumbnails;
     this.play();
     this.observer.disconnect();
     this.observer.observe(this.player.iframe, { attributes: true, attributeFilter: ['width', 'height'] });
@@ -280,6 +271,15 @@ export class SessionReplay extends LitElement {
     const toWidth = x - bounding.x;
     const toGo = (toWidth * this.metaData.totalTime) / bounding.width;
     this.trickTarget = toGo;
+    const el = this.trickPlayer?.wrapper;
+    const iframe = this.trickPlayer.iframe;
+    const widthSc = 192 / Number(iframe.getAttribute('width'));
+    const heightSc = 192 / Number(iframe.getAttribute('height'));
+    if (el) {
+      el.style.transform = `scale(${Math.min(widthSc, heightSc)}) translate(-50%, -50%)`;
+    }
+    this.trickPlayer?.play(this.trickTarget);
+    this.trickPlayer?.pause();
   }
 
   closePlayerWindow() {
@@ -452,15 +452,16 @@ export class SessionReplay extends LitElement {
               id="progressBar"
               @click=${this.handleTimeSeek}
               @mouseover=${this.handleTrickPlay}
+              @mousemove=${this.handleTrickPlay}
               class="relative progress-container h-1.5 cursor-pointer rounded group bg-gray-200"
               style="width:calc(100% - 32px)"
             >
               <div
-                class="bg-slate-700 absolute text-sm -translate-x-1/2 font-medium rounded hidden group-hover:block"
+                class="bg-slate-700 absolute text-sm font-medium rounded -translate-x-1/2 overflow-hidden border border-slate-700 hidden group-hover:block"
                 style="left:${(this.trickTarget / this.metaData.totalTime) * 100}%; top:-200px"
               >
-                <img src=${this.getClosestThumbnail() || ''} class="w-40 h-40 object-contain" />
-                <span class="text-gray-100 text-center w-full">${SessionReplay.formatTime(this.trickTarget)}</span>
+                <div id="trickPlayerContainer" class="h-40 w-60 bg-black overflow-hidden"></div>
+                <div class="text-gray-100 text-center w-full py-2">${SessionReplay.formatTime(this.trickTarget)}</div>
               </div>
               <div class="relative h-full bg-fillBrand-strong" style="width:${(this.currentTime / this.metaData.totalTime) * 100}%">
                 <span class="absolute right-0 h-4 w-4 top-1/2 -translate-y-1/2 rounded-full bg-fillBrand-strong"></span>
@@ -603,54 +604,5 @@ export class SessionReplay extends LitElement {
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseup', onMouseUp);
     };
-  }
-  async generateTrickPlayThumbnails({ intervalMs = 5000, quality = 0.65, format = 'image/png' } = {}) {
-    const meta = this.metaData;
-    const duration = meta.totalTime;
-    console.log('loopoing', duration);
-    const thumbnails = [];
-
-    setTimeout(async () => {
-      for (let t = 0; t <= duration; t += intervalMs) {
-        this.goTo(t, true);
-
-        const replayerRoot = this.player?.iframe;
-        console.log(replayerRoot);
-        if (!replayerRoot) continue;
-
-        const iframeDoc = replayerRoot.contentDocument;
-        const rootEl = iframeDoc?.documentElement || iframeDoc?.body;
-        console.log(rootEl);
-        if (!rootEl) continue;
-
-        const canvas = await html2canvas(rootEl, {
-          scale: 1,
-          useCORS: true,
-          logging: false,
-        });
-        console.log(t);
-        const dataURL = canvas.toDataURL(format, quality);
-
-        thumbnails.push({ timeOffset: t, dataURL });
-      }
-    }, 1000);
-    console.log(thumbnails);
-    return { duration, thumbnails };
-  }
-
-  getClosestThumbnail() {
-    if (!this.thumbnails || this.thumbnails.length === 0) return null;
-
-    let closest = this.thumbnails[0];
-    let minDiff = Math.abs(this.trickTarget - closest.timeOffset);
-
-    for (let i = 1; i < this.thumbnails.length; i++) {
-      const diff = Math.abs(this.trickTarget - this.thumbnails[i].timeOffset);
-      if (diff < minDiff) {
-        closest = this.thumbnails[i];
-        minDiff = diff;
-      }
-    }
-    return closest.dataURL;
   }
 }
