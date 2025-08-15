@@ -538,17 +538,21 @@ export class LogList extends LitElement {
             if (container.scrollTop === 0) this.handleRecentConcatenation();
           }
         }}
-        class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto"
+        class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto ${isInitialLoading ? 'overflow-hidden' : ''}"
         id="logs_list_container_inner"
         style="min-height: 500px;"
       >
         ${this.recentDataToBeAdded.length > 0 && !this.flipDirection
-          ? html` <div class="sticky left-1/2 -translate-y-1/2 top-[30px] z-50">
+          ? html` <div class="sticky left-1/2 -translate-x-1/2 top-[30px] z-50">
               <button
-                class="cbadge-sm badge-neutral cursor-pointer bg-fillBrand-strong text-textInverse-strong shadow rounded-lg text-sm absolute"
+                class="relative cursor-pointer bg-gradient-to-r from-fillBrand-strong to-fillBrand-weak text-textInverse-strong shadow-lg rounded-full px-4 py-1.5 text-sm font-medium transition-all duration-300 hover:shadow-xl hover:scale-105 animate-pulse"
                 @pointerdown=${this.handleRecentClick}
               >
-                ${this.recentDataToBeAdded.length} new
+                <span class="absolute inset-0 rounded-full bg-fillBrand-strong opacity-30 blur animate-ping"></span>
+                <span class="relative flex items-center gap-2">
+                  ${faSprite('arrow-up', 'solid', 'h-3 w-3')}
+                  ${this.recentDataToBeAdded.length} new event${this.recentDataToBeAdded.length > 1 ? 's' : ''}
+                </span>
               </button>
             </div>`
           : nothing}
@@ -559,7 +563,9 @@ export class LogList extends LitElement {
                 ? html`
                     ${[...Array(6)].map((_, idx) => html`
                       <td class="p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${getSkeletonColumnWidth(idx)}">
-                        <div class="h-4 bg-fillWeak rounded animate-pulse w-16"></div>
+                        <div class="relative overflow-hidden">
+                          <div class="h-4 rounded skeleton-shimmer w-16" style="animation-delay: ${idx * 0.1}s"></div>
+                        </div>
                       </td>
                     `)}
                   `
@@ -603,10 +609,18 @@ export class LogList extends LitElement {
                 }}
                 data-tip="Scroll to bottom"
                 class=${`absolute tooltip tooltip-left right-8 bottom-2 group z-50 ${
-                  this.recentDataToBeAdded.length > 0 ? 'bg-fillBrand-strong' : 'bg-bgInverse'
-                } text-textInverse-strong flex justify-center items-center rounded-full shadow-lg h-10 w-10`}
+                  this.recentDataToBeAdded.length > 0 
+                    ? 'bg-gradient-to-br from-fillBrand-strong to-fillBrand-weak animate-pulse' 
+                    : 'bg-gradient-to-br from-fillStrong to-fillWeak'
+                } text-textInverse-strong flex justify-center items-center rounded-full shadow-lg h-10 w-10 transition-all duration-300 hover:shadow-xl hover:scale-110`}
               >
-                ${faSprite('arrow-down', 'regular', 'h-6 w-6 fill-textInverse-strong stroke-textInverse-strong')}
+                ${this.recentDataToBeAdded.length > 0 
+                  ? html`<span class="absolute inset-0 rounded-full bg-fillBrand-strong opacity-30 blur animate-ping"></span>`
+                  : nothing
+                }
+                <span class="relative">
+                  ${faSprite('arrow-down', 'regular', 'h-6 w-6 fill-textInverse-strong stroke-textInverse-strong')}
+                </span>
               </button>
             </div>`
           : nothing}
@@ -950,7 +964,7 @@ export class LogList extends LitElement {
       const sessionId = lookupVecTextByKey(rowData.data, this.colIdxMap, 'session_id');
       const rowHtml = html`
         <tr
-          class=${`item-row relative p-0 flex items-center group cursor-pointer whitespace-nowrap ${isNew ? 'animate-fadeBg' : ''}`}
+          class=${`item-row relative p-0 flex items-center group cursor-pointer whitespace-nowrap transition-all duration-200 hover:bg-fillWeaker hover:shadow-sm ${isNew ? 'animate-fadeBg' : ''}`}
           @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
         >
           ${this.logsColumns
@@ -1283,7 +1297,7 @@ const displayTimestamp = (input: string) => {
 };
 
 function renderBadge(classes: string, title: string, tippy = '') {
-  return html`<span class=${`relative ${classes} ${tippy ? 'tooltip tooltip-right' : ''}`} data-tip=${tippy}>${title}</span>`;
+  return html`<span class=${`relative ${classes} ${tippy ? 'tooltip tooltip-right' : ''} transition-all duration-200 hover:shadow-sm`} data-tip=${tippy}>${title}</span>`;
 }
 
 const lookupVecText = (vec: any[], idx: number) => (Array.isArray(vec) && idx >= 0 && idx < vec.length ? vec[idx] : '');
@@ -1331,17 +1345,17 @@ function spanLatencyBreakdown({
   const width = (duration / traceEnd) * barWidth;
   const left = (start / traceEnd) * barWidth;
 
-  // Base visualization that's always rendered
+  // Enhanced base visualization with subtle gradient
   const baseVisualization = html`
-    <div class="flex h-5 relative bg-fillWeak overflow-x-hidden" style=${`width:${barWidth}px`}>
+    <div class="flex h-5 relative bg-fillWeak overflow-x-hidden rounded-sm" style=${`width:${barWidth}px`}>
       <div
-        class=${`h-full absolute top-0 ${depth === 0 || children.length === 0 ? color : ''}`}
-        style=${`width:${width}px; left:${left}px`}
+        class=${`h-full absolute top-0 rounded-sm transition-all duration-300 ${depth === 0 || children.length === 0 ? color : ''}`}
+        style=${`width:${width}px; left:${left}px; background-image: linear-gradient(to right, transparent, rgba(255,255,255,0.1), transparent)`}
       ></div>
       ${children.map((child) => {
         const cWidth = (child.duration / traceEnd) * barWidth;
         const cLeft = (child.startNs / traceEnd) * barWidth;
-        return html`<div class=${`h-full absolute top-0 ${child.color}`} style=${`width:${cWidth}px; left:${cLeft}px`}></div>`;
+        return html`<div class=${`h-full absolute top-0 rounded-sm ${child.color}`} style=${`width:${cWidth}px; left:${cLeft}px`}></div>`;
       })}
     </div>
   `;
@@ -1352,15 +1366,15 @@ function spanLatencyBreakdown({
       <div class="flex h-5 relative" style=${`width:${barWidth}px`}>
         ${baseVisualization}
 
-        <!-- Overlay frame elements on top -->
+        <!-- Enhanced overlay frame elements with glow effect -->
         <!-- Full width boundary markers at the start and end -->
-        <div class="absolute top-0 h-full border-l-2 border-strokeBrand-strong pointer-events-none" style="left:0"></div>
-        <div class="absolute top-0 h-full border-r-2 border-strokeBrand-strong pointer-events-none" style=${`left:${barWidth - 2}px`}></div>
+        <div class="absolute top-0 h-full border-l-2 border-strokeBrand-strong pointer-events-none" style="left:0; box-shadow: 0 0 4px rgba(26, 116, 168, 0.3)"></div>
+        <div class="absolute top-0 h-full border-r-2 border-strokeBrand-strong pointer-events-none" style=${`left:${barWidth - 2}px; box-shadow: 0 0 4px rgba(26, 116, 168, 0.3)`}></div>
 
         <!-- Horizontal line representing the full timeline -->
         <div
           class="absolute top-1/2 -translate-y-1/2 h-[1px] bg-strokeBrand-strong pointer-events-none"
-          style=${`width:${barWidth}px; left:0`}
+          style=${`width:${barWidth}px; left:0; box-shadow: 0 0 2px rgba(26, 116, 168, 0.2)`}
         ></div>
       </div>
     </div>`;
@@ -1372,21 +1386,47 @@ function spanLatencyBreakdown({
 
 function loadingSkeleton(cols: number) {
   const actualCols = cols || 6;
+  
   return html`
     <tbody class="min-w-0 text-sm">
       <tr class="w-full flex justify-center">
         <td colspan=${String(actualCols)} class="w-full">
-          <div class="text-center py-4">
-            <span class="loading loading-spinner loading-md text-textBrand"></span>
-            <p class="text-sm text-textWeak mt-2">Loading events...</p>
+          <div class="text-center py-8">
+            <div class="relative inline-block">
+              <!-- Animated rings around spinner -->
+              <div class="absolute inset-0 -m-4">
+                <div class="w-full h-full rounded-full border border-fillBrand-strong opacity-20 animate-ping"></div>
+              </div>
+              <div class="absolute inset-0 -m-2">
+                <div class="w-full h-full rounded-full border border-fillBrand-strong opacity-30 animate-ping" style="animation-delay: 0.5s"></div>
+              </div>
+              <span class="loading loading-spinner loading-md text-fillBrand-strong relative z-10"></span>
+            </div>
+            <p class="text-sm text-textWeak mt-4 font-medium">Initializing event stream...</p>
+            <div class="flex justify-center gap-1 mt-2">
+              <span class="w-2 h-2 rounded-full bg-fillBrand-strong animate-bounce" style="animation-delay: 0s"></span>
+              <span class="w-2 h-2 rounded-full bg-fillBrand-strong animate-bounce" style="animation-delay: 0.2s"></span>
+              <span class="w-2 h-2 rounded-full bg-fillBrand-strong animate-bounce" style="animation-delay: 0.4s"></span>
+            </div>
           </div>
         </td>
       </tr>
-      ${[...Array(8)].map((_, rowIdx) => html`
-        <tr class="item-row relative p-0 flex items-center group whitespace-nowrap animate-pulse" style="opacity: ${1 - rowIdx * 0.1}">
+      ${[...Array(10)].map((_, rowIdx) => html`
+        <tr class="item-row relative p-0 flex items-center group whitespace-nowrap" style="--row-index: ${rowIdx}">
           ${[...Array(actualCols)].map((_, idx) => html`
             <td class="bg-bgBase relative pl-2 ${idx === 0 ? 'w-3' : idx === actualCols - 1 ? 'sticky right-0 z-10' : getSkeletonColumnWidth(idx)}">
-              <div class="${idx === 0 ? 'w-1 h-5' : 'h-4'} bg-fillWeak rounded ${idx === actualCols - 1 ? 'w-24' : idx === 0 ? '' : 'w-3/4'}"></div>
+              ${idx === 0 
+                ? html`<div class="w-1 h-5 bg-fillBrand-strong opacity-20 rounded-full skeleton-glow"></div>`
+                : html`
+                    <div class="relative overflow-hidden">
+                      <div class="h-4 rounded skeleton-shimmer skeleton-wave ${idx === actualCols - 1 ? 'w-24' : 'w-3/4'}"></div>
+                      ${idx === actualCols - 1 
+                        ? html`<div class="absolute right-0 top-0 h-full w-16 bg-gradient-to-r from-transparent to-bgBase"></div>`
+                        : nothing
+                      }
+                    </div>
+                  `
+              }
             </td>
           `)}
         </tr>
@@ -1407,13 +1447,24 @@ function emptyState(cols: number) {
     <tr class="w-full flex justify-center">
       <td colspan=${String(cols)} class="w-full mx-auto">
         <div class="w-max mx-auto my-8 text-center p-5 sm:py-14 sm:px-24 flex flex-col gap-4">
-          <div>${faSprite('empty', 'regular', 'h-24 w-24 mx-auto stroke-strokeBrand-strong fill-fillBrand-strong')}</div>
-          <div class="flex flex-col gap-2">
-            <h2 class="text-xl text-textStrong font-bold">${title}</h2>
-            <p class="text-sm max-w-4xl font-medium text-textWeak">${subText}</p>
-            <a href="https://apitoolkit.io/docs/sdks/" target="_BLANK" class="btn text-sm w-max mx-auto btn-primary"
-              >Read integration guides</a
+          <div class="relative">
+            <div class="absolute inset-0 -m-8">
+              <div class="w-full h-full rounded-full bg-gradient-to-b from-fillBrand-weak to-transparent opacity-20 blur-xl"></div>
+            </div>
+            <div class="relative">
+              ${faSprite('empty', 'regular', 'h-24 w-24 mx-auto stroke-strokeBrand-strong fill-fillBrand-strong opacity-80')}
+            </div>
+          </div>
+          <div class="flex flex-col gap-3">
+            <h2 class="text-2xl text-textStrong font-bold bg-gradient-to-r from-textStrong to-textBrand bg-clip-text text-transparent">${title}</h2>
+            <p class="text-sm max-w-md font-medium text-textWeak leading-relaxed">${subText}</p>
+            <a 
+              href="https://apitoolkit.io/docs/sdks/" 
+              target="_BLANK" 
+              class="btn text-sm w-max mx-auto btn-primary bg-gradient-to-r from-fillBrand-strong to-fillBrand-weak hover:shadow-lg transition-all duration-300 hover:scale-105 border-0"
             >
+              Read integration guides
+            </a>
           </div>
         </div>
       </td>

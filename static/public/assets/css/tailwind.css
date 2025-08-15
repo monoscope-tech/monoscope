@@ -144,6 +144,15 @@
     70% { background-color: rgb(0 104 255)}
     100% { background-color: transparent }
   }
+
+  @keyframes shimmer {
+    0% {
+      background-position: -200% 0;
+    }
+    100% {
+      background-position: 200% 0;
+    }
+  }
 }
 
 @plugin "daisyui/theme" {
@@ -275,6 +284,32 @@ body {
     --color-error: var(--color-fillError-weak);
     --color-warning: var(--color-fillWarning-weak);
     --color-info: var(--color-fillInformation-weak);
+  }
+
+  /* Skeleton loader styles */
+  .skeleton-shimmer {
+    background: linear-gradient(
+      90deg,
+      var(--color-fillWeak) 0%,
+      var(--color-fillWeak) 40%,
+      var(--skeleton-highlight, rgba(26, 116, 168, 0.1)) 50%,
+      var(--color-fillWeak) 60%,
+      var(--color-fillWeak) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 2s ease-in-out infinite;
+  }
+  
+  [data-theme="dark"] .skeleton-shimmer {
+    --skeleton-highlight: rgba(26, 116, 168, 0.2);
+  }
+  
+  .skeleton-wave {
+    animation-delay: calc(var(--row-index) * 0.1s);
+  }
+  
+  .skeleton-glow {
+    box-shadow: 0 0 10px rgba(26, 116, 168, 0.1);
   }
 }
 
