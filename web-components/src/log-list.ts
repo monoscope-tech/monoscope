@@ -80,6 +80,9 @@ export class LogList extends LitElement {
   private debouncedHandleScroll: any;
   private debouncedHandleResize: any;
   private debouncedFetchData: any;
+  
+  // Bound functions for event listeners
+  private boundHandleResize: any;
 
   constructor() {
     super();
@@ -102,6 +105,9 @@ export class LogList extends LitElement {
     this.debouncedHandleScroll = debounce(this.handleScroll.bind(this), 150);
     this.debouncedHandleResize = debounce(this.handleResize.bind(this), 50);
     this.debouncedFetchData = debounce(this.fetchData.bind(this), 300);
+    
+    // Bind resize handler for immediate feedback
+    this.boundHandleResize = this.handleResize.bind(this);
     
     // Initialize memoized functions
     this.memoizedBuildSpanListTree = memoize(
@@ -166,7 +172,7 @@ export class LogList extends LitElement {
       document.body.style.userSelect = 'auto';
     };
     window.addEventListener('mouseup', this.handleMouseUp);
-    window.addEventListener('mousemove', this.debouncedHandleResize);
+    window.addEventListener('mousemove', this.boundHandleResize);
 
     window.addEventListener('load', () => {
       this.barChart = (window as any).barChart;
@@ -431,7 +437,7 @@ export class LogList extends LitElement {
     }
     
     // Clean up event listeners
-    window.removeEventListener('mousemove', this.debouncedHandleResize);
+    window.removeEventListener('mousemove', this.boundHandleResize);
     window.removeEventListener('mouseup', this.handleMouseUp);
     ['submit', 'add-query', 'update-query'].forEach((ev) => 
       window.removeEventListener(ev, this.debouncedRefetchLogs)
@@ -456,7 +462,7 @@ export class LogList extends LitElement {
     width += diff;
     if (width > 100) {
       this.columnMaxWidthMap[this.resizeTarget] = width;
-      this.batchRequestUpdate('columnResize');
+      this.requestUpdate();
     }
     this.mouseState = { x: event.clientX };
   }
