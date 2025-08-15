@@ -68,6 +68,9 @@ export class LogList extends LitElement {
   private totalCount: number = 0;
   private updateBatchTimer: NodeJS.Timeout | null = null;
   private pendingUpdates: Set<string> = new Set();
+  private handleMouseUp: (() => void) | null = null;
+  private summaryDataCache: WeakMap<any[], string[]> = new WeakMap();
+  private sessionPlayerWrapper: HTMLElement | null = null;
   
   // Memoized functions
   private memoizedBuildSpanListTree: any;
@@ -104,13 +107,22 @@ export class LogList extends LitElement {
     this.memoizedBuildSpanListTree = memoize(
       (logs: any[][]) => groupSpans(logs, this.colIdxMap, this.expandedTraces, this.flipDirection),
       (logs) => {
-        // Create a stable cache key based on log IDs and expansion state
-        const logIds = logs.slice(0, 10).map(l => l[this.colIdxMap['id']] || '').join(',');
-        const expandedKeys = Object.keys(this.expandedTraces).filter(k => this.expandedTraces[k]).join(',');
-        return `${logIds}-${expandedKeys}-${this.flipDirection}`;
+        // Create a more efficient cache key
+        const logCount = logs.length;
+        const firstId = logs[0]?.[this.colIdxMap['id']] || '';
+        const lastId = logs[logs.length - 1]?.[this.colIdxMap['id']] || '';
+        const expandedCount = Object.values(this.expandedTraces).filter(Boolean).length;
+        return `${logCount}-${firstId}-${lastId}-${expandedCount}-${this.flipDirection}`;
       }
     );
-    this.memoizedRenderSummaryElements = memoize((key: string) => null);
+    this.memoizedRenderSummaryElements = memoize(
+      (summaryArray: string[], wrapLines: boolean) => this._renderSummaryElementsImpl(summaryArray, wrapLines),
+      (summaryArray, wrapLines) => {
+        // Use a hash of the array content for efficient caching
+        const hash = summaryArray.length + '-' + summaryArray[0] + '-' + summaryArray[summaryArray.length - 1] + '-' + wrapLines;
+        return hash;
+      }
+    );
 
     const liveBtn = document.querySelector('#streamLiveData') as HTMLInputElement;
     if (liveBtn) {
@@ -149,10 +161,11 @@ export class LogList extends LitElement {
       if (this.liveStreamInterval) clearInterval(this.liveStreamInterval);
     });
 
-    window.addEventListener('mouseup', () => {
+    this.handleMouseUp = () => {
       this.resizeTarget = null;
       document.body.style.userSelect = 'auto';
-    });
+    };
+    window.addEventListener('mouseup', this.handleMouseUp);
     window.addEventListener('mousemove', this.debouncedHandleResize);
 
     window.addEventListener('load', () => {
@@ -214,7 +227,6 @@ export class LogList extends LitElement {
   }
 
   toggleColumnOnTable(col: string) {
-    console.log('toggleColumnOnTable', col);
     const p = new URLSearchParams(window.location.search);
     const cols = (p.get('cols') || '').split(',').filter(Boolean);
     const idx = cols.indexOf(col);
@@ -338,17 +350,29 @@ export class LogList extends LitElement {
 
   updated(changedProperties: Map<string, any>) {
     if (this.shouldScrollToBottom && this.flipDirection) {
-      this.scrollToBottom();
+      requestAnimationFrame(() => this.scrollToBottom());
     }
     if (changedProperties.has('spanListTree') && this.fetchedNew) {
-      setTimeout(() => {
-        this.spanListTree.forEach((span) => {
-          if (span.isNew) {
-            span.isNew = false;
-          }
+      // Use requestIdleCallback for non-critical updates
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => {
+          this.spanListTree.forEach((span) => {
+            if (span.isNew) {
+              span.isNew = false;
+            }
+          });
+          this.fetchedNew = false;
         });
-        this.fetchedNew = false;
-      }, 10);
+      } else {
+        setTimeout(() => {
+          this.spanListTree.forEach((span) => {
+            if (span.isNew) {
+              span.isNew = false;
+            }
+          });
+          this.fetchedNew = false;
+        }, 10);
+      }
     }
   }
 
@@ -388,17 +412,39 @@ export class LogList extends LitElement {
   }
 
   disconnectedCallback() {
+    // Clean up all observers and timers
     if (this._observer) {
       this._observer.disconnect();
+      this._observer = null;
     }
     if (this.fetchDebounceTimer) {
       clearTimeout(this.fetchDebounceTimer);
+      this.fetchDebounceTimer = null;
     }
     if (this.updateBatchTimer) {
       clearTimeout(this.updateBatchTimer);
+      this.updateBatchTimer = null;
     }
+    if (this.liveStreamInterval) {
+      clearInterval(this.liveStreamInterval);
+      this.liveStreamInterval = null;
+    }
+    
     // Clean up event listeners
     window.removeEventListener('mousemove', this.debouncedHandleResize);
+    window.removeEventListener('mouseup', this.handleMouseUp);
+    ['submit', 'add-query', 'update-query'].forEach((ev) => 
+      window.removeEventListener(ev, this.debouncedRefetchLogs)
+    );
+    
+    // Clean up chart event handlers
+    if (this.barChart) {
+      this.barChart.off('datazoom', this.handleChartZoom);
+    }
+    if (this.lineChart) {
+      this.lineChart.off('datazoom', this.handleChartZoom);
+    }
+    
     super.disconnectedCallback();
   }
   
@@ -434,10 +480,13 @@ export class LogList extends LitElement {
     if (this.updateBatchTimer) {
       clearTimeout(this.updateBatchTimer);
     }
+    // Use requestAnimationFrame for better performance
     this.updateBatchTimer = setTimeout(() => {
       this.updateBatchTimer = null;
-      this.pendingUpdates.clear();
-      this.requestUpdate();
+      requestAnimationFrame(() => {
+        this.pendingUpdates.clear();
+        this.requestUpdate();
+      });
     }, 16); // ~60fps
   }
 
@@ -512,8 +561,11 @@ export class LogList extends LitElement {
             this.updateRowCountDisplay(count);
           }
 
-          this.serviceColors = { ...serviceColors, ...this.serviceColors };
-          let tree = this.buildSpanListTree(logsData); // Don't spread unnecessarily
+          // Only update service colors if new ones are provided
+          if (serviceColors && Object.keys(serviceColors).length > 0) {
+            Object.assign(this.serviceColors, serviceColors);
+          }
+          let tree = this.buildSpanListTree(logsData);
 
           if (isRefresh) {
             this.logsColumns = cols;
@@ -539,10 +591,20 @@ export class LogList extends LitElement {
               } else if (this.isLiveStreaming && !scrolledToBottom && this.flipDirection) {
                 this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree);
               } else {
-                this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree);
+                // More efficient array operations
+                if (this.flipDirection) {
+                  this.spanListTree.push(...tree);
+                } else {
+                  this.spanListTree.unshift(...tree);
+                }
               }
             } else {
-              this.spanListTree = this.addWithFlipDirection(tree, this.spanListTree);
+              // For pagination loading
+              if (this.flipDirection) {
+                this.spanListTree = [...tree, ...this.spanListTree];
+              } else {
+                this.spanListTree.push(...tree);
+              }
             }
           }
 
@@ -592,31 +654,41 @@ export class LogList extends LitElement {
     this.requestUpdate();
   }
   updateColumnMaxWidthMap(recVecs: any[][]) {
-    const columnDefaults = { summary: 450 * 8.5, latency_breakdown: 100 };
-    const charWidths = { timestamp: 6.5, default: 8.5 };
+    // Defer non-critical calculations
+    requestAnimationFrame(() => {
+      const columnDefaults = { summary: 450 * 8.5, latency_breakdown: 100 };
+      const charWidths = { timestamp: 6.5, default: 8.5 };
 
-    recVecs.forEach((vec) => {
-      Object.entries(this.colIdxMap).forEach(([key, value]) => {
-        if (key === 'id') return;
+      // Process in batches for better performance
+      const batchSize = 100;
+      for (let i = 0; i < recVecs.length; i += batchSize) {
+        const batch = recVecs.slice(i, Math.min(i + batchSize, recVecs.length));
+        
+        batch.forEach((vec) => {
+          Object.entries(this.colIdxMap).forEach(([key, value]) => {
+            if (key === 'id') return;
 
-        // Set defaults for special columns
-        if (columnDefaults[key] && !this.columnMaxWidthMap[key]) {
-          this.columnMaxWidthMap[key] = columnDefaults[key];
-        }
+            // Set defaults for special columns
+            if (columnDefaults[key] && !this.columnMaxWidthMap[key]) {
+              this.columnMaxWidthMap[key] = columnDefaults[key];
+            }
 
-        // Skip if already set for special columns
-        if ((key === 'latency_breakdown' || key === 'summary') && this.columnMaxWidthMap[key]) return;
+            // Skip if already set for special columns
+            if ((key === 'latency_breakdown' || key === 'summary') && this.columnMaxWidthMap[key]) return;
 
-        const chPx = charWidths[key] || charWidths.default;
-        const target = String(vec[value]).length * chPx;
+            const chPx = charWidths[key] || charWidths.default;
+            const target = String(vec[value]).length * chPx;
 
-        this.columnMaxWidthMap[key] = Math.max(this.columnMaxWidthMap[key] || 12 * chPx, target);
-      });
+            this.columnMaxWidthMap[key] = Math.max(this.columnMaxWidthMap[key] || 12 * chPx, target);
+          });
+        });
+      }
     });
   }
   toggleLogRow(event: any, targetInfo: [string, string, string], pid: string) {
-    const sideView = document.querySelector('#log_details_container')! as HTMLElement;
-    const resizerWrapper = document.querySelector('#resizer-details_width-wrapper');
+    // Use refs when available, fallback to querySelector
+    const sideView = this.logDetailsContainer || document.querySelector('#log_details_container')! as HTMLElement;
+    const resizerWrapper = this.resizerWrapper || document.querySelector('#resizer-details_width-wrapper');
     const width = Number(getComputedStyle(sideView).width.replace('px', ''));
     this.shouldScrollToBottom = false;
     if (width < 50) {
@@ -627,10 +699,13 @@ export class LogList extends LitElement {
     if (resizerWrapper) {
       resizerWrapper.classList.remove('hidden', 'opacity-0', 'pointer-events-none');
     }
-    const rows = document.querySelectorAll('.item-row.bg-fillBrand-strong');
-    rows.forEach((row) => row.classList.remove('bg-fillBrand-strong'));
+    // Use event delegation instead of querying all rows
+    const prevActive = event.currentTarget.parentElement?.querySelector('.bg-fillBrand-strong');
+    if (prevActive) {
+      prevActive.classList.remove('bg-fillBrand-strong');
+    }
     event.currentTarget.classList.add('bg-fillBrand-strong');
-    const indicator = document.querySelector('#details_indicator');
+    const indicator = this.detailsIndicator || document.querySelector('#details_indicator');
     if (indicator) {
       indicator.classList.add('htmx-request');
     }
@@ -650,8 +725,15 @@ export class LogList extends LitElement {
     this.requestUpdate();
   }
 
-  addWithFlipDirection(current: any, newData: any[]) {
-    return this.flipDirection ? [...current, ...newData] : [...newData, ...current];
+  addWithFlipDirection(current: any[], newData: any[]) {
+    // Avoid creating new arrays when possible
+    if (this.flipDirection) {
+      current.push(...newData);
+      return current;
+    } else {
+      newData.push(...current);
+      return newData;
+    }
   }
 
   handleRecentClick() {
@@ -664,8 +746,14 @@ export class LogList extends LitElement {
 
   handleRecentConcatenation() {
     if (this.recentDataToBeAdded.length === 0) return;
-    this.spanListTree = this.addWithFlipDirection(this.spanListTree, this.recentDataToBeAdded);
+    // Use more efficient array concatenation
+    if (this.flipDirection) {
+      this.spanListTree.push(...this.recentDataToBeAdded);
+    } else {
+      this.spanListTree.unshift(...this.recentDataToBeAdded);
+    }
     this.recentDataToBeAdded = [];
+    this.batchRequestUpdate('recentConcatenation');
   }
 
   // Comment to allow classes be rendered.
@@ -681,19 +769,7 @@ export class LogList extends LitElement {
     return html`
       ${this.options()}
       <div
-        @scroll=${(event: any) => {
-          const container = event.target;
-          if (this.flipDirection) {
-            if (container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
-              this.shouldScrollToBottom = true;
-            } else {
-              this.shouldScrollToBottom = false;
-              this.handleRecentConcatenation();
-            }
-          } else {
-            if (container.scrollTop === 0) this.handleRecentConcatenation();
-          }
-        }}
+        @scroll=${this.debouncedHandleScroll}
         class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto ${isInitialLoading ? 'overflow-hidden' : ''}"
         id="logs_list_container_inner"
         style="min-height: 500px;"
@@ -747,6 +823,12 @@ export class LogList extends LitElement {
                   ${virtualize({
                       items: list,
                       renderItem: this.logItemRow,
+                      layout: {
+                        itemSize: {
+                          height: 28, // Fixed row height for better performance
+                          width: '100%'
+                        }
+                      }
                     })
                   }
                 </tbody>
@@ -806,17 +888,40 @@ export class LogList extends LitElement {
     return this;
   }
 
+  private parseSummaryData(dataArr: any[]): string[] {
+    // Check cache first
+    const cached = this.summaryDataCache.get(dataArr);
+    if (cached) return cached;
+    
+    const summaryData = lookupVecTextByKey(dataArr, this.colIdxMap, 'summary');
+    let summaryArray: string[] = [];
+
+    if (Array.isArray(summaryData)) {
+      summaryArray = summaryData;
+    } else if (typeof summaryData === 'string') {
+      // Handle new format: "\"[item1, item2, ...]\""
+      let cleaned = summaryData;
+      if (summaryData.startsWith('"') && summaryData.endsWith('"')) {
+        cleaned = summaryData.slice(1, -1); // Remove outer quotes
+      }
+      if (cleaned.startsWith('[') && cleaned.endsWith(']')) {
+        cleaned = cleaned.slice(1, -1); // Remove brackets
+      }
+      // Split by comma, but not commas inside braces {}
+      summaryArray = cleaned.match(/[^,]+(?:{[^}]*}[^,]*)?/g) || [];
+      summaryArray = summaryArray.map((s) => s.trim());
+    }
+    
+    // Cache the result
+    this.summaryDataCache.set(dataArr, summaryArray);
+    return summaryArray;
+  }
+
   renderSummaryElements(summaryArray: string[], wrapLines: boolean): any {
     if (!Array.isArray(summaryArray)) return nothing;
     
     // Use memoized version for better performance
-    const cacheKey = `${JSON.stringify(summaryArray).substring(0, 200)}-${wrapLines}`;
-    const cached = this.memoizedRenderSummaryElements(cacheKey);
-    if (cached) return cached;
-    
-    const result = this._renderSummaryElementsImpl(summaryArray, wrapLines);
-    this.memoizedRenderSummaryElements.cache.set(cacheKey, result);
-    return result;
+    return this.memoizedRenderSummaryElements(summaryArray, wrapLines);
   }
   
   private _renderSummaryElementsImpl(summaryArray: string[], wrapLines: boolean): any {
@@ -824,19 +929,31 @@ export class LogList extends LitElement {
 
     return summaryArray
       .filter((el) => {
-        if (!el.includes(';') || !el.includes('⇒')) return true;
-        const [, style] = el.split('⇒')[0].split(';');
+        // Optimize string checking
+        const sepIndex = el.indexOf('⇒');
+        if (sepIndex === -1) return true;
+        const semicolonIndex = el.indexOf(';');
+        if (semicolonIndex === -1 || semicolonIndex > sepIndex) return true;
+        const style = el.substring(semicolonIndex + 1, sepIndex);
         return !style.startsWith('right-');
       })
       .map((element) => {
-        if (!element.includes(';') || !element.includes('⇒')) {
+        const sepIndex = element.indexOf('⇒');
+        if (sepIndex === -1) {
           // Unescape any JSON content in plain text elements
           const unescapedElement = element.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
           return html`<span class=${`fill-textStrong ${wrapClass}`}>${unescapedElement}</span>`;
         }
 
-        const [fieldAndStyle, value] = element.split('⇒');
-        const [field, style] = fieldAndStyle.split(';');
+        const semicolonIndex = element.indexOf(';');
+        if (semicolonIndex === -1 || semicolonIndex > sepIndex) {
+          // Malformed element, treat as plain text
+          return html`<span class=${`fill-textStrong ${wrapClass}`}>${element}</span>`;
+        }
+        
+        const field = element.substring(0, semicolonIndex);
+        const style = element.substring(semicolonIndex + 1, sepIndex);
+        const value = element.substring(sepIndex + 1);
 
         // Special icon handling
         const iconConfig = {
@@ -925,24 +1042,7 @@ export class LogList extends LitElement {
         const width = this.columnMaxWidthMap['latency_breakdown'] || 200;
 
         // Extract right-aligned badges from summary array
-        const summaryData = lookupVecTextByKey(dataArr, this.colIdxMap, 'summary');
-        let summaryArr: string[] = [];
-
-        if (Array.isArray(summaryData)) {
-          summaryArr = summaryData;
-        } else if (typeof summaryData === 'string') {
-          // Handle new format: "\"[item1, item2, ...]\""
-          let cleaned = summaryData;
-          if (summaryData.startsWith('"') && summaryData.endsWith('"')) {
-            cleaned = summaryData.slice(1, -1); // Remove outer quotes
-          }
-          if (cleaned.startsWith('[') && cleaned.endsWith(']')) {
-            cleaned = cleaned.slice(1, -1); // Remove brackets
-          }
-          // Split by comma, but not commas inside braces {}
-          summaryArr = cleaned.match(/[^,]+(?:{[^}]*}[^,]*)?/g) || [];
-          summaryArr = summaryArr.map((s) => s.trim());
-        }
+        const summaryArr = this.parseSummaryData(dataArr);
 
         const rightAlignedBadges: TemplateResult[] = [];
 
@@ -967,8 +1067,12 @@ export class LogList extends LitElement {
                     window.dispatchEvent(
                       new CustomEvent('loadSessionReplay', { detail: { sessionId: value }, bubbles: true, cancelable: false })
                     );
-                    // Use ref if available, fall back to querySelector
-                    const wrapper = document.querySelector('#sessionPlayerWrapper');
+                    // Cache the wrapper reference
+                    let wrapper = this.sessionPlayerWrapper;
+                    if (!wrapper) {
+                      wrapper = document.querySelector('#sessionPlayerWrapper');
+                      this.sessionPlayerWrapper = wrapper;
+                    }
                     if (wrapper) wrapper.classList.remove('hidden');
                   }}
                 >
@@ -1000,24 +1104,7 @@ export class LogList extends LitElement {
         `;
         return latencyHtml;
       case 'summary':
-        const summaryData2 = lookupVecTextByKey(dataArr, this.colIdxMap, key);
-        let summaryArray: string[] = [];
-
-        if (Array.isArray(summaryData2)) {
-          summaryArray = summaryData2;
-        } else if (typeof summaryData2 === 'string') {
-          // Handle new format: "\"[item1, item2, ...]\""
-          let cleaned = summaryData2;
-          if (summaryData2.startsWith('"') && summaryData2.endsWith('"')) {
-            cleaned = summaryData2.slice(1, -1); // Remove outer quotes
-          }
-          if (cleaned.startsWith('[') && cleaned.endsWith(']')) {
-            cleaned = cleaned.slice(1, -1); // Remove brackets
-          }
-          // Split by comma, but not commas inside braces {}
-          summaryArray = cleaned.match(/[^,]+(?:{[^}]*}[^,]*)?/g) || [];
-          summaryArray = summaryArray.map((s) => s.trim());
-        }
+        const summaryArray = this.parseSummaryData(dataArr);
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
@@ -1284,10 +1371,13 @@ export class LogList extends LitElement {
           <div tabindex="0" class="dropdown-content space-y-2 bg-bgBase border w-64 border-strokeWeak p-2 text-sm rounded shadow">
             ${this.renderCheckbox('Flip direction', 'flip-vertical', this.flipDirection, (checked) => {
               this.flipDirection = checked;
-              this.spanListTree = this.buildSpanListTree(this.spanListTree.map((span) => span.data).reverse());
-              this.recentDataToBeAdded = this.buildSpanListTree(this.recentDataToBeAdded.map((span) => span.data).reverse());
-              this.spanListTree = [...this.spanListTree, ...this.recentDataToBeAdded];
-              this.recentDataToBeAdded = [];
+              // Just reverse the existing trees without rebuilding
+              this.spanListTree.reverse();
+              this.recentDataToBeAdded.reverse();
+              if (this.recentDataToBeAdded.length > 0) {
+                this.spanListTree.push(...this.recentDataToBeAdded);
+                this.recentDataToBeAdded = [];
+              }
               this.requestUpdate();
             })}
             ${this.renderCheckbox('Wrap lines', 'wrap-text', this.wrapLines, (checked) => {
@@ -1729,18 +1819,20 @@ function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<
 
       if (parentSpan) {
         parentSpan.children.push(span);
-        // Insertion sort to maintain order
-        let i = parentSpan.children.length - 1;
-        while (i > 0 && parentSpan.children[i].startNs < parentSpan.children[i - 1].startNs) {
-          [parentSpan.children[i], parentSpan.children[i - 1]] = [parentSpan.children[i - 1], parentSpan.children[i]];
-          i--;
-        }
       } else {
         spanTree.set(span.id, span);
       }
     });
 
-    traceData.spans = Array.from(spanTree.values()).sort((a, b) => a.startNs - b.startNs) as any;
+    // Sort children after all have been added
+    traceData.spans.forEach((span) => {
+      if (span.children.length > 1) {
+        span.children.sort((a, b) => a.startNs - b.startNs);
+      }
+    });
+    // Convert to array after processing
+    const sortedSpans = Array.from(spanTree.values()).sort((a, b) => a.startNs - b.startNs);
+    traceData.spans = sortedSpans as any;
   });
 
   const result = Array.from(traceMap.values()).map((trace) => {
