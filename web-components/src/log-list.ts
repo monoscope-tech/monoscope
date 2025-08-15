@@ -1391,23 +1391,9 @@ function loadingSkeleton(cols: number) {
     <tbody class="min-w-0 text-sm">
       <tr class="w-full flex justify-center">
         <td colspan=${String(actualCols)} class="w-full">
-          <div class="text-center py-8">
-            <div class="relative inline-block">
-              <!-- Animated rings around spinner -->
-              <div class="absolute inset-0 -m-4">
-                <div class="w-full h-full rounded-full border border-fillBrand-strong opacity-20 animate-ping"></div>
-              </div>
-              <div class="absolute inset-0 -m-2">
-                <div class="w-full h-full rounded-full border border-fillBrand-strong opacity-30 animate-ping" style="animation-delay: 0.5s"></div>
-              </div>
-              <span class="loading loading-spinner loading-md text-fillBrand-strong relative z-10"></span>
-            </div>
-            <p class="text-sm text-textWeak mt-4 font-medium">Initializing event stream...</p>
-            <div class="flex justify-center gap-1 mt-2">
-              <span class="w-2 h-2 rounded-full bg-fillBrand-strong animate-bounce" style="animation-delay: 0s"></span>
-              <span class="w-2 h-2 rounded-full bg-fillBrand-strong animate-bounce" style="animation-delay: 0.2s"></span>
-              <span class="w-2 h-2 rounded-full bg-fillBrand-strong animate-bounce" style="animation-delay: 0.4s"></span>
-            </div>
+          <div class="text-center py-6">
+            <span class="loading loading-spinner loading-md text-fillBrand-strong"></span>
+            <p class="text-sm text-textWeak mt-3">Loading events...</p>
           </div>
         </td>
       </tr>
