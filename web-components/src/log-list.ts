@@ -82,7 +82,20 @@ export class LogList extends LitElement {
       });
     }
 
+    // Listen to all relevant events
     ['submit', 'add-query', 'update-query'].forEach((ev) => window.addEventListener(ev, () => this.refetchLogs()));
+    
+    // Also listen to form submit and update-query from filterElement
+    document.addEventListener('submit', (e) => {
+      if ((e.target as HTMLElement)?.id === 'log_explorer_form') {
+        e.preventDefault();
+        this.refetchLogs();
+      }
+    });
+    
+    document.addEventListener('update-query', (e) => {
+      if ((e.target as HTMLElement)?.id === 'filterElement') this.refetchLogs();
+    });
 
     window.addEventListener('pagehide', () => {
       if (this.liveStreamInterval) clearInterval(this.liveStreamInterval);
@@ -185,7 +198,8 @@ export class LogList extends LitElement {
       })
     );
 
-    // set from and to to the startValue and endValue in search params
+    // Refetch logs with the new time range
+    this.refetchLogs();
   }
 
   // updateTableData method is no longer needed as we fetch data directly

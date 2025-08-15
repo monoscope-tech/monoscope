@@ -55,15 +55,9 @@ logQueryBox_ config = do
       input_ [class_ "input input-md", placeholder_ "query title", name_ "queryTitle"]
       button_ [type_ "submit", class_ "btn cursor-pointer bg-linear-to-b from-[#067cff] to-[#0850c5] text-white"] "Save"
   form_
-    [ hxGet_ $ "/p/" <> config.pid.toText <> "/log_explorer"
-    , hxTrigger_ "update-query from:#filterElement, submit, update-query from:window"
-    , hxVals_ "js:{...{...params(), layout:'resultTable'}}"
-    , hxTarget_ "#resultTableInner"
-    , hxSwap_ "outerHTML"
-    , id_ "log_explorer_form"
-    , hxIndicator_ "#run-query-indicator"
-    , [__| on keydown if event.key is 'Enter' halt |]
+    [ id_ "log_explorer_form"
     , class_ "flex flex-col gap-1 w-full max-w-full"
+    , [__| on keydown if event.key is 'Enter' halt |]
     ]
     do
       div_ [class_ "flex flex-col gap-2 items-stretch justify-center group/fltr"] do
@@ -169,7 +163,7 @@ logQueryBox_ config = do
                   [ class_ "ml-1 select select-sm w-full max-w-xs h-full bg-transparent border-strokeStrong"
                   , name_ "target-spans"
                   , id_ "spans-toggle"
-                  , onchange_ "htmx.trigger('#log_explorer_form', 'submit')"
+                  , onchange_ "this.form.dispatchEvent(new Event('submit', {bubbles: true}))"
                   ]
                   do
                     let target = fromMaybe "all-spans" config.targetSpan
@@ -184,7 +178,6 @@ logQueryBox_ config = do
             button_
               [type_ "submit", class_ "leading-none rounded-lg px-3 py-2 cursor-pointer !h-auto btn btn-primary"]
               do
-                span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-sm"] ""
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
       div_ [class_ "flex items-between justify-between"] do
         div_ [class_ "flex items-center gap-2"] do
@@ -192,7 +185,7 @@ logQueryBox_ config = do
           span_ [class_ "text-textDisabled mx-2 text-xs"] "|"
           termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
 
-        div_ [class_ "", id_ "resultTableInner"] pass
+        -- Results will be rendered by the virtual table component
 
         div_ [class_ "flex justify-end gap-2"] do
           fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[#viz-logs:checked]/pg:block"] do
