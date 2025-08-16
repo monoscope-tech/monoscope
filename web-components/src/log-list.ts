@@ -2,6 +2,7 @@
 import { virtualize } from '@lit-labs/virtualizer/virtualize.js';
 import { LitElement, html, css, TemplateResult, nothing } from 'lit';
 import { customElement, state, query, property } from 'lit/decorators.js';
+import { ref, createRef } from 'lit/directives/ref.js';
 import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, Trace, TraceDataMap } from './types/types';
 import { RangeChangedEvent, VisibilityChangedEvent } from '@lit-labs/virtualizer';
 import debounce from 'lodash/debounce';
@@ -41,7 +42,7 @@ export class LogList extends LitElement {
   @state() private loadingState: 'idle' | 'loading' | 'loading-recent' | 'loading-replace' = 'idle';
   @state() private initialDataLoaded: boolean = false;
   @state() private showRefreshLoader: boolean = false;
-  
+
   // Refs for DOM elements
   @query('#logs_list_container_inner') private logsContainer?: HTMLElement;
   @query('#loader') private loaderElement?: HTMLElement;
@@ -71,16 +72,17 @@ export class LogList extends LitElement {
   private handleMouseUp: (() => void) | null = null;
   private summaryDataCache: WeakMap<any[], string[]> = new WeakMap();
   private sessionPlayerWrapper: HTMLElement | null = null;
-  
+  private containerRef = createRef<HTMLDivElement>();
+
   // Memoized functions
   private memoizedBuildSpanListTree: any;
   private memoizedRenderSummaryElements: any;
-  
+
   // Debounced functions
   private debouncedHandleScroll: any;
   private debouncedHandleResize: any;
   private debouncedFetchData: any;
-  
+
   // Bound functions for event listeners
   private boundHandleResize: any;
 
@@ -100,15 +102,15 @@ export class LogList extends LitElement {
       'logItemCol',
       'toggleColumnOnTable',
     ].forEach((m) => (this[m] = this[m].bind(this)));
-    
+
     // Initialize debounced functions
     this.debouncedHandleScroll = debounce(this.handleScroll.bind(this), 150);
     this.debouncedHandleResize = debounce(this.handleResize.bind(this), 50);
     this.debouncedFetchData = debounce(this.fetchData.bind(this), 300);
-    
+
     // Bind resize handler for immediate feedback
     this.boundHandleResize = this.handleResize.bind(this);
-    
+
     // Initialize memoized functions
     this.memoizedBuildSpanListTree = memoize(
       (logs: any[][]) => groupSpans(logs, this.colIdxMap, this.expandedTraces, this.flipDirection),
@@ -150,7 +152,7 @@ export class LogList extends LitElement {
 
     // Listen to all relevant events with debouncing
     ['submit', 'add-query', 'update-query'].forEach((ev) => window.addEventListener(ev, () => this.debouncedRefetchLogs()));
-    
+
     // Also listen to form submit and update-query from filterElement
     document.addEventListener('submit', (e) => {
       if ((e.target as HTMLElement)?.id === 'log_explorer_form') {
@@ -158,7 +160,7 @@ export class LogList extends LitElement {
         this.debouncedRefetchLogs();
       }
     });
-    
+
     document.addEventListener('update-query', (e) => {
       if ((e.target as HTMLElement)?.id === 'filterElement') this.debouncedRefetchLogs();
     });
@@ -219,12 +221,12 @@ export class LogList extends LitElement {
     if (this.fetchDebounceTimer) {
       clearTimeout(this.fetchDebounceTimer);
     }
-    
+
     // Show refresh loader and spinner immediately for user feedback
     this.showRefreshLoader = true;
     this.requestUpdate();
     this.showLoadingSpinner(true);
-    
+
     // Set new timer
     this.fetchDebounceTimer = setTimeout(() => {
       this.fetchDebounceTimer = null;
@@ -324,16 +326,17 @@ export class LogList extends LitElement {
     // Find or create the spinner element next to row count
     const countElement = document.getElementById('row-count-display');
     if (!countElement) return;
-    
+
     const spinnerId = 'log-list-loading-spinner';
     let spinner = document.getElementById(spinnerId);
-    
+
     if (show && !spinner) {
       // Create spinner if it doesn't exist
       spinner = document.createElement('span');
       spinner.id = spinnerId;
       spinner.className = 'ml-2 inline-block';
-      spinner.innerHTML = '<svg class="inline-block icon w-4 h-4 animate-spin text-textBrand"><use href="/public/assets/svgs/fa-sprites/regular.svg?v=ecf9d105#spinner"></use></svg>';
+      spinner.innerHTML =
+        '<svg class="inline-block icon w-4 h-4 animate-spin text-textBrand"><use href="/public/assets/svgs/fa-sprites/regular.svg?v=ecf9d105#spinner"></use></svg>';
       countElement.parentElement?.appendChild(spinner);
     } else if (!show && spinner) {
       // Remove spinner
@@ -435,14 +438,12 @@ export class LogList extends LitElement {
       clearInterval(this.liveStreamInterval);
       this.liveStreamInterval = null;
     }
-    
+
     // Clean up event listeners
     window.removeEventListener('mousemove', this.boundHandleResize);
     window.removeEventListener('mouseup', this.handleMouseUp);
-    ['submit', 'add-query', 'update-query'].forEach((ev) => 
-      window.removeEventListener(ev, this.debouncedRefetchLogs)
-    );
-    
+    ['submit', 'add-query', 'update-query'].forEach((ev) => window.removeEventListener(ev, this.debouncedRefetchLogs));
+
     // Clean up chart event handlers
     if (this.barChart) {
       this.barChart.off('datazoom', this.handleChartZoom);
@@ -450,10 +451,10 @@ export class LogList extends LitElement {
     if (this.lineChart) {
       this.lineChart.off('datazoom', this.handleChartZoom);
     }
-    
+
     super.disconnectedCallback();
   }
-  
+
   private handleResize(event: MouseEvent) {
     if (this.resizeTarget === null) return;
     const diff = event.clientX - this.mouseState.x;
@@ -466,7 +467,7 @@ export class LogList extends LitElement {
     }
     this.mouseState = { x: event.clientX };
   }
-  
+
   private handleScroll(event: any) {
     const container = event.target;
     if (this.flipDirection) {
@@ -480,7 +481,7 @@ export class LogList extends LitElement {
       if (container.scrollTop === 0) this.handleRecentConcatenation();
     }
   }
-  
+
   private batchRequestUpdate(source: string) {
     this.pendingUpdates.add(source);
     if (this.updateBatchTimer) {
@@ -632,7 +633,7 @@ export class LogList extends LitElement {
         this.showRefreshLoader = false;
         this.showLoadingSpinner(false);
         this.requestUpdate();
-        
+
         // If there's a pending fetch, execute it now
         if (this.pendingFetchUrl) {
           const url = this.pendingFetchUrl;
@@ -670,7 +671,7 @@ export class LogList extends LitElement {
       const batchSize = 100;
       for (let i = 0; i < recVecs.length; i += batchSize) {
         const batch = recVecs.slice(i, Math.min(i + batchSize, recVecs.length));
-        
+
         batch.forEach((vec) => {
           Object.entries(this.colIdxMap).forEach(([key, value]) => {
             if (key === 'id') return;
@@ -694,7 +695,7 @@ export class LogList extends LitElement {
   }
   toggleLogRow(event: any, targetInfo: [string, string, string], pid: string) {
     // Use refs when available, fallback to querySelector
-    const sideView = this.logDetailsContainer || document.querySelector('#log_details_container')! as HTMLElement;
+    const sideView = this.logDetailsContainer || (document.querySelector('#log_details_container')! as HTMLElement);
     const resizerWrapper = this.resizerWrapper || document.querySelector('#resizer-details_width-wrapper');
     const width = Number(getComputedStyle(sideView).width.replace('px', ''));
     this.shouldScrollToBottom = false;
@@ -769,15 +770,21 @@ export class LogList extends LitElement {
     // end is used to render the load more button"
     list.unshift('start');
     list.push('end');
-    
+
     // Check if we're in initial loading state
     const isInitialLoading = !this.initialDataLoaded;
 
     return html`
       ${this.options()}
       <div
-        @scroll=${this.debouncedHandleScroll}
-        class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto ${isInitialLoading ? 'overflow-hidden' : ''}"
+        ${ref(this.containerRef)}
+        @scroll=${(e) => {
+          this.debouncedHandleScroll(e);
+          this.requestUpdate();
+        }}
+        class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto ${isInitialLoading
+          ? 'overflow-hidden'
+          : ''}"
         id="logs_list_container_inner"
         style="min-height: 500px;"
       >
@@ -789,8 +796,8 @@ export class LogList extends LitElement {
               >
                 <span class="absolute inset-0 rounded-full bg-fillBrand-strong opacity-30 blur animate-ping"></span>
                 <span class="relative flex items-center gap-2">
-                  ${faSprite('arrow-up', 'solid', 'h-3 w-3')}
-                  ${this.recentDataToBeAdded.length} new event${this.recentDataToBeAdded.length > 1 ? 's' : ''}
+                  ${faSprite('arrow-up', 'solid', 'h-3 w-3')} ${this.recentDataToBeAdded.length} new
+                  event${this.recentDataToBeAdded.length > 1 ? 's' : ''}
                 </span>
               </button>
             </div>`
@@ -800,19 +807,24 @@ export class LogList extends LitElement {
             <tr class="text-textStrong border-b flex min-w-0 relative font-medium ">
               ${isInitialLoading
                 ? html`
-                    ${[...Array(6)].map((_, idx) => html`
-                      <td class="p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${getSkeletonColumnWidth(idx)}">
-                        <div class="relative overflow-hidden">
-                          <div class="h-4 rounded skeleton-shimmer w-16" style="animation-delay: ${idx * 0.1}s"></div>
-                        </div>
-                      </td>
-                    `)}
+                    ${[...Array(6)].map(
+                      (_, idx) => html`
+                        <td
+                          class="p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${getSkeletonColumnWidth(
+                            idx
+                          )}"
+                        >
+                          <div class="relative overflow-hidden">
+                            <div class="h-4 rounded skeleton-shimmer w-16" style="animation-delay: ${idx * 0.1}s"></div>
+                          </div>
+                        </td>
+                      `
+                    )}
                   `
                 : html`
                     ${this.logsColumns.filter((v) => v !== 'latency_breakdown').map((column) => this.logTableHeading(column))}
                     ${this.logsColumns.length > 0 ? this.logTableHeading('latency_breakdown') : nothing}
-                  `
-              }
+                  `}
             </tr>
           </thead>
           ${isInitialLoading
@@ -828,16 +840,15 @@ export class LogList extends LitElement {
                   }}
                 >
                   ${virtualize({
-                      items: list,
-                      renderItem: this.logItemRow,
-                      layout: {
-                        itemSize: {
-                          height: 28, // Fixed row height for better performance
-                          width: '100%'
-                        }
-                      }
-                    })
-                  }
+                    items: list,
+                    renderItem: this.logItemRow,
+                    layout: {
+                      itemSize: {
+                        height: 28, // Fixed row height for better performance
+                        width: '100%',
+                      },
+                    },
+                  })}
                 </tbody>
               `}
         </table>
@@ -852,22 +863,20 @@ export class LogList extends LitElement {
                 }}
                 data-tip="Scroll to bottom"
                 class=${`absolute tooltip tooltip-left right-8 bottom-2 group z-50 ${
-                  this.recentDataToBeAdded.length > 0 
-                    ? 'bg-gradient-to-br from-fillBrand-strong to-fillBrand-weak animate-pulse' 
+                  this.recentDataToBeAdded.length > 0
+                    ? 'bg-gradient-to-br from-fillBrand-strong to-fillBrand-weak animate-pulse'
                     : 'bg-gradient-to-br from-fillStrong to-fillWeak'
                 } text-textInverse-strong flex justify-center items-center rounded-full shadow-lg h-10 w-10 transition-all duration-300 hover:shadow-xl hover:scale-110`}
               >
-                ${this.recentDataToBeAdded.length > 0 
+                ${this.recentDataToBeAdded.length > 0
                   ? html`<span class="absolute inset-0 rounded-full bg-fillBrand-strong opacity-30 blur animate-ping"></span>`
-                  : nothing
-                }
+                  : nothing}
                 <span class="relative">
                   ${faSprite('arrow-down', 'regular', 'h-6 w-6 fill-textInverse-strong stroke-textInverse-strong')}
                 </span>
               </button>
             </div>`
           : nothing}
-          
         ${this.showRefreshLoader
           ? html`
               <div class="absolute inset-0 z-50 flex items-center justify-center bg-black/5 backdrop-blur-sm">
@@ -875,7 +884,9 @@ export class LogList extends LitElement {
                   <!-- Outer rotating ring -->
                   <div class="absolute inset-0 rounded-full border-4 border-transparent border-t-fillBrand-strong animate-spin"></div>
                   <!-- Inner pulsing circle -->
-                  <div class="absolute inset-2 rounded-full bg-gradient-to-br from-fillBrand-strong to-fillBrand-weak opacity-20 animate-pulse"></div>
+                  <div
+                    class="absolute inset-2 rounded-full bg-gradient-to-br from-fillBrand-strong to-fillBrand-weak opacity-20 animate-pulse"
+                  ></div>
                   <!-- Center spinner -->
                   <div class="relative flex items-center justify-center w-20 h-20">
                     <span class="loading loading-spinner loading-lg text-fillBrand-strong"></span>
@@ -899,7 +910,7 @@ export class LogList extends LitElement {
     // Check cache first
     const cached = this.summaryDataCache.get(dataArr);
     if (cached) return cached;
-    
+
     const summaryData = lookupVecTextByKey(dataArr, this.colIdxMap, 'summary');
     let summaryArray: string[] = [];
 
@@ -918,7 +929,7 @@ export class LogList extends LitElement {
       summaryArray = cleaned.match(/[^,]+(?:{[^}]*}[^,]*)?/g) || [];
       summaryArray = summaryArray.map((s) => s.trim());
     }
-    
+
     // Cache the result
     this.summaryDataCache.set(dataArr, summaryArray);
     return summaryArray;
@@ -926,11 +937,11 @@ export class LogList extends LitElement {
 
   renderSummaryElements(summaryArray: string[], wrapLines: boolean): any {
     if (!Array.isArray(summaryArray)) return nothing;
-    
+
     // Use memoized version for better performance
     return this.memoizedRenderSummaryElements(summaryArray, wrapLines);
   }
-  
+
   private _renderSummaryElementsImpl(summaryArray: string[], wrapLines: boolean): any {
     const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
 
@@ -957,7 +968,7 @@ export class LogList extends LitElement {
           // Malformed element, treat as plain text
           return html`<span class=${`fill-textStrong ${wrapClass}`}>${element}</span>`;
         }
-        
+
         const field = element.substring(0, semicolonIndex);
         const style = element.substring(semicolonIndex + 1, sepIndex);
         const value = element.substring(sepIndex + 1);
@@ -1178,7 +1189,7 @@ export class LogList extends LitElement {
     if (this.spanListTree.length === 0 && this.initialDataLoaded && !this.hasMore && !this.flipDirection) {
       return emptyState(this.logsColumns.length);
     }
-    
+
     if (!this.hasMore || this.windowTarget === 'sessionList' || !this.initialDataLoaded) return html`<tr></tr>`;
     return html`<tr class="w-full flex relative">
       <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
@@ -1200,7 +1211,7 @@ export class LogList extends LitElement {
     if (this.spanListTree.length === 0 && this.initialDataLoaded && !this.hasMore && this.flipDirection) {
       return emptyState(this.logsColumns.length);
     }
-    
+
     if (this.windowTarget === 'sessionList' || !this.initialDataLoaded) return html`<tr></tr>`;
     return html`<tr class="w-full flex relative" id="recent-logs">
       <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
@@ -1593,7 +1604,11 @@ const displayTimestamp = (input: string) => {
 };
 
 function renderBadge(classes: string, title: string, tippy = '') {
-  return html`<span class=${`relative ${classes} ${tippy ? 'tooltip tooltip-right' : ''} transition-all duration-200 hover:shadow-sm`} data-tip=${tippy}>${title}</span>`;
+  return html`<span
+    class=${`relative ${classes} ${tippy ? 'tooltip tooltip-right' : ''} transition-all duration-200 hover:shadow-sm`}
+    data-tip=${tippy}
+    >${title}</span
+  >`;
 }
 
 const lookupVecText = (vec: any[], idx: number) => (Array.isArray(vec) && idx >= 0 && idx < vec.length ? vec[idx] : '');
@@ -1664,8 +1679,14 @@ function spanLatencyBreakdown({
 
         <!-- Enhanced overlay frame elements with glow effect -->
         <!-- Full width boundary markers at the start and end -->
-        <div class="absolute top-0 h-full border-l-2 border-strokeBrand-strong pointer-events-none" style="left:0; box-shadow: 0 0 4px rgba(26, 116, 168, 0.3)"></div>
-        <div class="absolute top-0 h-full border-r-2 border-strokeBrand-strong pointer-events-none" style=${`left:${barWidth - 2}px; box-shadow: 0 0 4px rgba(26, 116, 168, 0.3)`}></div>
+        <div
+          class="absolute top-0 h-full border-l-2 border-strokeBrand-strong pointer-events-none"
+          style="left:0; box-shadow: 0 0 4px rgba(26, 116, 168, 0.3)"
+        ></div>
+        <div
+          class="absolute top-0 h-full border-r-2 border-strokeBrand-strong pointer-events-none"
+          style=${`left:${barWidth - 2}px; box-shadow: 0 0 4px rgba(26, 116, 168, 0.3)`}
+        ></div>
 
         <!-- Horizontal line representing the full timeline -->
         <div
@@ -1682,7 +1703,7 @@ function spanLatencyBreakdown({
 
 function loadingSkeleton(cols: number) {
   const actualCols = cols || 6;
-  
+
   return html`
     <tbody class="min-w-0 text-sm">
       <tr class="w-full flex justify-center">
@@ -1693,26 +1714,34 @@ function loadingSkeleton(cols: number) {
           </div>
         </td>
       </tr>
-      ${[...Array(10)].map((_, rowIdx) => html`
-        <tr class="item-row relative p-0 flex items-center group whitespace-nowrap" style="--row-index: ${rowIdx}">
-          ${[...Array(actualCols)].map((_, idx) => html`
-            <td class="bg-bgBase relative pl-2 ${idx === 0 ? 'w-3' : idx === actualCols - 1 ? 'sticky right-0 z-10' : getSkeletonColumnWidth(idx)}">
-              ${idx === 0 
-                ? html`<div class="w-1 h-5 bg-fillBrand-strong opacity-20 rounded-full skeleton-glow"></div>`
-                : html`
-                    <div class="relative overflow-hidden">
-                      <div class="h-4 rounded skeleton-shimmer skeleton-wave ${idx === actualCols - 1 ? 'w-24' : 'w-3/4'}"></div>
-                      ${idx === actualCols - 1 
-                        ? html`<div class="absolute right-0 top-0 h-full w-16 bg-gradient-to-r from-transparent to-bgBase"></div>`
-                        : nothing
-                      }
-                    </div>
-                  `
-              }
-            </td>
-          `)}
-        </tr>
-      `)}
+      ${[...Array(10)].map(
+        (_, rowIdx) => html`
+          <tr class="item-row relative p-0 flex items-center group whitespace-nowrap" style="--row-index: ${rowIdx}">
+            ${[...Array(actualCols)].map(
+              (_, idx) => html`
+                <td
+                  class="bg-bgBase relative pl-2 ${idx === 0
+                    ? 'w-3'
+                    : idx === actualCols - 1
+                      ? 'sticky right-0 z-10'
+                      : getSkeletonColumnWidth(idx)}"
+                >
+                  ${idx === 0
+                    ? html`<div class="w-1 h-5 bg-fillBrand-strong opacity-20 rounded-full skeleton-glow"></div>`
+                    : html`
+                        <div class="relative overflow-hidden">
+                          <div class="h-4 rounded skeleton-shimmer skeleton-wave ${idx === actualCols - 1 ? 'w-24' : 'w-3/4'}"></div>
+                          ${idx === actualCols - 1
+                            ? html`<div class="absolute right-0 top-0 h-full w-16 bg-gradient-to-r from-transparent to-bgBase"></div>`
+                            : nothing}
+                        </div>
+                      `}
+                </td>
+              `
+            )}
+          </tr>
+        `
+      )}
     </tbody>
   `;
 }
@@ -1738,11 +1767,13 @@ function emptyState(cols: number) {
             </div>
           </div>
           <div class="flex flex-col gap-3">
-            <h2 class="text-2xl text-textStrong font-bold bg-gradient-to-r from-textStrong to-textBrand bg-clip-text text-transparent">${title}</h2>
+            <h2 class="text-2xl text-textStrong font-bold bg-gradient-to-r from-textStrong to-textBrand bg-clip-text text-transparent">
+              ${title}
+            </h2>
             <p class="text-sm max-w-md font-medium text-textWeak leading-relaxed">${subText}</p>
-            <a 
-              href="https://apitoolkit.io/docs/sdks/" 
-              target="_BLANK" 
+            <a
+              href="https://apitoolkit.io/docs/sdks/"
+              target="_BLANK"
               class="btn text-sm w-max mx-auto btn-primary bg-gradient-to-r from-fillBrand-strong to-fillBrand-weak hover:shadow-lg transition-all duration-300 hover:scale-105 border-0"
             >
               Read integration guides
