@@ -127,6 +127,8 @@ bodyWrapper bcfg child = do
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js"), defer_ "true"] ("" :: Text)
         -- script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/instantpage5_1_0.js"), type_ "module", defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/main.js")] ("" :: Text)
+        
+        script_ [src_ "https://unpkg.com/@monoscopetech/browser@latest/dist/monoscope.min.js"] ("" :: Text)
 
         script_ [type_ "module", src_ $ "/public/assets/web-components/dist/js/index.js"] ("" :: Text)
 
@@ -390,7 +392,9 @@ bodyWrapper bcfg child = do
       let pTitle = maybe "" (.title) bcfg.currProject
       script_
         [text| window.addEventListener("load", (event) => {
+        
         posthog.people.set_once({email: ${email}, name: "${name}", projectId: "${pidT}", projectTitle: "${pTitle}"});
+        window.monoscope = new Monoscope({projectId: "87576849-4941-49d3-a15d-680fef88a1a8", serviceName: "past-3_frontend", user:{email:${email}, name: "${name}"}});
       });
       echarts.connect('default');
       |]
