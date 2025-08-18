@@ -579,15 +579,9 @@ virtualTable page = do
     [ id_ "resultTable"
     , class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0"
     , term "windowTarget" "logList"
+    , term "projectId" page.pid.toText
     ]
     ("" :: Text)
-  let projectid = page.pid.toText
-  script_
-    [text|
-      window.logListData = {
-       projectId: "$projectid"
-      }
-   |]
 
 
 -- visualizationTabs_ has been moved to Pkg.Components.LogQueryBox

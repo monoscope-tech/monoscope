@@ -7,6 +7,19 @@ import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, Trace, TraceDataMap
 import { RangeChangedEvent, VisibilityChangedEvent } from '@lit-labs/virtualizer';
 import debounce from 'lodash/debounce';
 import memoize from 'lodash/memoize';
+import clsx from 'clsx';
+import {
+  formatTimestamp,
+  lookupVecValue,
+  getErrorClassification,
+  faSprite,
+  renderBadge,
+  renderIconWithTooltip,
+  generateId,
+  getColumnWidth,
+  getSkeletonColumnWidth,
+  getStyleClass,
+} from './log-list-utils';
 
 // TypeScript declarations for global functions
 declare global {
@@ -27,6 +40,8 @@ const _ensureBadgeClasses = html`
 
 @customElement('log-list')
 export class LogList extends LitElement {
+  @property({ type: String }) projectId: string = '';
+  
   @state() private expandedTraces: Record<string, boolean> = {};
   @state() private flipDirection: boolean = false;
   @state() private spanListTree: EventLine[] = [];
@@ -37,6 +52,7 @@ export class LogList extends LitElement {
   @state() private wrapLines: boolean = false;
   @state() private hasMore: boolean = false;
   @state() private isLiveStreaming: boolean = false;
+  @state() private isLoading: boolean = false;
 
   // Refs for DOM elements
   @query('#logs_list_container_inner') private logsContainer?: HTMLElement;
@@ -54,7 +70,6 @@ export class LogList extends LitElement {
   private recentFetchUrl: string = '';
   private liveStreamInterval: NodeJS.Timeout | null = null;
   private barChart: any = null;
-  private projectId: string = '';
   private lineChart: any = null;
   private _observer: IntersectionObserver | null = null;
   private totalCount: number = 0;
@@ -271,7 +286,9 @@ export class LogList extends LitElement {
     this.serviceColors = {};
     this.spanListTree = [];
     this.hasMore = false;
-    
+
+    // Project ID is now passed as a property from the server
+
     // Fetch initial data from the JSON endpoint
     this.fetchInitialData();
   }
@@ -555,8 +572,8 @@ export class LogList extends LitElement {
   updateColumnMaxWidthMap(recVecs: any[][]) {
     // Defer non-critical calculations
     requestAnimationFrame(() => {
-      const columnDefaults = { summary: 450 * 8.5, latency_breakdown: 100 };
-      const charWidths = { timestamp: 6.5, default: 8.5 };
+      const columnDefaults: Record<string, number> = { summary: 450 * 8.5, latency_breakdown: 100 };
+      const charWidths: Record<string, number> = { timestamp: 6.5, default: 8.5 };
 
       // Process in batches for better performance
       const batchSize = 100;
@@ -568,14 +585,14 @@ export class LogList extends LitElement {
             if (key === 'id') return;
 
             // Set defaults for special columns
-            if (columnDefaults[key] && !this.columnMaxWidthMap[key]) {
-              this.columnMaxWidthMap[key] = columnDefaults[key];
+            if (columnDefaults[key as keyof typeof columnDefaults] && !this.columnMaxWidthMap[key]) {
+              this.columnMaxWidthMap[key] = columnDefaults[key as keyof typeof columnDefaults];
             }
 
             // Skip if already set for special columns
             if ((key === 'latency_breakdown' || key === 'summary') && this.columnMaxWidthMap[key]) return;
 
-            const chPx = charWidths[key] || charWidths.default;
+            const chPx = charWidths[key as keyof typeof charWidths] || charWidths.default;
             const target = String(vec[value]).length * chPx;
 
             this.columnMaxWidthMap[key] = Math.max(this.columnMaxWidthMap[key] || 12 * chPx, target);
@@ -777,7 +794,7 @@ export class LogList extends LitElement {
     const cached = this.summaryDataCache.get(dataArr);
     if (cached) return cached;
 
-    const summaryData = lookupVecTextByKey(dataArr, this.colIdxMap, 'summary');
+    const summaryData = lookupVecValue<string | string[]>(dataArr, this.colIdxMap, 'summary');
     let summaryArray: string[] = [];
 
     if (Array.isArray(summaryData)) {
@@ -842,7 +859,7 @@ export class LogList extends LitElement {
         // Special icon handling
         const iconConfig = {
           request_type: () =>
-            renderIconWithTippy(
+            renderIconWithTooltip(
               'w-4',
               `${value} Request`,
               faSprite(
@@ -852,8 +869,8 @@ export class LogList extends LitElement {
               )
             ),
           kind: () =>
-            value === 'internal' ? renderIconWithTippy('w-4 ml-2', 'Internal span', faSprite('function', 'regular', 'h-3 w-3')) : nothing,
-          'db.system': () => renderIconWithTippy('w-4 ml-2', value, faSprite('database', 'regular', 'h-3 w-3 fill-iconNeutral')),
+            value === 'internal' ? renderIconWithTooltip('w-4 ml-2', 'Internal span', faSprite('function', 'regular', 'h-3 w-3')) : nothing,
+          'db.system': () => renderIconWithTooltip('w-4 ml-2', value, faSprite('database', 'regular', 'h-3 w-3 fill-iconNeutral')),
         };
 
         if (iconConfig[field]) return iconConfig[field]();
@@ -872,25 +889,7 @@ export class LogList extends LitElement {
   }
 
   getStyleClass(style: string): string {
-    if (style.startsWith('badge-')) return style;
-    if (style.startsWith('right-')) return style.substring(6);
-
-    const styleMap = {
-      'info-strong': 'badge-info',
-      'info-weak': 'badge-neutral',
-      'error-strong': 'badge-error',
-      'error-weak': 'badge-4xx',
-      'warning-strong': 'badge-warning',
-      'warning-weak': 'badge-3xx',
-      'success-strong': 'badge-success',
-      'success-weak': 'badge-2xx',
-      neutral: 'badge-neutral',
-      right: 'ml-auto badge-neutral',
-      'text-weak': '',
-      'text-textWeak': '',
-      'text-textStrong': '',
-    };
-    return styleMap[style] || 'badge-neutral';
+    return getStyleClass(style);
   }
 
   logItemCol(rowData: any, key: string): any {
@@ -899,29 +898,29 @@ export class LogList extends LitElement {
 
     switch (key) {
       case 'id':
-        let [status, errCount, errClass] = errorClass(dataArr, this.colIdxMap);
+        const { statusCode: status, hasErrors: errCount, className: errClass } = getErrorClassification(dataArr, this.colIdxMap);
         return html`
           <div class="flex items-center justify-between w-3">
             <span class="col-span-1 h-5 rounded-sm flex">
-              ${renderIconWithTippy(errClass, `${errCount} errors attached; status ${status}`, html``)}
+              ${renderIconWithTooltip(errClass, `${errCount} errors attached; status ${status}`, html``)}
             </span>
           </div>
         `;
       case 'created_at':
       case 'timestamp':
-        let timestamp = lookupVecTextByKey(dataArr, this.colIdxMap, key);
+        let timestamp = lookupVecValue<string>(dataArr, this.colIdxMap, key);
         return html`<div>
           <time class="monospace text-textStrong tooltip tooltip-right ${wrapClass}" data-tip="timestamp" datetime=${timestamp}
-            >${displayTimestamp(timestamp)}</time
+            >${formatTimestamp(timestamp)}</time
           >
         </div>`;
       case 'latency_breakdown':
         const { traceStart, traceEnd, startNs, duration, childrenTimeSpans } = rowData;
-        const color = this.serviceColors[lookupVecTextByKey(dataArr, this.colIdxMap, 'span_name')] || 'bg-black';
+        const color = this.serviceColors[lookupVecValue<string>(dataArr, this.colIdxMap, 'span_name')] || 'bg-black';
         const chil = childrenTimeSpans.map(({ startNs, duration, data }: { startNs: number; duration: number; data: any }) => ({
           startNs: startNs - traceStart,
           duration,
-          color: this.serviceColors[lookupVecTextByKey(data, this.colIdxMap, 'span_name')] || 'bg-black',
+          color: this.serviceColors[lookupVecValue<string>(data, this.colIdxMap, 'span_name')] || 'bg-black',
         }));
         const width = this.columnMaxWidthMap['latency_breakdown'] || 200;
 
@@ -1042,10 +1041,10 @@ export class LogList extends LitElement {
           </div>
         </div>`;
       case 'service':
-        let serviceData = lookupVecTextByKey(dataArr, this.colIdxMap, key);
+        let serviceData = lookupVecValue<string>(dataArr, this.colIdxMap, key);
         return renderBadge('cbadge-sm badge-neutral ' + wrapClass, serviceData, key);
       default:
-        let v = lookupVecTextByKey(dataArr, this.colIdxMap, key);
+        let v = lookupVecValue<string>(dataArr, this.colIdxMap, key);
         return html`<span class=${wrapClass} title=${key}>${v}</span>`;
     }
   }
@@ -1130,7 +1129,7 @@ export class LogList extends LitElement {
     try {
       const s = rowData.type === 'log' ? 'logs' : 'spans';
       const targetInfo = requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s);
-      const sessionId = lookupVecTextByKey(rowData.data, this.colIdxMap, 'session_id');
+      const sessionId = lookupVecValue<string>(rowData.data, this.colIdxMap, 'session_id');
       const rowHtml = html`
         <tr
           class="item-row relative p-0 flex items-center group cursor-pointer whitespace-nowrap transition-all duration-200 hover:bg-fillWeaker hover:shadow-sm"
@@ -1447,58 +1446,6 @@ class ColumnsSettings extends LitElement {
   }
 }
 
-const faSprite = (iconName: string, kind: string, classes: string) =>
-  html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`;
-
-const displayTimestamp = (input: string) => {
-  const date = new Date(input);
-  if (!date.getTime()) return '';
-
-  return (
-    date
-      .toLocaleString('en-US', {
-        month: 'short',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false,
-      })
-      .replace(',', '') + `.${String(date.getUTCMilliseconds()).padStart(3, '0')}`
-  );
-};
-
-function renderBadge(classes: string, title: string, tippy = '') {
-  return html`<span
-    class=${`relative ${classes} ${tippy ? 'tooltip tooltip-right' : ''} transition-all duration-200 hover:shadow-sm`}
-    data-tip=${tippy}
-    >${title}</span
-  >`;
-}
-
-const lookupVecText = (vec: any[], idx: number) => (Array.isArray(vec) && idx >= 0 && idx < vec.length ? vec[idx] : '');
-
-const lookupVecTextByKey = (vec: any[], colIdxMap: ColIdxMap, key: string) => lookupVecText(vec, colIdxMap[key] ?? -1);
-
-function renderIconWithTippy(cls: string, tip: string, icon: TemplateResult<1>) {
-  return html`<span class=${'shrink-0 inline-flex tooltip tooltip-right ' + cls} data-tip=${tip}>${icon}</span>`;
-}
-
-const errorClass = (reqVec: any[], colIdxMap: ColIdxMap) => {
-  const hasErrors = lookupVecTextByKey(reqVec, colIdxMap, 'errors');
-  const status = lookupVecTextByKey(reqVec, colIdxMap, 'http_attributes')?.status_code || 0;
-  const errStatus = lookupVecTextByKey(reqVec, colIdxMap, 'status');
-
-  const errClass =
-    hasErrors || errStatus === 'ERROR'
-      ? 'w-1 bg-fillError-strong'
-      : status >= 400
-        ? 'w-1 bg-fillWarning-strong'
-        : 'w-1 bg-fillBrand-weak status-indicator';
-
-  return [status, hasErrors, errClass];
-};
-
 function spanLatencyBreakdown({
   start,
   duration,
@@ -1611,10 +1558,7 @@ function loadingSkeleton(cols: number) {
   `;
 }
 
-function getSkeletonColumnWidth(idx: number) {
-  const widths = ['w-[17ch]', 'w-[16ch]', 'w-[25ch]', 'w-[12ch]', 'w-[450px]'];
-  return widths[idx % widths.length] + ' shrink-0';
-}
+// getSkeletonColumnWidth function moved to log-list-utils.ts
 
 function emptyState(cols: number) {
   let title = `No Events found`;
@@ -1651,8 +1595,8 @@ function emptyState(cols: number) {
 }
 
 function requestDumpLogItemUrlPath(rd: any[], colIdxMap: ColIdxMap, source: string): [string, string, string] {
-  const rdId = lookupVecTextByKey(rd, colIdxMap, 'id');
-  const rdCreatedAt = lookupVecTextByKey(rd, colIdxMap, 'created_at') || lookupVecTextByKey(rd, colIdxMap, 'timestamp');
+  const rdId = lookupVecValue<string>(rd, colIdxMap, 'id');
+  const rdCreatedAt = lookupVecValue<string>(rd, colIdxMap, 'created_at') || lookupVecValue<string>(rd, colIdxMap, 'timestamp');
   return [rdId, rdCreatedAt, source]; // Source parameter is preserved for future use
 }
 
@@ -1676,11 +1620,11 @@ function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<
     const id = span[colIdxMap['id']];
     if (traceId === '' || traceId === null) {
       // generate random id
-      traceId = generateStrId();
+      traceId = generateId();
       span[TRACE_INDEX] = traceId;
     }
     if (spanId === '' || spanId === null) {
-      spanId = generateStrId();
+      spanId = generateId();
       span[SPAN_INDEX] = spanId;
     }
     let traceData = traceMap.get(traceId);
@@ -1817,18 +1761,6 @@ function flattenSpanTree(traceArr: Trace[], expandedTraces: Record<string, boole
   return result;
 }
 
-const getColumnWidth = (column: string) => {
-  const widths = {
-    status: 'w-[12ch] shrink-0',
-    method: 'w-[12ch] shrink-0',
-    status_code: 'w-[12ch] shrink-0',
-    raw_url: 'w-[25ch] shrink-0 overflow-hidden',
-    url_path: 'w-[25ch] shrink-0 overflow-hidden',
-    summary: 'w-3/4 shrink-1',
-  };
-  return widths[column] || (column === 'id' || column === 'service' ? '' : 'w-[16ch] shrink-0');
-};
+// getColumnWidth function moved to log-list-utils.ts
 
-function generateStrId() {
-  return Math.random().toString(36).substring(2, 15);
-}
+// generateStrId moved to log-list-utils.ts as generateId
