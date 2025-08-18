@@ -136,7 +136,6 @@ export type EventLine = {
   traceId: string;
   childErrors: boolean;
   parentIds: string[];
-  isNew: boolean;
   show: boolean;
   expanded: boolean;
   isLastChild: boolean;

@@ -27,8 +27,6 @@ const _ensureBadgeClasses = html`
 
 @customElement('log-list')
 export class LogList extends LitElement {
-  @property({ type: String }) private windowTarget: string | null = null;
-
   @state() private expandedTraces: Record<string, boolean> = {};
   @state() private flipDirection: boolean = false;
   @state() private spanListTree: EventLine[] = [];
@@ -39,9 +37,6 @@ export class LogList extends LitElement {
   @state() private wrapLines: boolean = false;
   @state() private hasMore: boolean = false;
   @state() private isLiveStreaming: boolean = false;
-  @state() private loadingState: 'idle' | 'loading' | 'loading-recent' | 'loading-replace' = 'idle';
-  @state() private initialDataLoaded: boolean = false;
-  @state() private showRefreshLoader: boolean = false;
 
   // Refs for DOM elements
   @query('#logs_list_container_inner') private logsContainer?: HTMLElement;
@@ -57,15 +52,11 @@ export class LogList extends LitElement {
   private columnMaxWidthMap: ColIdxMap = {};
   private nextFetchUrl: string = '';
   private recentFetchUrl: string = '';
-  private fetchedNew: boolean = false;
   private liveStreamInterval: NodeJS.Timeout | null = null;
   private barChart: any = null;
   private projectId: string = '';
-  private resetLogsUrl: string = '';
   private lineChart: any = null;
   private _observer: IntersectionObserver | null = null;
-  private fetchDebounceTimer: NodeJS.Timeout | null = null;
-  private pendingFetchUrl: string | null = null;
   private totalCount: number = 0;
   private updateBatchTimer: NodeJS.Timeout | null = null;
   private pendingUpdates: Set<string> = new Set();
@@ -210,29 +201,14 @@ export class LogList extends LitElement {
   }
 
   async refetchLogs() {
-    this.showRefreshLoader = true;
-    this.requestUpdate();
+    this.isLoading = true;
     this.showLoadingSpinner(true);
-    this.fetchData(this.buildJsonUrl(), false, true);
+    this.fetchData(this.buildJsonUrl(), true);
   }
 
-  debouncedRefetchLogs() {
-    // Clear any existing timer
-    if (this.fetchDebounceTimer) {
-      clearTimeout(this.fetchDebounceTimer);
-    }
-
-    // Show refresh loader and spinner immediately for user feedback
-    this.showRefreshLoader = true;
-    this.requestUpdate();
-    this.showLoadingSpinner(true);
-
-    // Set new timer
-    this.fetchDebounceTimer = setTimeout(() => {
-      this.fetchDebounceTimer = null;
-      this.refetchLogs();
-    }, 300);
-  }
+  debouncedRefetchLogs = debounce(() => {
+    this.refetchLogs();
+  }, 300);
 
   toggleColumnOnTable(col: string) {
     const p = new URLSearchParams(window.location.search);
@@ -289,29 +265,15 @@ export class LogList extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    const globalKey = `${this.windowTarget}Data`;
-    const data = (window as any)[globalKey];
-    if (this.windowTarget && data) {
-      // Store the initial configuration
-      this.projectId = data.projectId ?? '';
-
-      // Clear the global data early to free memory
-      (window as any)[globalKey] = null;
-
-      // Initialize with empty state
-      this.logsColumns = [];
-      this.colIdxMap = {};
-      this.serviceColors = {};
-      this.nextFetchUrl = '';
-      this.recentFetchUrl = '';
-      this.expandedTraces = {};
-      this.spanListTree = [];
-      this.hasMore = false;
-      this.fetchedNew = false;
-
-      // Fetch initial data from the JSON endpoint
-      this.fetchInitialData();
-    }
+    // Initialize empty state
+    this.logsColumns = [];
+    this.colIdxMap = {};
+    this.serviceColors = {};
+    this.spanListTree = [];
+    this.hasMore = false;
+    
+    // Fetch initial data from the JSON endpoint
+    this.fetchInitialData();
   }
 
   private updateRowCountDisplay(count: number) {
@@ -361,28 +323,6 @@ export class LogList extends LitElement {
     if (this.shouldScrollToBottom && this.flipDirection) {
       requestAnimationFrame(() => this.scrollToBottom());
     }
-    if (changedProperties.has('spanListTree') && this.fetchedNew) {
-      // Use requestIdleCallback for non-critical updates
-      if ('requestIdleCallback' in window) {
-        requestIdleCallback(() => {
-          this.spanListTree.forEach((span) => {
-            if (span.isNew) {
-              span.isNew = false;
-            }
-          });
-          this.fetchedNew = false;
-        });
-      } else {
-        setTimeout(() => {
-          this.spanListTree.forEach((span) => {
-            if (span.isNew) {
-              span.isNew = false;
-            }
-          });
-          this.fetchedNew = false;
-        }, 10);
-      }
-    }
   }
 
   scrollToBottom() {
@@ -425,10 +365,6 @@ export class LogList extends LitElement {
     if (this._observer) {
       this._observer.disconnect();
       this._observer = null;
-    }
-    if (this.fetchDebounceTimer) {
-      clearTimeout(this.fetchDebounceTimer);
-      this.fetchDebounceTimer = null;
     }
     if (this.updateBatchTimer) {
       clearTimeout(this.updateBatchTimer);
@@ -523,16 +459,11 @@ export class LogList extends LitElement {
     this.requestUpdate();
   }
 
-  fetchData(url: string, isNewData = false, isRefresh = false) {
-    const loadingState = isNewData ? 'loading-recent' : isRefresh ? 'loading-replace' : 'loading';
-    if (this.loadingState !== 'idle') {
-      // If a request is already in flight, store this URL to fetch after current one completes
-      if (isRefresh) {
-        this.pendingFetchUrl = url;
-      }
+  fetchData(url: string, isRefresh = false) {
+    if (this.isLoading) {
       return;
     }
-    this.loadingState = loadingState;
+    this.isLoading = true;
     this.showLoadingSpinner(true);
     fetch(url, {
       method: 'GET',
@@ -543,25 +474,19 @@ export class LogList extends LitElement {
       .then((response) => response.json())
       .then((data) => {
         if (!data.error) {
-          let { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, resetLogsUrl, count } = data;
+          let { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, count } = data;
 
           // Validate required fields - but allow empty arrays
           if (!Array.isArray(logsData)) {
             this.showErrorToast('Invalid data format received');
-            this.initialDataLoaded = true; // Mark as loaded even on error
             this.requestUpdate();
             return;
           }
 
           // Update state
-          if (!isNewData) {
-            this.hasMore = logsData.length > 0;
-            this.nextFetchUrl = nextUrl || '';
-          } else if (isNewData && logsData.length > 0) {
-            this.recentFetchUrl = recentUrl || '';
-          }
-
-          this.resetLogsUrl = resetLogsUrl || this.resetLogsUrl;
+          this.hasMore = logsData.length > 0;
+          this.nextFetchUrl = nextUrl || '';
+          this.recentFetchUrl = recentUrl || '';
 
           // Update the count if provided
           if (count !== undefined) {
@@ -580,68 +505,32 @@ export class LogList extends LitElement {
           let tree = this.buildSpanListTree(logsData);
 
           if (isRefresh) {
-            this.nextFetchUrl = nextUrl;
-            this.recentFetchUrl = recentUrl;
+            // Replace all data
             this.spanListTree = tree;
-            // Scroll to bottom after initial load
             if (this.spanListTree.length > 0) {
               this.scrollToBottom();
             }
           } else {
-            if (isNewData) {
-              this.fetchedNew = true;
-              tree.forEach((t) => (t.isNew = true));
-              const container = document.querySelector('#logs_list_container_inner')!;
-              const scrolledToBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
-              if (container && scrolledToBottom) {
-                this.shouldScrollToBottom = true;
-              }
-              if (this.isLiveStreaming && container && container.scrollTop > 30 && !this.flipDirection) {
-                this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree);
-              } else if (this.isLiveStreaming && !scrolledToBottom && this.flipDirection) {
-                this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree);
-              } else {
-                // More efficient array operations
-                if (this.flipDirection) {
-                  this.spanListTree.push(...tree);
-                } else {
-                  this.spanListTree.unshift(...tree);
-                }
-              }
+            // Append data for pagination
+            if (this.flipDirection) {
+              this.spanListTree = [...tree, ...this.spanListTree];
             } else {
-              // For pagination loading
-              if (this.flipDirection) {
-                this.spanListTree = [...tree, ...this.spanListTree];
-              } else {
-                this.spanListTree.push(...tree);
-              }
+              this.spanListTree.push(...tree);
             }
           }
 
           this.updateColumnMaxWidthMap(logsData);
         } else {
           this.showErrorToast(data.message || 'Failed to fetch logs');
-          // Still need to mark as loaded to hide skeleton
-          this.initialDataLoaded = true;
-          this.batchRequestUpdate('fetchError');
         }
       })
       .catch((error) => {
         this.showErrorToast('Network error: Unable to fetch logs');
       })
       .finally(() => {
-        this.loadingState = 'idle';
-        this.initialDataLoaded = true;
-        this.showRefreshLoader = false;
+        this.isLoading = false;
         this.showLoadingSpinner(false);
         this.requestUpdate();
-
-        // If there's a pending fetch, execute it now
-        if (this.pendingFetchUrl) {
-          const url = this.pendingFetchUrl;
-          this.pendingFetchUrl = null;
-          setTimeout(() => this.fetchData(url, false, true), 100);
-        }
       });
   }
 
@@ -774,7 +663,7 @@ export class LogList extends LitElement {
     list.push('end');
 
     // Check if we're in initial loading state
-    const isInitialLoading = !this.initialDataLoaded;
+    const isInitialLoading = this.isLoading && this.spanListTree.length === 0;
 
     return html`
       ${this.options()}
@@ -837,9 +726,6 @@ export class LogList extends LitElement {
                   @rangeChanged=${(event: RangeChangedEvent) => {
                     this.setupIntersectionObserver();
                   }}
-                  @visibilityChanged=${(event: VisibilityChangedEvent) => {
-                    this.updateChartDataZoom(event.first, event.last);
-                  }}
                 >
                   ${virtualize({
                     items: list,
@@ -878,28 +764,6 @@ export class LogList extends LitElement {
                 </span>
               </button>
             </div>`
-          : nothing}
-        ${this.showRefreshLoader
-          ? html`
-              <div class="absolute inset-0 z-50 flex items-center justify-center bg-black/5 backdrop-blur-sm">
-                <div class="relative">
-                  <!-- Outer rotating ring -->
-                  <div class="absolute inset-0 rounded-full border-4 border-transparent border-t-fillBrand-strong animate-spin"></div>
-                  <!-- Inner pulsing circle -->
-                  <div
-                    class="absolute inset-2 rounded-full bg-gradient-to-br from-fillBrand-strong to-fillBrand-weak opacity-20 animate-pulse"
-                  ></div>
-                  <!-- Center spinner -->
-                  <div class="relative flex items-center justify-center w-20 h-20">
-                    <span class="loading loading-spinner loading-lg text-fillBrand-strong"></span>
-                  </div>
-                  <!-- Loading text -->
-                  <div class="absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap">
-                    <p class="text-sm font-medium text-textBrand animate-pulse">Refreshing logs...</p>
-                  </div>
-                </div>
-              </div>
-            `
           : nothing}
       </div>
     `;
@@ -1188,15 +1052,15 @@ export class LogList extends LitElement {
 
   renderLoadMore() {
     // Check if we have no data (empty state)
-    if (this.spanListTree.length === 0 && this.initialDataLoaded && !this.hasMore && !this.flipDirection) {
+    if (this.spanListTree.length === 0 && !this.isLoading && !this.hasMore && !this.flipDirection) {
       return emptyState(this.logsColumns.length);
     }
 
-    if (!this.hasMore || this.windowTarget === 'sessionList' || !this.initialDataLoaded) return html`<tr></tr>`;
+    if (!this.hasMore || !this.spanListTree.length) return html`<tr></tr>`;
     return html`<tr class="w-full flex relative">
       <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
         <div class="absolute -top-[500px] w-[1px] h-[500px] left-0" id="loader"></div>
-        ${this.loadingState === 'loading'
+        ${this.isLoading
           ? html`<div class="loading loading-dots loading-md"></div>`
           : html`<button
               class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
@@ -1210,20 +1074,20 @@ export class LogList extends LitElement {
 
   fetchRecent() {
     // Check if we have no data (empty state) when flipped
-    if (this.spanListTree.length === 0 && this.initialDataLoaded && !this.hasMore && this.flipDirection) {
+    if (this.spanListTree.length === 0 && !this.isLoading && !this.hasMore && this.flipDirection) {
       return emptyState(this.logsColumns.length);
     }
 
-    if (this.windowTarget === 'sessionList' || !this.initialDataLoaded) return html`<tr></tr>`;
+    if (!this.spanListTree.length) return html`<tr></tr>`;
     return html`<tr class="w-full flex relative" id="recent-logs">
       <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
         ${this.isLiveStreaming
           ? html`<p>Live streaming latest data...</p>`
-          : this.loadingState === 'loading-recent'
+          : this.isLoading
             ? html`<div class="loading loading-dots loading-md"></div>`
             : html`<button
                 class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-                @pointerdown=${() => this.fetchData(this.recentFetchUrl, true)}
+                @pointerdown=${() => this.fetchData(this.recentFetchUrl)}
               >
                 Check for recent data
               </button>`}
@@ -1266,11 +1130,10 @@ export class LogList extends LitElement {
     try {
       const s = rowData.type === 'log' ? 'logs' : 'spans';
       const targetInfo = requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s);
-      let isNew = rowData.isNew;
       const sessionId = lookupVecTextByKey(rowData.data, this.colIdxMap, 'session_id');
       const rowHtml = html`
         <tr
-          class=${`item-row relative p-0 flex items-center group cursor-pointer whitespace-nowrap transition-all duration-200 hover:bg-fillWeaker hover:shadow-sm ${isNew ? 'animate-fadeBg' : ''}`}
+          class="item-row relative p-0 flex items-center group cursor-pointer whitespace-nowrap transition-all duration-200 hover:bg-fillWeaker hover:shadow-sm"
           @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
         >
           ${this.logsColumns
@@ -1918,7 +1781,6 @@ function flattenSpanTree(traceArr: Trace[], expandedTraces: Record<string, boole
       traceEnd,
       traceId,
       childErrors,
-      isNew: false,
       parentIds: parentIds,
       show: expandedTraces[traceId] || depth === 0,
       expanded: expandedTraces[traceId],
