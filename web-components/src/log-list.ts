@@ -78,6 +78,7 @@ export class LogList extends LitElement {
   @state() private hasMore: boolean = false;
   @state() private isLiveStreaming: boolean = false;
   @state() private isLoading: boolean = false;
+  @state() private isFetchingRecent: boolean = false;
 
   // Refs for DOM elements
   @query('#logs_list_container_inner') private logsContainer?: HTMLElement;
@@ -167,7 +168,7 @@ export class LogList extends LitElement {
         if (liveBtn.checked) {
           this.isLiveStreaming = true;
           this.liveStreamInterval = setInterval(() => {
-            this.fetchData(this.recentFetchUrl, true);
+            this.fetchData(this.recentFetchUrl, true, true);
           }, 5000);
         } else {
           if (this.liveStreamInterval) {
@@ -503,11 +504,13 @@ export class LogList extends LitElement {
     this.requestUpdate();
   };
 
-  fetchData = (url: string, isRefresh = false) => {
-    if (this.isLoading) {
-      return;
-    }
-    this.isLoading = true;
+  fetchData = (url: string, isRefresh = false, isRecentFetch = false) => {
+    if (isRecentFetch && this.isFetchingRecent) return;
+    if (!isRecentFetch && this.isLoading) return;
+    
+    if (isRecentFetch) this.isFetchingRecent = true;
+    else this.isLoading = true;
+    
     this.showLoadingSpinner(true);
     fetch(url, {
       method: 'GET',
@@ -573,6 +576,7 @@ export class LogList extends LitElement {
       })
       .finally(() => {
         this.isLoading = false;
+        this.isFetchingRecent = false;
         this.showLoadingSpinner(false);
         this.requestUpdate();
       });
@@ -1057,9 +1061,9 @@ export class LogList extends LitElement {
       'recent-logs',
       this.isLiveStreaming
         ? html`<p class="h-5 leading-5 m-0">Live streaming latest data...</p>`
-        : this.isLoading
+        : this.isFetchingRecent
           ? html`<div class="loading loading-dots loading-md h-5"></div>`
-          : this.createLoadButton('Check for recent data', () => this.fetchData(this.recentFetchUrl))
+          : this.createLoadButton('Check for recent data', () => this.fetchData(this.recentFetchUrl, false, true))
     );
   }
 
