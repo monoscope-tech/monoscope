@@ -168,7 +168,7 @@ export class LogList extends LitElement {
         if (liveBtn.checked) {
           this.isLiveStreaming = true;
           this.liveStreamInterval = setInterval(() => {
-            this.fetchData(this.recentFetchUrl, true, true);
+            this.fetchData(this.recentFetchUrl, false, true);
           }, 5000);
         } else {
           if (this.liveStreamInterval) {
@@ -507,10 +507,10 @@ export class LogList extends LitElement {
   fetchData = (url: string, isRefresh = false, isRecentFetch = false) => {
     if (isRecentFetch && this.isFetchingRecent) return;
     if (!isRecentFetch && this.isLoading) return;
-    
+
     if (isRecentFetch) this.isFetchingRecent = true;
     else this.isLoading = true;
-    
+
     this.showLoadingSpinner(true);
     fetch(url, {
       method: 'GET',
@@ -557,6 +557,9 @@ export class LogList extends LitElement {
             if (this.spanListTree.length > 0) {
               this.scrollToBottom();
             }
+          } else if (isRecentFetch) {
+            // For recent data, add to recentDataToBeAdded instead of directly to spanListTree
+            this.recentDataToBeAdded = this.flipDirection ? [...this.recentDataToBeAdded, ...tree] : [...tree, ...this.recentDataToBeAdded];
           } else {
             // Append data for pagination
             if (this.flipDirection) {
@@ -1028,9 +1031,7 @@ export class LogList extends LitElement {
     <tr class="w-full flex relative" ${id ? `id="${id}"` : ''}>
       <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
         ${id === null ? html`<div class="absolute -top-[500px] w-[1px] h-[500px] left-0" id="loader"></div>` : nothing}
-        <div class="h-8 flex items-center justify-center">
-          ${content}
-        </div>
+        <div class="h-8 flex items-center justify-center">${content}</div>
       </td>
     </tr>
   `;
@@ -1610,7 +1611,10 @@ function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<
     'id',
   ]);
 
-  const traces = chain(data)
+  // First, sort all data by timestamp
+  const sortedData = sortBy(data, (span) => span[idx.timestamp]);
+
+  const traces = chain(sortedData)
     .map((span) => {
       span[idx.trace_id] ||= generateId();
       span[idx.latency_breakdown] ||= generateId();
@@ -1626,6 +1630,7 @@ function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<
           parent: isLog ? null : span[idx.parent_span_id],
           data: span,
           type: isLog ? 'log' : 'span',
+          timestamp: span[idx.timestamp], // Keep timestamp on the span for ordering
         },
         timestamp: new Date(span[idx.timestamp]),
         startTime: span[idx.start_time_ns],
@@ -1652,22 +1657,25 @@ function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<
         (parent ? parent.children : roots).push(span);
       });
 
-      // Sort all children
+      // Sort all children by timestamp instead of startNs
       spanMap.forEach((span) => {
-        if (span.children.length > 1) span.children = sortBy(span.children, 'startNs');
+        if (span.children.length > 1) span.children = sortBy(span.children, 'timestamp');
       });
 
       return {
         traceId: traceSpans[0].traceId,
-        spans: sortBy(roots, 'startNs'),
+        spans: sortBy(roots, 'timestamp'),
         startTime: metadata.minStart,
         duration: metadata.duration,
+        trace_start_time: metadata.trace_start_time,
       };
     })
     .values()
     .value();
 
-  return flattenSpanTree(flipDirection ? traces.reverse() : traces, expandedTraces);
+  // Sort traces by their start time to maintain chronological order
+  const sortedTraces = sortBy(traces, 'trace_start_time');
+  return flattenSpanTree(flipDirection ? sortedTraces.reverse() : sortedTraces, expandedTraces);
 }
 
 function flattenSpanTree(traceArr: Trace[], expandedTraces: Record<string, boolean> = {}): EventLine[] {

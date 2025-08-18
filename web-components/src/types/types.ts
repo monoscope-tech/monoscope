@@ -123,6 +123,7 @@ export interface APTEvent {
   parent: string | null;
   data: any[];
   type: 'span' | 'log';
+  timestamp?: string;
 }
 
 export type TraceData = Omit<Trace, 'spans'> & { spans: Map<string, APTEvent>; minStart: number; trace_start_time: Date | null };
