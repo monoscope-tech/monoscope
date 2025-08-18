@@ -871,10 +871,12 @@ export class LogList extends LitElement {
     switch (key) {
       case 'id':
         const { statusCode: status, hasErrors: errCount, className: errClass } = getErrorClassification(dataArr, this.colIdxMap);
+        const isExpanded = expanded || rowData.parentIds?.some((pid: string) => this.expandedTraces[pid]);
+        const indicatorClass = isExpanded ? errClass.replace('-weak', '-strong') : errClass;
         return html`
           <div class="flex items-center justify-between w-3">
             <span class="col-span-1 h-5 rounded-sm flex">
-              ${renderIconWithTooltip(errClass, `${errCount} errors attached; status ${status}`, html``)}
+              ${renderIconWithTooltip(indicatorClass, `${errCount} errors attached; status ${status}`, html``)}
             </span>
           </div>
         `;
@@ -1104,7 +1106,7 @@ export class LogList extends LitElement {
       const sessionId = lookupVecValue<string>(rowData.data, this.colIdxMap, 'session_id');
       const rowHtml = html`
         <tr
-          class="item-row relative p-0 flex items-center group cursor-pointer whitespace-nowrap transition-all duration-200 hover:bg-fillWeaker hover:shadow-sm"
+          class="item-row relative p-0 flex items-center group cursor-pointer whitespace-nowrap hover:bg-fillWeaker"
           @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
         >
           ${this.logsColumns
@@ -1444,7 +1446,7 @@ function spanLatencyBreakdown({
   const baseVisualization = html`
     <div class="flex h-5 relative bg-fillWeak overflow-x-hidden rounded-sm" style=${`width:${barWidth}px`}>
       <div
-        class=${`h-full absolute top-0 rounded-sm transition-all duration-300 ${depth === 0 || children.length === 0 ? color : ''}`}
+        class=${`h-full absolute top-0 rounded-sm ${depth === 0 || children.length === 0 ? color : ''}`}
         style=${`width:${width}px; left:${left}px; background-image: linear-gradient(to right, transparent, rgba(255,255,255,0.1), transparent)`}
       ></div>
       ${children.map((child) => {
