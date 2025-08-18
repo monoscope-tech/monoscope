@@ -1023,7 +1023,10 @@ export class LogList extends LitElement {
   createLoadingRow = (id: string | null, content: TemplateResult) => html`
     <tr class="w-full flex relative" ${id ? `id="${id}"` : ''}>
       <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
-        ${id === null ? html`<div class="absolute -top-[500px] w-[1px] h-[500px] left-0" id="loader"></div>` : nothing} ${content}
+        ${id === null ? html`<div class="absolute -top-[500px] w-[1px] h-[500px] left-0" id="loader"></div>` : nothing}
+        <div class="h-8 flex items-center justify-center">
+          ${content}
+        </div>
       </td>
     </tr>
   `;
@@ -1038,7 +1041,7 @@ export class LogList extends LitElement {
     return this.createLoadingRow(
       null,
       this.isLoading
-        ? html`<div class="loading loading-dots loading-md"></div>`
+        ? html`<div class="loading loading-dots loading-md h-5"></div>`
         : this.createLoadButton('Load more', () => this.fetchData(this.nextFetchUrl))
     );
   }
@@ -1053,9 +1056,9 @@ export class LogList extends LitElement {
     return this.createLoadingRow(
       'recent-logs',
       this.isLiveStreaming
-        ? html`<p>Live streaming latest data...</p>`
+        ? html`<p class="h-5 leading-5 m-0">Live streaming latest data...</p>`
         : this.isLoading
-          ? html`<div class="loading loading-dots loading-md"></div>`
+          ? html`<div class="loading loading-dots loading-md h-5"></div>`
           : this.createLoadButton('Check for recent data', () => this.fetchData(this.recentFetchUrl))
     );
   }
