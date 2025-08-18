@@ -104,18 +104,6 @@ export class LogList extends LitElement {
 
     // Initialize log list component
 
-    // Bind methods that need this context
-    [
-      'logItemRow',
-      'fetchData',
-      'expandTrace',
-      'handleChartZoom',
-      'updateColumnMaxWidthMap',
-      'toggleLogRow',
-      'logItemCol',
-      'toggleColumnOnTable',
-    ].forEach((m) => (this[m] = this[m].bind(this)));
-
     // Initialize debounced functions
     this.debouncedHandleScroll = debounce(this.handleScroll.bind(this), 150);
     this.debouncedHandleResize = debounce(this.handleResize.bind(this), 50);
@@ -145,6 +133,16 @@ export class LogList extends LitElement {
       }
     );
 
+    // Setup all event listeners
+    this.setupEventListeners();
+  }
+
+  updateChartDataZoom(start: number, end: number) {
+    // Chart data zoom functionality - currently disabled
+  }
+
+  private setupEventListeners() {
+    // Live streaming button
     const liveBtn = document.querySelector('#streamLiveData') as HTMLInputElement;
     if (liveBtn) {
       liveBtn.addEventListener('change', () => {
@@ -163,10 +161,12 @@ export class LogList extends LitElement {
       });
     }
 
-    // Listen to all relevant events with debouncing
-    ['submit', 'add-query', 'update-query'].forEach((ev) => window.addEventListener(ev, () => this.debouncedRefetchLogs()));
+    // Global event listeners
+    ['submit', 'add-query', 'update-query'].forEach((ev) => 
+      window.addEventListener(ev, () => this.debouncedRefetchLogs())
+    );
 
-    // Also listen to form submit and update-query from filterElement
+    // Form submit listener
     document.addEventListener('submit', (e) => {
       if ((e.target as HTMLElement)?.id === 'log_explorer_form') {
         e.preventDefault();
@@ -174,14 +174,19 @@ export class LogList extends LitElement {
       }
     });
 
+    // Filter element update listener
     document.addEventListener('update-query', (e) => {
-      if ((e.target as HTMLElement)?.id === 'filterElement') this.debouncedRefetchLogs();
+      if ((e.target as HTMLElement)?.id === 'filterElement') {
+        this.debouncedRefetchLogs();
+      }
     });
 
+    // Window lifecycle events
     window.addEventListener('pagehide', () => {
       if (this.liveStreamInterval) clearInterval(this.liveStreamInterval);
     });
 
+    // Mouse events for resizing
     this.handleMouseUp = () => {
       this.resizeTarget = null;
       document.body.style.userSelect = 'auto';
@@ -189,6 +194,7 @@ export class LogList extends LitElement {
     window.addEventListener('mouseup', this.handleMouseUp);
     window.addEventListener('mousemove', this.boundHandleResize);
 
+    // Chart initialization and events
     window.addEventListener('load', () => {
       this.barChart = (window as any).barChart;
       this.lineChart = (window as any).lineChart;
@@ -206,10 +212,6 @@ export class LogList extends LitElement {
     });
   }
 
-  updateChartDataZoom(start: number, end: number) {
-    // Chart data zoom functionality - currently disabled
-  }
-
   private buildJsonUrl(): string {
     // Preserve all existing query parameters and add json=true
     const p = new URLSearchParams(window.location.search);
@@ -219,7 +221,7 @@ export class LogList extends LitElement {
   }
 
   async fetchInitialData() {
-    this.fetchData(this.buildJsonUrl(), false, true);
+    this.fetchData(this.buildJsonUrl(), false);
   }
 
   async refetchLogs() {
@@ -232,7 +234,7 @@ export class LogList extends LitElement {
     this.refetchLogs();
   }, 300);
 
-  toggleColumnOnTable(col: string) {
+  toggleColumnOnTable = (col: string) => {
     const p = new URLSearchParams(window.location.search);
     const cols = (p.get('cols') || '').split(',').filter(Boolean);
     const idx = cols.indexOf(col);
@@ -242,10 +244,10 @@ export class LogList extends LitElement {
         : [...cols.slice(0, cols.indexOf('summary')), col, ...cols.slice(cols.indexOf('summary'))];
     p.set('cols', newCols.join(','));
     window.history.replaceState({}, '', `${window.location.pathname}?${p}${window.location.hash}`);
-    this.fetchData(this.buildJsonUrl(), false, true);
+    this.fetchData(this.buildJsonUrl(), false);
   }
 
-  handleChartZoom(params: { batch?: { startValue: string; endValue: string }[] }) {
+  handleChartZoom = (params: { batch?: { startValue: string; endValue: string }[] }) => {
     const zoom = params.batch ? params.batch[0] : undefined;
     if (!zoom) return;
     let startValue = zoom.startValue;
@@ -401,7 +403,9 @@ export class LogList extends LitElement {
 
     // Clean up event listeners
     window.removeEventListener('mousemove', this.boundHandleResize);
-    window.removeEventListener('mouseup', this.handleMouseUp);
+    if (this.handleMouseUp) {
+      window.removeEventListener('mouseup', this.handleMouseUp);
+    }
     ['submit', 'add-query', 'update-query'].forEach((ev) => window.removeEventListener(ev, this.debouncedRefetchLogs));
 
     // Clean up chart event handlers
@@ -462,7 +466,7 @@ export class LogList extends LitElement {
     return this.memoizedBuildSpanListTree(logs);
   }
 
-  expandTrace(tracId: string, spanId: string) {
+  expandTrace = (tracId: string, spanId: string) => {
     this.shouldScrollToBottom = false;
     this.expandedTraces[spanId] = !this.expandedTraces[spanId];
     const expanded = this.expandedTraces[spanId];
@@ -483,7 +487,7 @@ export class LogList extends LitElement {
     this.requestUpdate();
   }
 
-  fetchData(url: string, isRefresh = false) {
+  fetchData = (url: string, isRefresh = false) => {
     if (this.isLoading) {
       return;
     }
@@ -576,7 +580,7 @@ export class LogList extends LitElement {
     this.logsColumns = e.detail;
     this.requestUpdate();
   }
-  updateColumnMaxWidthMap(recVecs: any[][]) {
+  updateColumnMaxWidthMap = (recVecs: any[][]) => {
     // Defer non-critical calculations
     requestAnimationFrame(() => {
       // Process in batches for better performance
@@ -605,7 +609,7 @@ export class LogList extends LitElement {
       }
     });
   }
-  toggleLogRow(event: any, targetInfo: [string, string, string], pid: string) {
+  toggleLogRow = (event: any, targetInfo: [string, string, string], pid: string) => {
     // Use refs when available, fallback to querySelector
     const sideView = this.logDetailsContainer || (document.querySelector('#log_details_container')! as HTMLElement);
     const resizerWrapper = this.resizerWrapper || document.querySelector('#resizer-details_width-wrapper');
@@ -874,7 +878,7 @@ export class LogList extends LitElement {
     return getStyleClass(style);
   }
 
-  logItemCol(rowData: any, key: string): any {
+  logItemCol = (rowData: any, key: string): any => {
     const { data: dataArr, depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData;
     const wrapClass = this.wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
 
@@ -1095,7 +1099,7 @@ export class LogList extends LitElement {
     return this.tableHeadingWrapper(title, column, classes);
   }
 
-  logItemRow(rowData: EventLine | 'end' | 'start') {
+  logItemRow = (rowData: EventLine | 'end' | 'start') => {
     if (rowData === 'end') {
       if (this.flipDirection) {
         return this.fetchRecent();
