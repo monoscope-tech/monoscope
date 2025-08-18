@@ -7,7 +7,7 @@ import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, Trace, TraceDataMap
 import { RangeChangedEvent, VisibilityChangedEvent } from '@lit-labs/virtualizer';
 import debounce from 'lodash/debounce';
 import memoize from 'lodash/memoize';
-import { split, includes, startsWith, replace } from 'lodash';
+import { split, includes, startsWith, replace, filter, map, forEach, compact, get, omit, pick, flow, chunk, groupBy, mapValues, sortBy, chain } from 'lodash';
 import clsx from 'clsx';
 import {
   formatTimestamp,
@@ -236,7 +236,7 @@ export class LogList extends LitElement {
 
   toggleColumnOnTable = (col: string) => {
     const p = new URLSearchParams(window.location.search);
-    const cols = (p.get('cols') || '').split(',').filter(Boolean);
+    const cols = compact((p.get('cols') || '').split(','));
     const idx = cols.indexOf(col);
     const newCols =
       idx > -1
@@ -584,9 +584,8 @@ export class LogList extends LitElement {
     // Defer non-critical calculations
     requestAnimationFrame(() => {
       // Process in batches for better performance
-      const batchSize = 100;
-      for (let i = 0; i < recVecs.length; i += batchSize) {
-        const batch = recVecs.slice(i, Math.min(i + batchSize, recVecs.length));
+      const batches = chunk(recVecs, 100);
+      forEach(batches, (batch) => {
 
         batch.forEach((vec) => {
           Object.entries(this.colIdxMap).forEach(([key, value]) => {
@@ -606,7 +605,7 @@ export class LogList extends LitElement {
             this.columnMaxWidthMap[key] = Math.max(this.columnMaxWidthMap[key] || minWidth, target);
           });
         });
-      }
+      });
     });
   }
   toggleLogRow = (event: any, targetInfo: [string, string, string], pid: string) => {
@@ -649,17 +648,6 @@ export class LogList extends LitElement {
     this.requestUpdate();
   }
 
-  addWithFlipDirection(current: any[], newData: any[]) {
-    // Avoid creating new arrays when possible
-    if (this.flipDirection) {
-      current.push(...newData);
-      return current;
-    } else {
-      newData.push(...current);
-      return newData;
-    }
-  }
-
   handleRecentClick() {
     const container = document.querySelector('#logs_list_container_inner');
     if (container) {
@@ -670,12 +658,10 @@ export class LogList extends LitElement {
 
   handleRecentConcatenation() {
     if (this.recentDataToBeAdded.length === 0) return;
-    // Use more efficient array concatenation
-    if (this.flipDirection) {
-      this.spanListTree.push(...this.recentDataToBeAdded);
-    } else {
-      this.spanListTree.unshift(...this.recentDataToBeAdded);
-    }
+    // Use lodash concat for cleaner concatenation
+    this.spanListTree = this.flipDirection 
+      ? [...this.spanListTree, ...this.recentDataToBeAdded]
+      : [...this.recentDataToBeAdded, ...this.spanListTree];
     this.recentDataToBeAdded = [];
     this.batchRequestUpdate('recentConcatenation');
   }
