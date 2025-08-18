@@ -7,7 +7,25 @@ import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, Trace, TraceDataMap
 import { RangeChangedEvent, VisibilityChangedEvent } from '@lit-labs/virtualizer';
 import debounce from 'lodash/debounce';
 import memoize from 'lodash/memoize';
-import { split, includes, startsWith, replace, filter, map, forEach, compact, get, omit, pick, flow, chunk, groupBy, mapValues, sortBy, chain } from 'lodash';
+import {
+  split,
+  includes,
+  startsWith,
+  replace,
+  filter,
+  map,
+  forEach,
+  compact,
+  get,
+  omit,
+  pick,
+  flow,
+  chunk,
+  groupBy,
+  mapValues,
+  sortBy,
+  chain,
+} from 'lodash';
 import clsx from 'clsx';
 import {
   formatTimestamp,
@@ -48,7 +66,7 @@ const _ensureBadgeClasses = html`
 @customElement('log-list')
 export class LogList extends LitElement {
   @property({ type: String }) projectId: string = '';
-  
+
   @state() private expandedTraces: Record<string, boolean> = {};
   @state() private flipDirection: boolean = false;
   @state() private spanListTree: EventLine[] = [];
@@ -162,9 +180,7 @@ export class LogList extends LitElement {
     }
 
     // Global event listeners
-    ['submit', 'add-query', 'update-query'].forEach((ev) => 
-      window.addEventListener(ev, () => this.debouncedRefetchLogs())
-    );
+    ['submit', 'add-query', 'update-query'].forEach((ev) => window.addEventListener(ev, () => this.debouncedRefetchLogs()));
 
     // Form submit listener
     document.addEventListener('submit', (e) => {
@@ -245,7 +261,7 @@ export class LogList extends LitElement {
     p.set('cols', newCols.join(','));
     window.history.replaceState({}, '', `${window.location.pathname}?${p}${window.location.hash}`);
     this.fetchData(this.buildJsonUrl(), false);
-  }
+  };
 
   handleChartZoom = (params: { batch?: { startValue: string; endValue: string }[] }) => {
     const zoom = params.batch ? params.batch[0] : undefined;
@@ -278,7 +294,7 @@ export class LogList extends LitElement {
 
     // Refetch logs with the new time range
     this.debouncedRefetchLogs();
-  }
+  };
 
   // updateTableData method is no longer needed as we fetch data directly
 
@@ -485,7 +501,7 @@ export class LogList extends LitElement {
 
     // For user interactions, update immediately
     this.requestUpdate();
-  }
+  };
 
   fetchData = (url: string, isRefresh = false) => {
     if (this.isLoading) {
@@ -560,7 +576,7 @@ export class LogList extends LitElement {
         this.showLoadingSpinner(false);
         this.requestUpdate();
       });
-  }
+  };
 
   private showErrorToast(message: string) {
     document.body.dispatchEvent(
@@ -586,7 +602,6 @@ export class LogList extends LitElement {
       // Process in batches for better performance
       const batches = chunk(recVecs, 100);
       forEach(batches, (batch) => {
-
         batch.forEach((vec) => {
           Object.entries(this.colIdxMap).forEach(([key, value]) => {
             if (key === 'id') return;
@@ -601,13 +616,13 @@ export class LogList extends LitElement {
 
             const target = calculateColumnWidth(String(vec[value]), key);
             const minWidth = MIN_COLUMN_WIDTH * (CHAR_WIDTHS[key as keyof typeof CHAR_WIDTHS] || CHAR_WIDTHS.default);
-            
+
             this.columnMaxWidthMap[key] = Math.max(this.columnMaxWidthMap[key] || minWidth, target);
           });
         });
       });
     });
-  }
+  };
   toggleLogRow = (event: any, targetInfo: [string, string, string], pid: string) => {
     // Use refs when available, fallback to querySelector
     const sideView = this.logDetailsContainer || (document.querySelector('#log_details_container')! as HTMLElement);
@@ -636,7 +651,7 @@ export class LogList extends LitElement {
     const url = `/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=${source}`;
     updateUrlState('target_event', `${rdId}/${rdCreatedAt}/detailed?source=${source}`);
     (window as any).htmx.ajax('GET', url, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' });
-  }
+  };
 
   moveColumn(column: string, direction: number) {
     const index = this.logsColumns.indexOf(column);
@@ -659,7 +674,7 @@ export class LogList extends LitElement {
   handleRecentConcatenation() {
     if (this.recentDataToBeAdded.length === 0) return;
     // Use lodash concat for cleaner concatenation
-    this.spanListTree = this.flipDirection 
+    this.spanListTree = this.flipDirection
       ? [...this.spanListTree, ...this.recentDataToBeAdded]
       : [...this.recentDataToBeAdded, ...this.spanListTree];
     this.recentDataToBeAdded = [];
@@ -684,7 +699,10 @@ export class LogList extends LitElement {
           this.debouncedHandleScroll(e);
           this.requestUpdate();
         }}
-        class=${clsx('relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto', isInitialLoading && 'overflow-hidden')}
+        class=${clsx(
+          'relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto',
+          isInitialLoading && 'overflow-hidden'
+        )}
         id="logs_list_container_inner"
         style="min-height: 500px;"
       >
@@ -757,7 +775,12 @@ export class LogList extends LitElement {
                   this.handleRecentConcatenation();
                 }}
                 data-tip="Scroll to bottom"
-                class=${clsx('absolute tooltip tooltip-left right-8 bottom-2 group z-50 text-textInverse-strong flex justify-center items-center rounded-full shadow-lg h-10 w-10 transition-all duration-300 hover:shadow-xl hover:scale-110', this.recentDataToBeAdded.length > 0 ? 'bg-gradient-to-br from-fillBrand-strong to-fillBrand-weak animate-pulse' : 'bg-gradient-to-br from-fillStrong to-fillWeak')}
+                class=${clsx(
+                  'absolute tooltip tooltip-left right-8 bottom-2 group z-50 text-textInverse-strong flex justify-center items-center rounded-full shadow-lg h-10 w-10 transition-all duration-300 hover:shadow-xl hover:scale-110',
+                  this.recentDataToBeAdded.length > 0
+                    ? 'bg-gradient-to-br from-fillBrand-strong to-fillBrand-weak animate-pulse'
+                    : 'bg-gradient-to-br from-fillStrong to-fillWeak'
+                )}
               >
                 ${this.recentDataToBeAdded.length > 0
                   ? html`<span class="absolute inset-0 rounded-full bg-fillBrand-strong opacity-30 blur animate-ping"></span>`
@@ -821,7 +844,7 @@ export class LogList extends LitElement {
       })
       .map((element) => {
         const parsed = parseSummaryElement(element);
-        
+
         if (parsed.type === 'plain') {
           const unescapedContent = unescapeJsonString(parsed.content);
           return html`<span class=${`fill-textStrong ${wrapClass}`}>${unescapedContent}</span>`;
@@ -911,34 +934,9 @@ export class LogList extends LitElement {
             // Only process elements with styles starting with "right-"
             if (style.startsWith('right-')) {
               const badgeStyle = this.getStyleClass(style);
-              if (field === 'session') {
-                const pB = html`<button
-                  class="flex items-center gap-1 shrink-0 cbadge-sm badge-neutral cursor-pointer"
-                  @click=${(e: any) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                  }}
-                  @pointerdown=${(e: any) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    window.dispatchEvent(
-                      new CustomEvent('loadSessionReplay', { detail: { sessionId: value }, bubbles: true, cancelable: false })
-                    );
-                    // Cache the wrapper reference
-                    let wrapper = this.sessionPlayerWrapper;
-                    if (!wrapper) {
-                      wrapper = document.querySelector('#sessionPlayerWrapper');
-                      this.sessionPlayerWrapper = wrapper;
-                    }
-                    if (wrapper) wrapper.classList.remove('hidden');
-                  }}
-                >
-                  ${faSprite('play', 'regular', 'w-4 h-4')} Play recording
-                </button>`;
-                rightAlignedBadges.push(pB);
-              } else {
-                rightAlignedBadges.push(renderBadge(`cbadge-sm ${badgeStyle} bg-opacity-100`, value));
-              }
+              rightAlignedBadges.push(
+                field === 'session' ? this.createSessionButton(value) : renderBadge(`cbadge-sm ${badgeStyle} bg-opacity-100`, value)
+              );
             }
           }
         });
@@ -971,21 +969,16 @@ export class LogList extends LitElement {
           ${this.view === 'tree'
             ? html`
                 <div class="flex items-center">
-                  ${depth > 1
-                    ? new Array(depth - 1)
-                        .fill(1)
-                        .map(
-                          (_, i) =>
-                            html`<div class="w-8 h-5 shrink-0 flex items-center justify-center">
-                              ${siblingsArr[i] ? faSprite('tree-straight', 'regular', 'w-8 h-5 text-iconNeutral') : nothing}
-                            </div>`
-                        )
-                    : nothing}
+                  ${map(
+                    Array(Math.max(0, depth - 1)),
+                    (_, i) =>
+                      html`<div class="w-8 h-5 shrink-0 flex items-center justify-center">
+                        ${siblingsArr[i] ? faSprite('tree-straight', 'regular', 'w-8 h-5 text-iconNeutral') : nothing}
+                      </div>`
+                  )}
                   ${depth > 0
                     ? html`<div class="w-8 h-5 shrink-0 flex items-center justify-center">
-                        ${isLastChild
-                          ? faSprite('tree-angle', 'regular', 'w-8 h-5 text-iconNeutral')
-                          : faSprite('tree-tee', 'regular', 'w-8 h-5 text-iconNeutral')}
+                        ${faSprite(isLastChild ? 'tree-angle' : 'tree-tee', 'regular', 'w-8 h-5 text-iconNeutral')}
                       </div>`
                     : nothing}
                   ${children > 0
@@ -1021,51 +1014,50 @@ export class LogList extends LitElement {
         let v = lookupVecValue<string>(dataArr, this.colIdxMap, key);
         return html`<span class=${wrapClass} title=${key}>${v}</span>`;
     }
-  }
+  };
+
+  createLoadButton = (text: string, onClick: () => void) => html`
+    <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" @pointerdown=${onClick}>${text}</button>
+  `;
+
+  createLoadingRow = (id: string | null, content: TemplateResult) => html`
+    <tr class="w-full flex relative" ${id ? `id="${id}"` : ''}>
+      <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
+        ${id === null ? html`<div class="absolute -top-[500px] w-[1px] h-[500px] left-0" id="loader"></div>` : nothing} ${content}
+      </td>
+    </tr>
+  `;
 
   renderLoadMore() {
-    // Check if we have no data (empty state)
     if (this.spanListTree.length === 0 && !this.isLoading && !this.hasMore && !this.flipDirection) {
       return emptyState(this.logsColumns.length);
     }
 
     if (!this.hasMore || !this.spanListTree.length) return html`<tr></tr>`;
-    return html`<tr class="w-full flex relative">
-      <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
-        <div class="absolute -top-[500px] w-[1px] h-[500px] left-0" id="loader"></div>
-        ${this.isLoading
-          ? html`<div class="loading loading-dots loading-md"></div>`
-          : html`<button
-              class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-              @pointerdown=${() => this.fetchData(this.nextFetchUrl)}
-            >
-              Load more
-            </button>`}
-      </td>
-    </tr>`;
+
+    return this.createLoadingRow(
+      null,
+      this.isLoading
+        ? html`<div class="loading loading-dots loading-md"></div>`
+        : this.createLoadButton('Load more', () => this.fetchData(this.nextFetchUrl))
+    );
   }
 
   fetchRecent() {
-    // Check if we have no data (empty state) when flipped
     if (this.spanListTree.length === 0 && !this.isLoading && !this.hasMore && this.flipDirection) {
       return emptyState(this.logsColumns.length);
     }
 
     if (!this.spanListTree.length) return html`<tr></tr>`;
-    return html`<tr class="w-full flex relative" id="recent-logs">
-      <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
-        ${this.isLiveStreaming
-          ? html`<p>Live streaming latest data...</p>`
-          : this.isLoading
-            ? html`<div class="loading loading-dots loading-md"></div>`
-            : html`<button
-                class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto"
-                @pointerdown=${() => this.fetchData(this.recentFetchUrl)}
-              >
-                Check for recent data
-              </button>`}
-      </td>
-    </tr>`;
+
+    return this.createLoadingRow(
+      'recent-logs',
+      this.isLiveStreaming
+        ? html`<p>Live streaming latest data...</p>`
+        : this.isLoading
+          ? html`<div class="loading loading-dots loading-md"></div>`
+          : this.createLoadButton('Check for recent data', () => this.fetchData(this.recentFetchUrl))
+    );
   }
 
   logTableHeading(column: string) {
@@ -1137,7 +1129,7 @@ export class LogList extends LitElement {
         <td colspan="${this.logsColumns.length}">Error rendering row: ${error.message}</td>
       </tr>`;
     }
-  }
+  };
 
   tableHeadingWrapper(title: string, column: string, classes: string) {
     let width = this.columnMaxWidthMap[column];
@@ -1188,8 +1180,32 @@ export class LogList extends LitElement {
     `;
   }
 
-  renderCheckbox(label: string, icon: string, checked: boolean, onChange: (checked: boolean) => void) {
-    return html` <label class="flex items-center cursor-pointer w-full gap-1 px-2 py-1 text-sm rounded text-textWeak hover:bg-fillWeaker">
+  createSessionButton = (sessionId: string) => html`
+    <button
+      class="flex items-center gap-1 shrink-0 cbadge-sm badge-neutral cursor-pointer"
+      @click=${(e: any) => {
+        e.stopPropagation();
+        e.preventDefault();
+      }}
+      @pointerdown=${(e: any) => {
+        e.stopPropagation();
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent('loadSessionReplay', { detail: { sessionId }, bubbles: true, cancelable: false }));
+        // Cache the wrapper reference
+        let wrapper = this.sessionPlayerWrapper;
+        if (!wrapper) {
+          wrapper = document.querySelector('#sessionPlayerWrapper');
+          this.sessionPlayerWrapper = wrapper;
+        }
+        if (wrapper) wrapper.classList.remove('hidden');
+      }}
+    >
+      ${faSprite('play', 'regular', 'w-4 h-4')} Play recording
+    </button>
+  `;
+
+  renderCheckbox = (label: string, icon: string, checked: boolean, onChange: (checked: boolean) => void) => html`
+    <label class="flex items-center cursor-pointer w-full gap-1 px-2 py-1 text-sm rounded text-textWeak hover:bg-fillWeaker">
       <input
         type="checkbox"
         class="checkbox checkbox-xs checkbox-primary mr-1"
@@ -1198,8 +1214,8 @@ export class LogList extends LitElement {
       />
       ${faSprite(icon, 'regular', 'h-4 w-4')}
       <span class="sm:inline hidden">${label}</span>
-    </label>`;
-  }
+    </label>
+  `;
 
   options() {
     const viewButton = (view: 'tree' | 'list', icon: string, label: string) =>
@@ -1487,9 +1503,38 @@ function spanLatencyBreakdown({
   return html`<div class="-mt-1 shrink-0">${baseVisualization}</div>`;
 }
 
+const skeletonCell = (idx: number, totalCols: number) => {
+  const classes = clsx(
+    'bg-bgBase relative pl-2',
+    idx === 0 && 'w-3',
+    idx === totalCols - 1 && 'sticky right-0 z-10',
+    idx > 0 && idx < totalCols - 1 && getSkeletonColumnWidth(idx)
+  );
+
+  if (idx === 0) {
+    return html`<td class=${classes}>
+      <div class="w-1 h-5 bg-fillBrand-strong opacity-20 rounded-full skeleton-glow"></div>
+    </td>`;
+  }
+
+  return html`<td class=${classes}>
+    <div class="relative overflow-hidden">
+      <div class="h-4 rounded skeleton-shimmer skeleton-wave ${idx === totalCols - 1 ? 'w-24' : 'w-3/4'}"></div>
+      ${idx === totalCols - 1
+        ? html`<div class="absolute right-0 top-0 h-full w-16 bg-gradient-to-r from-transparent to-bgBase"></div>`
+        : nothing}
+    </div>
+  </td>`;
+};
+
+const skeletonRow = (rowIdx: number, cols: number) => html`
+  <tr class="item-row relative p-0 flex items-center group whitespace-nowrap" style="--row-index: ${rowIdx}">
+    ${map(Array(cols), (_, idx) => skeletonCell(idx, cols))}
+  </tr>
+`;
+
 function loadingSkeleton(cols: number) {
   const actualCols = cols || 6;
-
   return html`
     <tbody class="min-w-0 text-sm">
       <tr class="w-full flex justify-center">
@@ -1500,39 +1545,10 @@ function loadingSkeleton(cols: number) {
           </div>
         </td>
       </tr>
-      ${[...Array(10)].map(
-        (_, rowIdx) => html`
-          <tr class="item-row relative p-0 flex items-center group whitespace-nowrap" style="--row-index: ${rowIdx}">
-            ${[...Array(actualCols)].map(
-              (_, idx) => html`
-                <td
-                  class="bg-bgBase relative pl-2 ${idx === 0
-                    ? 'w-3'
-                    : idx === actualCols - 1
-                      ? 'sticky right-0 z-10'
-                      : getSkeletonColumnWidth(idx)}"
-                >
-                  ${idx === 0
-                    ? html`<div class="w-1 h-5 bg-fillBrand-strong opacity-20 rounded-full skeleton-glow"></div>`
-                    : html`
-                        <div class="relative overflow-hidden">
-                          <div class="h-4 rounded skeleton-shimmer skeleton-wave ${idx === actualCols - 1 ? 'w-24' : 'w-3/4'}"></div>
-                          ${idx === actualCols - 1
-                            ? html`<div class="absolute right-0 top-0 h-full w-16 bg-gradient-to-r from-transparent to-bgBase"></div>`
-                            : nothing}
-                        </div>
-                      `}
-                </td>
-              `
-            )}
-          </tr>
-        `
-      )}
+      ${map(Array(10), (_, rowIdx) => skeletonRow(rowIdx, actualCols))}
     </tbody>
   `;
 }
-
-// getSkeletonColumnWidth function moved to log-list-utils.ts
 
 function emptyState(cols: number) {
   let title = `No Events found`;
@@ -1575,106 +1591,76 @@ function requestDumpLogItemUrlPath(rd: any[], colIdxMap: ColIdxMap, source: stri
 }
 
 function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<string, boolean>, flipDirection: boolean) {
-  const traceMap: TraceDataMap = new Map();
-  const TRACE_INDEX = colIdxMap['trace_id'];
-  const SPAN_INDEX = colIdxMap['latency_breakdown'];
-  const PARENT_SPAN_INDEX = colIdxMap['parent_span_id'];
-  const TIMESTAMP_INDEX = colIdxMap['timestamp'];
-  const SPAN_DURATION_INDEX = colIdxMap['duration'];
-  const START_TIME_NS = colIdxMap['start_time_ns'];
-  const ERROR_INDEX = colIdxMap['errors'];
-  const BODY_INDEX = colIdxMap['body'];
-  const KIND_INDEX = colIdxMap['kind'];
+  const idx = pick(colIdxMap, [
+    'trace_id',
+    'latency_breakdown',
+    'parent_span_id',
+    'timestamp',
+    'duration',
+    'start_time_ns',
+    'errors',
+    'kind',
+    'id',
+  ]);
 
-  data.forEach((span: any[]) => {
-    let traceId = span[TRACE_INDEX];
-    let spanId = span[SPAN_INDEX];
-    const parentSpanId = span[PARENT_SPAN_INDEX];
-    const body = span[BODY_INDEX];
-    const id = span[colIdxMap['id']];
-    if (traceId === '' || traceId === null) {
-      // generate random id
-      traceId = generateId();
-      span[TRACE_INDEX] = traceId;
-    }
-    if (spanId === '' || spanId === null) {
-      spanId = generateId();
-      span[SPAN_INDEX] = spanId;
-    }
-    let traceData = traceMap.get(traceId);
-    if (traceData === undefined) {
-      traceData = {
-        traceId,
-        spans: new Map(),
-        minStart: Infinity,
-        duration: 0,
-        startTime: 0,
-        trace_start_time: null,
+  const traces = chain(data)
+    .map((span) => {
+      span[idx.trace_id] ||= generateId();
+      span[idx.latency_breakdown] ||= generateId();
+      const isLog = span[idx.kind] === 'log';
+      return {
+        traceId: span[idx.trace_id],
+        span: {
+          id: isLog ? span[idx.id] : span[idx.latency_breakdown],
+          startNs: span[idx.start_time_ns],
+          hasErrors: isLog ? false : span[idx.errors],
+          duration: isLog ? 0 : span[idx.duration],
+          children: [],
+          parent: isLog ? null : span[idx.parent_span_id],
+          data: span,
+          type: isLog ? 'log' : 'span',
+        },
+        timestamp: new Date(span[idx.timestamp]),
+        startTime: span[idx.start_time_ns],
+        duration: span[idx.duration],
       };
-      traceMap.set(traceId, traceData);
-    }
+    })
+    .groupBy('traceId')
+    .mapValues((traceSpans) => {
+      // Build spans and metadata
+      const spanMap = new Map(map(traceSpans, (s) => [s.span.id, s.span]));
+      const metadata = traceSpans.reduce(
+        (acc, s) => ({
+          minStart: Math.min(acc.minStart, s.startTime),
+          duration: Math.max(acc.duration, s.duration),
+          trace_start_time: !acc.trace_start_time || s.timestamp < acc.trace_start_time ? s.timestamp : acc.trace_start_time,
+        }),
+        { minStart: Infinity, duration: 0, trace_start_time: null }
+      );
 
-    const timestamp = new Date(span[TIMESTAMP_INDEX]);
-    const duration = span[SPAN_DURATION_INDEX];
-    const startTime = span[START_TIME_NS];
+      // Build tree
+      const roots: APTEvent[] = [];
+      spanMap.forEach((span) => {
+        const parent = span.parent && spanMap.get(span.parent);
+        (parent ? parent.children : roots).push(span);
+      });
 
-    if (!traceData.trace_start_time || timestamp < traceData.trace_start_time) {
-      traceData.trace_start_time = timestamp;
-    }
-    traceData.minStart = Math.min(traceData.minStart, startTime);
-    traceData.duration = Math.max(traceData.duration, duration);
-    const isLog = span[KIND_INDEX] === 'log';
-    traceData.spans.set(isLog ? id : spanId, {
-      id: spanId,
-      startNs: startTime,
-      hasErrors: isLog ? false : span[ERROR_INDEX],
-      duration: isLog ? 0 : duration,
-      children: [],
-      parent: isLog ? null : parentSpanId,
-      data: span,
-      type: isLog ? 'log' : 'span',
-    });
-  });
+      // Sort all children
+      spanMap.forEach((span) => {
+        if (span.children.length > 1) span.children = sortBy(span.children, 'startNs');
+      });
 
-  traceMap.forEach((traceData) => {
-    const spanTree = new Map<string, APTEvent>();
-    traceData.spans.forEach((span) => {
-      const parentId = span.type === 'log' ? span.id : span.parent || '';
-      const parentSpan = traceData.spans.get(parentId);
+      return {
+        traceId: traceSpans[0].traceId,
+        spans: sortBy(roots, 'startNs'),
+        startTime: metadata.minStart,
+        duration: metadata.duration,
+      };
+    })
+    .values()
+    .value();
 
-      if (parentSpan) {
-        parentSpan.children.push(span);
-      } else {
-        spanTree.set(span.id, span);
-      }
-    });
-
-    // Sort children after all have been added
-    traceData.spans.forEach((span) => {
-      if (span.children.length > 1) {
-        span.children.sort((a, b) => a.startNs - b.startNs);
-      }
-    });
-    // Convert to array after processing
-    const sortedSpans = Array.from(spanTree.values()).sort((a, b) => a.startNs - b.startNs);
-    traceData.spans = sortedSpans as any;
-  });
-
-  const result = Array.from(traceMap.values()).map((trace) => {
-    const r: Trace = {
-      traceId: trace.traceId,
-      spans: Object.values(trace.spans),
-      startTime: trace.minStart,
-      duration: trace.duration,
-    };
-    return r;
-  });
-
-  if (flipDirection) {
-    result.reverse();
-  }
-
-  return flattenSpanTree(result, expandedTraces);
+  return flattenSpanTree(flipDirection ? traces.reverse() : traces, expandedTraces);
 }
 
 function flattenSpanTree(traceArr: Trace[], expandedTraces: Record<string, boolean> = {}): EventLine[] {
@@ -1734,7 +1720,3 @@ function flattenSpanTree(traceArr: Trace[], expandedTraces: Record<string, boole
   });
   return result;
 }
-
-// getColumnWidth function moved to log-list-utils.ts
-
-// generateStrId moved to log-list-utils.ts as generateId
