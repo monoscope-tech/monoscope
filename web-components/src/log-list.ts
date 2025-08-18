@@ -573,11 +573,13 @@ export class LogList extends LitElement {
           if (serviceColors && Object.keys(serviceColors).length > 0) {
             Object.assign(this.serviceColors, serviceColors);
           }
+
+          this.logsColumns = cols;
+          this.colIdxMap = colIdxMap;
+
           let tree = this.buildSpanListTree(logsData);
 
           if (isRefresh) {
-            this.logsColumns = cols;
-            this.colIdxMap = colIdxMap;
             this.nextFetchUrl = nextUrl;
             this.recentFetchUrl = recentUrl;
             this.spanListTree = tree;

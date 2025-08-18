@@ -67,6 +67,7 @@ extra-source-files:
     static/public/assets/css/tailwind.css
     static/public/assets/css/tailwind.min.css
     static/public/assets/css/thirdparty/notyf3.min.css
+    static/public/assets/css/thirdparty/rrweb.css
     static/public/assets/deps/gridstack/gridstack.min.css
     static/public/assets/js/monaco/vs/editor/editor.main.css
     static/public/assets/web-components/dist/css/index.css
@@ -218,6 +219,14 @@ extra-source-files:
     static/public/workbox-ed58f0de.js
     static/public/assets/echart-theme.json
     static/public/assets/js/monaco/config.json
+    static/public/sessions/e194f49b-1b6f-4e38-b486-2ae3b9e5b7a5/20250727083737.json
+    static/public/sessions/e194f49b-1b6f-4e38-b486-2ae3b9e5b7a5/20250727083752.json
+    static/public/sessions/e194f49b-1b6f-4e38-b486-2ae3b9e5b7a5/20250727083852.json
+    static/public/sessions/e194f49b-1b6f-4e38-b486-2ae3b9e5b7a5/20250727083952.json
+    static/public/sessions/e194f49b-1b6f-4e38-b486-2ae3b9e5b7a5/20250727084007.json
+    static/public/sessions/e194f49b-1b6f-4e38-b486-2ae3b9e5b7a5/20250727115744.json
+    static/public/sessions/e194f49b-1b6f-4e38-b486-2ae3b9e5b7a5/20250727115759.json
+    static/public/sessions/e194f49b-1b6f-4e38-b486-2ae3b9e5b7a5/20250727115815.json
     static/public/assets/framework-logos/ihp-logo.svg
     static/public/assets/framework-logos/spring-logo.svg
     static/public/assets/svgs/anomalies/archive.svg
@@ -478,6 +487,7 @@ library
     , casing
     , clock
     , colourista
+    , conduit
     , containers
     , cookie
     , cryptohash-md5
@@ -523,6 +533,7 @@ library
     , lucid-hyperscript >=0.1.0.2
     , lucid-svg >=0.7.1.1
     , megaparsec
+    , minio-hs
     , mmark
     , monad-time-effectful
     , mtl
@@ -570,15 +581,13 @@ library
     , vector
     , vector-algorithms
     , wai
+    , wai-cors
     , wai-log
     , wai-middleware-static
     , warp
     , wreq
     , xxhash
     , yaml
-    , wai-cors
-    , minio-hs
-    , conduit
   default-language: GHC2021
 
 executable apitoolkit-server-exe
