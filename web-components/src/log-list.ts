@@ -7,6 +7,7 @@ import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, Trace, TraceDataMap
 import { RangeChangedEvent, VisibilityChangedEvent } from '@lit-labs/virtualizer';
 import debounce from 'lodash/debounce';
 import memoize from 'lodash/memoize';
+import { split, includes, startsWith, replace } from 'lodash';
 import clsx from 'clsx';
 import {
   formatTimestamp,
@@ -19,6 +20,12 @@ import {
   getColumnWidth,
   getSkeletonColumnWidth,
   getStyleClass,
+  COLUMN_DEFAULTS,
+  CHAR_WIDTHS,
+  MIN_COLUMN_WIDTH,
+  calculateColumnWidth,
+  parseSummaryElement,
+  unescapeJsonString,
 } from './log-list-utils';
 
 // TypeScript declarations for global functions
@@ -572,9 +579,6 @@ export class LogList extends LitElement {
   updateColumnMaxWidthMap(recVecs: any[][]) {
     // Defer non-critical calculations
     requestAnimationFrame(() => {
-      const columnDefaults: Record<string, number> = { summary: 450 * 8.5, latency_breakdown: 100 };
-      const charWidths: Record<string, number> = { timestamp: 6.5, default: 8.5 };
-
       // Process in batches for better performance
       const batchSize = 100;
       for (let i = 0; i < recVecs.length; i += batchSize) {
@@ -585,17 +589,17 @@ export class LogList extends LitElement {
             if (key === 'id') return;
 
             // Set defaults for special columns
-            if (columnDefaults[key as keyof typeof columnDefaults] && !this.columnMaxWidthMap[key]) {
-              this.columnMaxWidthMap[key] = columnDefaults[key as keyof typeof columnDefaults];
+            if (COLUMN_DEFAULTS[key as keyof typeof COLUMN_DEFAULTS] && !this.columnMaxWidthMap[key]) {
+              this.columnMaxWidthMap[key] = COLUMN_DEFAULTS[key as keyof typeof COLUMN_DEFAULTS];
             }
 
             // Skip if already set for special columns
             if ((key === 'latency_breakdown' || key === 'summary') && this.columnMaxWidthMap[key]) return;
 
-            const chPx = charWidths[key as keyof typeof charWidths] || charWidths.default;
-            const target = String(vec[value]).length * chPx;
-
-            this.columnMaxWidthMap[key] = Math.max(this.columnMaxWidthMap[key] || 12 * chPx, target);
+            const target = calculateColumnWidth(String(vec[value]), key);
+            const minWidth = MIN_COLUMN_WIDTH * (CHAR_WIDTHS[key as keyof typeof CHAR_WIDTHS] || CHAR_WIDTHS.default);
+            
+            this.columnMaxWidthMap[key] = Math.max(this.columnMaxWidthMap[key] || minWidth, target);
           });
         });
       }
@@ -690,9 +694,7 @@ export class LogList extends LitElement {
           this.debouncedHandleScroll(e);
           this.requestUpdate();
         }}
-        class="relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto ${isInitialLoading
-          ? 'overflow-hidden'
-          : ''}"
+        class=${clsx('relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto', isInitialLoading && 'overflow-hidden')}
         id="logs_list_container_inner"
         style="min-height: 500px;"
       >
@@ -718,9 +720,7 @@ export class LogList extends LitElement {
                     ${[...Array(6)].map(
                       (_, idx) => html`
                         <td
-                          class="p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${getSkeletonColumnWidth(
-                            idx
-                          )}"
+                          class=${`p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${getSkeletonColumnWidth(idx)}`}
                         >
                           <div class="relative overflow-hidden">
                             <div class="h-4 rounded skeleton-shimmer w-16" style="animation-delay: ${idx * 0.1}s"></div>
@@ -767,11 +767,7 @@ export class LogList extends LitElement {
                   this.handleRecentConcatenation();
                 }}
                 data-tip="Scroll to bottom"
-                class=${`absolute tooltip tooltip-left right-8 bottom-2 group z-50 ${
-                  this.recentDataToBeAdded.length > 0
-                    ? 'bg-gradient-to-br from-fillBrand-strong to-fillBrand-weak animate-pulse'
-                    : 'bg-gradient-to-br from-fillStrong to-fillWeak'
-                } text-textInverse-strong flex justify-center items-center rounded-full shadow-lg h-10 w-10 transition-all duration-300 hover:shadow-xl hover:scale-110`}
+                class=${clsx('absolute tooltip tooltip-left right-8 bottom-2 group z-50 text-textInverse-strong flex justify-center items-center rounded-full shadow-lg h-10 w-10 transition-all duration-300 hover:shadow-xl hover:scale-110', this.recentDataToBeAdded.length > 0 ? 'bg-gradient-to-br from-fillBrand-strong to-fillBrand-weak animate-pulse' : 'bg-gradient-to-br from-fillStrong to-fillWeak')}
               >
                 ${this.recentDataToBeAdded.length > 0
                   ? html`<span class="absolute inset-0 rounded-full bg-fillBrand-strong opacity-30 blur animate-ping"></span>`
@@ -830,31 +826,18 @@ export class LogList extends LitElement {
 
     return summaryArray
       .filter((el) => {
-        // Optimize string checking
-        const sepIndex = el.indexOf('⇒');
-        if (sepIndex === -1) return true;
-        const semicolonIndex = el.indexOf(';');
-        if (semicolonIndex === -1 || semicolonIndex > sepIndex) return true;
-        const style = el.substring(semicolonIndex + 1, sepIndex);
-        return !style.startsWith('right-');
+        const parsed = parseSummaryElement(el);
+        return parsed.type === 'plain' || !startsWith(parsed.style, 'right-');
       })
       .map((element) => {
-        const sepIndex = element.indexOf('⇒');
-        if (sepIndex === -1) {
-          // Unescape any JSON content in plain text elements
-          const unescapedElement = element.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-          return html`<span class=${`fill-textStrong ${wrapClass}`}>${unescapedElement}</span>`;
+        const parsed = parseSummaryElement(element);
+        
+        if (parsed.type === 'plain') {
+          const unescapedContent = unescapeJsonString(parsed.content);
+          return html`<span class=${`fill-textStrong ${wrapClass}`}>${unescapedContent}</span>`;
         }
 
-        const semicolonIndex = element.indexOf(';');
-        if (semicolonIndex === -1 || semicolonIndex > sepIndex) {
-          // Malformed element, treat as plain text
-          return html`<span class=${`fill-textStrong ${wrapClass}`}>${element}</span>`;
-        }
-
-        const field = element.substring(0, semicolonIndex);
-        const style = element.substring(semicolonIndex + 1, sepIndex);
-        const value = element.substring(sepIndex + 1);
+        const { field, style, value } = parsed;
 
         // Special icon handling
         const iconConfig = {
@@ -876,15 +859,14 @@ export class LogList extends LitElement {
         if (iconConfig[field]) return iconConfig[field]();
 
         // Text rendering
-        if (style === 'text-weak' || style === 'text-textWeak') {
-          // Unescape JSON strings
-          const unescapedValue = value.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+        if (includes(['text-weak', 'text-textWeak'], style)) {
+          const unescapedValue = unescapeJsonString(value);
           return html`<span class="text-textWeak">${unescapedValue}</span>`;
         }
 
         if (style === 'text-textStrong') return html`<span class="text-textStrong">${value}</span>`;
 
-        return renderBadge(`cbadge-sm ${this.getStyleClass(style)} ${wrapClass}`, value);
+        return renderBadge(clsx('cbadge-sm', this.getStyleClass(style), wrapClass), value);
       });
   }
 
@@ -910,7 +892,7 @@ export class LogList extends LitElement {
       case 'timestamp':
         let timestamp = lookupVecValue<string>(dataArr, this.colIdxMap, key);
         return html`<div>
-          <time class="monospace text-textStrong tooltip tooltip-right ${wrapClass}" data-tip="timestamp" datetime=${timestamp}
+          <time class=${`monospace text-textStrong tooltip tooltip-right ${wrapClass}`} data-tip="timestamp" datetime=${timestamp}
             >${formatTimestamp(timestamp)}</time
           >
         </div>`;
@@ -993,7 +975,7 @@ export class LogList extends LitElement {
           : childErrors
             ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
             : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
-        return html`<div class="flex w-full ${this.wrapLines ? 'items-start' : 'items-center'} gap-1">
+        return html`<div class=${clsx('flex w-full gap-1', this.wrapLines ? 'items-start' : 'items-center')}>
           ${this.view === 'tree'
             ? html`
                 <div class="flex items-center">
@@ -1036,7 +1018,7 @@ export class LogList extends LitElement {
                 </div>
               `
             : nothing}
-          <div class=${`flex items-center gap-1 ${this.wrapLines ? 'break-all flex-wrap' : 'overflow-hidden'}`}>
+          <div class=${clsx('flex items-center gap-1', this.wrapLines ? 'break-all flex-wrap' : 'overflow-hidden')}>
             ${this.renderSummaryElements(summaryArray, this.wrapLines)}
           </div>
         </div>`;
