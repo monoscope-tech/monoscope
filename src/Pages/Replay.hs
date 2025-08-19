@@ -100,7 +100,7 @@ getMinioFile conn bucket object = do
             AE.Array a -> a
             _ -> V.empty
           Left _ -> V.empty
-    pure v
+    pure v 
   whenRight V.empty res pure
 
 

@@ -4,7 +4,6 @@ import { EventType, eventWithTime } from '@rrweb/types';
 import { faSprite_ } from './monitors/test-editor-utils';
 import { ConsoleEvent } from './types/types';
 import { Replayer } from '@rrweb/replay';
-import html2canvas from 'html2canvas';
 
 const MS_10 = 10000;
 @customElement('session-replay')
@@ -32,6 +31,8 @@ export class SessionReplay extends LitElement {
   private player: Replayer | null = null;
   private events: eventWithTime[] = [];
   private containerWidth = 1024;
+  private timeout: any = null;
+
   private containerHeight = 550;
   private iframeWidth = 1117;
   private trickPlayer: Replayer | null = null;
@@ -78,7 +79,6 @@ export class SessionReplay extends LitElement {
     this.initiatePlayer = this.initiatePlayer.bind(this);
     this.handleTimeSeek = this.handleTimeSeek.bind(this);
     this.closePlayerWindow = this.closePlayerWindow.bind(this);
-
     document.addEventListener('mousemove', (e) => {
       if (this.startX !== null) {
         const diff = this.startX - e.clientX;
@@ -144,6 +144,15 @@ export class SessionReplay extends LitElement {
     }
   }
 
+  debounce(fn :()=>void) {
+    if(this.timeout) {
+      clearTimeout(this.timeout)
+    }
+    this.timeout = setTimeout(()=> fn(),10)
+  }
+
+
+
   updateContainerWidths() {
     const frameContainer = document.querySelector('.player-frame') as HTMLElement;
     frameContainer.style.width = `${this.containerWidth}px`;
@@ -152,7 +161,7 @@ export class SessionReplay extends LitElement {
   updateScale = () => {
     this.updateContainerWidths();
     const el = this.player?.wrapper;
-    const widthScale = this.containerWidth / this.iframeWidth;
+    const widthScale = (this.containerWidth) / this.iframeWidth;
     const heightScale = this.containerHeight / this.iframeHeight;
     if (el) {
       el.style.transform = `scale(${Math.min(widthScale, heightScale)}) translate(-50%, -50%)`;
@@ -161,11 +170,13 @@ export class SessionReplay extends LitElement {
 
   protected updated(changedProperties: PropertyValues): void {
     if (this.player) {
-      const mContainer = Number(getComputedStyle(this.replayerOuterContainer).width.replace('px', ''));
 
       if (changedProperties.has('activityWidth')) {
+        this.debounce(()=> {
+        const mContainer = Number(getComputedStyle(this.replayerOuterContainer).width.replace('px', ''));
         this.containerWidth = mContainer - this.activityWidth;
         this.updateScale();
+        })
       }
       if (changedProperties.has('skipInactive')) {
         this.player?.setConfig({ skipInactive: this.skipInactive });
@@ -253,8 +264,31 @@ export class SessionReplay extends LitElement {
   protected firstUpdated(_changedProperties: PropertyValues): void {
     const mContainer = Number(getComputedStyle(this.replayerOuterContainer).width.replace('px', ''));
     this.containerWidth = mContainer - this.activityWidth;
-    const events = JSON.parse(localStorage.getItem('qq') || '[]');
+    const events = JSON.parse(localStorage.getItem('qq') || '[]').events;
     this.initiatePlayer(events);
+
+    const container = this.renderRoot.querySelector<HTMLDivElement>('#replayerOuterContainer');
+
+    if (container)  {
+    const resizeObserver = new ResizeObserver((entries) => {
+      this.debounce(()=> {
+      for (let entry of entries) {
+        const { width, height } = entry.contentRect;
+        const comp = getComputedStyle(this.replayerOuterContainer);
+        const mContainer = Number(comp.width.replace('px', ''));
+        const mHeight = Number(comp.height.replace("px",""))
+        this.containerWidth = mContainer - this.activityWidth;
+        this.containerHeight = mHeight - 120
+
+        this.updateScale();
+      }
+      })
+    });
+
+    // Start observing
+    resizeObserver.observe(container);
+    }
+
   }
 
   handleTimeSeek(e: any) {
@@ -373,7 +407,11 @@ export class SessionReplay extends LitElement {
   };
 
   render() {
-    return html`<div class="flex overflow-x-hidden " id="replayerOuterContainer" style="width:1024px; height:670px">
+    return html`<div
+      class="flex overflow-x-hidden resize w-max"
+      id="replayerOuterContainer"
+      style="height:${this.containerHeight + 120}px; width:1024px"
+    >
       <div class="w-full  flex flex-col justify-start shrink-1 min-w-0 overflow-hidden">
         <div class="bg-fillWeak w-full px-2 h-10 min-h-10 flex items-center border-b gap-4 cursor-move  justify-between playerHeader">
           <div class="flex items-center gap-4 shrink-1">
@@ -422,12 +460,12 @@ export class SessionReplay extends LitElement {
           </div>
         </div>
         <!-- End nav controls -->
-        <div class="relative" style="height:${this.containerHeight + 80}px">
+        <div class="relative">
           <div class="border-b relative bg-black">
             <div
               class="player-frame border-y overflow-hidden"
               id="playerWrapper"
-              style="height:${this.containerHeight}px; width: ${this.containerWidth}px"
+              style="height:${this.containerHeight}px; width:${this.containerWidth}px"
             ></div>
             <div
               class="absolute inset-0 flex bg-black opacity-25 items-center  justify-center ${this.paused || this.finished || this.isLoading
@@ -449,7 +487,7 @@ export class SessionReplay extends LitElement {
                   `}
             </div>
           </div>
-          <div class="flex flex-col items-center w-full py-4">
+          <div class="flex flex-col items-center w-full py-4 h-20">
             <div
               id="progressBar"
               @click=${this.handleTimeSeek}
