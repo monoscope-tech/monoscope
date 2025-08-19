@@ -17,6 +17,7 @@ import Data.Aeson.Lens (key, _Object, _String)
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.Aeson.Types qualified as AE
 import Data.ByteString.Lazy.Char8 qualified as BL
+import Pkg.DeriveUtils (AesonText(..), unAesonTextMaybe)
 
 import Data.Cache qualified as Cache
 import Data.Effectful.UUID (UUIDEff)
@@ -199,7 +200,7 @@ processSpanToEntities pjc otelSpan dumpId =
   let !projectId = Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText otelSpan.project_id
 
       -- Extract HTTP attributes from nested JSON structure
-      !attributes = maybeToMonoid otelSpan.attributes
+      !attributes = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
       !attrValue = AE.Object $ AEKM.fromMapText attributes
 
       -- Navigate nested JSON to extract values using lens
@@ -235,7 +236,7 @@ processSpanToEntities pjc otelSpan dumpId =
       !redacted = redactJSON redactFieldsList
 
       -- Extract request/response bodies from span body
-      !bodyValue = fromMaybe AE.Null otelSpan.body
+      !bodyValue = fromMaybe AE.Null (unAesonTextMaybe otelSpan.body)
       !requestBody = redacted $ fromMaybe AE.Null $ bodyValue ^? key "request_body"
       !responseBody = redacted $ fromMaybe AE.Null $ bodyValue ^? key "response_body"
 
@@ -357,7 +358,7 @@ convertRequestMessageToSpan rm (spanId, trId) =
           , end_time = Just $ addUTCTime (realToFrac (fromIntegral rm.duration / 1000000000)) (zonedTimeToUTC rm.timestamp)
           , kind = Just $ if T.isSuffixOf "Outgoing" (show rm.sdkType) then "client" else "server"
           , level = Nothing
-          , body = Just $ AE.object ["request_body" AE..= b64ToJson rm.requestBody, "response_body" AE..= b64ToJson rm.responseBody]
+          , body = Just $ AesonText $ AE.object ["request_body" AE..= b64ToJson rm.requestBody, "response_body" AE..= b64ToJson rm.responseBody]
           , severity = Nothing
           , status_message = Just $ case rm.statusCode of
               sc
@@ -366,11 +367,11 @@ convertRequestMessageToSpan rm (spanId, trId) =
           , status_code = Just $ show rm.statusCode
           , hashes = []
           , observed_timestamp = Just $ zonedTimeToUTC rm.timestamp
-          , attributes = jsonToMap $ createSpanAttributes rm
-          , events = Just $ AE.Array V.empty
+          , attributes = fmap AesonText $ jsonToMap $ createSpanAttributes rm
+          , events = Just $ AesonText $ AE.Array V.empty
           , links = Just ""
           , resource =
-              jsonToMap
+              fmap AesonText $ jsonToMap
                 $ nestedJsonFromDotNotation
                   [ ("service.name", AE.String $ fromMaybe "unknown" rm.host)
                   , ("service.version", maybe (AE.String "") AE.String rm.serviceVersion)

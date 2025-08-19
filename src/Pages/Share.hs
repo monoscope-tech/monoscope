@@ -7,7 +7,9 @@ import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity.DBT (execute, queryOne)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Labeled (labeled)
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.Reader.Static qualified
 import Lucid
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
@@ -16,6 +18,7 @@ import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Pages.Components (navBar)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Relude
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
@@ -87,6 +90,7 @@ copyLink rid = do
 
 shareLinkGetH :: UUID.UUID -> ATBaseCtx ShareLinkGet
 shareLinkGetH sid = do
+  authCtx <- Effectful.Reader.Static.ask @AuthContext
   -- FIXME: handle errors
   r <- dbtToEff $ queryOne [sql|SELECT project_id, event_id, event_type, event_created_at FROM apis.share_events where id=? and created_at > current_timestamp - interval '48 hours' limit 1|] (Only sid)
   uiM <- do
@@ -100,7 +104,10 @@ shareLinkGetH sid = do
               Nothing -> Nothing
           -- Also "span"
           _ -> do
-            spanItem <- Telemetry.spanRecordByProjectAndId pid createdAt eventId
+            spanItem <-
+              if authCtx.env.enableTimefusionReads
+                then labeled @"timefusion" @DB $ Telemetry.spanRecordByProjectAndId pid createdAt eventId
+                else Telemetry.spanRecordByProjectAndId pid createdAt eventId
             pure case spanItem of
               Just spn -> Just $ LogItem.expandedItemView pid spn Nothing Nothing Nothing
               Nothing -> Nothing

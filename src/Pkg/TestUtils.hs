@@ -69,6 +69,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.SummaryGenerator qualified as SummaryGenerator
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
+import Pkg.DeriveUtils (AesonText(..))
 import NeatInterpolation (text)
 import OddJobs.Job (Job (..))
 import OpenTelemetry.Trace (getGlobalTracerProvider)
@@ -658,8 +659,8 @@ createRequestDumps TestResources{..} projectId numRequestsPerEndpoint = do
               , context = Just context
               , events = Nothing
               , links = Nothing
-              , attributes = case attributes of AE.Object km -> Just $ AEKM.toMapText km; _ -> Nothing
-              , resource = case resource of AE.Object km -> Just $ AEKM.toMapText km; _ -> Nothing
+              , attributes = case attributes of AE.Object km -> Just $ AesonText $ AEKM.toMapText km; _ -> Nothing
+              , resource = case resource of AE.Object km -> Just $ AesonText $ AEKM.toMapText km; _ -> Nothing
               , date = currentTime
               , summary = V.empty -- Will be generated
               }

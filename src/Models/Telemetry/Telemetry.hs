@@ -6,7 +6,6 @@ module Models.Telemetry.Telemetry (
   spanRecordByProjectAndId,
   getSpandRecordsByTraceId,
   convertOtelLogsAndSpansToSpanRecord,
-  getEventsBySessionId,
   getTotalEventsToReport,
   SpanRecord (..),
   getAllATErrors,
@@ -30,7 +29,6 @@ module Models.Telemetry.Telemetry (
   Severity (..),
   Context (..),
   getDataPointsData,
-  spanRecordById,
   spanRecordByName,
   getTraceDetails,
   getMetricData,
@@ -38,12 +36,10 @@ module Models.Telemetry.Telemetry (
   bulkInsertOtelLogsAndSpansTF,
   getMetricChartListData,
   getLogsByTraceIds,
-  getSpandRecordsByTraceIds,
   getMetricLabelValues,
   getValsWithPrefix,
   getSpanAttribute,
   getMetricServiceNames,
-  getChildSpans,
   SpanEvent (..),
   SpanLink (..),
   atMapText,
@@ -90,7 +86,7 @@ import Models.Projects.Projects (ProjectId (unProjectId))
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..))
-import Pkg.DeriveUtils (AesonText (..))
+import Pkg.DeriveUtils (AesonText (..), unAesonTextMaybe)
 import Relude hiding (ask)
 import UnliftIO (throwIO, tryAny)
 import Utils (lookupValueText, toXXHash)
@@ -232,8 +228,6 @@ instance ToField (Map Text AE.Value) where
   toField = toField . AE.Object . KEM.fromMapText
 
 
-
-
 data SpanRecord = SpanRecord
   { uSpanId :: Text
   , projectId :: UUID.UUID
@@ -278,10 +272,10 @@ convertOtelLogsAndSpansToSpanRecord lgSp = case (trId, spanId, projectId, spanNa
         , kind = Nothing -- USE actual span kind
         , status = Nothing -- TODO use actual span status
         , statusMessage = lgSp.status_message
-        , attributes = lgSp.attributes
-        , events = fromMaybe AE.Null lgSp.events
+        , attributes = unAesonTextMaybe lgSp.attributes
+        , events = fromMaybe AE.Null (unAesonTextMaybe lgSp.events)
         , links = lgSp.links
-        , resource = lgSp.resource
+        , resource = unAesonTextMaybe lgSp.resource
         , instrumentationScope = AE.Null
         , spanDurationNs = maybe 0 fromIntegral lgSp.duration
         }
@@ -489,8 +483,8 @@ logRecordByProjectAndId :: DB :> es => Projects.ProjectId -> UTCTime -> UUID.UUI
 logRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne q (createdAt, pid.toText, rdId)
   where
     q =
-      [sql|SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
+      [sql|SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date::timestamptz
              FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
@@ -499,8 +493,8 @@ getSpandRecordsByTraceId pid trId = dbtToEff $ query q (pid.toText, trId)
   where
     q =
       [sql|
-      SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
+      SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date::timestamptz
               FROM otel_logs_and_spans where project_id=? and context___trace_id=? ORDER BY start_time ASC;
     |]
 
@@ -509,38 +503,18 @@ spanRecordByProjectAndId :: DB :> es => Projects.ProjectId -> UTCTime -> UUID.UU
 spanRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne q (createdAt, pid.toText, rdId)
   where
     q =
-      [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
+      [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date::timestamptz
               FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
-
-
-spanRecordById :: DB :> es => Projects.ProjectId -> Text -> Text -> Eff es (Maybe OtelLogsAndSpans)
-spanRecordById pid trId spanId = dbtToEff $ queryOne q (pid.toText, trId, spanId)
-  where
-    q =
-      [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
-              FROM otel_logs_and_spans where project_id=? and context___trace_id = ? and context___span_id=? LIMIT 1|]
 
 
 spanRecordByName :: DB :> es => Projects.ProjectId -> Text -> Text -> Eff es (Maybe OtelLogsAndSpans)
 spanRecordByName pid trId spanName = dbtToEff $ queryOne q (pid.toText, trId, spanName)
   where
     q =
-      [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
+      [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date::timestamptz
               FROM otel_logs_and_spans where project_id=? and context___trace_id = ? and name=? LIMIT 1|]
-
-
-getChildSpans :: DB :> es => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector OtelLogsAndSpans)
-getChildSpans pid spanIds
-  | V.null spanIds = pure V.empty
-  | otherwise = dbtToEff $ query q (pid.toText, spanIds)
-  where
-    q =
-      [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
-              FROM otel_logs_and_spans where project_id =? AND parent_id=Any(?)|]
 
 
 getDataPointsData :: DB :> es => Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es (V.Vector MetricDataPoint)
@@ -737,7 +711,7 @@ instance ToRow OtelLogsAndSpans where
     , toField $ fmap AE.toJSON entry.severity -- severity as JSON
     , toField $ parseSeverityText entry.severity -- severity___severity_text
     , toField $ parseSeverityNumber entry.severity -- severity___severity_number
-    , toField $ fmap cleanNullBytesFromJSON entry.body -- body as JSON
+    , toField $ fmap cleanNullBytesFromJSON (unAesonTextMaybe entry.body) -- body as JSON
     , toField entry.duration -- duration
     , toField entry.start_time -- start_time
     , toField entry.end_time -- end_time
@@ -747,67 +721,67 @@ instance ToRow OtelLogsAndSpans where
     , toField $ fmap cleanNullBytes $ entry.context >>= (.trace_state) -- context___trace_state
     , toField $ fmap cleanNullBytes $ entry.context >>= (.trace_flags) -- context___trace_flags
     , toField $ fmap cleanNullBytes $ entry.context >>= (.is_remote) -- context___is_remote
-    , toField $ fmap cleanNullBytesFromJSON entry.events -- events as JSON
+    , toField $ fmap cleanNullBytesFromJSON (unAesonTextMaybe entry.events) -- events as JSON
     , toField $ fmap cleanNullBytes entry.links -- links
-    , toField $ fmap (cleanNullBytesFromJSON . AE.Object . KEM.fromMapText) entry.attributes -- attributes as JSON
-    , toField $ atMapText "client.address" entry.attributes -- attributes___client___address
-    , toField $ atMapInt "client.port" entry.attributes -- attributes___client___port
-    , toField $ atMapText "server.address" entry.attributes -- attributes___server___address
-    , toField $ atMapInt "server.port" entry.attributes -- attributes___server___port
-    , toField $ atMapText "network.local.address" entry.attributes -- attributes___network___local__address
-    , toField $ atMapInt "network.local.port" entry.attributes -- attributes___network___local__port
-    , toField $ atMapText "network.peer.address" entry.attributes -- attributes___network___peer___address
-    , toField $ atMapInt "network.peer.port" entry.attributes -- attributes___network___peer__port
-    , toField $ atMapText "network.protocol.name" entry.attributes -- attributes___network___protocol___name
-    , toField $ atMapText "network.protocol.version" entry.attributes -- attributes___network___protocol___version
-    , toField $ atMapText "network.transport" entry.attributes -- attributes___network___transport
-    , toField $ atMapText "network.type" entry.attributes -- attributes___network___type
-    , toField $ atMapInt "code.number" entry.attributes -- attributes___code___number
-    , toField $ atMapText "code.file.path" entry.attributes -- attributes___code___file___path
-    , toField $ atMapText "code.function.name" entry.attributes -- attributes___code___function___name
-    , toField $ atMapInt "code.line.number" entry.attributes -- attributes___code___line___number
-    , toField $ atMapText "code.stacktrace" entry.attributes -- attributes___code___stacktrace
-    , toField $ atMapText "log.record.original" entry.attributes -- attributes___log__record___original
-    , toField $ atMapText "log.record.uid" entry.attributes -- attributes___log__record___uid
-    , toField $ atMapText "error.type" entry.attributes -- attributes___error___type
-    , toField $ atMapText "exception.type" entry.attributes -- attributes___exception___type
-    , toField $ atMapText "exception.message" entry.attributes -- attributes___exception___message
-    , toField $ atMapText "exception.stacktrace" entry.attributes -- attributes___exception___stacktrace
-    , toField $ atMapText "url.fragment" entry.attributes -- attributes___url___fragment
-    , toField $ atMapText "url.full" entry.attributes -- attributes___url___full
-    , toField $ atMapText "url.path" entry.attributes -- attributes___url___path
-    , toField $ atMapText "url.query" entry.attributes -- attributes___url___query
-    , toField $ atMapText "url.scheme" entry.attributes -- attributes___url___scheme
-    , toField $ atMapText "user_agent.original" entry.attributes -- attributes___user_agent___original
-    , toField $ atMapText "http.request.method" entry.attributes -- attributes___http___request___method
-    , toField $ atMapText "http.request.method_original" entry.attributes -- attributes___http___request___method_original
-    , toField $ atMapInt "http.response.status_code" entry.attributes -- attributes___http___response___status_code
-    , toField $ atMapInt "http.request.resend_count" entry.attributes -- attributes___http___request___resend_count
-    , toField $ atMapInt "http.request.body.size" entry.attributes -- attributes___http___request___body___size
-    , toField $ atMapText "session.id" entry.attributes -- attributes___session___id
-    , toField $ atMapText "session.previous.id" entry.attributes -- attributes___session___previous___id
-    , toField $ atMapText "db.system.name" entry.attributes -- attributes___db___system___name
-    , toField $ atMapText "db.collection.name" entry.attributes -- attributes___db___collection___name
-    , toField $ atMapText "db.namespace" entry.attributes -- attributes___db___namespace
-    , toField $ atMapText "db.operation.name" entry.attributes -- attributes___db___operation___name
-    , toField $ atMapText "db.response.status_code" entry.attributes -- attributes___db___response___status_code
-    , toField $ atMapInt "db.operation.batch.size" entry.attributes -- attributes___db___operation___batch___size
-    , toField $ atMapText "db.query.summary" entry.attributes -- attributes___db___query___summary
-    , toField $ atMapText "db.query.text" entry.attributes -- attributes___db___query___text
-    , toField $ atMapText "user.id" entry.attributes -- attributes___user___id
-    , toField $ atMapText "user.email" entry.attributes -- attributes___user___email
-    , toField $ atMapText "user.full_name" entry.attributes -- attributes___user___full_name
-    , toField $ atMapText "user.name" entry.attributes -- attributes___user___name
-    , toField $ atMapText "user.hash" entry.attributes -- attributes___user___hash
-    , toField $ fmap (cleanNullBytesFromJSON . AE.Object . KEM.fromMapText) entry.resource -- resource as JSON
-    , toField $ atMapText "service.name" entry.resource -- resource___service___name
-    , toField $ atMapText "service.version" entry.resource -- resource___service___version
-    , toField $ atMapText "service.instance.id" entry.resource -- resource___service___instance___id
-    , toField $ atMapText "service.namespace" entry.resource -- resource___service___namespace
-    , toField $ atMapText "telemetry.sdk.language" entry.resource -- resource___telemetry___sdk___language
-    , toField $ atMapText "telemetry.sdk.name" entry.resource -- resource___telemetry___sdk___name
-    , toField $ atMapText "telemetry.sdk.version" entry.resource -- resource___telemetry___sdk___version
-    , toField $ atMapText "user_agent.original" entry.resource -- resource___user_agent___original
+    , toField $ fmap (cleanNullBytesFromJSON . AE.Object . KEM.fromMapText) (unAesonTextMaybe entry.attributes) -- attributes as JSON
+    , toField $ atMapText "client.address" (unAesonTextMaybe entry.attributes) -- attributes___client___address
+    , toField $ atMapInt "client.port" (unAesonTextMaybe entry.attributes) -- attributes___client___port
+    , toField $ atMapText "server.address" (unAesonTextMaybe entry.attributes) -- attributes___server___address
+    , toField $ atMapInt "server.port" (unAesonTextMaybe entry.attributes) -- attributes___server___port
+    , toField $ atMapText "network.local.address" (unAesonTextMaybe entry.attributes) -- attributes___network___local__address
+    , toField $ atMapInt "network.local.port" (unAesonTextMaybe entry.attributes) -- attributes___network___local__port
+    , toField $ atMapText "network.peer.address" (unAesonTextMaybe entry.attributes) -- attributes___network___peer___address
+    , toField $ atMapInt "network.peer.port" (unAesonTextMaybe entry.attributes) -- attributes___network___peer__port
+    , toField $ atMapText "network.protocol.name" (unAesonTextMaybe entry.attributes) -- attributes___network___protocol___name
+    , toField $ atMapText "network.protocol.version" (unAesonTextMaybe entry.attributes) -- attributes___network___protocol___version
+    , toField $ atMapText "network.transport" (unAesonTextMaybe entry.attributes) -- attributes___network___transport
+    , toField $ atMapText "network.type" (unAesonTextMaybe entry.attributes) -- attributes___network___type
+    , toField $ atMapInt "code.number" (unAesonTextMaybe entry.attributes) -- attributes___code___number
+    , toField $ atMapText "code.file.path" (unAesonTextMaybe entry.attributes) -- attributes___code___file___path
+    , toField $ atMapText "code.function.name" (unAesonTextMaybe entry.attributes) -- attributes___code___function___name
+    , toField $ atMapInt "code.line.number" (unAesonTextMaybe entry.attributes) -- attributes___code___line___number
+    , toField $ atMapText "code.stacktrace" (unAesonTextMaybe entry.attributes) -- attributes___code___stacktrace
+    , toField $ atMapText "log.record.original" (unAesonTextMaybe entry.attributes) -- attributes___log__record___original
+    , toField $ atMapText "log.record.uid" (unAesonTextMaybe entry.attributes) -- attributes___log__record___uid
+    , toField $ atMapText "error.type" (unAesonTextMaybe entry.attributes) -- attributes___error___type
+    , toField $ atMapText "exception.type" (unAesonTextMaybe entry.attributes) -- attributes___exception___type
+    , toField $ atMapText "exception.message" (unAesonTextMaybe entry.attributes) -- attributes___exception___message
+    , toField $ atMapText "exception.stacktrace" (unAesonTextMaybe entry.attributes) -- attributes___exception___stacktrace
+    , toField $ atMapText "url.fragment" (unAesonTextMaybe entry.attributes) -- attributes___url___fragment
+    , toField $ atMapText "url.full" (unAesonTextMaybe entry.attributes) -- attributes___url___full
+    , toField $ atMapText "url.path" (unAesonTextMaybe entry.attributes) -- attributes___url___path
+    , toField $ atMapText "url.query" (unAesonTextMaybe entry.attributes) -- attributes___url___query
+    , toField $ atMapText "url.scheme" (unAesonTextMaybe entry.attributes) -- attributes___url___scheme
+    , toField $ atMapText "user_agent.original" (unAesonTextMaybe entry.attributes) -- attributes___user_agent___original
+    , toField $ atMapText "http.request.method" (unAesonTextMaybe entry.attributes) -- attributes___http___request___method
+    , toField $ atMapText "http.request.method_original" (unAesonTextMaybe entry.attributes) -- attributes___http___request___method_original
+    , toField $ atMapInt "http.response.status_code" (unAesonTextMaybe entry.attributes) -- attributes___http___response___status_code
+    , toField $ atMapInt "http.request.resend_count" (unAesonTextMaybe entry.attributes) -- attributes___http___request___resend_count
+    , toField $ atMapInt "http.request.body.size" (unAesonTextMaybe entry.attributes) -- attributes___http___request___body___size
+    , toField $ atMapText "session.id" (unAesonTextMaybe entry.attributes) -- attributes___session___id
+    , toField $ atMapText "session.previous.id" (unAesonTextMaybe entry.attributes) -- attributes___session___previous___id
+    , toField $ atMapText "db.system.name" (unAesonTextMaybe entry.attributes) -- attributes___db___system___name
+    , toField $ atMapText "db.collection.name" (unAesonTextMaybe entry.attributes) -- attributes___db___collection___name
+    , toField $ atMapText "db.namespace" (unAesonTextMaybe entry.attributes) -- attributes___db___namespace
+    , toField $ atMapText "db.operation.name" (unAesonTextMaybe entry.attributes) -- attributes___db___operation___name
+    , toField $ atMapText "db.response.status_code" (unAesonTextMaybe entry.attributes) -- attributes___db___response___status_code
+    , toField $ atMapInt "db.operation.batch.size" (unAesonTextMaybe entry.attributes) -- attributes___db___operation___batch___size
+    , toField $ atMapText "db.query.summary" (unAesonTextMaybe entry.attributes) -- attributes___db___query___summary
+    , toField $ atMapText "db.query.text" (unAesonTextMaybe entry.attributes) -- attributes___db___query___text
+    , toField $ atMapText "user.id" (unAesonTextMaybe entry.attributes) -- attributes___user___id
+    , toField $ atMapText "user.email" (unAesonTextMaybe entry.attributes) -- attributes___user___email
+    , toField $ atMapText "user.full_name" (unAesonTextMaybe entry.attributes) -- attributes___user___full_name
+    , toField $ atMapText "user.name" (unAesonTextMaybe entry.attributes) -- attributes___user___name
+    , toField $ atMapText "user.hash" (unAesonTextMaybe entry.attributes) -- attributes___user___hash
+    , toField $ fmap (cleanNullBytesFromJSON . AE.Object . KEM.fromMapText) (unAesonTextMaybe entry.resource) -- resource as JSON
+    , toField $ atMapText "service.name" (unAesonTextMaybe entry.resource) -- resource___service___name
+    , toField $ atMapText "service.version" (unAesonTextMaybe entry.resource) -- resource___service___version
+    , toField $ atMapText "service.instance.id" (unAesonTextMaybe entry.resource) -- resource___service___instance___id
+    , toField $ atMapText "service.namespace" (unAesonTextMaybe entry.resource) -- resource___service___namespace
+    , toField $ atMapText "telemetry.sdk.language" (unAesonTextMaybe entry.resource) -- resource___telemetry___sdk___language
+    , toField $ atMapText "telemetry.sdk.name" (unAesonTextMaybe entry.resource) -- resource___telemetry___sdk___name
+    , toField $ atMapText "telemetry.sdk.version" (unAesonTextMaybe entry.resource) -- resource___telemetry___sdk___version
+    , toField $ atMapText "user_agent.original" (unAesonTextMaybe entry.resource) -- resource___user_agent___original
     , toField $ cleanNullBytes entry.project_id -- project_id
     , toField $ V.map cleanNullBytes entry.summary -- summary
     , toField entry.date
@@ -934,15 +908,15 @@ data OtelLogsAndSpans = OtelLogsAndSpans
   , status_message :: Maybe Text
   , level :: Maybe Text
   , severity :: Maybe Severity
-  , body :: Maybe AE.Value
+  , body :: Maybe (AesonText AE.Value)
   , duration :: Maybe Int64
   , start_time :: UTCTime
   , end_time :: Maybe UTCTime
   , context :: Maybe Context
-  , events :: Maybe AE.Value
+  , events :: Maybe (AesonText AE.Value)
   , links :: Maybe Text
-  , attributes :: Maybe (Map Text AE.Value)
-  , resource :: Maybe (Map Text AE.Value)
+  , attributes :: Maybe (AesonText (Map Text AE.Value))
+  , resource :: Maybe (AesonText (Map Text AE.Value))
   , summary :: V.Vector Text
   , date :: UTCTime
   }
@@ -1009,7 +983,7 @@ instance FromRow OtelLogsAndSpans where
 
 
 getErrorEvents :: OtelLogsAndSpans -> V.Vector AE.Value
-getErrorEvents OtelLogsAndSpans{events = Just (AE.Array arr)} =
+getErrorEvents OtelLogsAndSpans{events = Just (AesonText (AE.Array arr))} =
   V.filter isErrorEvent arr
   where
     isErrorEvent (AE.Object o) =
@@ -1032,12 +1006,12 @@ extractATError :: OtelLogsAndSpans -> AE.Value -> Maybe RequestDumps.ATError
 extractATError spanObj (AE.Object o) = do
   AE.Object attrs' <- KEM.lookup "event_attributes" o
   AE.Object attrs <- KEM.lookup "exception" attrs'
-  let method = case spanObj.attributes >>= Map.lookup "http.request.method" of
+  let method = case unAesonTextMaybe spanObj.attributes >>= Map.lookup "http.request.method" of
         Just (AE.String s) -> Just s
         _ -> Nothing
-      urlPath = case spanObj.attributes >>= Map.lookup "http.route" of
+      urlPath = case unAesonTextMaybe spanObj.attributes >>= Map.lookup "http.route" of
         Just (AE.String s) -> Just s
-        _ -> case spanObj.attributes >>= Map.lookup "http.target" of
+        _ -> case unAesonTextMaybe spanObj.attributes >>= Map.lookup "http.target" of
           Just (AE.String s) -> Just s
           _ -> Nothing
   let lookupText k = case KEM.lookup k attrs of
@@ -1050,7 +1024,7 @@ extractATError spanObj (AE.Object o) = do
       stack = getTextOrEmpty "stacktrace"
 
       -- TODO: parse telemetry.sdk.name to SDKTypes
-      tech = case spanObj.resource >>= Map.lookup "telemetry" of
+      tech = case unAesonTextMaybe spanObj.resource >>= Map.lookup "telemetry" of
         Just (AE.Object tel) ->
           KEM.lookup "sdk" tel
             >>= ( \case
@@ -1058,7 +1032,7 @@ extractATError spanObj (AE.Object o) = do
                     _ -> Nothing
                 )
         _ -> Nothing
-      serviceName = case spanObj.resource >>= Map.lookup "service" of
+      serviceName = case unAesonTextMaybe spanObj.resource >>= Map.lookup "service" of
         Just (AE.Object serviceObj) ->
           KEM.lookup "name" serviceObj >>= asText
         _ -> Nothing
@@ -1100,26 +1074,3 @@ getProjectStatsForReport projectId start end = dbtToEff $ query q (projectId, st
            GROUP BY resource___service___name 
            ORDER BY total_events DESC;
         |]
-
-
-getEventsBySessionId :: DB :> es => Projects.ProjectId -> Text -> Eff es (V.Vector OtelLogsAndSpans)
-getEventsBySessionId pid sessionId = dbtToEff $ query q (pid, sessionId)
-  where
-    q =
-      [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
-              FROM otel_logs_and_spans
-              WHERE project_id = ? AND attributes___session___id = ?
-              ORDER BY start_time ASC;
-    |]
-
-
-getSpandRecordsByTraceIds :: DB :> es => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector OtelLogsAndSpans)
-getSpandRecordsByTraceIds pid trIds = dbtToEff $ query q (pid.toText, trIds)
-  where
-    q =
-      [sql|
-      SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                  hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
-              FROM otel_logs_and_spans where project_id=? and context___trace_id=Any(?) and attributes___session___id is null ORDER BY start_time ASC;
-    |]

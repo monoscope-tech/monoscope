@@ -21,38 +21,6 @@ widgets:
         eager: true
         layout: { w: 7, h: 2 }
 
-      - type: 'stat'
-        title: Errors & anomalies
-        icon: bug
-        sql: select total_anomalies::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
-        unit: reqs
-        eager: true
-        layout: { w: 5, h: 2 }
-
-      - type: 'stat'
-        title: endpoints
-        icon: list-check
-        sql: select total_endpoints::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
-        unit: reqs
-        eager: true
-        layout: { w: 4, h: 2 }
-
-      - type: 'stat'
-        title: Req shapes
-        icon: dashboard-list
-        sql: select total_shapes::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
-        unit: reqs
-        eager: true
-        layout: { w: 4, h: 2 }
-
-      - type: 'stat'
-        title: Reqs per min
-        icon: arrow-down-to-line
-        sql: select requests_per_min::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
-        unit: reqs
-        eager: true
-        layout: { w: 4, h: 2 }
-
   - type: 'anomalies'
     title: 'Ongoing issues and monitors'
     layout: { w: 6, h: 5 }

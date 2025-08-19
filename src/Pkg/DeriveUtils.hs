@@ -1,6 +1,8 @@
 module Pkg.DeriveUtils (
   AesonText (..),
   PGTextArray (..),
+  unAesonText,
+  unAesonTextMaybe,
 ) where
 
 import Data.Aeson qualified as AE
@@ -12,8 +14,8 @@ import Database.PostgreSQL.Simple (ResultError (ConversionFailed))
 import Relude
 
 
--- | Newtype wrapper for JSON fields that can handle both JSONB and varchar/text columns
--- This is useful when a database column might be either JSONB or TEXT containing JSON
+-- | Newtype wrapper for JSON fields that can handle JSONB, ByteString, and varchar/text columns
+-- This is useful when a database column might be any of: JSONB, ByteString containing JSON, or TEXT containing JSON
 -- It works with any type that has FromJSON/ToJSON instances, including Map Text Value
 newtype AesonText a = AesonText a
   deriving (Generic, Show, Eq)
@@ -25,16 +27,30 @@ instance (AE.FromJSON a, Typeable a) => FromField (AesonText a) where
     let tryJsonb = do
           Aeson v <- fromField f mdata :: Conversion (Aeson a)
           return (AesonText v)
+    -- Try parsing as ByteString
+    let tryByteString = do
+          bs <- fromField f mdata :: Conversion ByteString
+          case AE.eitherDecodeStrict bs of
+            Right v -> return (AesonText v)
+            Left err -> returnError ConversionFailed f ("Failed to parse JSON from ByteString: " ++ err)
     -- If that fails, try parsing as text/varchar
     let tryText = do
           txt <- fromField f mdata :: Conversion Text
           case AE.eitherDecodeStrict (encodeUtf8 txt) of
             Right v -> return (AesonText v)
             Left err -> returnError ConversionFailed f ("Failed to parse JSON from text: " ++ err)
-    tryJsonb <|> tryText
+    tryJsonb <|> tryByteString <|> tryText
 
 instance (AE.ToJSON a) => ToField (AesonText a) where
   toField (AesonText v) = toField (Aeson v)
+
+-- | Unwrap an AesonText value
+unAesonText :: AesonText a -> a
+unAesonText (AesonText a) = a
+
+-- | Unwrap a Maybe AesonText value
+unAesonTextMaybe :: Maybe (AesonText a) -> Maybe a
+unAesonTextMaybe = fmap unAesonText
 
 
 -- | Newtype wrapper for PostgreSQL text arrays (TEXT[])

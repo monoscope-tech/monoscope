@@ -14,6 +14,7 @@ import Data.Vector qualified as V
 import Models.Telemetry.Telemetry (OtelLogsAndSpans (..), Severity (..), SeverityLevel (..), atMapInt, atMapText)
 import Relude
 import Utils (getDurationNSMS)
+import Pkg.DeriveUtils (unAesonTextMaybe)
 
 
 -- | Generate summary array for an OtelLogsAndSpans record
@@ -41,12 +42,12 @@ generateLogSummary otel =
             Just $ "severity_text;" <> severityStyle sev <> "⇒" <> severityText sev
           _ -> Nothing
       , -- Body
-        case otel.body of
+        case unAesonTextMaybe otel.body of
           Just (AE.String txt) -> Just txt
           Just val -> Just $ T.take 200 $ T.pack $ show val
           Nothing -> Nothing
       , -- Attributes (limited to avoid excessive length)
-        case otel.attributes of
+        case unAesonTextMaybe otel.attributes of
           Just attrs
             | not (Map.null attrs) ->
                 let attrText = TE.decodeUtf8 $ BSL.toStrict $ AE.encode attrs
@@ -79,7 +80,7 @@ generateSpanSummary :: OtelLogsAndSpans -> V.Vector T.Text
 generateSpanSummary otel =
   let
     -- Check if this span has HTTP attributes
-    hasHttp = case otel.attributes of
+    hasHttp = case unAesonTextMaybe otel.attributes of
       Just attrs ->
         isJust (atMapText "http.request.method" (Just attrs))
           || isJust (atMapInt "http.response.status_code" (Just attrs))
@@ -90,7 +91,7 @@ generateSpanSummary otel =
       catMaybes
         $
         -- 1. Request type indicators (icons)
-        [ case (otel.kind, hasHttp, atMapText "component" otel.attributes) of
+        [ case (otel.kind, hasHttp, atMapText "component" (unAesonTextMaybe otel.attributes)) of
             -- HTTP server/client spans (check kind first)
             (Just "server", True, _) -> Just "request_type;neutral⇒incoming"
             (Just "client", True, _) -> Just "request_type;neutral⇒outgoing"
@@ -101,29 +102,29 @@ generateSpanSummary otel =
             -- Generic HTTP spans without clear direction
             (_, True, _) -> Just "request_type;neutral⇒outgoing"
             -- RPC server/client spans
-            (Just "server", _, _) | isJust (atMapText "rpc.method" otel.attributes) -> Just "request_type;neutral⇒incoming"
-            (Just "client", _, _) | isJust (atMapText "rpc.method" otel.attributes) -> Just "request_type;neutral⇒outgoing"
+            (Just "server", _, _) | isJust (atMapText "rpc.method" (unAesonTextMaybe otel.attributes)) -> Just "request_type;neutral⇒incoming"
+            (Just "client", _, _) | isJust (atMapText "rpc.method" (unAesonTextMaybe otel.attributes)) -> Just "request_type;neutral⇒outgoing"
             -- Database spans
-            (_, _, _) | isJust (atMapText "db.system" otel.attributes) -> Just "kind;neutral⇒database"
+            (_, _, _) | isJust (atMapText "db.system" (unAesonTextMaybe otel.attributes)) -> Just "kind;neutral⇒database"
             -- Internal spans
             (Just "internal", _, _) -> Just "kind;neutral⇒internal"
             _ -> Nothing
         ]
           ++
           -- 2. HTTP Status code (comes before method)
-          [ case atMapInt "http.response.status_code" otel.attributes of
+          [ case atMapInt "http.response.status_code" (unAesonTextMaybe otel.attributes) of
               Just code -> Just $ "status_code;" <> statusCodeStyle code <> "⇒" <> T.pack (show code)
               _ -> Nothing
           ]
           ++
           -- 3. HTTP Method
-          [ case atMapText "http.request.method" otel.attributes of
+          [ case atMapText "http.request.method" (unAesonTextMaybe otel.attributes) of
               Just method -> Just $ "method;" <> methodStyle method <> "⇒" <> method
               _ -> Nothing
           ]
           ++
           -- 4. URL or Route
-          [ case (atMapText "http.route" otel.attributes, atMapText "url.path" otel.attributes) of
+          [ case (atMapText "http.route" (unAesonTextMaybe otel.attributes), atMapText "url.path" (unAesonTextMaybe otel.attributes)) of
               (Just route, _) -> Just $ "route;neutral⇒" <> route
               (_, Just url) -> Just $ "url;neutral⇒" <> url
               _ -> Nothing
@@ -131,26 +132,26 @@ generateSpanSummary otel =
           ++
           -- 5. Database attributes
           [ -- Database type
-            case atMapText "db.system" otel.attributes of
+            case atMapText "db.system" (unAesonTextMaybe otel.attributes) of
               Just system -> Just $ "db.system;neutral⇒" <> system
               _ -> Nothing
           , -- Query text (if db.query.text exists for db types)
-            case (atMapText "db.system" otel.attributes, atMapText "db.query.text" otel.attributes) of
+            case (atMapText "db.system" (unAesonTextMaybe otel.attributes), atMapText "db.query.text" (unAesonTextMaybe otel.attributes)) of
               (Just _, Just queryText) -> Just $ "db.query.text;text-textStrong⇒" <> T.take 200 queryText
               _ -> Nothing
           , -- Query statement
-            case atMapText "db.statement" otel.attributes of
+            case atMapText "db.statement" (unAesonTextMaybe otel.attributes) of
               Just stmt -> Just $ "db.statement;neutral⇒" <> T.take 200 stmt
               _ -> Nothing
           ]
           ++
           -- 6. RPC attributes
           [ -- RPC method
-            case atMapText "rpc.method" otel.attributes of
+            case atMapText "rpc.method" (unAesonTextMaybe otel.attributes) of
               Just method -> Just $ "rpc.method;neutral⇒" <> method
               _ -> Nothing
           , -- RPC service
-            case atMapText "rpc.service" otel.attributes of
+            case atMapText "rpc.service" (unAesonTextMaybe otel.attributes) of
               Just service -> Just $ "rpc.service;neutral⇒" <> service
               _ -> Nothing
           ]
@@ -159,7 +160,7 @@ generateSpanSummary otel =
           [ case otel.name of
               Just n ->
                 -- Only show span name if no URL/route was shown
-                case (atMapText "http.route" otel.attributes, atMapText "url.path" otel.attributes) of
+                case (atMapText "http.route" (unAesonTextMaybe otel.attributes), atMapText "url.path" (unAesonTextMaybe otel.attributes)) of
                   (Nothing, Nothing) -> Just $ "span_name;neutral⇒" <> n
                   _ -> Nothing
               _ -> Nothing
@@ -173,7 +174,7 @@ generateSpanSummary otel =
           ]
           ++
           -- 9. Attributes (limited to avoid excessive length)
-          [ case otel.attributes of
+          [ case unAesonTextMaybe otel.attributes of
               Just attrs
                 | not (Map.null attrs) ->
                     let attrText = TE.decodeUtf8 $ BSL.toStrict $ AE.encode attrs
@@ -189,17 +190,17 @@ generateSpanSummary otel =
           -- 10. Right-aligned badges for latency breakdown
           -- These use "right" style and will be extracted by frontend
           [ -- has a session id
-            case atMapText "session.id" otel.attributes of
+            case atMapText "session.id" (unAesonTextMaybe otel.attributes) of
               Just v -> Just $ "session;right-badge-neutral⇒" <> v
               _ -> Nothing
-          , case atMapText "user.email" otel.attributes of
+          , case atMapText "user.email" (unAesonTextMaybe otel.attributes) of
               Just eml -> Just $ "user email;right-badge-neutral⇒" <> eml
-              _ -> case atMapText "user.id" otel.attributes of
+              _ -> case atMapText "user.id" (unAesonTextMaybe otel.attributes) of
                 Just s -> Just $ "user name;right-badge-neutral⇒" <> s
                 _ -> Nothing
-          , case atMapText "user.full_name" otel.attributes of
+          , case atMapText "user.full_name" (unAesonTextMaybe otel.attributes) of
               Just s -> Just $ "user name;right-badge-neutral⇒" <> s
-              _ -> case atMapText "user.name" otel.attributes of
+              _ -> case atMapText "user.name" (unAesonTextMaybe otel.attributes) of
                 Just s -> Just $ "user name;right-badge-neutral⇒" <> s
                 _ -> Nothing
           , -- Error status (if ERROR)
@@ -207,7 +208,7 @@ generateSpanSummary otel =
               Just "ERROR" -> Just "status;right-badge-error⇒ERROR"
               _ -> Nothing
           , -- Database system with brand colors
-            case atMapText "db.system" otel.attributes of
+            case atMapText "db.system" (unAesonTextMaybe otel.attributes) of
               Just "postgresql" -> Just "db.system;right-badge-postgres⇒postgres"
               Just "mysql" -> Just "db.system;right-badge-mysql⇒mysql"
               Just "redis" -> Just "db.system;right-badge-redis⇒redis"
@@ -218,7 +219,7 @@ generateSpanSummary otel =
           , -- HTTP indicator (if has HTTP attributes)
             if hasHttp then Just "protocol;right-badge-neutral⇒http" else Nothing
           , -- RPC indicator
-            case atMapText "rpc.method" otel.attributes of
+            case atMapText "rpc.method" (unAesonTextMaybe otel.attributes) of
               Just _ -> Just "protocol;right-badge-neutral⇒rpc"
               _ -> Nothing
           , -- Duration (always show)

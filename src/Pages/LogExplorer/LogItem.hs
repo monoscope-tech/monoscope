@@ -33,6 +33,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.Components (dateTime)
+import Pkg.DeriveUtils (unAesonTextMaybe)
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
@@ -152,7 +153,7 @@ expandAPIlogItemH pid rdId timestamp sourceM = do
         Just "log" -> addRespHeaders $ LogItemExpanded pid record
         _ -> do
           -- It's a span, check if we need to fetch the apitoolkit-http-span
-          aptSpan <- case getRequestDetails record.attributes of
+          aptSpan <- case getRequestDetails (unAesonTextMaybe record.attributes) of
             Just ("HTTP", _, _, _) -> do
               let trIdM = record.context >>= (.trace_id)
               if record.name
@@ -161,7 +162,10 @@ expandAPIlogItemH pid rdId timestamp sourceM = do
                   /= Just "monoscope.http"
                 then do
                   case trIdM of
-                    Just trId -> Telemetry.spanRecordByName pid trId (fromMaybe "apitoolkit-http-span" record.name)
+                    Just trId -> do
+                      if authCtx.env.enableTimefusionReads
+                        then labeled @"timefusion" @DB $ Telemetry.spanRecordByName pid trId (fromMaybe "apitoolkit-http-span" record.name)
+                        else Telemetry.spanRecordByName pid trId (fromMaybe "apitoolkit-http-span" record.name)
                     _ -> pure Nothing
                 else pure Nothing
             _ -> pure Nothing
@@ -196,7 +200,7 @@ spanBadge val key = do
 expandedItemView :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> Maybe Text -> Maybe Text -> Html ()
 expandedItemView pid item aptSp leftM rightM = do
   let isLog = item.kind == Just "log"
-      reqDetails = if isLog then Nothing else getRequestDetails item.attributes
+      reqDetails = if isLog then Nothing else getRequestDetails (unAesonTextMaybe item.attributes)
   div_ [class_ $ "w-full pl-2 pb-2 relative" <> if isLog then " flex flex-col gap-2" else " pb-[50px]"] $ do
     div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
     unless isLog $ span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "loading-span-list"] ""
@@ -230,9 +234,9 @@ expandedItemView pid item aptSp leftM rightM = do
           let svTxt = maybe "UNSET" (\x -> maybe "UNSET" show x.severity_text) item.severity
               cls = getSeverityColor svTxt
           span_ [class_ $ "rounded-lg border cbadge-sm text-sm px-2 py-1 shrink-0 " <> cls] $ toHtml $ T.toUpper svTxt
-          h4_ [class_ "text-textStrong"] $ toHtml $ case item.body of
+          h4_ [class_ "text-textStrong"] $ toHtml $ case unAesonTextMaybe item.body of
             Just (AE.String x) -> x
-            _ -> toStrict $ encodeToLazyText item.body
+            _ -> toStrict $ encodeToLazyText (unAesonTextMaybe item.body)
         else div_ [class_ "flex items-center gap-4 text-sm font-medium text-textStrong"] $ do
           case reqDetails of
             Just req -> do
@@ -258,11 +262,11 @@ expandedItemView pid item aptSp leftM rightM = do
         unless isLog $ do
           spanBadge (toText $ getDurationNSMS $ maybe 0 fromIntegral item.duration) "Span duration"
           spanBadge (fromMaybe "" item.kind) "Span Kind"
-        spanBadge (getServiceName item.resource) "Service"
+        spanBadge (getServiceName (unAesonTextMaybe item.resource)) "Service"
         spanBadge ("Span ID: " <> maybe "" (\c -> fromMaybe "" c.span_id) item.context) "Span ID"
         spanBadge ("Trace ID: " <> maybe "" (\z -> fromMaybe "" z.trace_id) item.context) "Trace ID"
       div_ [class_ "flex flex-wrap gap-3 items-center text-textBrand font-medium text-xs"] do
-        whenJust (atMapText "session.id" item.attributes) $ \v -> do
+        whenJust (atMapText "session.id" (unAesonTextMaybe item.attributes)) $ \v -> do
           button_ [class_ "cursor-pointer flex items-center gap-1", term "data-field-path" "attributes.session.id", term "data-field-value" ("\"" <> v <> "\""), onpointerdown_ "filterByField(event, 'Eq')"] do
             "Filter by session"
             faSprite_ "filter" "regular" "w-3 h-3"
@@ -312,7 +316,7 @@ expandedItemView pid item aptSp leftM rightM = do
 
     let tabContainerId = if isLog then "log-tabs-container" else "span-tabs-container"
     div_ [class_ $ "w-full " <> if isLog then "mt-4" else "mt-8", id_ tabContainerId] do
-      let spanErrors = if isLog then [] else getSpanErrors $ fromMaybe AE.Null item.events
+      let spanErrors = if isLog then [] else getSpanErrors $ fromMaybe AE.Null (unAesonTextMaybe item.events)
           isHttp = case reqDetails of
             Just ("HTTP", _, _, _) -> True
             _ -> False
@@ -327,7 +331,7 @@ expandedItemView pid item aptSp leftM rightM = do
             div_ [class_ "badge badge-error badge-sm"] $ show $ length spanErrors
         unless isLog $ button_ [class_ $ "a-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#logs-content', '#" <> tabContainerId <> "', 't-tab-active','.http')"] $ do
           "Logs"
-          div_ [class_ "badge badge-ghost badge-sm"] $ show $ numberOfEvents $ fromMaybe AE.Null item.events
+          div_ [class_ "badge badge-ghost badge-sm"] $ show $ numberOfEvents $ fromMaybe AE.Null (unAesonTextMaybe item.events)
         unless isLog $ button_ [class_ $ "a-tab cursor-pointer border-b-2 whitespace-nowrap " <> borderClass <> " px-4 py-1.5", onpointerdown_ $ "navigatable(this, '#m-raw-content', '#" <> tabContainerId <> "', 't-tab-active','.http')"] "Raw data"
         div_ [class_ $ "w-full border-b-2 " <> borderClass] pass
 
@@ -335,14 +339,14 @@ expandedItemView pid item aptSp leftM rightM = do
         unless isLog $ div_ [class_ "hidden a-tab-content", id_ "m-raw-content"] $ do
           jsonValueToHtmlTree (AE.toJSON item) Nothing
         div_ [class_ $ "a-tab-content" <> if not isLog && isHttp then " hidden" else "", id_ "att-content"] $ do
-          jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) item.attributes) $ if isLog then Nothing else Just "attributes"
+          jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) (unAesonTextMaybe item.attributes)) $ if isLog then Nothing else Just "attributes"
         div_ [class_ "hidden a-tab-content", id_ "meta-content"] $ do
-          jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) item.resource) $ if isLog then Nothing else Just "resource"
+          jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) (unAesonTextMaybe item.resource)) $ if isLog then Nothing else Just "resource"
         unless isLog $ do
           div_ [class_ "hidden a-tab-content", id_ "errors-content"] $ do
             renderErrors spanErrors
           div_ [class_ "hidden a-tab-content", id_ "logs-content"] $ do
-            jsonValueToHtmlTree (AE.toJSON item.events) Nothing
+            jsonValueToHtmlTree (AE.toJSON (unAesonTextMaybe item.events)) Nothing
 
         unless isLog $ whenJust reqDetails $ \case
           ("HTTP", method, path, status) -> do
@@ -360,38 +364,38 @@ expandedItemView pid item aptSp leftM rightM = do
                   div_ [id_ "raw_content", class_ "hidden a-tab-content http"] do
                     jsonValueToHtmlTree (AE.toJSON cSp) Nothing
                   div_ [id_ "req_content", class_ "hidden a-tab-content http"] do
-                    let b = case cSp.body of
+                    let b = case unAesonTextMaybe cSp.body of
                           Just (AE.Object bb) -> case KEM.lookup "request_body" bb of
                             Just a -> a
                             _ -> AE.object []
                           _ -> AE.object []
                     jsonValueToHtmlTree b $ Just "body.request_body"
                   div_ [id_ "res_content", class_ "a-tab-content http"] do
-                    let b = case cSp.body of
+                    let b = case unAesonTextMaybe cSp.body of
                           Just (AE.Object bb) -> case KEM.lookup "response_body" bb of
                             Just a -> a
                             _ -> AE.object []
                           _ -> AE.object []
                     jsonValueToHtmlTree b $ Just "body.response_body"
                   div_ [id_ "hed_content", class_ "hidden a-tab-content http"] do
-                    let reqHeaders = case cSp.attributes >>= Map.lookup "http" of
+                    let reqHeaders = case unAesonTextMaybe cSp.attributes >>= Map.lookup "http" of
                           Just (AE.Object httpAtts) -> case KEM.lookup "request" httpAtts of
                             Just (AE.Object reqAtts) -> KEM.lookup "header" reqAtts
                             _ -> Nothing
                           _ -> Nothing
-                        resHeaders = case cSp.attributes >>= Map.lookup "http" of
+                        resHeaders = case unAesonTextMaybe cSp.attributes >>= Map.lookup "http" of
                           Just (AE.Object httpAtts) -> case KEM.lookup "response" httpAtts of
                             Just (AE.Object resAtts) -> KEM.lookup "header" resAtts
                             _ -> Nothing
                           _ -> Nothing
                     jsonValueToHtmlTree (AE.object ["request_headers" AE..= fromMaybe AE.Null reqHeaders, "response_headers" AE..= fromMaybe AE.Null resHeaders]) Nothing
                   div_ [id_ "par_content", class_ "hidden a-tab-content http"] do
-                    let queryParams = case cSp.attributes >>= Map.lookup "http" of
+                    let queryParams = case unAesonTextMaybe cSp.attributes >>= Map.lookup "http" of
                           Just (AE.Object httpAtts) -> case KEM.lookup "request" httpAtts of
                             Just (AE.Object reqAtts) -> KEM.lookup "query_params" reqAtts
                             _ -> Nothing
                           _ -> Nothing
-                        pathParams = case cSp.attributes >>= Map.lookup "http" of
+                        pathParams = case unAesonTextMaybe cSp.attributes >>= Map.lookup "http" of
                           Just (AE.Object httpAtts) -> case KEM.lookup "request" httpAtts of
                             Just (AE.Object reqAtts) -> KEM.lookup "path_params" reqAtts
                             _ -> Nothing

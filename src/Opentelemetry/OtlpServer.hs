@@ -7,6 +7,7 @@ import Control.Parallel.Strategies (parList, rpar, using)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
+import Pkg.DeriveUtils (AesonText(..))
 import Data.Base64.Types qualified as B64
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
@@ -652,9 +653,9 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
                   { severity_text = parseSeverityLevel severityText
                   , severity_number = severityNumber
                   }
-          , body = Just $ anyValueToJSON $ Just $ logRecord ^. PLF.body
-          , attributes = jsonToMap $ removeProjectId $ keyValueToJSON $ V.fromList $ logRecord ^. PLF.attributes
-          , resource = jsonToMap $ removeProjectId $ resourceToJSON resourceM
+          , body = fmap AesonText $ Just $ anyValueToJSON $ Just $ logRecord ^. PLF.body
+          , attributes = fmap AesonText $ jsonToMap $ removeProjectId $ keyValueToJSON $ V.fromList $ logRecord ^. PLF.attributes
+          , resource = fmap AesonText $ jsonToMap $ removeProjectId $ resourceToJSON resourceM
           , hashes = V.empty
           , kind = Just "log"
           , status_code = Nothing
@@ -849,9 +850,9 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
                   }
           , level = Nothing
           , severity = Nothing
-          , body
-          , attributes = newAttributes
-          , resource = jsonToMap $ removeProjectId $ resourceToJSON resourceM
+          , body = fmap AesonText body
+          , attributes = fmap AesonText newAttributes
+          , resource = fmap AesonText $ jsonToMap $ removeProjectId $ resourceToJSON resourceM
           , hashes = V.empty
           , kind = spanKindText
           , status_code = statusCodeText
@@ -859,7 +860,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
           , duration = Just $ fromIntegral durationNanos
           , start_time = validStartTime
           , end_time = Just validEndTime
-          , events = eventsJson
+          , events = fmap AesonText eventsJson
           , links = linksJson
           , name = Just $ pSpan ^. PTF.name
           , parent_id = parentId
