@@ -31,8 +31,8 @@ export class SessionReplay extends LitElement {
   private startX: number | null = null;
   private player: Replayer | null = null;
   private events: eventWithTime[] = [];
-  private containerWidth = 1124;
-  private containerHeight = 650;
+  private containerWidth = 1024;
+  private containerHeight = 550;
   private iframeWidth = 1117;
   private trickPlayer: Replayer | null = null;
   private observer = new MutationObserver((mutations) => {
@@ -373,7 +373,7 @@ export class SessionReplay extends LitElement {
   };
 
   render() {
-    return html`<div class="flex overflow-x-hidden " id="replayerOuterContainer" style="width:1124px; height:770px">
+    return html`<div class="flex overflow-x-hidden " id="replayerOuterContainer" style="width:1024px; height:670px">
       <div class="w-full  flex flex-col justify-start shrink-1 min-w-0 overflow-hidden">
         <div class="bg-fillWeak w-full px-2 h-10 min-h-10 flex items-center border-b gap-4 cursor-move  justify-between playerHeader">
           <div class="flex items-center gap-4 shrink-1">
