@@ -633,7 +633,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
       otelLog =
         OtelLogsAndSpans
           { project_id = pid.toText
-          , id = UUID.nil -- Will be replaced in bulkInsertOtelLogsAndSpansTF
+          , id = UUID.toText UUID.nil -- Will be replaced in bulkInsertOtelLogsAndSpansTF
           , timestamp = validTimestamp
           , observed_timestamp = Just validObservedTimestamp
           , context =
@@ -835,7 +835,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
       otelSpan =
         OtelLogsAndSpans
           { project_id = pid.toText
-          , id = UUID.nil -- Will be replaced in bulkInsertOtelLogsAndSpansTF
+          , id = UUID.toText UUID.nil -- Will be replaced in bulkInsertOtelLogsAndSpansTF
           , timestamp = validStartTime
           , observed_timestamp = Just validStartTime
           , context =

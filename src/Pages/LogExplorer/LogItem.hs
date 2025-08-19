@@ -21,6 +21,9 @@ import Data.Time (UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Effectful.Labeled (labeled)
+import Effectful.PostgreSQL.Transact.Effect (DB)
+import Effectful.Reader.Static qualified
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
@@ -31,6 +34,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.Components (dateTime)
 import Relude
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils
 
@@ -131,11 +135,16 @@ getErrorDetails ae = case ae of
 
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiItemDetailed)
-expandAPIlogItemH pid rdId createdAt sourceM = do
+expandAPIlogItemH pid rdId timestamp sourceM = do
   _ <- Sessions.sessionAndProject pid
+  authCtx <- Effectful.Reader.Static.ask @AuthContext
   -- sourceM parameter is preserved for future use but not used in current logic
   -- Query the unified table using timestamp and id
-  item <- Telemetry.logRecordByProjectAndId pid createdAt rdId
+  item <-
+    if authCtx.env.enableTimefusionReads
+      then labeled @"timefusion" @DB $ Telemetry.logRecordByProjectAndId pid timestamp rdId
+      else Telemetry.logRecordByProjectAndId pid timestamp rdId
+
   case item of
     Just record -> do
       -- Determine if this is a log or span based on the kind field
@@ -288,7 +297,7 @@ expandedItemView pid item aptSp leftM rightM = do
               do
                 "View parent trace"
                 faSprite_ "cross-hair" "regular" "w-4 h-4"
-        let item_id = UUID.toText item.id
+        let item_id = item.id
         let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" item.timestamp
         let eventType = if isLog then "log" else "span"
         button_

@@ -374,6 +374,7 @@ library
       Pkg.ConvertKit
       Pkg.DashboardUtils
       Pkg.DBUtils
+      Pkg.DeriveUtils
       Pkg.Google
       Pkg.Mail
       Pkg.Parser

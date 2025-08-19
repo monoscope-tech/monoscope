@@ -639,7 +639,7 @@ createRequestDumps TestResources{..} projectId numRequestsPerEndpoint = do
       -- Create OtelLogsAndSpans record to generate summary
       let otelRecord =
             Telemetry.OtelLogsAndSpans
-              { id = spanId
+              { id = UUID.toText spanId
               , project_id = projectId.toText
               , timestamp = currentTime
               , parent_id = Nothing

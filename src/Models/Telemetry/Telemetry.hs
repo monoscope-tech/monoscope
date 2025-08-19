@@ -90,6 +90,7 @@ import Models.Projects.Projects (ProjectId (unProjectId))
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..))
+import Pkg.DeriveUtils (AesonText (..))
 import Relude hiding (ask)
 import UnliftIO (throwIO, tryAny)
 import Utils (lookupValueText, toXXHash)
@@ -207,13 +208,23 @@ instance AE.ToJSON ByteString where
   toJSON = AE.String . decodeUtf8 . B16.encode
 
 
--- Custom FromField instance for Map Text AE.Value
+-- Custom FromField instance for Map Text AE.Value that handles both JSONB and varchar/text
 instance FromField (Map Text AE.Value) where
   fromField f mdata = do
-    v <- fromField f mdata :: Conversion AE.Value
-    case v of
-      AE.Object o -> pure $ KEM.toMapText o
-      _ -> returnError ConversionFailed f "Expected a JSON object"
+    -- Try to parse as JSONB first
+    let tryJsonb = do
+          v <- fromField f mdata :: Conversion AE.Value
+          case v of
+            AE.Object o -> pure $ KEM.toMapText o
+            _ -> returnError ConversionFailed f "Expected a JSON object"
+    -- If that fails, try parsing as text/varchar
+    let tryText = do
+          txt <- fromField f mdata :: Conversion Text
+          case AE.eitherDecodeStrict (encodeUtf8 txt) of
+            Right (AE.Object o) -> return $ KEM.toMapText o
+            Right _ -> returnError ConversionFailed f "Expected a JSON object"
+            Left err -> returnError ConversionFailed f ("Failed to parse JSON from text: " ++ err)
+    tryJsonb <|> tryText
 
 
 -- Custom ToField instance for Map Text AE.Value
@@ -221,8 +232,10 @@ instance ToField (Map Text AE.Value) where
   toField = toField . AE.Object . KEM.fromMapText
 
 
+
+
 data SpanRecord = SpanRecord
-  { uSpanId :: UUID.UUID
+  { uSpanId :: Text
   , projectId :: UUID.UUID
   , timestamp :: UTCTime
   , traceId :: Text
@@ -810,7 +823,7 @@ instance ToRow OtelLogsAndSpans where
 
 bulkInsertOtelLogsAndSpansTF :: (Concurrent :> es, DB :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
 bulkInsertOtelLogsAndSpansTF records = do
-  updatedRecords <- V.mapM (\r -> genUUID >>= \uid -> pure (r & #id .~ uid)) records
+  updatedRecords <- V.mapM (\r -> genUUID >>= \uid -> pure (r & #id .~ UUID.toText uid)) records
   _ <- bulkInsertOtelLogsAndSpans updatedRecords
   _ <- retryTimefusion 10 updatedRecords
   pass
@@ -904,12 +917,12 @@ data Context = Context
   }
   deriving (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
-  deriving (FromField, ToField) via Aeson Context
+  deriving (FromField, ToField) via AesonText Context
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Context
 
 
 data OtelLogsAndSpans = OtelLogsAndSpans
-  { id :: UUID.UUID
+  { id :: Text -- UUID
   , project_id :: Text
   , timestamp :: UTCTime
   , parent_id :: Maybe Text

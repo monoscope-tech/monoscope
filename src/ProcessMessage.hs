@@ -347,7 +347,7 @@ convertRequestMessageToSpan :: RequestMessages.RequestMessage -> (UUID.UUID, Tex
 convertRequestMessageToSpan rm (spanId, trId) =
   let otelSpan =
         Telemetry.OtelLogsAndSpans
-          { id = UUID.nil
+          { id = UUID.toText UUID.nil
           , project_id = UUID.toText rm.projectId
           , timestamp = zonedTimeToUTC rm.timestamp
           , parent_id = (Just . UUID.toText) =<< rm.parentId

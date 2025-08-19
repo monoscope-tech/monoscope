@@ -279,7 +279,7 @@ spanTable records =
       tbody_ do
         forM_ records $ \spanRecord -> do
           let pidText = UUID.toText spanRecord.projectId
-              spanid = UUID.toText spanRecord.uSpanId
+              spanid = spanRecord.uSpanId
               tme = fromString (formatShow iso8601Format spanRecord.timestamp)
               (reqType, _, _, _) = fromMaybe ("", "", "", 0) $ getRequestDetails spanRecord.attributes
           tr_
@@ -350,7 +350,7 @@ buildTree spanMap parentId =
         SpanMin
           { parentSpanId = sp.parentSpanId
           , spanId = sp.spanId
-          , uSpanId = sp.uSpanId
+          , uSpanId = fromMaybe UUID.nil (UUID.fromText sp.uSpanId)
           , spanName = sp.spanName
           , spanDurationNs = sp.spanDurationNs
           , serviceName = getServiceName sp.resource
