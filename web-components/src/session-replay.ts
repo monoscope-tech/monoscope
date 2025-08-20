@@ -278,7 +278,7 @@ export class SessionReplay extends LitElement {
         const mContainer = Number(comp.width.replace('px', ''));
         const mHeight = Number(comp.height.replace("px",""))
         this.containerWidth = mContainer - this.activityWidth;
-        this.containerHeight = mHeight - 120
+        this.containerHeight = mHeight - 110
 
         this.updateScale();
       }
@@ -410,7 +410,7 @@ export class SessionReplay extends LitElement {
     return html`<div
       class="flex overflow-x-hidden resize w-max"
       id="replayerOuterContainer"
-      style="height:${this.containerHeight + 120}px; width:1024px"
+      style="height:${this.containerHeight + 110}px; width:1024px"
     >
       <div class="w-full  flex flex-col justify-start shrink-1 min-w-0 overflow-hidden">
         <div class="bg-fillWeak w-full px-2 h-10 min-h-10 flex items-center border-b gap-4 cursor-move  justify-between playerHeader">
@@ -487,7 +487,7 @@ export class SessionReplay extends LitElement {
                   `}
             </div>
           </div>
-          <div class="flex flex-col items-center w-full py-4 h-20">
+          <div class="flex flex-col items-center w-full py-4 h-32">
             <div
               id="progressBar"
               @click=${this.handleTimeSeek}
