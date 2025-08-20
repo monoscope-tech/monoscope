@@ -878,7 +878,7 @@ data Severity = Severity
   }
   deriving (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
-  deriving (FromField, ToField) via Aeson Severity
+  deriving (FromField, ToField) via AesonText Severity
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Severity
 
 
