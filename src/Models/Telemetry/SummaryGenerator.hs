@@ -6,12 +6,14 @@ module Models.Telemetry.SummaryGenerator (
 ) where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AE
+import Data.Aeson.KeyMap qualified as AE
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Vector qualified as V
-import Models.Telemetry.Telemetry (OtelLogsAndSpans (..), Severity (..), SeverityLevel (..), atMapInt, atMapText)
+import Models.Telemetry.Telemetry (OtelLogsAndSpans (..), Severity (..), SeverityLevel (..), Context (..), atMapInt, atMapText)
 import Relude
 import Utils (getDurationNSMS)
 import Pkg.DeriveUtils (unAesonTextMaybe)
@@ -86,8 +88,69 @@ generateSpanSummary otel =
           || isJust (atMapInt "http.response.status_code" (Just attrs))
       _ -> False
 
+    -- Check if span is truly empty (no name or empty name, no attributes)
+    isEmptySpan = (isNothing otel.name || otel.name == Just "")
+                  && maybe True Map.null (unAesonTextMaybe otel.attributes)
+
     -- Build elements in correct order
-    elements =
+    elements = if isEmptySpan then resourceFallbackElements else normalElements
+    
+    -- Resource fallback elements for empty spans
+    resourceFallbackElements =
+      catMaybes
+        [ -- Process name from executable.name or PID
+          case unAesonTextMaybe otel.resource of
+            Just res -> 
+              -- Try to get process.executable.name first
+              case Map.lookup "process" res of
+                Just (AE.Object procObj) ->
+                  let procMap = Map.fromList [(AE.toText k, v) | (k, v) <- AE.toList procObj]
+                   in case Map.lookup "executable" procMap of
+                        Just (AE.Object execObj) ->
+                          let execMap = Map.fromList [(AE.toText k, v) | (k, v) <- AE.toList execObj]
+                           in case Map.lookup "name" execMap of
+                                Just (AE.String name) | name /= "" -> 
+                                  Just $ "process;neutral⇒" <> name
+                                _ -> 
+                                  -- Fall back to PID
+                                  case Map.lookup "pid" procMap of
+                                    Just (AE.Number n) -> 
+                                      Just $ "process;neutral⇒PID " <> T.pack (show (round n :: Int))
+                                    _ -> Nothing
+                        _ -> 
+                          -- No executable, try PID
+                          case Map.lookup "pid" procMap of
+                            Just (AE.Number n) -> 
+                              Just $ "process;neutral⇒PID " <> T.pack (show (round n :: Int))
+                            _ -> Nothing
+                _ -> Nothing
+            _ -> Nothing
+        , -- Service name
+          unAesonTextMaybe otel.resource >>= atMapText "service.name" . Just <&>
+            (\name -> "service;neutral⇒" <> name)
+        , -- Resource attributes
+          case unAesonTextMaybe otel.resource of
+            Just attrs | not (Map.null attrs) ->
+              let filtered = Map.filterWithKey (\k _ -> k /= "process") attrs
+                  attrText = TE.decodeUtf8 $ BSL.toStrict $ AE.encode filtered
+                  truncated = if T.length attrText > 300
+                              then T.take 297 attrText <> "..."
+                              else attrText
+               in if Map.null filtered 
+                  then Nothing
+                  else Just $ "resource;text-textWeak⇒" <> truncated
+            _ -> Nothing
+        , -- Trace ID
+          otel.context >>= \ctx -> ctx.trace_id >>= \tid ->
+            if tid /= "" then Just $ "trace_id;right-badge-neutral⇒" <> T.take 16 tid
+            else Nothing
+        , -- Duration
+          otel.duration <&> \dur ->
+            "duration;right-badge-neutral⇒" <> toText (getDurationNSMS (fromIntegral dur))
+        ]
+    
+    -- Normal elements (original logic preserved exactly)
+    normalElements =
       catMaybes
         $
         -- 1. Request type indicators (icons)

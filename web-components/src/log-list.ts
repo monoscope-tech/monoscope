@@ -806,32 +806,7 @@ export class LogList extends LitElement {
   }
 
   private parseSummaryData(dataArr: any[]): string[] {
-    // Check cache first
-    const cached = this.summaryDataCache.get(dataArr);
-    if (cached) return cached;
-
-    const summaryData = lookupVecValue<string | string[]>(dataArr, this.colIdxMap, 'summary');
-    let summaryArray: string[] = [];
-
-    if (Array.isArray(summaryData)) {
-      summaryArray = summaryData;
-    } else if (typeof summaryData === 'string') {
-      // Handle new format: "\"[item1, item2, ...]\""
-      let cleaned = summaryData;
-      if (summaryData.startsWith('"') && summaryData.endsWith('"')) {
-        cleaned = summaryData.slice(1, -1); // Remove outer quotes
-      }
-      if (cleaned.startsWith('[') && cleaned.endsWith(']')) {
-        cleaned = cleaned.slice(1, -1); // Remove brackets
-      }
-      // Split by comma, but not commas inside braces {}
-      summaryArray = cleaned.match(/[^,]+(?:{[^}]*}[^,]*)?/g) || [];
-      summaryArray = summaryArray.map((s) => s.trim());
-    }
-
-    // Cache the result
-    this.summaryDataCache.set(dataArr, summaryArray);
-    return summaryArray;
+    return lookupVecValue<string[]>(dataArr, this.colIdxMap, 'summary');
   }
 
   renderSummaryElements(summaryArray: string[], wrapLines: boolean): any {
