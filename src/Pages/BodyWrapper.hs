@@ -64,6 +64,7 @@ data BWConfig = BWConfig
   , isSettingsPage :: Bool
   , freeTierExceeded :: Bool
   , hideNavbar :: Bool -- When True, hides the entire navbar
+  , headContent :: Maybe (Html ()) -- Optional HTML content to include in the head
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -99,6 +100,9 @@ bodyWrapper bcfg child = do
         link_ [rel_ "stylesheet", type_ "text/css", href_ "/public/assets/css/tailwind.min.css"]
         link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/web-components/dist/css/index.css")]
 
+        -- Include optional head content from the page
+        whenJust bcfg.headContent id
+
         script_ [src_ $(hashAssetFile "/public/assets/deps/tagify/tagify.min.js")] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/echarts/echarts.min.js")] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/roma-echarts.js")] ("" :: Text)
@@ -127,7 +131,7 @@ bodyWrapper bcfg child = do
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js"), defer_ "true"] ("" :: Text)
         -- script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/instantpage5_1_0.js"), type_ "module", defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/main.js")] ("" :: Text)
-        
+
         script_ [src_ "https://unpkg.com/@monoscopetech/browser@latest/dist/monoscope.min.js"] ("" :: Text)
 
         script_ [type_ "module", src_ $ "/public/assets/web-components/dist/js/index.js"] ("" :: Text)
@@ -290,34 +294,35 @@ bodyWrapper bcfg child = do
               sideNav' = bcfg.currProject & maybe "" \project -> sideNav sess project (fromMaybe bcfg.pageTitle bcfg.prePageTitle) bcfg.menuItem
            in section_ [class_ "flex flex-row grow-0 h-screen overflow-hidden"] do
                 sideNav'
-                section_ [class_ "h-screen overflow-y-hidden grow"] do
+                section_ [class_ "h-full overflow-y-hidden grow flex flex-col"] do
                   when
                     (currUser.email == "hello@apitoolkit.io")
                     loginBanner
                   unless (bcfg.isSettingsPage || bcfg.hideNavbar) $ navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
-                  section_ [class_ "overflow-y-hidden h-full flex-1"] do
+                  section_ [class_ "overflow-y-hidden h-full grow"] do
                     when bcfg.freeTierExceeded $ whenJust bcfg.currProject (\p -> freeTierLimitExceededBanner p.id.toText)
                     if bcfg.isSettingsPage
                       then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
                       else child
-                  Components.drawer_ "global-data-drawer" Nothing Nothing ""
-                  -- Modal for copying widgets to other dashboards
-                  Components.modal_ "dashboards-modal" "" do
-                    -- Hidden fields to store widget and dashboard IDs
-                    input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "widget_id"]
-                    input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "source_dashboard_id"]
+                  div_ [class_ "h-0 shrink"] do
+                    Components.drawer_ "global-data-drawer" Nothing Nothing ""
+                    -- Modal for copying widgets to other dashboards
+                    Components.modal_ "dashboards-modal" "" do
+                      -- Hidden fields to store widget and dashboard IDs
+                      input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "widget_id"]
+                      input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "source_dashboard_id"]
 
-                    div_
-                      [ class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
-                      , hxGet_ ("/p/" <> maybe "" (.id.toText) bcfg.currProject <> "/dashboards?embedded=true")
-                      , hxTrigger_ "intersect once"
-                      , hxSelect_ "#itemsListPage"
-                      , hxSwap_ "innerHTML"
-                      ]
-                      do
-                        div_ [class_ "skeleton h-16 w-full"] ""
-                        div_ [class_ "skeleton h-16 w-full"] ""
-                        div_ [class_ "skeleton h-16 w-full"] ""
+                      div_
+                        [ class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
+                        , hxGet_ ("/p/" <> maybe "" (.id.toText) bcfg.currProject <> "/dashboards?embedded=true")
+                        , hxTrigger_ "intersect once"
+                        , hxSelect_ "#itemsListPage"
+                        , hxSwap_ "innerHTML"
+                        ]
+                        do
+                          div_ [class_ "skeleton h-16 w-full"] ""
+                          div_ [class_ "skeleton h-16 w-full"] ""
+                          div_ [class_ "skeleton h-16 w-full"] ""
 
       externalHeadScripts_
       alerts_

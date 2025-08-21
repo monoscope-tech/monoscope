@@ -1,6 +1,10 @@
 <div align="center">
 
-<img src="/static/public/assets/svgs/logo_black.svg" alt="Monoscope Logo" width="400" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="/static/public/assets/svgs/logo_white.svg">
+  <source media="(prefers-color-scheme: light)" srcset="/static/public/assets/svgs/logo_black.svg">
+  <img src="/static/public/assets/svgs/logo_black.svg" alt="Monoscope Logo" width="400" />
+</picture>
 
 ### Open-source monitoring and observability platform that understands your systems
 

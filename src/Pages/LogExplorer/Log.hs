@@ -46,7 +46,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (checkFreeTierExceeded, faSprite_, getServiceColors, listToIndexHashMap, lookupVecTextByKey, onpointerdown_, prettyPrintCount)
+import Utils (checkFreeTierExceeded, faSprite_, formatUTC, getServiceColors, listToIndexHashMap, lookupVecTextByKey, onpointerdown_, prettyPrintCount)
 
 import Pkg.AI (callOpenAIAPI, systemPrompt)
 
@@ -431,6 +431,14 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
 
+  -- Build preload URL using the same function that builds the JSON URLs
+  let preloadUrl = RequestDumps.requestDumpLogUrlPath pid queryM' cols' (formatUTC <$> cursorM') sinceM fromM toM Nothing source False
+      -- Also preload the chart data request
+      chartDataUrl = "/chart_data?pid=" <> pid.toText <> "&query=summarize+count%28*%29+by+bin_auto%28timestamp%29%2C+status_code"
+      headContent = Just $ do
+        link_ [rel_ "preload", href_ preloadUrl, term "as" "fetch"]
+        link_ [rel_ "preload", href_ chartDataUrl, term "as" "fetch"]
+
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
@@ -438,6 +446,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           , pageTitle = "Explorer"
           , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/api-log-explorer/"
           , freeTierExceeded = freeTierExceeded
+          , headContent = headContent
           , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
               label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs"] do
                 input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
@@ -692,9 +701,6 @@ apiLogsPage page = do
       let dW = fromMaybe "100%" page.detailsWidth
           showTrace = isJust page.showTrace
       div_ [class_ "grow relative flex flex-col shrink-1 min-w-0 w-full h-full ", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
-        -- Alert configuration section at the top of the content area
-        div_ [class_ "shrink-0"] $ alertConfigurationForm_ page.pid
-
         -- Filters and row count header
         div_ [class_ "flex gap-2  pt-1 text-sm -mb-6 z-10 w-max bg-bgBase"] do
           label_ [class_ "gap-1 flex items-center cursor-pointer"] do
@@ -758,6 +764,12 @@ apiLogsPage page = do
         div_ [class_ "flex-1 min-h-0 flex flex-col"] do
           -- Virtual table for logs
           div_ [class_ "flex-1 min-h-0 hidden group-has-[#viz-logs:checked]/pg:block"] $ virtualTable page
+
+      -- Alert configuration panel on the right
+      div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block"] $ resizer_ "alert_container" "alert_width" False
+
+      div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block", id_ "alert_container", style_ "width: 500px;"] do
+        alertConfigurationForm_ page.pid
 
       div_ [class_ $ "transition-opacity duration-200 " <> if isJust page.targetEvent then "" else "opacity-0 pointer-events-none hidden", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
 
@@ -965,7 +977,7 @@ jsonTreeAuxillaryCode pid query = do
 -- | Render alert configuration form for creating log-based alerts
 alertConfigurationForm_ :: Projects.ProjectId -> Html ()
 alertConfigurationForm_ pid = do
-  div_ [class_ "bg-fillWeaker rounded-2xl mb-3 border border-strokeWeak hidden group-has-[#create-alert-toggle:checked]/pg:block shrink-0 group/alt"] do
+  div_ [class_ "bg-fillWeaker h-full flex flex-col group/alt"] do
     -- Header section (more compact)
     div_ [class_ "flex items-center justify-between px-4 py-2.5"] do
       div_ [class_ "flex items-center gap-2.5"] do
@@ -974,21 +986,16 @@ alertConfigurationForm_ pid = do
         div_ [] do
           h3_ [class_ "text-base font-semibold text-textStrong"] "Create Alert"
           p_ [class_ "text-xs text-textWeak hidden sm:block"] "Monitor logs and get notified on thresholds"
-      div_ [class_ "flex items-center gap-2"] do
-        -- Collapse/expand button
-        label_ [class_ "cursor-pointer p-1 rounded-lg hover:bg-fillWeak transition-colors peer", term "data-tippy-content" "Collapse/expand form"] do
-          input_ [type_ "checkbox", class_ "hidden peer", id_ "alert-form-collapsed"]
-          faSprite_ "chevron-down" "regular" "w-4 h-4 text-textWeak peer-checked:rotate-180 transition-transform"
-        -- Close button
-        button_
-          [ type_ "button"
-          , class_ "p-1 rounded-lg hover:bg-fillWeak transition-colors"
-          , [__|on click set #create-alert-toggle.checked to false|]
-          ]
-          $ faSprite_ "xmark" "regular" "w-4 h-4 text-textWeak"
+      -- Close button only
+      button_
+        [ type_ "button"
+        , class_ "p-1 rounded-lg hover:bg-fillWeak transition-colors"
+        , [__|on click set #create-alert-toggle.checked to false|]
+        ]
+        $ faSprite_ "xmark" "regular" "w-4 h-4 text-textWeak"
 
-    -- Form content wrapper that can be collapsed
-    div_ [class_ "p-4 pt-3 group-has-[#alert-form-collapsed:checked]/alt:hidden"] do
+    -- Form content wrapper with scrolling
+    div_ [class_ "p-4 pt-3 flex-1 overflow-y-auto c-scroll"] do
       form_
         [ id_ "alert-form"
         , hxPost_ $ "/p/" <> pid.toText <> "/alerts"
@@ -1105,7 +1112,7 @@ alertConfigurationForm_ pid = do
                     option_ [value_ "below"] "Below threshold"
 
               -- Info banner (more compact)
-              div_ [class_ "flex items-start gap-2 p-2.5 bg-bgAlternate rounded-lg mt-3"] do
+              div_ [class_ "flex items-start gap-2 p-2.5 bg-bgAlternate rounded-lg mt-3 hidden"] do
                 faSprite_ "lightbulb" "regular" "w-3.5 h-3.5 text-iconBrand mt-0.5 shrink-0"
                 div_ [class_ "flex-1 text-xs"] do
                   p_ [class_ "text-textStrong font-medium"] "Preview thresholds on chart"
@@ -1151,54 +1158,56 @@ alertConfigurationForm_ pid = do
                   ]
                   "The alert threshold has been exceeded. Check the APItoolkit dashboard for details."
 
-              -- Recovery Thresholds section
-              div_ [class_ "border-t border-strokeWeak pt-2 mt-3 text-xs"] do
-                div_ [class_ "flex items-center gap-3 text-textWeak mb-1.5"] do
-                  h4_ [class_ "font-medium text-textStrong"] "Recovery Thresholds"
-                  span_ [] "Continue notifications until monitor recovers"
+              -- Recovery Thresholds section with improved spacing
+              div_ [class_ "border-t border-strokeWeak pt-4 mt-4"] do
+                div_ [class_ "mb-3"] do
+                  h4_ [class_ "font-medium text-sm text-textStrong mb-1"] "Recovery Thresholds"
+                  p_ [class_ "text-xs text-textWeak"] "Continue notifications until monitor recovers"
 
-                div_ [class_ "flex items-center gap-5 pt-1"] do
+                div_ [class_ "space-y-3"] do
                   -- Renotify option
-                  label_ [class_ "flex items-center gap-2"] do
-                    input_ [type_ "checkbox", class_ "checkbox checkbox-xs", name_ "notifyAfterCheck"]
-                    span_ [] "Renotify every"
-                    select_ [class_ "select select-xs w-24 ", name_ "notifyAfter", id_ "notifyAfterInterval"]
+                  div_ [class_ "flex items-center"] do
+                    label_ [class_ "flex items-center gap-2 text-xs"] do
+                      input_ [type_ "checkbox", class_ "checkbox checkbox-sm", name_ "notifyAfterCheck"]
+                      span_ [] "Renotify every"
+                    select_ [class_ "select select-sm w-28 ml-2", name_ "notifyAfter", id_ "notifyAfterInterval"]
                       $ forM_ (zip ["10m", "20m", "30m", "1h", "6h", "24h"] ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"])
                       $ \(v, t) -> option_ ([value_ v] ++ [selected_ "" | v == "30m"]) (toHtml t)
 
                   -- Stop after option
-                  label_ [class_ "flex items-center gap-2"] do
-                    input_
-                      [ type_ "checkbox"
-                      , class_ "checkbox checkbox-xs"
-                      , name_ "stopAfterCheck"
-                      , [__|on change if my.checked then remove .hidden from #stopAfterInput else add .hidden to #stopAfterInput end|]
-                      ]
-                    span_ [] "Stop after"
-                    div_ [class_ "items-center gap-1 hidden", id_ "stopAfterInput", style_ "display:inline-flex"] do
-                      input_ [type_ "number", class_ "input input-xs w-14", value_ "5", name_ "stopAfter", min_ "1", max_ "100"]
-                      span_ [class_ "text-textWeak"] "occurrences"
+                  div_ [class_ "flex items-center"] do
+                    label_ [class_ "flex items-center gap-2 text-xs"] do
+                      input_
+                        [ type_ "checkbox"
+                        , class_ "checkbox checkbox-sm"
+                        , name_ "stopAfterCheck"
+                        , [__|on change if my.checked then remove .hidden from #stopAfterInput else add .hidden to #stopAfterInput end|]
+                        ]
+                      span_ [] "Stop after"
+                    div_ [class_ "flex items-center gap-1.5 ml-2 hidden", id_ "stopAfterInput"] do
+                      input_ [type_ "number", class_ "input input-sm w-16", value_ "5", name_ "stopAfter", min_ "1", max_ "100"]
+                      span_ [class_ "text-xs text-textWeak"] "occurrences"
 
-              -- Recipients checkbox
-              div_ [class_ "flex items-center gap-2 mt-3"] do
+              -- Recipients checkbox with better spacing
+              div_ [class_ "flex items-center gap-2 mt-4 pt-3 border-t border-strokeWeak"] do
                 label_ [class_ "label cursor-pointer flex items-center gap-2"] do
-                  input_ [type_ "checkbox", class_ "checkbox checkbox-xs", name_ "recipientEmailAll", value_ "true", checked_]
-                  span_ [class_ "text-xs"] "Send to all team members"
+                  input_ [type_ "checkbox", class_ "checkbox checkbox-sm", name_ "recipientEmailAll", value_ "true", checked_]
+                  span_ [class_ "text-sm"] "Send to all team members"
 
                 span_ [class_ "tooltip", term "data-tip" "Configure specific recipients in alert settings after creation"]
                   $ faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-iconNeutral"
 
-          -- Action buttons (more compact)
-          div_ [class_ "flex items-center justify-end gap-2 pt-1"] do
+          -- Action buttons with proper spacing
+          div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do
             button_
               [ type_ "button"
-              , class_ "btn btn-outline btn-xs"
+              , class_ "btn btn-outline btn-sm"
               , [__|on click set #create-alert-toggle.checked to false|]
               ]
               "Cancel"
             button_
               [ type_ "submit"
-              , class_ "btn btn-primary btn-xs"
+              , class_ "btn btn-primary btn-sm"
               ]
               do
                 faSprite_ "plus" "regular" "w-3.5 h-3.5"
