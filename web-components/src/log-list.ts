@@ -817,16 +817,12 @@ export class LogList extends LitElement {
         style="min-height: 500px;"
       >
         ${this.recentDataToBeAdded.length > 0 && !this.flipDirection
-          ? html` <div class="sticky left-1/2 -translate-x-1/2 top-[30px] z-50">
+          ? html` <div class="sticky top-[30px] z-50 flex justify-center">
               <button
-                class="relative cursor-pointer bg-gradient-to-r from-fillBrand-strong to-fillBrand-weak text-textInverse-strong shadow-lg rounded-full px-4 py-1.5 text-sm font-medium transition-all duration-300 hover:shadow-xl hover:scale-105 animate-pulse"
+                class="cbadge-sm badge-neutral cursor-pointer bg-fillBrand-strong text-textInverse-strong shadow rounded-lg text-sm"
                 @pointerdown=${this.handleRecentClick}
               >
-                <span class="absolute inset-0 rounded-full bg-fillBrand-strong opacity-30 blur animate-ping"></span>
-                <span class="relative flex items-center gap-2">
-                  ${faSprite('arrow-up', 'solid', 'h-3 w-3')} ${this.recentDataToBeAdded.length} new
-                  event${this.recentDataToBeAdded.length > 1 ? 's' : ''}
-                </span>
+                ${this.recentDataToBeAdded.length} new
               </button>
             </div>`
           : nothing}
