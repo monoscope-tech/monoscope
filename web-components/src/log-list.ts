@@ -70,7 +70,7 @@ export class LogList extends LitElement {
   @state() private expandedTraces: Record<string, boolean> = {};
   @state() private flipDirection: boolean = false;
   @state() private spanListTree: EventLine[] = [];
-  @state() private recentDataToBeAdded: any[] = [];
+  @state() private recentDataToBeAdded: EventLine[] = [];
   @state() private view: 'tree' | 'list' = 'tree';
   @state() private shouldScrollToBottom: boolean = false;
   @state() private logsColumns: string[] = [];
@@ -79,6 +79,8 @@ export class LogList extends LitElement {
   @state() private isLiveStreaming: boolean = false;
   @state() private isLoading: boolean = false;
   @state() private isFetchingRecent: boolean = false;
+  @state() private isLoadingMore: boolean = false;
+  @state() private fetchedNew: boolean = false;
 
   // Refs for DOM elements
   @query('#logs_list_container_inner') private logsContainer?: HTMLElement;
@@ -140,7 +142,9 @@ export class LogList extends LitElement {
         const firstId = logs[0]?.[this.colIdxMap['id']] || '';
         const lastId = logs[logs.length - 1]?.[this.colIdxMap['id']] || '';
         const expandedCount = Object.values(this.expandedTraces).filter(Boolean).length;
-        return `${logCount}-${firstId}-${lastId}-${expandedCount}-${this.flipDirection}`;
+        // Include timestamp to ensure fresh data when new items arrive
+        const firstTimestamp = logs[0]?.[this.colIdxMap['timestamp']] || '';
+        return `${logCount}-${firstId}-${lastId}-${expandedCount}-${this.flipDirection}-${firstTimestamp}`;
       }
     );
     this.memoizedRenderSummaryElements = memoize(
@@ -168,8 +172,8 @@ export class LogList extends LitElement {
         if (liveBtn.checked) {
           this.isLiveStreaming = true;
           this.liveStreamInterval = setInterval(() => {
-            this.fetchData(this.recentFetchUrl, false, true);
-          }, 2000);
+            this.fetchData(this.buildRecentFetchUrl(), false, true);
+          }, 5000);
         } else {
           if (this.liveStreamInterval) {
             clearInterval(this.liveStreamInterval);
@@ -235,6 +239,45 @@ export class LogList extends LitElement {
     p.set('json', 'true');
     const pathName = window.location.pathname;
     return `${window.location.origin}${pathName}?${p.toString()}`;
+  }
+
+  private buildRecentFetchUrl(): string {
+    if (this.spanListTree.length === 0 || !this.recentFetchUrl) {
+      return this.recentFetchUrl;
+    }
+
+    const firstItem = this.flipDirection ? this.spanListTree[this.spanListTree.length - 1] : this.spanListTree[0];
+    const timestamp = firstItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
+
+    if (!timestamp) return this.recentFetchUrl;
+
+    const date = new Date(timestamp);
+    date.setTime(date.getTime() + 500); // Add 500ms (half a second)
+
+    // Replace just the 'to' parameter in the existing recentFetchUrl
+    const url = new URL(this.recentFetchUrl, window.location.origin);
+    url.searchParams.set('to', date.toISOString());
+    return url.toString();
+  }
+
+  private buildLoadMoreUrl(): string {
+    if (this.spanListTree.length === 0) {
+      return this.buildJsonUrl();
+    }
+
+    // Always get the last item based on current direction
+    const lastItem = this.flipDirection ? this.spanListTree[0] : this.spanListTree[this.spanListTree.length - 1];
+    const timestamp = lastItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
+
+    if (!timestamp) {
+      console.warn('No timestamp found for last item, using default URL');
+      return this.buildJsonUrl();
+    }
+
+    // Build URL from scratch with correct cursor
+    const url = new URL(this.buildJsonUrl(), window.location.origin);
+    url.searchParams.set('cursor', timestamp);
+    return url.toString();
   }
 
   async fetchInitialData() {
@@ -366,6 +409,19 @@ export class LogList extends LitElement {
     if (this.shouldScrollToBottom && this.flipDirection) {
       requestAnimationFrame(() => this.scrollToBottom());
     }
+
+    // Reset isNew flag after animation
+    if (changedProperties.has('spanListTree') && this.fetchedNew) {
+      setTimeout(() => {
+        this.spanListTree.forEach((span) => {
+          if (span.isNew) {
+            span.isNew = false;
+          }
+        });
+        this.fetchedNew = false;
+        this.requestUpdate();
+      }, 500); // Give time for the animation to show
+    }
   }
 
   scrollToBottom() {
@@ -391,7 +447,7 @@ export class LogList extends LitElement {
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          this.debouncedFetchData(this.nextFetchUrl);
+          this.debouncedFetchData(this.buildLoadMoreUrl(), false, false, true);
         }
       },
       {
@@ -480,7 +536,9 @@ export class LogList extends LitElement {
 
   buildSpanListTree(logs: any[][]) {
     // Use memoized version for better performance
-    return this.memoizedBuildSpanListTree(logs);
+    const tree = this.memoizedBuildSpanListTree(logs);
+    // Ensure tree maintains proper order
+    return tree;
   }
 
   expandTrace = (tracId: string, spanId: string) => {
@@ -504,11 +562,13 @@ export class LogList extends LitElement {
     this.requestUpdate();
   };
 
-  fetchData = (url: string, isRefresh = false, isRecentFetch = false) => {
+  fetchData = (url: string, isRefresh = false, isRecentFetch = false, isLoadMore = false) => {
     if (isRecentFetch && this.isFetchingRecent) return;
-    if (!isRecentFetch && this.isLoading) return;
+    if (isLoadMore && this.isLoadingMore) return;
+    if (!isRecentFetch && !isLoadMore && this.isLoading) return;
 
     if (isRecentFetch) this.isFetchingRecent = true;
+    else if (isLoadMore) this.isLoadingMore = true;
     else this.isLoading = true;
 
     this.showLoadingSpinner(true);
@@ -532,8 +592,11 @@ export class LogList extends LitElement {
 
           // Update state
           this.hasMore = logsData.length > 0;
-          this.nextFetchUrl = nextUrl || '';
-          this.recentFetchUrl = recentUrl || '';
+          // Only update URLs if not in a concurrent request situation
+          if (!this.isLoadingMore && !this.isFetchingRecent) {
+            this.nextFetchUrl = nextUrl || '';
+            this.recentFetchUrl = recentUrl || '';
+          }
 
           // Update the count if provided
           if (count !== undefined) {
@@ -558,15 +621,36 @@ export class LogList extends LitElement {
               this.scrollToBottom();
             }
           } else if (isRecentFetch) {
-            // For recent data, add to recentDataToBeAdded instead of directly to spanListTree
-            this.recentDataToBeAdded = this.flipDirection ? [...this.recentDataToBeAdded, ...tree] : [...tree, ...this.recentDataToBeAdded];
-          } else {
-            // Append data for pagination
-            if (this.flipDirection) {
-              this.spanListTree = [...tree, ...this.spanListTree];
+            // Mark new items for visual distinction
+            this.fetchedNew = true;
+            tree.forEach((t) => (t.isNew = true));
+
+            // For live streaming, check scroll position to decide where to add
+            const container = this.logsContainer;
+            if (container) {
+              const scrolledToBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
+
+              if (container && scrolledToBottom) {
+                this.shouldScrollToBottom = true;
+              }
+
+              if (this.isLiveStreaming && container.scrollTop > 30 && !this.flipDirection) {
+                // User has scrolled up, add to recent buffer
+                this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree);
+              } else if (this.isLiveStreaming && !scrolledToBottom && this.flipDirection) {
+                // In flip mode and not at bottom, add to recent buffer
+                this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree);
+              } else {
+                // Add directly to the tree
+                this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree);
+              }
             } else {
-              this.spanListTree.push(...tree);
+              // Fallback if container not found
+              this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree);
             }
+          } else {
+            // Append data for pagination - always add to the end
+            this.spanListTree = [...this.spanListTree, ...tree];
           }
 
           this.updateColumnMaxWidthMap(logsData);
@@ -580,6 +664,7 @@ export class LogList extends LitElement {
       .finally(() => {
         this.isLoading = false;
         this.isFetchingRecent = false;
+        this.isLoadingMore = false;
         this.showLoadingSpinner(false);
         this.requestUpdate();
       });
@@ -652,7 +737,8 @@ export class LogList extends LitElement {
     const indicator = this.detailsIndicator || document.querySelector('#details_indicator');
     if (indicator) {
       indicator.classList.add('htmx-request');
-    
+    }
+
     const [rdId, rdCreatedAt, source] = targetInfo;
     const url = `/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=${source}`;
     updateUrlState('target_event', `${rdId}/${rdCreatedAt}/detailed?source=${source}`);
@@ -669,6 +755,12 @@ export class LogList extends LitElement {
     this.requestUpdate();
   }
 
+  private addWithFlipDirection(current: any[], newData: any[]) {
+    const result = this.flipDirection ? [...current, ...newData] : [...newData, ...current];
+
+    return result;
+  }
+
   handleRecentClick() {
     const container = document.querySelector('#logs_list_container_inner');
     if (container) {
@@ -679,10 +771,8 @@ export class LogList extends LitElement {
 
   handleRecentConcatenation() {
     if (this.recentDataToBeAdded.length === 0) return;
-    // Use lodash concat for cleaner concatenation
-    this.spanListTree = this.flipDirection
-      ? [...this.spanListTree, ...this.recentDataToBeAdded]
-      : [...this.recentDataToBeAdded, ...this.spanListTree];
+    // Use addWithFlipDirection for consistent ordering
+    this.spanListTree = this.addWithFlipDirection(this.spanListTree, this.recentDataToBeAdded);
     this.recentDataToBeAdded = [];
     this.batchRequestUpdate('recentConcatenation');
   }
@@ -698,6 +788,20 @@ export class LogList extends LitElement {
     const isInitialLoading = this.isLoading && this.spanListTree.length === 0;
 
     return html`
+      <style>
+        @keyframes fadeBg {
+          0% {
+            background-color: rgba(26, 116, 168, 0.15);
+          }
+          100% {
+            background-color: transparent;
+          }
+        }
+
+        .animate-fadeBg {
+          animation: fadeBg 2s ease-out;
+        }
+      </style>
       ${this.options()}
       <div
         ${ref(this.containerRef)}
@@ -1019,9 +1123,9 @@ export class LogList extends LitElement {
 
     return this.createLoadingRow(
       null,
-      this.isLoading
+      this.isLoading || this.isLoadingMore
         ? html`<div class="loading loading-dots loading-md h-5"></div>`
-        : this.createLoadButton('Load more', () => this.fetchData(this.nextFetchUrl))
+        : this.createLoadButton('Load more', () => this.fetchData(this.buildLoadMoreUrl(), false, false, true))
     );
   }
 
@@ -1038,7 +1142,7 @@ export class LogList extends LitElement {
         ? html`<p class="h-5 leading-5 m-0">Live streaming latest data...</p>`
         : this.isFetchingRecent
           ? html`<div class="loading loading-dots loading-md h-5"></div>`
-          : this.createLoadButton('Check for recent data', () => this.fetchData(this.recentFetchUrl, false, true))
+          : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
     );
   }
 
@@ -1078,9 +1182,13 @@ export class LogList extends LitElement {
       const s = rowData.type === 'log' ? 'logs' : 'spans';
       const targetInfo = requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s);
       const sessionId = lookupVecValue<string>(rowData.data, this.colIdxMap, 'session_id');
+      const isNew = rowData.isNew;
       const rowHtml = html`
         <tr
-          class="item-row relative p-0 flex items-center group cursor-pointer whitespace-nowrap hover:bg-fillWeaker"
+          class=${clsx(
+            'item-row relative p-0 flex items-center group cursor-pointer whitespace-nowrap hover:bg-fillWeaker',
+            isNew && 'animate-fadeBg'
+          )}
           @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
         >
           ${this.logsColumns
@@ -1233,7 +1341,7 @@ export class LogList extends LitElement {
               this.spanListTree.reverse();
               this.recentDataToBeAdded.reverse();
               if (this.recentDataToBeAdded.length > 0) {
-                this.spanListTree.push(...this.recentDataToBeAdded);
+                this.spanListTree = this.addWithFlipDirection(this.spanListTree, this.recentDataToBeAdded);
                 this.recentDataToBeAdded = [];
               }
               this.requestUpdate();
@@ -1585,10 +1693,7 @@ function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<
     'id',
   ]);
 
-  // First, sort all data by timestamp
-  const sortedData = sortBy(data, (span) => span[idx.timestamp]);
-
-  const traces = chain(sortedData)
+  const traces = chain(data)
     .map((span) => {
       span[idx.trace_id] ||= generateId();
       span[idx.latency_breakdown] ||= generateId();
@@ -1604,7 +1709,6 @@ function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<
           parent: isLog ? null : span[idx.parent_span_id],
           data: span,
           type: isLog ? 'log' : 'span',
-          timestamp: span[idx.timestamp], // Keep timestamp on the span for ordering
         },
         timestamp: new Date(span[idx.timestamp]),
         startTime: span[idx.start_time_ns],
@@ -1631,14 +1735,17 @@ function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<
         (parent ? parent.children : roots).push(span);
       });
 
-      // Sort all children by timestamp instead of startNs
+      // Sort all children by startNs (execution order) instead of timestamp
       spanMap.forEach((span) => {
-        if (span.children.length > 1) span.children = sortBy(span.children, 'timestamp');
+        if (span.children.length > 1) {
+          span.children.sort((a, b) => a.startNs - b.startNs);
+        }
       });
 
+      // Don't sort - preserve server order
       return {
         traceId: traceSpans[0].traceId,
-        spans: sortBy(roots, 'timestamp'),
+        spans: roots,
         startTime: metadata.minStart,
         duration: metadata.duration,
         trace_start_time: metadata.trace_start_time,
@@ -1647,9 +1754,7 @@ function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<
     .values()
     .value();
 
-  // Sort traces by their start time to maintain chronological order
-  const sortedTraces = sortBy(traces, 'trace_start_time');
-  return flattenSpanTree(flipDirection ? sortedTraces.reverse() : sortedTraces, expandedTraces);
+  return flattenSpanTree(traces, expandedTraces);
 }
 
 function flattenSpanTree(traceArr: Trace[], expandedTraces: Record<string, boolean> = {}): EventLine[] {
@@ -1674,6 +1779,7 @@ function flattenSpanTree(traceArr: Trace[], expandedTraces: Record<string, boole
       traceEnd,
       traceId,
       childErrors,
+      isNew: false,
       parentIds: parentIds,
       show: expandedTraces[traceId] || depth === 0,
       expanded: expandedTraces[traceId],
