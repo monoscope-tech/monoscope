@@ -124,8 +124,8 @@ export class LogList extends LitElement {
     // Initialize log list component
 
     // Initialize debounced functions
-    this.debouncedHandleScroll = debounce(this.handleScroll.bind(this), 150);
-    this.debouncedHandleResize = debounce(this.handleResize.bind(this), 50);
+    this.debouncedHandleScroll = debounce(this.handleScroll.bind(this), 50);
+    this.debouncedHandleResize = debounce(this.handleResize.bind(this), 20);
     this.debouncedFetchData = debounce(this.fetchData.bind(this), 300);
 
     // Bind resize handler for immediate feedback
@@ -169,7 +169,7 @@ export class LogList extends LitElement {
           this.isLiveStreaming = true;
           this.liveStreamInterval = setInterval(() => {
             this.fetchData(this.recentFetchUrl, false, true);
-          }, 5000);
+          }, 2000);
         } else {
           if (this.liveStreamInterval) {
             clearInterval(this.liveStreamInterval);
@@ -641,9 +641,8 @@ export class LogList extends LitElement {
       updateUrlState('details_width', '550');
     }
     // Always show the resizer when a log row is clicked
-    if (resizerWrapper) {
-      resizerWrapper.classList.remove('hidden', 'opacity-0', 'pointer-events-none');
-    }
+    if (resizerWrapper) resizerWrapper.classList.remove('hidden', 'opacity-0', 'pointer-events-none');
+
     // Use event delegation instead of querying all rows
     const prevActive = event.currentTarget.parentElement?.querySelector('.bg-fillBrand-strong');
     if (prevActive) {
@@ -653,7 +652,7 @@ export class LogList extends LitElement {
     const indicator = this.detailsIndicator || document.querySelector('#details_indicator');
     if (indicator) {
       indicator.classList.add('htmx-request');
-    }
+    
     const [rdId, rdCreatedAt, source] = targetInfo;
     const url = `/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=${source}`;
     updateUrlState('target_event', `${rdId}/${rdCreatedAt}/detailed?source=${source}`);
