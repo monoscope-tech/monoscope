@@ -5,7 +5,7 @@ import Control.Error (hush)
 import Data.Default (Default (def))
 import Data.Text qualified as T
 import Data.Time.Calendar (fromGregorian)
-import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
+import Data.Time.Clock (UTCTime (..), addUTCTime, diffUTCTime, secondsToDiffTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
@@ -37,30 +37,30 @@ data QueryComponents = QueryComponents
   deriving anyclass (Default)
 
 
-sectionsToComponents :: [Section] -> QueryComponents
-sectionsToComponents = foldl' applySectionToComponent (def :: QueryComponents)
+sectionsToComponents :: SqlQueryCfg -> [Section] -> QueryComponents
+sectionsToComponents sqlCfg = foldl' (applySectionToComponent sqlCfg) (def :: QueryComponents)
 
 
-applySectionToComponent :: QueryComponents -> Section -> QueryComponents
-applySectionToComponent qc (Search expr) = qc{whereClause = Just $ display expr}
-applySectionToComponent qc (WhereClause expr) = qc{whereClause = Just $ display expr} -- Handle where clause same as Search
-applySectionToComponent qc (Source source) = qc{fromTable = Just $ display source}
-applySectionToComponent qc (SummarizeCommand aggs byClauseM) = applySummarizeByClauseToQC byClauseM $ qc{select = qc.select <> map display aggs}
-applySectionToComponent qc (SortCommand sortFields) = qc{sortFields = Just sortFields}
-applySectionToComponent qc (TakeCommand limit) = qc{takeLimit = Just limit}
+applySectionToComponent :: SqlQueryCfg -> QueryComponents -> Section -> QueryComponents
+applySectionToComponent _ qc (Search expr) = qc{whereClause = Just $ display expr}
+applySectionToComponent _ qc (WhereClause expr) = qc{whereClause = Just $ display expr} -- Handle where clause same as Search
+applySectionToComponent _ qc (Source source) = qc{fromTable = Just $ display source}
+applySectionToComponent sqlCfg qc (SummarizeCommand aggs byClauseM) = applySummarizeByClauseToQC sqlCfg byClauseM $ qc{select = qc.select <> map display aggs}
+applySectionToComponent _ qc (SortCommand sortFields) = qc{sortFields = Just sortFields}
+applySectionToComponent _ qc (TakeCommand limit) = qc{takeLimit = Just limit}
 
 
 -- | Apply summarize by clause to query components
-applySummarizeByClauseToQC :: Maybe SummarizeByClause -> QueryComponents -> QueryComponents
-applySummarizeByClauseToQC Nothing qc = qc
-applySummarizeByClauseToQC (Just (SummarizeByClause fields)) qc =
+applySummarizeByClauseToQC :: SqlQueryCfg -> Maybe SummarizeByClause -> QueryComponents -> QueryComponents
+applySummarizeByClauseToQC _ Nothing qc = qc
+applySummarizeByClauseToQC sqlCfg (Just (SummarizeByClause fields)) qc =
   let (regularFields, binFields) = partitionEithers fields
       -- Extract bin functions for special handling
       hasBinFuncs = not (null binFields)
       -- Extract the bin interval from the first bin function, or use auto bin calculation
       binInterval = case listToMaybe binFields of
         Just (Bin _ interval) -> kqlTimespanToTimeBucket interval
-        Just (BinAuto _) -> defaultBinSize -- Could be replaced with query_bin_auto_size calculation
+        Just (BinAuto _) -> calculateAutoBinWidth sqlCfg.dateRange sqlCfg.currentTime
         Nothing -> defaultBinSize
       -- Only add regular fields to GROUP BY
       groupByClauses = map display regularFields
@@ -406,7 +406,7 @@ parseQueryStringToWhereClause q =
         else
           bimap
             (toText . errorBundlePretty)
-            (\x -> fromMaybe "" (sectionsToComponents x).whereClause)
+            (\x -> fromMaybe "" (sectionsToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) x).whereClause)
             (parse parseQuery "" trimmedQ)
 
 
@@ -434,7 +434,7 @@ parseQueryToComponents sqlCfg q = bimap (toText . errorBundlePretty) (queryASTTo
 
 
 queryASTToComponents :: SqlQueryCfg -> [Section] -> (Text, QueryComponents)
-queryASTToComponents sqlCfg = sqlFromQueryComponents sqlCfg . sectionsToComponents
+queryASTToComponents sqlCfg = sqlFromQueryComponents sqlCfg . sectionsToComponents sqlCfg
 
 
 parseQueryToAST :: Text -> Either Text [Section]
@@ -448,6 +448,42 @@ defPid = def :: Projects.ProjectId
 -- Only for tests. and harrd coding
 fixedUTCTime :: UTCTime
 fixedUTCTime = UTCTime (fromGregorian 2020 1 1) (secondsToDiffTime 0)
+
+
+-- | Calculate automatic bin width based on date range duration
+-- Rules:
+-- - Less than 1 hour: 1 minute bins
+-- - 1-6 hours: 5 minute bins
+-- - 6-24 hours: 10 minute bins
+-- - 1-7 days: 1 hour bins
+-- - 7-30 days: 6 hour bins
+-- - More than 30 days: 1 day bins
+calculateAutoBinWidth :: (Maybe UTCTime, Maybe UTCTime) -> UTCTime -> Text
+calculateAutoBinWidth (Just startTime, Just endTime) _ =
+  let duration = diffUTCTime endTime startTime
+      seconds = realToFrac duration :: Double
+      minutes = seconds / 60
+      hours = minutes / 60
+      days = hours / 24
+   in case () of
+        _
+          | hours <= 1 -> "30 seconds"
+          | hours <= 6 -> "1 minutes"
+          | hours <= 48 -> "10 minutes"
+          | days < 7 -> "1 hour"
+          | days < 30 -> "6 hours"
+          | otherwise -> "1 day"
+calculateAutoBinWidth (Nothing, Just endTime) currentTime =
+  -- If no start time, assume 14 days ago (same as default date range)
+  let startTime = addUTCTime (-14 * 24 * 60 * 60) currentTime
+   in calculateAutoBinWidth (Just startTime, Just endTime) currentTime
+calculateAutoBinWidth (Just startTime, Nothing) currentTime =
+  -- If no end time, use current time
+  calculateAutoBinWidth (Just startTime, Just currentTime) currentTime
+calculateAutoBinWidth (Nothing, Nothing) currentTime =
+  -- Default to 14 days range if no date range specified
+  let startTime = addUTCTime (-14 * 24 * 60 * 60) currentTime
+   in calculateAutoBinWidth (Just startTime, Just currentTime) currentTime
 
 
 defSqlQueryCfg :: Projects.ProjectId -> UTCTime -> Maybe Sources -> Maybe Text -> SqlQueryCfg

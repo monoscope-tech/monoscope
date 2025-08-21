@@ -160,7 +160,11 @@ Monoscope translates your natural language into optimized queries across logs, m
       <p align="center"><i>Dashboard Analytics</i></p>
     </td>
     <td width="50%">
-      <img src="/static/public/assets/svgs/logo_black.svg" alt="Monoscope Logo" />
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="/static/public/assets/svgs/logo_white.svg">
+        <source media="(prefers-color-scheme: light)" srcset="/static/public/assets/svgs/logo_black.svg">
+        <img src="/static/public/assets/svgs/logo_black.svg" alt="Monoscope Logo" />
+      </picture>
       <p align="center"><i>Monoscope - Open Source Observability</i></p>
     </td>
   </tr>

@@ -450,8 +450,8 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
     div_ [class_ "py-5 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center"] do
       a_ [href_ "/", class_ "relative h-6 flex-1 hidden group-has-[#sidenav-toggle:checked]/pg:inline-flex"] do
         -- Full logos (shown when sidebar is expanded)
-        img_ [class_ "h-6 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:block dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
-        img_ [class_ "h-6 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:dark:block", src_ "/public/assets/svgs/logo_white.svg"]
+        img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:block dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
+        img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:dark:block", src_ "/public/assets/svgs/logo_white.svg"]
       -- Mini logos (shown when sidebar is collapsed)
       -- img_ [class_ "h-10 w-10 block group-has-[#sidenav-toggle:checked]/pg:hidden dark:hidden", src_ "/public/assets/svgs/logo_mini_black.svg"]
       -- img_ [class_ "h-10 w-10 hidden dark:block group-has-[#sidenav-toggle:checked]/pg:dark:hidden", src_ "/public/assets/svgs/logo_mini_white.svg"]
