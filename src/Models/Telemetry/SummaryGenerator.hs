@@ -36,8 +36,40 @@ generateSummary otel =
 -- | Generate summary for log entries
 generateLogSummary :: OtelLogsAndSpans -> V.Vector T.Text
 generateLogSummary otel =
-  V.fromList
-    $ catMaybes
+  let
+    -- Check if this is a raw data log (no body, no severity, empty attributes)
+    isRawDataLog = isNothing otel.body 
+                   && isNothing otel.severity
+                   && maybe True Map.null (unAesonTextMaybe otel.attributes)
+    
+    elements = if isRawDataLog then rawDataLogElements else normalLogElements
+    
+    -- Elements for raw data logs
+    rawDataLogElements = catMaybes
+      [ -- Trace state (often contains metric info)
+        case otel.context of
+          Just ctx -> case ctx.trace_state of
+            Just ts | ts /= "" -> Just $ "trace_state;neutral⇒" <> ts
+            _ -> Nothing
+          _ -> Nothing
+      , -- Resource info (service name, etc)
+        case unAesonTextMaybe otel.resource of
+          Just res -> 
+            case atMapText "service.name" (Just res) of
+              Just name -> Just $ "service;neutral⇒" <> name
+              _ -> Nothing
+          _ -> Nothing
+      , -- Trace ID
+        otel.context >>= \ctx -> ctx.trace_id >>= \tid ->
+          if tid /= "" then Just $ "trace_id;right-badge-neutral⇒" <> T.take 16 tid
+          else Nothing
+      , -- Duration
+        otel.duration <&> \dur ->
+          "duration;right-badge-neutral⇒" <> toText (getDurationNSMS (fromIntegral dur))
+      ]
+    
+    -- Normal log elements (original logic)
+    normalLogElements = catMaybes
       [ -- Severity
         case otel.severity of
           Just Severity{severity_text = Just sev} ->
@@ -61,6 +93,8 @@ generateLogSummary otel =
                  in Just $ "attributes;text-textWeak⇒" <> truncated
           _ -> Nothing
       ]
+  in
+    V.fromList elements
   where
     severityStyle sev = case sev of
       SLDebug -> "badge-neutral"
