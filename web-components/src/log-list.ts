@@ -636,21 +636,21 @@ export class LogList extends LitElement {
 
               if (this.isLiveStreaming && container.scrollTop > 30 && !this.flipDirection) {
                 // User has scrolled up, add to recent buffer
-                this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree);
+                this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
               } else if (this.isLiveStreaming && !scrolledToBottom && this.flipDirection) {
                 // In flip mode and not at bottom, add to recent buffer
-                this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree);
+                this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
               } else {
                 // Add directly to the tree
-                this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree);
+                this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);
               }
             } else {
               // Fallback if container not found
-              this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree);
+              this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);
             }
           } else {
-            // Append data for pagination - always add to the end
-            this.spanListTree = [...this.spanListTree, ...tree];
+            // loading older logs
+            this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);
           }
 
           this.updateColumnMaxWidthMap(logsData);
@@ -755,9 +755,14 @@ export class LogList extends LitElement {
     this.requestUpdate();
   }
 
-  private addWithFlipDirection(current: any[], newData: any[]) {
-    const result = this.flipDirection ? [...current, ...newData] : [...newData, ...current];
-
+  private addWithFlipDirection(current: any[], newData: any[], isRecentFetch: boolean) {
+    const result = this.flipDirection
+      ? isRecentFetch
+        ? [...current, ...newData]
+        : [...newData, ...current]
+      : isRecentFetch
+      ? [...newData, ...current]
+      : [...current, ...newData];
     return result;
   }
 
@@ -772,7 +777,7 @@ export class LogList extends LitElement {
   handleRecentConcatenation() {
     if (this.recentDataToBeAdded.length === 0) return;
     // Use addWithFlipDirection for consistent ordering
-    this.spanListTree = this.addWithFlipDirection(this.spanListTree, this.recentDataToBeAdded);
+    this.spanListTree = this.addWithFlipDirection(this.spanListTree, this.recentDataToBeAdded, true);
     this.recentDataToBeAdded = [];
     this.batchRequestUpdate('recentConcatenation');
   }
@@ -834,7 +839,9 @@ export class LogList extends LitElement {
                     ${[...Array(6)].map(
                       (_, idx) => html`
                         <td
-                          class=${`p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${getSkeletonColumnWidth(idx)}`}
+                          class=${`p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${getSkeletonColumnWidth(
+                            idx
+                          )}`}
                         >
                           <div class="relative overflow-hidden">
                             <div class="h-4 rounded skeleton-shimmer w-16" style="animation-delay: ${idx * 0.1}s"></div>
@@ -1044,8 +1051,8 @@ export class LogList extends LitElement {
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
-            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
+          ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         return html`<div class=${clsx('flex w-full gap-1', this.wrapLines ? 'items-start' : 'items-center')}>
           ${this.view === 'tree'
             ? html`
@@ -1079,8 +1086,8 @@ export class LogList extends LitElement {
                         ${children}
                       </button>`
                     : depth === 0
-                      ? nothing
-                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                    ? nothing
+                    : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
                 </div>
               `
             : nothing}
@@ -1137,8 +1144,8 @@ export class LogList extends LitElement {
       this.isLiveStreaming
         ? html`<p class="h-5 leading-5 m-0">Live streaming latest data...</p>`
         : this.isFetchingRecent
-          ? html`<div class="loading loading-dots loading-md h-5"></div>`
-          : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
+        ? html`<div class="loading loading-dots loading-md h-5"></div>`
+        : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
     );
   }
 
@@ -1334,10 +1341,11 @@ export class LogList extends LitElement {
             ${this.renderCheckbox('Flip direction', 'flip-vertical', this.flipDirection, (checked) => {
               this.flipDirection = checked;
               // Just reverse the existing trees without rebuilding
-              this.spanListTree.reverse();
-              this.recentDataToBeAdded.reverse();
+              // Just reversing the existing trees causes trace tree to be upside down (when direction is flipped)
+              this.spanListTree = this.buildSpanListTree(this.spanListTree.map((sp) => sp.data));
+              this.recentDataToBeAdded = this.buildSpanListTree(this.recentDataToBeAdded.map((sp) => sp.data));
               if (this.recentDataToBeAdded.length > 0) {
-                this.spanListTree = this.addWithFlipDirection(this.spanListTree, this.recentDataToBeAdded);
+                this.spanListTree = this.addWithFlipDirection(this.spanListTree, this.recentDataToBeAdded, true);
                 this.recentDataToBeAdded = [];
               }
               this.requestUpdate();
@@ -1748,7 +1756,12 @@ function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<
       };
     })
     .values()
-    .value();
+    .value()
+    .sort((a, b) => {
+      const aStart = a.startTime || 0;
+      const bStart = b.startTime || 0;
+      return flipDirection ? aStart - bStart : bStart - aStart;
+    });
 
   return flattenSpanTree(traces, expandedTraces);
 }
