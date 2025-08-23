@@ -5,7 +5,7 @@ receivers:
         endpoint: :4317
         include_metadata: true
       http:
-        endpoint: :4318
+        endpoint: :80
         include_metadata: true
         cors:
           allowed_origins:
