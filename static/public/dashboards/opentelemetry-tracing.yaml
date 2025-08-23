@@ -1,0 +1,96 @@
+title: OpenTelemetry Tracing
+icon: opentelemetry
+preview: /public/assets/svgs/screens/http-stats.svg
+description: Monitor distributed traces, span metrics, service dependencies, and trace analytics
+refresh_interval: 60s
+widgets:
+  - type: group
+    title: Tracing Overview
+    layout: { w: 6, h: 5 }
+    children:
+      - type: 'timeseries_stat'
+        title: 'Total Spans'
+        icon: list-tree
+        query: kind != null | summarize count() by bin_auto(timestamp)
+        unit: spans
+        eager: true
+        layout: { w: 4, h: 2 }
+
+      - type: 'stat'
+        title: 'Error Rate'
+        icon: bug
+        query: status.code=="ERROR" | summarize (count() / sum(count())) * 100
+        unit: '%'
+        eager: true
+        layout: { w: 4, h: 2 }
+
+      - type: 'stat'
+        title: 'Services'
+        icon: server
+        query: attributes.service.name != null | summarize count(distinct(attributes.service.name))
+        unit: services
+        eager: true
+        layout: { w: 4, h: 2 }
+
+  - type: 'timeseries'
+    title: 'Span Rate by Service'
+    query: attributes.service.name != null | summarize count() by bin_auto(timestamp), attributes.service.name
+    unit: spans/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Service Latency Percentiles (ms)'
+    hide_subtitle: true
+    summarize_by: max
+    sql: |
+      SELECT timeB, quantile, value
+      FROM (
+        SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
+               ARRAY[
+                 (approx_percentile(0.50, percentile_agg(duration)) / 1e6)::float,
+                 (approx_percentile(0.75, percentile_agg(duration)) / 1e6)::float,
+                 (approx_percentile(0.90, percentile_agg(duration)) / 1e6)::float,
+                 (approx_percentile(0.95, percentile_agg(duration)) / 1e6)::float,
+                 (approx_percentile(0.99, percentile_agg(duration)) / 1e6)::float
+               ] AS values,
+               ARRAY['p50', 'p75', 'p90', 'p95', 'p99'] AS quantiles
+        FROM otel_logs_and_spans
+        WHERE project_id='{{project_id}}' AND kind IS NOT NULL
+          {{time_filter}}
+        GROUP BY timeB
+      ) s,
+      LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Span Status Distribution'
+    query: status.code != null | summarize count() by bin_auto(timestamp), status.code
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Error Spans by Service'
+    theme: 'roma'
+    query: status.code=="ERROR" | summarize count() by bin_auto(timestamp), attributes.service.name
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Span Duration by Operation'
+    query: name != null | summarize avg(duration) / 1e6 by bin_auto(timestamp), name | top 10 by avg(duration)
+    unit: ms
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Span Kind Distribution'
+    query: kind != null | summarize count() by bin_auto(timestamp), kind
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Database Query Performance'
+    query: attributes.db.system != null | summarize avg(duration) / 1e6 by bin_auto(timestamp), attributes.db.operation, attributes.db.system
+    unit: ms
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'HTTP Request Spans'
+    query: attributes.http.method != null | summarize count() by bin_auto(timestamp), attributes.http.method, attributes.http.response.status_code
+    layout: { w: 6, h: 4 }

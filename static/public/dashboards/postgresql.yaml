@@ -1,0 +1,99 @@
+title: PostgreSQL Database
+icon: postgres
+preview: /public/assets/svgs/screens/http-stats.svg
+description: Monitor PostgreSQL performance, query statistics, connection pools, and replication health
+refresh_interval: 60s
+widgets:
+  - type: group
+    title: Overview
+    layout: { w: 6, h: 5 }
+    children:
+      - type: 'timeseries_stat'
+        title: 'Queries/sec'
+        icon: database
+        query: name=="postgresql.operations" | summarize rate(sum(value)) by bin_auto(timestamp)
+        unit: qps
+        eager: true
+        layout: { w: 4, h: 2 }
+
+      - type: 'stat'
+        title: 'Active Connections'
+        icon: swap
+        query: name=="postgresql.backends" | summarize avg(value)
+        unit: connections
+        eager: true
+        layout: { w: 4, h: 2 }
+
+      - type: 'stat'
+        title: 'Database Size'
+        icon: database
+        query: name=="postgresql.database.size" | summarize sum(value) / 1073741824
+        unit: GB
+        eager: true
+        layout: { w: 4, h: 2 }
+
+  - type: 'timeseries'
+    title: 'Query Performance by Type'
+    query: name=="postgresql.operations" | summarize rate(sum(value)) by bin_auto(timestamp), attributes.operation
+    unit: qps
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Connection Pool Status'
+    query: name=~"postgresql.connection.max" | summarize avg(value) by bin_auto(timestamp), attributes.state
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Query Duration Percentiles (ms)'
+    hide_subtitle: true
+    summarize_by: max
+    sql: |
+      SELECT timeB, quantile, value
+      FROM (
+        SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
+               ARRAY[
+                 (approx_percentile(0.50, percentile_agg(attributes___db___duration)) / 1e3)::float,
+                 (approx_percentile(0.75, percentile_agg(attributes___db___duration)) / 1e3)::float,
+                 (approx_percentile(0.90, percentile_agg(attributes___db___duration)) / 1e3)::float,
+                 (approx_percentile(0.95, percentile_agg(attributes___db___duration)) / 1e3)::float,
+                 (approx_percentile(0.99, percentile_agg(attributes___db___duration)) / 1e3)::float
+               ] AS values,
+               ARRAY['p50', 'p75', 'p90', 'p95', 'p99'] AS quantiles
+        FROM otel_logs_and_spans
+        WHERE project_id='{{project_id}}' AND attributes___db___system='postgresql'
+          {{time_filter}}
+        GROUP BY timeB
+      ) s,
+      LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Cache Hit Ratio (%)'
+    query: name=~"postgresql.blocks.(hit|read)" | summarize (sum(postgresql.blocks.hit) / (sum(postgresql.blocks.hit) + sum(postgresql.blocks.read))) * 100 by bin_auto(timestamp)
+    unit: '%'
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Transaction Commits/Rollbacks'
+    query: name=~"postgresql.commits|postgresql.rollbacks" | summarize rate(sum(value)) by bin_auto(timestamp), name
+    unit: txn/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Table Size (MB)'
+    query: name=="postgresql.table.size" | summarize avg(value) / 1048576 by bin_auto(timestamp), attributes.table | top 10 by avg(value)
+    unit: MB
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Replication Lag'
+    query: name=="postgresql.replication.lag" | summarize avg(value) by bin_auto(timestamp), attributes.replica
+    unit: seconds
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Lock Wait Time'
+    theme: 'roma'
+    query: name=="postgresql.locks.wait_time" | summarize avg(value) by bin_auto(timestamp), attributes.mode
+    unit: ms
+    layout: { w: 6, h: 4 }

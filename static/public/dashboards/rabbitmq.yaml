@@ -1,0 +1,78 @@
+title: RabbitMQ Message Broker
+icon: rabbitmq
+preview: /public/assets/svgs/screens/http-stats.svg
+description: Monitor RabbitMQ queues, exchanges, connections, and message throughput
+refresh_interval: 60s
+widgets:
+  - type: group
+    title: Overview
+    layout: { w: 6, h: 5 }
+    children:
+      - type: 'timeseries_stat'
+        title: 'Message Rate'
+        icon: envelope
+        query: name=="rabbitmq.message.published" | summarize rate(sum(value)) by bin_auto(timestamp)
+        unit: msgs/s
+        eager: true
+        layout: { w: 4, h: 2 }
+
+      - type: 'stat'
+        title: 'Total Queues'
+        icon: list-check
+        query: name=="rabbitmq.queue.messages" | summarize count(distinct(attributes.queue))
+        unit: queues
+        eager: true
+        layout: { w: 4, h: 2 }
+
+      - type: 'stat'
+        title: 'Connections'
+        icon: swap
+        query: name=="rabbitmq.connection.count" | summarize avg(value)
+        unit: connections
+        eager: true
+        layout: { w: 4, h: 2 }
+
+  - type: 'timeseries'
+    title: 'Messages by Queue'
+    query: name=="rabbitmq.queue.messages" | summarize avg(value) by bin_auto(timestamp), attributes.queue
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Message Publish/Deliver Rate'
+    query: name=~"rabbitmq.message.(published|delivered)" | summarize rate(sum(value)) by bin_auto(timestamp), name
+    unit: msgs/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Queue Depth'
+    query: name=="rabbitmq.queue.messages.ready" | summarize avg(value) by bin_auto(timestamp), attributes.queue | top 10 by avg(value)
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Consumer Utilization (%)'
+    query: name=="rabbitmq.queue.consumer.utilisation" | summarize avg(value) * 100 by bin_auto(timestamp), attributes.queue
+    unit: '%'
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Memory Usage (MB)'
+    query: name=="rabbitmq.node.mem.used" | summarize avg(value) / 1048576 by bin_auto(timestamp), attributes.node
+    unit: MB
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Disk Space (GB)'
+    query: name=="rabbitmq.node.disk.free" | summarize min(value) / 1073741824 by bin_auto(timestamp), attributes.node
+    unit: GB
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Channel Count'
+    query: name=="rabbitmq.channel.count" | summarize sum(value) by bin_auto(timestamp)
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Message Acknowledgment Rate'
+    query: name=~"rabbitmq.message.(acked|nacked)" | summarize rate(sum(value)) by bin_auto(timestamp), name
+    unit: msgs/s
+    layout: { w: 6, h: 4 }

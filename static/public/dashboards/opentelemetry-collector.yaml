@@ -1,0 +1,70 @@
+title: OpenTelemetry Collector
+icon: opentelemetry
+preview: /public/assets/svgs/screens/http-stats.svg
+description: Monitor OTel Collector performance, pipeline metrics, receiver/exporter stats, and data flow
+refresh_interval: 60s
+widgets:
+  - type: group
+    title: Collector Overview
+    layout: { w: 6, h: 5 }
+    children:
+      - type: 'timeseries_stat'
+        title: 'Data Points/sec'
+        icon: chart-line
+        query: name=~"otelcol_receiver_accepted_(spans|metrics|logs)" | summarize rate(sum(value)) by bin_auto(timestamp)
+        unit: points/s
+        eager: true
+        layout: { w: 7, h: 2 }
+
+      - type: 'stat'
+        title: 'Uptime'
+        icon: clock
+        query: name=="otelcol_process_uptime" | summarize last(value) / 3600
+        unit: hours
+        eager: true
+        layout: { w: 5, h: 2 }
+
+  - type: 'timeseries'
+    title: 'Receiver Accepted Data'
+    query: name=~"otelcol_receiver_accepted_(spans|metrics|logs)" | summarize rate(sum(value)) by bin_auto(timestamp), name, attributes.receiver
+    unit: items/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Exporter Sent Data'
+    query: name=~"otelcol_exporter_sent_(spans|metrics|logs)" | summarize rate(sum(value)) by bin_auto(timestamp), name, attributes.exporter
+    unit: items/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Pipeline Errors'
+    theme: 'roma'
+    query: name=~"otelcol_(receiver_refused|exporter_send_failed)_(spans|metrics|logs)" | summarize sum(value) by bin_auto(timestamp), name
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Memory Usage (MB)'
+    query: name=="otelcol_process_memory_rss" | summarize avg(value) / 1048576 by bin_auto(timestamp)
+    unit: MB
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'CPU Usage (%)'
+    query: name=="otelcol_process_cpu_seconds" | summarize rate(avg(value)) * 100 by bin_auto(timestamp)
+    unit: '%'
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Queue Size'
+    query: name=~"otelcol_exporter_queue_size" | summarize avg(value) by bin_auto(timestamp), attributes.exporter
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Batch Processing'
+    query: name=~"otelcol_processor_batch_.*_send" | summarize rate(sum(value)) by bin_auto(timestamp), name
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'gRPC Connections'
+    query: name=="otelcol_grpc_io_server_completed_rpcs" | summarize rate(sum(value)) by bin_auto(timestamp), attributes.grpc_method
+    layout: { w: 6, h: 4 }

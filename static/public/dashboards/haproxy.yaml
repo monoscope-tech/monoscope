@@ -1,0 +1,72 @@
+title: HAProxy Load Balancer
+icon: haproxy
+preview: /public/assets/svgs/screens/http-stats.svg
+description: Monitor HAProxy performance, backend health, request routing, and connection statistics
+refresh_interval: 60s
+widgets:
+  - type: group
+    title: Overview
+    layout: { w: 6, h: 5 }
+    children:
+      - type: 'timeseries_stat'
+        title: 'Total Requests'
+        icon: list-tree
+        query: attributes.service.name=="haproxy" | summarize count() by bin_auto(timestamp)
+        unit: reqs
+        eager: true
+        layout: { w: 7, h: 2 }
+
+      - type: 'stat'
+        title: 'Active Sessions'
+        icon: swap
+        query: name=="haproxy.sessions.active" | summarize avg(value)
+        unit: sessions
+        eager: true
+        layout: { w: 5, h: 2 }
+
+  - type: 'timeseries'
+    title: 'Request Rate by Frontend'
+    query: attributes.service.name=="haproxy" AND attributes.haproxy.frontend != null | summarize count() by bin_auto(timestamp), attributes.haproxy.frontend
+    unit: reqs/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Backend Server Status'
+    query: name=="haproxy.backend.status" | summarize count() by bin_auto(timestamp), attributes.haproxy.backend, attributes.status
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Response Time by Backend (ms)'
+    hide_subtitle: true
+    query: attributes.service.name=="haproxy" AND attributes.haproxy.backend != null | summarize avg(duration) / 1e6 by bin_auto(timestamp), attributes.haproxy.backend
+    unit: ms
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'HTTP Response Codes'
+    query: attributes.service.name=="haproxy" AND attributes.http.response.status_code != null | summarize count() by bin_auto(timestamp), attributes.http.response.status_code
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Connection Errors'
+    theme: 'roma'
+    query: name=~"haproxy.*.errors" | summarize sum(value) by bin_auto(timestamp), name
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Queue Time (ms)'
+    query: name=="haproxy.queue.time.average" | summarize avg(value) by bin_auto(timestamp), attributes.haproxy.backend
+    unit: ms
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Bytes In/Out (MB/s)'
+    query: name=~"haproxy.bytes.(in|out)" | summarize rate(sum(value)) / 1048576 by bin_auto(timestamp), name
+    unit: MB/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Session Rate'
+    query: name=="haproxy.sessions.rate" | summarize avg(value) by bin_auto(timestamp), attributes.haproxy.frontend
+    unit: sessions/s
+    layout: { w: 6, h: 4 }

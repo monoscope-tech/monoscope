@@ -1,0 +1,81 @@
+title: Redis Cache
+icon: redis
+preview: /public/assets/svgs/screens/http-stats.svg
+description: Monitor Redis performance, memory usage, command statistics, and replication health
+refresh_interval: 60s
+widgets:
+  - type: group
+    title: Overview
+    layout: { w: 6, h: 5 }
+    children:
+      - type: 'timeseries_stat'
+        title: 'Commands/sec'
+        icon: chart-line
+        query: name=="redis.commands.processed" | summarize rate(sum(value)) by bin_auto(timestamp)
+        unit: cmd/s
+        eager: true
+        layout: { w: 4, h: 2 }
+
+      - type: 'stat'
+        title: 'Hit Rate'
+        icon: chart-simple
+        query: name=="redis.keyspace.hits" AND name=="redis.keyspace.misses" | summarize (sum(redis.keyspace.hits) / (sum(redis.keyspace.hits) + sum(redis.keyspace.misses))) * 100
+        unit: '%'
+        eager: true
+        layout: { w: 4, h: 2 }
+
+      - type: 'stat'
+        title: 'Connected Clients'
+        icon: user-plus
+        query: name=="redis.clients.connected" | summarize avg(value)
+        unit: clients
+        eager: true
+        layout: { w: 4, h: 2 }
+
+  - type: 'timeseries'
+    title: 'Operations per Second'
+    query: name=~"redis.commands.(get|set|del|exists)" | summarize rate(sum(value)) by bin_auto(timestamp), name
+    unit: ops/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Memory Usage (MB)'
+    query: name=~"redis.memory.(used|rss|peak)" | summarize avg(value) / 1048576 by bin_auto(timestamp), name
+    unit: MB
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Cache Hit/Miss Rate'
+    query: name=~"redis.keyspace.(hits|misses)" | summarize rate(sum(value)) by bin_auto(timestamp), name
+    unit: ops/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Key Evictions'
+    theme: 'roma'
+    query: name=="redis.keys.evicted" | summarize rate(sum(value)) by bin_auto(timestamp)
+    unit: keys/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Network I/O (MB/s)'
+    query: name=~"redis.net.(input|output)" | summarize rate(sum(value)) / 1048576 by bin_auto(timestamp), name
+    unit: MB/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Database Keys'
+    query: name=="redis.db.keys" | summarize sum(value) by bin_auto(timestamp), attributes.db
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Command Latency (μs)'
+    query: name=~"redis.command.latency.*" | summarize avg(value) by bin_auto(timestamp), name
+    unit: μs
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Replication Lag'
+    query: name=="redis.replication.lag" | summarize avg(value) by bin_auto(timestamp), attributes.replica
+    unit: seconds
+    layout: { w: 6, h: 4 }

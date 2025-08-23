@@ -1,6 +1,6 @@
 title: Endpoint Analytics
 preview: /public/assets/svgs/screens/http-stats.svg
-icon: globe-wifi
+icon: chart-line
 refresh_interval: 60s
 variables:
   - key: host

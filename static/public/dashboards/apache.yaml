@@ -1,0 +1,76 @@
+title: Apache HTTP Server
+icon: apache
+preview: /public/assets/svgs/screens/http-stats.svg
+description: Monitor your Apache HTTP Server performance, requests, errors, and traffic patterns
+refresh_interval: 60s
+widgets:
+  - type: group
+    title: Overview
+    layout: { w: 6, h: 5 }
+    children:
+      - type: 'timeseries_stat'
+        title: 'Total Requests'
+        icon: list-tree
+        query: attributes.service.name=="apache" OR attributes.http.server_name=~"apache.*" | summarize count() by bin_auto(timestamp)
+        unit: reqs
+        eager: true
+        layout: { w: 7, h: 2 }
+
+      - type: 'stat'
+        title: 'Active Connections'
+        icon: swap
+        query: attributes.service.name=="apache" AND name=="apache.workers" | summarize avg(value) by bin_auto(timestamp)
+        unit: connections
+        eager: true
+        layout: { w: 5, h: 2 }
+
+  - type: 'timeseries'
+    title: 'Request Rate by Status Code'
+    query: attributes.service.name=="apache" AND attributes.http.response.status_code != null | summarize count() by bin_auto(timestamp), attributes.http.response.status_code
+    unit: reqs/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Response Time Percentiles (ms)'
+    hide_subtitle: true
+    summarize_by: max
+    sql: |
+      SELECT timeB, quantile, value
+      FROM (
+        SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
+               ARRAY[
+                 (approx_percentile(0.50, percentile_agg(duration)) / 1e6)::float,
+                 (approx_percentile(0.75, percentile_agg(duration)) / 1e6)::float,
+                 (approx_percentile(0.90, percentile_agg(duration)) / 1e6)::float,
+                 (approx_percentile(0.95, percentile_agg(duration)) / 1e6)::float
+               ] AS values,
+               ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
+        FROM otel_logs_and_spans
+        WHERE project_id='{{project_id}}' AND (attributes___service___name='apache' OR attributes___http___server_name LIKE 'apache%')
+          {{time_filter}}
+        GROUP BY timeB
+      ) s,
+      LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Error Rate (4xx & 5xx)'
+    theme: 'roma'
+    query: attributes.service.name=="apache" AND attributes.http.response.status_code >= 400.0 | summarize count() by bin_auto(timestamp), attributes.http.response.status_code
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Traffic by Virtual Host'
+    query: attributes.service.name=="apache" AND attributes.http.server_name != null | summarize count() by bin_auto(timestamp), attributes.http.server_name
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Bandwidth Usage (MB)'
+    query: attributes.service.name=="apache" AND name=="apache.traffic" | summarize sum(value) / 1048576 by bin_auto(timestamp)
+    unit: MB
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Worker Processes'
+    query: attributes.service.name=="apache" AND (name=="apache.workers.idle" OR name=="apache.workers.busy") | summarize avg(value) by bin_auto(timestamp), name
+    layout: { w: 6, h: 4 }

@@ -1,0 +1,82 @@
+title: Elasticsearch Cluster
+icon: elasticsearch
+preview: /public/assets/svgs/screens/http-stats.svg
+description: Monitor Elasticsearch cluster health, indexing performance, search latency, and resource usage
+refresh_interval: 60s
+widgets:
+  - type: group
+    title: Cluster Overview
+    layout: { w: 6, h: 5 }
+    children:
+      - type: 'timeseries_stat'
+        title: 'Search Rate'
+        icon: chart-line
+        query: name=="elasticsearch.indices.search.query_total" | summarize rate(sum(value)) by bin_auto(timestamp)
+        unit: searches/s
+        eager: true
+        layout: { w: 4, h: 2 }
+
+      - type: 'stat'
+        title: 'Cluster Health'
+        icon: shield-check
+        query: name=="elasticsearch.cluster.health.status" | summarize last(value) == 0 ? "Green" : (last(value) == 1 ? "Yellow" : "Red")
+        unit: status
+        eager: true
+        layout: { w: 4, h: 2 }
+
+      - type: 'stat'
+        title: 'Active Shards'
+        icon: database
+        query: name=="elasticsearch.cluster.health.active_shards" | summarize sum(value)
+        unit: shards
+        eager: true
+        layout: { w: 4, h: 2 }
+
+  - type: 'timeseries'
+    title: 'Search & Index Operations'
+    query: name=~"elasticsearch.indices.(search.query_total|indexing.index_total)" | summarize rate(sum(value)) by bin_auto(timestamp), name
+    unit: ops/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Search Latency (ms)'
+    hide_subtitle: true
+    query: name=="elasticsearch.indices.search.query_time" AND name=="elasticsearch.indices.search.query_total" | summarize (rate(sum(elasticsearch.indices.search.query_time)) / rate(sum(elasticsearch.indices.search.query_total))) by bin_auto(timestamp)
+    unit: ms
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'JVM Heap Usage (%)'
+    query: name=="elasticsearch.jvm.memory.heap.used.percent" | summarize avg(value) by bin_auto(timestamp), attributes.node
+    unit: '%'
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Document Count'
+    query: name=="elasticsearch.indices.docs.count" | summarize sum(value) by bin_auto(timestamp), attributes.index
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Index Size (GB)'
+    query: name=="elasticsearch.indices.store.size" | summarize sum(value) / 1073741824 by bin_auto(timestamp), attributes.index
+    unit: GB
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Bulk Rejections'
+    theme: 'roma'
+    query: name=~"elasticsearch.thread_pool.bulk.rejected" | summarize rate(sum(value)) by bin_auto(timestamp)
+    unit: rejections/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'CPU Usage (%)'
+    query: name=="elasticsearch.os.cpu.percent" | summarize avg(value) by bin_auto(timestamp), attributes.node
+    unit: '%'
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Network Traffic (MB/s)'
+    query: name=~"elasticsearch.transport.(rx|tx)_size" | summarize rate(sum(value)) / 1048576 by bin_auto(timestamp), name
+    unit: MB/s
+    layout: { w: 6, h: 4 }

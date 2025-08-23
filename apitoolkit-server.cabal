@@ -278,9 +278,25 @@ extra-source-files:
     static/public/workbox-de3660d1.js.map
     static/public/workbox-ed58f0de.js.map
     static/public/dashboards/_overview.yaml
+    static/public/dashboards/apache.yaml
+    static/public/dashboards/cloudflare.yaml
+    static/public/dashboards/docker.yaml
+    static/public/dashboards/elasticsearch.yaml
     static/public/dashboards/endpoint-stats.yaml
+    static/public/dashboards/haproxy.yaml
+    static/public/dashboards/heroku.yaml
+    static/public/dashboards/host-prometheus.yaml
     static/public/dashboards/http-stats.yaml
     static/public/dashboards/kitchensink.yaml
+    static/public/dashboards/kubernetes.yaml
+    static/public/dashboards/minio.yaml
+    static/public/dashboards/mysql.yaml
+    static/public/dashboards/nginx.yaml
+    static/public/dashboards/opentelemetry-collector.yaml
+    static/public/dashboards/opentelemetry-tracing.yaml
+    static/public/dashboards/postgresql.yaml
+    static/public/dashboards/rabbitmq.yaml
+    static/public/dashboards/redis.yaml
     static/public/otelcol.yaml
     static/public/favicon.ico
     static/public/site.webmanifest

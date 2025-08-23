@@ -1,0 +1,71 @@
+title: Nginx Web Server
+icon: nginx
+preview: /public/assets/svgs/screens/http-stats.svg
+description: Monitor Nginx performance, request handling, upstream health, and cache statistics
+refresh_interval: 60s
+widgets:
+  - type: group
+    title: Overview
+    layout: { w: 6, h: 5 }
+    children:
+      - type: 'timeseries_stat'
+        title: 'Request Rate'
+        icon: list-tree
+        query: attributes.service.name=="nginx" OR attributes.http.server_name=~"nginx.*" | summarize count() by bin_auto(timestamp)
+        unit: reqs/s
+        eager: true
+        layout: { w: 7, h: 2 }
+
+      - type: 'stat'
+        title: 'Active Connections'
+        icon: swap
+        query: name=="nginx.connections.active" | summarize avg(value)
+        unit: connections
+        eager: true
+        layout: { w: 5, h: 2 }
+
+  - type: 'timeseries'
+    title: 'Requests by Status Code'
+    query: attributes.service.name=="nginx" AND attributes.http.response.status_code != null | summarize count() by bin_auto(timestamp), attributes.http.response.status_code
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Connection States'
+    query: name=~"nginx.connections.(accepted|handled|requests)" | summarize rate(sum(value)) by bin_auto(timestamp), name
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Request Processing Time (ms)'
+    hide_subtitle: true
+    query: attributes.service.name=="nginx" | summarize avg(attributes.request_time * 1000) by bin_auto(timestamp)
+    unit: ms
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Upstream Response Time (ms)'
+    query: attributes.service.name=="nginx" AND attributes.upstream_response_time != null | summarize avg(attributes.upstream_response_time * 1000) by bin_auto(timestamp), attributes.upstream_addr
+    unit: ms
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Error Rate'
+    theme: 'roma'
+    query: attributes.service.name=="nginx" AND attributes.http.response.status_code >= 400.0 | summarize count() by bin_auto(timestamp), attributes.http.response.status_code
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Cache Hit Ratio (%)'
+    query: name=~"nginx.cache.(hit|miss|bypass)" | summarize count() by bin_auto(timestamp), name | where name=="nginx.cache.hit" | summarize (count() / sum(count())) * 100
+    unit: '%'
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Bandwidth (MB/s)'
+    query: name=~"nginx.(bytes_sent|request_length)" | summarize rate(sum(value)) / 1048576 by bin_auto(timestamp), name
+    unit: MB/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Requests by Server Block'
+    query: attributes.service.name=="nginx" AND attributes.server_name != null | summarize count() by bin_auto(timestamp), attributes.server_name | top 10 by count()
+    layout: { w: 6, h: 4 }

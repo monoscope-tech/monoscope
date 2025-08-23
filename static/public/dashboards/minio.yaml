@@ -1,0 +1,80 @@
+title: MinIO Object Storage
+icon: minio
+preview: /public/assets/svgs/screens/http-stats.svg
+description: Monitor MinIO S3-compatible object storage performance, bucket metrics, and API operations
+refresh_interval: 60s
+widgets:
+  - type: group
+    title: Overview
+    layout: { w: 6, h: 5 }
+    children:
+      - type: 'timeseries_stat'
+        title: 'API Requests'
+        icon: chart-line
+        query: name=="minio.s3.requests.total" | summarize rate(sum(value)) by bin_auto(timestamp)
+        unit: req/s
+        eager: true
+        layout: { w: 4, h: 2 }
+
+      - type: 'stat'
+        title: 'Total Storage'
+        icon: bucket
+        query: name=="minio.disk.storage.used" | summarize sum(value) / 1073741824
+        unit: GB
+        eager: true
+        layout: { w: 4, h: 2 }
+
+      - type: 'stat'
+        title: 'Total Buckets'
+        icon: folders
+        query: name=="minio.bucket.objects.size.distribution" | summarize count(distinct(attributes.bucket))
+        unit: buckets
+        eager: true
+        layout: { w: 4, h: 2 }
+
+  - type: 'timeseries'
+    title: 'S3 API Operations'
+    query: name=="minio.s3.requests.total" | summarize rate(sum(value)) by bin_auto(timestamp), attributes.api
+    unit: ops/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Request Latency by API (ms)'
+    query: name=="minio.s3.requests.duration" AND name=="minio.s3.requests.total" | summarize (rate(sum(minio.s3.requests.duration)) / rate(sum(minio.s3.requests.total))) * 1000 by bin_auto(timestamp), attributes.api
+    unit: ms
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Bandwidth Usage (MB/s)'
+    query: name=~"minio.s3.traffic.(sent|received)" | summarize rate(sum(value)) / 1048576 by bin_auto(timestamp), name
+    unit: MB/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Bucket Size (GB)'
+    query: name=="minio.bucket.usage.total" | summarize sum(value) / 1073741824 by bin_auto(timestamp), attributes.bucket | top 10 by sum(value)
+    unit: GB
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Object Count by Bucket'
+    query: name=="minio.bucket.objects.total" | summarize sum(value) by bin_auto(timestamp), attributes.bucket | top 10 by sum(value)
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'API Errors'
+    theme: 'roma'
+    query: name=="minio.s3.requests.errors.total" | summarize rate(sum(value)) by bin_auto(timestamp), attributes.api
+    unit: errors/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Disk Usage (%)'
+    query: name=="minio.disk.storage.used" AND name=="minio.disk.storage.total" | summarize (sum(minio.disk.storage.used) / sum(minio.disk.storage.total)) * 100 by bin_auto(timestamp), attributes.disk
+    unit: '%'
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Concurrent Requests'
+    query: name=="minio.s3.requests.inflight" | summarize avg(value) by bin_auto(timestamp), attributes.api
+    layout: { w: 6, h: 4 }

@@ -1,0 +1,87 @@
+title: Cloudflare HTTP Requests
+icon: cloudflare
+preview: /public/assets/svgs/screens/http-stats.svg
+description: Monitor Cloudflare CDN performance, cache hit rates, security events, and origin performance
+refresh_interval: 60s
+widgets:
+  - type: group
+    title: Overview
+    layout: { w: 6, h: 5 }
+    children:
+      - type: 'timeseries_stat'
+        title: 'Total Requests'
+        icon: list-tree
+        query: attributes.service.name=="cloudflare" OR attributes.http.cloudflare.ray_id != null | summarize count() by bin_auto(timestamp)
+        unit: reqs
+        eager: true
+        layout: { w: 7, h: 2 }
+
+      - type: 'stat'
+        title: 'Cache Hit Rate'
+        icon: chart-simple
+        query: attributes.service.name=="cloudflare" AND attributes.cache.status != null | summarize count() by attributes.cache.status | where attributes.cache.status=="HIT" | summarize (count() / sum(count())) * 100
+        unit: '%'
+        eager: true
+        layout: { w: 5, h: 2 }
+
+  - type: 'timeseries'
+    title: 'Request Distribution by Status Code'
+    query: attributes.service.name=="cloudflare" AND attributes.http.response.status_code != null | summarize count() by bin_auto(timestamp), attributes.http.response.status_code
+    unit: reqs
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Cache Performance'
+    query: attributes.service.name=="cloudflare" AND attributes.cache.status != null | summarize count() by bin_auto(timestamp), attributes.cache.status
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Origin Response Time (ms)'
+    hide_subtitle: true
+    summarize_by: max
+    sql: |
+      SELECT timeB, quantile, value
+      FROM (
+        SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
+               ARRAY[
+                 (approx_percentile(0.50, percentile_agg(attributes___origin___time)) / 1e3)::float,
+                 (approx_percentile(0.75, percentile_agg(attributes___origin___time)) / 1e3)::float,
+                 (approx_percentile(0.90, percentile_agg(attributes___origin___time)) / 1e3)::float,
+                 (approx_percentile(0.95, percentile_agg(attributes___origin___time)) / 1e3)::float
+               ] AS values,
+               ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
+        FROM otel_logs_and_spans
+        WHERE project_id='{{project_id}}' AND attributes___service___name='cloudflare' AND attributes___origin___time IS NOT NULL
+          {{time_filter}}
+        GROUP BY timeB
+      ) s,
+      LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Security Events'
+    theme: 'roma'
+    query: attributes.service.name=="cloudflare" AND (attributes.security.action=="block" OR attributes.security.action=="challenge" OR attributes.firewall.action != null) | summarize count() by bin_auto(timestamp), attributes.security.action, attributes.firewall.action
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Bandwidth Usage (GB)'
+    query: attributes.service.name=="cloudflare" AND name=="cloudflare.edge.response.bytes" | summarize sum(value) / 1073741824 by bin_auto(timestamp)
+    unit: GB
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Requests by Country'
+    query: attributes.service.name=="cloudflare" AND attributes.client.country != null | summarize count() by bin_auto(timestamp), attributes.client.country | top 10 by count()
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'SSL/TLS Protocol Distribution'
+    query: attributes.service.name=="cloudflare" AND attributes.tls.protocol != null | summarize count() by bin_auto(timestamp), attributes.tls.protocol
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Edge vs Origin Errors'
+    theme: 'roma'
+    query: attributes.service.name=="cloudflare" AND attributes.http.response.status_code >= 500.0 | summarize count() by bin_auto(timestamp), attributes.origin.status != null ? "Origin Error" : "Edge Error"
+    layout: { w: 6, h: 4 }

@@ -1,0 +1,71 @@
+title: Docker Containers
+icon: docker
+preview: /public/assets/svgs/screens/http-stats.svg
+description: Monitor Docker container performance, resource usage, network traffic, and health status
+refresh_interval: 60s
+widgets:
+  - type: group
+    title: Overview
+    layout: { w: 6, h: 5 }
+    children:
+      - type: 'timeseries_stat'
+        title: 'Running Containers'
+        icon: server
+        query: name=="container.status" AND attributes.container.status=="running" | summarize count(distinct(attributes.container.id)) by bin_auto(timestamp)
+        unit: containers
+        eager: true
+        layout: { w: 7, h: 2 }
+
+      - type: 'stat'
+        title: 'Total Images'
+        icon: folders
+        query: name=="docker.images.total" | summarize last(value)
+        unit: images
+        eager: true
+        layout: { w: 5, h: 2 }
+
+  - type: 'timeseries'
+    title: 'Container CPU Usage (%)'
+    query: name=="container.cpu.usage.total" | summarize avg(value) * 100 by bin_auto(timestamp), attributes.container.name
+    unit: '%'
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Container Memory Usage (MB)'
+    query: name=="container.memory.usage" | summarize avg(value) / 1048576 by bin_auto(timestamp), attributes.container.name
+    unit: MB
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Network I/O (MB/s)'
+    query: name=~"container.network.(rx|tx).bytes" | summarize rate(sum(value)) / 1048576 by bin_auto(timestamp), name, attributes.container.name
+    unit: MB/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Disk I/O (MB/s)'
+    query: name=~"container.disk.io.(read|write).bytes" | summarize rate(sum(value)) / 1048576 by bin_auto(timestamp), name, attributes.container.name
+    unit: MB/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Container Restart Count'
+    theme: 'roma'
+    query: name=="container.restarts" | summarize sum(value) by bin_auto(timestamp), attributes.container.name
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Container States'
+    query: name=="container.status" | summarize count() by bin_auto(timestamp), attributes.container.status
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Memory Limit Usage (%)'
+    query: name=="container.memory.usage" AND name=="container.memory.limit" | summarize (avg(container.memory.usage) / avg(container.memory.limit)) * 100 by bin_auto(timestamp), attributes.container.name
+    unit: '%'
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Container Health Status'
+    query: name=="container.health.status" | summarize count() by bin_auto(timestamp), attributes.health.status
+    layout: { w: 6, h: 4 }

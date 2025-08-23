@@ -1,0 +1,69 @@
+title: Heroku Application
+icon: heroku
+preview: /public/assets/svgs/screens/http-stats.svg
+description: Monitor Heroku app performance, dyno metrics, database connections, and error rates
+refresh_interval: 60s
+widgets:
+  - type: group
+    title: Overview
+    layout: { w: 6, h: 5 }
+    children:
+      - type: 'timeseries_stat'
+        title: 'Request Rate'
+        icon: list-tree
+        query: attributes.service.name=~"heroku.*" OR attributes.heroku.source != null | summarize count() by bin_auto(timestamp)
+        unit: reqs
+        eager: true
+        layout: { w: 7, h: 2 }
+
+      - type: 'stat'
+        title: 'Active Dynos'
+        icon: server
+        query: name=="heroku.dyno.load" | summarize count(distinct(attributes.dyno))
+        unit: dynos
+        eager: true
+        layout: { w: 5, h: 2 }
+
+  - type: 'timeseries'
+    title: 'Response Time (ms)'
+    query: attributes.heroku.source=="router" | summarize avg(attributes.connect + attributes.service) by bin_auto(timestamp)
+    unit: ms
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Memory Usage by Dyno (MB)'
+    query: name=="heroku.dyno.memory" | summarize avg(value) by bin_auto(timestamp), attributes.dyno
+    unit: MB
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'HTTP Status Codes'
+    query: attributes.heroku.source=="router" AND attributes.status != null | summarize count() by bin_auto(timestamp), attributes.status
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Error Rate'
+    theme: 'roma'
+    query: attributes.heroku.source=="router" AND attributes.status >= 500 | summarize count() by bin_auto(timestamp), attributes.status
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Database Connection Pool'
+    query: name=="heroku.postgres.connections" | summarize avg(value) by bin_auto(timestamp), attributes.pool_type
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Dyno Load Average'
+    query: name=="heroku.dyno.load" | summarize avg(attributes.load_avg_1m) by bin_auto(timestamp), attributes.dyno
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Router Queue Time (ms)'
+    query: attributes.heroku.source=="router" | summarize avg(attributes.queue) by bin_auto(timestamp)
+    unit: ms
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Throughput by Path'
+    query: attributes.heroku.source=="router" | summarize count() by bin_auto(timestamp), attributes.path | top 10 by count()
+    layout: { w: 6, h: 4 }

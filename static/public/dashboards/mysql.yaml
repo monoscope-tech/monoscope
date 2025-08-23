@@ -1,0 +1,98 @@
+title: MySQL Database
+icon: mysql
+preview: /public/assets/svgs/screens/http-stats.svg
+description: Monitor MySQL performance, query statistics, InnoDB metrics, and replication status
+refresh_interval: 60s
+widgets:
+  - type: group
+    title: Overview
+    layout: { w: 6, h: 5 }
+    children:
+      - type: 'timeseries_stat'
+        title: 'Queries/sec'
+        icon: database
+        query: name=="mysql.queries" | summarize rate(sum(value)) by bin_auto(timestamp)
+        unit: qps
+        eager: true
+        layout: { w: 4, h: 2 }
+
+      - type: 'stat'
+        title: 'Connections'
+        icon: swap
+        query: name=="mysql.threads.connected" | summarize avg(value)
+        unit: connections
+        eager: true
+        layout: { w: 4, h: 2 }
+
+      - type: 'stat'
+        title: 'Uptime'
+        icon: clock
+        query: name=="mysql.uptime" | summarize last(value) / 3600
+        unit: hours
+        eager: true
+        layout: { w: 4, h: 2 }
+
+  - type: 'timeseries'
+    title: 'Query Types'
+    query: name=~"mysql.handlers.(read.*|write|update|delete)" | summarize rate(sum(value)) by bin_auto(timestamp), name
+    unit: ops/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'InnoDB Buffer Pool Usage (%)'
+    query: name=="mysql.innodb.buffer_pool.pages.data" AND name=="mysql.innodb.buffer_pool.pages.total" | summarize (sum(mysql.innodb.buffer_pool.pages.data) / sum(mysql.innodb.buffer_pool.pages.total)) * 100 by bin_auto(timestamp)
+    unit: '%'
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Query Response Time (ms)'
+    hide_subtitle: true
+    summarize_by: max
+    sql: |
+      SELECT timeB, quantile, value
+      FROM (
+        SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
+               ARRAY[
+                 (approx_percentile(0.50, percentile_agg(attributes___db___duration)) / 1e3)::float,
+                 (approx_percentile(0.75, percentile_agg(attributes___db___duration)) / 1e3)::float,
+                 (approx_percentile(0.90, percentile_agg(attributes___db___duration)) / 1e3)::float,
+                 (approx_percentile(0.95, percentile_agg(attributes___db___duration)) / 1e3)::float
+               ] AS values,
+               ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
+        FROM otel_logs_and_spans
+        WHERE project_id='{{project_id}}' AND attributes___db___system='mysql'
+          {{time_filter}}
+        GROUP BY timeB
+      ) s,
+      LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Slow Queries'
+    theme: 'roma'
+    query: name=="mysql.slow_queries" | summarize rate(sum(value)) by bin_auto(timestamp)
+    unit: queries/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Thread Activity'
+    query: name=~"mysql.threads.(running|cached|created)" | summarize avg(value) by bin_auto(timestamp), name
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Table Locks'
+    query: name=~"mysql.locks.(immediate|waited)" | summarize rate(sum(value)) by bin_auto(timestamp), name
+    unit: locks/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Replication Lag'
+    query: name=="mysql.replication.seconds_behind_source" | summarize avg(value) by bin_auto(timestamp), attributes.source
+    unit: seconds
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'InnoDB I/O (pages/s)'
+    query: name=~"mysql.innodb.pages.(read|written)" | summarize rate(sum(value)) by bin_auto(timestamp), name
+    unit: pages/s
+    layout: { w: 6, h: 4 }

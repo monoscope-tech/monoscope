@@ -1,0 +1,78 @@
+title: Host Metrics (Prometheus)
+icon: prometheus
+preview: /public/assets/svgs/screens/http-stats.svg
+description: Monitor host system metrics including CPU, memory, disk, network, and system load
+refresh_interval: 60s
+widgets:
+  - type: group
+    title: System Overview
+    layout: { w: 6, h: 5 }
+    children:
+      - type: 'timeseries_stat'
+        title: 'CPU Usage'
+        icon: chart-simple
+        query: name=="system.cpu.utilization" | summarize avg(value) * 100 by bin_auto(timestamp)
+        unit: '%'
+        eager: true
+        layout: { w: 4, h: 2 }
+
+      - type: 'stat'
+        title: 'Memory Usage'
+        icon: server
+        query: name=="system.memory.usage" AND name=="system.memory.limit" | summarize (avg(system.memory.usage) / avg(system.memory.limit)) * 100
+        unit: '%'
+        eager: true
+        layout: { w: 4, h: 2 }
+
+      - type: 'stat'
+        title: 'Uptime'
+        icon: clock
+        query: name=="system.uptime" | summarize last(value) / 86400
+        unit: days
+        eager: true
+        layout: { w: 4, h: 2 }
+
+  - type: 'timeseries'
+    title: 'CPU Usage by Core (%)'
+    query: name=="system.cpu.utilization" | summarize avg(value) * 100 by bin_auto(timestamp), attributes.cpu
+    unit: '%'
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Memory Usage (GB)'
+    query: name=~"system.memory.(usage|available|cached|buffers)" | summarize avg(value) / 1073741824 by bin_auto(timestamp), name
+    unit: GB
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Disk I/O (MB/s)'
+    query: name=~"system.disk.io.(read|write)" | summarize rate(sum(value)) / 1048576 by bin_auto(timestamp), name, attributes.device
+    unit: MB/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Network Traffic (MB/s)'
+    query: name=~"system.network.io.(receive|transmit)" | summarize rate(sum(value)) / 1048576 by bin_auto(timestamp), name, attributes.device
+    unit: MB/s
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Load Average'
+    query: name=~"system.cpu.load_average.(1m|5m|15m)" | summarize avg(value) by bin_auto(timestamp), name
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Filesystem Usage (%)'
+    query: name=="system.filesystem.usage" AND name=="system.filesystem.limit" | summarize (sum(system.filesystem.usage) / sum(system.filesystem.limit)) * 100 by bin_auto(timestamp), attributes.mountpoint
+    unit: '%'
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Process Count'
+    query: name=="system.processes.count" | summarize sum(value) by bin_auto(timestamp), attributes.status
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'TCP Connections'
+    query: name=="system.network.connections" | summarize sum(value) by bin_auto(timestamp), attributes.state
+    layout: { w: 6, h: 4 }

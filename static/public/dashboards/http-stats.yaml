@@ -1,6 +1,6 @@
 title: HTTP Stats
 preview: /public/assets/svgs/screens/http-stats.svg
-icon: globe-wifi
+icon: chart-bar
 refresh_interval: 60s
 widgets:
   # - type: "timeseries_stat"
