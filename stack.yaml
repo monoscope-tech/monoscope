@@ -108,10 +108,3 @@ extra-deps:
       - .
 
 allow-newer: true
-
-extra-include-dirs:
-  - /opt/homebrew/opt/snappy/include
-  - /opt/homebrew/opt/librdkafka/include
-extra-lib-dirs:
-  - /opt/homebrew/opt/snappy/lib
-  - /opt/homebrew/opt/librdkafka/lib
