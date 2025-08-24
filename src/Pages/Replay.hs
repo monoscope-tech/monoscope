@@ -110,7 +110,7 @@ saveReplayMinio envCfg (ackId, replayData) = do
   case project of
     Just p -> do
       let session = UUID.toText replayData.sessionId
-          object = session <> ".json"
+          object = "/rrweb/" <> session <> ".json"
           (acc, sec, region, bucket, endpoint) = maybe (envCfg.s3AccessKey, envCfg.s3SecretKey, envCfg.s3Region, envCfg.s3Bucket, envCfg.s3Endpoint) (\x -> (x.accessKey, x.secretKey, x.region, x.bucket, x.endpointUrl)) p.s3Bucket
       let conn = getMinioConnectInfo acc sec region bucket endpoint
       ds <- getMinioFile conn bucket object
@@ -139,7 +139,7 @@ replaySessionGetH pid sessionId = do
     Just p -> do
       let (acc, sec, region, bucket, endpoint) = maybe (envCfg.s3AccessKey, envCfg.s3SecretKey, envCfg.s3Region, envCfg.s3Bucket, envCfg.s3Endpoint) (\x -> (x.accessKey, x.secretKey, x.region, x.bucket, x.endpointUrl)) p.s3Bucket
           conn = getMinioConnectInfo acc sec region bucket endpoint
-      replayEvents <- getMinioFile conn bucket (fromString $ toString $ UUID.toText sessionId <> ".json")
+      replayEvents <- getMinioFile conn bucket (fromString $ toString $ "/rrweb/" <> UUID.toText sessionId <> ".json")
       addRespHeaders $ AE.object ["events" AE..= AE.Array replayEvents]
     Nothing -> do
       addRespHeaders $ AE.object ["events" AE..= AE.Array V.empty]
