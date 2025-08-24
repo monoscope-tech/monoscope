@@ -205,6 +205,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , replaySessionGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] (RespHeaders AE.Value)
   , bringS3 :: mode :- "p" :> ProjectId :> "byob_s3" :> Get '[HTML] (RespHeaders (Html ()))
   , bringS3Post :: mode :- "p" :> ProjectId :> "byob_s3" :> ReqBody '[FormUrlEncoded] Projects.ProjectS3Bucket :> Post '[HTML] (RespHeaders (Html ()))
+  , bringS3Remove :: mode :- "p" :> ProjectId :> "byob_s3" :> Delete '[HTML] (RespHeaders (Html ()))
   , -- Sub-route groups
     projects :: mode :- ProjectsRoutes
   , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes
@@ -417,6 +418,7 @@ cookieProtectedServer =
     , replaySessionGet = Replay.replaySessionGetH
     , bringS3 = S3.bringS3GetH
     , bringS3Post = S3.brings3PostH
+    , bringS3Remove = S3.brings3RemoveH
     , -- Billing handlers
       manageBillingGet = LemonSqueezy.manageBillingGetH
     , -- Endpoint handlers

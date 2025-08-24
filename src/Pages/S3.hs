@@ -1,10 +1,10 @@
-module Pages.S3 (bringS3GetH, brings3PostH, getMinioConnectInfo) where
+module Pages.S3 (bringS3GetH, brings3PostH, getMinioConnectInfo,brings3RemoveH) where
 
 import Data.Default (Default (def))
 import Data.Text qualified as T
 import Effectful.Reader.Static (ask)
 import Lucid
-import Lucid.Htmx (hxIndicator_, hxPost_, hxSwap_, hxTarget_)
+import Lucid.Htmx (hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxDelete_)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Network.Minio qualified as Minio
@@ -36,13 +36,21 @@ brings3PostH pid s3Form = do
     Right bExists ->
       if bExists
         then do
-          _ <- Projects.updateProjectS3Bucket pid s3Form
+          _ <- Projects.updateProjectS3Bucket pid $ Just s3Form
           addSuccessToast "Connected succesfully" Nothing
           addRespHeaders connected
         else do
           addErrorToast "Bucket does not exist" Nothing
           addRespHeaders notConnected
 
+brings3RemoveH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
+brings3RemoveH pid = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
+  _ <- Projects.updateProjectS3Bucket pid Nothing
+
+  addSuccessToast "Removed S3 bucket" Nothing
+  addRespHeaders notConnected
 
 bringS3GetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 bringS3GetH pid = do
@@ -67,7 +75,7 @@ bringS3Page pid s3BucketM = div_ [class_ "space-y-6 mx-auto w-full max-w-5xl px-
           h2_ [class_ "flex items-center gap-2 font-semibold"] $ do
             faSprite_ "shield-check" "regular" "h-5 w-5"
             "Connection"
-          p_ [class_ "text-sm text-textWeak"] "Enter temporary credentials to test your bucket connection."
+          p_ [class_ "text-sm text-textWeak"] "Enter credentials to connect to your S3 bucket."
         div_ [id_ "connectedInd"] do
           case s3BucketM of
             Just _ -> connected
@@ -86,6 +94,7 @@ bringS3Page pid s3BucketM = div_ [class_ "space-y-6 mx-auto w-full max-w-5xl px-
           "Validate Connection"
           span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-sm", id_ "indicator"] ""
         span_ [class_ "text-sm text-textWeak"] "Auto saves if credentials are valid"
+        button_ [class_ "btn btn-sm btn-secondary", hxDelete_ $ "", hxSwap_ "innerHtml", hxTarget_ "#connectedInd"] "Remove bucket"
 
 
 -- div_ [class_ "rounded-lg border bg-bgBase w-full"] $ do
