@@ -359,7 +359,7 @@ updateUsageLastReported pid lastReported = execute q (lastReported, pid)
     q = [sql| UPDATE projects.projects SET usage_last_reported=? WHERE id=?;|]
 
 
-updateProjectS3Bucket :: DB :> es => ProjectId -> ProjectS3Bucket -> Eff es Int64
+updateProjectS3Bucket :: DB :> es => ProjectId -> Maybe ProjectS3Bucket -> Eff es Int64
 updateProjectS3Bucket pid bucket = dbtToEff $ execute q (bucket, pid)
   where
     q = [sql| UPDATE projects.projects SET s3_bucket=? WHERE id=?|]

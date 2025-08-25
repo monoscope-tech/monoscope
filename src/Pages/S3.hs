@@ -13,6 +13,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Utils (faSprite_)
+import Lucid.Hyperscript (__)
 
 
 getMinioConnectInfo :: Text -> Text -> Text -> Text -> Text -> Minio.ConnectInfo
@@ -89,12 +90,30 @@ bringS3Page pid s3BucketM = div_ [class_ "space-y-6 mx-auto w-full max-w-5xl px-
         connectionField "Bucket" "bucket" True (maybe "" (.bucket) s3BucketM) False
         div_ [class_ "space-y-2 md:col-span-2"] $ do
           connectionField "Custom Endpoint (optional, for S3-compatible providers)" "endpointUrl" False (maybe "" (.endpointUrl) s3BucketM) False
-      div_ [class_ "mt-4 flex flex-wrap items-center gap-3"] $ do
-        button_ [class_ "btn btn-sm btn-primary"] do
-          "Validate Connection"
-          span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-sm", id_ "indicator"] ""
-        span_ [class_ "text-sm text-textWeak"] "Auto saves if credentials are valid"
-        button_ [class_ "btn btn-sm btn-secondary", hxDelete_ $ "", hxSwap_ "innerHtml", hxTarget_ "#connectedInd"] "Remove bucket"
+      div_ [class_ "mt-10 flex flex-wrap justify-between items-center gap-3"] $ do
+        div_ [class_ "flex gap-2 items-center"] do
+          button_ [class_ "btn btn-sm btn-primary"] do
+            "Validate Connection"
+            span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-sm", id_ "indicator"] ""
+          span_ [class_ "text-sm text-textWeak"] "Auto saves if credentials are valid"
+        label_ [class_ "btn bg-fillWeak text-textWeak", Lucid.for_ "remove-modal"] "Remove bucket"
+
+    input_ [type_ "checkbox", id_ "remove-modal", class_ "modal-toggle"]
+    div_ [class_ "modal ", role_ "dialog", id_ "remove-modal"] do
+      div_ [class_ "modal-box flex flex-col gap-2 p-8"] $ do
+        div_ [class_ "flex w-full mb-2 justify-between items-start"] do
+          div_ [class_ "p-3 bg-fillError-weak rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"]
+            $ faSprite_ "circle-info" "regular" "h-6 w-6 text-textError"
+          button_
+            [ class_ "btn btn-ghost btn-sm btn-circle"
+            , [__|on click set #remove-modal.checked to false |]
+            ]
+            do
+              faSprite_ "circle-xmark" "regular" "h-6 w-6 text-textWeak"
+        span_ [class_ "text-textStrong text-2xl font-semibold"] "Remove bucket?"
+        span_ [class_ "text-textWeak text-sm font-semibold"] "Removing bucket will result in the loss of all data associated with it on your dashboard"
+        button_ [class_ "btn mt-4 bg-fillError-strong text-white", hxDelete_ $ "", hxSwap_ "innerHtml", hxTarget_ "#connectedInd"] "Remove"
+      label_ [class_ "modal-backdrop", Lucid.for_ "remove-modal"] "Close"
 
 
 -- div_ [class_ "rounded-lg border bg-bgBase w-full"] $ do
