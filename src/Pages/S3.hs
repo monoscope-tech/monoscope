@@ -1,10 +1,11 @@
-module Pages.S3 (bringS3GetH, brings3PostH, getMinioConnectInfo,brings3RemoveH) where
+module Pages.S3 (bringS3GetH, brings3PostH, getMinioConnectInfo, brings3RemoveH) where
 
 import Data.Default (Default (def))
 import Data.Text qualified as T
 import Effectful.Reader.Static (ask)
 import Lucid
-import Lucid.Htmx (hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxDelete_)
+import Lucid.Htmx (hxDelete_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
+import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Network.Minio qualified as Minio
@@ -13,7 +14,6 @@ import Relude hiding (ask)
 import System.Config (AuthContext)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Utils (faSprite_)
-import Lucid.Hyperscript (__)
 
 
 getMinioConnectInfo :: Text -> Text -> Text -> Text -> Text -> Minio.ConnectInfo
@@ -44,6 +44,7 @@ brings3PostH pid s3Form = do
           addErrorToast "Bucket does not exist" Nothing
           addRespHeaders notConnected
 
+
 brings3RemoveH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 brings3RemoveH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
@@ -52,6 +53,7 @@ brings3RemoveH pid = do
 
   addSuccessToast "Removed S3 bucket" Nothing
   addRespHeaders notConnected
+
 
 bringS3GetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 bringS3GetH pid = do
@@ -115,23 +117,6 @@ bringS3Page pid s3BucketM = div_ [class_ "space-y-6 mx-auto w-full max-w-5xl px-
         button_ [class_ "btn mt-4 bg-fillError-strong text-white", hxDelete_ $ "", hxSwap_ "innerHtml", hxTarget_ "#connectedInd"] "Remove"
       label_ [class_ "modal-backdrop", Lucid.for_ "remove-modal"] "Close"
 
-
--- div_ [class_ "rounded-lg border bg-bgBase w-full"] $ do
---   div_ [class_ "flex flex-wrap items-center w-full justify-between gap-3 border-b p-5"] $ do
---     div_ [class_ "flex items-center w-full justify-between"] $ do
---       div_ [class_ "space-y-1"] $ do
---         h2_ [class_ "flex items-center font-semibold"] $ do
---           "Upload a Test File"
---         p_ [class_ "text-sm text-textWeak"] "Uploads server-side with your provided credentials."
---       span_ [class_ "inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium bg-fillWeaker"] "Connected"
---   div_ [class_ "p-5"] $ do
---     div_ [class_ "grid grid-cols-1 gap-4 md:grid-cols-2"] $ do
---       div_ [class_ "space-y-2"] $ do
---         label_ [class_ "flex items-center gap-2 text-sm font-medium"] "File"
---         input_ [class_ "input rounded-lg w-full border border-strokeStrong", type_ "file"]
---     div_ [class_ "mt-4 flex flex-wrap items-center gap-3"] $ do
---       button_ [class_ "btn btn-sm btn-primary"] "Upload"
---       span_ [class_ "text-sm text-textWeak"] "Make sure to enter credentials first"
 
 connectionField :: Text -> Text -> Bool -> Text -> Bool -> Html ()
 connectionField lbl name required defVal isPass =

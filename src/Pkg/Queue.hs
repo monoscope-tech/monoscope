@@ -68,11 +68,12 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
               liftIO
                 $ Log.runLogT "apitoolkit" appLogger Log.LogAttention
                 $ Log.logAttention "pubsubService: CAUGHT EXCEPTION - Error processing messages" (AE.object ["error" AE..= show e, "message_count" AE..= length (catMaybes msgsB64), "first_attrs" AE..= firstAttrs, "checkpoint" AE..= ("pubsubService:exception" :: String)])
-              
+
               -- Send to dead letter queue unless it's an unrecoverable error
-              unless (isUnrecoverableError e) $
-                liftIO $ publishToDeadLetterQueue appCtx (catMaybes msgsB64) (maybeToMonoid firstAttrs) (toText $ show e)
-              
+              unless (isUnrecoverableError e)
+                $ liftIO
+                $ publishToDeadLetterQueue appCtx (catMaybes msgsB64) (maybeToMonoid firstAttrs) (toText $ show e)
+
               -- Always return all message IDs so they're acknowledged
               pure $ map fst $ catMaybes msgsB64
             Right ids -> pure ids
@@ -158,11 +159,12 @@ kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
           let topic = recc.crTopic.unTopicName
               headers = consumerRecordHeadersToHashMap recc
               -- For dead letter queue messages, get ce-type from headers or derive from original-topic
-              ceType = if topic == appCtx.config.kafkaDeadLetterTopic
-                        then case HM.lookup "ce-type" headers of
-                               Just existingCeType -> existingCeType  -- PubSub messages have ce-type
-                               Nothing -> maybe "" topicToCeType (HM.lookup "original-topic" headers)  -- Kafka messages need derivation
-                        else topicToCeType topic
+              ceType =
+                if topic == appCtx.config.kafkaDeadLetterTopic
+                  then case HM.lookup "ce-type" headers of
+                    Just existingCeType -> existingCeType -- PubSub messages have ce-type
+                    Nothing -> maybe "" topicToCeType (HM.lookup "original-topic" headers) -- Kafka messages need derivation
+                  else topicToCeType topic
               attributes = HM.insert "ce-type" ceType headers
               allRecords = consumerRecordToTuple <$> rightRecords
 
@@ -171,11 +173,12 @@ kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
               Left e -> do
                 Log.runLogT "apitoolkit" appLogger Log.LogAttention
                   $ Log.logAttention "kafkaService: CAUGHT EXCEPTION - Error processing Kafka messages" (AE.object ["error" AE..= show e, "topic" AE..= topic, "ce-type" AE..= ceType, "record_count" AE..= length allRecords, "attributes" AE..= attributes, "checkpoint" AE..= ("kafkaService:exception" :: String)])
-                
+
                 -- Send to dead letter queue unless it's an unrecoverable error
-                unless (isUnrecoverableError e) $
-                  liftIO $ publishToDeadLetterQueue appCtx allRecords attributes (toText $ show e)
-                
+                unless (isUnrecoverableError e)
+                  $ liftIO
+                  $ publishToDeadLetterQueue appCtx allRecords attributes (toText $ show e)
+
                 -- Always return all message IDs so they're acknowledged
                 pure $ map fst allRecords
               Right ids -> pure ids
@@ -226,23 +229,26 @@ publishToDeadLetterQueue appCtx messages attributes errorReason = do
   let deadLetterTopic = appCtx.config.kafkaDeadLetterTopic
   currentTime <- getCurrentTime
   forM_ messages \(origTopicOrAckId, msgData) -> do
-    let deadLetterAttrs = attributes 
-          <> HM.fromList [ ("original-topic", origTopicOrAckId)  -- For Kafka, this stores the original topic name
-                         , ("original-ack-id", origTopicOrAckId)  -- For PubSub, this stores the ack ID
-                         , ("error-reason", errorReason)
-                         , ("failed-at", toText $ show currentTime)
-                         ]
+    let deadLetterAttrs =
+          attributes
+            <> HM.fromList
+              [ ("original-topic", origTopicOrAckId) -- For Kafka, this stores the original topic name
+              , ("original-ack-id", origTopicOrAckId) -- For PubSub, this stores the ack ID
+              , ("error-reason", errorReason)
+              , ("failed-at", toText $ show currentTime)
+              ]
     _ <- publishJSONToKafka appCtx deadLetterTopic (BC.unpack msgData) deadLetterAttrs
     pure ()
 
 
 -- | Check if exception is unrecoverable and should be discarded
 isUnrecoverableError :: SomeException -> Bool
-isUnrecoverableError e = 
+isUnrecoverableError e =
   let errorMsg = show e
-  in any (`T.isInfixOf` toText errorMsg) 
-       [ "Unknown wire type"
-       , "project API Key and project ID not available"
-       , "Unexpected end of input"
-       , "Invalid UTF-8 stream"
-       ]
+   in any
+        (`T.isInfixOf` toText errorMsg)
+        [ "Unknown wire type"
+        , "project API Key and project ID not available"
+        , "Unexpected end of input"
+        , "Invalid UTF-8 stream"
+        ]

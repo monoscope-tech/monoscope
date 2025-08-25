@@ -88,7 +88,7 @@ facetColumns =
 
 -- | Generate facets for a project from a specified table and save to database
 generateAndSaveFacets
-  :: (DB :> es, Labeled "timefusion" DB :> es, UUID.UUIDEff :> es, Effectful.Reader.Static.Reader AuthContext :> es)
+  :: (DB :> es, Effectful.Reader.Static.Reader AuthContext :> es, Labeled "timefusion" DB :> es, UUID.UUIDEff :> es)
   => ProjectId
   -> Text
   -> [Text]
@@ -103,18 +103,21 @@ generateAndSaveFacets pid tableName columns maxValues timestamp = do
   -- Generate facets for the last 24 hours
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   facetMap <- do
-    values <- if authCtx.env.enableTimefusionReads
-      then checkpoint (toAnnotation (buildOptimizedFacetQuery tableName (length columns)))
-        $ labeled @"timefusion" @DB
-        $ dbtToEff
-        $ query
-          (buildOptimizedFacetQuery tableName (length columns))
-          (V.fromList columns, pid.toText, dayStart, dayEnd, maxValues)
-      else checkpoint (toAnnotation (buildOptimizedFacetQuery tableName (length columns)))
-        $ dbtToEff
-        $ query
-          (buildOptimizedFacetQuery tableName (length columns))
-          (V.fromList columns, pid.toText, dayStart, dayEnd, maxValues)
+    values <-
+      if authCtx.env.enableTimefusionReads
+        then
+          checkpoint (toAnnotation (buildOptimizedFacetQuery tableName (length columns)))
+            $ labeled @"timefusion" @DB
+            $ dbtToEff
+            $ query
+              (buildOptimizedFacetQuery tableName (length columns))
+              (V.fromList columns, pid.toText, dayStart, dayEnd, maxValues)
+        else
+          checkpoint (toAnnotation (buildOptimizedFacetQuery tableName (length columns)))
+            $ dbtToEff
+            $ query
+              (buildOptimizedFacetQuery tableName (length columns))
+              (V.fromList columns, pid.toText, dayStart, dayEnd, maxValues)
     pure $ processQueryResults values
 
   -- Get existing summary ID (if any) to preserve it
@@ -125,10 +128,10 @@ generateAndSaveFacets pid tableName columns maxValues timestamp = do
               WHERE project_id = ? AND table_name = ?
               LIMIT 1 |]
         (pid.toText, tableName)
-        <&> \case
-          v
-            | V.null v -> Nothing
-            | otherwise -> Just (V.head v)
+      <&> \case
+        v
+          | V.null v -> Nothing
+          | otherwise -> Just (V.head v)
 
   -- Create a summary object with either existing or new ID
   facetId <- case existingIdM of

@@ -59,9 +59,9 @@ publishReplayEvent replayData pid = do
     (topicName : _) -> do
       liftIO
         $ publishJSONToKafka ctx topicName messagePayload attributes
-          >>= \case
-            Left err -> pure $ Left $ "Failed to publish replay event: " <> err
-            Right messageId -> pure $ Right messageId
+        >>= \case
+          Left err -> pure $ Left $ "Failed to publish replay event: " <> err
+          Right messageId -> pure $ Right messageId
 
 
 replayPostH :: Projects.ProjectId -> Text -> ATBaseCtx AE.Value
@@ -100,7 +100,7 @@ getMinioFile conn bucket object = do
             AE.Array a -> a
             _ -> V.empty
           Left _ -> V.empty
-    pure v 
+    pure v
   whenRight V.empty res pure
 
 

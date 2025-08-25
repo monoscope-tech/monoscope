@@ -7,7 +7,6 @@ import Control.Parallel.Strategies (parList, rpar, using)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
-import Pkg.DeriveUtils (AesonText(..))
 import Data.Base64.Types qualified as B64
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
@@ -46,6 +45,7 @@ import Network.GRPC.Server (SomeRpcHandler)
 import Network.GRPC.Server.Run hiding (runServer)
 import Network.GRPC.Server.StreamType
 import OpenTelemetry.Trace (TracerProvider)
+import Pkg.DeriveUtils (AesonText (..))
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
 import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService qualified as TS
@@ -133,7 +133,7 @@ getMetricAttributeValue !attribute !rms = listToMaybe $ V.toList $ V.mapMaybe ge
 
 
 -- | Process a list of messages
-processList :: (DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es, Concurrent :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
+processList :: (Concurrent :> es, DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs !attrs = checkpoint "processList" $ do
   startTime <- liftIO getCurrentTime
@@ -486,9 +486,12 @@ nanosecondsToUTC !ns = posixSecondsToUTCTime (fromIntegral ns / 1e9)
 getValidTimestamp :: UTCTime -> Word64 -> Word64 -> UTCTime
 getValidTimestamp !fallbackTime !timeNano !observedTimeNano =
   let isValid ns = ns >= minValidTimestampNanos && ns /= 0
-   in if isValid timeNano then nanosecondsToUTC timeNano
-      else if isValid observedTimeNano then nanosecondsToUTC observedTimeNano
-      else fallbackTime
+   in if isValid timeNano
+        then nanosecondsToUTC timeNano
+        else
+          if isValid observedTimeNano
+            then nanosecondsToUTC observedTimeNano
+            else fallbackTime
 
 
 -- Convert ByteString to hex Text
@@ -628,9 +631,10 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
       !severityText = logRecord ^. PLF.severityText
       !severityNumber = fromEnum (logRecord ^. PLF.severityNumber)
       !validTimestamp = getValidTimestamp fallbackTime timeNano observedTimeNano
-      !validObservedTimestamp = if observedTimeNano >= minValidTimestampNanos && observedTimeNano /= 0
-                                    then nanosecondsToUTC observedTimeNano
-                                    else fallbackTime
+      !validObservedTimestamp =
+        if observedTimeNano >= minValidTimestampNanos && observedTimeNano /= 0
+          then nanosecondsToUTC observedTimeNano
+          else fallbackTime
       otelLog =
         OtelLogsAndSpans
           { project_id = pid.toText
@@ -723,15 +727,18 @@ convertSpanToOtelLog :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> Ma
 convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
   let !startTimeNano = pSpan ^. PTF.startTimeUnixNano
       !endTimeNano = pSpan ^. PTF.endTimeUnixNano
-      !validStartTime = if startTimeNano >= minValidTimestampNanos && startTimeNano /= 0
-                          then nanosecondsToUTC startTimeNano
-                          else fallbackTime
-      !validEndTime = if endTimeNano >= minValidTimestampNanos && endTimeNano /= 0
-                        then nanosecondsToUTC endTimeNano
-                        else validStartTime  -- If end time is invalid, use start time
-      !durationNanos = if startTimeNano > 0 && endTimeNano > startTimeNano 
-                        then endTimeNano - startTimeNano
-                        else 0
+      !validStartTime =
+        if startTimeNano >= minValidTimestampNanos && startTimeNano /= 0
+          then nanosecondsToUTC startTimeNano
+          else fallbackTime
+      !validEndTime =
+        if endTimeNano >= minValidTimestampNanos && endTimeNano /= 0
+          then nanosecondsToUTC endTimeNano
+          else validStartTime -- If end time is invalid, use start time
+      !durationNanos =
+        if startTimeNano > 0 && endTimeNano > startTimeNano
+          then endTimeNano - startTimeNano
+          else 0
       spanKind = pSpan ^. PTF.kind
       spanKindText = case spanKind of
         PT.Span'SPAN_KIND_INTERNAL -> Just "internal"
@@ -768,10 +775,11 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
                     ( \ev ->
                         AE.object
                           [ "event_name" AE..= (ev ^. PTF.name)
-                          , "event_time" AE..= let evTimeNano = ev ^. PTF.timeUnixNano
-                                                   in if evTimeNano >= minValidTimestampNanos && evTimeNano /= 0
-                                                      then nanosecondsToUTC evTimeNano
-                                                      else fallbackTime
+                          , "event_time"
+                              AE..= let evTimeNano = ev ^. PTF.timeUnixNano
+                                     in if evTimeNano >= minValidTimestampNanos && evTimeNano /= 0
+                                          then nanosecondsToUTC evTimeNano
+                                          else fallbackTime
                           , "event_attributes" AE..= keyValueToJSON (V.fromList $ ev ^. PTF.attributes)
                           , "event_dropped_attributes_count" AE..= (ev ^. PTF.droppedAttributesCount)
                           ]
@@ -915,9 +923,10 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
                 $ V.map
                   ( \point ->
                       let !timeNano = point ^. PMF.timeUnixNano
-                          !validTime = if timeNano >= minValidTimestampNanos && timeNano /= 0
-                                         then nanosecondsToUTC timeNano
-                                         else fallbackTime
+                          !validTime =
+                            if timeNano >= minValidTimestampNanos && timeNano /= 0
+                              then nanosecondsToUTC timeNano
+                              else fallbackTime
                           !value = case point ^. PMF.maybe'value of
                             Just (PM.NumberDataPoint'AsDouble d) -> d
                             Just (PM.NumberDataPoint'AsInt i) -> fromIntegral i
@@ -978,7 +987,7 @@ traceServiceExport :: Log.Logger -> AuthContext -> TracerProvider -> Proto TS.Ex
 traceServiceExport appLogger appCtx tp (Proto req) = do
   _ <- runBackground appLogger appCtx tp do
     Log.logInfo "Received trace export request" AE.Null
-    
+
     currentTime <- liftIO getCurrentTime
 
     let !resourceSpans = V.fromList $ req ^. TSF.resourceSpans
@@ -1013,7 +1022,7 @@ logsServiceExport :: Log.Logger -> AuthContext -> TracerProvider -> Proto LS.Exp
 logsServiceExport appLogger appCtx tp (Proto req) = do
   _ <- runBackground appLogger appCtx tp $ do
     Log.logInfo "Received logs export request" AE.Null
-    
+
     currentTime <- liftIO getCurrentTime
 
     let !resourceLogs = V.fromList $ req ^. PLF.resourceLogs
@@ -1047,7 +1056,7 @@ metricsServiceExport :: Log.Logger -> AuthContext -> TracerProvider -> Proto MS.
 metricsServiceExport appLogger appCtx tp (Proto req) = do
   _ <- runBackground appLogger appCtx tp $ do
     Log.logInfo "Received metrics export request" AE.Null
-    
+
     currentTime <- liftIO getCurrentTime
 
     let !resourceMetrics = V.fromList $ req ^. PMF.resourceMetrics

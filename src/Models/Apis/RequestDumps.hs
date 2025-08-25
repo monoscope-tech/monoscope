@@ -35,7 +35,7 @@ import Database.PostgreSQL.Entity.DBT (query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField (fromField))
-import Database.PostgreSQL.Simple.FromRow (FromRow(..))
+import Database.PostgreSQL.Simple.FromRow (FromRow (..))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
@@ -444,7 +444,7 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query (Query $ encodeUt
 
 
 -- | Custom field parser that tries multiple types
-data FieldValue 
+data FieldValue
   = FText Text
   | FInt Int64
   | FDouble Double
@@ -453,8 +453,9 @@ data FieldValue
   | FUUID UUID.UUID
   | FJson AE.Value
   | FNull
-  deriving (Show, Generic)
+  deriving (Generic, Show)
   deriving anyclass (NFData)
+
 
 -- | Convert FieldValue to JSON
 fieldValueToJson :: FieldValue -> AE.Value
@@ -467,22 +468,24 @@ fieldValueToJson (FUUID u) = AE.String (UUID.toText u)
 fieldValueToJson (FJson v) = v
 fieldValueToJson FNull = AE.Null
 
+
 -- | FromField instance that tries multiple types
 instance FromField FieldValue where
   fromField f mdata = do
     -- First check if it's NULL
     case mdata of
       Nothing -> pure FNull
-      Just _ -> 
+      Just _ ->
         -- Try parsing as different types
         (FText <$> fromField f mdata)
-        <|> (FInt <$> fromField f mdata)
-        <|> (FDouble <$> fromField f mdata)
-        <|> (FBool <$> fromField f mdata)
-        <|> (FTime <$> fromField f mdata)
-        <|> (FUUID <$> fromField f mdata)
-        <|> (FJson <$> fromField f mdata)
-        <|> pure FNull
+          <|> (FInt <$> fromField f mdata)
+          <|> (FDouble <$> fromField f mdata)
+          <|> (FBool <$> fromField f mdata)
+          <|> (FTime <$> fromField f mdata)
+          <|> (FUUID <$> fromField f mdata)
+          <|> (FJson <$> fromField f mdata)
+          <|> pure FNull
+
 
 -- | Execute arbitrary SQL query and return results as vector of vectors
 -- Each inner vector represents a row with all columns as JSON values
@@ -518,8 +521,6 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
   logItemsV <- checkpoint (toAnnotation ("selectLogTable", q)) $ executeArbitraryQuery q
   Only c <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
   pure $ Right (logItemsV, queryComponents.toColNames, c)
-
-
 
 
 queryCount :: DB :> es => Text -> Eff es (Maybe (Only Int))

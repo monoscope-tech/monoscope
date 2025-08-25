@@ -69,10 +69,10 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.SummaryGenerator qualified as SummaryGenerator
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
-import Pkg.DeriveUtils (AesonText(..))
 import NeatInterpolation (text)
 import OddJobs.Job (Job (..))
 import OpenTelemetry.Trace (getGlobalTracerProvider)
+import Pkg.DeriveUtils (AesonText (..))
 import ProcessMessage qualified
 import Relude
 import RequestMessages qualified

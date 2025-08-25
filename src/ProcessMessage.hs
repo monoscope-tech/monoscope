@@ -17,7 +17,7 @@ import Data.Aeson.Lens (key, _Object, _String)
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.Aeson.Types qualified as AE
 import Data.ByteString.Lazy.Char8 qualified as BL
-import Pkg.DeriveUtils (AesonText(..), unAesonTextMaybe)
+import Pkg.DeriveUtils (AesonText (..), unAesonTextMaybe)
 
 import Data.Cache qualified as Cache
 import Data.Effectful.UUID (UUIDEff)
@@ -128,7 +128,7 @@ defaultProjectCache =
 
 processMessages
   -- :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
-  :: (DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es, Concurrent :> es)
+  :: (Concurrent :> es, DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es)
   => [(Text, ByteString)]
   -> HashMap Text Text
   -> Eff es [Text]
@@ -330,7 +330,7 @@ processSpanToEntities pjc otelSpan dumpId =
             [ Just endpointHash
             , if isJust shape then Just shapeHash else Nothing
             ]
-            <> V.toList fieldHashes
+          <> V.toList fieldHashes
    in (endpoint, shape, fields', formats', hashes)
   where
     -- Helper function to extract headers from nested attribute structure
@@ -371,7 +371,8 @@ convertRequestMessageToSpan rm (spanId, trId) =
           , events = Just $ AesonText $ AE.Array V.empty
           , links = Just ""
           , resource =
-              fmap AesonText $ jsonToMap
+              fmap AesonText
+                $ jsonToMap
                 $ nestedJsonFromDotNotation
                   [ ("service.name", AE.String $ fromMaybe "unknown" rm.host)
                   , ("service.version", maybe (AE.String "") AE.String rm.serviceVersion)
@@ -437,7 +438,7 @@ createSpanAttributes rm =
         reqHeaders =
           fromMaybe (AE.object [])
             $ rm.requestHeaders
-              ^? _Object
+            ^? _Object
               >>= \obj ->
                 let pairs = [("http.request.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
                  in Just $ nestedJsonFromDotNotation pairs
@@ -446,7 +447,7 @@ createSpanAttributes rm =
         respHeaders =
           fromMaybe (AE.object [])
             $ rm.responseHeaders
-              ^? _Object
+            ^? _Object
               >>= \obj ->
                 let pairs = [("http.response.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
                  in Just $ nestedJsonFromDotNotation pairs

@@ -341,7 +341,7 @@ runHourlyJob scheduledTime hour = do
 
 
 -- | Batch process facets generation for multiple projects using 24-hour window
-generateOtelFacetsBatch :: (DB :> es, Labeled "timefusion" DB :> es, Effectful.Reader.Static.Reader Config.AuthContext :> es, IOE :> es, Log :> es, UUID.UUIDEff :> es) => V.Vector Text -> UTCTime -> Eff es ()
+generateOtelFacetsBatch :: (DB :> es, Effectful.Reader.Static.Reader Config.AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUID.UUIDEff :> es) => V.Vector Text -> UTCTime -> Eff es ()
 generateOtelFacetsBatch projectIds timestamp = do
   forM_ projectIds \pid -> void $ Facets.generateAndSaveFacets (Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText pid) "otel_logs_and_spans" Facets.facetColumns 50 timestamp
   Log.logInfo "Completed batch OTLP facets generation for projects" ("project_count", AE.toJSON $ V.length projectIds)
@@ -605,8 +605,8 @@ queryMonitorsTriggered queryMonitorIds = do
       else do
         if Just True
           == ( monitorE.warningThreshold <&> \warningThreshold ->
-                (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
-                  || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
+                 (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
+                   || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
              )
           then handleQueryMonitorThreshold monitorE False
           else pass
