@@ -352,20 +352,17 @@ processFiveMinuteSpans :: UTCTime -> ATBackgroundCtx ()
 processFiveMinuteSpans scheduledTime = do
   ctx <- ask @Config.AuthContext
   let fiveMinutesAgo = addUTCTime (-300) scheduledTime
-
+  Log.logInfo "Getting HTTP spans from 5-minute window" ()
   -- Get HTTP spans from last 5 minutes
+  -- instead of all http spans, we should target apitoolkit specific custom spans (monoscope.http, apitoolkit-http-span)
   httpSpans <-
     dbtToEff
       $ query
-        [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+        [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
                      hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
               FROM otel_logs_and_spans 
           WHERE timestamp >= ? AND timestamp < ?
-          AND kind IN ('server', 'client')
-          AND (name LIKE '%http%' 
-               OR attributes___http___request___method IS NOT NULL
-               OR attributes___http___response___status_code IS NOT NULL
-               OR attributes___url___full IS NOT NULL)   
+          AND (name LIKE '%http%')   
           ORDER BY project_id |]
         (fiveMinutesAgo, scheduledTime)
 
@@ -397,6 +394,7 @@ processOneMinuteErrors scheduledTime = do
   -- 1. Spans with error status
   -- 2. Spans with exception events
   -- 3. Spans with error attributes
+  Log.logInfo "Getting HTTP spans from 5-minute window" ()
   spansWithErrors <-
     dbtToEff
       $ query
@@ -426,14 +424,14 @@ processOneMinuteErrors scheduledTime = do
           ORDER BY project_id |]
         (oneMinuteAgo, scheduledTime)
 
-  Log.logInfo "Processing spans with errors from 1-minute window" ("span_count", AE.toJSON $ V.length spansWithErrors)
+  -- Log.logInfo "Processing spans with errors from 1-minute window" ("span_count", AE.toJSON $ V.length spansWithErrors)
 
   -- Extract errors from all spans using the existing getAllATErrors function
   let allErrors = Telemetry.getAllATErrors spansWithErrors
 
-  Log.logInfo "Found errors to process" ("error_count", AE.toJSON $ V.length allErrors)
+  -- Log.logInfo "Found errors to process" ("error_count", AE.toJSON $ V.length allErrors)
 
-  -- Group errors by project
+-- Group errors by project
   let errorsByProject = V.groupBy (\a b -> a.projectId == b.projectId) allErrors
 
   forM_ errorsByProject \projectErrors -> case V.uncons projectErrors of
@@ -443,7 +441,7 @@ processOneMinuteErrors scheduledTime = do
         -- Process errors for this project
         processProjectErrors pid projectErrors
 
-  Log.logInfo "Completed 1-minute error processing" ()
+  -- Log.logInfo "Completed 1-minute error processing" ()
 
 
 -- | Process and insert errors for a specific project
