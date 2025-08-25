@@ -4,9 +4,6 @@ BEGIN;
 -- Drop the old issues table
 DROP TABLE IF EXISTS apis.issues CASCADE;
 
--- Create issue type enum
-CREATE TYPE apis.issue_type AS ENUM ('api_change', 'runtime_exception', 'query_alert');
-
 -- Create the new issues table
 CREATE TABLE apis.issues
 (
