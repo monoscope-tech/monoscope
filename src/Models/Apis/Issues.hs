@@ -269,22 +269,22 @@ insertIssue issue = void $ execute q issue
   where
     q =
       [sql|
-      INSERT INTO apis.issues (
-        id, created_at, updated_at, project_id, issue_type, endpoint_hash,
-        acknowledged_at, acknowledged_by, archived_at,
-        title, service, critical, severity,
-        affected_requests, affected_clients, error_rate,
-        recommended_action, migration_complexity,
-        issue_data, request_payloads, response_payloads, 
-        llm_enhanced_at, llm_enhancement_version
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT (project_id, issue_type, endpoint_hash) 
-      WHERE acknowledged_at IS NULL AND archived_at IS NULL
-      DO UPDATE SET
-        updated_at = EXCLUDED.updated_at,
-        affected_requests = issues.affected_requests + EXCLUDED.affected_requests,
-        affected_clients = MAX(issues.affected_clients, EXCLUDED.affected_clients),
-        issue_data = issues.issue_data || EXCLUDED.issue_data
+INSERT INTO apis.issues (
+  id, created_at, updated_at, project_id, issue_type, endpoint_hash,
+  acknowledged_at, acknowledged_by, archived_at,
+  title, service, critical, severity,
+  affected_requests, affected_clients, error_rate,
+  recommended_action, migration_complexity,
+  issue_data, request_payloads, response_payloads, 
+  llm_enhanced_at, llm_enhancement_version
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (project_id, issue_type, endpoint_hash) 
+DO UPDATE SET
+  updated_at = EXCLUDED.updated_at,
+  affected_requests = issues.affected_requests + EXCLUDED.affected_requests,
+  affected_clients = GREATEST(issues.affected_clients, EXCLUDED.affected_clients),
+  issue_data = issues.issue_data || EXCLUDED.issue_data
+WHERE issues.acknowledged_at IS NULL AND issues.archived_at IS NULL
     |]
 
 

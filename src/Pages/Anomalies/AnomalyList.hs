@@ -183,7 +183,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
 
   let fLimit = 10
   -- Toggle between mock data and real database queries
-  let useMockData = True -- Set to False to use real database data
+  let useMockData = False -- Set to False to use real database data
   issues <-
     if useMockData
       then do

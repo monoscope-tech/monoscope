@@ -230,19 +230,20 @@ processBackgroundJob authCtx job bgJob =
           -- Schedule each hourly job to run at the appropriate hour
           let scheduledTime = addUTCTime (fromIntegral $ hour * 3600) currentTime
           _ <- scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob scheduledTime hour) scheduledTime
+          pass
 
-          -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
-          forM_ [0 .. 287] \interval -> do
-            let scheduledTime2 = addUTCTime (fromIntegral $ interval * 300) currentTime
-            scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteSpanProcessing scheduledTime2) scheduledTime2
+        -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
+        forM_ [0 .. 287] \interval -> do
+          let scheduledTime2 = addUTCTime (fromIntegral $ interval * 300) currentTime
+          scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteSpanProcessing scheduledTime2) scheduledTime2
 
-          -- Schedule 1-minute error processing jobs (1440 jobs per day = 24 hours * 60 per hour)
-          forM_ [0 .. 1439] \interval -> do
+        -- Schedule 1-minute error processing jobs (1440 jobs per hour = 24 hours * 60 per hour)
+        forM_ [0 .. 1439] \interval -> do
             let scheduledTime3 = addUTCTime (fromIntegral $ interval * 60) currentTime
             scheduleJob conn "background_jobs" (BackgroundJobs.OneMinuteErrorProcessing scheduledTime3) scheduledTime3
 
-          -- Schedule issue enhancement processing every hour
-          forM_ [0 .. 23] \hr -> do
+        -- Schedule issue enhancement processing every hour
+        forM_ [0 .. 23] \hr -> do
             let scheduledTime4 = addUTCTime (fromIntegral $ hr * 3600) currentTime
             scheduleJob conn "background_jobs" (BackgroundJobs.ProcessIssuesEnhancement scheduledTime4) scheduledTime4
 
@@ -387,21 +388,21 @@ processFiveMinuteSpans scheduledTime = do
 processOneMinuteErrors :: UTCTime -> ATBackgroundCtx ()
 processOneMinuteErrors scheduledTime = do
   ctx <- ask @Config.AuthContext
-  let oneMinuteAgo = addUTCTime (-60) scheduledTime
+  -- let oneMinuteAgo = addUTCTime (-0) scheduledTime
 
   -- Get all spans with errors from last minute
   -- Check for:
   -- 1. Spans with error status
   -- 2. Spans with exception events
   -- 3. Spans with error attributes
-  Log.logInfo "Getting HTTP spans from 5-minute window" ()
+  Log.logInfo "Getting error spans from 5-minute window" ()
   spansWithErrors <-
     dbtToEff
       $ query
-        [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+        [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
                      hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
               FROM otel_logs_and_spans 
-          WHERE timestamp >= ? AND timestamp < ?
+          WHERE timestamp < ?
           AND (
             -- Check for error status
             status_code = 'error' OR status_code = 'ERROR' OR status_code = '2'
@@ -422,8 +423,7 @@ processOneMinuteErrors scheduledTime = do
             OR attributes->>'exception.message' IS NOT NULL
           )
           ORDER BY project_id |]
-        (oneMinuteAgo, scheduledTime)
-
+        (Only scheduledTime)
   -- Log.logInfo "Processing spans with errors from 1-minute window" ("span_count", AE.toJSON $ V.length spansWithErrors)
 
   -- Extract errors from all spans using the existing getAllATErrors function
@@ -774,7 +774,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
       project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
       users <- dbtToEff $ Projects.usersByProjectId pid
 
-      -- Create one issue per error
+-- Create one issue per error
       forM_ errors \err -> do
         issue <- liftIO $ Issues.createRuntimeExceptionIssue pid err.errorData
         dbtToEff $ Issues.insertIssue issue
