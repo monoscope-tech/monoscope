@@ -185,7 +185,11 @@ export class LogList extends LitElement {
     }
 
     // Global event listeners
-    ['submit', 'add-query', 'update-query'].forEach((ev) => window.addEventListener(ev, () => this.debouncedRefetchLogs()));
+    ['submit', 'add-query', 'update-query'].forEach((ev) =>
+      window.addEventListener(ev, () => {
+        this.debouncedRefetchLogs();
+      })
+    );
 
     // Form submit listener
     document.addEventListener('submit', (e) => {
@@ -266,6 +270,7 @@ export class LogList extends LitElement {
     }
 
     // Always get the last item based on current direction
+    // TODO: fix getting last or first item is not always correct
     const lastItem = this.flipDirection ? this.spanListTree[0] : this.spanListTree[this.spanListTree.length - 1];
     const timestamp = lastItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
 
@@ -285,12 +290,10 @@ export class LogList extends LitElement {
   }
 
   async refetchLogs() {
-    this.isLoading = true;
-    this.showLoadingSpinner(true);
     this.fetchData(this.buildJsonUrl(), true);
   }
 
-  debouncedRefetchLogs = debounce(() => {
+  debouncedRefetchLogs = debounce(async () => {
     this.refetchLogs();
   }, 300);
 
@@ -1215,9 +1218,6 @@ export class LogList extends LitElement {
       `;
       return rowHtml;
     } catch (error) {
-      console.error('Error in logItemRow:', error);
-      console.error('rowData:', rowData);
-      console.error('Stack trace:', error.stack);
       return html`<tr>
         <td colspan="${this.logsColumns.length}">Error rendering row: ${error.message}</td>
       </tr>`;
