@@ -388,7 +388,7 @@ processFiveMinuteSpans scheduledTime = do
 processOneMinuteErrors :: UTCTime -> ATBackgroundCtx ()
 processOneMinuteErrors scheduledTime = do
   ctx <- ask @Config.AuthContext
-  -- let oneMinuteAgo = addUTCTime (-0) scheduledTime
+  let oneMinuteAgo = addUTCTime (-0) scheduledTime
 
   -- Get all spans with errors from last minute
   -- Check for:
@@ -402,7 +402,7 @@ processOneMinuteErrors scheduledTime = do
         [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
                      hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
               FROM otel_logs_and_spans 
-          WHERE timestamp < ?
+          WHERE timestamp >= ? AND timestamp < ?
           AND (
             -- Check for error status
             status_code = 'error' OR status_code = 'ERROR' OR status_code = '2'
@@ -423,7 +423,7 @@ processOneMinuteErrors scheduledTime = do
             OR attributes->>'exception.message' IS NOT NULL
           )
           ORDER BY project_id |]
-        (Only scheduledTime)
+        (oneMinuteAgo,scheduledTime)
   -- Log.logInfo "Processing spans with errors from 1-minute window" ("span_count", AE.toJSON $ V.length spansWithErrors)
 
   -- Extract errors from all spans using the existing getAllATErrors function
