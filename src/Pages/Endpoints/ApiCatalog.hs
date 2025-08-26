@@ -1,4 +1,4 @@
-module Pages.Endpoints.ApiCatalog (apiCatalogH, HostEventsVM (..), endpointListGetH, renderEndpoint, CatalogList, EndpointRequestStatsVM (..), EnpReqStatsVM (..)) where
+module Pages.Endpoints.ApiCatalog (apiCatalogH, HostEventsVM (..), endpointListGetH, renderEndpoint, CatalogList (..), EndpointRequestStatsVM (..), EnpReqStatsVM (..)) where
 
 import Data.Default (def)
 import Data.Text qualified as T

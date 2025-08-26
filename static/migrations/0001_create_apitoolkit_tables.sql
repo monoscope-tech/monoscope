@@ -320,8 +320,8 @@ CREATE TABLE IF NOT EXISTS apis.anomalies
   created_at     TIMESTAMP           WITH       TIME        ZONE       NOT               NULL    DEFAULT current_timestamp,
   updated_at     TIMESTAMP           WITH       TIME        ZONE       NOT               NULL    DEFAULT current_timestamp,
   project_id     uuid                NOT        NULL        REFERENCES projects.projects (id)    ON      DELETE CASCADE,
-  acknowleged_at TIMESTAMP           WITH       TIME        ZONE,
-  acknowleged_by UUID                REFERENCES users.users (id),
+  acknowledged_at TIMESTAMP           WITH       TIME        ZONE,
+  acknowledged_by UUID                REFERENCES users.users (id),
   anomaly_type   apis.anomaly_type   NOT        NULL        DEFAULT    'unknown'::apis.anomaly_type,
   action         apis.anomaly_action NOT        NULL        DEFAULT    'unknown'::apis.anomaly_action,
   target_hash    text,
@@ -330,8 +330,8 @@ CREATE TABLE IF NOT EXISTS apis.anomalies
 SELECT manage_updated_at('apis.anomalies');
 CREATE INDEX IF NOT EXISTS idx_apis_anomalies_project_id ON apis.anomalies(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_anomalies_project_id_target_hash ON apis.anomalies(project_id, target_hash);
-ALTER TABLE apis.anomalies DROP CONSTRAINT IF EXISTS anomalies_acknowleged_by_fkey;
-ALTER TABLE apis.anomalies ADD CONSTRAINT anomalies_acknowleged_by_fkey FOREIGN KEY (acknowleged_by) REFERENCES users.users (id) ON DELETE CASCADE;
+ALTER TABLE apis.anomalies DROP CONSTRAINT IF EXISTS anomalies_acknowledged_by_fkey;
+ALTER TABLE apis.anomalies ADD CONSTRAINT anomalies_acknowledged_by_fkey FOREIGN KEY (acknowledged_by) REFERENCES users.users (id) ON DELETE CASCADE;
 
 CREATE OR REPLACE FUNCTION apis.new_anomaly_proc() RETURNS trigger AS $$
 DECLARE

@@ -86,8 +86,8 @@ acknowlegeAnomalyGetH pid aid hostM = do
 unAcknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
 unAcknowlegeAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
-  let q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
-  let qI = [sql| update apis.issues set acknowleged_by=null, acknowleged_at=null where id=? |]
+  let q = [sql| update apis.anomalies set acknowledged_by=null, acknowledged_at=null where id=? |]
+  let qI = [sql| update apis.issues set acknowledged_by=null, acknowledged_at=null where id=? |]
   _ <- dbtToEff $ execute qI (Only aid)
   _ <- dbtToEff $ execute q (Only aid)
   addRespHeaders $ Acknowlege pid (Issues.IssueId aid.unAnomalyId) False

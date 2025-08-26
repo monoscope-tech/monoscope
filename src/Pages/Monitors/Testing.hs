@@ -2,6 +2,7 @@ module Pages.Monitors.Testing (
   collectionDashboard,
   MonitorType (..),
   UnifiedMonitorItem (..),
+  UnifiedMonitorDetails (..),
   unifiedMonitorsGetH,
   unifiedMonitorOverviewH,
   statusBadge_,

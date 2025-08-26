@@ -41,10 +41,9 @@ spec = aroundAll withTestResources do
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger ListProjects.listProjectsGetH
       let (projects, _demoProject) = pg.unwrap.content
-      length projects `shouldBe` 2
-      -- Should have both demo project and test project created in testSessionHeader
+      length projects `shouldBe` 1
+      -- Should have the test project created in testSessionHeader (user doesn't have access to demo project)
       let projectIds = map (.id.toText) (V.toList projects)
-      projectIds `shouldContain` ["00000000-0000-0000-0000-000000000000"] -- demo project
       projectIds `shouldContain` ["12345678-9abc-def0-1234-56789abcdef0"] -- test project from testSessionHeader
     -- TODO: add more checks for the info we we display on list page
 

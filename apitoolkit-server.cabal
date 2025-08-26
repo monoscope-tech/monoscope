@@ -33,6 +33,7 @@ extra-source-files:
     static/migrations/0003_facets_table.sql
     static/migrations/0006_add_llm_enhancement_tracking.sql
     static/migrations/0007_rebuild_issues_table.sql
+    static/migrations/0008_use_non_defferable_contraint_on_issues.sql
     static/public/android-chrome-192x192.png
     static/public/android-chrome-512x512.png
     static/public/apple-touch-icon.png
@@ -328,6 +329,10 @@ library
       Models.Apis.Formats
       Models.Apis.Issues
       Models.Apis.Issues.Enhancement
+      Models.Apis.Issues_BACKUP_58751
+      Models.Apis.Issues_BASE_58751
+      Models.Apis.Issues_LOCAL_58751
+      Models.Apis.Issues_REMOTE_58751
       Models.Apis.Monitors
       Models.Apis.Reports
       Models.Apis.RequestDumps
