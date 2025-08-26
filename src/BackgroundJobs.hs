@@ -388,7 +388,7 @@ processFiveMinuteSpans scheduledTime = do
 processOneMinuteErrors :: UTCTime -> ATBackgroundCtx ()
 processOneMinuteErrors scheduledTime = do
   ctx <- ask @Config.AuthContext
-  let oneMinuteAgo = addUTCTime (-0) scheduledTime
+  let oneMinuteAgo = addUTCTime (-60) scheduledTime
 
   -- Get all spans with errors from last minute
   -- Check for:
