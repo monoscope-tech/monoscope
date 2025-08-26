@@ -43,6 +43,10 @@ spec = aroundAll TestUtils.withSetup do
                 , since = "7d"
                 , from = ""
                 , to = ""
+                , frequency = Nothing
+                , timeWindow = Nothing
+                , conditionType = Just "threshold_exceeded"
+                , source = Nothing
                 }
       respC <- withPool pool $ Monitors.queryMonitorUpsert queryMonitor
       respC `shouldBe` 1

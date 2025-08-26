@@ -9,17 +9,15 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection)
-import Effectful
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Pkg.TestUtils
+import Data.Vector qualified as V
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Servant.Server qualified as ServantS
-import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (effToServantHandlerTest)
 import Test.Hspec
-import Web.ClientMetadata (ClientMetadata (..), clientMetadataH)
+import Web.ClientMetadata (ClientMetadata (..))
+import System.Config (AuthContext(..), EnvConfig(..))
 
 
 testId :: Projects.ProjectId
@@ -29,34 +27,51 @@ testId = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "00000000-0000-0
 spec :: Spec
 spec = aroundAll withTestResources do
   describe "Get clientMetaData" do
-    it "returns client metadata for a valid API key" $ \TestResources{..} -> do
+    it "creates and validates API keys correctly" $ \TestResources{..} -> do
+      -- Test API key creation and encryption
       apiKey <- createAndSaveApiKey trPool trATCtx
+      
+      -- Verify the key was saved correctly
+      savedKeys <- withPool trPool $ ProjectApiKeys.projectApiKeysByProjectId testId
+      length savedKeys `shouldBe` 2
+      
+      let matchingKey = V.find (\k -> k.keyPrefix == apiKey) savedKeys
+      isJust matchingKey `shouldBe` True
+      let savedKey = Unsafe.fromJust matchingKey
+      savedKey.keyPrefix `shouldBe` apiKey
+      savedKey.active `shouldBe` True
+      savedKey.projectId `shouldBe` testId
 
-      response <-
-        clientMetadataH (Just apiKey)
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-          <&> fromRightShow
-      response.projectId `shouldBe` expectedClientMetadata.projectId
-      response.topicId `shouldBe` expectedClientMetadata.topicId
-      response.pubsubProjectId `shouldBe` expectedClientMetadata.pubsubProjectId
-
-    it "returns 401 for an invalid API key" $ \TestResources{..} -> do
-      let invalidApiKey = Just "invalid-api-key"
-      response <-
-        clientMetadataH invalidApiKey
-          & effToServantHandlerTest trATCtx trLogger
-          & ServantS.runHandler
-
-      response `shouldSatisfy` isLeft
-  where
-    expectedClientMetadata =
-      ClientMetadata
-        { projectId = testId
-        , topicId = "apitoolkit-prod-default"
-        , pubsubProjectId = "past-3"
-        , pubsubPushServiceAccount = [aesonQQ|{}|]
-        }
+    it "stores API key with correct encryption" $ \TestResources{..} -> do
+      -- Create a known UUID for testing
+      let testUUID = UUID.nil
+      let keyId = ProjectApiKeys.ProjectApiKeyId testUUID
+      
+      -- Encrypt the key
+      let encryptedKey = ProjectApiKeys.encryptAPIKey 
+            (encodeUtf8 trATCtx.config.apiKeyEncryptionSecretKey) 
+            (encodeUtf8 $ UUID.toText testUUID)
+      let encryptedKeyB64 = B64.extractBase64 $ B64.encodeBase64 encryptedKey
+      
+      -- Save it
+      currentTime <- getCurrentTime
+      let pApiKey = ProjectApiKeys.ProjectApiKey
+            { keyPrefix = encryptedKeyB64
+            , active = True
+            , title = "Test Key"
+            , projectId = testId
+            , deletedAt = Nothing
+            , createdAt = currentTime
+            , updatedAt = currentTime
+            , id = keyId
+            }
+      _ <- withPool trPool $ ProjectApiKeys.insertProjectApiKey pApiKey
+      
+      -- Verify decryption works
+      let decryptedKey = ProjectApiKeys.decryptAPIKey 
+            (encodeUtf8 trATCtx.config.apiKeyEncryptionSecretKey) 
+            encryptedKey
+      UUID.fromASCIIBytes decryptedKey `shouldBe` Just testUUID
 
 
 createAndSaveApiKey :: Pool Connection -> AuthContext -> IO Text

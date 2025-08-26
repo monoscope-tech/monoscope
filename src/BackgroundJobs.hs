@@ -319,7 +319,7 @@ runHourlyJob scheduledTime hour = do
   activeProjects <-
     dbtToEff
       $ query
-        [sql| SELECT DISTINCT project_id 
+        [sql| SELECT DISTINCT project_id::text 
               FROM otel_logs_and_spans ols
               WHERE ols.timestamp >= ?
                 AND ols.timestamp <= ? |]
@@ -359,8 +359,16 @@ processFiveMinuteSpans scheduledTime = do
   httpSpans <-
     dbtToEff
       $ query
+<<<<<<< Updated upstream
         [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
                      hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
+||||||| constructed merge base
+        [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+                     hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
+=======
+        [sql| SELECT project_id::text, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+                     hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id::text, summary, date
+>>>>>>> Stashed changes
               FROM otel_logs_and_spans 
           WHERE timestamp >= ? AND timestamp < ?
           AND (name LIKE '%http%')   
@@ -399,8 +407,16 @@ processOneMinuteErrors scheduledTime = do
   spansWithErrors <-
     dbtToEff
       $ query
+<<<<<<< Updated upstream
         [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
                      hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
+||||||| constructed merge base
+        [sql| SELECT project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+                     hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
+=======
+        [sql| SELECT project_id::text, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+                     hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id::text, summary, date
+>>>>>>> Stashed changes
               FROM otel_logs_and_spans 
           WHERE timestamp >= ? AND timestamp < ?
           AND (

@@ -46,7 +46,7 @@ import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Connection, Only (..), close, connectPostgreSQL, execute, execute_, query)
+import Database.PostgreSQL.Simple (Connection, Only (..), close, connectPostgreSQL, execute, execute_, query, query_)
 import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory, MigrationInitialization))
 import Database.PostgreSQL.Simple.Migration qualified as Migration
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -103,6 +103,10 @@ migrate db = do
   let q =
         [sql| INSERT into users.users (id, first_name, last_name, email) 
               VALUES ('00000000-0000-0000-0000-000000000000', 'FN', 'LN', 'test@apitoolkit.io')
+              ON CONFLICT (id) DO NOTHING;
+              
+              INSERT INTO projects.projects (id, title, description)
+              VALUES ('00000000-0000-0000-0000-000000000000', 'Test Project', 'Test project for integration tests')
               ON CONFLICT (id) DO NOTHING;
               
               INSERT into projects.project_api_keys (active, project_id, title, key_prefix) 
@@ -242,14 +246,10 @@ ensureTemplateDatabase masterConnStr templateDbName = do
     -- Drop existing template if it exists
     when exists $ do
       -- First, terminate any connections to the template database
-      _ <-
-        execute
+      _ :: [Only Bool] <-
+        query_
           masterConn
-          [sql| SELECT pg_terminate_backend(pg_stat_activity.pid)
-              FROM pg_stat_activity
-              WHERE pg_stat_activity.datname = ?
-                AND pid <> pg_backend_pid() |]
-          (Only templateDbName)
+          (Query $ encodeUtf8 $ "SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.datname = '" <> templateDbName <> "' AND pid <> pg_backend_pid()")
 
       _ <-
         execute
@@ -277,6 +277,10 @@ ensureTemplateDatabase masterConnStr templateDbName = do
     let setupData =
           [sql| INSERT into users.users (id, first_name, last_name, email) 
                 VALUES ('00000000-0000-0000-0000-000000000000', 'FN', 'LN', 'test@apitoolkit.io')
+                ON CONFLICT (id) DO NOTHING;
+                
+                INSERT INTO projects.projects (id, title, description)
+                VALUES ('00000000-0000-0000-0000-000000000000', 'Test Project', 'Test project for integration tests')
                 ON CONFLICT (id) DO NOTHING;
                 
                 INSERT into projects.project_api_keys (active, project_id, title, key_prefix) 

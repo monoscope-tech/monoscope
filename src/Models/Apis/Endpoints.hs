@@ -162,7 +162,7 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
 
     isOutgoing = requestType == "Outgoing"
     offset = page * 30
-    ackdAt = if ackd && not archived then "AND ann.acknowleged_at IS NOT NULL AND ann.archived_at IS NULL " else "AND ann.acknowleged_at IS NULL "
+    ackdAt = if ackd && not archived then "AND ann.acknowledged_at IS NOT NULL AND ann.archived_at IS NULL " else "AND ann.acknowledged_at IS NULL "
     archivedAt = if archived then "AND ann.archived_at IS NOT NULL " else " AND ann.archived_at IS NULL"
     search = case searchM of Just s -> " AND enp.url_path LIKE '%" <> s <> "%'"; Nothing -> ""
     pHostQuery = case pHostM of Just h -> " AND enp.host = ?"; Nothing -> ""
@@ -173,17 +173,17 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
       [text| SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, enp.host, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0),  coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) ,
          coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(ers.total_requests,0), coalesce(total_requests_proj,0),
          (SELECT count(*) from apis.issues
-                 where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
+                 where project_id=enp.project_id AND acknowledged_at is null AND archived_at is null AND issue_type = 'api_change'
          ) ongoing_anomalies,
         (SELECT count(*) from apis.issues
-                 where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
+                 where project_id=enp.project_id AND acknowledged_at is null AND archived_at is null AND issue_type = 'api_change'
         ) ongoing_anomalies_proj,
-        ann.acknowleged_at,
+        ann.acknowledged_at,
         ann.archived_at,
         ann.id
      from apis.endpoints enp
      left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
-     left join apis.issues ann on (ann.anomaly_type='endpoint' AND ann.target_hash=enp.hash)
+     left join apis.issues ann on (ann.issue_type='api_change' AND ann.endpoint_hash=enp.hash)
      where enp.project_id=? and ann.id is not null and enp.outgoing=? $ackdAt $archivedAt $pHostQuery $search
      order by $orderBy , url_path ASC
      offset ? limit 30;
@@ -199,12 +199,12 @@ dependencyEndpointsRequestStatsByProject pid host ack arch sortM searchM page = 
       SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, enp.host, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0), coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) ,
          coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(total_requests,0), coalesce(total_requests_proj,0),
          (SELECT count(*) from apis.issues
-                 where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
+                 where project_id=enp.project_id AND acknowledged_at is null AND archived_at is null AND issue_type = 'api_change'
          ) ongoing_anomalies,
         (SELECT count(*) from apis.issues
-                 where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
+                 where project_id=enp.project_id AND acknowledged_at is null AND archived_at is null AND issue_type = 'api_change'
         ) ongoing_anomalies_proj,
-        ann.acknowleged_at,
+        ann.acknowledged_at,
         ann.archived_at,
         ann.id
      from apis.endpoints enp
@@ -225,10 +225,10 @@ endpointRequestStatsByEndpoint eid = queryOne q (eid, eid)
       (max, 0),
                    coalesce(total_time, 0), coalesce(total_time_proj,0), coalesce(total_requests,0), coalesce(total_requests_proj,0),
                    (SELECT count(*) from apis.anomalies
-                           where endpoint_id=? AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
+                           where endpoint_id=? AND acknowledged_at is null AND archived_at is null AND anomaly_type != 'field'
                    ) ongoing_anomalies,
                   (SELECT count(*) from apis.anomalies
-                           where project_id=project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
+                           where project_id=project_id AND acknowledged_at is null AND archived_at is null AND anomaly_type != 'field'
                    ) ongoing_anomalies_proj,
                   null, null, '00000000-0000-0000-0000-000000000000'::uuid
               FROM apis.endpoint_request_stats WHERE endpoint_id=?|]
@@ -392,11 +392,11 @@ countEndpointInbox pid host requestType = do
       [text|
         SELECT COUNT(*)
         FROM apis.endpoints enp
-        LEFT JOIN apis.issues ann ON (ann.anomaly_type = 'endpoint' AND ann.target_hash = enp.hash)
+        LEFT JOIN apis.issues ann ON (ann.issue_type = 'api_change' AND ann.endpoint_hash = enp.hash)
         WHERE
             enp.project_id = ?
             AND $showCountBaseOnRequestType
             AND ann.id IS NOT NULL
-            AND ann.acknowleged_at IS NULL
+            AND ann.acknowledged_at IS NULL
             AND host = ?
      |]

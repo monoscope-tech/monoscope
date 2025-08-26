@@ -49,6 +49,7 @@ import Database.PostgreSQL.Simple.FromField (FromField, ResultError (..), fromFi
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
+import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Anomalies (PayloadChange)
@@ -86,7 +87,7 @@ instance Default IssueType where
 
 
 issueTypeToText :: IssueType -> Text
-issueTypeToText APIChange = "shape" -- Maps to anomaly_type 'shape' in DB
+issueTypeToText APIChange = "api_change"
 issueTypeToText RuntimeException = "runtime_exception"
 issueTypeToText QueryAlert = "query_alert"
 
@@ -315,52 +316,68 @@ selectIssueById = selectOneByField [field| id |] . Only
 selectIssues :: Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> DBT IO (V.Vector IssueL)
 selectIssues pid typeM isAcknowledged isArchived limit offset = query q params
   where
+    -- Build WHERE conditions
+    acknowledgedCond = case isAcknowledged of
+      Just True -> " AND acknowledged_at IS NOT NULL"
+      Just False -> " AND acknowledged_at IS NULL"
+      Nothing -> ""
+    archivedCond = case isArchived of
+      Just True -> " AND archived_at IS NOT NULL"
+      Just False -> " AND archived_at IS NULL"
+      Nothing -> ""
+    typeCond = case typeM of
+      Just t -> " AND issue_type = '" <> issueTypeToText t <> "'"
+      Nothing -> ""
+
     -- Query must return columns in the exact order of IssueL fields
     q =
-      [sql|
-      SELECT 
-        id,                                               -- 1. id
-        created_at,                                       -- 2. createdAt
-        updated_at,                                       -- 3. updatedAt
-        project_id,                                       -- 4. projectId
-        issue_type::text,                              -- 5. issueType (converted)
-        endpoint_hash,                                    -- 6. endpointHash
-        acknowledged_at,                                  -- 7. acknowledgedAt
-        acknowledged_by,                                  -- 8. acknowledgedBy
-        archived_at,                                      -- 9. archivedAt
-        title,                                           -- 10. title
-        service,                                         -- 11. service
-        critical,                                        -- 12. critical
-        CASE WHEN critical THEN 'critical' ELSE 'info' END, -- 13. severity
-        affected_requests,                               -- 14. affectedRequests
-        affected_clients,                                -- 15. affectedClients
-        NULL::double precision,                          -- 16. errorRate
-        recommended_action,                              -- 17. recommendedAction
-        migration_complexity,                            -- 18. migrationComplexity
-        issue_data,                                      -- 19. issueData
-        request_payloads,                                -- 20. requestPayloads
-        response_payloads,                               -- 21. responsePayloads
-        NULL::timestamp with time zone,                  -- 22. llmEnhancedAt
-        NULL::int,                                       -- 23. llmEnhancementVersion
-        0::bigint,                                       -- 24. eventCount
-        updated_at                                       -- 25. lastSeen
-      FROM apis.issues
-      WHERE project_id = ?
-      ORDER BY critical DESC, created_at DESC
-      LIMIT ? OFFSET ?
-    |]
+      Query
+        $ encodeUtf8
+        $ "SELECT "
+          <> "id, "
+          <> "created_at, " -- 1. id
+          <> "updated_at, " -- 2. createdAt
+          <> "project_id, " -- 3. updatedAt
+          <> "issue_type::text, " -- 4. projectId
+          <> "endpoint_hash, " -- 5. issueType (converted)
+          <> "acknowledged_at, " -- 6. endpointHash
+          <> "acknowledged_by, " -- 7. acknowledgedAt
+          <> "archived_at, " -- 8. acknowledgedBy
+          <> "title, " -- 9. archivedAt
+          <> "service, " -- 10. title
+          <> "critical, " -- 11. service
+          <> "CASE WHEN critical THEN 'critical' ELSE 'info' END, " -- 12. critical
+          <> "affected_requests, " -- 13. severity
+          <> "affected_clients, " -- 14. affectedRequests
+          <> "NULL::double precision, " -- 15. affectedClients
+          <> "recommended_action, " -- 16. errorRate
+          <> "migration_complexity, " -- 17. recommendedAction
+          <> "issue_data, " -- 18. migrationComplexity
+          <> "request_payloads, " -- 19. issueData
+          <> "response_payloads, " -- 20. requestPayloads
+          <> "NULL::timestamp with time zone, " -- 21. responsePayloads
+          <> "NULL::int, " -- 22. llmEnhancedAt
+          <> "0::bigint, " -- 23. llmEnhancementVersion
+          <> "updated_at " -- 24. eventCount
+          <> "FROM apis.issues " -- 25. lastSeen
+          <> "WHERE project_id = ? "
+          <> acknowledgedCond
+          <> archivedCond
+          <> typeCond
+          <> " ORDER BY critical DESC, created_at DESC "
+          <> "LIMIT ? OFFSET ?"
     params = (pid, limit, offset)
 
 
 -- | Find open issue for endpoint
 findOpenIssueForEndpoint :: Projects.ProjectId -> Text -> DBT IO (Maybe Issue)
-findOpenIssueForEndpoint pid endpointHash = queryOne q (pid, "shape" :: Text, endpointHash)
+findOpenIssueForEndpoint pid endpointHash = queryOne q (pid, "api_change" :: Text, endpointHash)
   where
     q =
       [sql|
       SELECT * FROM apis.issues
       WHERE project_id = ? 
-        AND anomaly_type = ?
+        AND issue_type = ?
         AND endpoint_hash = ?
         AND acknowledged_at IS NULL
         AND archived_at IS NULL
@@ -377,7 +394,7 @@ updateIssueWithNewAnomaly issueId newData = void $ execute q (Aeson newData, iss
       UPDATE apis.issues
       SET 
         issue_data = issue_data || ?::jsonb,
-        affected_payloads = affected_payloads + 1,
+        affected_requests = affected_requests + 1,
         updated_at = NOW()
       WHERE id = ?
     |]

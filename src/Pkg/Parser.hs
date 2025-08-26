@@ -326,14 +326,16 @@ sqlFromQueryComponents sqlCfg qc =
               timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
              in
               [fmt|
-                SELECT GREATEST({alertSelect}) FROM {fromTable}
-                WHERE project_id='{sqlCfg.pid.toText}' and ({alertWhereCondition})
-                GROUP BY {timeBucketExpr}
+                SELECT MAX({alertSelect}) FROM (
+                  SELECT {alertSelect} FROM {fromTable}
+                  WHERE project_id='{sqlCfg.pid.toText}' and ({alertWhereCondition})
+                  GROUP BY {timeBucketExpr}
+                ) as time_buckets
               |]
           Nothing ->
             -- For regular summarize queries without time buckets
             [fmt|
-              SELECT GREATEST({alertSelect}) FROM {fromTable}
+              SELECT {alertSelect} FROM {fromTable}
               WHERE project_id='{sqlCfg.pid.toText}' and ({alertWhereCondition})
               {alertGroupByClause}
             |]
