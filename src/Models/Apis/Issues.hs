@@ -86,7 +86,7 @@ instance Default IssueType where
 
 
 issueTypeToText :: IssueType -> Text
-issueTypeToText APIChange = "shape" -- Maps to anomaly_type 'shape' in DB
+issueTypeToText APIChange = "api_change" -- Maps to anomaly_type 'shape' in DB
 issueTypeToText RuntimeException = "runtime_exception"
 issueTypeToText QueryAlert = "query_alert"
 
@@ -354,13 +354,13 @@ selectIssues pid typeM isAcknowledged isArchived limit offset = query q params
 
 -- | Find open issue for endpoint
 findOpenIssueForEndpoint :: Projects.ProjectId -> Text -> DBT IO (Maybe Issue)
-findOpenIssueForEndpoint pid endpointHash = queryOne q (pid, "shape" :: Text, endpointHash)
+findOpenIssueForEndpoint pid endpointHash = queryOne q (pid, "api_change" :: Text, endpointHash)
   where
     q =
       [sql|
       SELECT * FROM apis.issues
       WHERE project_id = ? 
-        AND anomaly_type = ?
+        AND issue_type = ?
         AND endpoint_hash = ?
         AND acknowledged_at IS NULL
         AND archived_at IS NULL

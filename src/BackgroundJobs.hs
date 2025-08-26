@@ -362,8 +362,7 @@ processFiveMinuteSpans scheduledTime = do
         [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
                      hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
               FROM otel_logs_and_spans 
-          WHERE timestamp >= ? AND timestamp < ?
-          AND (name LIKE '%http%')   
+          WHERE timestamp >= ? AND timestamp < ? AND (name = 'monoscope.http' OR name = 'apitoolkit-http-span')
           ORDER BY project_id |]
         (fiveMinutesAgo, scheduledTime)
 
@@ -400,7 +399,6 @@ processOneMinuteErrors scheduledTime = do
   -- 1. Spans with error status
   -- 2. Spans with exception events
   -- 3. Spans with error attributes
-  Log.logInfo "Getting error spans from 5-minute window" ()
   spansWithErrors <-
     dbtToEff
       $ query
@@ -429,7 +427,7 @@ processOneMinuteErrors scheduledTime = do
           )
           ORDER BY project_id |]
         (oneMinuteAgo, scheduledTime)
-  -- Log.logInfo "Processing spans with errors from 1-minute window" ("span_count", AE.toJSON $ V.length spansWithErrors)
+  Log.logInfo "Processing spans with errors from 1-minute window" ("span_count", AE.toJSON $ V.length spansWithErrors)
 
   -- Extract errors from all spans using the existing getAllATErrors function
   let allErrors = Telemetry.getAllATErrors spansWithErrors
@@ -839,7 +837,7 @@ processAPIChangeAnomalies pid targetHashes = do
 
   -- Group by endpoint hash
   let anomaliesByEndpoint = groupAnomaliesByEndpointHash anomaliesVM
-
+  
   -- Process each endpoint group
   forM_ anomaliesByEndpoint \(endpointHash, anomalies) -> do
     -- Check for existing open issue

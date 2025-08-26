@@ -284,10 +284,10 @@ from
     LEFT JOIN apis.shapes on (target_hash = shapes.hash AND an.project_id = shapes.project_id)
     LEFT JOIN apis.endpoints ON (starts_with(an.target_hash, endpoints.hash) AND an.project_id = endpoints.project_id)
 where
-  ((anomaly_type = 'endpoint')
-    OR (anomaly_type = 'shape' AND endpoints.project_id = an.project_id AND endpoints.created_at != an.created_at)
-    OR (anomaly_type = 'format' AND fields.project_id = an.project_id AND fields.created_at != an.created_at)
-    OR NOT ( anomaly_type = ANY('{"endpoint","shape","field","format"}'::apis.anomaly_type[]))
+  ((an.anomaly_type = 'endpoint')
+    OR (an.anomaly_type = 'shape' AND endpoints.project_id = an.project_id AND endpoints.created_at != an.created_at)
+    OR (an.anomaly_type = 'format' AND fields.project_id = an.project_id AND fields.created_at != an.created_at)
+    OR NOT (an.anomaly_type = ANY('{"endpoint","shape","field","format"}'::apis.anomaly_type[]))
   ) AND an.project_id=? AND an.target_hash=ANY(?)
       |]
 
