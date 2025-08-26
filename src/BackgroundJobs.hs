@@ -239,13 +239,13 @@ processBackgroundJob authCtx job bgJob =
 
         -- Schedule 1-minute error processing jobs (1440 jobs per hour = 24 hours * 60 per hour)
         forM_ [0 .. 1439] \interval -> do
-            let scheduledTime3 = addUTCTime (fromIntegral $ interval * 60) currentTime
-            scheduleJob conn "background_jobs" (BackgroundJobs.OneMinuteErrorProcessing scheduledTime3) scheduledTime3
+          let scheduledTime3 = addUTCTime (fromIntegral $ interval * 60) currentTime
+          scheduleJob conn "background_jobs" (BackgroundJobs.OneMinuteErrorProcessing scheduledTime3) scheduledTime3
 
         -- Schedule issue enhancement processing every hour
         forM_ [0 .. 23] \hr -> do
-            let scheduledTime4 = addUTCTime (fromIntegral $ hr * 3600) currentTime
-            scheduleJob conn "background_jobs" (BackgroundJobs.ProcessIssuesEnhancement scheduledTime4) scheduledTime4
+          let scheduledTime4 = addUTCTime (fromIntegral $ hr * 3600) currentTime
+          scheduleJob conn "background_jobs" (BackgroundJobs.ProcessIssuesEnhancement scheduledTime4) scheduledTime4
 
       -- Handle regular daily jobs for each project
       projects <- dbtToEff $ query [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
@@ -423,7 +423,7 @@ processOneMinuteErrors scheduledTime = do
             OR attributes->>'exception.message' IS NOT NULL
           )
           ORDER BY project_id |]
-        (oneMinuteAgo,scheduledTime)
+        (oneMinuteAgo, scheduledTime)
   -- Log.logInfo "Processing spans with errors from 1-minute window" ("span_count", AE.toJSON $ V.length spansWithErrors)
 
   -- Extract errors from all spans using the existing getAllATErrors function
@@ -431,7 +431,7 @@ processOneMinuteErrors scheduledTime = do
 
   -- Log.logInfo "Found errors to process" ("error_count", AE.toJSON $ V.length allErrors)
 
--- Group errors by project
+  -- Group errors by project
   let errorsByProject = V.groupBy (\a b -> a.projectId == b.projectId) allErrors
 
   forM_ errorsByProject \projectErrors -> case V.uncons projectErrors of
@@ -441,8 +441,8 @@ processOneMinuteErrors scheduledTime = do
         -- Process errors for this project
         processProjectErrors pid projectErrors
 
-  -- Log.logInfo "Completed 1-minute error processing" ()
 
+-- Log.logInfo "Completed 1-minute error processing" ()
 
 -- | Process and insert errors for a specific project
 processProjectErrors :: Projects.ProjectId -> V.Vector RequestDumps.ATError -> ATBackgroundCtx ()
@@ -774,7 +774,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
       project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
       users <- dbtToEff $ Projects.usersByProjectId pid
 
--- Create one issue per error
+      -- Create one issue per error
       forM_ errors \err -> do
         issue <- liftIO $ Issues.createRuntimeExceptionIssue pid err.errorData
         dbtToEff $ Issues.insertIssue issue
