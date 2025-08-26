@@ -388,7 +388,12 @@ processFiveMinuteSpans scheduledTime = do
 processOneMinuteErrors :: UTCTime -> ATBackgroundCtx ()
 processOneMinuteErrors scheduledTime = do
   ctx <- ask @Config.AuthContext
-  let oneMinuteAgo = addUTCTime (-60) scheduledTime
+  -- This processing might happen before the spans within the timestamp are stored in db
+  -- hence will be missed and never get processed
+  -- since we use hashes of errors and don't insert same error twice
+  -- we can increase the window to account for time spent on kafka
+  -- use five minutes for now before use a better solution
+  let oneMinuteAgo = addUTCTime (-60*5) scheduledTime
 
   -- Get all spans with errors from last minute
   -- Check for:
