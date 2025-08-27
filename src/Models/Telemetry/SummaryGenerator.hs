@@ -55,7 +55,16 @@ generateLogSummary otel =
                     then T.take 497 attrText <> "..."
                     else attrText
              in  "attributes;text-textWeak⇒" <> truncated
-      _ -> "attributes;text-textWeak⇒{}"
+      _ -> case unAesonTextMaybe otel.resource of
+        Just res
+          | not (Map.null res) ->
+              let resText = TE.decodeUtf8 $ BSL.toStrict $ AE.encode res
+                  truncated =
+                    if T.length resText > 500
+                      then T.take 497 resText <> "..."
+                      else resText
+               in "resource;text-textWeak⇒" <> truncated
+        _ -> "attributes;text-textWeak⇒{}"
 
     -- Elements for raw data logs
     rawDataLogElements =
@@ -157,7 +166,16 @@ generateSpanSummary otel =
                     then T.take 497 attrText <> "..."
                     else attrText
              in  "attributes;text-textWeak⇒" <> truncated
-      _ -> "attributes;text-textWeak⇒{}"
+      _ -> case unAesonTextMaybe otel.resource of
+        Just res
+          | not (Map.null res) ->
+              let resText = TE.decodeUtf8 $ BSL.toStrict $ AE.encode res
+                  truncated =
+                    if T.length resText > 500
+                      then T.take 497 resText <> "..."
+                      else resText
+               in "resource;text-textWeak⇒" <> truncated
+        _ -> "attributes;text-textWeak⇒{}"
 
     -- Resource fallback elements for empty spans
     resourceFallbackElements =
