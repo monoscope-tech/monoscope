@@ -45,27 +45,6 @@ generateLogSummary otel =
 
     elements = if isRawDataLog then rawDataLogElements else normalLogElements
 
-    attributesFallback = case unAesonTextMaybe otel.attributes of
-      Just attrs
-        | not (Map.null attrs) ->
-            let attrText = TE.decodeUtf8 $ BSL.toStrict $ AE.encode attrs
-                -- Limit attributes to 500 characters
-                truncated =
-                  if T.length attrText > 500
-                    then T.take 497 attrText <> "..."
-                    else attrText
-             in  "attributes;text-textWeak⇒" <> truncated
-      _ -> case unAesonTextMaybe otel.resource of
-        Just res
-          | not (Map.null res) ->
-              let resText = TE.decodeUtf8 $ BSL.toStrict $ AE.encode res
-                  truncated =
-                    if T.length resText > 500
-                      then T.take 497 resText <> "..."
-                      else resText
-               in "resource;text-textWeak⇒" <> truncated
-        _ -> "attributes;text-textWeak⇒{}"
-
     -- Elements for raw data logs
     rawDataLogElements =
       catMaybes
@@ -104,7 +83,9 @@ generateLogSummary otel =
         , -- Body
           case unAesonTextMaybe otel.body of
             Just (AE.String txt) -> Just txt
-            Just val -> Just $ T.take 200 $ T.pack $ show val
+            Just val -> case val of 
+              AE.Null -> Nothing
+              _ -> Just $ T.take 200 $ T.pack $ show val
             Nothing -> Nothing
         , -- Attributes (limited to avoid excessive length)
           case unAesonTextMaybe otel.attributes of
@@ -120,7 +101,7 @@ generateLogSummary otel =
             _ -> Nothing
         ]
    in
-    V.fromList $ if null elements then [attributesFallback] else elements
+    V.fromList $ if null elements then rawDataLogElements else elements
   where
     severityStyle sev = case sev of
       SLDebug -> "badge-neutral"
@@ -155,27 +136,6 @@ generateSpanSummary otel =
 
     -- Build elements in correct order
     elements = if isEmptySpan then resourceFallbackElements else normalElements 
-
-    attributesFallback = case unAesonTextMaybe otel.attributes of
-      Just attrs
-        | not (Map.null attrs) ->
-            let attrText = TE.decodeUtf8 $ BSL.toStrict $ AE.encode attrs
-                -- Limit attributes to 500 characters
-                truncated =
-                  if T.length attrText > 500
-                    then T.take 497 attrText <> "..."
-                    else attrText
-             in  "attributes;text-textWeak⇒" <> truncated
-      _ -> case unAesonTextMaybe otel.resource of
-        Just res
-          | not (Map.null res) ->
-              let resText = TE.decodeUtf8 $ BSL.toStrict $ AE.encode res
-                  truncated =
-                    if T.length resText > 500
-                      then T.take 497 resText <> "..."
-                      else resText
-               in "resource;text-textWeak⇒" <> truncated
-        _ -> "attributes;text-textWeak⇒{}"
 
     -- Resource fallback elements for empty spans
     resourceFallbackElements =
@@ -381,7 +341,7 @@ generateSpanSummary otel =
               Nothing
         ]
    in
-    V.fromList $ if null elements then [attributesFallback] else elements
+    V.fromList $ elements
 
 
 statusCodeStyle :: Int -> T.Text
