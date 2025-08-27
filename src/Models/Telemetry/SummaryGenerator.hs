@@ -45,6 +45,18 @@ generateLogSummary otel =
 
     elements = if isRawDataLog then rawDataLogElements else normalLogElements
 
+    attributesFallback = case unAesonTextMaybe otel.attributes of
+      Just attrs
+        | not (Map.null attrs) ->
+            let attrText = TE.decodeUtf8 $ BSL.toStrict $ AE.encode attrs
+                -- Limit attributes to 500 characters
+                truncated =
+                  if T.length attrText > 500
+                    then T.take 497 attrText <> "..."
+                    else attrText
+             in  "attributes;text-textWeak⇒" <> truncated
+      _ -> "attributes;text-textWeak⇒{}"
+
     -- Elements for raw data logs
     rawDataLogElements =
       catMaybes
@@ -99,7 +111,7 @@ generateLogSummary otel =
             _ -> Nothing
         ]
    in
-    V.fromList elements
+    V.fromList $ if null elements then [attributesFallback] else elements
   where
     severityStyle sev = case sev of
       SLDebug -> "badge-neutral"
@@ -133,7 +145,19 @@ generateSpanSummary otel =
         && maybe True Map.null (unAesonTextMaybe otel.attributes)
 
     -- Build elements in correct order
-    elements = if isEmptySpan then resourceFallbackElements else normalElements
+    elements = if isEmptySpan then resourceFallbackElements else normalElements 
+
+    attributesFallback = case unAesonTextMaybe otel.attributes of
+      Just attrs
+        | not (Map.null attrs) ->
+            let attrText = TE.decodeUtf8 $ BSL.toStrict $ AE.encode attrs
+                -- Limit attributes to 500 characters
+                truncated =
+                  if T.length attrText > 500
+                    then T.take 497 attrText <> "..."
+                    else attrText
+             in  "attributes;text-textWeak⇒" <> truncated
+      _ -> "attributes;text-textWeak⇒{}"
 
     -- Resource fallback elements for empty spans
     resourceFallbackElements =
@@ -339,7 +363,7 @@ generateSpanSummary otel =
               Nothing
         ]
    in
-    V.fromList elements
+    V.fromList $ if null elements then [attributesFallback] else elements
 
 
 statusCodeStyle :: Int -> T.Text
