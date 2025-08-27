@@ -44,7 +44,16 @@ generateLogSummary otel =
         && maybe True Map.null (unAesonTextMaybe otel.attributes)
 
     elements = if isRawDataLog then rawDataLogElements else normalLogElements
-
+    resourceFallback = case unAesonTextMaybe otel.resource of
+      Just res
+        | not (Map.null res) ->
+            let resText = TE.decodeUtf8 $ BSL.toStrict $ AE.encode res
+                truncated =
+                  if T.length resText > 500
+                    then T.take 497 resText <> "..."
+                    else resText
+             in "resource;text-textWeak⇒" <> truncated
+      _ -> "resource;text-textWeak⇒{}"
     -- Elements for raw data logs
     rawDataLogElements =
       catMaybes
@@ -54,22 +63,14 @@ generateLogSummary otel =
               Just ts | ts /= "" -> Just $ "trace_state;neutral⇒" <> ts
               _ -> Nothing
             _ -> Nothing
-        , -- Resource info (service name, etc)
-          case unAesonTextMaybe otel.resource of
-            Just res ->
-              case atMapText "service.name" (Just res) of
-                Just name -> Just $ "service;neutral⇒" <> name
-                _ -> Nothing
-            _ -> Nothing
         , -- Trace ID
           otel.context >>= \ctx ->
             ctx.trace_id >>= \tid ->
               if tid /= ""
                 then Just $ "trace_id;right-badge-neutral⇒" <> T.take 16 tid
                 else Nothing
-        , -- Duration
-          otel.duration <&> \dur ->
-            "duration;right-badge-neutral⇒" <> toText (getDurationNSMS (fromIntegral dur))
+        , -- Resource info (service name, etc)
+          Just resourceFallback
         ]
 
     -- Normal log elements (original logic)
