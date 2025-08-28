@@ -50,7 +50,6 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
-import Models.Tests.Testing qualified as TestingM
 
 -- Page imports
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
@@ -67,7 +66,6 @@ import Pages.LemonSqueezy qualified as LemonSqueezy
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors.Alerts qualified as Alerts
-import Pages.Monitors.TestCollectionEditor qualified as TestCollectionEditor
 import Pages.Monitors.Testing qualified as Testing
 import Pages.Onboarding.Onboarding qualified as Onboarding
 import Pages.Projects.CreateProject qualified as CreateProject
@@ -277,13 +275,7 @@ data MonitorsRoutes' mode = MonitorsRoutes'
   , alertSingleToggleActive :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[HTML] (RespHeaders Alerts.Alert)
   , alertOverviewGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "overview" :> Get '[HTML] (RespHeaders Alerts.Alert)
   , monitorListGet :: mode :- "monitors" :> QueryParam "filter" Text :> QueryParam "since" Text :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage Testing.UnifiedMonitorItem)))
-  , collectionGet :: mode :- "monitors" :> "collection" :> QueryParam "col_id" TestingM.CollectionId :> Get '[HTML] (RespHeaders TestCollectionEditor.CollectionGet)
-  , collectionDashboardGet :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "overview" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , unifiedMonitorOverviewGet :: mode :- "monitors" :> Capture "monitor_id" Text :> "overview" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , collectionStepsUpdate :: mode :- "monitors" :> "collection" :> ReqBody '[JSON] TestingM.CollectionStepUpdateForm :> QPT "onboarding" :> Post '[HTML] (RespHeaders TestCollectionEditor.CollectionMut)
-  , collectionRunTests :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> QueryParam "step_index" Int :> ReqBody '[JSON] TestingM.CollectionStepUpdateForm :> Patch '[HTML] (RespHeaders TestCollectionEditor.CollectionRunTest)
-  , collectionVarsPost :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "variables" :> ReqBody '[JSON] TestCollectionEditor.CollectionVariableForm :> Post '[HTML] (RespHeaders (Html ()))
-  , collectionVarsDelete :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "variables" :> Capture "variable_name" Text :> Delete '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
 
@@ -479,13 +471,7 @@ monitorsServer pid =
     , alertSingleToggleActive = Alerts.alertSingleToggleActiveH pid
     , alertOverviewGet = Alerts.alertOverviewGetH pid
     , monitorListGet = Testing.unifiedMonitorsGetH pid
-    , collectionGet = TestCollectionEditor.collectionGetH pid
-    , collectionStepsUpdate = TestCollectionEditor.collectionStepsUpdateH pid
-    , collectionRunTests = TestCollectionEditor.collectionRunTestsH pid
-    , collectionDashboardGet = Testing.collectionDashboard pid
     , unifiedMonitorOverviewGet = Testing.unifiedMonitorOverviewH pid
-    , collectionVarsPost = TestCollectionEditor.collectionStepVariablesUpdateH pid
-    , collectionVarsDelete = TestCollectionEditor.collectionStepVariablesDeleteH pid
     }
 
 

@@ -344,8 +344,6 @@ library
       Models.Telemetry.Schema
       Models.Telemetry.SummaryGenerator
       Models.Telemetry.Telemetry
-      Models.Tests.Testing
-      Models.Tests.TestToDump
       Models.Users.Sessions
       Models.Users.Users
       Network.Wai.Middleware.Heartbeat
@@ -366,9 +364,8 @@ library
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
       Pages.Monitors.Alerts
-      Pages.Monitors.TestCollectionEditor
-      Pages.Monitors.Testing
       Pages.Onboarding.Onboarding
+      Pages.Monitors.Testing
       Pages.Projects.CreateProject
       Pages.Projects.Integrations
       Pages.Projects.ListProjects
