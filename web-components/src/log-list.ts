@@ -585,7 +585,6 @@ export class LogList extends LitElement {
       .then((data) => {
         if (!data.error) {
           let { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, count } = data;
-
           // Validate required fields - but allow empty arrays
           if (!Array.isArray(logsData)) {
             this.showErrorToast('Invalid data format received');

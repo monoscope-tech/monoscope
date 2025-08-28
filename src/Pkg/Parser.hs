@@ -16,6 +16,7 @@ import PyF (fmt)
 import Relude
 import Safe qualified
 import Text.Megaparsec (errorBundlePretty, parse)
+import NeatInterpolation (text)
 
 
 data QueryComponents = QueryComponents
@@ -522,7 +523,19 @@ defaultSelectSqlQuery (Just SSpans) =
   , "resource___service___name as service"
   , "parent_id as parent_span_id"
   , "CAST(EXTRACT(EPOCH FROM (start_time)) * 1000000000 AS BIGINT) as start_time_ns"
-  , "EXISTS(SELECT 1 FROM jsonb_array_elements(events) elem  WHERE elem->>'event_name' = 'exception') as errors"
+  , [text|
+  (
+    EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(events) elem
+      WHERE elem->>'event_name' = 'exception'
+    )
+    OR (
+      attributes->'apitoolkit'->>'errors' IS NOT NULL
+      AND jsonb_array_length((attributes->'apitoolkit'->>'errors')::jsonb) > 0
+    )
+  ) as errors
+|]
   , "summary"
   , "context___span_id as latency_breakdown"
   ]
