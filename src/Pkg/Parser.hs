@@ -9,6 +9,7 @@ import Data.Time.Clock (UTCTime (..), addUTCTime, diffUTCTime, secondsToDiffTime
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
+import NeatInterpolation (text)
 import Pkg.Parser.Core (ToQueryText (..))
 import Pkg.Parser.Expr
 import Pkg.Parser.Stats
@@ -16,7 +17,6 @@ import PyF (fmt)
 import Relude
 import Safe qualified
 import Text.Megaparsec (errorBundlePretty, parse)
-import NeatInterpolation (text)
 
 
 data QueryComponents = QueryComponents

@@ -84,7 +84,7 @@ generateLogSummary otel =
         , -- Body
           case unAesonTextMaybe otel.body of
             Just (AE.String txt) -> Just txt
-            Just val -> case val of 
+            Just val -> case val of
               AE.Null -> Nothing
               _ -> Just $ T.take 200 $ T.pack $ show val
             Nothing -> Nothing
@@ -136,7 +136,7 @@ generateSpanSummary otel =
         && maybe True Map.null (unAesonTextMaybe otel.attributes)
 
     -- Build elements in correct order
-    elements = if isEmptySpan then resourceFallbackElements else normalElements 
+    elements = if isEmptySpan then resourceFallbackElements else normalElements
 
     -- Resource fallback elements for empty spans
     resourceFallbackElements =

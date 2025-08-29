@@ -100,7 +100,7 @@ getMinioFile conn bucket object = do
             AE.Array a -> a
             _ -> V.empty
           Left _ -> V.empty
-    pure v 
+    pure v
   whenRight V.empty res pure
 
 
@@ -110,7 +110,7 @@ saveReplayMinio envCfg (ackId, replayData) = do
   case project of
     Just p -> do
       let session = UUID.toText replayData.sessionId
-          object =  session <> ".json"
+          object = session <> ".json"
           (acc, sec, region, bucket, endpoint) = maybe (envCfg.s3AccessKey, envCfg.s3SecretKey, envCfg.s3Region, envCfg.s3Bucket, envCfg.s3Endpoint) (\x -> (x.accessKey, x.secretKey, x.region, x.bucket, x.endpointUrl)) p.s3Bucket
       let conn = getMinioConnectInfo acc sec region bucket endpoint
       ds <- getMinioFile conn bucket object

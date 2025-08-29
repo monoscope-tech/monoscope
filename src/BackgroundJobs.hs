@@ -392,7 +392,7 @@ processOneMinuteErrors scheduledTime = do
   -- since we use hashes of errors and don't insert same error twice
   -- we can increase the window to account for time spent on kafka
   -- use five minutes for now before use a better solution
-  let oneMinuteAgo = addUTCTime (-60*5) scheduledTime
+  let oneMinuteAgo = addUTCTime (-60 * 5) scheduledTime
 
   -- Get all spans with errors from last minute
   -- Check for:
@@ -837,7 +837,7 @@ processAPIChangeAnomalies pid targetHashes = do
 
   -- Group by endpoint hash
   let anomaliesByEndpoint = groupAnomaliesByEndpointHash anomaliesVM
-  
+
   -- Process each endpoint group
   forM_ anomaliesByEndpoint \(endpointHash, anomalies) -> do
     -- Check for existing open issue
