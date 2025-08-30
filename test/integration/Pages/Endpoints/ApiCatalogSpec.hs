@@ -91,7 +91,7 @@ spec = aroundAll withTestResources do
     it "returns empty list when no data exists" \tr@TestResources{..} -> do
       PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents) <- 
         toServantResponse trATCtx trSessAndHeader trLogger $ 
-          ApiCatalog.apiCatalogH testPid Nothing Nothing Nothing
+          ApiCatalog.apiCatalogH testPid Nothing Nothing Nothing Nothing
       length hostsAndEvents `shouldBe` 0
 
     it "creates endpoints from processed spans" \tr -> do
@@ -102,7 +102,7 @@ spec = aroundAll withTestResources do
     it "returns hosts list after processing messages" \tr@TestResources{..} -> do
       PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents) <- 
         toServantResponse trATCtx trSessAndHeader trLogger $ 
-          ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming")
+          ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing
       length hostsAndEvents `shouldBe` 2
 
     it "creates anomalies automatically via database triggers" \tr@TestResources{..} -> do

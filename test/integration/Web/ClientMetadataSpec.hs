@@ -17,6 +17,7 @@ import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant.Server qualified as ServantS
 import System.Config (AuthContext (..), EnvConfig (..))
+import OpenTelemetry.Trace (getGlobalTracerProvider)
 import System.Types (effToServantHandlerTest)
 import Test.Hspec
 import Web.ClientMetadata (ClientMetadata (..), clientMetadataH)
@@ -32,9 +33,10 @@ spec = aroundAll withTestResources do
     it "returns client metadata for a valid API key" $ \TestResources{..} -> do
       apiKey <- createAndSaveApiKey trPool trATCtx
 
+      tp <- getGlobalTracerProvider
       response <-
         clientMetadataH (Just apiKey)
-          & effToServantHandlerTest trATCtx trLogger
+          & effToServantHandlerTest trATCtx trLogger tp
           & ServantS.runHandler
           <&> fromRightShow
       response.projectId `shouldBe` expectedClientMetadata.projectId
@@ -43,9 +45,10 @@ spec = aroundAll withTestResources do
 
     it "returns 401 for an invalid API key" $ \TestResources{..} -> do
       let invalidApiKey = Just "invalid-api-key"
+      tp <- getGlobalTracerProvider
       response <-
         clientMetadataH invalidApiKey
-          & effToServantHandlerTest trATCtx trLogger
+          & effToServantHandlerTest trATCtx trLogger tp
           & ServantS.runHandler
 
       response `shouldSatisfy` isLeft

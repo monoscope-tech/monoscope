@@ -147,13 +147,12 @@ spec = aroundAll withTestResources do
       case res of
         TestCollectionEditor.CollectionMutError -> fail "Error"
         _ -> do pass
-    it "should get inative collections" \TestResources{..} -> do
-      (PageCtx _ (ItemsList.ItemsPage _ collections)) <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Testing.testingGetH testPid (Just "Inactive") Nothing
-      length collections `shouldBe` 1
-      let col = V.head $ (\(Testing.CollectionListItemVM _ co _) -> co) <$> collections
-      col.title `shouldBe` "Test Collection"
-      col.stepsCount `shouldBe` 1
-      col.lastRun `shouldBe` Nothing
-      col.schedule `shouldBe` "1 days"
-      col.isScheduled `shouldBe` False
+    it "should get inactive collections" \TestResources{..} -> do
+      (PageCtx _ (ItemsList.ItemsPage _ monitors)) <-
+        toServantResponse trATCtx trSessAndHeader trLogger $ Testing.unifiedMonitorsGetH testPid (Just "Inactive") Nothing
+      length monitors `shouldBe` 1
+      let monitor = V.head monitors
+      monitor.title `shouldBe` "Test Collection"
+      monitor.status `shouldBe` "Inactive"
+      monitor.lastRun `shouldBe` Nothing
+      monitor.schedule `shouldBe` "1 days"

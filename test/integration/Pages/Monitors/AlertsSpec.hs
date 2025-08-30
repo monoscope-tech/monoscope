@@ -39,6 +39,10 @@ alertForm =
     , alertThreshold = 1
     , warningThreshold = Nothing
     , alertId = Just (UUID.toText alertId)
+    , frequency = Nothing
+    , timeWindow = Nothing
+    , conditionType = Nothing
+    , source = Nothing
     }
 
 

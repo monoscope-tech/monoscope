@@ -762,7 +762,9 @@ test-suite integration-tests
     , effectful
     , effectful-th
     , generic-lens
+    , hs-opentelemetry-api
     , hs-opentelemetry-instrumentation-auto
+    , hs-opentelemetry-sdk
     , hspec
     , hspec-discover
     , http-types
