@@ -21,7 +21,6 @@ import PyF qualified
 import Relude hiding (ask, asks)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (checkFreeTierExceeded)
-import Utils qualified
 
 
 apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders CatalogList)
@@ -172,10 +171,6 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
           , prePageTitle = Just "API Catalog"
           , pageTitle = "Endpoints for " <> host
           , freeTierExceeded = freeTierExceeded
-          , pageActions =
-              Just
-                $ a_ [class_ "btn btn-sm btn-primary space-x-2", href_ $ "/p/" <> pid.toText <> "/documentation?host=" <> host] do
-                  Utils.faSprite_ "plus" "regular" "h-4" >> "OpenAPI/Swagger"
           , navTabs =
               Just
                 $ toHtml
