@@ -46,7 +46,6 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.LemonSqueezy qualified as LemonSqueezy
 import Models.Projects.Projects (ProjectId (unProjectId))
 import Models.Projects.Projects qualified as Projects
-import Models.Projects.Swaggers qualified as Swaggers
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Users qualified as Users
 import Network.HTTP.Types (urlEncode)
@@ -56,7 +55,6 @@ import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, creat
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.Reports qualified as RP
-import Pages.Specification.GenerateSwagger (generateSwagger)
 import Pkg.Mail (NotificationAlerts (EndpointAlert, ReportAlert, RuntimeErrorAlert), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
 import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
@@ -87,7 +85,6 @@ data BgJobs
   | WeeklyReports Projects.ProjectId
   | DailyJob
   | HourlyJob UTCTime Int
-  | GenSwagger Projects.ProjectId Users.UserId Text
   | ReportUsage Projects.ProjectId
   | GenerateOtelFacetsBatch (V.Vector Text) UTCTime
   | QueryMonitorsTriggered (V.Vector Monitors.QueryMonitorId)
@@ -255,7 +252,6 @@ processBackgroundJob authCtx job bgJob =
     HourlyJob scheduledTime hour -> runHourlyJob scheduledTime hour
     DailyReports pid -> sendReportForProject pid DailyReport
     WeeklyReports pid -> sendReportForProject pid WeeklyReport
-    GenSwagger pid uid host -> generateSwaggerForProject pid uid host
     ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
       Relude.when (project.paymentPlan /= "Free" && project.paymentPlan /= "ONBOARDING") $ whenJust project.firstSubItemId \fSubId -> do
         currentTime <- liftIO getZonedTime
@@ -510,31 +506,6 @@ processProjectSpans pid spans = do
         , dailyMetricCount = 0
         , paymentPlan = ""
         }
-
-
-generateSwaggerForProject :: Projects.ProjectId -> Users.UserId -> Text -> ATBackgroundCtx ()
-generateSwaggerForProject pid uid host = whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
-  endpoints <- dbtToEff $ Endpoints.endpointsByProjectId pid host
-  let endpoint_hashes = V.map (.hash) endpoints
-  shapes <- dbtToEff $ Shapes.shapesByEndpointHashes pid endpoint_hashes
-  fields <- dbtToEff $ FieldsQ.fieldsByEndpointHashes pid endpoint_hashes
-  let field_hashes = V.map (.fHash) fields
-  formats <- dbtToEff $ Formats.formatsByFieldsHashes pid field_hashes
-  let (projectTitle, projectDescription) = (toText project.title, toText project.description)
-  let swagger = generateSwagger projectTitle projectDescription endpoints shapes fields formats
-  swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
-  currentTime <- liftIO getZonedTime
-  let swaggerToAdd =
-        Swaggers.Swagger
-          { id = swaggerId
-          , projectId = pid
-          , createdBy = uid
-          , createdAt = currentTime
-          , updatedAt = currentTime
-          , swaggerJson = swagger
-          , host = host
-          }
-  dbtToEff $ Swaggers.addSwagger swaggerToAdd
 
 
 -- FIXME: implement inteligent allerting logic, where we pause to ensure users are not alerted too often, or spammed.

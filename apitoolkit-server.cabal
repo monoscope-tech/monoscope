@@ -340,7 +340,6 @@ library
       Models.Projects.ProjectMembers
       Models.Projects.Projects
       Models.Projects.ProjectsEmail
-      Models.Projects.Swaggers
       Models.Telemetry.Schema
       Models.Telemetry.SummaryGenerator
       Models.Telemetry.Telemetry
@@ -374,8 +373,6 @@ library
       Pages.Reports
       Pages.S3
       Pages.Share
-      Pages.Specification.Documentation
-      Pages.Specification.GenerateSwagger
       Pages.Telemetry.Metrics
       Pages.Telemetry.Trace
       Pkg.AI
