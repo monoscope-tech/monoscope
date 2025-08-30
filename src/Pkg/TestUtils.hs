@@ -71,7 +71,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import OddJobs.Job (Job (..))
-import OpenTelemetry.Trace (getGlobalTracerProvider)
+import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
 import Pkg.DeriveUtils (AesonText (..))
 import ProcessMessage qualified
 import Relude
@@ -418,6 +418,7 @@ data TestResources = TestResources
   , trSessAndHeader :: Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Sessions.Session
   , trATCtx :: AuthContext
   , trLogger :: Log.Logger
+  , trTracerProvider :: TracerProvider
   }
 
 
@@ -427,6 +428,7 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
   projectCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   projectKeyCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   sessAndHeader <- testSessionHeader pool
+  tp <- getGlobalTracerProvider
   let atAuthCtx =
         AuthContext
           (def @EnvConfig)
@@ -450,6 +452,7 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
       , trSessAndHeader = sessAndHeader
       , trATCtx = atAuthCtx
       , trLogger = logger
+      , trTracerProvider = tp
       }
 
 

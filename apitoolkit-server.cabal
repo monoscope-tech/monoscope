@@ -33,6 +33,7 @@ extra-source-files:
     static/migrations/0003_facets_table.sql
     static/migrations/0006_add_llm_enhancement_tracking.sql
     static/migrations/0007_rebuild_issues_table.sql
+    static/migrations/0008_use_non_defferable_contraint_on_issues.sql
     static/public/android-chrome-192x192.png
     static/public/android-chrome-512x512.png
     static/public/apple-touch-icon.png
@@ -707,7 +708,6 @@ test-suite integration-tests
       Pages.Endpoints.ApiCatalogSpec
       Pages.LogExplorer.LogSpec
       Pages.Monitors.AlertsSpec
-      Pages.Monitors.TestingSpec
       Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
       Pages.ReportsSpec
@@ -762,9 +762,7 @@ test-suite integration-tests
     , effectful
     , effectful-th
     , generic-lens
-    , hs-opentelemetry-api
     , hs-opentelemetry-instrumentation-auto
-    , hs-opentelemetry-sdk
     , hspec
     , hspec-discover
     , http-types

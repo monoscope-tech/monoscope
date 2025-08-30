@@ -31,7 +31,7 @@ import BackgroundJobs (processFiveMinuteSpans, processBackgroundJob, processOneM
 import BackgroundJobs qualified
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Test.Hspec (Spec, aroundAll, describe, it, pendingWith, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, pendingWith, shouldBe, shouldSatisfy)
 import Utils (toXXHash)
 
 testPid :: Projects.ProjectId
@@ -89,10 +89,12 @@ spec :: Spec
 spec = aroundAll withTestResources do
   describe "API Catalog and Endpoints" do
     it "returns empty list when no data exists" \tr@TestResources{..} -> do
-      PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents) <- 
-        toServantResponse trATCtx trSessAndHeader trLogger $ 
+      catalogList <- toServantResponse trATCtx trSessAndHeader trLogger $ 
           ApiCatalog.apiCatalogH testPid Nothing Nothing Nothing Nothing
-      length hostsAndEvents `shouldBe` 0
+      case catalogList of
+        ApiCatalog.CatalogListPage (PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents)) -> 
+          length hostsAndEvents `shouldBe` 0
+        _ -> expectationFailure "Expected CatalogListPage"
 
     it "creates endpoints from processed spans" \tr -> do
       msgs <- prepareTestMessages
@@ -100,10 +102,12 @@ spec = aroundAll withTestResources do
       verifyEndpointsCreated tr
 
     it "returns hosts list after processing messages" \tr@TestResources{..} -> do
-      PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents) <- 
-        toServantResponse trATCtx trSessAndHeader trLogger $ 
+      catalogList <- toServantResponse trATCtx trSessAndHeader trLogger $ 
           ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing
-      length hostsAndEvents `shouldBe` 2
+      case catalogList of
+        ApiCatalog.CatalogListPage (PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents)) ->
+          length hostsAndEvents `shouldBe` 2
+        _ -> expectationFailure "Expected CatalogListPage"
 
     it "creates anomalies automatically via database triggers" \tr@TestResources{..} -> do
       -- Verify anomalies were created by triggers
