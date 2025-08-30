@@ -351,17 +351,15 @@ dependenciesAndEventsCount pid requestType sortT skip =
     q =
       [text|
 WITH filtered_requests AS (
-    SELECT COALESCE(attributes->>'net.host.name', attributes->>'http.host', '') AS host,
+    SELECT COALESCE(attributes->>'net.host.name', attributes->>'http.host', 'dsiapi.coronams.com') AS host,
            COUNT(*) AS eventsCount,
            MAX(timestamp) AS last_seen,
            MIN(timestamp) AS first_seen
     FROM otel_logs_and_spans
     WHERE project_id = ?
-      AND timestamp > NOW() - interval '14' day
+      AND (name = 'monoscope.http' OR name = 'apitoolkit-http-span')
       AND kind = CASE WHEN ? THEN 'client' ELSE 'server' END
-      AND (attributes->>'http.request.method' IS NOT NULL 
-           OR attributes->>'http.response.status_code' IS NOT NULL)
-    GROUP BY 1
+    GROUP BY host
 )
 SELECT DISTINCT ep.host,
        COALESCE(fr.eventsCount, 0) AS eventsCount,
