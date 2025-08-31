@@ -773,6 +773,7 @@ instance ToRow OtelLogsAndSpans where
     , toField $ atMapText "user.full_name" (unAesonTextMaybe entry.attributes) -- attributes___user___full_name
     , toField $ atMapText "user.name" (unAesonTextMaybe entry.attributes) -- attributes___user___name
     , toField $ atMapText "user.hash" (unAesonTextMaybe entry.attributes) -- attributes___user___hash
+    , toField $ atMapText "http.host" (unAesonTextMaybe entry.attributes) -- attributes___http___host
     , toField $ fmap (cleanNullBytesFromJSON . AE.Object . KEM.fromMapText) (unAesonTextMaybe entry.resource) -- resource as JSON
     , toField $ atMapText "service.name" (unAesonTextMaybe entry.resource) -- resource___service___name
     , toField $ atMapText "service.version" (unAesonTextMaybe entry.resource) -- resource___service___version
@@ -844,14 +845,14 @@ bulkInserSpansAndLogsQuery =
        attributes___db___response___status_code, attributes___db___operation___batch___size,
        attributes___db___query___summary, attributes___db___query___text, attributes___user___id,
        attributes___user___email, attributes___user___full_name, attributes___user___name,
-       attributes___user___hash, resource, resource___service___name, resource___service___version,
+       attributes___user___hash, attributes___http___host, resource, resource___service___name, resource___service___version,
        resource___service___instance___id, resource___service___namespace, 
        resource___telemetry___sdk___language, resource___telemetry___sdk___name,
        resource___telemetry___sdk___version, resource___user_agent___original,
        project_id, summary, date)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     |]
 
 

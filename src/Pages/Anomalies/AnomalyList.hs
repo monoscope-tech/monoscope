@@ -18,10 +18,8 @@ module Pages.Anomalies.AnomalyList (
 )
 where
 
-import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Default (def)
-import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime, utc, utcToZonedTime, utctDayTime)
 import Data.Time.LocalTime (zonedTimeToUTC)
@@ -45,14 +43,13 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users (User (id))
 import NeatInterpolation (text)
-import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pkg.Components.ItemsList (TabFilter (..), TabFilterOpt (..))
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import System.Config (AuthContext (pool))
+import System.Config (AuthContext)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (checkFreeTierExceeded, escapedQueryPartial, faSprite_)
@@ -69,7 +66,6 @@ newtype AnomalyBulkForm = AnomalyBulk
 acknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> Maybe Text -> ATAuthCtx (RespHeaders AnomalyAction)
 acknowlegeAnomalyGetH pid aid hostM = do
   (sess, project) <- Sessions.sessionAndProject pid
-  let host = fromMaybe "" hostM
   appCtx <- ask @AuthContext
   -- Convert to Issues.IssueId for new system
   let issueId = Issues.IssueId aid.unAnomalyId
@@ -79,7 +75,6 @@ acknowlegeAnomalyGetH pid aid hostM = do
   let text_id = V.fromList [UUID.toText aid.unAnomalyId]
   v <- dbtToEff $ Anomalies.acknowledgeAnomalies sess.user.id text_id
   _ <- dbtToEff $ Anomalies.acknowlegeCascade sess.user.id v
-  _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.GenSwagger pid sess.user.id host
   addRespHeaders $ Acknowlege pid (Issues.IssueId aid.unAnomalyId) True
 
 
@@ -141,10 +136,7 @@ anomalyBulkActionsPostH pid action items = do
         "acknowlege" -> do
           v <- dbtToEff $ Anomalies.acknowledgeAnomalies sess.user.id (V.fromList items.anomalyId)
           _ <- dbtToEff $ Anomalies.acknowlegeCascade sess.user.id v
-          hosts <- dbtToEff $ Endpoints.getEndpointsByAnomalyTargetHash pid v
-          forM_ hosts \h -> do
-            _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" do BackgroundJobs.GenSwagger pid sess.user.id h.host
-            pass
+          pass
         "archive" -> do
           _ <- dbtToEff $ execute [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ V.fromList items.anomalyId)
           pass
@@ -850,9 +842,9 @@ renderIssue hideByDefault currTime timeFilter issue = do
         button_
           [ class_
               $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
-              <> if isAcknowledged
-                then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80"
-                else "bg-fillPrimary text-textInverse-strong hover:bg-fillPrimary/90"
+                <> if isAcknowledged
+                  then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80"
+                  else "bg-fillPrimary text-textInverse-strong hover:bg-fillPrimary/90"
           , hxGet_ acknowledgeEndpoint
           , hxSwap_ "outerHTML"
           , hxTarget_ "closest .itemsListItem"
@@ -867,9 +859,9 @@ renderIssue hideByDefault currTime timeFilter issue = do
         button_
           [ class_
               $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
-              <> if isArchived
-                then "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak hover:bg-fillWarning-weak/80"
-                else "border border-strokeWeak text-textStrong hover:bg-fillWeak"
+                <> if isArchived
+                  then "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak hover:bg-fillWarning-weak/80"
+                  else "border border-strokeWeak text-textStrong hover:bg-fillWeak"
           , hxGet_ archiveEndpoint
           , hxSwap_ "outerHTML"
           , hxTarget_ "closest .itemsListItem"
@@ -1170,7 +1162,7 @@ anomalyAcknowlegeButton pid aid acked host = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
-        <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+          <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" "acknowlege issue"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -1186,7 +1178,7 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
-        <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+          <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"

@@ -50,7 +50,6 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
-import Models.Tests.Testing qualified as TestingM
 
 -- Page imports
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
@@ -67,7 +66,6 @@ import Pages.LemonSqueezy qualified as LemonSqueezy
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors.Alerts qualified as Alerts
-import Pages.Monitors.TestCollectionEditor qualified as TestCollectionEditor
 import Pages.Monitors.Testing qualified as Testing
 import Pages.Onboarding.Onboarding qualified as Onboarding
 import Pages.Projects.CreateProject qualified as CreateProject
@@ -78,8 +76,6 @@ import Pages.Replay qualified as Replay
 import Pages.Reports qualified as Reports
 import Pages.S3 qualified as S3
 import Pages.Share qualified as Share
-import Pages.Specification.Documentation qualified as Documentation
-import Pages.Specification.GenerateSwagger qualified as GenerateSwagger
 import Pages.Telemetry.Metrics qualified as Metrics
 import Pages.Telemetry.Trace qualified as Trace
 import Pkg.Components.ItemsList qualified as ItemsList
@@ -200,8 +196,6 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QPT "event_type" :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
   , -- Billing
     manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> QPT "from" :> Get '[HTML] (RespHeaders LemonSqueezy.BillingGet)
-  , -- Swagger/documentation
-    swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] (RespHeaders AE.Value)
   , replaySessionGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] (RespHeaders AE.Value)
   , bringS3 :: mode :- "p" :> ProjectId :> "byob_s3" :> Get '[HTML] (RespHeaders (Html ()))
   , bringS3Post :: mode :- "p" :> ProjectId :> "byob_s3" :> ReqBody '[FormUrlEncoded] Projects.ProjectS3Bucket :> Post '[HTML] (RespHeaders (Html ()))
@@ -211,7 +205,6 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes
   , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes
   , monitors :: mode :- "p" :> ProjectId :> MonitorsRoutes
-  , specification :: mode :- "p" :> ProjectId :> SpecificationRoutes
   , traces :: mode :- "p" :> ProjectId :> TelemetryRoutes
   }
   deriving stock (Generic)
@@ -277,27 +270,7 @@ data MonitorsRoutes' mode = MonitorsRoutes'
   , alertSingleToggleActive :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[HTML] (RespHeaders Alerts.Alert)
   , alertOverviewGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "overview" :> Get '[HTML] (RespHeaders Alerts.Alert)
   , monitorListGet :: mode :- "monitors" :> QueryParam "filter" Text :> QueryParam "since" Text :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage Testing.UnifiedMonitorItem)))
-  , collectionGet :: mode :- "monitors" :> "collection" :> QueryParam "col_id" TestingM.CollectionId :> Get '[HTML] (RespHeaders TestCollectionEditor.CollectionGet)
-  , collectionDashboardGet :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "overview" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , unifiedMonitorOverviewGet :: mode :- "monitors" :> Capture "monitor_id" Text :> "overview" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , collectionStepsUpdate :: mode :- "monitors" :> "collection" :> ReqBody '[JSON] TestingM.CollectionStepUpdateForm :> QPT "onboarding" :> Post '[HTML] (RespHeaders TestCollectionEditor.CollectionMut)
-  , collectionRunTests :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> QueryParam "step_index" Int :> ReqBody '[JSON] TestingM.CollectionStepUpdateForm :> Patch '[HTML] (RespHeaders TestCollectionEditor.CollectionRunTest)
-  , collectionVarsPost :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "variables" :> ReqBody '[JSON] TestCollectionEditor.CollectionVariableForm :> Post '[HTML] (RespHeaders (Html ()))
-  , collectionVarsDelete :: mode :- "monitors" :> Capture "collection_id" TestingM.CollectionId :> "variables" :> Capture "variable_name" Text :> Delete '[HTML] (RespHeaders (Html ()))
-  }
-  deriving stock (Generic)
-
-
--- Specification Routes
-type role SpecificationRoutes' nominal
-type SpecificationRoutes = NamedRoutes SpecificationRoutes'
-
-
-type SpecificationRoutes' :: Type -> Type
-data SpecificationRoutes' mode = SpecificationRoutes'
-  { documentationPut :: mode :- "documentation" :> "save" :> ReqBody '[JSON] Documentation.SaveSwaggerForm :> Post '[HTML] (RespHeaders Documentation.DocumentationMut)
-  , documentationPost :: mode :- "documentation" :> ReqBody '[FormUrlEncoded] Documentation.SwaggerForm :> Post '[HTML] (RespHeaders Documentation.DocumentationMut)
-  , documentationGet :: mode :- "documentation" :> QueryParam "swagger_id" Text :> QueryParam "host" Text :> Get '[HTML] (RespHeaders (PageCtx Documentation.DocumentationGet))
   }
   deriving stock (Generic)
 
@@ -413,8 +386,6 @@ cookieProtectedServer =
     , reportsSingleGet = Reports.singleReportGetH
     , reportsPost = Reports.reportsPostH
     , shareLinkPost = Share.shareLinkPostH
-    , -- Swagger handlers
-      swaggerGenerateGet = GenerateSwagger.generateGetH
     , replaySessionGet = Replay.replaySessionGetH
     , bringS3 = S3.bringS3GetH
     , bringS3Post = S3.brings3PostH
@@ -429,7 +400,6 @@ cookieProtectedServer =
     , logExplorer = logExplorerServer
     , anomalies = anomaliesServer
     , monitors = monitorsServer
-    , specification = specificationServer
     , traces = telemetryServer
     }
 
@@ -479,23 +449,7 @@ monitorsServer pid =
     , alertSingleToggleActive = Alerts.alertSingleToggleActiveH pid
     , alertOverviewGet = Alerts.alertOverviewGetH pid
     , monitorListGet = Testing.unifiedMonitorsGetH pid
-    , collectionGet = TestCollectionEditor.collectionGetH pid
-    , collectionStepsUpdate = TestCollectionEditor.collectionStepsUpdateH pid
-    , collectionRunTests = TestCollectionEditor.collectionRunTestsH pid
-    , collectionDashboardGet = Testing.collectionDashboard pid
     , unifiedMonitorOverviewGet = Testing.unifiedMonitorOverviewH pid
-    , collectionVarsPost = TestCollectionEditor.collectionStepVariablesUpdateH pid
-    , collectionVarsDelete = TestCollectionEditor.collectionStepVariablesDeleteH pid
-    }
-
-
--- Specification server
-specificationServer :: Projects.ProjectId -> Servant.ServerT SpecificationRoutes ATAuthCtx
-specificationServer pid =
-  SpecificationRoutes'
-    { documentationPut = Documentation.documentationPutH pid
-    , documentationPost = Documentation.documentationPostH pid
-    , documentationGet = Documentation.documentationGetH pid
     }
 
 

@@ -112,9 +112,6 @@ extra-source-files:
     static/public/assets/js/monaco/vs/editor/editor.main.nls.zh-cn.js
     static/public/assets/js/monaco/vs/editor/editor.main.nls.zh-tw.js
     static/public/assets/js/monaco/vs/loader.js
-    static/public/assets/js/parse_swagger.js
-    static/public/assets/js/parse_swagger.test.js
-    static/public/assets/js/swagger_endpoints.js
     static/public/assets/js/thirdparty/_hyperscript_template.js
     static/public/assets/js/thirdparty/_hyperscript_web0_9_5.min.js
     static/public/assets/js/thirdparty/instantpage5_1_0.js
@@ -220,14 +217,6 @@ extra-source-files:
     static/public/workbox-ed58f0de.js
     static/public/assets/echart-theme.json
     static/public/assets/js/monaco/config.json
-    static/public/sessions/e194f49b-1b6f-4e38-b486-2ae3b9e5b7a5/20250727083737.json
-    static/public/sessions/e194f49b-1b6f-4e38-b486-2ae3b9e5b7a5/20250727083752.json
-    static/public/sessions/e194f49b-1b6f-4e38-b486-2ae3b9e5b7a5/20250727083852.json
-    static/public/sessions/e194f49b-1b6f-4e38-b486-2ae3b9e5b7a5/20250727083952.json
-    static/public/sessions/e194f49b-1b6f-4e38-b486-2ae3b9e5b7a5/20250727084007.json
-    static/public/sessions/e194f49b-1b6f-4e38-b486-2ae3b9e5b7a5/20250727115744.json
-    static/public/sessions/e194f49b-1b6f-4e38-b486-2ae3b9e5b7a5/20250727115759.json
-    static/public/sessions/e194f49b-1b6f-4e38-b486-2ae3b9e5b7a5/20250727115815.json
     static/public/assets/framework-logos/ihp-logo.svg
     static/public/assets/framework-logos/spring-logo.svg
     static/public/assets/svgs/anomalies/archive.svg
@@ -340,12 +329,9 @@ library
       Models.Projects.ProjectMembers
       Models.Projects.Projects
       Models.Projects.ProjectsEmail
-      Models.Projects.Swaggers
       Models.Telemetry.Schema
       Models.Telemetry.SummaryGenerator
       Models.Telemetry.Telemetry
-      Models.Tests.Testing
-      Models.Tests.TestToDump
       Models.Users.Sessions
       Models.Users.Users
       Network.Wai.Middleware.Heartbeat
@@ -366,9 +352,8 @@ library
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
       Pages.Monitors.Alerts
-      Pages.Monitors.TestCollectionEditor
-      Pages.Monitors.Testing
       Pages.Onboarding.Onboarding
+      Pages.Monitors.Testing
       Pages.Projects.CreateProject
       Pages.Projects.Integrations
       Pages.Projects.ListProjects
@@ -377,8 +362,6 @@ library
       Pages.Reports
       Pages.S3
       Pages.Share
-      Pages.Specification.Documentation
-      Pages.Specification.GenerateSwagger
       Pages.Telemetry.Metrics
       Pages.Telemetry.Trace
       Pkg.AI

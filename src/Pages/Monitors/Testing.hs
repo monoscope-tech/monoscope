@@ -1,5 +1,4 @@
 module Pages.Monitors.Testing (
-  collectionDashboard,
   MonitorType (..),
   UnifiedMonitorItem (..),
   unifiedMonitorsGetH,
@@ -8,13 +7,8 @@ module Pages.Monitors.Testing (
 )
 where
 
-import Control.Error.Util (hush)
-import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
-import Data.HashMap.Lazy qualified as HM
-import Data.List.Extra (nubOrd)
-import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
@@ -25,293 +19,19 @@ import Fmt.Internal.Core (fmt)
 import Fmt.Internal.Numeric (commaizeF)
 import Lucid
 import Lucid.Htmx
-import Lucid.Hyperscript (__)
 import Models.Apis.Monitors qualified as Monitors
-import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
-import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
-import Network.URI (URIAuth (uriRegName), parseURI, uriAuthority)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Components (emptyState_, statBox_)
-import Pages.LogExplorer.Log (ApiLogsPageData (isTestLog))
-import Pages.LogExplorer.Log qualified as Log
-import Pages.Monitors.TestCollectionEditor (castToStepResult)
+import Pages.Components (statBox_)
 import Pkg.Components.ItemsList (TabFilter (..), TabFilterOpt (..))
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
-import Pkg.Parser
-import PyF qualified
 import Relude hiding (ask)
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders)
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (checkFreeTierExceeded, faSprite_, listToIndexHashMap, lookupVecTextByKey)
-
-
-stepsBox_ :: Int -> Int -> Int -> Html ()
-stepsBox_ total passed failed = do
-  div_ [class_ "flex gap-2 px-6 py-2 items-center border rounded-3xl"] do
-    div_ [class_ "p-2 text-center"] do
-      div_ [class_ "text-textStrong text-lg text-base font-medium"] $ show total
-      small_ [class_ "block"] "Steps"
-    div_ [class_ "p-2 text-center"] do
-      div_ [class_ "font-medium  text-lg text-textSuccess"] $ show passed
-      small_ [class_ "block"] "Passed"
-    div_ [class_ "p-2 text-center"] do
-      div_ [class_ "font-medium text-lg text-textError"] $ show failed
-      small_ [class_ "block"] "Failed"
-
-
-pageTabs :: Text -> Text -> Html ()
-pageTabs url ov = do
-  div_ [class_ "tabs tabs-box tabs-outline items-center border p-0  bg-fillWeak  text-textWeak"] do
-    a_ [href_ ov, role_ "tab", class_ "tab tab-active border border-strokeStrong  text-textStrong"] "Overview"
-    a_ [href_ url, role_ "tab", class_ "tab"] "Test editor"
-
-
--- TODO: can't the log list page endpoint be reused for this info on this page? atleast we shouldnt need to query log table, and rather htmx load the correct log table
-collectionDashboard :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-collectionDashboard pid cid = do
-  (sess, project) <- Sessions.sessionAndProject pid
-  let queryTextRaw = [PyF.fmt|"sdk_type == \"TestkitOutgoing\" and request_headers.X-Testkit-Collection-ID == \"{cid.toText}\""]|]
-  queryAST <- case parseQueryToAST queryTextRaw of
-    Left err -> addErrorToast "Error Parsing Query " (Just err) >> pure []
-    Right ast -> pure ast
-  tableAsVecE <- RequestDumps.selectLogTable pid queryAST queryTextRaw Nothing (Nothing, Nothing) [""] Nothing Nothing
-  collectionM <- dbtToEff $ Testing.getCollectionById cid
-  let tableAsVecM = hush tableAsVecE
-  let url = "/p/" <> pid.toText <> "/monitors/collection?col_id=" <> cid.toText
-  let overviewUrl = "/p/" <> pid.toText <> "/monitors/" <> cid.toText <> "/overview"
-
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , pageTitle = "API Tests (Beta)"
-          , prePageTitle = Just "Monitors & Alerts"
-          , navTabs = Just $ pageTabs url overviewUrl
-          }
-  case collectionM of
-    Just col -> do
-      addRespHeaders $ PageCtx bwconf $ dashboardPage pid col tableAsVecM
-    Nothing -> addRespHeaders $ PageCtx bwconf "Something went wrong"
-
-
-dashboardPage :: Projects.ProjectId -> Testing.Collection -> Maybe (V.Vector (V.Vector AE.Value), [Text], Int) -> Html ()
-dashboardPage pid col reqsVecM = do
-  let passed = col.lastRunPassed
-      failed = col.lastRunFailed
-      schedule = col.schedule
-      (Testing.CollectionSteps steps) = col.collectionSteps
-      stepsCount = V.length steps
-      urls = catMaybes $ join $ V.toList $ (\x -> [x.get, x.post, x.patch, x.delete, x.put] :: [Maybe Text]) <$> steps
-      hostnames = extractHostnames urls
-  section_ [class_ "pt-2 mx-auto px-14 w-full flex flex-col gap-4 h-full"] do
-    div_ [class_ "flex justify-between items-center"] do
-      div_ [class_ "flex flex-col gap-2"] do
-        div_ [class_ "flex gap-2 items-center text-sm"] do
-          forM_ col.tags $ \tag -> do
-            span_ [class_ "badge badge-blue"] $ toHtml tag
-        div_ [] do
-          forM_ hostnames $ \host -> do
-            span_ [class_ "badge badge-ghost"] $ toHtml host
-      stepsBox_ stepsCount passed failed
-    div_ [class_ "relative p-1 flex gap-10 items-start"] do
-      dStats pid stepsCount passed failed schedule
-    div_ [role_ "tablist", class_ "w-full rounded-3xl border", id_ "t-tabs-container"] do
-      div_ [class_ "w-full flex"] do
-        button_
-          [ class_ "cursor-pointer t-tab px-5 pt-2 pb-1.5 text-sm text-textWeak border-b t-tab-active a-tab"
-          , role_ "tab"
-          , term "aria-label" "Overview"
-          , onclick_ "navigatable(this, '#results-t', '#t-tabs-container', 't-tab-active')"
-          ]
-          "Results"
-        button_
-          [ class_ "cursor-pointer t-tab px-5 pt-2 pb-1.5 text-sm text-textWeak border-b a-tab"
-          , role_ "tab"
-          , term "aria-label" "Logs"
-          , onclick_ "navigatable(this, '#logs-t', '#t-tabs-container', 't-tab-active')"
-          ]
-          "Logs"
-        div_ [class_ "w-full border-b"] pass
-      div_ [role_ "tabpanel", class_ "h-[65vh] overflow-y-auto a-tab-content", id_ "results-t"] do
-        let result = col.lastRunResponse >>= castToStepResult
-        let Testing.CollectionSteps stepsD = col.collectionSteps
-        testResultDiagram_ pid col.id stepsD result
-      div_ [class_ "hidden h-[65vh] overflow-y-auto a-tab-content", id_ "logs-t"] do
-        div_ [class_ "overflow-x-hidden h-full"] do
-          case reqsVecM of
-            Just reqVec -> do
-              let (requestVecs, colNames, requestsCount) = reqVec
-                  query = Just "sdk_type==\"TestkitOutgoing\""
-                  colIdxMap = listToIndexHashMap colNames
-                  reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
-                  curatedColNames = nubOrd $ Log.curateCols [""] colNames
-                  nextLogsURL = RequestDumps.requestDumpLogUrlPath pid query reqLastCreatedAtM Nothing Nothing Nothing Nothing (Just "loadmore") "requests" False
-                  resetLogsURL = RequestDumps.requestDumpLogUrlPath pid query Nothing Nothing Nothing Nothing Nothing Nothing "requests" False
-                  page =
-                    Log.ApiLogsPageData
-                      { pid
-                      , resultCount = requestsCount
-                      , requestVecs
-                      , cols = curatedColNames
-                      , colIdxMap
-                      , nextLogsURL
-                      , resetLogsURL
-                      , recentLogsURL = ""
-                      , currentRange = Nothing
-                      , exceededFreeTier = False
-                      , query
-                      , cursor = Nothing
-                      , isTestLog = Just True
-                      , emptyStateUrl = Just $ "/p/" <> pid.toText <> "/monitors/collection?col_id=" <> col.id.toText
-                      , source = "requests"
-                      , targetSpans = Nothing
-                      , daysCountDown = Nothing
-                      , queryLibRecent = V.empty
-                      , queryLibSaved = V.empty
-                      , serviceColors = HM.empty
-                      , fromD = Nothing
-                      , toD = Nothing
-                      , detailsWidth = Nothing
-                      , targetEvent = Nothing
-                      , showTrace = Nothing
-                      , facets = Nothing
-                      , vizType = Nothing
-                      }
-              Log.virtualTable page
-            _ -> pass
-
-
-testResultDiagram_ :: Projects.ProjectId -> Testing.CollectionId -> V.Vector Testing.CollectionStepData -> Maybe (V.Vector Testing.StepResult) -> Html ()
-testResultDiagram_ pid cid steps result = do
-  when (isNothing result) $ do
-    let subTxt = "You are currently not running this test collection yet."
-        url = Just $ "/p/" <> pid.toText <> "/monitors/collection?col_id=" <> cid.toText
-    emptyState_ "Waiting for test run events" subTxt url "Go to test editor"
-  whenJust result $ \res -> do
-    div_ [class_ "p-6 flex flex-col gap-8"] do
-      forM_ (V.indexed steps) $ \(i, st) -> do
-        let stepResult = res V.!? i
-        renderStepIll_ st stepResult i
-
-
-renderStepIll_ :: Testing.CollectionStepData -> Maybe Testing.StepResult -> Int -> Html ()
-renderStepIll_ st stepResult ind = do
-  whenJust stepResult $ \stepRes -> do
-    let assertionRes = (\(i, r) -> getAssertionResult r (V.fromList stepRes.assertResults V.!? i)) <$> V.indexed (fromMaybe [] st.asserts)
-        totalPass = V.length $ V.filter fst assertionRes
-    div_ [] do
-      div_ [class_ "flex items-center gap-2 cursor-pointer", [__|on click toggle .hidden on the next .step-body|]] do
-        faSprite_ "chevron-up" "regular" "h-5 w-5 border rounded-sm p-1"
-        span_ [class_ "text-textStrong text-sm font-medium"] $ "Step " <> show (ind + 1)
-        span_ [class_ "badge badge-success"] $ show totalPass <> "/" <> show (V.length assertionRes) <> " Passed"
-        span_ [class_ "text-textWeak text-sm flex items-center gap-1"] do
-          faSprite_ "chevron-right" "regular" "h-3 w-3"
-          toHtml $ maybeToMonoid st.title
-      div_ [class_ "step-body ml-2"] do
-        div_ [class_ "border-l h-8"] pass
-        div_ [class_ "flex"] do
-          div_ [class_ "border-t w-8"] pass
-          div_ [] do
-            div_ [class_ "flex gap-1 -mt-2 cursor-pointer", [__|on click toggle .hidden on the next .assert-body|]] do
-              faSprite_ "chevron-up" "regular" "h-5 w-5 border rounded-sm p-1"
-              span_ [class_ "font-medium text-sm text-textStrong"] "Assertions"
-            div_ [class_ "border-l pt-4 ml-2 flex flex-col gap-3 assert-body"] do
-              forM_ assertionRes $ \(success, resultText) -> do
-                div_ [class_ "flex gap-3 items-center"] do
-                  span_
-                    [ class_ "w-10 relative border-t after:content-[''] after:top-[-2px] after:absolute after:h-1 after:w-1 after:rounded-full after:bg-fillWeak after:right-[-2px] after:z-10"
-                    ]
-                    pass
-                  if success
-                    then span_ [class_ "badge badge-success"] "Passed"
-                    else span_ [class_ "badge badge-error"] "Failed"
-                  span_ [class_ "text-sm"] $ toHtml resultText
-
-
-getAssertionResult :: Map Text AE.Value -> Maybe Testing.AssertResult -> (Bool, Text)
-getAssertionResult st stepResult =
-  case Map.toList st of
-    [(key, val)] ->
-      let v = case val of
-            AE.String s -> s
-            _ -> show val
-          resultText = convertAssertText key (toText v)
-          success = maybe False (\x -> (x.ok == Just True) && isNothing x.err) stepResult
-       in (success, resultText)
-    _ -> (False, "Something went wrong")
-
-
-convertAssertText :: Text -> Text -> Text
-convertAssertText key val =
-  case key of
-    "ok" ->
-      let (left, right, op) = splitOnAny ["==", "!=", ">", "<", ">=", "<="] val
-          (cat, t) = getAssertCategory left
-       in cat <> " " <> t <> " " <> operationText (fromMaybe "" op) <> " " <> right
-    _ -> key <> ": " <> val
-
-
-getAssertCategory :: Text -> (Text, Text)
-getAssertCategory key
-  | T.isPrefixOf "$.resp.status" key = ("Status code", T.replace "$.resp.status" "" key)
-  | T.isPrefixOf "$.resp.headers" key = ("Header", T.replace "$.resp.headers." "" key)
-  | T.isPrefixOf "$.resp.json" key = ("Json path", T.replace ".resp.json" "" key)
-  | otherwise = ("Body", key)
-
-
-operationText :: Text -> Text
-operationText "==" = "equals"
-operationText "!=" = "does not equal"
-operationText ">" = "is greater than"
-operationText "<" = "is less than"
-operationText ">=" = "is greater than or equal to"
-operationText "<=" = "is less than or equal to"
-operationText op = op
-
-
-splitOnAny :: [Text] -> Text -> (Text, Text, Maybe Text)
-splitOnAny delimiters val =
-  case findDelimiter delimiters val of
-    Just delimiter ->
-      let parts = T.splitOn delimiter val
-       in case parts of
-            [left, right] -> (T.strip left, T.strip right, Just delimiter)
-            _ -> (val, "", Nothing) -- Fallback in case splitting fails
-    Nothing -> (val, "", Nothing)
-
-
-findDelimiter :: [Text] -> Text -> Maybe Text
-findDelimiter [] _ = Nothing
-findDelimiter (d : ds) val
-  | d `T.isInfixOf` val = Just d
-  | otherwise = findDelimiter ds val
-
-
-dStats :: Projects.ProjectId -> Int -> Int -> Int -> Text -> Html ()
-dStats pid steps passed failed freq = do
-  section_ [class_ "space-y-3 shrink-0 w-1/2"] do
-    div_ [class_ "flex gap-2"] do
-      statBox_ (Just pid) Nothing "Steps" "Total number of steps" (fmt (commaizeF steps)) Nothing Nothing
-      statBox_ (Just pid) Nothing "Passed" "Total number of steps passed in the last test run" (fmt (commaizeF passed)) Nothing Nothing
-      statBox_ (Just pid) Nothing "Failed" "Total number of steps failed in the last test run" (fmt (commaizeF failed)) Nothing Nothing
-      statBox_ (Just pid) Nothing "Frequency" "Frequency of collection test runs" freq Nothing Nothing
-
-
-extractHostname :: Text -> Maybe Text
-extractHostname txt =
-  case parseURI (toString txt) of
-    Just uri -> case uriAuthority uri of
-      Just auth -> Just $ toText (uriRegName auth)
-      Nothing -> Nothing
-    Nothing -> Nothing
-
-
-extractHostnames :: [Text] -> [Text]
-extractHostnames urs = sortNub (mapMaybe extractHostname urs)
+import Utils (checkFreeTierExceeded, faSprite_)
 
 
 -- | Types for unified monitor view
@@ -336,19 +56,13 @@ data UnifiedMonitorItem = UnifiedMonitorItem
 
 data UnifiedMonitorDetails
   = AlertDetails
-      { query :: Text
-      , alertThreshold :: Int
-      , warningThreshold :: Maybe Int
-      , triggerDirection :: Text -- "above" or "below"
-      , lastEvaluated :: Maybe UTCTime
-      , alertLastTriggered :: Maybe UTCTime
-      }
-  | MultiStepDetails
-      { stepsCount :: Int
-      , passed :: Int
-      , failed :: Int
-      , urls :: V.Vector Text
-      }
+  { query :: Text
+  , alertThreshold :: Int
+  , warningThreshold :: Maybe Int
+  , triggerDirection :: Text -- "above" or "below"
+  , lastEvaluated :: Maybe UTCTime
+  , alertLastTriggered :: Maybe UTCTime
+  }
 
 
 -- | Unified handler for monitors endpoint showing both alerts and multi-step monitors
@@ -362,14 +76,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
   currTime <- Time.currentTime
 
   -- Parse filter
-  let filterType = fromMaybe "All" filterTM
-
-  -- Fetch multi-step monitors (collections)
-  collections <- case filterType of
-    "Multi-step" -> dbtToEff $ Testing.getCollections pid Testing.Active
-    "All" -> dbtToEff $ Testing.getCollections pid Testing.Active
-    "Inactive" -> dbtToEff $ Testing.getCollections pid Testing.Inactive
-    _ -> pure V.empty
+  let filterType = fromMaybe "Active" filterTM
 
   -- Fetch alerts (query monitors)
   allAlerts <- dbtToEff $ Monitors.queryMonitorsAll pid
@@ -377,20 +84,13 @@ unifiedMonitorsGetH pid filterTM sinceM = do
       inactiveAlerts = V.filter (isJust . (.deactivatedAt)) allAlerts
 
   alerts <- case filterType of
-    "Alerts" -> pure activeAlerts
-    "All" -> pure activeAlerts
-    "Inactive" -> pure inactiveAlerts
-    _ -> pure V.empty
+    "Active" -> pure activeAlerts
+    _ -> pure inactiveAlerts
 
   -- Convert to unified items using the generic converter
-  let collectionItems = V.map (toUnifiedMonitorItem pid currTime . Right) collections
-      alertItems = V.map (toUnifiedMonitorItem pid currTime . Left) alerts
-      allItems = collectionItems <> alertItems
+  let allItems = V.map (toUnifiedMonitorItem pid currTime) alerts
 
-  -- Count inactive items for tab
-  inactiveColsCount <- dbtToEff $ Testing.inactiveCollectionsCount pid
-  let inactiveAlertsCount = V.length inactiveAlerts
-      totalInactive = inactiveColsCount + inactiveAlertsCount
+  let totalInactive = V.length inactiveAlerts
 
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
 
@@ -429,23 +129,14 @@ unifiedMonitorsGetH pid filterTM sinceM = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "Monitors"
-          , menuItem = Just "Monitors & Alerts"
+          , pageTitle = "Alerts"
+          , menuItem = Just "Alerts"
           , docsLink = Just "https://apitoolkit.io/docs/monitors/"
           , freeTierExceeded = freeTierExceeded
           , pageActions = Just $ div_ [class_ "flex gap-2"] do
-              div_ [class_ "dropdown dropdown-end"] do
-                label_ [tabindex_ "0", class_ "btn btn-sm btn-primary gap-2"] do
-                  faSprite_ "plus" "regular" "h-4"
-                  "Create Monitor"
-                  faSprite_ "chevron-down" "regular" "h-3"
-                ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow bg-base-100 rounded-box w-52"] do
-                  li_ $ a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"] do
-                    faSprite_ "bell" "regular" "h-4 w-4"
-                    "Log Query Alert"
-                  li_ $ a_ [href_ $ "/p/" <> pid.toText <> "/monitors/collection"] do
-                    faSprite_ "list-check" "regular" "h-4 w-4"
-                    "Multi-step Monitor"
+              a_ [class_ "btn btn-sm btn-primary gap-2", href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"] do
+                faSprite_ "bell" "regular" "h-4 w-4"
+                "Log Query Alert"
           , navTabs =
               Just
                 $ toHtml
@@ -453,9 +144,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
                   { current = filterType
                   , currentURL
                   , options =
-                      [ TabFilterOpt{name = "All", count = Nothing}
-                      , TabFilterOpt{name = "Alerts", count = Just $ V.length activeAlerts}
-                      , TabFilterOpt{name = "Multi-step", count = Just $ V.length collections}
+                      [ TabFilterOpt{name = "Active", count = Just $ V.length activeAlerts}
                       , TabFilterOpt{name = "Inactive", count = Just totalInactive}
                       ]
                   }
@@ -465,32 +154,9 @@ unifiedMonitorsGetH pid filterTM sinceM = do
 
 
 -- | Convert any monitor to unified item using a more generic approach
-toUnifiedMonitorItem :: Projects.ProjectId -> UTCTime -> Either Monitors.QueryMonitor Testing.CollectionListItem -> UnifiedMonitorItem
-toUnifiedMonitorItem pid currTime = either (alertToUnifiedItem pid) (collectionToUnifiedItem pid currTime)
+toUnifiedMonitorItem :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitor -> UnifiedMonitorItem
+toUnifiedMonitorItem pid currTime = alertToUnifiedItem pid
   where
-    -- \| Convert collection to unified monitor item
-    collectionToUnifiedItem _ _ col =
-      let hosts = extractHostnames (V.toList col.urls)
-       in UnifiedMonitorItem
-            { monitorType = MTMultiStep
-            , monitorId = col.id.toText
-            , projectId = pid.toText
-            , title = col.title
-            , status = if col.failed > 0 then "Failing" else "Passing"
-            , schedule = "every " <> col.schedule
-            , lastRun = col.lastRun
-            , createdAt = col.createdAt
-            , tags = V.toList col.tags
-            , hosts = hosts
-            , details =
-                MultiStepDetails
-                  { stepsCount = col.stepsCount
-                  , passed = col.passed
-                  , failed = col.failed
-                  , urls = col.urls
-                  }
-            }
-
     -- \| Convert alert to unified monitor item
     alertToUnifiedItem _ alert =
       let isActive = isNothing alert.deactivatedAt
@@ -549,9 +215,6 @@ unifiedMonitorCard item = do
           -- Hosts or query preview
           div_ [class_ "flex gap-2 items-center w-full"] do
             case item.details of
-              MultiStepDetails{} -> do
-                forM_ item.hosts $ \host -> do
-                  span_ [class_ "badge badge-ghost"] $ toHtml host
               AlertDetails{query} -> do
                 span_ [class_ "text-sm text-textWeak font-mono truncate", term "data-tippy-content" query] $ toHtml $ T.take 50 query
 
@@ -583,8 +246,6 @@ unifiedMonitorCard item = do
 
           -- Type-specific details
           case item.details of
-            MultiStepDetails{stepsCount, passed, failed} ->
-              stepsBox_ stepsCount passed failed
             AlertDetails{alertThreshold, warningThreshold, triggerDirection} ->
               thresholdBox_ alertThreshold warningThreshold triggerDirection
 
@@ -673,37 +334,22 @@ unifiedMonitorOverviewH pid monitorId = do
       pure $ alerts V.!? 0
     Nothing -> pure Nothing
 
-  -- Try as collection if not alert
-  collectionM <- case Testing.CollectionId <$> UUID.fromText monitorId of
-    Just cid -> dbtToEff $ Testing.getCollectionById cid
-    Nothing -> pure Nothing
-
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "Monitor Overview"
-          , prePageTitle = Just "Monitors & Alerts"
-          , menuItem = Just "Monitors & Alerts"
+          , pageTitle = "Alerts Overview"
+          , prePageTitle = Just "Alerts"
+          , menuItem = Just "Alerts"
           , docsLink = Just "https://apitoolkit.io/docs/monitors/"
           , freeTierExceeded = freeTierExceeded
           }
 
-  case (alertM, collectionM) of
-    (Just alert, _) -> do
+  case alertM of
+    Just alert -> do
       let bwconf' = bwconf{navTabs = Just $ monitorOverviewTabs pid monitorId "alert"}
-      addRespHeaders $ PageCtx bwconf' $ unifiedOverviewPage pid (Left alert) currTime
-    (_, Just collection) -> do
-      -- Fetch logs for collection
-      let queryTextRaw = [PyF.fmt|"sdk_type == \"TestkitOutgoing\" and request_headers.X-Testkit-Collection-ID == \"{monitorId}\""|]
-      queryAST <- case parseQueryToAST queryTextRaw of
-        Left err -> addErrorToast "Error Parsing Query " (Just err) >> pure []
-        Right ast -> pure ast
-      tableAsVecE <- RequestDumps.selectLogTable pid queryAST queryTextRaw Nothing (Nothing, Nothing) [""] Nothing Nothing
-      let tableAsVecM = hush tableAsVecE
-      let bwconf' = bwconf{navTabs = Just $ monitorOverviewTabs pid monitorId "collection"}
-      addRespHeaders $ PageCtx bwconf' $ unifiedOverviewPage pid (Right (collection, tableAsVecM)) currTime
-    _ -> addRespHeaders $ PageCtx bwconf $ div_ [class_ "p-6 text-center"] "Monitor not found"
+      addRespHeaders $ PageCtx bwconf' $ unifiedOverviewPage pid alert currTime
+    _ -> addRespHeaders $ PageCtx bwconf $ div_ [class_ "p-6 text-center"] "Alert not found"
 
 
 -- | Unified overview tabs
@@ -719,54 +365,36 @@ monitorOverviewTabs pid monitorId monitorType = do
 
 
 -- | Unified overview page that handles both monitor types
-unifiedOverviewPage :: Projects.ProjectId -> Either Monitors.QueryMonitorEvaled (Testing.Collection, Maybe (V.Vector (V.Vector AE.Value), [Text], Int)) -> UTCTime -> Html ()
-unifiedOverviewPage pid monitorData currTime = do
+unifiedOverviewPage :: Projects.ProjectId -> Monitors.QueryMonitorEvaled -> UTCTime -> Html ()
+unifiedOverviewPage pid alert currTime = do
   section_ [class_ "pt-2 mx-auto px-14 w-full flex flex-col gap-4 h-full"] do
     -- Header section
     div_ [class_ "flex justify-between items-center"] do
-      case monitorData of
-        Left alert -> monitorHeader (alert.alertConfig.title) (isJust alert.deactivatedAt) ("Severity: " <> alert.alertConfig.severity)
-        Right (col, _) -> monitorHeader col.title False ("Schedule: every " <> col.schedule)
+      monitorHeader (alert.alertConfig.title) (isJust alert.deactivatedAt) ("Severity: " <> alert.alertConfig.severity)
 
       -- Action buttons
       div_ [class_ "flex gap-2"] do
-        case monitorData of
-          Left alert -> do
-            button_
-              [ class_ "btn btn-sm btn-outline"
-              , hxPost_ $ "/p/" <> pid.toText <> "/alerts/" <> alert.id.toText <> "/toggle_active"
-              , hxTarget_ "body"
-              , hxSwap_ "innerHTML"
-              ]
-              $ if isJust alert.deactivatedAt then "Activate" else "Deactivate"
-            a_ [href_ $ "/p/" <> pid.toText <> "/alerts/" <> alert.id.toText, class_ "btn btn-sm btn-primary"] do
-              faSprite_ "pen-to-square" "regular" "h-4 w-4"
-              "Edit Alert"
-          Right (col, _) -> do
-            a_ [href_ $ "/p/" <> pid.toText <> "/monitors/collection?col_id=" <> col.id.toText, class_ "btn btn-sm btn-primary"] do
-              faSprite_ "pen-to-square" "regular" "h-4 w-4"
-              "Edit Monitor"
+        button_
+          [ class_ "btn btn-sm btn-outline"
+          , hxPost_ $ "/p/" <> pid.toText <> "/alerts/" <> alert.id.toText <> "/toggle_active"
+          , hxTarget_ "body"
+          , hxSwap_ "innerHTML"
+          ]
+          $ if isJust alert.deactivatedAt
+            then "Activate"
+            else "Deactivate"
+        a_
+          [href_ $ "/p/" <> pid.toText <> "/alerts/" <> alert.id.toText, class_ "btn btn-sm btn-primary"]
+          do
+            faSprite_ "pen-to-square" "regular" "h-4 w-4"
+            "Edit Alert"
 
     -- Stats section
     div_ [class_ "relative p-1 flex gap-10 items-start"] do
-      case monitorData of
-        Left alert -> alertStats_ pid alert currTime
-        Right (col, _) ->
-          let (Testing.CollectionSteps steps) = col.collectionSteps
-           in dStats pid (V.length steps) col.lastRunPassed col.lastRunFailed col.schedule
+      alertStats_ pid alert currTime
 
     -- Content tabs
-    tabbedSection_ "monitor-tabs" $ case monitorData of
-      Left alert ->
-        [ ("Query & Visualization", alertQueryTab_ pid alert)
-        , ("Execution History", monitorHistoryTab_ "Alert execution history")
-        , ("Notifications", alertNotificationsTab_ alert)
-        ]
-      Right (col, logsM) ->
-        [ ("Results", testResultsTab_ pid col)
-        , ("Logs", logsTab_ pid col logsM)
-        , ("Execution History", monitorHistoryTab_ "Test run history")
-        ]
+    tabbedSection_ "monitor-tabs" $ [("Query & Visualization", alertQueryTab_ pid alert), ("Execution History", monitorHistoryTab_ "Alert execution history"), ("Notifications", alertNotificationsTab_ alert)]
   where
     monitorHeader title isInactive subtitle = do
       div_ [class_ "flex flex-col gap-2"] do
@@ -818,61 +446,6 @@ monitorHistoryTab_ description = do
       faSprite_ "clock-rotate-left" "regular" "h-12 w-12 mb-3 text-iconNeutral"
       p_ [] "Execution history coming soon"
       p_ [class_ "text-sm mt-2"] $ toHtml description
-
-
--- | Test results tab for collections
-testResultsTab_ :: Projects.ProjectId -> Testing.Collection -> Html ()
-testResultsTab_ pid col = do
-  let result = col.lastRunResponse >>= castToStepResult
-      (Testing.CollectionSteps stepsD) = col.collectionSteps
-  testResultDiagram_ pid col.id stepsD result
-
-
--- | Logs tab for collections
-logsTab_ :: Projects.ProjectId -> Testing.Collection -> Maybe (V.Vector (V.Vector AE.Value), [Text], Int) -> Html ()
-logsTab_ pid col reqsVecM = do
-  div_ [class_ "overflow-x-hidden h-full"] do
-    case reqsVecM of
-      Just reqVec -> do
-        let (requestVecs, colNames, requestsCount) = reqVec
-            query = Just "sdk_type==\"TestkitOutgoing\""
-            colIdxMap = listToIndexHashMap colNames
-            reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
-            curatedColNames = nubOrd $ Log.curateCols [""] colNames
-            nextLogsURL = RequestDumps.requestDumpLogUrlPath pid query reqLastCreatedAtM Nothing Nothing Nothing Nothing (Just "loadmore") "requests" False
-            resetLogsURL = RequestDumps.requestDumpLogUrlPath pid query Nothing Nothing Nothing Nothing Nothing Nothing "requests" False
-            page =
-              Log.ApiLogsPageData
-                { pid
-                , resultCount = requestsCount
-                , requestVecs
-                , cols = curatedColNames
-                , colIdxMap
-                , nextLogsURL
-                , resetLogsURL
-                , recentLogsURL = ""
-                , currentRange = Nothing
-                , exceededFreeTier = False
-                , query
-                , cursor = Nothing
-                , isTestLog = Just True
-                , emptyStateUrl = Just $ "/p/" <> pid.toText <> "/monitors/collection?col_id=" <> col.id.toText
-                , source = "requests"
-                , targetSpans = Nothing
-                , daysCountDown = Nothing
-                , queryLibRecent = V.empty
-                , queryLibSaved = V.empty
-                , serviceColors = HM.empty
-                , fromD = Nothing
-                , toD = Nothing
-                , detailsWidth = Nothing
-                , targetEvent = Nothing
-                , showTrace = Nothing
-                , facets = Nothing
-                , vizType = Nothing
-                }
-        Log.virtualTable page
-      _ -> pass
 
 
 -- | Alert statistics boxes (copied from Alerts module for consolidation)

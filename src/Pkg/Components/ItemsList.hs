@@ -9,14 +9,12 @@ module Pkg.Components.ItemsList (
   ItemsListCfg (..),
   SortCfg (..),
   SearchCfg (..),
-  TimelineSteps (..),
   TimelineStep (..),
   TabFilter (..),
   TabFilterOpt (..),
 )
 where
 
-import Data.Foldable.WithIndex (iforM_)
 import Data.Time (UTCTime)
 import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
@@ -24,7 +22,6 @@ import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
-import Models.Tests.Testing qualified as Testing
 import Pages.Components (emptyState_)
 import Relude
 import Utils (deleteParam, escapedQueryPartial, faSprite_)
@@ -221,60 +218,10 @@ itemRows_ nextFetchUrl items = do
           span_ [id_ "rowsIndicator", class_ "ml-2 htmx-indicator loading loading-dots loading-md"] ""
 
 
----------------------------------------------------------------------
---   TimelineSteps
----------------------------------------------------------------------
-
--- TimelineSteps is used to render numbered timeline sections
--- where each section has a number a title and content
-data TimelineSteps = TimelineSteps [TimelineStep] (Maybe Testing.Collection)
-
-
 data TimelineStep = TimelineStep
   { title :: Text
   , content :: Html ()
   }
-
-
-instance ToHtml TimelineSteps where
-  toHtmlRaw = toHtml
-  toHtml (TimelineSteps steps colM) = toHtml $ timelineSteps_ steps colM
-
-
-timelineSteps_ :: [TimelineStep] -> Maybe Testing.Collection -> Html ()
-timelineSteps_ steps colM =
-  ul_ [class_ "timeline timeline-snap-icon timeline-vertical timeline-compact pb-8"] $ do
-    iforM_ steps $ \idx step -> li_ [class_ "group/tm"] $ do
-      when (idx > 0) $ hr_ [style_ "width:2px"]
-      div_ [class_ "timeline-middle "] do
-        span_
-          [class_ "rounded-full bg-primary text-textInverse-strong h-7 w-7 flex items-center justify-center "]
-          (toHtml $ show $ idx + 1)
-      div_ [class_ "timeline-end space-y-5 w-full"] $ do
-        div_ [class_ "flex items-center justify-between"] do
-          label_ [class_ "text-lg flex gap-2 items-center pt-1"] $ do
-            span_ [class_ "font-medium ml-2 text-textStrong"] (toHtml step.title)
-            input_ ([type_ "checkbox", class_ "hidden tm-toggle"] <> [checked_ | idx == 0])
-            faSprite_ "chevron-up" "regular" "h-4 rounded-full rotate-180  bg-fillWeak  text-textStrong p-1 w-4 group-has-[.tm-toggle:checked]/tm:rotate-0"
-          when (idx == 0) $ do
-            whenJust colM $ \col ->
-              div_ [class_ "flex items-center gap-6"] do
-                label_ [class_ "relative inline-flex items-center cursor-pointer space-x-1"] do
-                  input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm editormode", id_ "test-code-toggle", onchange_ "codeToggle(event)"] >> span_ [class_ "text-sm  text-textWeak font-medium"] "Code editor"
-                button_
-                  [ class_ "flex items-center gap-1 font-medium rounded-lg text-textBrand underline"
-                  , hxPatch_ $ "/p/" <> col.projectId.toText <> "/monitors/" <> col.id.toText
-                  , hxParams_ "stepsData"
-                  , hxExt_ "json-enc"
-                  , hxVals_ "js:{stepsData: saveStepData()}"
-                  , hxTarget_ "#step-results-parent"
-                  , hxSwap_ "innerHTML"
-                  , hxIndicator_ "#step-results-indicator"
-                  ]
-                  "Run all"
-
-        div_ [class_ "pl-2 pb-8 space-y-3 hidden group-has-[.tm-toggle:checked]/tm:block"] step.content
-      when (idx < (length steps - 1)) $ hr_ [style_ "width:2px"]
 
 
 --------------------------------------------------------------------

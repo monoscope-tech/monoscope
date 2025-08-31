@@ -333,8 +333,8 @@ getProjectHosts pid = query q (Only pid)
 
 
 dependenciesAndEventsCount :: Projects.ProjectId -> Text -> Text -> Int -> DBT IO (V.Vector HostEvents)
-dependenciesAndEventsCount pid requestType sortT skip =
-  query (Query $ encodeUtf8 q) (pid, isOutgoing, pid, skip)
+dependenciesAndEventsCount pid requestType sortT skip = do
+  query (Query $ encodeUtf8 q) (pid, isOutgoing, isOutgoing, pid, skip)
   where
     orderBy = case sortT of
       "first_seen" -> "first_seen ASC"
@@ -351,17 +351,15 @@ dependenciesAndEventsCount pid requestType sortT skip =
     q =
       [text|
 WITH filtered_requests AS (
-    SELECT COALESCE(attributes->>'net.host.name', attributes->>'http.host', '') AS host,
+    SELECT attributes->'net'->'host'->>'name' AS host,
            COUNT(*) AS eventsCount,
            MAX(timestamp) AS last_seen,
            MIN(timestamp) AS first_seen
     FROM otel_logs_and_spans
     WHERE project_id = ?
-      AND timestamp > NOW() - interval '14' day
-      AND kind = CASE WHEN ? THEN 'client' ELSE 'server' END
-      AND (attributes->>'http.request.method' IS NOT NULL 
-           OR attributes->>'http.response.status_code' IS NOT NULL)
-    GROUP BY 1
+      AND (name = 'monoscope.http' OR name = 'apitoolkit-http-span')
+      AND kind IN (CASE  WHEN ? THEN 'client' ELSE 'server' END, CASE  WHEN ? THEN NULL ELSE 'internal' END)
+    GROUP BY host
 )
 SELECT DISTINCT ep.host,
        COALESCE(fr.eventsCount, 0) AS eventsCount,
@@ -373,7 +371,7 @@ WHERE ep.project_id = ?
   AND ep.host != ''
   AND $endpointFilter
 ORDER BY $orderBy
-LIMIT 10 OFFSET ?
+LIMIT 20 OFFSET ?
       |]
 
 

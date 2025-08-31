@@ -46,10 +46,7 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.LemonSqueezy qualified as LemonSqueezy
 import Models.Projects.Projects (ProjectId (unProjectId))
 import Models.Projects.Projects qualified as Projects
-import Models.Projects.Swaggers qualified as Swaggers
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Models.Tests.TestToDump qualified as TestToDump
-import Models.Tests.Testing qualified as Testing
 import Models.Users.Users qualified as Users
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq (defaults, header, postWith)
@@ -58,7 +55,6 @@ import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, creat
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.Reports qualified as RP
-import Pages.Specification.GenerateSwagger (generateSwagger)
 import Pkg.Mail (NotificationAlerts (EndpointAlert, ReportAlert, RuntimeErrorAlert), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
 import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
@@ -89,13 +85,10 @@ data BgJobs
   | WeeklyReports Projects.ProjectId
   | DailyJob
   | HourlyJob UTCTime Int
-  | GenSwagger Projects.ProjectId Users.UserId Text
   | ReportUsage Projects.ProjectId
   | GenerateOtelFacetsBatch (V.Vector Text) UTCTime
   | QueryMonitorsTriggered (V.Vector Monitors.QueryMonitorId)
-  | RunCollectionTests Testing.CollectionId
   | DeletedProject Projects.ProjectId
-  | APITestFailed Projects.ProjectId Testing.CollectionId (V.Vector Testing.StepResult)
   | CleanupDemoProject
   | FiveMinuteSpanProcessing UTCTime
   | OneMinuteErrorProcessing UTCTime
@@ -259,7 +252,6 @@ processBackgroundJob authCtx job bgJob =
     HourlyJob scheduledTime hour -> runHourlyJob scheduledTime hour
     DailyReports pid -> sendReportForProject pid DailyReport
     WeeklyReports pid -> sendReportForProject pid WeeklyReport
-    GenSwagger pid uid host -> generateSwaggerForProject pid uid host
     ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
       Relude.when (project.paymentPlan /= "Free" && project.paymentPlan /= "ONBOARDING") $ whenJust project.firstSubItemId \fSubId -> do
         currentTime <- liftIO getZonedTime
@@ -269,32 +261,6 @@ processBackgroundJob authCtx job bgJob =
           _ <- dbtToEff $ LemonSqueezy.addDailyUsageReport pid totalToReport
           _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
           pass
-    RunCollectionTests col_id -> do
-      now <- Time.currentTime
-      collectionM <- dbtToEff $ Testing.getCollectionById col_id
-      if job.jobRunAt > addUTCTime (-900) now -- Run time is less than 15 mins ago
-        then whenJust collectionM \collection -> Relude.when collection.isScheduled do
-          let (Testing.CollectionSteps colStepsV) = collection.collectionSteps
-              Testing.CollectionVariables colV = collection.collectionVariables
-          stepResultsE <- TestToDump.runCollectionTest colStepsV colV col_id
-          case stepResultsE of
-            Left e -> do
-              _ <- TestToDump.logTest collection.projectId col_id colStepsV (Left e)
-              pass
-            Right stepResults -> do
-              let (_, failed) = Testing.getCollectionRunStatus stepResults
-              Relude.when (failed > 0) do
-                _ <- liftIO $ withResource authCtx.jobsPool \conn -> do
-                  createJob conn "background_jobs" $ BackgroundJobs.APITestFailed collection.projectId col_id stepResults
-                pass
-              _ <- TestToDump.logTest collection.projectId col_id colStepsV (Right stepResults)
-              pass
-        else Log.logAttention "RunCollectionTests failed.  Job was sheduled to run over 30 mins ago" $ maybe AE.Null (\c -> AE.object [("title", AE.toJSON c.title), ("id", AE.toJSON c.id)]) collectionM
-    APITestFailed pid col_id stepResult -> do
-      -- collectionM <- dbtToEff $ Testing.getCollectionById col_id
-      -- whenJust collectionM \collection -> do
-      --   _ <- sendTestFailedAlert pid col_id collection stepResult
-      pass
     CleanupDemoProject -> do
       let pid = Projects.ProjectId{unProjectId = UUID.nil}
       -- DELETE PROJECT members
@@ -540,31 +506,6 @@ processProjectSpans pid spans = do
         , dailyMetricCount = 0
         , paymentPlan = ""
         }
-
-
-generateSwaggerForProject :: Projects.ProjectId -> Users.UserId -> Text -> ATBackgroundCtx ()
-generateSwaggerForProject pid uid host = whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
-  endpoints <- dbtToEff $ Endpoints.endpointsByProjectId pid host
-  let endpoint_hashes = V.map (.hash) endpoints
-  shapes <- dbtToEff $ Shapes.shapesByEndpointHashes pid endpoint_hashes
-  fields <- dbtToEff $ FieldsQ.fieldsByEndpointHashes pid endpoint_hashes
-  let field_hashes = V.map (.fHash) fields
-  formats <- dbtToEff $ Formats.formatsByFieldsHashes pid field_hashes
-  let (projectTitle, projectDescription) = (toText project.title, toText project.description)
-  let swagger = generateSwagger projectTitle projectDescription endpoints shapes fields formats
-  swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
-  currentTime <- liftIO getZonedTime
-  let swaggerToAdd =
-        Swaggers.Swagger
-          { id = swaggerId
-          , projectId = pid
-          , createdBy = uid
-          , createdAt = currentTime
-          , updatedAt = currentTime
-          , swaggerJson = swagger
-          , host = host
-          }
-  dbtToEff $ Swaggers.addSwagger swaggerToAdd
 
 
 -- FIXME: implement inteligent allerting logic, where we pause to ensure users are not alerted too often, or spammed.
