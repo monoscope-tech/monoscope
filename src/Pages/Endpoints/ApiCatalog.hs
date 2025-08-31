@@ -38,7 +38,7 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
   let filterV = fromMaybe "14d" timeFilter
 
   let currentURL = "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=" <> requestType <> "&since=" <> filterV
-      nextFetchUrl = Just $ currentURL <> "&skip=" <> maybe "10" (\x -> show $ 10 + x) skipM
+      nextFetchUrl = Just $ currentURL <> "&skip=" <> maybe "20" (\x -> show $ 20 + x) skipM
 
   let listCfg =
         ItemsList.ItemsListCfg
