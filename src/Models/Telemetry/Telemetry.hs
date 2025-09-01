@@ -88,6 +88,8 @@ import NeatInterpolation (text)
 import Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..))
 import Pkg.DeriveUtils (AesonText (..), unAesonTextMaybe)
 import Relude hiding (ask)
+import Text.Regex.TDFA ((=~))
+import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
 import Utils (lookupValueText, toXXHash)
 
@@ -849,7 +851,7 @@ bulkInserSpansAndLogsQuery =
        resource___telemetry___sdk___language, resource___telemetry___sdk___name,
        resource___telemetry___sdk___version, resource___user_agent___original,
        project_id, summary, date)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     |]
@@ -1052,7 +1054,7 @@ extractATError spanObj (AE.Object o) = do
       , message = msg
       , rootErrorMessage = msg
       , stackTrace = stack
-      , hash = Just (toXXHash (spanObj.project_id <> fromMaybe "" serviceName <> fromMaybe "" spanObj.name <> typ <> msg))
+      , hash = Just (toXXHash (spanObj.project_id <> fromMaybe "" serviceName <> fromMaybe "" spanObj.name <> typ <> (sanitizeError $ msg <> stack)))
       , technology = Nothing
       , serviceName = serviceName
       , requestMethod = method
@@ -1074,3 +1076,24 @@ getProjectStatsForReport projectId start end = dbtToEff $ query q (projectId, st
            GROUP BY resource___service___name 
            ORDER BY total_events DESC;
         |]
+
+
+sanitizeError :: T.Text -> T.Text
+sanitizeError input =
+  let step1 = replaceRegex "[0-9]+" "NUMBER" input
+      step2 = replaceRegex datePattern "DATE" step1
+      step3 = T.filter (not . isSpaceLike) step2
+   in step3
+  where
+    datePattern = "([0-9]{4}[-/][0-9]{2}[-/][0-9]{2}|[0-9]{2}[-/][0-9]{2}[-/][0-9]{4})"
+    isSpaceLike c = c == ' ' || c == '\n' || c == '\r' || c == '\t'
+
+
+replaceRegex :: T.Text -> T.Text -> T.Text -> T.Text
+replaceRegex pat repl txt
+  | T.null txt = ""
+  | otherwise =
+      let (before, match, after) = txt =~ pat :: (T.Text, T.Text, T.Text)
+       in if T.null match
+            then before
+            else before <> repl <> replaceRegex pat repl after
