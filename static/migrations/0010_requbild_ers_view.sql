@@ -8,8 +8,8 @@ WITH request_stats AS (
         project_id,
         attributes___url___path AS url_path,
         attributes___http___request___method AS method,
-        hashes,
-        coalesce(attributes___server___address, '') AS host,
+        hashes[1] AS endpoint_hash,
+        coalesce(attributes->'net'->'host'->>'name', '') AS host,
         percentile_agg(duration) AS agg,
         sum(duration) AS total_time,
         count(*) AS total_requests,
@@ -17,7 +17,7 @@ WITH request_stats AS (
         sum(count(*)) OVER (PARTITION BY project_id) AS total_requests_proj
     FROM otel_logs_and_spans
     WHERE name = 'monoscope.http' OR name = 'apitoolkit-http-span'
-    GROUP BY project_id, url_path, method, hashes, host
+    GROUP BY project_id, url_path, method, hashes[1], host
 )
 SELECT
     enp.id AS endpoint_id,
@@ -40,7 +40,7 @@ SELECT
 FROM apis.endpoints enp
 JOIN request_stats rds
   ON rds.project_id = enp.project_id::text
- AND enp.hash = Any(rds.hashes);
+ AND enp.hash = rds.endpoint_hash;
 
 CREATE INDEX IF NOT EXISTS idx_apis_endpoint_request_stats_project_id ON apis.endpoint_request_stats(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_endpoint_request_stats_endpoint_id ON apis.endpoint_request_stats(endpoint_id);
