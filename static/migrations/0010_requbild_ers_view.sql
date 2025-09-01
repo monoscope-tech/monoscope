@@ -19,7 +19,7 @@ WITH request_stats AS (
     WHERE name = 'monoscope.http' OR name = 'apitoolkit-http-span'
     GROUP BY project_id, url_path, method, hashes[1], host
 )
-SELECT
+SELECT  DISTINCT ON (enp.id)
     enp.id AS endpoint_id,
     enp.hash AS endpoint_hash,
     rds.project_id,

@@ -187,7 +187,7 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
      where enp.project_id=? and ann.id is not null and enp.outgoing=? $ackdAt $archivedAt $pHostQuery $search
      order by $orderBy , url_path ASC
      offset ? limit 30;
-     ;
+     
   |]
 
 
