@@ -44,7 +44,7 @@ widgets:
                ] AS values,
                ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
         FROM otel_logs_and_spans
-        WHERE project_id='{{project_id}}' AND (kind='server' OR name='apitoolkit-http-span' OR name=="monoscope.http") AND attributes___http___response___status_code is not null
+        WHERE project_id='{{project_id}}' AND (kind='server' OR name='apitoolkit-http-span' OR name='monoscope.http') AND attributes___http___response___status_code is not null
           {{time_filter}}
         GROUP BY timeB
       ) s,
