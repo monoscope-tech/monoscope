@@ -851,9 +851,10 @@ bulkInserSpansAndLogsQuery =
        resource___telemetry___sdk___language, resource___telemetry___sdk___name,
        resource___telemetry___sdk___version, resource___user_agent___original,
        project_id, summary, date)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ 
     |]
 
 
@@ -1078,10 +1079,6 @@ getProjectStatsForReport projectId start end = dbtToEff $ query q (projectId, st
         |]
 
 
--- | Sanitize error message:
---   - Replace numbers (ints, floats, scientific) with "NUMBER"
---   - Replace dates (with or without time) with "DATE"
---   - Remove whitespace, newlines, carriage returns
 sanitizeError :: T.Text -> T.Text
 sanitizeError input =
   let step1 = replaceRegex numberPattern "NUMBER" input
@@ -1092,10 +1089,40 @@ sanitizeError input =
     -- Numbers: integers, floats, scientific notation
     numberPattern = "-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?"
 
-    -- Dates: YYYY-MM-DD, DD/MM/YYYY, with optional time
+    -- Dates (ISO, EU, US, textual months, with optional fractions & tz)
     datePattern =
-      "([0-9]{4}[-/][0-9]{2}[-/][0-9]{2}([ T][0-9]{2}:[0-9]{2}(:[0-9]{2})?)?|\
-      \[0-9]{2}[-/][0-9]{2}[-/][0-9]{4}([ T][0-9]{2}:[0-9]{2}(:[0-9]{2})?)?)"
+      "("
+        <> isoDate
+        <> "|"
+        <> euDate
+        <> "|"
+        <> usDate
+        <> "|"
+        <> monthNameDate
+        <> ")"
+
+    -- ISO: 2025-09-01T19:22:47.789254Z or 2025-09-01 19:22:47
+    isoDate =
+      "[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}"
+        <> "([ T][0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]+)?)?"
+        <> "(Z|[+-][0-9]{2}:[0-9]{2})?)?"
+
+    -- DD-MM-YYYY or DD/MM/YYYY
+    euDate =
+      "[0-9]{2}[-/][0-9]{2}[-/][0-9]{4}"
+        <> "([ T][0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]+)?)?)?"
+
+    -- MM/DD/YYYY
+    usDate =
+      "[0-9]{2}/[0-9]{2}/[0-9]{4}"
+        <> "([ T][0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]+)?)?)?"
+
+    -- Month names + day + year
+    monthNameDate =
+      "((Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|"
+        <> "January|February|March|April|May|June|July|August|September|October|November|December)"
+        <> " ?[0-9]{1,2},? ?[0-9]{4}"
+        <> "( [0-9]{1,2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]+)?)?( ?[APMapm]{2})?)?)"
 
     isSpaceLike c = c == ' ' || c == '\n' || c == '\r' || c == '\t'
 
