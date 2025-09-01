@@ -13,8 +13,6 @@ module Models.Apis.Endpoints (
   endpointsByProjectId,
   endpointUrlPath,
   endpointRequestStatsByProject,
-  dependencyEndpointsRequestStatsByProject,
-  endpointRequestStatsByEndpoint,
   endpointById,
   endpointIdText,
   endpointToUrlPath,
@@ -129,19 +127,7 @@ data EndpointRequestStats = EndpointRequestStats
   , urlPath :: Text
   , method :: Text
   , host :: Text
-  , min :: Double
-  , p50 :: Double
-  , p75 :: Double
-  , p90 :: Double
-  , p95 :: Double
-  , p99 :: Double
-  , max :: Double
-  , totalTime :: Double
-  , totalTimeProj :: Double
   , totalRequests :: Int
-  , totalRequestsProj :: Int
-  , ongoingAnomalies :: Int
-  , ongoingAnomaliesProj :: Int
   , acknowlegedAt :: Maybe UTCTime
   , archivedAt :: Maybe UTCTime
   , anomalyId :: UUID.UUID
@@ -158,80 +144,40 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
   where
     -- Construct the list of parameters conditionally
     pHostParams = maybe [] (\h -> [toField h]) pHostM
-    queryParams = [toField pid, toField isOutgoing] ++ pHostParams ++ [toField offset]
+    queryParams = [toField pid] ++ pHostParams ++ [toField pid, toField isOutgoing] ++ pHostParams ++ [toField offset]
 
     isOutgoing = requestType == "Outgoing"
     offset = page * 30
     ackdAt = if ackd && not archived then "AND ann.acknowledged_at IS NOT NULL AND ann.archived_at IS NULL " else "AND ann.acknowledged_at IS NULL "
-    archivedAt = if archived then "AND ann.archived_at IS NOT NULL " else " AND ann.archived_at IS NULL"
+    archivedAt = if archived then "AND ann.archived_at IS NOT NULL " else "AND ann.archived_at IS NULL "
     search = case searchM of Just s -> " AND enp.url_path LIKE '%" <> s <> "%'"; Nothing -> ""
     pHostQuery = case pHostM of Just h -> " AND enp.host = ?"; Nothing -> ""
-    orderBy = case fromMaybe "" sortM of "first_seen" -> "enp.created_at ASC"; "last_seen" -> "enp.created_at DESC"; _ -> " coalesce(ers.total_requests,0) DESC"
-    -- TODO This query to get the anomalies for the anomalies page might be too complex.
-    -- Does it make sense yet to remove the call to endpoint_request_stats? since we're using async charts already
+    orderBy = case fromMaybe "" sortM of "first_seen" -> "enp.created_at ASC"; "last_seen" -> "enp.created_at DESC"; _ -> "coalesce(fr.eventsCount, 0) DESC"
     q =
-      [text| SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, enp.host, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0),  coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) ,
-         coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(ers.total_requests,0), coalesce(total_requests_proj,0),
-         (SELECT count(*) from apis.issues
-                 where project_id=enp.project_id AND acknowledged_at is null AND archived_at is null AND issue_type = 'api_change'
-         ) ongoing_anomalies,
-        (SELECT count(*) from apis.issues
-                 where project_id=enp.project_id AND acknowledged_at is null AND archived_at is null AND issue_type = 'api_change'
-        ) ongoing_anomalies_proj,
+      [text| 
+      
+   WITH filtered_requests AS (
+    SELECT attributes->'http'->>'route' AS url_path,
+           attributes->'http'->'request'->>'method' AS method,
+           COUNT(*) AS eventsCount
+    FROM otel_logs_and_spans
+    WHERE project_id = ?
+      AND (name = 'monoscope.http' OR name = 'apitoolkit-http-span')
+      AND attributes->'net'->'host'->>'name' = ?
+    GROUP BY url_path, method
+)
+      SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, enp.host, coalesce(fr.eventsCount, 0) as total_requests,
         ann.acknowledged_at,
         ann.archived_at,
         ann.id
      from apis.endpoints enp
-     left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
+     left join filtered_requests fr on (enp.url_path=fr.url_path and enp.method=fr.method)
      left join apis.issues ann on ( ann.endpoint_hash=enp.hash)
-     where enp.project_id=? and ann.id is not null and enp.outgoing=? $ackdAt $archivedAt $pHostQuery $search
+     where enp.project_id=? and enp.outgoing=? $ackdAt $archivedAt $pHostQuery $search
      order by $orderBy , url_path ASC
      offset ? limit 30;
      
   |]
-
-
-dependencyEndpointsRequestStatsByProject :: Projects.ProjectId -> Text -> Bool -> Bool -> Maybe Text -> Maybe Text -> Int -> PgT.DBT IO (V.Vector EndpointRequestStats)
-dependencyEndpointsRequestStatsByProject pid host ack arch sortM searchM page = query (Query $ encodeUtf8 q) (pid, host)
-  where
-    q =
-      [text|
-      SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, enp.host, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0), coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) ,
-         coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(total_requests,0), coalesce(total_requests_proj,0),
-         (SELECT count(*) from apis.issues
-                 where project_id=enp.project_id AND acknowledged_at is null AND archived_at is null AND issue_type != 'api_change'
-         ) ongoing_anomalies,
-        (SELECT count(*) from apis.issues
-                 where project_id=enp.project_id AND acknowledged_at is null AND archived_at is null AND issue_type != 'api_change'
-        ) ongoing_anomalies_proj,
-        ann.acknowledged_at,
-        ann.archived_at,
-        ann.id
-     from apis.endpoints enp
-     left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
-     left join apis.issues ann on (ann.issue_type='api_change' AND ann.endpoint_hash=endpoint_hash)
-     where enp.project_id=? and enp.id is not null and ann.id is not null AND enp.outgoing = true AND enp.host = ?
-     order by total_requests DESC, enp.url_path ASC;
-    |]
-
-
--- FIXME: return endpoint_hash as well.
--- This would require tampering with the view.
-endpointRequestStatsByEndpoint :: EndpointId -> PgT.DBT IO (Maybe EndpointRequestStats)
-endpointRequestStatsByEndpoint eid = queryOne q (eid, eid)
-  where
-    q =
-      [sql| SELECT endpoint_id, endpoint_hash, project_id, url_path, method, host, coalesce(min, 0), coalesce(p50, 0), coalesce(p75, 0), coalesce(p90, 0), coalesce(p95, 0), coalesce(p99, 0), coalesce
-      (max, 0),
-                   coalesce(total_time, 0), coalesce(total_time_proj,0), coalesce(total_requests,0), coalesce(total_requests_proj,0),
-                   (SELECT count(*) from apis.anomalies
-                           where endpoint_id=? AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
-                   ) ongoing_anomalies,
-                  (SELECT count(*) from apis.anomalies
-                           where project_id=project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
-                   ) ongoing_anomalies_proj,
-                  null, null, '00000000-0000-0000-0000-000000000000'::uuid
-              FROM apis.endpoint_request_stats WHERE endpoint_id=?|]
 
 
 endpointById :: EndpointId -> PgT.DBT IO (Maybe Endpoint)
@@ -388,7 +334,7 @@ countEndpointInbox pid host requestType = do
       _ -> "ep.outgoing =  false"
     q =
       [text|
-        SELECT COUNT(*)
+        SELECT coalesce(COUNT(*), 0)
         FROM apis.endpoints enp
         LEFT JOIN apis.issues ann ON (ann.issue_type = 'api_change' AND ann.endpoint_hash = enp.hash)
         WHERE
