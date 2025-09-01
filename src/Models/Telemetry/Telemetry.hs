@@ -1078,17 +1078,29 @@ getProjectStatsForReport projectId start end = dbtToEff $ query q (projectId, st
         |]
 
 
+-- | Sanitize error message:
+--   - Replace numbers (ints, floats, scientific) with "NUMBER"
+--   - Replace dates (with or without time) with "DATE"
+--   - Remove whitespace, newlines, carriage returns
 sanitizeError :: T.Text -> T.Text
 sanitizeError input =
-  let step1 = replaceRegex "[0-9]+" "NUMBER" input
+  let step1 = replaceRegex numberPattern "NUMBER" input
       step2 = replaceRegex datePattern "DATE" step1
       step3 = T.filter (not . isSpaceLike) step2
    in step3
   where
-    datePattern = "([0-9]{4}[-/][0-9]{2}[-/][0-9]{2}|[0-9]{2}[-/][0-9]{2}[-/][0-9]{4})"
+    -- Numbers: integers, floats, scientific notation
+    numberPattern = "-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?"
+
+    -- Dates: YYYY-MM-DD, DD/MM/YYYY, with optional time
+    datePattern =
+      "([0-9]{4}[-/][0-9]{2}[-/][0-9]{2}([ T][0-9]{2}:[0-9]{2}(:[0-9]{2})?)?|\
+      \[0-9]{2}[-/][0-9]{2}[-/][0-9]{4}([ T][0-9]{2}:[0-9]{2}(:[0-9]{2})?)?)"
+
     isSpaceLike c = c == ' ' || c == '\n' || c == '\r' || c == '\t'
 
 
+-- Replace regex matches with given replacement
 replaceRegex :: T.Text -> T.Text -> T.Text -> T.Text
 replaceRegex pat repl txt
   | T.null txt = ""
