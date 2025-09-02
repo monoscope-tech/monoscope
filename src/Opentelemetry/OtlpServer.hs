@@ -609,10 +609,16 @@ convertResourceLogsToOtelLogs !fallbackTime !projectCaches !pids resourceLogs =
         _ -> []
 
 
+filterEmptyEvents :: OtelLogsAndSpans -> Bool
+filterEmptyEvents x =
+  not (T.null (fromMaybe "" x.name) && isAesonTextEmpty x.body && isAesonTextEmpty x.attributes && isAesonTextEmpty x.resource && T.null (fromMaybe "" (x.parent_id)))
+
+
 -- | Convert ScopeLogs to OtelLogsAndSpans
 convertScopeLogsToOtelLogs :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> PL.ResourceLogs -> [OtelLogsAndSpans]
 convertScopeLogsToOtelLogs fallbackTime pid resourceM resourceLogs =
-  join
+  filter filterEmptyEvents
+    $ join
     $ V.toList
     $ V.map
       ( \scopeLog ->
@@ -708,10 +714,11 @@ convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans
       resourceSpans
 
 
--- | Convert ScopeSpans to OtelLogsAndSpans
+-- | Convert ScopeSpans to OtelLogsAndSpansF
 convertScopeSpansToOtelLogs :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> PT.ResourceSpans -> [OtelLogsAndSpans]
 convertScopeSpansToOtelLogs fallbackTime pid resourceM resourceSpans =
-  join
+  filter filterEmptyEvents
+    $ join
     $ V.toList
     $ V.map
       ( \scopeSpan ->
@@ -1082,6 +1089,17 @@ metricsServiceExport appLogger appCtx tp (Proto req) = do
 
   -- Return an empty response
   pure defMessage
+
+
+isAesonTextEmpty :: AE.ToJSON a => Maybe (AesonText a) -> Bool
+isAesonTextEmpty Nothing = True
+isAesonTextEmpty (Just (AesonText v)) =
+  case AE.toJSON v of
+    AE.Object o -> KEM.null o
+    AE.Array arr -> V.null arr
+    AE.String t -> T.null t
+    AE.Null -> True
+    _ -> False
 
 
 services :: Log.Logger -> AuthContext -> TracerProvider -> [SomeRpcHandler IO]
