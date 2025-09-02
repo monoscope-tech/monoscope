@@ -136,7 +136,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
           , pageActions = Just $ div_ [class_ "flex gap-2"] do
               a_ [class_ "btn btn-sm btn-primary gap-2", href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"] do
                 faSprite_ "bell" "regular" "h-4 w-4"
-                "Log Query Alert"
+                "Create Alert"
           , navTabs =
               Just
                 $ toHtml
@@ -201,7 +201,7 @@ unifiedMonitorCard item = do
     div_ [class_ "w-full flex flex-col gap-2 shrink-1"] do
       -- Title and tags row
       div_ [class_ "flex gap-10 items-center"] do
-        a_ [href_ detailsUrl, class_ "font-medium text-textStrong text-base hover:text-textBrand transition-colors"] $ toHtml item.title
+        a_ [href_ detailsUrl, class_ "font-medium text-textStrong text-base hover:text-textBrand transition-colors"] $ toHtml $ if T.null item.title then "(Untitled)" else item.title
         div_ [class_ "flex gap-1 items-center text-sm"] do
           -- Monitor type badge
           span_ [class_ "badge badge-sm badge-ghost"] $ toHtml typeLabel
@@ -216,7 +216,7 @@ unifiedMonitorCard item = do
           div_ [class_ "flex gap-2 items-center w-full"] do
             case item.details of
               AlertDetails{query} -> do
-                span_ [class_ "text-sm text-textWeak font-mono truncate", term "data-tippy-content" query] $ toHtml $ T.take 50 query
+                span_ [class_ "text-sm text-textWeak p-1 bg-fillWeak font-mono truncate", term "data-tippy-content" query] $ toHtml $ T.take 50 query
 
           -- Status and schedule
           div_ [class_ "flex gap-4 w-full items-center"] do
