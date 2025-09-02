@@ -98,6 +98,7 @@ data EnvConfig = EnvConfig
   , enableReplayService :: Bool
   , enableTimefusionReads :: Bool
   , kafkaDeadLetterTopic :: Text
+  , enableFreetier :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)

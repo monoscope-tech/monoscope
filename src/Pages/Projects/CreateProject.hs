@@ -339,15 +339,15 @@ pricingUpdateGetH pid = do
   let envCfg = appCtx.config
       lemon = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
-  addRespHeaders $ PageCtx bwconf $ pricingPage_ pid lemon critical project.paymentPlan
+  addRespHeaders $ PageCtx bwconf $ pricingPage_ pid lemon critical project.paymentPlan appCtx.config.enableFreetier
 
 
-pricingPage_ :: Projects.ProjectId -> Text -> Text -> Text -> Html ()
-pricingPage_ pid lemon critical paymentPlan = do
+pricingPage_ :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Html ()
+pricingPage_ pid lemon critical paymentPlan enableFreeTier = do
   section_ [class_ "w-full h-full overflow-y-auto py-12"] do
     div_ [class_ "flex flex-col max-w-4xl mx-auto gap-10 px-4"] do
       h1_ [class_ "font-semibold text-4xl text-textStrong"] "Update pricing"
-      paymentPlanPicker pid lemon critical paymentPlan
+      paymentPlanPicker pid lemon critical paymentPlan enableFreeTier
 
 
 processProjectPostForm :: Valor.Valid CreateProjectForm -> Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)

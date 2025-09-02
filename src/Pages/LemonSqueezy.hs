@@ -119,11 +119,11 @@ webhookPostH secretHeaderM dat = do
     _ -> pure ""
 
 
-newtype BillingGet = BillingGet (PageCtx (Projects.ProjectId, Int64, Text, Text, Text, Text, Text))
+newtype BillingGet = BillingGet (PageCtx (Projects.ProjectId, Int64, Text, Text, Text, Text, Text, Bool))
 
 
 instance ToHtml BillingGet where
-  toHtml (BillingGet (PageCtx bwconf (pid, totalReqs, amount, last_reported, lemonUrl, critical, paymentPlan))) = toHtml $ PageCtx bwconf $ billingPage pid totalReqs amount last_reported lemonUrl critical paymentPlan
+  toHtml (BillingGet (PageCtx bwconf (pid, totalReqs, amount, last_reported, lemonUrl, critical, paymentPlan, enableFreetier))) = toHtml $ PageCtx bwconf $ billingPage pid totalReqs amount last_reported lemonUrl critical paymentPlan enableFreetier
   toHtmlRaw = toHtml
 
 
@@ -148,11 +148,11 @@ manageBillingGetH pid from = do
           }
   let lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
-  addRespHeaders $ BillingGet $ PageCtx bwconf (pid, totalRequests, estimatedAmount, last_reported, lemonUrl, critical, project.paymentPlan)
+  addRespHeaders $ BillingGet $ PageCtx bwconf (pid, totalRequests, estimatedAmount, last_reported, lemonUrl, critical, project.paymentPlan, envCfg.enableFreetier)
 
 
-billingPage :: Projects.ProjectId -> Int64 -> Text -> Text -> Text -> Text -> Text -> Html ()
-billingPage pid reqs amount last_reported lemonUrl critical paymentPlan = div_ [class_ "w-full pt-12"] do
+billingPage :: Projects.ProjectId -> Int64 -> Text -> Text -> Text -> Text -> Text -> Bool -> Html ()
+billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFreetier = div_ [class_ "w-full pt-12"] do
   let pidTxt = pid.toText
   div_ [class_ "w-[606px] mx-auto"] do
     div_ [class_ "flex flex-col gap-1"] do
@@ -204,7 +204,7 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan = div_ [
               span_ [class_ " text-textStrong text-2xl font-semibold"] "What’s Included?"
               p_ [class_ "mt-2 mb-4"] "See and compare what you get in each plan."
               p_ [] "Please adjust the bar below to see difference in price as your events increase"
-            paymentPlanPicker pid lemonUrl critical paymentPlan
+            paymentPlanPicker pid lemonUrl critical paymentPlan enableFreetier
           label_ [class_ "modal-backdrop", Lucid.for_ "pricing-modal"] "Close"
 
 

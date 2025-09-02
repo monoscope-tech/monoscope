@@ -99,7 +99,7 @@ onboardingGetH pid onboardingStepM = do
       let lemonUrl = appContx.config.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
           critical = appContx.config.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
           paymentPlan = project.paymentPlan
-      addRespHeaders $ PageCtx bodyConfig $ pricingPage pid lemonUrl critical paymentPlan
+      addRespHeaders $ PageCtx bodyConfig $ pricingPage pid lemonUrl critical paymentPlan appContx.config.enableFreetier
     _ -> do
       let firstName = sess.user.firstName
           lastName = sess.user.lastName
@@ -264,13 +264,13 @@ onboardingCompleteBody pid = do
   script_ [src_ "/public/assets/js/confetti.js"] ("" :: Text)
 
 
-pricingPage :: Projects.ProjectId -> Text -> Text -> Text -> Html ()
-pricingPage pid lemon critical paymentPlan = do
+pricingPage :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Html ()
+pricingPage pid lemon critical paymentPlan freeTierEnabled = do
   div_ [class_ "w-[1100px] mx-auto mt-[70px] mb-10 mx-auto"] $ do
     div_ [class_ "flex-col gap-6 flex w-full"] $ do
       div_ [class_ "w-1/2"] $ do
         stepIndicator 5 "Please pick a plan" $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
-      paymentPlanPicker pid lemon critical paymentPlan
+      paymentPlanPicker pid lemon critical paymentPlan freeTierEnabled
       div_ [class_ "flex flex-col gap-2 w-full"] do
         span_ [class_ " text-textStrong text-2xl font-semibold mt-20"] "FAQ"
         div_ [class_ "flex flex-col mt-4 w-full"] do
@@ -407,8 +407,8 @@ integrationsPage pid apikey =
         $ div_ [class_ "max-w-[550px]"]
         $ stepIndicator 4 "Instrument your apps or servers"
         $ "/p/"
-        <> pid.toText
-        <> "/onboarding?step=NotifChannel"
+          <> pid.toText
+          <> "/onboarding?step=NotifChannel"
       div_ [class_ "flex-col w-full gap-4 flex mt-4 px-12 overflow-y-auto flex-grow"] do
         p_ [class_ "text-textStrong"] do
           "Send Logs, Metrics or Traces. Select an item below for instructions. "
@@ -512,7 +512,7 @@ integrationsPage pid apikey =
                           , hxSelect_ "#mainArticle"
                           , hxIndicator_ $ "#fw-indicator-" <> lang
                           ]
-                        <> [checked_ | idx == 0]
+                          <> [checked_ | idx == 0]
                       unless (T.null fwIcon) $ img_ [class_ "h-5 w-5", src_ $ "https://apitoolkit.io/assets/img/framework-logos/" <> fwIcon]
                       span_ $ toHtml fwName
 

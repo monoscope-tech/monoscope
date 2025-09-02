@@ -1079,60 +1079,33 @@ getProjectStatsForReport projectId start end = dbtToEff $ query q (projectId, st
         |]
 
 
-sanitizeError :: T.Text -> T.Text
+sanitizeError :: Text -> Text
 sanitizeError input =
-  let step1 = replaceRegex numberPattern "NUMBER" input
-      step2 = replaceRegex datePattern "DATE" step1
-      step3 = T.filter (not . isSpaceLike) step2
-   in step3
-  where
-    -- Numbers: integers, floats, scientific notation
-    numberPattern = "-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?"
+  let
+    -- Replace UUIDs first
+    step1 = regexReplace "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" "UUID" input
 
-    -- Dates (ISO, EU, US, textual months, with optional fractions & tz)
-    datePattern =
-      "("
-        <> isoDate
-        <> "|"
-        <> euDate
-        <> "|"
-        <> usDate
-        <> "|"
-        <> monthNameDate
-        <> ")"
+    -- Replace ISO 8601 timestamps with optional fractional seconds & Z
+    step2 = regexReplace "[0-9]{4}-[0-9]{2}-[0-9]{2}[T ]?[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z?" "DATE" step1
 
-    -- ISO: 2025-09-01T19:22:47.789254Z or 2025-09-01 19:22:47
-    isoDate =
-      "[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}"
-        <> "([ T][0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]+)?)?"
-        <> "(Z|[+-][0-9]{2}:[0-9]{2})?)?"
+    -- Replace dates like 2025-09-01
+    step3 = regexReplace "[0-9]{4}-[0-9]{2}-[0-9]{2}" "DATE" step2
 
-    -- DD-MM-YYYY or DD/MM/YYYY
-    euDate =
-      "[0-9]{2}[-/][0-9]{2}[-/][0-9]{4}"
-        <> "([ T][0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]+)?)?)?"
+    -- Replace other common date formats (dd/mm/yyyy or mm/dd/yyyy)
+    step4 = regexReplace "[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}" "DATE" step3
 
-    -- MM/DD/YYYY
-    usDate =
-      "[0-9]{2}/[0-9]{2}/[0-9]{4}"
-        <> "([ T][0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]+)?)?)?"
+    -- Replace numeric values (integer & float)
+    step5 = regexReplace "[0-9]+(\\.[0-9]+)?" "NUMBER" step4
 
-    -- Month names + day + year
-    monthNameDate =
-      "((Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|"
-        <> "January|February|March|April|May|June|July|August|September|October|November|December)"
-        <> " ?[0-9]{1,2},? ?[0-9]{4}"
-        <> "( [0-9]{1,2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]+)?)?( ?[APMapm]{2})?)?)"
-
-    isSpaceLike c = c == ' ' || c == '\n' || c == '\r' || c == '\t'
+    -- Normalize whitespace (\n, \r, multiple spaces)
+    step6 = regexReplace "[\\s\\r\\n]+" " " step5
+   in
+    T.strip step6
 
 
--- Replace regex matches with given replacement
-replaceRegex :: T.Text -> T.Text -> T.Text -> T.Text
-replaceRegex pat repl txt
-  | T.null txt = ""
-  | otherwise =
-      let (before, match, after) = txt =~ pat :: (T.Text, T.Text, T.Text)
-       in if T.null match
-            then before
-            else before <> repl <> replaceRegex pat repl after
+regexReplace :: Text -> Text -> Text -> Text
+regexReplace pat replacement input =
+  let (before, match, after) = input =~ pat :: (Text, Text, Text)
+   in if T.null match
+        then before
+        else before <> replacement <> regexReplace pat replacement after
