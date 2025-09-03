@@ -191,7 +191,6 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFr
             span_ [class_ "text-textStrong text-xl"] "$"
             span_ [class_ "text-4xl text-textStrong"] $ if paymentPlan == "Free" then "0" else if paymentPlan == "Bring your own storage" then "199" else "34"
           div_ [class_ "flex flex-col text-textWeak text-sm"] do
-            span_ [class_ ""] "Starts at"
             span_ [class_ ""] "/per month"
         label_ [class_ "btn btn-secondary bg-bgRaised cursor pointer z-10", Lucid.for_ "pricing-modal", [__|on click set #pricing-modal.check to true|]] "Change plan"
 

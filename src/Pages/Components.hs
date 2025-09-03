@@ -138,13 +138,16 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled = do
 
                const price_indicator = document.querySelector("#price_range");
                const priceContainer = document.querySelector("#price")
+               const criticalContainer = document.querySelector("#critical_price")
                const reqsContainer = document.querySelector("#num_requests")
 
                function priceChange() {
                  const value = price_indicator.value
                  let num_reqs = Math.floor(value/1000000)
                  let calculatedPrice = value <= 20_000_000 ? 34 : 34 + ((value- 20_000_000)/500_000)
+                 let calculatedPriceCritical = value <= 100_000_000 ? 199 : 199 + ((value - 100_000_000)/500_000)
                  priceContainer.innerText = calculatedPrice
+                 criticalContainer.innerText = calculatedPriceCritical
                  reqsContainer.innerText = num_reqs + " Million"
                }
 
@@ -187,7 +190,6 @@ freePricing pid isCurrent = do
               span_ [class_ "text-textStrong text-xl"] "$"
               span_ [class_ "text-4xl text-textStrong"] "0"
             div_ [class_ "flex flex-col text-textWeak text-sm"] do
-              span_ [class_ ""] "Starts at"
               span_ [class_ ""] "/per month"
           div_ [[__|on click halt|]] do
             button_
@@ -235,7 +237,6 @@ popularPricing pid lemonUrl isCurrent freeTierEnabled = do
                 span_ [class_ "text-textStrong text-xl"] "$"
                 span_ [class_ "text-4xl text-textStrong", id_ "price"] "34"
               div_ [class_ "flex flex-col text-textWeak text-sm"] do
-                span_ [class_ ""] "Starts at"
                 span_ [class_ ""] "/per month"
             div_ [[__|on click halt|]] do
               button_
@@ -286,9 +287,8 @@ systemsPricing pid critical isCurrent = do
             div_ [class_ "flex items-center gap-1 mt-4"] do
               div_ [class_ "flex items-end"] do
                 span_ [class_ "text-textStrong text-xl"] "$"
-                span_ [class_ "text-4xl text-textStrong"] "199"
+                span_ [class_ "text-4xl text-textStrong", id_ "critical_price"] "199"
               div_ [class_ "flex flex-col text-textWeak text-sm"] do
-                span_ [class_ ""] "Starts at"
                 span_ [class_ ""] "/per month"
             div_ [[__|on click halt|]] do
               button_
