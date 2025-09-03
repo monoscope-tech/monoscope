@@ -525,7 +525,6 @@ library
     , http-client
     , http-types
     , hw-kafka-client
-    , indexed-traversable
     , ki-effectful
     , langchain-hs
     , lens
@@ -554,7 +553,6 @@ library
     , postgresql-migration
     , postgresql-simple
     , pretty-relative-time
-    , process
     , proto-lens
     , proto-lens-runtime
     , regex
@@ -585,7 +583,6 @@ library
     , vector
     , vector-algorithms
     , wai
-    , wai-cors
     , wai-log
     , wai-middleware-static
     , warp
@@ -744,13 +741,9 @@ test-suite integration-tests
     , clock
     , data-default
     , effectful
-    , effectful-th
     , generic-lens
     , hs-opentelemetry-instrumentation-auto
     , hspec
-    , hspec-discover
-    , http-types
-    , neat-interpolation
     , odd-jobs
     , pg-entity
     , pg-transact
@@ -759,11 +752,8 @@ test-suite integration-tests
     , resource-pool
     , servant-server
     , time
-    , tmp-postgres
     , uuid
     , vector
-    , wai
-    , warp
   default-language: GHC2021
 
 test-suite unit-tests
@@ -816,11 +806,9 @@ test-suite unit-tests
     , extra
     , hs-opentelemetry-instrumentation-auto
     , hspec
-    , hspec-expectations-json
     , log-base
     , log-effectful
     , neat-interpolation
     , relude >=1.2.0.0
     , uuid
-    , vector
   default-language: GHC2021
