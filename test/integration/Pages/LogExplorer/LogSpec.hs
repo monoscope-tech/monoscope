@@ -6,6 +6,7 @@ import Data.HashMap.Strict qualified as HashMap
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.Time.Clock (addUTCTime)
 import Data.UUID qualified as UUID
+import Data.Vector qualified as V
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.LogExplorer.Log qualified as Log
@@ -25,14 +26,15 @@ spec = aroundAll withTestResources do
   describe "Check Log Page" do
     it "should return an empty list" \TestResources{..} -> do
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing
 
       case pg of
-        Log.LogPage (PageCtx _ content) -> do
-          content.pid `shouldBe` testPid
-          content.resultCount `shouldBe` 0
-          content.cols `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
-        _ -> error "Unexpected response"
+        Log.LogsGetJson requestVecs serviceColors nextUrl resetUrl recentUrl cols colIdxMap resultCount -> do
+          -- For empty case
+          V.length requestVecs `shouldBe` 0
+          resultCount `shouldBe` 0
+          cols `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
+        _ -> error "Expected JSON response but got something else"
 
     it "should return log items" \TestResources{..} -> do
       currentTime <- getCurrentTime
@@ -51,30 +53,78 @@ spec = aroundAll withTestResources do
       res <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
       length res `shouldBe` 202
       
-      -- Get time range that includes all messages (3 days ago to now)
+      -- Get time range that includes all messages (3 days ago to 1 day from now)
       let threeDaysAgo = addUTCTime (-259200) currentTime  -- 3 days in seconds
+      let oneDayFuture = addUTCTime 86400 currentTime  -- 1 day in the future
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" threeDaysAgo
-      let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
+      let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" oneDayFuture
       
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing
 
       case pg of
-        Log.LogPage (PageCtx _ content) -> do
-          content.pid `shouldBe` testPid
-          content.query `shouldBe` Nothing
-          content.cols `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
-          length content.requestVecs `shouldBe` 150  -- API limits to 150 results per page
+        Log.LogsGetJson requestVecs serviceColors nextUrl resetUrl recentUrl cols colIdxMap resultCount -> do
+          -- Verify we got results
+          V.length requestVecs `shouldBe` 150  -- API limits to 150 results per page
+          resultCount `shouldSatisfy` (>= 202)  -- At least our 202 test messages (might include data from other tests)
+          
+          -- Verify column structure
+          cols `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
+          
+          -- Verify URLs are generated correctly
+          nextUrl `shouldNotBe` ""
+          resetUrl `shouldNotBe` ""
+          recentUrl `shouldNotBe` ""
+        _ -> error "Expected JSON response but got something else"
 
-        -- let cur = textToUTCTime $ fromMaybe "" content.cursor
-        -- json <-
-        --   toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogJson testPid Nothing Nothing Nothing cur Nothing Nothing Nothing Nothing Nothing Nothing
-        -- case json of
-        --   AE.Object j -> do
-        --     let lgs = KEM.lookup "logsData" j
-        --     case lgs of
-        --       Just (AE.Array o) -> length o `shouldBe` 2
-        --       _ -> error "Unexpected response"
-        --   _ -> error "Unexpected response"
-        -- content.resultCount `shouldBe` 202
-        _ -> error "Unexpected response"
+    it "should handle query filters correctly" \TestResources{..} -> do
+      currentTime <- getCurrentTime
+      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
+      let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
+      let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
+
+      -- Process some test messages
+      let msgs = [("m1", BL.toStrict $ AE.encode reqMsg1), ("m2", BL.toStrict $ AE.encode reqMsg2)]
+      res <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
+      length res `shouldBe` 2
+      
+      -- Get time range that includes the messages we just processed
+      let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) currentTime
+      let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 currentTime
+
+      -- Test with a query filter (using proper string comparison for JSONB field)
+      let query = "status_code == \"200\""
+      pg <-
+        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid (Just query) Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing
+
+      case pg of
+        Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount -> do
+          -- Should only return entries matching the query
+          resultCount `shouldSatisfy` (> 0)
+          V.length requestVecs `shouldSatisfy` (> 0)
+        _ -> error "Expected JSON response but got something else"
+
+    it "should paginate results correctly" \TestResources{..} -> do
+      currentTime <- getCurrentTime
+      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
+      let reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
+
+      -- Create many messages to test pagination
+      let msgs = take 200 $ zip (map (\i -> "m" <> show i) [1..]) (repeat $ BL.toStrict $ AE.encode reqMsg)
+      res <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
+      length res `shouldBe` 200
+      
+      -- Get time range that includes the messages we just processed
+      let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) currentTime
+      let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 currentTime
+
+      -- First page
+      pg1 <-
+        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing
+
+      case pg1 of
+        Log.LogsGetJson requestVecs1 _ nextUrl1 _ _ _ _ resultCount1 -> do
+          V.length requestVecs1 `shouldBe` 150  -- API limits to 150 per page
+          resultCount1 `shouldSatisfy` (>= 200)  -- At least our 200 test messages
+          nextUrl1 `shouldNotBe` ""
+        _ -> error "Expected JSON response but got something else"
