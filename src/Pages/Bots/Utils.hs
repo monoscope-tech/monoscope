@@ -134,7 +134,7 @@ noTokenFound = do
   navBar
   section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
     h3_ [class_ "text-5xl font-semibold my-8"] "Token Not Found"
-    p_ [class_ "text-2xl"] "No slack access token found, reinstall the APItoolkit slack app to try again."
+    p_ [class_ "text-2xl"] "No slack access token found, reinstall the Monoscope slack app to try again."
 
 
 discordError :: Html ()
@@ -161,7 +161,7 @@ installedSuccess botPlatform = do
           div_ [class_ "inline-flex items-center justify-center w-16 h-16 bg-bgRaised rounded-full mb-4 shadow-lg"] do
             faSprite_ "check" "regular" "h-8 w-8 text-textSuccess"
           h1_ [class_ "text-3xl font-semibold text-white mb-4"] "Installation Complete!"
-          p_ [class_ "text-textBrand font-semibold max-w-2xl mx-auto"] $ toHtml $ "APItoolkit Bot has been successfully added to your " <> botPlatform <> " server"
+          p_ [class_ "text-textBrand font-semibold max-w-2xl mx-auto"] $ toHtml $ "Monoscope Bot has been successfully added to your " <> botPlatform <> " server"
         div_ [class_ "px-8 py-12"] do
           div_ [class_ "text-center mb-12"] do
             h2_ [class_ "font-semibold text-textStrong mb-4"] "You're All Set! 🚀"

@@ -60,7 +60,11 @@ generateEnhancedTitle authCtx issue = do
   result <- AI.callOpenAIAPI prompt authCtx.config.openaiApiKey
   case result of
     Left err -> pure $ Left err
-    Right (title, _) -> pure $ Right $ T.take 200 title -- Limit title length
+    Right r -> do
+      let response' = AI.getNormalTupleReponse r
+      case response' of
+        Left e -> pure $ Left e
+        Right (title, _) -> pure $ Right $ T.take 200 title -- Limit title length
 
 
 -- | Generate enhanced description with recommended actions
@@ -70,18 +74,22 @@ generateEnhancedDescription authCtx issue = do
   result <- AI.callOpenAIAPI prompt authCtx.config.openaiApiKey
   case result of
     Left err -> pure $ Left err
-    Right (response, _) -> do
-      let lines' = T.lines response
-          description = fromMaybe "" $ viaNonEmpty head lines'
-          recommendedAction = fromMaybe "Review the changes and update your integration accordingly." $ lines' !!? 1
-          complexity = fromMaybe "medium" $ lines' !!? 2
-      -- Also classify critical/safe
-      criticalityResult <- classifyIssueCriticality authCtx issue
-      case criticalityResult of
-        Left _ -> pure $ Right (description, recommendedAction, complexity)
-        Right (isCritical, breakingCount, incrementalCount) -> do
-          -- Note: Classification update happens in the background job
-          pure $ Right (description, recommendedAction, complexity)
+    Right r -> do
+      let response' = AI.getNormalTupleReponse r
+      case response' of
+        Left e -> pure $ Left e
+        Right (response, _) -> do
+          let lines' = T.lines response
+              description = fromMaybe "" $ viaNonEmpty head lines'
+              recommendedAction = fromMaybe "Review the changes and update your integration accordingly." $ lines' !!? 1
+              complexity = fromMaybe "medium" $ lines' !!? 2
+          -- Also classify critical/safe
+          criticalityResult <- classifyIssueCriticality authCtx issue
+          case criticalityResult of
+            Left _ -> pure $ Right (description, recommendedAction, complexity)
+            Right (isCritical, breakingCount, incrementalCount) -> do
+              -- Note: Classification update happens in the background job
+              pure $ Right (description, recommendedAction, complexity)
 
 
 -- | Build prompt for title generation
@@ -255,18 +263,22 @@ buildDescriptionPrompt issue =
 classifyIssueCriticality :: AuthContext -> Issues.Issue -> IO (Either Text (Bool, Int, Int))
 classifyIssueCriticality authCtx issue = do
   let prompt = buildCriticalityPrompt issue
-  result <- AI.callOpenAIAPI prompt authCtx.config.openaiApiKey
-  case result of
+  result' <- AI.callOpenAIAPI prompt authCtx.config.openaiApiKey
+  case result' of
     Left err -> pure $ Left err
-    Right (response, _) -> do
-      let lines' = T.lines response
-      case lines' of
-        [criticalStr, breakingStr, incrementalStr] -> do
-          let isCritical = T.toLower criticalStr == "critical"
-              breakingCount = fromMaybe 0 $ readMaybe $ T.unpack breakingStr
-              incrementalCount = fromMaybe 0 $ readMaybe $ T.unpack incrementalStr
-          pure $ Right (isCritical, breakingCount, incrementalCount)
-        _ -> pure $ Left "Invalid response format from LLM"
+    Right res -> do
+      let r = AI.getNormalTupleReponse res
+      case r of
+        Left e -> pure $ Left e
+        Right (response, _) -> do
+          let lines' = T.lines $ response
+          case lines' of
+            [criticalStr, breakingStr, incrementalStr] -> do
+              let isCritical = T.toLower criticalStr == "critical"
+                  breakingCount = fromMaybe 0 $ readMaybe $ T.unpack breakingStr
+                  incrementalCount = fromMaybe 0 $ readMaybe $ T.unpack incrementalStr
+              pure $ Right (isCritical, breakingCount, incrementalCount)
+            _ -> pure $ Left "Invalid response format from LLM"
 
 
 -- | Build prompt for criticality classification

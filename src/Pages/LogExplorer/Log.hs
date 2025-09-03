@@ -49,6 +49,7 @@ import Text.Megaparsec (parseMaybe)
 import Utils (checkFreeTierExceeded, faSprite_, formatUTC, getServiceColors, listToIndexHashMap, lookupVecTextByKey, onpointerdown_, prettyPrintCount)
 
 import Pkg.AI (callOpenAIAPI, systemPrompt)
+import Pkg.AI qualified as AI
 
 
 -- $setup
@@ -816,16 +817,25 @@ aiSearchH _pid requestBody = do
         else do
           let fullPrompt = systemPrompt <> "\n\nUser query: " <> inputText
           result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
+
           case result of
             Left errMsg -> do
               addErrorToast "AI search failed" (Just errMsg)
               throwError Servant.err502{Servant.errBody = encodeUtf8 errMsg}
-            Right (kqlQuery, vizType) ->
-              addRespHeaders
-                $ AE.object
-                  [ "query" AE..= kqlQuery
-                  , "visualization_type" AE..= vizType
-                  ]
+            Right rs -> do
+              traceShowM rs
+              let resp = AI.getAskLLMResponse rs
+              traceShowM resp
+              case resp of
+                Left err -> do
+                  addErrorToast "AI search failed" (Just err)
+                  throwError Servant.err502{Servant.errBody = encodeUtf8 err}
+                Right AI.ChatLLMResponse{..} -> do
+                  addRespHeaders
+                    $ AE.object
+                      [ "query" AE..= query
+                      , "visualization_type" AE..= visualization
+                      ]
 
 
 curateCols :: [Text] -> [Text] -> [Text]
@@ -1099,7 +1109,7 @@ alertConfigurationForm_ pid = do
                                      })
                                    end|]
                             ]
-                          ++ [required_ "" | req]
+                            ++ [required_ "" | req]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True

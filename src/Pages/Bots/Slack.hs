@@ -41,6 +41,7 @@ import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Pages.Bots.Utils (BotResponse (..), BotType (..), contentTypeHeader, handleTableResponse)
 import Pkg.AI (callOpenAIAPI, systemPrompt)
+import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (parseQueryToAST)
@@ -50,6 +51,7 @@ import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400)
 import System.Config (AuthContext (env, pool), EnvConfig (..))
 import System.Types (ATBaseCtx)
+import Utils qualified
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -119,7 +121,7 @@ linkProjectGetH pid slack_code onboardingM = do
         insertAccessToken pid token'.incomingWebhook.url token'.team.id token'.incomingWebhook.channelId
       -- Create a background job to send the Slack notification
       _ <- liftIO $ withResource pool $ \conn ->
-        createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("APItoolkit Bot has been linked to your project: " <> project'.title)
+        createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
       case onboardingM of
         Just _ -> pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
         Nothing -> pure $ addHeader "" $ BotLinked $ PageCtx bwconf "Slack"
@@ -143,7 +145,7 @@ slackInteractionsH interaction = do
         case slackDataM of
           Nothing -> sendSlackFollowupResponse interaction.response_url (AE.object ["text" AE..= "Error: something went wrong"])
           Just slackData -> handleAskCommand interaction slackData authCtx
-      pure $ AE.object ["text" AE..= "apitoolkit is working...", "replace_original" AE..= True, "delete_original" AE..= True]
+      pure $ AE.object ["text" AE..= "monoscope is working...", "replace_original" AE..= True, "delete_original" AE..= True]
   where
     handleAskCommand :: SlackInteraction -> SlackData -> AuthContext -> ATBaseCtx ()
     handleAskCommand inter slackData authCtx = do
@@ -154,26 +156,35 @@ slackInteractionsH interaction = do
       result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
       case result of
         Left err -> sendSlackFollowupResponse inter.response_url (AE.object ["text" AE..= "Error: something went wrong"])
-        Right (query, vizTypeM) -> do
-          case vizTypeM of
-            Just vizType -> do
-              let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-                  opts = "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query)) <> "&p=" <> slackData.projectId.toText <> "&t=" <> chartType
-                  query_url = authCtx.env.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query))
-                  content' = getBotContent question query query_url opts authCtx.env.chartShotUrl now
-                  content = AE.object ["attachments" AE..= content', "response_type" AE..= "in_channel", "replace_original" AE..= True, "delete_original" AE..= True]
+        Right p -> do
+          let res = AI.getAskLLMResponse p
+          case res of
+            Left _ -> sendSlackFollowupResponse inter.response_url (AE.object ["text" AE..= "Error: something went wrong"])
+            Right AI.ChatLLMResponse{..} -> do
+              let from' = timeRange >>= Just . fst
+              let to' = timeRange >>= Just . snd
+              let (fromT, toT, rangeM) = Utils.parseTime from' to' Nothing now
+                  from = fromMaybe "" $ rangeM >>= Just . fst
+                  to = fromMaybe "" $ rangeM >>= Just . snd
+              case visualization of
+                Just vizType -> do
+                  let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
+                      opts = "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query)) <> "&p=" <> slackData.projectId.toText <> "&t=" <> chartType <> "&from=" <> from <> "&to=" <> to
+                      query_url = authCtx.env.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query))
+                      content' = getBotContent question query query_url opts authCtx.env.chartShotUrl now
+                      content = AE.object ["attachments" AE..= content', "response_type" AE..= "in_channel", "replace_original" AE..= True, "delete_original" AE..= True]
 
-              _ <- sendSlackFollowupResponse inter.response_url content
-              pass
-            Nothing -> do
-              let queryAST = parseQueryToAST query
-              case queryAST of
-                Left err -> sendSlackFollowupResponse inter.response_url (AE.object ["text" AE..= "Error: something went wrong"])
-                Right query' -> do
-                  tableAsVecE <- RequestDumps.selectLogTable slackData.projectId query' query Nothing (Nothing, Nothing) [] Nothing Nothing
-                  let content = handleTableResponse Slack tableAsVecE envCfg slackData.projectId query
                   _ <- sendSlackFollowupResponse inter.response_url content
                   pass
+                Nothing -> do
+                  let queryAST = parseQueryToAST query
+                  case queryAST of
+                    Left err -> sendSlackFollowupResponse inter.response_url (AE.object ["text" AE..= "Error: something went wrong"])
+                    Right query' -> do
+                      tableAsVecE <- RequestDumps.selectLogTable slackData.projectId query' query Nothing (fromT, toT) [] Nothing Nothing
+                      let content = handleTableResponse Slack tableAsVecE envCfg slackData.projectId query
+                      _ <- sendSlackFollowupResponse inter.response_url content
+                      pass
       pass
 
 
@@ -512,17 +523,17 @@ instance AE.FromJSON SlackEventPayload where
       "event_callback" ->
         EventCallback
           <$> v
-          AE..: "token"
+            AE..: "token"
           <*> v
-          AE..: "team_id"
+            AE..: "team_id"
           <*> v
-          AE..: "api_app_id"
+            AE..: "api_app_id"
           <*> v
-          AE..: "event"
+            AE..: "event"
           <*> v
-          AE..: "event_id"
+            AE..: "event_id"
           <*> v
-          AE..: "event_time"
+            AE..: "event_time"
       other -> fail $ "Unsupported Slack event type: " ++ show other
 
 
@@ -575,28 +586,37 @@ slackEventsPostH payload = do
       result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
       case result of
         Left _ -> sendSlackChatMessage envCfg.slackBotToken (AE.object ["text" AE..= "Sorry I wasn't able to process your request", "channel" AE..= event.channel, "thread_ts" AE..= threadTs])
-        Right (query, vizTypeM) -> handleQueryResult envCfg event slackData query vizTypeM threadTs now
+        Right r -> do
+          let res = AI.getAskLLMResponse r
+          case res of
+            Left _ -> sendSlackChatMessage envCfg.slackBotToken (AE.object ["text" AE..= "Sorry I wasn't able to process your request", "channel" AE..= event.channel, "thread_ts" AE..= threadTs])
+            Right rr -> handleQueryResult envCfg event slackData rr threadTs now
 
-    handleQueryResult envCfg event slackData query vizTypeM threadTs now =
-      case vizTypeM of
-        Just vizType -> sendChartResponse envCfg event slackData query vizType threadTs now
+    handleQueryResult envCfg event slackData res threadTs now = do
+      let from' = res.timeRange >>= Just . fst
+      let to' = res.timeRange >>= Just . snd
+      let (fromT, toT, rangeM) = Utils.parseTime from' to' Nothing now
+          from = fromMaybe "" $ rangeM >>= Just . fst
+          to = fromMaybe "" $ rangeM >>= Just . snd
+      case res.visualization of
+        Just vizType -> sendChartResponse envCfg event slackData res.query vizType threadTs now from to
         Nothing -> do
-          let queryAST = parseQueryToAST query
+          let queryAST = parseQueryToAST res.query
           case queryAST of
             Left err -> do
               sendSlackChatMessage envCfg.slackBotToken (AE.object ["text" AE..= "Sorry I wasn't able to process your request", "channel" AE..= event.channel, "thread_ts" AE..= threadTs])
             Right query' -> do
-              tableAsVecE <- RequestDumps.selectLogTable slackData.projectId query' query Nothing (Nothing, Nothing) [] Nothing Nothing
-              let content' = handleTableResponse Slack tableAsVecE envCfg slackData.projectId query
+              tableAsVecE <- RequestDumps.selectLogTable slackData.projectId query' res.query Nothing (fromT, toT) [] Nothing Nothing
+              let content' = handleTableResponse Slack tableAsVecE envCfg slackData.projectId res.query
                   content = case content' of
                     AE.Object o -> AE.Object (o <> KEMP.fromList [("channel", AE.String event.channel), ("thread_ts", AE.String threadTs)])
                     _ -> content'
               _ <- sendSlackChatMessage envCfg.slackBotToken content
               pass
 
-    sendChartResponse envCfg event slackData query vizType threadTs now = do
+    sendChartResponse envCfg event slackData query vizType threadTs now from to = do
       let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-          opts = "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query)) <> "&p=" <> slackData.projectId.toText <> "&t=" <> chartType
+          opts = "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query)) <> "&p=" <> slackData.projectId.toText <> "&t=" <> chartType <> "&from=" <> from <> "&to=" <> to
           query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query))
           content' = getBotContent event.text query query_url opts envCfg.chartShotUrl now
           content = AE.object ["attachments" AE..= content', "channel" AE..= event.channel, "thread_ts" AE..= threadTs]
@@ -651,7 +671,7 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-        <> [msgJson]
-        <> ["\n\nUser query: " <> question]
+          <> [msgJson]
+          <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt

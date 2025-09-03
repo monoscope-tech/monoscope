@@ -1,5 +1,6 @@
-module Pkg.AI (callOpenAIAPI, systemPrompt) where
+module Pkg.AI (callOpenAIAPI, systemPrompt, getNormalTupleReponse, getAskLLMResponse, ChatLLMResponse (..)) where
 
+import Data.Aeson qualified as AE
 import Data.List qualified as L
 import Data.Text qualified as T
 import Langchain.LLM.Core qualified as LLM
@@ -8,7 +9,16 @@ import Models.Telemetry.Schema qualified as Schema
 import Relude
 
 
-callOpenAIAPI :: Text -> Text -> IO (Either Text (Text, Maybe Text))
+data ChatLLMResponse = ChatLLMResponse
+  { query :: Text
+  , visualization :: Maybe Text
+  , timeRange :: Maybe (Text, Text)
+  }
+  deriving (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+callOpenAIAPI :: Text -> Text -> IO (Either Text Text)
 callOpenAIAPI fullPrompt apiKey = do
   let openAI =
         OpenAI
@@ -21,38 +31,83 @@ callOpenAIAPI fullPrompt apiKey = do
   result <- liftIO $ LLM.generate openAI fullPrompt Nothing
   case result of
     Left err -> pure $ Left $ "LLM Error: " <> toText err
-    Right response -> do
-      -- Parse the response for query and visualization type
-      let lines' = lines $ T.strip response
-          queryLine = fromMaybe "" (viaNonEmpty head lines')
+    Right response -> pure $ Right response
 
-          -- Check if a visualization type is specified
-          vizTypeM =
-            if length lines' > 1
-              then parseVisualizationType (lines' L.!! 1)
-              else Nothing
 
-          -- Clean the query by removing any code block markup and language identifiers
-          cleanedQuery =
-            T.strip
-              $ if "```" `T.isPrefixOf` queryLine
-                then
-                  let withoutFirstLine = maybe "" (unlines . toList) $ viaNonEmpty tail (lines queryLine)
-                      withoutBackticks = T.takeWhile (/= '`') withoutFirstLine
-                   in T.strip withoutBackticks
-                else queryLine
-       in -- Check if the response indicates an invalid query
-          if "Please provide a query"
-            `T.isInfixOf` cleanedQuery
-            || "I need more"
-            `T.isInfixOf` cleanedQuery
-            || "Could you please"
-            `T.isInfixOf` cleanedQuery
-            || T.length cleanedQuery
-            < 3
-            then pure $ Left "INVALID_QUERY_ERROR"
-            else pure $ Right (cleanedQuery, vizTypeM)
+getNormalTupleReponse :: Text -> Either Text (Text, Maybe Text)
+getNormalTupleReponse response =
+  let lines' = lines $ T.strip response
+      queryLine = fromMaybe "" (viaNonEmpty head lines')
 
+      -- Check if a visualization type is specified
+      vizTypeM =
+        if length lines' > 1
+          then parseVisualizationType (lines' L.!! 1)
+          else Nothing
+
+      -- Clean the query by removing any code block markup and language identifiers
+      cleanedQuery =
+        T.strip
+          $ if "```" `T.isPrefixOf` queryLine
+            then
+              let withoutFirstLine = maybe "" (unlines . toList) $ viaNonEmpty tail (lines queryLine)
+                  withoutBackticks = T.takeWhile (/= '`') withoutFirstLine
+               in T.strip withoutBackticks
+            else queryLine
+   in -- Check if the response indicates an invalid query
+      if "Please provide a query"
+        `T.isInfixOf` cleanedQuery
+        || "I need more"
+          `T.isInfixOf` cleanedQuery
+        || "Could you please"
+          `T.isInfixOf` cleanedQuery
+        || T.length cleanedQuery
+          < 3
+        then Left "INVALID_QUERY_ERROR"
+        else Right (cleanedQuery, vizTypeM)
+
+
+getAskLLMResponse :: Text -> Either Text ChatLLMResponse
+getAskLLMResponse response =
+  let responseBS = encodeUtf8 response
+      decoded = AE.eitherDecode (fromStrict responseBS)
+   in case decoded of
+        Left err -> Left $ "JSON Decode Error: " <> toText err
+        Right apiResponse -> do
+          let vType = parseVisualizationType $ fromMaybe "" apiResponse.visualization
+              apiResponse' = apiResponse{visualization = vType}
+           in Right apiResponse'
+
+
+-- let lines' = lines $ T.strip response
+--     queryLine = fromMaybe "" (viaNonEmpty head lines')
+
+--     -- Check if a visualization type is specified
+--     vizTypeM =
+--       if length lines' > 1
+--         then parseVisualizationType (lines' L.!! 1)
+--         else Nothing
+
+--     -- Clean the query by removing any code block markup and language identifiers
+--     cleanedQuery =
+--       T.strip
+--         $ if "```" `T.isPrefixOf` queryLine
+--           then
+--             let withoutFirstLine = maybe "" (unlines . toList) $ viaNonEmpty tail (lines queryLine)
+--                 withoutBackticks = T.takeWhile (/= '`') withoutFirstLine
+--              in T.strip withoutBackticks
+--           else queryLine
+--  in -- Check if the response indicates an invalid query
+--     if "Please provide a query"
+--       `T.isInfixOf` cleanedQuery
+--       || "I need more"
+--         `T.isInfixOf` cleanedQuery
+--       || "Could you please"
+--         `T.isInfixOf` cleanedQuery
+--       || T.length cleanedQuery
+--         < 3
+--       then pure $ Left "INVALID_QUERY_ERROR"
+--       else pure $ Right (cleanedQuery, vizTypeM)
 
 -- Parse visualization type from the response
 parseVisualizationType :: Text -> Maybe Text
@@ -142,7 +197,22 @@ systemPrompt =
     , "- \"make a bar chart of requests by kind\" -> | summarize count() by bin(timestamp, 1h), kind\nvisualization: timeseries"
     , "- \"line chart of requests over time\" -> | summarize count() by bin(timestamp, 1h)\nvisualization: timeseries_line"
     , ""
-    , "Return ONLY the KQL filter expression on the first line without any backticks, markdown formatting, or code blocks. If applicable, specify the visualization type on the second line with format 'visualization: [type]'"
+    , "Time range:"
+    , "If the query includes a time range, specify it using the 'timeRange' field in the JSON response:"
+    , "{"
+    , "  \"timeRange\": [ \"<From: ISO8601>\",  \"<To: ISO8601>\"]"
+    , "}"
     , ""
+    , "DO NOT include timeRange if not requsted by the user"
+    , ""
+    , "Response format:"
+    , "Always return JSON in the following structure:"
+    , "{"
+    , "  \"query\": \"<KQL filter/query string>\","
+    , "  \"visualization\": \"<logs|timeseries|timeseries_line>\","
+    , "  \"timeRange\": [\"<From: ISO8601>\", \"<To: ISO8601>\"]"
+    , "}"
+    , ""
+    , "IMPORTANT: Do not include timeRange if not requested by the user"
     , "IMPORTANT: Do not use code blocks or backticks in your response. Return the raw query directly."
     ]
