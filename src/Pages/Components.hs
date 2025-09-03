@@ -108,8 +108,8 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled = do
     div_ [class_ "flex flex-col gap-8 mt-6 w-full"] do
       div_ [class_ $ "grid gap-8 w-full " <> if freePricingEnabled then "grid-cols-3" else "grid-cols-2"] do
         when freePricingEnabled $ freePricing pid (currentPlan == "Free")
-        popularPricing pid lemonUrl (currentPlan == "Pay as you use")
-        systemsPricing pid criticalUrl (currentPlan == "Critical Systems Plan")
+        popularPricing pid lemonUrl (currentPlan == "Bring nothing") freePricingEnabled
+        systemsPricing pid criticalUrl (currentPlan == "Bring your own storage")
     script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
     script_
       [text|
@@ -207,11 +207,11 @@ freePricing pid isCurrent = do
       ]
 
 
-popularPricing :: Projects.ProjectId -> Text -> Bool -> Html ()
-popularPricing pid lemonUrl isCurrent = do
+popularPricing :: Projects.ProjectId -> Text -> Bool -> Bool -> Html ()
+popularPricing pid lemonUrl isCurrent freeTierEnabled = do
   div_ [class_ "relative"] do
     div_
-      [ class_ "relative bg-bgRaised rounded-2xl py-11 px-4 outline overflow-hidden outline-strokeBrand-strong shadow-[0px_3px_3px_-1.5px_rgba(10,13,18,0.04)] shadow-[0px_8px_8px_-4px_rgba(10,13,18,0.03)] shadow-[0px_20px_24px_-4px_rgba(10,13,18,0.08)]"
+      [ class_ "relative bg-bgRaised rounded-2xl py-11 px-4 outline overflow-hidden  outline-strokeWeak shadow-[0px_3px_3px_-1.5px_rgba(10,13,18,0.04)] shadow-[0px_8px_8px_-4px_rgba(10,13,18,0.03)] shadow-[0px_20px_24px_-4px_rgba(10,13,18,0.08)]"
       , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
       , id_ "GraduatedPricing"
       , hxIndicator_ "#loadingIndicator"
@@ -219,7 +219,7 @@ popularPricing pid lemonUrl isCurrent = do
       , hxVals_ "js:{orderIdM: document.querySelector('#popularPricing').value}"
       ]
       $ do
-        div_ [class_ "w-[500px] h-36 right-0 top-0 rotate-y-15 rotate-z-15 top-[-55px] right-[-40px] rounded-t-2xl absolute bg-gradient-to-b from-fillBrand-weak to-transparent"] pass
+        div_ [class_ "w-[500px] h-36 right-0 top-0 rotate-y-15 rotate-z-15 top-[-55px] right-[-40px] absolute bg-gradient-to-bl from-slate-500/10 to-slate-transparent"] pass
         div_
           [ class_ "relative flex flex-col gap-2 overflow-hidden"
           , onpointerdown_ "handlePaymentPlanSelect(event, 'popularPlan')"
@@ -228,7 +228,7 @@ popularPricing pid lemonUrl isCurrent = do
           do
             input_ [type_ "hidden", class_ "orderId", id_ "popularPricing", name_ "ord", value_ ""]
             div_ [class_ "flex-col justify-start items-start gap-1 flex"] $ do
-              div_ [class_ "text-xl font-semibold text-textStrong"] "Pay as you use"
+              div_ [class_ "text-xl font-semibold text-textStrong"] "Bring nothing"
               div_ [class_ "text-textStrong text-sm"] "This plan can be adjusted"
             div_ [class_ "flex items-center gap-1 mt-4"] do
               div_ [class_ "flex items-end"] do
@@ -246,74 +246,81 @@ popularPricing pid lemonUrl isCurrent = do
                 do
                   if isCurrent then "Current plan" else "Start 30 day free trial"
             included features $ span_ [] do
+              when freeTierEnabled do
+                "Everything in "
+                span_ [class_ "text-textBrand"] "free"
+                " plus..."
+  where
+    features =
+      [ "Fully managed cloud service"
+      , "Predictable usage-based pricing"
+      , "Intelligent incident alerts"
+      , "Query your data in english"
+      , "30 days data retention included"
+      ]
+
+
+systemsPricing :: Projects.ProjectId -> Text -> Bool -> Html ()
+systemsPricing pid critical isCurrent = do
+  div_ [class_ "relative"] do
+    div_
+      [ class_ "relative bg-bgRaised rounded-2xl py-11 px-4 outline outline-strokeBrand-strong overflow-hidden"
+      , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
+      , id_ "SystemsPricing"
+      , hxIndicator_ "#loadingIndicator"
+      , hxSwap_ "none"
+      , hxVals_ "js:{orderIdM: document.querySelector('#systemsPricing').value}"
+      ]
+      $ do
+        div_
+          [ class_ "flex flex-col gap-2"
+          , onpointerdown_ "handlePaymentPlanSelect(event, 'systemsPlan')"
+          , id_ "systemsPlan"
+          ]
+          do
+            input_ [type_ "hidden", class_ "orderId", id_ "systemsPricing", name_ "ord", value_ ""]
+            div_ [class_ "w-[500px] h-36 right-0 top-0 rotate-y-15 rotate-z-15 top-[-55px] right-[-40px] rounded-t-2xl absolute bg-gradient-to-b from-fillBrand-weak to-transparent"] pass
+            div_ [class_ "flex-col justify-start items-start gap-1 flex"] $ do
+              div_ [class_ "text-xl font-semibold text-textStrong"] "Bring your own storage"
+              div_ [class_ "text-textStrong text-sm"] "Business plan"
+            div_ [class_ "flex items-center gap-1 mt-4"] do
+              div_ [class_ "flex items-end"] do
+                span_ [class_ "text-textStrong text-xl"] "$"
+                span_ [class_ "text-4xl text-textStrong"] "199"
+              div_ [class_ "flex flex-col text-textWeak text-sm"] do
+                span_ [class_ ""] "Starts at"
+                span_ [class_ ""] "/per month"
+            div_ [[__|on click halt|]] do
+              button_
+                [ class_ $ "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg " <> if isCurrent then "bg-fillDisabled cursor-not-allowed border-0 text-textInverse-strong" else "bg-fillStrong text-textInverse-strong"
+                , term "_" [text|on click call window.payLemon("SystemsPricing", "$critical") |]
+                , type_ "button"
+                ]
+                do
+                  if isCurrent then "Current plan" else "Start 30 day free trial"
+            included features $ span_ [] do
               "Everything in "
-              span_ [class_ "text-textBrand"] "free"
+              span_ [class_ "text-textBrand"] "bring nothing"
               " plus..."
+
     div_ [class_ "px-3 py-1.5 bg-fillBrand-strong absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-lg inline-flex justify-center items-center gap-2"] do
       div_ [class_ "justify-start text-white"] do
         span_ [class_ "text-sm font-medium leading-tight"] "🌟"
         span_ [class_ "leading-tight text-sm"] "MOST POPULAR"
   where
     features =
-      [ "Unlimited events per day"
-      , "Unlimited team members"
-      , "Opentelemetry Logs, Traces and Metrics"
-      , "Last 14 days data retention"
-      ]
-
-
-systemsPricing :: Projects.ProjectId -> Text -> Bool -> Html ()
-systemsPricing pid critical isCurrent = do
-  div_
-    [ class_ "relative bg-bgRaised rounded-2xl py-11 px-4 outline outline-strokeWeak overflow-hidden"
-    , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
-    , id_ "SystemsPricing"
-    , hxIndicator_ "#loadingIndicator"
-    , hxSwap_ "none"
-    , hxVals_ "js:{orderIdM: document.querySelector('#systemsPricing').value}"
-    ]
-    $ do
-      div_
-        [ class_ "flex flex-col gap-2"
-        , onpointerdown_ "handlePaymentPlanSelect(event, 'systemsPlan')"
-        , id_ "systemsPlan"
-        ]
-        do
-          input_ [type_ "hidden", class_ "orderId", id_ "systemsPricing", name_ "ord", value_ ""]
-          div_ [class_ "w-[500px] h-36 right-0 top-0 rotate-y-15 rotate-z-15 top-[-55px] right-[-40px] absolute bg-gradient-to-bl from-slate-500/10 to-slate-transparent"] pass
-          div_ [class_ "flex-col justify-start items-start gap-1 flex"] $ do
-            div_ [class_ "text-xl font-semibold text-textStrong"] "Critical Systems"
-            div_ [class_ "text-textStrong text-sm"] "Business plan"
-          div_ [class_ "flex items-center gap-1 mt-4"] do
-            div_ [class_ "flex items-end"] do
-              span_ [class_ "text-textStrong text-xl"] "$"
-              span_ [class_ "text-4xl text-textStrong"] "199"
-            div_ [class_ "flex flex-col text-textWeak text-sm"] do
-              span_ [class_ ""] "Starts at"
-              span_ [class_ ""] "/per month"
-          div_ [[__|on click halt|]] do
-            button_
-              [ class_ $ "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg " <> if isCurrent then "bg-fillDisabled cursor-not-allowed border-0 text-textInverse-strong" else "bg-fillStrong text-textInverse-strong"
-              , term "_" [text|on click call window.payLemon("SystemsPricing", "$critical") |]
-              , type_ "button"
-              ]
-              do
-                if isCurrent then "Current plan" else "Start 30 day free trial"
-          included features $ span_ [] do
-            "Everything in "
-            span_ [class_ "text-textBrand"] "pay as you use"
-            " plus..."
-  where
-    features =
-      [ "24/7 support from our team of industry experts"
-      , "Last 30 days data retention"
+      [ "Own and control all your data"
+      , "Save all your data to any S3-compatible bucket"
+      , "Unlimited data retention period"
+      , "Query years of data via monoscope"
+      , "No extra cost for data retention"
       ]
 
 
 included :: [Text] -> Html () -> Html ()
 included features title =
   div_ [class_ "flex-col justify-start items-start gap-3 flex"] $ do
-    span_ [class_ "text-textStrong text-sm font-medium italic"] $ toHtml title
+    div_ [class_ "text-textStrong text-sm h-6 font-medium italic"] $ toHtml title
     mapM_ featureRow features
 
 

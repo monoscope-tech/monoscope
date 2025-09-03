@@ -189,7 +189,7 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFr
         div_ [class_ "flex items-center gap-1 mt-4"] do
           div_ [class_ "flex items-end"] do
             span_ [class_ "text-textStrong text-xl"] "$"
-            span_ [class_ "text-4xl text-textStrong"] $ if paymentPlan == "Free" then "0" else if paymentPlan == "Critical Systems Plan" then "199" else "34"
+            span_ [class_ "text-4xl text-textStrong"] $ if paymentPlan == "Free" then "0" else if paymentPlan == "Bring your own storage" then "199" else "34"
           div_ [class_ "flex flex-col text-textWeak text-sm"] do
             span_ [class_ ""] "Starts at"
             span_ [class_ ""] "/per month"
