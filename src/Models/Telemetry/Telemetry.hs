@@ -88,6 +88,7 @@ import NeatInterpolation (text)
 import Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..))
 import Pkg.DeriveUtils (AesonText (..), unAesonTextMaybe)
 import Relude hiding (ask)
+import RequestMessages (sanitizeError)
 import Text.Regex.TDFA ((=~))
 import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
@@ -1077,35 +1078,3 @@ getProjectStatsForReport projectId start end = dbtToEff $ query q (projectId, st
            GROUP BY resource___service___name 
            ORDER BY total_events DESC;
         |]
-
-
-sanitizeError :: Text -> Text
-sanitizeError input =
-  let
-    -- Replace UUIDs first
-    step1 = regexReplace "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" "UUID" input
-
-    -- Replace ISO 8601 timestamps with optional fractional seconds & Z
-    step2 = regexReplace "[0-9]{4}-[0-9]{2}-[0-9]{2}[T ]?[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z?" "DATE" step1
-
-    -- Replace dates like 2025-09-01
-    step3 = regexReplace "[0-9]{4}-[0-9]{2}-[0-9]{2}" "DATE" step2
-
-    -- Replace other common date formats (dd/mm/yyyy or mm/dd/yyyy)
-    step4 = regexReplace "[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}" "DATE" step3
-
-    -- Replace numeric values (integer & float)
-    step5 = regexReplace "[0-9]+(\\.[0-9]+)?" "NUMBER" step4
-
-    -- Normalize whitespace (\n, \r, multiple spaces)
-    step6 = regexReplace "[\\s\\r\\n]+" " " step5
-   in
-    T.strip step6
-
-
-regexReplace :: Text -> Text -> Text -> Text
-regexReplace pat replacement input =
-  let (before, match, after) = input =~ pat :: (Text, Text, Text)
-   in if T.null match
-        then before
-        else before <> replacement <> regexReplace pat replacement after
