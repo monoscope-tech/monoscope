@@ -9,7 +9,6 @@ ghc-options:
   'grpc-haskell-core': -Wno-x-partial
 
 extra-deps:
-  - ./rust-interop
   - pg-entity-0.0.6.0
   - Unique-0.4.7.9@sha256:7c37e22b7bb9df935c22112e67043177461aedcebe3a958854f6c0e9ecb54083,2155
   - dotenv-0.12.0.0@sha256:2f25615cec37ff9a66a48ef0ebf2ac96ae989911d0c26c6796fc2f5247bdd665,4702

@@ -7,24 +7,24 @@ time_range:
   to: now
 variables:
   - key: airport
-    _vType: query
+    type: query
     title: "Airport"
     query: method == "GET" 
     value: "JFK"
 
   - key: airline
-    _vType: values
+    type: values
     title: "Airline"
     options: [["AA"], ["DL"], ["UA"], ["SW"]]
     value: "AA"
 
   - key: start_time
-    _vType: values
+    type: values
     title: "Start Time"
     value: "now-6h"
 
   - key: end_time
-    _vType: values
+    type: values
     title: "End Time"
     value: "now"
 

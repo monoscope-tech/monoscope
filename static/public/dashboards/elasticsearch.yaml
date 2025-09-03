@@ -19,7 +19,7 @@ widgets:
       - type: 'stat'
         title: 'Cluster Health'
         icon: shield-check
-        query: name=="elasticsearch.cluster.health.status" | summarize last(value) == 0 ? "Green" : (last(value) == 1 ? "Yellow" : "Red")
+        query: 'name=="elasticsearch.cluster.health.status" | summarize last(value) == 0 ? "Green" : (last(value) == 1 ? "Yellow" : "Red")'
         unit: status
         eager: true
         layout: { w: 4, h: 2 }

@@ -1,4 +1,4 @@
-packages: . ./rust-interop
+packages: . 
 with-compiler: ghc-9.10.2
 multi-repl: True
 write-ghc-environment-files: always

@@ -34,6 +34,10 @@ extra-source-files:
     static/migrations/0006_add_llm_enhancement_tracking.sql
     static/migrations/0007_rebuild_issues_table.sql
     static/migrations/0008_use_non_defferable_contraint_on_issues.sql
+    static/migrations/0009_make_retention_policy_30.sql
+    static/migrations/0010_requbild_ers_view.sql
+    static/migrations/0011_host_request_stats.sql
+    static/migrations/0012_drop_materialized_views.sql
     static/public/android-chrome-192x192.png
     static/public/android-chrome-512x512.png
     static/public/apple-touch-icon.png
@@ -352,8 +356,8 @@ library
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
       Pages.Monitors.Alerts
-      Pages.Onboarding.Onboarding
       Pages.Monitors.Testing
+      Pages.Onboarding.Onboarding
       Pages.Projects.CreateProject
       Pages.Projects.Integrations
       Pages.Projects.ListProjects
@@ -558,7 +562,6 @@ library
     , relude >=1.2.0.0
     , resource-pool
     , resourcet
-    , rust-interop
     , safe
     , safe-exceptions
     , scientific
@@ -683,7 +686,6 @@ test-suite integration-tests
   type: exitcode-stdio-1.0
   main-is: Main.hs
   other-modules:
-      Models.Projects.SwaggersSpec
       MonitoringSpec
       Opentelemetry.OtlpServerSpec
       Pages.Anomalies.AnomalyListSpec
@@ -695,7 +697,6 @@ test-suite integration-tests
       Pages.Projects.ProjectsSpec
       Pages.ReportsSpec
       Pages.ShareSpec
-      Pages.Specification.DocumentationSpec
       ProcessMessageSpec
       Spec
       Web.ClientMetadataSpec
@@ -770,7 +771,6 @@ test-suite unit-tests
   main-is: Main.hs
   other-modules:
       Data.Effectful.NotifySpec
-      Pages.Specification.GenerateSwaggerSpec
       Pkg.Parser.ExprSpec
       Pkg.ParserSpec
       RequestMessagesSpec

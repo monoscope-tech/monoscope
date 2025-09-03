@@ -83,5 +83,5 @@ widgets:
   - type: 'timeseries'
     title: 'Edge vs Origin Errors'
     theme: 'roma'
-    query: attributes.service.name=="cloudflare" AND attributes.http.response.status_code >= 500.0 | summarize count() by bin_auto(timestamp), attributes.origin.status != null ? "Origin Error" : "Edge Error"
+    query: 'attributes.service.name=="cloudflare" AND attributes.http.response.status_code >= 500.0 | summarize count() by bin_auto(timestamp), attributes.origin.status != null ? "Origin Error" : "Edge Error"'
     layout: { w: 6, h: 4 }

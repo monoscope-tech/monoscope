@@ -150,7 +150,6 @@ library:
   dependencies:
     - base
     - relude >= 1.2.0.0
-    - rust-interop
     - colourista
     - proto-lens
     - proto-lens-runtime

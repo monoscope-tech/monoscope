@@ -7,25 +7,7 @@ import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, Trace, TraceDataMap
 import { RangeChangedEvent, VisibilityChangedEvent } from '@lit-labs/virtualizer';
 import debounce from 'lodash/debounce';
 import memoize from 'lodash/memoize';
-import {
-  split,
-  includes,
-  startsWith,
-  replace,
-  filter,
-  map,
-  forEach,
-  compact,
-  get,
-  omit,
-  pick,
-  flow,
-  chunk,
-  groupBy,
-  mapValues,
-  sortBy,
-  chain,
-} from 'lodash';
+import { includes, startsWith, map, forEach, compact, pick, chunk, chain } from 'lodash';
 import clsx from 'clsx';
 import {
   formatTimestamp,
@@ -94,17 +76,14 @@ export class LogList extends LitElement {
   private colIdxMap: ColIdxMap = {};
   private serviceColors: Record<string, string> = {};
   private columnMaxWidthMap: ColIdxMap = {};
-  private nextFetchUrl: string = '';
   private recentFetchUrl: string = '';
   private liveStreamInterval: NodeJS.Timeout | null = null;
   private barChart: any = null;
   private lineChart: any = null;
   private _observer: IntersectionObserver | null = null;
-  private totalCount: number = 0;
   private updateBatchTimer: NodeJS.Timeout | null = null;
   private pendingUpdates: Set<string> = new Set();
   private handleMouseUp: (() => void) | null = null;
-  private summaryDataCache: WeakMap<any[], string[]> = new WeakMap();
   private sessionPlayerWrapper: HTMLElement | null = null;
   private containerRef = createRef<HTMLDivElement>();
 
@@ -114,7 +93,6 @@ export class LogList extends LitElement {
 
   // Debounced functions
   private debouncedHandleScroll: any;
-  private debouncedHandleResize: any;
   private debouncedFetchData: any;
 
   // Bound functions for event listeners
@@ -127,7 +105,6 @@ export class LogList extends LitElement {
 
     // Initialize debounced functions
     this.debouncedHandleScroll = debounce(this.handleScroll.bind(this), 50);
-    this.debouncedHandleResize = debounce(this.handleResize.bind(this), 20);
     this.debouncedFetchData = debounce(this.fetchData.bind(this), 300);
 
     // Bind resize handler for immediate feedback
@@ -763,8 +740,8 @@ export class LogList extends LitElement {
         ? [...current, ...newData]
         : [...newData, ...current]
       : isRecentFetch
-      ? [...newData, ...current]
-      : [...current, ...newData];
+        ? [...newData, ...current]
+        : [...current, ...newData];
     return result;
   }
 
@@ -1053,8 +1030,8 @@ export class LogList extends LitElement {
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
-          ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
+            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         return html`<div class=${clsx('flex w-full gap-1', this.wrapLines ? 'items-start' : 'items-center')}>
           ${this.view === 'tree'
             ? html`
@@ -1088,8 +1065,8 @@ export class LogList extends LitElement {
                         ${children}
                       </button>`
                     : depth === 0
-                    ? nothing
-                    : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                      ? nothing
+                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
                 </div>
               `
             : nothing}
@@ -1146,8 +1123,8 @@ export class LogList extends LitElement {
       this.isLiveStreaming
         ? html`<p class="h-5 leading-5 m-0">Live streaming latest data...</p>`
         : this.isFetchingRecent
-        ? html`<div class="loading loading-dots loading-md h-5"></div>`
-        : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
+          ? html`<div class="loading loading-dots loading-md h-5"></div>`
+          : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
     );
   }
 
