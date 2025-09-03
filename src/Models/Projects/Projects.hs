@@ -280,8 +280,12 @@ selectProjectsForUser = query q
     q =
       [sql|
         SELECT pp.*,
-               (SELECT COUNT(*) > 0 FROM otel_logs_and_spans ols
-                WHERE ols.project_id = pp.id::text) has_integrated,
+               EXISTS (
+                    SELECT 1 FROM otel_logs_and_spans ols
+                    WHERE ols.project_id = pp.id::text
+                    AND ols.timestamp >= CURRENT_DATE - INTERVAL '30 days'
+                    LIMIT 1
+                ) as has_integrated,
                ARRAY_AGG(us.display_image_url) OVER (PARTITION BY pp.id)
         FROM projects.projects AS pp
         JOIN projects.project_members AS ppm ON (pp.id = ppm.project_id)
