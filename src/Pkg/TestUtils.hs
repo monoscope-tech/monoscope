@@ -41,7 +41,6 @@ import Data.HashMap.Strict qualified as HashMap
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
-import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V

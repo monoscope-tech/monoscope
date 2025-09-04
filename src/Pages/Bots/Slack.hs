@@ -137,6 +137,7 @@ slackInteractionsH interaction = do
       pure $ AE.object ["response_type" AE..= "in_channel", "text" AE..= "Done, you'll be receiving project notifcations here going forward", "replace_original" AE..= True, "delete_original" AE..= True]
     "/dashboard" -> do
       dashboards <- getDashboardsForSlack interaction.team_id
+      when (null dashboards) $ throwError err400{errBody = "No dashboards found for this project"}
       _ <- triggerSlackModal authCtx.env.slackBotToken "open" $ (AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= (dashboardView interaction.channel_id $ V.fromList [(dashboardViewOne dashboards)])])
       pure $ AE.object ["text" AE..= "modal opened", "replace_original" AE..= True, "delete_original" AE..= True]
     _ -> do
@@ -294,6 +295,7 @@ slackActionsH action = do
       let view = slackAction.view
           privateMeta = view.private_metadata
           metas = T.splitOn "___" privateMeta
+
           channelId = fromMaybe "" $ viaNonEmpty head metas
           pid = fromMaybe "" $ viaNonEmpty head $ fromMaybe [] $ viaNonEmpty tail metas
           image_url = fromMaybe "" $ viaNonEmpty last metas
@@ -301,7 +303,6 @@ slackActionsH action = do
           widgetTitle = slackAction.view.state >>= lookupSelectedValueByKey "widget-select"
           url = authCtx.env.hostUrl <> "p/" <> pid <> "/dashboards/" <> fromMaybe "" dashBoardId
           heading = "<" <> url <> "|" <> fromMaybe "" widgetTitle <> ">"
-
           content =
             AE.object
               [ "channel" AE..= channelId
@@ -309,7 +310,7 @@ slackActionsH action = do
                   AE..= AE.Array
                     ( V.fromList
                         [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= heading]]
-                        , AE.object ["type" AE..= "context", "elements" AE..= AE.Array (V.singleton $ AE.object ["type" AE..= "plain_text", "text" AE..= ("Shared by @" <> slackAction.user.username <> " using /dashboard")])]
+                        , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("Shared by <@" <> slackAction.user.id <> "> using /dashboard")]]
                         , dashboardWidgetView image_url (fromMaybe "" widgetTitle)
                         ]
                     )
@@ -373,7 +374,7 @@ sendSlackFollowupResponse responseUrl content = do
 triggerSlackModal :: Text -> Text -> AE.Value -> ATBaseCtx ()
 triggerSlackModal token action content = do
   let url = toString $ "https://slack.com/api/views." <> action
-  _ <- postWith (defaults & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> token] & contentTypeHeader "application/json") url content
+  res <- postWith (defaults & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> token] & contentTypeHeader "application/json") url content
   pass
 
 
@@ -450,7 +451,7 @@ dashboardViewOne options =
           ]
     ]
   where
-    opts = V.map (\(text, value) -> AE.object ["text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= text], "value" AE..= value]) options
+    opts = V.map (\(text, value) -> AE.object ["text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= if T.null text then "Untitled" else text], "value" AE..= value]) options
 
 
 dashboardViewTwo :: V.Vector (Text, Text) -> AE.Value
@@ -492,7 +493,7 @@ sendSlackChatMessage :: HTTP :> es => Text -> AE.Value -> Eff es ()
 sendSlackChatMessage token content = do
   let url = "https://slack.com/api/chat.postMessage"
   let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> token]
-  _ <- postWith opts (toString url) content
+  rs <- postWith opts (toString url) content
   pass
 
 
@@ -522,17 +523,17 @@ instance AE.FromJSON SlackEventPayload where
       "event_callback" ->
         EventCallback
           <$> v
-          AE..: "token"
+            AE..: "token"
           <*> v
-          AE..: "team_id"
+            AE..: "team_id"
           <*> v
-          AE..: "api_app_id"
+            AE..: "api_app_id"
           <*> v
-          AE..: "event"
+            AE..: "event"
           <*> v
-          AE..: "event_id"
+            AE..: "event_id"
           <*> v
-          AE..: "event_time"
+            AE..: "event_time"
       other -> fail $ "Unsupported Slack event type: " ++ show other
 
 
@@ -670,7 +671,7 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-        <> [msgJson]
-        <> ["\n\nUser query: " <> question]
+          <> [msgJson]
+          <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt

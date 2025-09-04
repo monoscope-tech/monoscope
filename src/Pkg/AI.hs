@@ -3,7 +3,6 @@ module Pkg.AI (callOpenAIAPI, systemPrompt, getNormalTupleReponse, getAskLLMResp
 import Data.Aeson qualified as AE
 import Data.List qualified as L
 import Data.Text qualified as T
-import Data.Vector qualified as V
 import Langchain.LLM.Core qualified as LLM
 import Langchain.LLM.OpenAI
 import Models.Telemetry.Schema qualified as Schema
@@ -59,11 +58,11 @@ getNormalTupleReponse response =
       if "Please provide a query"
         `T.isInfixOf` cleanedQuery
         || "I need more"
-        `T.isInfixOf` cleanedQuery
+          `T.isInfixOf` cleanedQuery
         || "Could you please"
-        `T.isInfixOf` cleanedQuery
+          `T.isInfixOf` cleanedQuery
         || T.length cleanedQuery
-        < 3
+          < 3
         then Left "INVALID_QUERY_ERROR"
         else Right (cleanedQuery, vizTypeM)
 

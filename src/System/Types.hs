@@ -33,7 +33,6 @@ import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
 import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPWreq)
 import Data.Map qualified as Map
 import Data.Time (UTCTime)
-import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, runConcurrent)
