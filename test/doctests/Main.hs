@@ -2,9 +2,11 @@ module Main (main) where
 
 import Relude
 import Test.DocTest (doctest)
+import System.Environment (getArgs)
 
 main :: IO ()
 main = do
+  args <- getArgs
   let extensions = 
         [ "-XGHC2021"
         , "-XBlockArguments"
@@ -36,7 +38,7 @@ main = do
         , "-XBangPatterns"
         , "-XPackageImports"
         ]
-  doctest $ 
+  doctest $ args ++ 
     [ "-isrc"
     , "--fast"
     ] ++ extensions ++ ["src"]
