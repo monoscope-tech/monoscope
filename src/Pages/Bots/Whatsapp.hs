@@ -28,6 +28,7 @@ import Relude
 import System.Config (AuthContext, EnvConfig)
 import System.Config qualified as Config
 import System.Types (ATBaseCtx)
+import Utils (toUriStr)
 import Utils qualified
 import Web.Internal.FormUrlEncoded
 
@@ -105,16 +106,16 @@ whatsappIncomingPostH val = do
               _ <- sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotChart (Just "Sorry, I couldn't proess your request")
               pass
             Right AI.ChatLLMResponse{..} -> do
-              let from' = timeRange >>= Just . fst
-              let to' = timeRange >>= Just . snd
+              let from' = timeRange >>= viaNonEmpty head
+              let to' = timeRange >>= viaNonEmpty last
               let (fromT, toT, rangeM) = Utils.parseTime from' to' Nothing now
                   from = fromMaybe "" $ rangeM >>= Just . fst
                   to = fromMaybe "" $ rangeM >>= Just . snd
               case visualization of
                 Just vizType -> do
                   let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-                      opts = "time=" <> decodeUtf8 (urlEncode True (encodeUtf8 $ show now)) <> "&q=" <> decodeUtf8 (urlEncode True (encodeUtf8 query)) <> "&p=" <> project.id.toText <> "&t=" <> chartType <> "&from=" <> from <> "&to=" <> to
-                      query_url = project.id.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query))
+                      opts = "time=" <> toUriStr (show now) <> "&q=" <> toUriStr query <> "&p=" <> toUriStr project.id.toText <> "&t=" <> toUriStr chartType <> "&from=" <> toUriStr from <> "&to=" <> toUriStr to
+                      query_url = project.id.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
                       content' = getBotContent reqBody.body query query_url opts
                   _ <- sendWhatsappResponse content' reqBody.from envCfg.whatsappBotChart Nothing
                   pass

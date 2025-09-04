@@ -34,7 +34,6 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Slack (SlackData (..), getDashboardsForSlack, getSlackDataByTeamId, insertAccessToken, updateSlackNotificationChannel)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
@@ -51,6 +50,7 @@ import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400)
 import System.Config (AuthContext (env, pool), EnvConfig (..))
 import System.Types (ATBaseCtx)
+import Utils (toUriStr)
 import Utils qualified
 import Web.FormUrlEncoded (FromForm)
 
@@ -161,19 +161,18 @@ slackInteractionsH interaction = do
           case res of
             Left _ -> sendSlackFollowupResponse inter.response_url (AE.object ["text" AE..= "Error: something went wrong"])
             Right AI.ChatLLMResponse{..} -> do
-              let from' = timeRange >>= Just . fst
-              let to' = timeRange >>= Just . snd
+              let from' = timeRange >>= viaNonEmpty head
+              let to' = timeRange >>= viaNonEmpty last
               let (fromT, toT, rangeM) = Utils.parseTime from' to' Nothing now
                   from = fromMaybe "" $ rangeM >>= Just . fst
                   to = fromMaybe "" $ rangeM >>= Just . snd
               case visualization of
                 Just vizType -> do
                   let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-                      opts = "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query)) <> "&p=" <> slackData.projectId.toText <> "&t=" <> chartType <> "&from=" <> from <> "&to=" <> to
-                      query_url = authCtx.env.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query))
+                      opts = "&q=" <> toUriStr query <> "&p=" <> slackData.projectId.toText <> "&t=" <> chartType <> "&from=" <> toUriStr from <> "&to=" <> toUriStr to
+                      query_url = authCtx.env.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
                       content' = getBotContent question query query_url opts authCtx.env.chartShotUrl now
                       content = AE.object ["attachments" AE..= content', "response_type" AE..= "in_channel", "replace_original" AE..= True, "delete_original" AE..= True]
-
                   _ <- sendSlackFollowupResponse inter.response_url content
                   pass
                 Nothing -> do
@@ -342,7 +341,7 @@ slackActionsH action = do
             widget = find (\w -> (fromMaybe "Untitled-" w.title) == widgetTitle) dashboard.widgets
         whenJust widget $ \w -> do
           now <- Time.currentTime
-          let widgetQuery = "&widget=" <> decodeUtf8 (urlEncode True (toStrict $ AE.encode $ AE.toJSON w))
+          let widgetQuery = "&widget=" <> toUriStr (decodeUtf8 $ AE.encode $ AE.toJSON w)
               chartUrl' = chartImageUrl ("&p=" <> pid <> widgetQuery) authCtx.env.chartShotUrl now
               blocks = V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets, dashboardWidgetView chartUrl' widgetTitle]
               privateMeta = channelId <> "___" <> pid <> "___" <> baseTemplate <> "___" <> chartUrl'
@@ -593,8 +592,8 @@ slackEventsPostH payload = do
             Right rr -> handleQueryResult envCfg event slackData rr threadTs now
 
     handleQueryResult envCfg event slackData res threadTs now = do
-      let from' = res.timeRange >>= Just . fst
-      let to' = res.timeRange >>= Just . snd
+      let from' = res.timeRange >>= viaNonEmpty head
+      let to' = res.timeRange >>= viaNonEmpty last
       let (fromT, toT, rangeM) = Utils.parseTime from' to' Nothing now
           from = fromMaybe "" $ rangeM >>= Just . fst
           to = fromMaybe "" $ rangeM >>= Just . snd
@@ -616,8 +615,8 @@ slackEventsPostH payload = do
 
     sendChartResponse envCfg event slackData query vizType threadTs now from to = do
       let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-          opts = "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query)) <> "&p=" <> slackData.projectId.toText <> "&t=" <> chartType <> "&from=" <> from <> "&to=" <> to
-          query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query))
+          opts = "&q=" <> toUriStr query <> "&p=" <> slackData.projectId.toText <> "&t=" <> chartType <> "&from=" <> toUriStr from <> "&to=" <> toUriStr to
+          query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
           content' = getBotContent event.text query query_url opts envCfg.chartShotUrl now
           content = AE.object ["attachments" AE..= content', "channel" AE..= event.channel, "thread_ts" AE..= threadTs]
       _ <- sendSlackChatMessage envCfg.slackBotToken content

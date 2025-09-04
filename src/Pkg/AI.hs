@@ -3,6 +3,7 @@ module Pkg.AI (callOpenAIAPI, systemPrompt, getNormalTupleReponse, getAskLLMResp
 import Data.Aeson qualified as AE
 import Data.List qualified as L
 import Data.Text qualified as T
+import Data.Vector qualified as V
 import Langchain.LLM.Core qualified as LLM
 import Langchain.LLM.OpenAI
 import Models.Telemetry.Schema qualified as Schema
@@ -12,7 +13,7 @@ import Relude
 data ChatLLMResponse = ChatLLMResponse
   { query :: Text
   , visualization :: Maybe Text
-  , timeRange :: Maybe (Text, Text)
+  , timeRange :: Maybe [Text] -- [From, To] in ISO8601 format
   }
   deriving (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -111,28 +112,19 @@ getAskLLMResponse response =
 
 -- Parse visualization type from the response
 parseVisualizationType :: Text -> Maybe Text
-parseVisualizationType line = do
-  let lowerLine = T.toLower $ T.strip line
-      prefixes = ["visualization:", "visualization type:", "viz:", "viz type:", "chart:", "chart type:", "type:"]
-      -- Try to match any of the prefixes
-      matchedPrefix = find (`T.isPrefixOf` lowerLine) prefixes
-
-  matchedPrefix >>= \prefix -> do
-    -- Extract the visualization type after the prefix
-    let rawType = T.strip $ T.drop (T.length prefix) lowerLine
-
-    -- Map to known visualization types
-    case rawType of
-      "bar" -> Just "timeseries"
-      "line" -> Just "timeseries_line"
-      "logs" -> Just "logs"
-      "timeseries" -> Just "timeseries"
-      "timeseries_line" -> Just "timeseries_line"
-      "bar chart" -> Just "timeseries"
-      "line chart" -> Just "timeseries_line"
-      "time series" -> Just "timeseries"
-      "time series line" -> Just "timeseries_line"
-      _ -> Nothing -- Unknown visualization type
+parseVisualizationType v = do
+  -- Map to known visualization types
+  case v of
+    "bar" -> Just "timeseries"
+    "line" -> Just "timeseries_line"
+    "logs" -> Nothing
+    "timeseries" -> Just "timeseries"
+    "timeseries_line" -> Just "timeseries_line"
+    "bar chart" -> Just "timeseries"
+    "line chart" -> Just "timeseries_line"
+    "time series" -> Just "timeseries"
+    "time series line" -> Just "timeseries_line"
+    _ -> Nothing -- Unknown visualization type
 
 
 systemPrompt :: Text
@@ -203,8 +195,11 @@ systemPrompt =
     , "  \"timeRange\": [ \"<From: ISO8601>\",  \"<To: ISO8601>\"]"
     , "}"
     , ""
+    , "Time range rules:"
     , "DO NOT include timeRange if not requsted by the user"
-    , ""
+    , "DO NOT make up a time range if not specified by the user"
+    , "DO NOT include timeRange field if the array is empty or incomplete"
+    , "DO NOT use code blocks or backticks in your response. Return the raw query directly."
     , "Response format:"
     , "Always return JSON in the following structure:"
     , "{"
@@ -214,5 +209,6 @@ systemPrompt =
     , "}"
     , ""
     , "IMPORTANT: Do not include timeRange if not requested by the user"
+    , "IMPORTANT: If timerange is empty or incomplete, do not include the timeRange field"
     , "IMPORTANT: Do not use code blocks or backticks in your response. Return the raw query directly."
     ]

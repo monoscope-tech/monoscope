@@ -48,6 +48,7 @@ module Utils (
   displayTimestamp,
   utcTimeToNanoseconds,
   getDurationNSMS,
+  toUriStr,
   toXXHash,
   getServiceColors,
   getGrpcStatusColor,
@@ -84,6 +85,7 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
 import NeatInterpolation (text)
+import Network.HTTP.Types (urlEncode)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Numeric (showHex)
 import Pkg.THUtils (hashFile)
@@ -562,6 +564,10 @@ convertToDHMS diffTime =
 
 isDemoAndNotSudo :: Projects.ProjectId -> Bool -> Bool
 isDemoAndNotSudo pid isSudo = pid.toText == "00000000-0000-0000-0000-000000000000" && not isSudo
+
+
+toUriStr :: Text -> Text
+toUriStr s = decodeUtf8 $ urlEncode True (encodeUtf8 s)
 
 
 parseTime :: Maybe Text -> Maybe Text -> Maybe Text -> UTCTime -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))

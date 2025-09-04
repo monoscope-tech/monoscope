@@ -43,6 +43,7 @@ import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400, err401)
 import System.Config (AuthContext (env), EnvConfig (..))
 import System.Types (ATBaseCtx)
+import Utils (toUriStr)
 import Utils qualified
 
 
@@ -305,8 +306,8 @@ discordInteractionsH rawBody signatureM timestampM = do
             Left errMsg -> do
               sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= ("Error parsing LLM response: " <> errMsg)])
             Right AI.ChatLLMResponse{..} -> do
-              let from' = timeRange >>= Just . fst
-              let to' = timeRange >>= Just . snd
+              let from' = timeRange >>= viaNonEmpty head
+              let to' = timeRange >>= viaNonEmpty last
               let (fromT, toT, rangeM) = Utils.parseTime from' to' Nothing now
                   from = fromMaybe "" $ rangeM >>= Just . fst
                   to = fromMaybe "" $ rangeM >>= Just . snd
@@ -314,8 +315,8 @@ discordInteractionsH rawBody signatureM timestampM = do
                 Just vizType -> do
                   let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
 
-                      query_url = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> ("&query=" <> decodeUtf8 (urlEncode True $ encodeUtf8 query))
-                      opts = "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 query)) <> "&p=" <> discordData.projectId.toText <> "&t=" <> chartType <> "&from=" <> from <> "&to=" <> to
+                      query_url = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> ("&query=" <> toUriStr query)
+                      opts = "&q=" <> toUriStr query <> "&p=" <> discordData.projectId.toText <> "&t=" <> chartType <> "&from=" <> toUriStr from <> "&to=" <> toUriStr to
                       question = case options of
                         Just (InteractionOption{value = AE.String q} : _) -> q
                         _ -> "[?]"

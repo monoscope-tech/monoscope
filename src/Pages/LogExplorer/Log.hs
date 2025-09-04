@@ -823,9 +823,7 @@ aiSearchH _pid requestBody = do
               addErrorToast "AI search failed" (Just errMsg)
               throwError Servant.err502{Servant.errBody = encodeUtf8 errMsg}
             Right rs -> do
-              traceShowM rs
               let resp = AI.getAskLLMResponse rs
-              traceShowM resp
               case resp of
                 Left err -> do
                   addErrorToast "AI search failed" (Just err)
