@@ -140,7 +140,7 @@ spec = aroundAll withTestResources do
     it "returns endpoints in inbox filter after creating issues" \tr -> do
       -- Create request dumps to populate materialized view
       createRequestDumps tr testPid 10
-      _ <- withPool tr.trPool $ refreshMaterializedView "apis.endpoint_request_stats"
+      -- _ <- withPool tr.trPool $ refreshMaterializedView "apis.endpoint_request_stats"
       
       -- Test inbox filter without host
       inboxEndpoints <- getEndpointStats tr (Just "Inbox") Nothing

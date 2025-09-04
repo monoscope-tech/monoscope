@@ -597,7 +597,7 @@ processMessagesAndBackgroundJobs TestResources{..} msgs = do
     BackgroundJobs.processFiveMinuteSpans futureTime
 
   _ <- runAllBackgroundJobs trATCtx
-  _ <- withPool trPool $ refreshMaterializedView "apis.endpoint_request_stats"
+  -- _ <- withPool trPool $ refreshMaterializedView "apis.endpoint_request_stats"
   pure ()
 
 
