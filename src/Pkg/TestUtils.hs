@@ -63,7 +63,7 @@ import Effectful.Ki qualified as Ki
 import Effectful.Labeled (runLabeled)
 import Effectful.PostgreSQL.Transact.Effect qualified as DB
 import Effectful.Reader.Static qualified
-import Effectful.Time (runTime, runFrozenTime)
+import Effectful.Time (runFrozenTime, runTime)
 import Log qualified
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Projects.Projects qualified as Projects
