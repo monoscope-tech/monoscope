@@ -14,12 +14,6 @@ jobs:
       id-token: 'write'
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          override: true
       - uses: freckle/stack-cache-action@main
       # - uses: freckle/stack-action@v5
       - uses: haskell-actions/setup@v2
@@ -45,14 +39,6 @@ jobs:
           npm install
           npm run build
 
-      - run: |
-          make prepare-rust-interop
-          sudo mkdir -p /usr/local/lib
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so
-          sudo mkdir -p /usr/lib
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
       - run: stack --no-terminal build --dependencies-only
       - run: stack build --ghc-options "-O0"
       
@@ -62,10 +48,6 @@ jobs:
           path: |
             .stack-work
             ~/.stack
-            /usr/local/lib/libCrust_interop.so
-            /usr/local/lib/librust_interop.so
-            /usr/lib/libCrust_interop.so
-            /usr/lib/librust_interop.so
           key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml', 'package.yaml') }}
           restore-keys: |
             ${{ runner.os }}-stack-
@@ -79,12 +61,6 @@ jobs:
         test-suite: [doctests, unit-tests, integration-tests]
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          override: true
       - uses: freckle/stack-cache-action@main
       - uses: haskell-actions/setup@v2
         with:
@@ -100,19 +76,10 @@ jobs:
           path: |
             .stack-work
             ~/.stack
-            /usr/local/lib/libCrust_interop.so
-            /usr/local/lib/librust_interop.so
-            /usr/lib/libCrust_interop.so
-            /usr/lib/librust_interop.so
           key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml', 'package.yaml') }}
           restore-keys: |
             ${{ runner.os }}-stack-
             
-      - name: Restore Rust libraries
-        run: |
-          sudo mkdir -p /usr/local/lib
-          sudo mkdir -p /usr/lib
-          
       - run: |
           make prepare-rust-interop
           sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib

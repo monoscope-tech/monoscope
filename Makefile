@@ -4,8 +4,6 @@ GHC_VERSION := 9.10.2
 ARCH := $(shell uname -m | sed 's/arm64/aarch64/' | tr '[:upper:]' '[:lower:]')
 OS := $(shell uname -s | sed 's/Darwin/osx/' | tr '[:upper:]' '[:lower:]')
 OS_ARCH := $(ARCH)-$(OS)
-LINUX_HC_PATH := ./stack-work/dist/x86_64-linux/ghc-$(GHC_VERSION)/apitoolkit-server-0.1.0.0/build
-RUSTLIB := Crust_interop
 
 css-start:
 	./node_modules/.bin/tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --watch
@@ -98,26 +96,5 @@ show-os-arch:
 show-ghc-version:
 	@echo "GHC Version: $(GHC_VERSION)"
 
-prepare-rust-interop:
-	cd ./rust-interop/ && \
-	cargo build --release && \
-	mkdir -p ./.stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/ && \
-	mkdir -p $(LINUX_HC_PATH) && \
-	cp ./target/release/lib$(RUSTLIB).a $(LINUX_HC_PATH)/lib$(RUSTLIB).a && \
-	cp ./target/release/lib$(RUSTLIB).a $(LINUX_HC_PATH)/lib$(RUSTLIB)_p.a && \
-	cp ./target/release/lib$(RUSTLIB).so $(LINUX_HC_PATH)/lib$(RUSTLIB).so || true && \
-	cp ./target/release/lib$(RUSTLIB).so $(LINUX_HC_PATH)/lib$(RUSTLIB)_p.so || true && \
-	cp ./target/release/lib$(RUSTLIB).so $(LINUX_HC_PATH)/lib$(RUSTLIB)-ghc$(GHC_VERSION).so || true && \
-	cp ./target/release/lib$(RUSTLIB).so $(LINUX_HC_PATH)/lib$(RUSTLIB)-ghc$(GHC_VERSION)_p.so || true && \
-	cp ./target/release/lib$(RUSTLIB).a .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/lib$(RUSTLIB).a || true && \
-	cp ./target/release/lib$(RUSTLIB).a .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/lib$(RUSTLIB)_p.a || true && \
-	cp ./target/release/lib$(RUSTLIB).so .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/lib$(RUSTLIB).so || true && \
-	cp ./target/release/lib$(RUSTLIB).so .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/lib$(RUSTLIB)_p.so || true && \
-	cp ./target/release/lib$(RUSTLIB).so .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/lib$(RUSTLIB)-ghc$(GHC_VERSION).so || true && \
-	cp ./target/release/lib$(RUSTLIB).so .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/lib$(RUSTLIB)-ghc$(GHC_VERSION)_p.so || true && \
-	cp ./target/release/lib$(RUSTLIB).dylib .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/lib$(RUSTLIB).dylib || true && \
-	cp ./target/release/lib$(RUSTLIB).dylib .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/lib$(RUSTLIB)_p.dylib || true && \
-	cp ./target/release/lib$(RUSTLIB).dylib .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/lib$(RUSTLIB)-ghc$(GHC_VERSION).dylib  || true
-	cp ./target/release/lib$(RUSTLIB).dylib .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/lib$(RUSTLIB)-ghc$(GHC_VERSION)_p.dylib  || true
 
-.PHONY: all test fmt lint fix-lint lice-reload prepare-rust-interop
+.PHONY: all test fmt lint fix-lint lice-reload

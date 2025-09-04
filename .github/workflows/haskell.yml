@@ -26,12 +26,9 @@ jobs:
       - name: Generate cache key
         id: cache-key
         run: |
-          echo "key=${{ runner.os }}-build-${{ hashFiles('**/*.cabal', '**/cabal.project*', 'rust-interop/Cargo.*', '**/package-lock.json') }}" >> $GITHUB_OUTPUT
+          echo "key=${{ runner.os }}-build-${{ hashFiles('**/*.cabal', '**/cabal.project*', '**/package-lock.json') }}" >> $GITHUB_OUTPUT
 
       # Setup all toolchains early to maximize parallel downloads
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
       - uses: haskell-actions/setup@v2
         with:
           ghc-version: ${{ env.GHC_VERSION }}
@@ -50,9 +47,6 @@ jobs:
           path: |
             ~/.cabal/store
             dist-newstyle
-            rust-interop/target
-            ~/.cargo/registry
-            ~/.cargo/git
             node_modules
             web-components/node_modules
           key: ${{ steps.cache-key.outputs.key }}
@@ -93,36 +87,10 @@ jobs:
           cd ..
           echo "::endgroup::"
 
-      # Build Rust only if not cached
-      - name: Build Rust interop library
-        run: |
-          echo "::group::Check Rust cache"
-          if [ -f "rust-interop/target/release/libCrust_interop.a" ]; then
-            echo "Rust library already built, using cache"
-          else
-            echo "Building Rust library..."
-            cd rust-interop
-            cargo build --release -j4
-            cd ..
-          fi
-          echo "::endgroup::"
-
-          echo "::group::Setup libraries for Cabal"
-          mkdir -p dist/build
-          # Copy only the static library
-          cp rust-interop/target/release/libCrust_interop.a dist/build/
-          sudo cp rust-interop/target/release/libCrust_interop.a /usr/local/lib/
-          # List what was copied
-          echo "Libraries in dist/build:"
-          ls -la dist/build/
-          echo "Libraries in /usr/local/lib:"
-          ls -la /usr/local/lib/libCrust_interop*
-          echo "::endgroup::"
-
       # Build Haskell project
       - name: Configure Haskell project
         run: |
-          cabal configure --enable-tests --enable-benchmarks --ghc-options="-O2 -j4" --extra-lib-dirs=/usr/local/lib --extra-lib-dirs=$PWD/rust-interop/target/release
+          cabal configure --enable-tests --enable-benchmarks --ghc-options="-O2 -j4"
 
       - name: Build dependencies only
         run: |
@@ -157,9 +125,6 @@ jobs:
           path: |
             ~/.cabal/store
             dist-newstyle
-            rust-interop/target
-            ~/.cargo/registry
-            ~/.cargo/git
             node_modules
             web-components/node_modules
           key: ${{ steps.cache-key.outputs.key }}
@@ -209,20 +174,10 @@ jobs:
           path: |
             ~/.cabal/store
             dist-newstyle
-            rust-interop/target
-            ~/.cargo/registry
-            ~/.cargo/git
             node_modules
             web-components/node_modules
           key: ${{ needs.build.outputs.cache-key }}
           fail-on-cache-miss: true
-
-      - name: Setup Rust libraries
-        run: |
-          echo "::group::Setup Rust libraries"
-          # The libraries should already be in the cache
-          sudo cp rust-interop/target/release/libCrust_interop.a /usr/local/lib/
-          echo "::endgroup::"
 
       # No need to update cabal or configure - reuse from build
       - name: Run ${{ matrix.test }}
