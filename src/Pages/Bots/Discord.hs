@@ -2,8 +2,6 @@
 
 module Pages.Bots.Discord (linkDiscordGetH, discordInteractionsH, DiscordInteraction) where
 
-import "cryptonite" Crypto.Error qualified as Crypto
-import "cryptonite" Crypto.PubKey.Ed25519 qualified as Ed25519
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
@@ -17,6 +15,8 @@ import Models.Apis.Slack (DiscordData (..), getDashboardsForDiscord, getDiscordD
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Relude hiding (ask, asks)
+import "cryptonite" Crypto.Error qualified as Crypto
+import "cryptonite" Crypto.PubKey.Ed25519 qualified as Ed25519
 
 import Control.Lens ((.~), (^.))
 import Data.Effectful.Wreq (

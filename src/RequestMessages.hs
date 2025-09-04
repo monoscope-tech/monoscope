@@ -2,9 +2,9 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RankNTypes #-}
 
--- $setup
+-- \$setup
 -- >>> :set -XOverloadedStrings
--- >>> :set -XQuasiQuotes  
+-- >>> :set -XQuasiQuotes
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import qualified Data.Aeson as AE
 -- >>> import qualified Data.Vector as V
