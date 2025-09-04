@@ -1,6 +1,8 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
+{-# LANGUAGE PackageImports #-}
+
 module Pages.Projects.CreateProject (
   CreateProjectForm (..),
   createProjectPostH,
@@ -23,7 +25,7 @@ import BackgroundJobs qualified
 import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64
-import Data.ByteString.Base64 qualified as B64
+import "base64" Data.ByteString.Base64 qualified as B64
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default (..))
 import Data.Effectful.UUID qualified as UUID

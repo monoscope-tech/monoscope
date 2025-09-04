@@ -2,6 +2,13 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RankNTypes #-}
 
+-- $setup
+-- >>> :set -XOverloadedStrings
+-- >>> :set -XQuasiQuotes  
+-- >>> import Data.Aeson.QQ (aesonQQ)
+-- >>> import qualified Data.Aeson as AE
+-- >>> import qualified Data.Vector as V
+
 module RequestMessages (
   RequestMessage (..),
   valueToFormatStr,
@@ -109,16 +116,17 @@ instance {-# OVERLAPPING #-} AE.FromJSON (Either Text [Text]) where
 
 
 -- | Walk the JSON once, redact any fields which are in the list of json paths to be redacted.
--- >>> redactJSON ["menu.id."] [aesonQQ| {"menu":{"id":"file", "name":"John"}} |]
+--
+-- >>> redactJSON (V.fromList ["menu.id."]) [aesonQQ| {"menu":{"id":"file", "name":"John"}} |]
 -- Object (fromList [("menu",Object (fromList [("id",String "[REDACTED]"),("name",String "John")]))])
 --
--- >>> redactJSON ["menu.id"] [aesonQQ| {"menu":{"id":"file", "name":"John"}} |]
+-- >>> redactJSON (V.fromList ["menu.id"]) [aesonQQ| {"menu":{"id":"file", "name":"John"}} |]
 -- Object (fromList [("menu",Object (fromList [("id",String "[REDACTED]"),("name",String "John")]))])
 --
--- >>> redactJSON ["menu.id", "menu.name"] [aesonQQ| {"menu":{"id":"file", "name":"John"}} |]
+-- >>> redactJSON (V.fromList ["menu.id", "menu.name"]) [aesonQQ| {"menu":{"id":"file", "name":"John"}} |]
 -- Object (fromList [("menu",Object (fromList [("id",String "[REDACTED]"),("name",String "[REDACTED]")]))])
 --
--- >>> redactJSON ["menu.[].id", "menu.[].names.[]"] [aesonQQ| {"menu":[{"id":"i1", "names":["John","okon"]}, {"id":"i2"}]} |]
+-- >>> redactJSON (V.fromList ["menu.[].id", "menu.[].names.[]"]) [aesonQQ| {"menu":[{"id":"i1", "names":["John","okon"]}, {"id":"i2"}]} |]
 -- Object (fromList [("menu",Array [Object (fromList [("id",String "[REDACTED]"),("names",Array [String "[REDACTED]",String "[REDACTED]"])]),Object (fromList [("id",String "[REDACTED]")])])])
 redactJSON :: V.Vector Text -> AE.Value -> AE.Value
 redactJSON paths' = redactJSON' (V.map stripPrefixDot paths')

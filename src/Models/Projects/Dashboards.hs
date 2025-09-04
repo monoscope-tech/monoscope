@@ -118,7 +118,6 @@ data Variable = Variable
 
 readDashboardsFromDirectory :: FilePath -> Q Exp
 readDashboardsFromDirectory dir = do
-  runIO $ putStrLn $ "Reading dashboards from: " ++ dir
   files <- runIO $ listDirectory dir
   let files' = sort $ filter (".yaml" `L.isSuffixOf`) files
   dashboards <- runIO $ catMaybes <$> mapM (readDashboardFile dir) files'

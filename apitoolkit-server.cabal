@@ -674,7 +674,7 @@ test-suite doctests
   build-depends:
       apitoolkit-server
     , base
-    , doctest-parallel >=0.1
+    , doctest >=0.20
     , hs-opentelemetry-instrumentation-auto
     , relude >=1.2.0.0
   default-language: GHC2021

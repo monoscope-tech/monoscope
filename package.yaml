@@ -300,7 +300,7 @@ tests:
       - base
       - apitoolkit-server
       - hs-opentelemetry-instrumentation-auto
-      - doctest-parallel >= 0.1
+      - doctest >= 0.20
       - relude >= 1.2.0.0
   integration-tests:
     main: Main.hs

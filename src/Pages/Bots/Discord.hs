@@ -1,7 +1,9 @@
+{-# LANGUAGE PackageImports #-}
+
 module Pages.Bots.Discord (linkDiscordGetH, discordInteractionsH, DiscordInteraction) where
 
-import Crypto.Error qualified as Crypto
-import Crypto.PubKey.Ed25519 qualified as Ed25519
+import "cryptonite" Crypto.Error qualified as Crypto
+import "cryptonite" Crypto.PubKey.Ed25519 qualified as Ed25519
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16

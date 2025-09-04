@@ -1,8 +1,10 @@
+{-# LANGUAGE PackageImports #-}
+
 module Web.ClientMetadata (ClientMetadata (..), clientMetadataH) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (ToJSON)
-import Data.ByteString.Base64 qualified as B64
+import "base64" Data.ByteString.Base64 qualified as B64
 import Data.Text qualified as T
 
 import Data.UUID qualified as UUID

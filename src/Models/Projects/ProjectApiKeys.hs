@@ -1,4 +1,5 @@
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE PackageImports #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
 module Models.Projects.ProjectApiKeys (
@@ -18,9 +19,9 @@ module Models.Projects.ProjectApiKeys (
 )
 where
 
-import Crypto.Cipher.AES (AES256)
-import Crypto.Cipher.Types (BlockCipher (..), Cipher (..), nullIV)
-import Crypto.Error (throwCryptoError)
+import "cryptonite" Crypto.Cipher.AES (AES256)
+import "cryptonite" Crypto.Cipher.Types (BlockCipher (..), Cipher (..), nullIV)
+import "cryptonite" Crypto.Error (throwCryptoError)
 import Data.Cache qualified as Cache
 import Data.Default (Default)
 import Data.Time (UTCTime)

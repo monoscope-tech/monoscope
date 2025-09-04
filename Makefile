@@ -50,7 +50,7 @@ test-unit:
 	cabal test unit-tests -j --ghc-options="-O0 -j8"  --test-show-details=direct --test-options='--color '
 
 test-doctests:
-	cabal test doctests -j --ghc-options="-O0 -j8" --test-show-details=direct --test-options='--color '
+	cabal test doctests -j --ghc-options="-O0 -j8" --test-show-details=direct --verbose --test-options='--color '
 
 test-integration:
 	USE_EXTERNAL_DB=true cabal test integration-tests -j --ghc-options="-O0 -j8" --test-show-details=direct --test-options='--color '
