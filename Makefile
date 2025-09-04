@@ -44,16 +44,16 @@ live-test-reload-cabal:
 	ghcid --test 'cabal test --ghc-options="-w -j4" --test-show-details=streaming'
 
 test:
-	USE_EXTERNAL_DB=true  cabal test -test-show-details=streaming --test-options='--color '
+	USE_EXTERNAL_DB=true  cabal test -j --ghc-options="-O0 -j8"  --test-show-details=direct --test-options='--color '
 
 test-unit:
-	cabal test unit-tests
+	cabal test unit-tests -j --ghc-options="-O0 -j8"  --test-show-details=direct --test-options='--color '
 
 test-doctests:
-	cabal test doctests
+	cabal test doctests -j --ghc-options="-O0 -j8" --test-show-details=direct --test-options='--color '
 
 test-integration:
-	USE_EXTERNAL_DB=true cabal test integration-tests --test-show-details=streaming --test-options='--color '
+	USE_EXTERNAL_DB=true cabal test integration-tests -j --ghc-options="-O0 -j8" --test-show-details=direct --test-options='--color '
 
 live-test-unit:
 	ghcid --test 'cabal test apitoolkit-server:unit-tests --ghc-options="-w -j4" --test-show-details=streaming'

@@ -32,7 +32,7 @@ jobs:
         with:
           node-version: 18
       - run: npm install
-      - run: npx tailwindcss  -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
+      - run: npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
       - name: Build web-components
         run: |
           cd web-components
@@ -48,6 +48,8 @@ jobs:
           path: |
             .stack-work
             ~/.stack
+            static/public/assets/css/tailwind.min.css
+            web-components/dist
           key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml', 'package.yaml') }}
           restore-keys: |
             ${{ runner.os }}-stack-
@@ -76,16 +78,27 @@ jobs:
           path: |
             .stack-work
             ~/.stack
+            static/public/assets/css/tailwind.min.css
+            web-components/dist
           key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml', 'package.yaml') }}
           restore-keys: |
             ${{ runner.os }}-stack-
-            
-      - run: |
-          make prepare-rust-interop
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/local/lib/librust_interop.so
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib
-          sudo cp rust-interop/target/release/libCrust_interop.so /usr/lib/librust_interop.so
+      
+      # Build CSS if not in cache
+      - name: Setup node env
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      
+      - name: Build CSS if missing
+        run: |
+          if [ ! -f static/public/assets/css/tailwind.min.css ]; then
+            echo "CSS file missing, building..."
+            npm install
+            npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
+          else
+            echo "CSS file found in cache"
+          fi
           
       - name: Run ${{ matrix.test-suite }}
         run: stack test :${{ matrix.test-suite }}

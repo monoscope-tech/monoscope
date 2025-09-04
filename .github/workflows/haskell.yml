@@ -150,6 +150,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Download build artifacts which include static files
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+
       # Install and cache system dependencies
       - name: Install system dependencies
         uses: awalsh128/cache-apt-pkgs-action@latest
