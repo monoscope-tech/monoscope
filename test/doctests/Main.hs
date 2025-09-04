@@ -1,6 +1,6 @@
 module Main (main) where
 
-import Relude
+import Relude hiding (getArgs)
 import Test.DocTest (doctest)
 import System.Environment (getArgs)
 
