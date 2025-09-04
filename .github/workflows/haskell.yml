@@ -105,7 +105,7 @@ jobs:
           # Build only what we need for deployment
           cabal build exe:apitoolkit-server-exe -j4
           echo "::endgroup::"
-          
+
           mkdir -p ./build-output
           echo "::group::Copy executable"
           # Use find to locate the built executable and copy it
@@ -190,7 +190,7 @@ jobs:
         run: |
           echo "::group::Running ${{ matrix.test }}"
           # Run test without rebuilding - everything should be cached
-          cabal test ${{ matrix.test }} --builddir=dist-newstyle -j4 --test-show-details=always --test-option=--color=always
+          cabal test ${{ matrix.test }} --builddir=dist-newstyle -j --ghc-options="-O0 -j8" --test-show-details=direct --verbose --test-options='--color '
           echo "::endgroup::"
 
   deploy:
@@ -247,4 +247,3 @@ jobs:
           app: '${{ secrets.CAPTAINROVER_APP_NAME }}'
           token: '${{ secrets.CAPTAINROVER_APP_TOKEN }}'
           image: 'ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ github.sha }}'
-
