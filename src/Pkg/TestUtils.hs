@@ -40,7 +40,8 @@ import Data.Either.Extra
 import Data.HashMap.Strict qualified as HashMap
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool)
 import Data.Text qualified as T
-import Data.Time (addUTCTime, getCurrentTime)
+import Data.Time (UTCTime, addUTCTime, getCurrentTime)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
@@ -62,7 +63,7 @@ import Effectful.Ki qualified as Ki
 import Effectful.Labeled (runLabeled)
 import Effectful.PostgreSQL.Transact.Effect qualified as DB
 import Effectful.Reader.Static qualified
-import Effectful.Time (runTime)
+import Effectful.Time (runTime, runFrozenTime)
 import Log qualified
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Projects.Projects qualified as Projects
@@ -75,6 +76,7 @@ import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
 import Pkg.DeriveUtils (AesonText (..))
 import ProcessMessage qualified
 import Relude
+import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
 import Servant qualified
 import Servant.Server qualified as ServantS
@@ -395,7 +397,7 @@ runTestBackgroundWithLogger logger appCtx process = do
       & Effectful.Reader.Static.runReader appCtx
       & DB.runDB appCtx.pool
       & runLabeled @"timefusion" (DB.runDB appCtx.timefusionPgPool)
-      & runTime
+      & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
       & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
       & Tracing.runTracing tp
       & runUUID

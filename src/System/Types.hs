@@ -32,6 +32,7 @@ import Data.Effectful.Notify qualified
 import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
 import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPWreq)
 import Data.Map qualified as Map
+import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
 import Effectful
@@ -48,6 +49,7 @@ import Log qualified
 import Models.Users.Sessions qualified as Sessions
 import OpenTelemetry.Trace (TracerProvider)
 import Relude
+import Relude.Unsafe qualified as Unsafe
 import Servant (AuthProtect, Header, Headers, ServerError, addHeader, noHeader)
 import Servant qualified
 import Servant.Htmx (HXRedirect, HXTriggerAfterSettle)
@@ -139,7 +141,7 @@ effToServantHandlerTest env logger tp app =
     & runHTTPGolden "./golden/"
     & runDB env.pool
     & runLabeled @"timefusion" (runDB env.timefusionPgPool)
-    & runFrozenTime (posixSecondsToUTCTime 0)
+    & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
     & Logging.runLog (show env.config.environment) logger
     & Tracing.runTracing tp
     & runConcurrent
