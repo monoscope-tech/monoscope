@@ -41,14 +41,14 @@ spec = aroundAll withTestResources do
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger ListProjects.listProjectsGetH
       let (projects, _demoProject) = pg.unwrap.content
-      length projects `shouldBe` 2
-      -- Should have both demo project and test project created in testSessionHeader
+      length projects `shouldBe` 1
+      -- Should have test project created in testSessionHeader (demo project is returned separately)
       let projectIds = map (.id.toText) (V.toList projects)
-      projectIds `shouldContain` ["00000000-0000-0000-0000-000000000000"] -- demo project
       projectIds `shouldContain` ["12345678-9abc-def0-1234-56789abcdef0"] -- test project from testSessionHeader
     -- TODO: add more checks for the info we we display on list page
 
     it "Should update project with new details" \TestResources{..} -> do
+      let testProjectPid = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "12345678-9abc-def0-1234-56789abcdef0"
       let createPForm =
             CreateProject.CreateProjectForm
               { title = "Test Project CI2"
@@ -58,18 +58,18 @@ spec = aroundAll withTestResources do
               , timeZone = "Africa/Accra"
               }
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ CreateProject.createProjectPostH testPid createPForm
+        toServantResponse trATCtx trSessAndHeader trLogger $ CreateProject.createProjectPostH testProjectPid createPForm
       (pg.unwrapCreateProjectResp <&> (.form.title)) `shouldBe` Just @Text "Test Project CI2"
       (pg.unwrapCreateProjectResp <&> (.form.description)) `shouldBe` Just "Test Description2"
 
     -- FIXME: marked as pending with xit. Test is faily and should be investigated
-    xit "Project in list should have new details" \TestResources{..} -> do
+    it "Project in list should have new details" \TestResources{..} -> do
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger ListProjects.listProjectsGetH
       let (projects, _demoProject) = pg.unwrap.content
-      length projects `shouldBe` 2
-      (projects V.! 0).id.toText `shouldBe` "00000000-0000-0000-0000-000000000001"
+      length projects `shouldBe` 1
+      (projects V.! 0).id.toText `shouldBe` "12345678-9abc-def0-1234-56789abcdef0"
       (projects V.! 0).title `shouldBe` "Test Project CI2"
       (projects V.! 0).description `shouldBe` "Test Description2"
-      (projects V.! 0).paymentPlan `shouldBe` "Free"
+      (projects V.! 0).paymentPlan `shouldBe` "FREE"
       (projects V.! 0).timeZone `shouldBe` "Africa/Accra"
