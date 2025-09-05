@@ -96,9 +96,46 @@ spec = aroundAll withTestResources do
           length hostsAndEvents `shouldBe` 0
         _ -> expectationFailure "Expected CatalogListPage"
 
-    it "creates endpoints from processed spans" \tr -> do
+    it "creates endpoints from processed spans" \tr@TestResources{..} -> do
+      -- First verify the demo project exists
+      projectExists <- withPool trPool $ DBT.query [sql|
+        SELECT COUNT(*)
+        FROM projects.projects
+        WHERE id = ?
+      |] (Only testPid) :: IO (V.Vector (Only Int))
+      
+      case projectExists of
+        [(Only 0)] -> error $ "Demo project with ID " <> show testPid <> " does not exist in database"
+        _ -> pure ()
+      
       msgs <- prepareTestMessages
       processMessagesAndBackgroundJobs tr msgs
+      
+      -- Debug: Check if any spans were inserted at all
+      allSpansCount <- withPool trPool $ DBT.query [sql|
+        SELECT COUNT(*)
+        FROM otel_logs_and_spans
+      |] () :: IO (V.Vector (Only Int))
+      
+      case allSpansCount of
+        [(Only totalCount)] -> if totalCount == 0 
+          then error "No spans at all in otel_logs_and_spans table"
+          else pure ()
+        _ -> pure ()
+      
+      -- Debug: Check if spans were actually inserted for our project
+      spanCount <- withPool trPool $ DBT.query [sql|
+        SELECT COUNT(*)
+        FROM otel_logs_and_spans
+        WHERE project_id = ? AND (name = 'monoscope.http' OR name = 'apitoolkit-http-span')
+      |] (Only testPid) :: IO (V.Vector (Only Int))
+      
+      case spanCount of
+        [(Only count)] -> if count == 0 
+          then error $ "No spans found in otel_logs_and_spans table after processing messages for project " <> show testPid
+          else pure ()
+        _ -> error "Unexpected span count result"
+      
       verifyEndpointsCreated tr
 
     it "returns hosts list after processing messages" \tr@TestResources{..} -> do
@@ -130,7 +167,7 @@ spec = aroundAll withTestResources do
       issuesCount <- withPool trPool $ DBT.query [sql|
         SELECT COUNT(*)
         FROM apis.issues
-        WHERE project_id = ? AND anomaly_type = 'endpoint'
+        WHERE project_id = ? AND issue_type = 'api_change'
       |] (Only testPid) :: IO (V.Vector (Only Int))
       
       case issuesCount of
@@ -163,8 +200,8 @@ spec = aroundAll withTestResources do
       -- Acknowledge all endpoint issues
       _ <- withPool trPool $ DBT.execute [sql|
         UPDATE apis.issues 
-        SET acknowleged_at = NOW(), acknowleged_by = ?
-        WHERE project_id = ? AND anomaly_type = 'endpoint'
+        SET acknowledged_at = NOW(), acknowledged_by = ?
+        WHERE project_id = ? AND issue_type = 'api_change'
       |] (Users.UserId UUID.nil, testPid)
       
       -- Test active filter

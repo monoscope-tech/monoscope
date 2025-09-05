@@ -94,7 +94,7 @@ import Servant
 import Text.Printf (printf)
 import Text.Regex.TDFA ((=~))
 import Text.Show
-import "base64" Data.ByteString.Base64 qualified as B64
+import "base64-bytestring" Data.ByteString.Base64 qualified as B64
 
 
 -- Added only for satisfying the tests

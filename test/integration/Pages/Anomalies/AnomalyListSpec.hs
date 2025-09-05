@@ -1,3 +1,5 @@
+{-# LANGUAGE PackageImports #-}
+
 module Pages.Anomalies.AnomalyListSpec (spec) where
 
 import Control.Concurrent (threadDelay)
@@ -6,7 +8,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Base64.Types qualified as B64T
-import Data.ByteString.Base64 qualified as B64
+import "base64-bytestring" Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Lazy qualified as BL
 import Data.HashMap.Strict qualified as HashMap
 import Data.Int (Int64)

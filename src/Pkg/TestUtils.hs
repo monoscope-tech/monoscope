@@ -106,6 +106,10 @@ migrate db = do
               VALUES ('00000000-0000-0000-0000-000000000000', 'FN', 'LN', 'test@apitoolkit.io')
               ON CONFLICT (id) DO NOTHING;
               
+              INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
+              VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project', 'FREE', true, NULL, true, true)
+              ON CONFLICT (id) DO UPDATE SET payment_plan = 'FREE', active = true, deleted_at = NULL;
+              
               INSERT into projects.project_api_keys (active, project_id, title, key_prefix) 
               SELECT True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
               WHERE NOT EXISTS (
@@ -279,6 +283,10 @@ ensureTemplateDatabase masterConnStr templateDbName = do
           [sql| INSERT into users.users (id, first_name, last_name, email) 
                 VALUES ('00000000-0000-0000-0000-000000000000', 'FN', 'LN', 'test@apitoolkit.io')
                 ON CONFLICT (id) DO NOTHING;
+                
+                INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
+                VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project', 'FREE', true, NULL, true, true)
+                ON CONFLICT (id) DO UPDATE SET payment_plan = 'FREE', active = true, deleted_at = NULL;
                 
                 INSERT into projects.project_api_keys (active, project_id, title, key_prefix) 
                 SELECT True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'

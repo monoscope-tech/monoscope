@@ -64,7 +64,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (runBackground)
 import Utils (b64ToJson, freeTierDailyMaxEvents, nestedJsonFromDotNotation)
-import "base64" Data.ByteString.Base64 qualified as B64
+import "base64-bytestring" Data.ByteString.Base64 qualified as B64
 
 
 -- | Minimum valid timestamp in nanoseconds (Year 2000)

@@ -357,7 +357,7 @@ SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, tar
       ELSE (0, NOW()::TEXT)
     END as req_count,
     title, service, critical, breaking_changes, incremental_changes,
-    affected_payloads, affected_clients, estimated_requests, migration_complexity, recommended_action,
+    affected_requests, affected_clients, estimated_requests, migration_complexity, recommended_action,
     request_payloads, response_payloads, COALESCE(anomaly_hashes, '{}'), COALESCE(endpoint_hash, '')
     FROM apis.issues iss WHERE project_id = ? $cond
     AND anomaly_type!='endpoint' 
@@ -379,7 +379,7 @@ SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, tar
       ELSE (0::BIGINT, NOW()::TEXT)
     END as req_count,
     title, service, critical, breaking_changes, incremental_changes,
-    affected_payloads, affected_clients, estimated_requests, migration_complexity, recommended_action,
+    affected_requests, affected_clients, estimated_requests, migration_complexity, recommended_action,
     request_payloads, response_payloads, COALESCE(anomaly_hashes, '{}'), COALESCE(endpoint_hash, '')
     FROM apis.issues iss WHERE project_id = ? and target_hash=? LIMIT 1
     |]
@@ -402,7 +402,7 @@ getReportAnomalies pid report_type = query (Query $ encodeUtf8 q) pid
       ELSE (0::BIGINT, NOW()::TEXT)
     END as req_count,
     title, service, critical, breaking_changes, incremental_changes,
-    affected_payloads, affected_clients, estimated_requests, migration_complexity, recommended_action,
+    affected_requests, affected_clients, estimated_requests, migration_complexity, recommended_action,
     request_payloads, response_payloads, COALESCE(anomaly_hashes, '{}'), COALESCE(endpoint_hash, '')
     FROM apis.issues iss WHERE project_id = ?  and created_at > current_timestamp - interval $report_interval
     ORDER BY req_count desc limit 20
@@ -566,7 +566,7 @@ data Issue = Issue
   , critical :: Bool
   , breakingChanges :: Int
   , incrementalChanges :: Int
-  , affectedPayloads :: Int
+  , affectedRequests :: Int
   , affectedClients :: Int
   , estimatedRequests :: Text
   , migrationComplexity :: Text
@@ -636,7 +636,7 @@ data IssueL = IssueL
   , critical :: Bool
   , breakingChanges :: Int
   , incrementalChanges :: Int
-  , affectedPayloads :: Int
+  , affectedRequests :: Int
   , affectedClients :: Int
   , estimatedRequests :: Text
   , migrationComplexity :: Text
@@ -952,7 +952,7 @@ convertAnomalyToIssue hostM anomaly = do
       , critical = assessCriticality anomaly
       , breakingChanges = countBreakingChanges anomaly
       , incrementalChanges = countIncrementalChanges anomaly
-      , affectedPayloads = 0 -- TODO: Calculate from actual request data
+      , affectedRequests = 0 -- TODO: Calculate from actual request data
       , affectedClients = 0 -- TODO: Calculate from actual client data
       , estimatedRequests = "N/A" -- TODO: Calculate from metrics
       , migrationComplexity = assessMigrationComplexity anomaly
@@ -1040,7 +1040,7 @@ insertIssues issues = executeMany q (V.toList issues)
     q =
       [sql|insert into apis.issues (id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash,
                       issue_data, endpoint_id, acknowleged_by, archived_at, title, service, critical, breaking_changes,
-                      incremental_changes, affected_payloads, affected_clients, estimated_requests, migration_complexity,
+                      incremental_changes, affected_requests, affected_clients, estimated_requests, migration_complexity,
                       recommended_action, request_payloads, response_payloads, anomaly_hashes, endpoint_hash) 
                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                       ON CONFLICT (project_id, target_hash) DO NOTHING;
@@ -1055,7 +1055,7 @@ findOpenIssueForEndpoint pid endpointHash = queryOne q (pid, endpointHash)
       [sql|
       SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
         endpoint_id, acknowleged_by, archived_at, title, service, critical, breaking_changes, incremental_changes,
-        affected_payloads, affected_clients, estimated_requests, migration_complexity, recommended_action,
+        affected_requests, affected_clients, estimated_requests, migration_complexity, recommended_action,
         request_payloads, response_payloads, COALESCE(anomaly_hashes, '{}'), COALESCE(endpoint_hash, '')
       FROM apis.issues 
       WHERE project_id = ? 
@@ -1107,7 +1107,7 @@ updateIssueWithNewAnomaly existingIssue newAnomalyHashes newRequestPayloads newR
 --       { anomalyHashes = base.anomalyHashes <> new.anomalyHashes
 --       , breakingChanges = base.breakingChanges + new.breakingChanges
 --       , incrementalChanges = base.incrementalChanges + new.incrementalChanges
---       , affectedPayloads = base.affectedPayloads + new.affectedPayloads
+--       , affectedRequests = base.affectedRequests + new.affectedRequests
 --       , affectedClients = max base.affectedClients new.affectedClients
 --       , requestPayloads = mergePayloadLists base.requestPayloads new.requestPayloads
 --       , responsePayloads = mergePayloadLists base.responsePayloads new.responsePayloads
@@ -1145,7 +1145,7 @@ selectIssueById aid = queryOne q (Only aid)
       [sql|
       SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
         endpoint_id, acknowleged_by, archived_at, title, service, critical, breaking_changes, incremental_changes,
-        affected_payloads, affected_clients, estimated_requests, migration_complexity, recommended_action,
+        affected_requests, affected_clients, estimated_requests, migration_complexity, recommended_action,
         request_payloads, response_payloads, COALESCE(anomaly_hashes, '{}'), COALESCE(endpoint_hash, '')
       FROM apis.issues 
       WHERE id = ?

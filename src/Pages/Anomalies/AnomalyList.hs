@@ -765,7 +765,7 @@ renderIssue hideByDefault currTime timeFilter issue = do
         let breakingChanges = length $ filter (\c -> c.changeType == Anomalies.Breaking) allChanges
         let incrementalChanges = length $ filter (\c -> c.changeType == Anomalies.Incremental) allChanges
         let totalChanges = length allChanges
-        let affectedPayloads = if null requestChanges then length responseChanges else if null responseChanges then length requestChanges else length requestChanges + length responseChanges
+        let affectedRequests = if null requestChanges then length responseChanges else if null responseChanges then length requestChanges else length requestChanges + length responseChanges
 
         div_ [class_ "flex items-center gap-4 text-sm mb-4 p-3 bg-fillWeak rounded-lg"] do
           span_ [class_ "text-textWeak"] do
@@ -790,7 +790,7 @@ renderIssue hideByDefault currTime timeFilter issue = do
           div_ [class_ "w-px h-4 bg-strokeWeak"] ""
 
           span_ [class_ "text-textWeak"] do
-            strong_ [class_ "text-textBrand"] $ toHtml $ show affectedPayloads
+            strong_ [class_ "text-textBrand"] $ toHtml $ show affectedRequests
             " payloads affected"
 
       -- Stack trace for runtime exceptions or Query for alerts

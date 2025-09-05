@@ -353,7 +353,7 @@ convertRequestMessageToSpan rm (spanId, trId) =
           , timestamp = zonedTimeToUTC rm.timestamp
           , parent_id = (Just . UUID.toText) =<< rm.parentId
           , context = Just $ Telemetry.Context{trace_id = Just trId, span_id = Just $ UUID.toText spanId, trace_state = Nothing, trace_flags = Nothing, is_remote = Nothing}
-          , name = Just $ rm.method <> maybe "" (" " <>) rm.urlPath
+          , name = Just "apitoolkit-http-span"
           , start_time = zonedTimeToUTC rm.timestamp
           , end_time = Just $ addUTCTime (realToFrac (fromIntegral rm.duration / 1000000000)) (zonedTimeToUTC rm.timestamp)
           , kind = Just $ if T.isSuffixOf "Outgoing" (show rm.sdkType) then "client" else "server"

@@ -377,7 +377,7 @@ updateIssueWithNewAnomaly issueId newData = void $ execute q (Aeson newData, iss
       UPDATE apis.issues
       SET 
         issue_data = issue_data || ?::jsonb,
-        affected_payloads = affected_payloads + 1,
+        affected_requests = affected_requests + 1,
         updated_at = NOW()
       WHERE id = ?
     |]
