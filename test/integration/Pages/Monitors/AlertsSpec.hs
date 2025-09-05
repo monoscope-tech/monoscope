@@ -41,7 +41,7 @@ alertForm =
     , alertId = Just (UUID.toText alertId)
     , frequency = Nothing
     , timeWindow = Nothing
-    , conditionType = Nothing
+    , conditionType = Just "threshold_exceeded"
     , source = Nothing
     }
 
