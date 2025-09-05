@@ -143,6 +143,19 @@ jobs:
     name: Test
     needs: build
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: timescale/timescaledb-ha:pg16-all
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: apitoolkit
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+        ports:
+          - 5432:5432
     strategy:
       fail-fast: false
       matrix:
@@ -187,6 +200,8 @@ jobs:
 
       # No need to update cabal or configure - reuse from build
       - name: Run ${{ matrix.test }}
+        env:
+          USE_EXTERNAL_DB: true
         run: |
           echo "::group::Running ${{ matrix.test }}"
           # Run test without rebuilding - everything should be cached

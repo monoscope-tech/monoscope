@@ -58,6 +58,19 @@ jobs:
     name: Test ${{ matrix.test-suite }}
     needs: build
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: timescale/timescaledb-ha:pg16-all
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: apitoolkit
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+        ports:
+          - 5432:5432
     strategy:
       matrix:
         test-suite: [doctests, unit-tests, integration-tests]
@@ -101,4 +114,6 @@ jobs:
           fi
           
       - name: Run ${{ matrix.test-suite }}
+        env:
+          USE_EXTERNAL_DB: true
         run: stack test :${{ matrix.test-suite }}
