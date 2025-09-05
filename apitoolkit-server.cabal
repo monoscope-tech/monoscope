@@ -486,6 +486,7 @@ library
     , base
     , base16-bytestring
     , base64
+    , base64-bytestring
     , bytestring
     , cache >=0.1.3.0
     , case-insensitive

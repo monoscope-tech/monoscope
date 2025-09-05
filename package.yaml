@@ -171,6 +171,7 @@ library:
     - async
     - bytestring
     - base64
+    - base64-bytestring
     - mtl
     - base16-bytestring
     - http-types

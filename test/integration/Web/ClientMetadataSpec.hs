@@ -4,7 +4,7 @@ module Web.ClientMetadataSpec (spec) where
 
 import Data.Aeson.QQ (aesonQQ)
 import Data.Base64.Types qualified as B64
-import "base64-bytestring" Data.ByteString.Base64 qualified as B64
+import "base64" Data.ByteString.Base64 qualified as B64
 import Data.Pool (Pool)
 import Data.Time (getCurrentTime)
 import Data.UUID qualified as UUID

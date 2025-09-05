@@ -3,6 +3,7 @@
 module Pages.Api (apiGetH, apiPostH, apiActivateH, apiDeleteH, GenerateAPIKeyForm (..), ApiGet (..), ApiMut (..)) where
 
 import Data.Base64.Types qualified as B64
+import "base64" Data.ByteString.Base64 qualified as B64
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.UUID as UUID (toText)
@@ -23,7 +24,6 @@ import System.Config (AuthContext (config), EnvConfig (apiKeyEncryptionSecretKey
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
-import "base64-bytestring" Data.ByteString.Base64 qualified as B64
 
 
 data GenerateAPIKeyForm = GenerateAPIKeyForm
