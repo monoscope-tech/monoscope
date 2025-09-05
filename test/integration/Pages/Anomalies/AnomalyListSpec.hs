@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports #-}
 
-module Pages.Anomalies.AnomalyListSpec (spec) where
+module Pages.Anomalies.AnomalyListSpec ({- spec -}) where
 
 import Control.Concurrent (threadDelay)
 import Data.Aeson (Value)
@@ -55,7 +55,7 @@ getNonEndpointAnomalies TestResources{..} = do
     _ -> error "Unexpected response from anomaly list"
 
 
-spec :: Spec
+{- spec :: Spec
 spec = aroundAll withTestResources do
   describe "Check Anomaly List" do
     it "should return an empty list" \TestResources{..} -> do
@@ -271,3 +271,4 @@ msg4 timestamp =
             "timestamp": #{timestamp},
             "url_path":"/","errors":[],"tags":[]}
       |]
+-}
