@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports #-}
 
-module Pages.Anomalies.AnomalyListSpec ({- spec -}) where
+module Pages.Anomalies.AnomalyListSpec (spec) where
 
 import Control.Concurrent (threadDelay)
 import Data.Aeson (Value)
@@ -38,7 +38,7 @@ import BackgroundJobs qualified
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages (RequestMessage (..), replaceNullChars, valueToFields)
-import Test.Hspec (Spec, aroundAll, describe, it, pendingWith, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, describe, it, pendingWith, shouldBe, shouldSatisfy, xdescribe)
 import Utils (toXXHash)
 
 
@@ -55,9 +55,9 @@ getNonEndpointAnomalies TestResources{..} = do
     _ -> error "Unexpected response from anomaly list"
 
 
-{- spec :: Spec
+spec :: Spec
 spec = aroundAll withTestResources do
-  describe "Check Anomaly List" do
+  xdescribe "Check Anomaly List" do
     it "should return an empty list" \TestResources{..} -> do
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
@@ -271,4 +271,3 @@ msg4 timestamp =
             "timestamp": #{timestamp},
             "url_path":"/","errors":[],"tags":[]}
       |]
--}
