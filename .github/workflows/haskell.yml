@@ -190,7 +190,12 @@ jobs:
         run: |
           echo "::group::Running ${{ matrix.test }}"
           # Run test without rebuilding - everything should be cached
-          cabal test ${{ matrix.test }} --builddir=dist-newstyle -j --ghc-options="-O0 -j8" --test-show-details=direct 
+          if [ "${{ matrix.test }}" = "doctests" ]; then
+            # For doctests, use cabal exec to ensure proper environment
+            cabal exec -- cabal test ${{ matrix.test }} --builddir=dist-newstyle -j --ghc-options="-O0 -j8" --test-show-details=direct
+          else
+            cabal test ${{ matrix.test }} --builddir=dist-newstyle -j --ghc-options="-O0 -j8" --test-show-details=direct
+          fi
           echo "::endgroup::"
 
   deploy:
