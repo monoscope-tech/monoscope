@@ -76,7 +76,7 @@ spec = aroundAll TestUtils.withSetup do
       _ <- TestUtils.runTestBackground authCtx $ processFiveMinuteSpans currentTime
       _ <- TestUtils.runAllBackgroundJobs authCtx
       -- Now refresh the materialized view to see the results
-      _ <- withPool pool $ TestUtils.refreshMaterializedView "apis.endpoint_request_stats"
+      -- _ <- withPool pool $ TestUtils.refreshMaterializedView "apis.endpoint_request_stats"
       endpoints <- withPool pool $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0 "Incoming"
       length endpoints `shouldBe` 3 -- Two new endpoints from the last 2 requests
       forM_ endpoints \enp -> do

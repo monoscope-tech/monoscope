@@ -152,6 +152,7 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
     archivedAt = if archived then "AND ann.archived_at IS NOT NULL " else "AND ann.archived_at IS NULL "
     search = case searchM of Just s -> " AND enp.url_path LIKE '%" <> s <> "%'"; Nothing -> ""
     pHostQuery = case pHostM of Just h -> " AND enp.host = ?"; Nothing -> ""
+    hostFilter = case pHostM of Just h -> " AND attributes->'net'->'host'->>'name' = ?"; Nothing -> ""
     orderBy = case fromMaybe "" sortM of "first_seen" -> "enp.created_at ASC"; "last_seen" -> "enp.created_at DESC"; _ -> "coalesce(fr.eventsCount, 0) DESC"
     q =
       [text| 
@@ -163,7 +164,7 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
     FROM otel_logs_and_spans
     WHERE project_id = ?
       AND (name = 'monoscope.http' OR name = 'apitoolkit-http-span')
-      AND attributes->'net'->'host'->>'name' = ?
+      $hostFilter
     GROUP BY url_path, method
 )
       SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, enp.host, coalesce(fr.eventsCount, 0) as total_requests,
