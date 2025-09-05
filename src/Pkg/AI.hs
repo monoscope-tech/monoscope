@@ -25,7 +25,7 @@ callOpenAIAPI fullPrompt apiKey = do
           { apiKey = apiKey
           , openAIModelName = "gpt-4o-mini"
           , callbacks = []
-          , baseUrl = Nothing
+          -- , baseUrl = Nothing
           }
   -- Use langchain-hs to generate response
   result <- liftIO $ LLM.generate openAI fullPrompt Nothing
