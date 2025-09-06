@@ -645,6 +645,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
               , queryLibSaved = V.empty
               , updateUrl = False
               , targetWidgetPreview = Just widgetPreviewId
+              , alert = False
               }
 
       div_ [class_ "space-y-4"] do
