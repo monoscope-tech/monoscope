@@ -111,15 +111,14 @@ unifiedMonitorsGetH pid filterTM sinceM = do
                 $ ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No monitors configured yet"
-                  , description = "Create alerts or multi-step monitors to start monitoring your services"
-                  , actionText = "Create Monitor"
+                  , description = "Create alerts"
+                  , actionText = "Create alert"
                   , destination =
                       Left
                         $ fromLazy
                         $ Lucid.renderText
                           ( div_ [class_ "flex gap-2"] do
                               a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle", class_ "btn btn-sm btn-primary"] "Create Alert"
-                              a_ [href_ $ "/p/" <> pid.toText <> "/monitors/collection", class_ "btn btn-sm btn-outline"] "Create Multi-step Monitor"
                           )
                   }
           , elemID = "monitorsListForm"
@@ -272,7 +271,7 @@ unifiedMonitorCard item = do
     detailsUrl = "/p/" <> item.projectId <> "/monitors/" <> item.monitorId <> "/overview"
 
     editUrl = case item.monitorType of
-      MTAlert -> "/p/" <> item.projectId <> "/alerts/" <> item.monitorId
+      MTAlert -> "/p/" <> item.projectId <> "/log_explorer/?alert=" <> item.monitorId
       MTMultiStep -> "/p/" <> item.projectId <> "/monitors/collection?col_id=" <> item.monitorId
 
     toggleUrl = case item.monitorType of

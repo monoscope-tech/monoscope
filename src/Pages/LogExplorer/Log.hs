@@ -48,6 +48,8 @@ import System.Types
 import Text.Megaparsec (parseMaybe)
 import Utils (checkFreeTierExceeded, faSprite_, formatUTC, getServiceColors, listToIndexHashMap, lookupVecTextByKey, onpointerdown_, prettyPrintCount)
 
+import Data.UUID qualified as UUID
+import Models.Apis.Monitors qualified as Monitors
 import Pkg.AI (callOpenAIAPI, systemPrompt)
 import Pkg.AI qualified as AI
 
@@ -381,8 +383,8 @@ keepNonEmpty (Just "") = Nothing
 keepNonEmpty (Just a) = Just a
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
-apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM vizTypeM = do
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
+apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM vizTypeM alertM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let source = fromMaybe "spans" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
@@ -409,6 +411,16 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   now <- Time.currentTime
   let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   authCtx <- Effectful.Reader.Static.ask @AuthContext
+
+  -- If an alert ID is provided, fetch the alert and pre-fill the query box
+  alertDM <- case alertM of
+    Nothing -> return Nothing
+    Just alertIdText -> do
+      case UUID.fromText alertIdText of
+        Just alertId -> do
+          mAlert <- dbtToEff $ Monitors.queryMonitorById (Monitors.QueryMonitorId alertId)
+          return mAlert
+        Nothing -> return Nothing
 
   -- Skip table load on initial page load unless it's a JSON request
   let shouldSkipLoad = layoutM == Nothing && hxRequestM == Nothing && jsonM /= Just "true"
@@ -504,6 +516,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
               , showTrace = showTraceM
               , facets = facetSummary
               , vizType = vizTypeM
+              , alert = alertDM
               }
       let jsonResponse = LogsGetJson requestVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap resultCount
       addRespHeaders $ case (layoutM, hxRequestM, jsonM) of
@@ -577,6 +590,7 @@ data ApiLogsPageData = ApiLogsPageData
   , showTrace :: Maybe Text
   , facets :: Maybe Models.Apis.Fields.Types.FacetSummary
   , vizType :: Maybe Text
+  , alert :: Maybe Monitors.QueryMonitor
   }
 
 
@@ -637,6 +651,7 @@ apiLogsPage page = do
           , queryLibSaved = page.queryLibSaved
           , updateUrl = True
           , targetWidgetPreview = Nothing
+          , alert = isJust page.alert
           }
 
       div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[#viz-logs:not(:checked)]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 ", style_ "aspect-ratio: 10 / 1;"] do
@@ -770,7 +785,7 @@ apiLogsPage page = do
       div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block"] $ resizer_ "alert_container" "alert_width" False
 
       div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block", id_ "alert_container", style_ "width: 500px;"] do
-        alertConfigurationForm_ page.pid
+        alertConfigurationForm_ page.pid page.alert
 
       div_ [class_ $ "transition-opacity duration-200 " <> if isJust page.targetEvent then "" else "opacity-0 pointer-events-none hidden", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
 
@@ -982,9 +997,37 @@ jsonTreeAuxillaryCode pid query = do
 |]
 
 
+-- { id :: QueryMonitorId
+-- , createdAt :: UTCTime
+-- , updatedAt :: UTCTime
+-- , projectId :: Projects.ProjectId
+-- , checkIntervalMins :: Int
+-- , alertThreshold :: Int
+-- , warningThreshold :: Maybe Int
+-- , logQuery :: Text
+-- , logQueryAsSql :: Text
+-- , lastEvaluated :: UTCTime
+-- , warningLastTriggered :: Maybe UTCTime
+-- , alertLastTriggered :: Maybe UTCTime
+-- , triggerLessThan :: Bool
+-- , thresholdSustainedForMins :: Int
+-- , alertConfig :: MonitorAlertConfig
+-- , deactivatedAt :: Maybe UTCTime
+-- , deletedAt :: Maybe UTCTime
+-- }
+
+--  { title :: Text
+--   , severity :: Text
+--   , subject :: Text
+--   , message :: Text
+--   , emails :: V.Vector (CI.CI Text)
+--   , emailAll :: Bool
+--   , slackChannels :: V.Vector Text
+--   }
+
 -- | Render alert configuration form for creating log-based alerts
-alertConfigurationForm_ :: Projects.ProjectId -> Html ()
-alertConfigurationForm_ pid = do
+alertConfigurationForm_ :: Projects.ProjectId -> Maybe Monitors.QueryMonitor -> Html ()
+alertConfigurationForm_ pid alertM = do
   div_ [class_ "bg-fillWeaker h-full flex flex-col group/alt"] do
     -- Header section (more compact)
     div_ [class_ "flex items-center justify-between px-4 py-2.5"] do
@@ -1012,11 +1055,13 @@ alertConfigurationForm_ pid = do
         ]
         do
           -- Alert name field (more compact)
+          input_ [type_ "hidden", name_ "alertId", value_ $ maybe "" ((.id.toText)) alertM]
           fieldset_ [class_ "fieldset"] do
             label_ [class_ "label text-xs font-medium text-textStrong mb-1"] "Alert name"
             input_
               [ type_ "text"
               , name_ "title"
+              , value_ $ maybe "" (\x -> x.alertConfig.title) alertM
               , placeholder_ "e.g. High error rate on checkout API"
               , class_ "input input-sm w-full"
               , required_ ""
@@ -1033,12 +1078,12 @@ alertConfigurationForm_ pid = do
 
             div_ [class_ "gap-3 p-3 pt-0 peer-has-[:checked]:flex hidden"] do
               let timeOpts = [(1, "minute"), (2, "2 minutes"), (5, "5 minutes"), (10, "10 minutes"), (15, "15 minutes"), (30, "30 minutes"), (60, "hour"), (360, "6 hours"), (720, "12 hours"), (1440, "day")]
-                  mkOpt (m, l) = option_ [value_ (show m <> "m")] ("every " <> l)
+                  mkOpt (m, l) = option_ ([value_ (show m <> "m")] <> [selected_ "" | Just m == fmap (.checkIntervalMins) alertM]) ("every " <> l)
 
               -- Frequency
               fieldset_ [class_ "fieldset flex-1"] do
                 label_ [class_ "label text-xs"] "Execute the query"
-                select_ [name_ "frequency", class_ "select select-sm"] $ forM_ timeOpts mkOpt
+                select_ [name_ "frequency", class_ "select select-sm", value_ $ maybe "" (\x -> show x.checkIntervalMins <> "m") alertM] $ forM_ timeOpts mkOpt
 
               -- Time window
               fieldset_ [class_ "fieldset flex-1"] do
@@ -1073,8 +1118,8 @@ alertConfigurationForm_ pid = do
                   ]
                   do
                     -- option_ [value_ "matches_changed"] "the query's results change"
-                    option_ [value_ "threshold_exceeded", selected_ ""] "threshold is exceeded"
-                    option_ [value_ "has_matches"] "the query has any results"
+                    option_ ([value_ "threshold_exceeded"] <> [selected_ "" | maybe True (\x -> x.alertThreshold > 0 && isJust x.warningThreshold) alertM]) "threshold is exceeded"
+                    option_ ([value_ "has_matches"] <> [selected_ "" | maybe False (\x -> x.alertThreshold == 0 && isNothing x.warningThreshold) alertM]) $ "the query has any results"
 
           -- Thresholds (collapsible, only visible when threshold_exceeded is selected)
           div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden", id_ "thresholds"] do
@@ -1087,7 +1132,7 @@ alertConfigurationForm_ pid = do
 
             div_ [class_ "p-3 pt-0 peer-has-[:checked]:block hidden"] do
               div_ [class_ "flex flex-row gap-3"] do
-                let thresholdInput name color label req = fieldset_ [class_ "fieldset flex-1"] do
+                let thresholdInput name color label req vM = fieldset_ [class_ "fieldset flex-1"] do
                       _ <- label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] do
                         _ <- div_ [class_ $ "w-1.5 h-1.5 rounded-full " <> color] ""
                         _ <- span_ [class_ "font-medium"] label
@@ -1107,17 +1152,18 @@ alertConfigurationForm_ pid = do
                                      })
                                    end|]
                             ]
-                          ++ [required_ "" | req]
+                            ++ [required_ "" | req]
+                            ++ [value_ (maybe "" (show) vM) | isJust vM]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
-                thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True
-                thresholdInput "warningThreshold" "bg-fillWarning-strong" "Warning threshold" False
+                thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)
+                thresholdInput "warningThreshold" "bg-fillWarning-strong" "Warning threshold" False (maybe Nothing (.warningThreshold) alertM)
 
                 fieldset_ [class_ "fieldset flex-1"] do
                   label_ [class_ "label text-xs font-medium mb-1"] "Trigger condition"
                   select_ [name_ "direction", class_ "select select-sm"] do
-                    option_ [value_ "above", selected_ ""] "Above threshold"
-                    option_ [value_ "below"] "Below threshold"
+                    option_ ([value_ "above"] ++ [selected_ "" | maybe True (not . (.triggerLessThan)) alertM]) "Above threshold"
+                    option_ ([value_ "below"] ++ [selected_ "" | maybe False (.triggerLessThan) alertM]) "Below threshold"
 
               -- Info banner (more compact)
               div_ [class_ "flex items-start gap-2 p-2.5 bg-bgAlternate rounded-lg mt-3 hidden"] do
@@ -1137,14 +1183,15 @@ alertConfigurationForm_ pid = do
 
             div_ [class_ "p-3 pt-0 peer-has-[:checked]:block hidden"] do
               -- Severity and Subject row
+              let defaultSeverity = maybe "Error" (.alertConfig.severity) alertM
               div_ [class_ "flex items-center w-full gap-2 mb-3"] do
                 fieldset_ [class_ "fieldset"] do
                   label_ [class_ "label text-xs font-medium mb-1"] "Severity"
                   select_ [class_ "select select-sm w-28", name_ "severity"] do
-                    option_ [] "Info"
-                    option_ [selected_ ""] "Error"
-                    option_ [] "Warning"
-                    option_ [] "Critical"
+                    option_ [selected_ "" | defaultSeverity == "Info"] "Info"
+                    option_ [selected_ "" | defaultSeverity == "Error"] "Error"
+                    option_ [selected_ "" | defaultSeverity == "Warning"] "Warning"
+                    option_ [selected_ "" | defaultSeverity == "Critical"] "Critical"
 
                 fieldset_ [class_ "fieldset w-full"] do
                   label_ [class_ "label text-xs font-medium mb-1"] "Subject"
@@ -1152,7 +1199,7 @@ alertConfigurationForm_ pid = do
                     [ placeholder_ "e.g. Alert triggered for high error rate"
                     , class_ "input input-sm w-full"
                     , name_ "subject"
-                    , value_ "Alert triggered"
+                    , value_ (maybe "Alert triggered" (\x -> x.alertConfig.subject) alertM)
                     ]
 
               -- Message field
@@ -1164,7 +1211,8 @@ alertConfigurationForm_ pid = do
                   , name_ "message"
                   , rows_ "3"
                   ]
-                  "The alert threshold has been exceeded. Check the APItoolkit dashboard for details."
+                  $ toHtml
+                  $ maybe "The alert threshold has been exceeded. Check the APItoolkit dashboard for details." (.alertConfig.message) alertM
 
               -- Recovery Thresholds section with improved spacing
               div_ [class_ "border-t border-strokeWeak pt-4 mt-4"] do
@@ -1199,7 +1247,7 @@ alertConfigurationForm_ pid = do
               -- Recipients checkbox with better spacing
               div_ [class_ "flex items-center gap-2 mt-4 pt-3 border-t border-strokeWeak"] do
                 label_ [class_ "label cursor-pointer flex items-center gap-2"] do
-                  input_ [type_ "checkbox", class_ "checkbox checkbox-sm", name_ "recipientEmailAll", value_ "true", checked_]
+                  input_ $ [type_ "checkbox", class_ "checkbox checkbox-sm", name_ "recipientEmailAll", value_ "true"] ++ [checked_ | maybe True (.alertConfig.emailAll) alertM]
                   span_ [class_ "text-sm"] "Send to all team members"
 
                 span_ [class_ "tooltip", term "data-tip" "Configure specific recipients in alert settings after creation"]
@@ -1219,4 +1267,4 @@ alertConfigurationForm_ pid = do
               ]
               do
                 faSprite_ "plus" "regular" "w-3.5 h-3.5"
-                "Create Alert"
+                if isJust alertM then "Update alert" else "Create Alert"

@@ -28,6 +28,7 @@ data LogQueryBoxConfig = LogQueryBoxConfig
   , queryLibRecent :: V.Vector Projects.QueryLibItem
   , queryLibSaved :: V.Vector Projects.QueryLibItem
   , updateUrl :: Bool
+  , alert :: Bool
   -- ^ Whether to update the URL when the query changes
   , targetWidgetPreview :: Maybe Text
   -- ^ ID of the widget preview element to update when the query changes
@@ -70,7 +71,7 @@ logQueryBox_ config = do
                   on keydown[key=='Space' and shiftKey] from document set #ai-search-chkbox.checked to true
                   |]
               ]
-            <> [checked_ | isJust config.targetWidgetPreview]
+              <> [checked_ | isJust config.targetWidgetPreview]
           script_
             [text|
             document.addEventListener('keydown', function(e) {
@@ -184,7 +185,7 @@ logQueryBox_ config = do
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
       div_ [class_ "flex items-between justify-between"] do
         div_ [class_ "flex items-center gap-2"] do
-          visualizationTabs_ config.vizType config.updateUrl config.targetWidgetPreview
+          visualizationTabs_ config.vizType config.updateUrl config.targetWidgetPreview config.alert
           span_ [class_ "text-textDisabled mx-2 text-xs"] "|"
           termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
 
@@ -195,10 +196,10 @@ logQueryBox_ config = do
             input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "timeline"
           fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1"] do
             input_
-              [ type_ "checkbox"
-              , id_ "create-alert-toggle"
-              , class_ "checkbox checkbox-sm rounded-sm"
-              , [__|on change 
+              $ [ type_ "checkbox"
+                , id_ "create-alert-toggle"
+                , class_ "checkbox checkbox-sm rounded-sm"
+                , [__|on change 
                      if me.checked
                        -- Force switch to chart visualization when creating alert
                        set #viz-timeseries.checked to true
@@ -207,7 +208,8 @@ logQueryBox_ config = do
                        send 'update-widget' to #visualization-widget-container
                      end
                   |]
-              ]
+                ]
+                <> [checked_ | config.alert]
             span_ "create alert"
 
   -- Include initialization code for the query editor
@@ -215,10 +217,10 @@ logQueryBox_ config = do
 
 
 -- | Helper for visualizing the data with different chart types
-visualizationTabs_ :: Maybe Text -> Bool -> Maybe Text -> Html ()
-visualizationTabs_ vizTypeM updateUrl widgetContainerId =
+visualizationTabs_ :: Maybe Text -> Bool -> Maybe Text -> Bool -> Html ()
+visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
   div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-fillWeak p-1 rounded-lg", id_ "visualizationTabs", role_ "tablist"] do
-    let defaultVizType = fromMaybe "logs" vizTypeM
+    let defaultVizType = if alert then "viz-timeseries" else fromMaybe "logs" vizTypeM
         containerSelector = fromMaybe "visualization-widget-container" widgetContainerId
     forM_ visTypes $ \(icon, label, vizType, emoji) -> label_ [class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
       input_
@@ -236,7 +238,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId =
                       end
                    |]
           ]
-        <> [checked_ | vizType == defaultVizType]
+          <> [checked_ | vizType == defaultVizType]
       span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
       span_ [] $ toHtml label
 
