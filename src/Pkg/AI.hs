@@ -25,7 +25,7 @@ callOpenAIAPI fullPrompt apiKey = do
           { apiKey = apiKey
           , openAIModelName = "gpt-4o-mini"
           , callbacks = []
-          -- , baseUrl = Nothing
+          , baseUrl = Nothing
           }
   -- Use langchain-hs to generate response
   result <- liftIO $ LLM.generate openAI fullPrompt Nothing
@@ -58,11 +58,11 @@ getNormalTupleReponse response =
       if "Please provide a query"
         `T.isInfixOf` cleanedQuery
         || "I need more"
-        `T.isInfixOf` cleanedQuery
+          `T.isInfixOf` cleanedQuery
         || "Could you please"
-        `T.isInfixOf` cleanedQuery
+          `T.isInfixOf` cleanedQuery
         || T.length cleanedQuery
-        < 3
+          < 3
         then Left "INVALID_QUERY_ERROR"
         else Right (cleanedQuery, vizTypeM)
 
