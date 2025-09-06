@@ -159,7 +159,7 @@ expandAPIlogItemH pid rdId timestamp sourceM = do
               if record.name
                 /= Just "apitoolkit-http-span"
                 || record.name
-                /= Just "monoscope.http"
+                  /= Just "monoscope.http"
                 then do
                   case trIdM of
                     Just trId -> do
@@ -335,7 +335,7 @@ expandedItemView pid item aptSp leftM rightM = do
         button_ [class_ $ "a-tab cursor-pointer border-b-2 whitespace-nowrap " <> borderClass <> " px-4 py-1.5", onpointerdown_ $ "navigatable(this, '#m-raw-content', '#" <> tabContainerId <> "', 't-tab-active','.http')"] "Raw data"
         div_ [class_ $ "w-full border-b-2 " <> borderClass] pass
 
-      div_ [class_ "grid my-4 text-textWeak font"] $ do
+      div_ [class_ "dmy-4 text-textWeak font"] $ do
         div_ [class_ "hidden a-tab-content", id_ "m-raw-content"] $ do
           jsonValueToHtmlTree (AE.toJSON item) Nothing
         div_ [class_ $ "a-tab-content" <> if not isLog && isHttp then " hidden" else "", id_ "att-content"] $ do
@@ -343,7 +343,7 @@ expandedItemView pid item aptSp leftM rightM = do
         div_ [class_ "hidden a-tab-content", id_ "meta-content"] $ do
           jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) (unAesonTextMaybe item.resource)) $ Just "resource"
         unless isLog $ do
-          div_ [class_ "hidden a-tab-content", id_ "errors-content"] $ do
+          div_ [class_ "hidden a-tab-content w-full whitespace-wrap", id_ "errors-content"] $ do
             renderErrors spanErrors
           div_ [class_ "hidden a-tab-content", id_ "logs-content"] $ do
             jsonValueToHtmlTree (AE.toJSON (unAesonTextMaybe item.events)) Nothing
@@ -406,15 +406,25 @@ expandedItemView pid item aptSp leftM rightM = do
 
 -- Helper functions
 renderErrors :: [AE.Value] -> Html ()
-renderErrors errs = div_ [class_ "flex flex-col gap-1"] $ do
-  forM_ errs $ \err -> do
-    let (tye, message, stacktrace) = getErrorDetails err
-    div_ [class_ "flex flex-col rounded-lg border overflow-hidden"] $ do
-      div_ [class_ "bg-fillError-weak text-textError px-4 py-2 flex gap-2 items-center"] do
-        span_ [class_ "font-bold"] $ toHtml (tye <> ":")
-        span_ [] $ toHtml message
-      div_ [] do
-        p_ [class_ "whitespace-nowrap px-4 py-2"] $ toHtml stacktrace
+renderErrors errs =
+  div_ [class_ "flex flex-col mt-4 gap-4 w-full"]
+    $ forM_ errs
+    $ \err -> do
+      let (tye, message, stacktrace) = getErrorDetails err
+      div_ [class_ "w-full max-w-2xl mx-auto  border border-border rounded-lg shadow-sm"] $ do
+        -- Card Header
+        div_ [class_ "p-3 pb-3"] do
+          div_ [class_ "text-textError font-semibold mb-2"] $ toHtml tye
+          div_ [class_ "flex items-start justify-between gap-4"] do
+            div_ [class_ "flex-1 min-w-0"] $ do
+              h3_ [class_ "text-base text-balance text-sm leading-tight"] $ toHtml message
+        div_ [class_ "px-3 pb-6 space-y-4"] $ do
+          div_ [class_ "border-b border-border "] $ do
+            button_ [class_ "w-full flex justify-between items-center py-2 text-sm font-medium text-left rounded"] "Stack Trace"
+            div_ [id_ "stackTraceContent", class_ "rounded bg-fillWeak p-2"]
+              $ div_ [class_ "bg-muted p-3 rounded-md max-h-64 overflow-y-auto mb-4"]
+              $ pre_ [class_ "text-xs font-mono whitespace-pre-wrap text-muted-foreground"]
+              $ toHtml stacktrace
 
 
 numberOfEvents :: AE.Value -> Int
