@@ -194,3 +194,5 @@ CREATE INDEX IF NOT EXISTS idx_logs_and_spans_parent_id ON otel_logs_and_spans (
 CREATE INDEX IF NOT EXISTS idx_logs_and_spans_service_name ON otel_logs_and_spans (project_id, resource___service___name);
 CREATE INDEX IF NOT EXISTS idx_logs_and_spans_name ON otel_logs_and_spans (project_id, name);
 
+ALTER TABLE otel_logs_and_spans
+ADD COLUMN IF NOT EXISTS errors JSONB DEFAULT  NULL;

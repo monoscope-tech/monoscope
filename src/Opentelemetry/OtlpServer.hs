@@ -680,6 +680,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
           , parent_id = Nothing
           , summary = V.empty -- Will be populated after creation
           , date = validTimestamp
+          , errors = Nothing
           }
    in otelLog{summary = generateSummary otelLog}
 
@@ -882,6 +883,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
           , parent_id = parentId
           , summary = V.empty -- Will be populated after creation
           , date = validStartTime
+          , errors = Nothing
           }
    in otelSpan{summary = generateSummary otelSpan}
 

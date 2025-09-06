@@ -675,6 +675,7 @@ createRequestDumps TestResources{..} projectId numRequestsPerEndpoint = do
               , resource = case resource of AE.Object km -> Just $ AesonText $ AEKM.toMapText km; _ -> Nothing
               , date = currentTime
               , summary = V.empty -- Will be generated
+              , errors = Nothing
               }
       let summary = SummaryGenerator.generateSummary otelRecord
       withPool trPool

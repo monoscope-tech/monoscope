@@ -922,6 +922,7 @@ data OtelLogsAndSpans = OtelLogsAndSpans
   , resource :: Maybe (AesonText (Map Text AE.Value))
   , summary :: V.Vector Text
   , date :: UTCTime
+  , errors :: Maybe AE.Value
   }
   deriving (Generic, Show)
   deriving anyclass (NFData)
@@ -982,6 +983,7 @@ instance FromRow OtelLogsAndSpans where
         , resource = resource'
         , summary = summary'
         , date = date'
+        , errors = Nothing
         }
 
 

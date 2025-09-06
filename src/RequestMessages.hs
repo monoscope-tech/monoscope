@@ -160,7 +160,7 @@ processErrors pid maybeSdkType maybeMethod maybePath err = (normalizedError, q, 
         , RequestDumps.requestMethod = maybeMethod <|> err.requestMethod
         , RequestDumps.requestPath = maybePath <|> err.requestPath
         }
-    defaultHash = toXXHash (pid.toText <> err.errorType <> replaceAllFormats err.message <> maybe "" show maybeSdkType)
+    defaultHash = toXXHash (pid.toText <> fromMaybe "" err.serviceName <> err.errorType <> sanitizeError (err.message <> err.stackTrace) <> maybe "" show maybeSdkType)
 
 
 sortVector :: Ord a => V.Vector a -> V.Vector a

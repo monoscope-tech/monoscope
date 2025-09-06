@@ -226,9 +226,9 @@ processBackgroundJob authCtx job bgJob =
           pass
 
         -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
-        forM_ [0 .. 287] \interval -> do
-          let scheduledTime2 = addUTCTime (fromIntegral $ interval * 300) currentTime
-          scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteSpanProcessing scheduledTime2) scheduledTime2
+        -- forM_ [0 .. 287] \interval -> do
+        --   let scheduledTime2 = addUTCTime (fromIntegral $ interval * 300) currentTime
+        --   scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteSpanProcessing scheduledTime2) scheduledTime2
 
         -- Schedule 1-minute error processing jobs (1440 jobs per hour = 24 hours * 60 per hour)
         forM_ [0 .. 1439] \interval -> do
@@ -358,7 +358,7 @@ processOneMinuteErrors scheduledTime = do
   -- since we use hashes of errors and don't insert same error twice
   -- we can increase the window to account for time spent on kafka
   -- use five minutes for now before use a better solution
-  let oneMinuteAgo = addUTCTime (-60 * 5) scheduledTime
+  let oneMinuteAgo = addUTCTime (-60 * 2) scheduledTime
 
   -- Get all spans with errors from last minute
   -- Check for:
@@ -403,12 +403,31 @@ processOneMinuteErrors scheduledTime = do
   -- Group errors by project
   let errorsByProject = V.groupBy (\a b -> a.projectId == b.projectId) allErrors
 
+  -- Group errors by traceId within each project to avoid duplicate errors from same trace
+  -- (otel log and span, [errors])
+  let errorsByProjectAndTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.projectId == b.projectId && a.spanId == b.spanId) allErrors
+
   forM_ errorsByProject \projectErrors -> case V.uncons projectErrors of
     Nothing -> pass
     Just (firstError, _) -> do
       whenJust firstError.projectId \pid -> do
         -- Process errors for this project
         processProjectErrors pid projectErrors
+
+  forM_ errorsByProjectAndTrace \groupedErrors -> case V.uncons groupedErrors of
+    Nothing -> pass
+    Just (firstError, _) -> do
+      whenJust firstError.projectId \pid -> do
+        let mappedErrors = V.map (\x -> AE.object ["type" AE..= x.errorType, "message" AE..= x.message, "stack_trace" AE..= x.stackTrace]) groupedErrors
+        Relude.when (not $ V.null groupedErrors) $ do
+          _ <-
+            dbtToEff
+              $ execute
+                [sql| UPDATE otel_logs_and_spans 
+                  SET errors = ? 
+                  WHERE project_id = ? AND context___trace_id = ? AND context___span_id = ? |]
+                (AE.toJSON mappedErrors, pid, firstError.traceId, firstError.spanId)
+          pass
 
 
 -- Log.logInfo "Completed 1-minute error processing" ()
