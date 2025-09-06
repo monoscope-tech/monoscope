@@ -27,7 +27,7 @@ spec = aroundAll withTestResources do
   describe "Check Log Page" do
     it "should return an empty list" \TestResources{..} -> do
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing
 
       case pg of
         Log.LogsGetJson requestVecs serviceColors nextUrl resetUrl recentUrl cols colIdxMap resultCount -> do
@@ -62,7 +62,7 @@ spec = aroundAll withTestResources do
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" oneDayFuture
       
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing
 
       case pg of
         Log.LogsGetJson requestVecs serviceColors nextUrl resetUrl recentUrl cols colIdxMap resultCount -> do
@@ -97,7 +97,7 @@ spec = aroundAll withTestResources do
       -- Test with a query filter (using proper string comparison for JSONB field)
       let query = "status_code == \"200\""
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid (Just query) Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid (Just query) Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing
 
       case pg of
         Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount -> do
@@ -122,7 +122,7 @@ spec = aroundAll withTestResources do
 
       -- First page
       pg1 <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing
+        toServantResponse trATCtx trSessAndHeader trLogger $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing
 
       case pg1 of
         Log.LogsGetJson requestVecs1 _ nextUrl1 _ _ _ _ resultCount1 -> do
@@ -147,8 +147,8 @@ spec = aroundAll withTestResources do
       -- Note: Just request additional columns beyond the default ones
       let cols = "id,timestamp,name,duration"
       pg <- toServantResponse trATCtx trSessAndHeader trLogger $ 
-        Log.apiLogH testPid Nothing (Just cols) Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing
-      
+        Log.apiLogH testPid Nothing (Just cols) Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing
+
       case pg of
         Log.LogsGetJson _ _ _ _ _ returnedCols _ _ -> do
           -- The system returns the requested columns plus default columns in a curated order
@@ -167,7 +167,7 @@ spec = aroundAll withTestResources do
       _ <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
       
       pg <- toServantResponse trATCtx trSessAndHeader trLogger $ 
-        Log.apiLogH testPid (Just invalidQuery) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing
+        Log.apiLogH testPid (Just invalidQuery) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing
       
       -- Invalid query should be ignored, returning all results (no filter applied)
       case pg of
@@ -181,7 +181,7 @@ spec = aroundAll withTestResources do
     it "should handle malformed query operators" \TestResources{..} -> do
       let malformedQuery = "status_code === \"200\""  -- Invalid operator
       pg <- toServantResponse trATCtx trSessAndHeader trLogger $ 
-        Log.apiLogH testPid (Just malformedQuery) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing
+        Log.apiLogH testPid (Just malformedQuery) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing
       
       case pg of
         Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount -> do
@@ -205,7 +205,7 @@ spec = aroundAll withTestResources do
       
       -- First page
       pg1 <- toServantResponse trATCtx trSessAndHeader trLogger $ 
-        Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing
+        Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing
       
       case pg1 of
         Log.LogsGetJson requestVecs1 _ nextUrl1 _ _ _ colIdxMap1 resultCount1 -> do
@@ -242,7 +242,7 @@ spec = aroundAll withTestResources do
       
       -- Get all results
       pg <- toServantResponse trATCtx trSessAndHeader trLogger $ 
-        Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing
+        Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing
       
       case pg of
         Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount -> do
@@ -275,7 +275,7 @@ spec = aroundAll withTestResources do
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-5400) frozenTime   -- 1.5 hours ago
       
       pg <- toServantResponse trATCtx trSessAndHeader trLogger $ 
-        Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing
+        Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing
       
       case pg of
         Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount -> do
@@ -304,7 +304,7 @@ spec = aroundAll withTestResources do
       
       -- Test "1H" - should get messages from last hour (msgNow and msgHourBefore)
       pg1 <- toServantResponse trATCtx trSessAndHeader trLogger $ 
-        Log.apiLogH testPid Nothing Nothing Nothing (Just "1H") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing
+        Log.apiLogH testPid Nothing Nothing Nothing (Just "1H") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing
       
       case pg1 of
         Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount -> do
@@ -316,7 +316,7 @@ spec = aroundAll withTestResources do
       
       -- Test "24H" - should get messages from last 24 hours  
       pg2 <- toServantResponse trATCtx trSessAndHeader trLogger $ 
-        Log.apiLogH testPid Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing
+        Log.apiLogH testPid Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing
       
       case pg2 of
         Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount -> do
@@ -328,7 +328,7 @@ spec = aroundAll withTestResources do
     it "should handle missing time range (default behavior)" \TestResources{..} -> do
       -- When no time range is specified, it should use a default (e.g., last 24 hours)
       pg <- toServantResponse trATCtx trSessAndHeader trLogger $ 
-        Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing
+        Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing
       
       case pg of
         Log.LogsGetJson _ _ _ _ _ cols _ _ -> do
