@@ -987,6 +987,9 @@ instance FromRow OtelLogsAndSpans where
         }
 
 
+-- | Extract error events from OpenTelemetry span events
+-- Following OpenTelemetry semantic conventions for exceptions:
+-- https://opentelemetry.io/docs/reference/specification/trace/semantic_conventions/exceptions/
 getErrorEvents :: OtelLogsAndSpans -> V.Vector AE.Value
 getErrorEvents OtelLogsAndSpans{events = Just (AesonText (AE.Array arr))} =
   V.filter isErrorEvent arr
@@ -999,6 +1002,8 @@ getErrorEvents OtelLogsAndSpans{events = Just (AesonText (AE.Array arr))} =
 getErrorEvents _ = []
 
 
+-- | Extract all runtime errors from a collection of spans
+-- This is the main entry point for error anomaly detection
 getAllATErrors :: V.Vector OtelLogsAndSpans -> V.Vector RequestDumps.ATError
 getAllATErrors = V.concatMap extractErrorsFromSpan
   where
@@ -1007,6 +1012,12 @@ getAllATErrors = V.concatMap extractErrorsFromSpan
        in V.mapMaybe (extractATError spanObj) events
 
 
+-- | Extract error details from an OpenTelemetry event
+-- Follows the OpenTelemetry semantic conventions:
+-- - exception.type: The type of the exception
+-- - exception.message: The exception message
+-- - exception.stacktrace: The stacktrace
+-- Also extracts HTTP context (method, path) for better error tracking
 extractATError :: OtelLogsAndSpans -> AE.Value -> Maybe RequestDumps.ATError
 extractATError spanObj (AE.Object o) = do
   AE.Object attrs' <- KEM.lookup "event_attributes" o
@@ -1048,6 +1059,10 @@ extractATError spanObj (AE.Object o) = do
       asText (AE.String t) = Just t
       asText _ = Nothing
 
+  -- Build ATError structure for anomaly detection
+  -- The hash is critical for grouping similar errors together
+  -- Hash components: projectId + service + span name + error type + sanitized message/stack
+  -- This ensures similar errors are grouped while allowing variations in the actual message
   return
     $ RequestDumps.ATError
       { projectId = UUID.fromText spanObj.project_id >>= (\uid -> Just Projects.ProjectId{unProjectId = uid})

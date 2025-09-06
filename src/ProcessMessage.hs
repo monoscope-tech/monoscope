@@ -194,7 +194,16 @@ jsonToMap (AE.Object o) = Just $ AEKM.toMapText o
 jsonToMap _ = Nothing
 
 
--- | Process a single span to extract entities
+-- | Process a single span to extract entities for anomaly detection
+-- This function is the core of the anomaly detection system. It extracts:
+-- 1. Endpoints - New API routes (triggers endpoint anomalies)
+-- 2. Shapes - Request/response structures (triggers shape anomalies)
+-- 3. Fields - Individual data fields (triggers field anomalies)
+-- 4. Formats - Field value patterns (triggers format anomalies)
+--
+-- The extracted entities are compared against the project cache to avoid
+-- redundant database operations. New entities will trigger database inserts
+-- which fire PostgreSQL triggers to create anomaly records.
 processSpanToEntities :: Projects.ProjectCache -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, Maybe Shapes.Shape, V.Vector Fields.Field, V.Vector Formats.Format, V.Vector Text)
 processSpanToEntities pjc otelSpan dumpId =
   let !projectId = Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText otelSpan.project_id
@@ -228,10 +237,12 @@ processSpanToEntities pjc otelSpan dumpId =
       !requestHeaders = fromMaybe AE.emptyObject $ extractHeaders "http.request.headers" attrValue
       !responseHeaders = fromMaybe AE.emptyObject $ extractHeaders "http.response.headers" attrValue
 
-      -- Generate proper endpoint hash with project ID and host
+      -- Generate endpoint hash - this uniquely identifies an API endpoint
+      -- Hash components: projectId + host + method + urlPath
+      -- This hash is used to detect new endpoints (endpoint anomalies)
       !endpointHash = toXXHash $ projectId.toText <> host <> method <> urlPath
 
-      -- Set up redaction
+      -- Set up redaction to protect sensitive data
       !redactFieldsList = pjc.redactFieldslist V.++ V.fromList [".set-cookie", ".password"]
       !redacted = redactJSON redactFieldsList
 
@@ -255,7 +266,10 @@ processSpanToEntities pjc otelSpan dumpId =
       !requestBodyKP = V.map fst reqBodyFields
       !responseBodyKP = V.map fst respBodyFields
 
-      -- Calculate shape hash (include query params and response headers like original)
+      -- Calculate shape hash - identifies unique request/response structures
+      -- A shape represents the "schema" of an API call for a specific status code
+      -- Hash components: endpointHash + statusCode + sorted field paths
+      -- New shapes trigger shape anomalies indicating API structure changes
       !representativeKP = sortVector $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
       !combinedKeyPathStr = T.concat $ V.toList representativeKP
       !shapeHash = endpointHash <> show statusCode <> toXXHash combinedKeyPathStr
@@ -276,6 +290,10 @@ processSpanToEntities pjc otelSpan dumpId =
       !outgoing = otelSpan.kind == Just "client"
 
       -- Build endpoint if not in cache
+      -- Only create endpoint entity if:
+      -- 1. Not already in project cache (prevents duplicate anomalies)
+      -- 2. Not a 404 response (ignore missing routes)
+      -- When inserted, will trigger endpoints_created_anomaly in DB
       !endpoint =
         if endpointHash `elem` pjc.endpointHashes || statusCode == 404
           then Nothing
@@ -296,6 +314,9 @@ processSpanToEntities pjc otelSpan dumpId =
                 }
 
       -- Build shape if not in cache
+      -- Shape represents the structure of request/response for a specific endpoint+status
+      -- Only create if not cached and not 404
+      -- When inserted, will trigger shapes_created_anomaly in DB
       !shape =
         if shapeHash `elem` pjc.shapeHashes || statusCode == 404
           then Nothing

@@ -1,3 +1,18 @@
+-- | Issues module - User-facing representation of anomalies
+-- 
+-- This module is the primary interface for the anomaly detection system.
+-- Issues are created from anomalies detected by database triggers and 
+-- background jobs. They represent actionable items for developers.
+--
+-- Issue Types:
+-- - APIChange: Groups endpoint/shape/format changes by endpoint
+-- - RuntimeException: Individual issues for each error pattern
+-- - QueryAlert: Threshold violations from monitoring
+--
+-- For detailed documentation on the anomaly detection system, see:
+-- - docs/anomaly-detection-system.md (architecture overview)
+-- - docs/anomaly-detection-triggers.sql (database trigger details)
+--
 module Models.Apis.Issues (
   -- * Core Types
   IssueId (..),

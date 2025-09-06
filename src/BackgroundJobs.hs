@@ -314,14 +314,24 @@ generateOtelFacetsBatch projectIds timestamp = do
   Log.logInfo "Completed batch OTLP facets generation for projects" ("project_count", AE.toJSON $ V.length projectIds)
 
 
--- | Process HTTP spans from the last 5 minutes
+-- | Process HTTP spans to extract API entities and detect changes
+-- This job runs every 5 minutes to analyze HTTP traffic and identify:
+-- - New endpoints (API routes)
+-- - New shapes (request/response structures)
+-- - New fields and their formats
+--
+-- Processing Flow:
+-- 1. Query HTTP spans from the last 5 minutes
+-- 2. Group spans by project for batch processing
+-- 3. Extract entities using processSpanToEntities
+-- 4. Bulk insert new entities (triggers anomaly detection)
+-- 5. Update spans with computed hashes for tracking
 processFiveMinuteSpans :: UTCTime -> ATBackgroundCtx ()
 processFiveMinuteSpans scheduledTime = do
   ctx <- ask @Config.AuthContext
   let fiveMinutesAgo = addUTCTime (-300) scheduledTime
   Log.logInfo "Getting HTTP spans from 5-minute window" ()
-  -- Get HTTP spans from last 5 minutes
-  -- instead of all http spans, we should target apitoolkit specific custom spans (monoscope.http, apitoolkit-http-span)
+  -- Get APIToolkit-specific HTTP spans (excludes generic telemetry)
   httpSpans <-
     dbtToEff
       $ query
@@ -349,7 +359,18 @@ processFiveMinuteSpans scheduledTime = do
   Log.logInfo "Completed 5-minute span processing" ()
 
 
--- | Process errors from spans in the last minute
+-- | Process errors from OpenTelemetry spans to detect runtime exceptions
+-- This job runs every minute to extract errors from span data and create
+-- runtime exception issues for tracking and notification.
+--
+-- Error Detection Strategy:
+-- 1. Query spans with error indicators (status, events, attributes)
+-- 2. Extract error details from span events using OpenTelemetry conventions
+-- 3. Group errors by hash (project + service + error type + message)
+-- 4. Create runtime exception issues (triggers anomaly detection)
+--
+-- Note: Uses 2-minute window instead of 1-minute to account for Kafka/PubSub
+-- processing delays and ensure no errors are missed.
 processOneMinuteErrors :: UTCTime -> ATBackgroundCtx ()
 processOneMinuteErrors scheduledTime = do
   ctx <- ask @Config.AuthContext
@@ -357,13 +378,13 @@ processOneMinuteErrors scheduledTime = do
   -- hence will be missed and never get processed
   -- since we use hashes of errors and don't insert same error twice
   -- we can increase the window to account for time spent on kafka
-  -- use five minutes for now before use a better solution
+  -- use two minutes for now before use a better solution
   let oneMinuteAgo = addUTCTime (-60 * 2) scheduledTime
 
-  -- Get all spans with errors from last minute
+  -- Get all spans with errors from time window
   -- Check for:
-  -- 1. Spans with error status
-  -- 2. Spans with exception events
+  -- 1. Spans with error status codes
+  -- 2. Spans with exception events (OpenTelemetry standard)
   -- 3. Spans with error attributes
   spansWithErrors <-
     dbtToEff
@@ -457,22 +478,32 @@ processProjectErrors pid errors = do
     processError err = RequestMessages.processErrors pid Nothing Nothing Nothing err
 
 
--- | Process spans for a specific project
+-- | Process spans for a specific project to extract API entities
+-- This is where the core anomaly detection logic happens:
+-- 1. Load project cache (contains known entities to skip)
+-- 2. Extract entities from each span
+-- 3. Deduplicate entities by hash
+-- 4. Bulk insert new entities (triggers DB anomaly detection)
+-- 5. Update spans with hashes for tracking
+--
+-- The bulk inserts use "ON CONFLICT DO NOTHING" which prevents duplicates
+-- but still triggers the database anomaly detection triggers for new entities.
 processProjectSpans :: Projects.ProjectId -> V.Vector Telemetry.OtelLogsAndSpans -> ATBackgroundCtx ()
 processProjectSpans pid spans = do
   ctx <- ask @Config.AuthContext
 
-  -- Get project cache
+  -- Get project cache to filter out known entities
   projectCacheVal <- liftIO $ Cache.fetchWithCache ctx.projectCache pid \pid' -> do
     mpjCache <- withPool ctx.jobsPool $ Projects.projectCacheById pid'
     pure $ fromMaybe projectCacheDefault mpjCache
 
-  -- Process each span to extract endpoints, shapes, fields, and formats
+  -- Process each span to extract entities
   results <- forM spans \spn -> do
     spanId <- liftIO UUIDV4.nextRandom
     let result = processSpanToEntities projectCacheVal spn spanId
     pure result
 
+  -- Unzip and deduplicate extracted entities
   let (endpoints, shapes, fields, formats, spanUpdates) = V.unzip5 results
   let endpointsFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes $ V.toList endpoints
   let shapesFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes $ V.toList shapes
@@ -721,6 +752,15 @@ emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email u
 --     Apitoolkit team
 --               |]
 
+-- | Process new anomalies detected by database triggers
+-- This job is created by the apis.new_anomaly_proc() stored procedure
+-- when new entities (endpoints, shapes, fields, formats, errors) are inserted.
+--
+-- Anomaly Processing Strategy:
+-- 1. API Changes (endpoint/shape/format) -> Group by endpoint into single issue
+-- 2. Runtime Exceptions -> Create individual issues for each error
+-- 3. All issues are queued for LLM enhancement if configured
+-- 4. Notifications are sent based on project settings
 newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> V.Vector Text -> ATBackgroundCtx ()
 newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
   authCtx <- ask @Config.AuthContext
@@ -728,10 +768,12 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
 
   case anomalyType of
     -- API Change anomalies (endpoint, shape, format) - group into single issue per endpoint
+    -- This prevents notification spam when multiple related changes occur
     Anomalies.ATEndpoint -> processAPIChangeAnomalies pid targetHashes
     Anomalies.ATShape -> processAPIChangeAnomalies pid targetHashes
     Anomalies.ATFormat -> processAPIChangeAnomalies pid targetHashes
     -- Runtime exceptions get individual issues
+    -- Each unique error pattern gets its own issue for tracking
     Anomalies.ATRuntimeException -> do
       errors <- dbtToEff $ Anomalies.errorsByHashes pid targetHashes
       project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
@@ -788,6 +830,14 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
 
 
 -- | Process API change anomalies (endpoint, shape, format) into unified APIChange issues
+-- This function groups related anomalies by endpoint to prevent notification spam.
+-- For example, if a new endpoint is added with 5 fields and 2 formats, instead of
+-- creating 8 separate issues, we create 1 issue that encompasses all changes.
+--
+-- Grouping Strategy:
+-- 1. All anomalies are grouped by their endpoint hash
+-- 2. If an open issue exists for that endpoint, update it with new anomalies
+-- 3. Otherwise, create a new issue containing all anomalies for that endpoint
 processAPIChangeAnomalies :: Projects.ProjectId -> V.Vector Text -> ATBackgroundCtx ()
 processAPIChangeAnomalies pid targetHashes = do
   authCtx <- ask @Config.AuthContext
@@ -795,17 +845,17 @@ processAPIChangeAnomalies pid targetHashes = do
   -- Get all anomalies
   anomaliesVM <- dbtToEff $ Anomalies.getAnomaliesVM pid targetHashes
 
-  -- Group by endpoint hash
+  -- Group by endpoint hash to consolidate related changes
   let anomaliesByEndpoint = groupAnomaliesByEndpointHash anomaliesVM
 
   -- Process each endpoint group
   forM_ anomaliesByEndpoint \(endpointHash, anomalies) -> do
-    -- Check for existing open issue
+    -- Check for existing open issue to avoid duplicates
     existingIssueM <- dbtToEff $ Issues.findOpenIssueForEndpoint pid endpointHash
 
     case existingIssueM of
       Just existingIssue -> do
-        -- Update existing issue
+        -- Update existing issue with new anomaly data
         let apiChangeData =
               Issues.APIChangeData
                 { endpointMethod = fromMaybe "UNKNOWN" $ viaNonEmpty head $ V.toList $ V.mapMaybe (.endpointMethod) anomalies
