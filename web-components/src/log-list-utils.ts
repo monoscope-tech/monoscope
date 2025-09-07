@@ -3,7 +3,7 @@ import clsx from 'clsx';
 import { html, TemplateResult } from 'lit';
 import { get } from 'lodash';
 import { ColIdxMap } from './types/types';
-
+import { AnsiUp } from 'ansi-up';
 // Configuration objects
 export const COLUMN_WIDTHS = {
   status: 'w-[12ch] shrink-0',
@@ -83,8 +83,13 @@ function colorizeJsonValues(jsonStr: string): string {
   });
 }
 
+const ansi_up = new AnsiUp();
+ansi_up.escapeForHtml = false;
+
 // Unescape JSON strings
-export const unescapeJsonString = (str: string): string => colorizeJsonValues(str.replace(/\\"/g, '"').replace(/\\\\/g, '\\'));
+export const unescapeJsonString = (str: string): string => {
+  return ansi_up.ansi_to_html(colorizeJsonValues(str.replace(/\\"/g, '"').replace(/\\\\/g, '\\')));
+};
 
 // Pure utility functions
 export const formatTimestamp = (input: string): string => {
