@@ -13,6 +13,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.Text (encodeToLazyText)
+import Data.Char (isSpace)
 import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
 import Data.Scientific (toBoundedInteger)
@@ -33,6 +34,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.Components (dateTime)
+import Pages.LogExplorer.Log (jsonTreeAuxillaryCode)
 import Pkg.DeriveUtils (unAesonTextMaybe)
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -159,7 +161,7 @@ expandAPIlogItemH pid rdId timestamp sourceM = do
               if record.name
                 /= Just "apitoolkit-http-span"
                 || record.name
-                  /= Just "monoscope.http"
+                /= Just "monoscope.http"
                 then do
                   case trIdM of
                     Just trId -> do
@@ -186,14 +188,21 @@ instance ToHtml ApiItemDetailed where
   toHtmlRaw = toHtml
 
 
-spanBadge :: Text -> Text -> Html ()
-spanBadge val key = do
+spanBadge :: Projects.ProjectId -> Text -> Text -> Text -> Html ()
+spanBadge pid path val key = do
   div_
-    [ class_ "flex gap-2 items-center text-textStrong bg-fillWeaker border border-strokeWeak text-xs rounded-lg whitespace-nowrap px-2 py-1"
-    , term "data-tippy-content" key
+    [ class_ "relative"
+    , term "data-field-path" $ path
+    , term "data-field-value" $ "\"" <> (T.dropAround isSpace $ fromMaybe val (viaNonEmpty last (T.splitOn ":" val))) <> "\""
     ]
-    $ do
-      span_ [] $ toHtml val
+    do
+      button_
+        [ class_ "relative cursor-pointer flex gap-2 items-center text-textStrong bg-fillWeaker border border-strokeWeak text-xs rounded-lg whitespace-nowrap px-2 py-1"
+        , term "data-tippy-content" key
+        , [__|install LogItemMenuable|]
+        ]
+        $ do
+          span_ [] $ toHtml val
 
 
 -- Unified view for both logs and spans
@@ -202,6 +211,7 @@ expandedItemView pid item aptSp leftM rightM = do
   let isLog = item.kind == Just "log"
       reqDetails = if isLog then Nothing else getRequestDetails (unAesonTextMaybe item.attributes)
   div_ [class_ $ "w-full pl-2 pb-2 relative" <> if isLog then " flex flex-col gap-2" else " pb-[50px]"] $ do
+    jsonTreeAuxillaryCode pid Nothing
     div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
     unless isLog $ span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "loading-span-list"] ""
     span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
@@ -260,11 +270,11 @@ expandedItemView pid item aptSp leftM rightM = do
 
       div_ [class_ "flex gap-2 flex-wrap"] $ do
         unless isLog $ do
-          spanBadge (toText $ getDurationNSMS $ maybe 0 fromIntegral item.duration) "Span duration"
-          spanBadge (fromMaybe "" item.kind) "Span Kind"
-        spanBadge (getServiceName (unAesonTextMaybe item.resource)) "Service"
-        spanBadge ("Span ID: " <> maybe "" (\c -> fromMaybe "" c.span_id) item.context) "Span ID"
-        spanBadge ("Trace ID: " <> maybe "" (\z -> fromMaybe "" z.trace_id) item.context) "Trace ID"
+          spanBadge pid "duration" (toText $ getDurationNSMS $ maybe 0 fromIntegral item.duration) "Span duration"
+          spanBadge pid "kind" (fromMaybe "" item.kind) "Span Kind"
+        spanBadge pid "resource___service___name" (getServiceName (unAesonTextMaybe item.resource)) "Service"
+        spanBadge pid "context___span_id" ("Span ID: " <> maybe "" (\c -> fromMaybe "" c.span_id) item.context) "Span ID"
+        spanBadge pid "context___trace_id" ("Trace ID: " <> maybe "" (\z -> fromMaybe "" z.trace_id) item.context) "Trace ID"
       div_ [class_ "flex flex-wrap gap-3 items-center text-textBrand font-medium text-xs"] do
         whenJust (atMapText "session.id" (unAesonTextMaybe item.attributes)) $ \v -> do
           button_ [class_ "cursor-pointer flex items-center gap-1", term "data-field-path" "attributes.session.id", term "data-field-value" ("\"" <> v <> "\""), onpointerdown_ "filterByField(event, 'Eq')"] do

@@ -6,6 +6,7 @@ module Pages.LogExplorer.Log (
   virtualTable,
   curateCols,
   logQueryBox_,
+  jsonTreeAuxillaryCode,
 )
 where
 
