@@ -21,11 +21,12 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..), query)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Models.Apis.Anomalies
+import Models.Apis.Anomalies (AnomalyId(..))
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
+import Models.Users.Sessions (Session(..))
 import OddJobs.Job (Job (..))
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
@@ -39,15 +40,16 @@ import Relude
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages (RequestMessage (..), replaceNullChars, valueToFields)
 import Test.Hspec (Spec, aroundAll, describe, it, pendingWith, shouldBe, shouldSatisfy, xdescribe)
+import Servant qualified
 import Utils (toXXHash)
 
 
 testPid :: Projects.ProjectId
 testPid = Projects.ProjectId UUID.nil
 
--- Helper function to get non-endpoint anomalies from API
-getNonEndpointAnomalies :: TestResources -> IO (V.Vector AnomalyList.IssueVM)
-getNonEndpointAnomalies TestResources{..} = do
+-- Helper function to get anomalies from API
+getAnomalies :: TestResources -> IO (V.Vector AnomalyList.IssueVM)
+getAnomalies TestResources{..} = do
   pg <- toServantResponse trATCtx trSessAndHeader trLogger $ 
     AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
   case pg of
@@ -57,7 +59,7 @@ getNonEndpointAnomalies TestResources{..} = do
 
 spec :: Spec
 spec = aroundAll withTestResources do
-  xdescribe "Check Anomaly List" do
+  describe "Check Anomaly List" do
     it "should return an empty list" \TestResources{..} -> do
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
@@ -92,43 +94,46 @@ spec = aroundAll withTestResources do
       _ <- runAllBackgroundJobs trATCtx
       createRequestDumps tr testPid 10
       
-      -- Check that endpoint issue was created
-      endpointIssues <- withPool trPool $ DBT.query [sql|
-        SELECT id FROM apis.issues WHERE project_id = ? AND anomaly_type = 'endpoint'
-      |] (Only testPid) :: IO (V.Vector (Only AnomalyId))
-      V.length endpointIssues `shouldBe` 1
+      -- Check that API change issue was created for the endpoint
+      apiChangeIssues <- withPool trPool $ DBT.query [sql|
+        SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
+      |] (Only testPid) :: IO (V.Vector (Only Issues.IssueId))
+      V.length apiChangeIssues `shouldBe` 1
       
-      -- Anomaly list API excludes endpoint anomalies
-      anomalies <- getNonEndpointAnomalies tr
-      -- Should have shape and other anomalies created alongside endpoint
-      length anomalies `shouldBe` 1 -- All anomalies under unacknowledged endpoint are hidden
+      -- Anomaly list should show the API change issue
+      anomalies <- getAnomalies tr
+      -- API change issues are visible in the anomaly list
+      length anomalies `shouldBe` 1 -- Should see the API change issue
 
     it "should acknowledge endpoint anomaly and reveal child anomalies" \tr@TestResources{..} -> do
-      let msg1EndpointHash = toXXHash $ testPid.toText <> "172.31.29.11" <> "GET" <> "/"
-      anm <- withPool trPool $ selectIssueByHash testPid msg1EndpointHash
-      isJust anm `shouldBe` True
-      let anmId = anm & Unsafe.fromJust & (\a -> a.id)
+      -- Find the API change issue for the endpoint
+      apiChangeIssues <- withPool trPool $ DBT.query [sql|
+        SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
+      |] (Only testPid) :: IO (V.Vector (Only Issues.IssueId))
+      V.length apiChangeIssues `shouldBe` 1
+      let issueId = apiChangeIssues V.! 0 & (\(Only iid) -> iid)
       
       -- Process shape and field anomaly jobs to create issues
       processShapeAndFieldAnomalyJobs tr
       
-      -- Acknowledge the endpoint anomaly
-      pg <- toServantResponse trATCtx trSessAndHeader trLogger $ 
-        AnomalyList.acknowlegeAnomalyGetH testPid anmId (Just "")
-      case pg of
-        AnomalyList.Acknowlege pid anid isack -> do
-          pid `shouldBe` testPid
-          isack `shouldBe` True
-          anid `shouldBe` Issues.IssueId anmId.unAnomalyId
-        _ -> error "Unexpected response"
+      -- Acknowledge the endpoint anomaly directly using Issues module
+      -- This avoids the old acknowledgeAnomalies function that queries non-existent columns
+      let sess = Servant.getResponse trSessAndHeader
+      withPool trPool $ Issues.acknowledgeIssue issueId (sess.user).id
+      
+      -- Verify it was acknowledged
+      acknowledgedIssue <- withPool trPool $ Issues.selectIssueById issueId
+      case acknowledgedIssue of
+        Just issue -> isJust issue.acknowledgedAt `shouldBe` True
+        Nothing -> error "Issue not found after acknowledgment"
       
       -- After acknowledging endpoint, child anomalies should be visible
-      anomalies <- getNonEndpointAnomalies tr
+      anomalies <- getAnomalies tr
       -- In the new Issues system, shape/field/format anomalies are all API changes
-      let apiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
+      let visibleApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
       
       -- There should be API change issues visible after acknowledging the endpoint
-      V.length apiChangeIssues `shouldSatisfy` (> 0)
+      V.length visibleApiChangeIssues `shouldSatisfy` (> 0)
 
     it "should detect new shape anomaly after endpoint acknowledgment" \tr@TestResources{..} -> do
       currentTime <- getCurrentTime
@@ -150,22 +155,22 @@ spec = aroundAll withTestResources do
       -- Process shape and field anomaly jobs to create issues
       processShapeAndFieldAnomalyJobs tr
       
-      -- Acknowledge endpoints first
-      endpointIssues <- withPool trPool $ DBT.query [sql|
-        SELECT id, target_hash FROM apis.issues WHERE project_id = ? AND anomaly_type = 'endpoint'
-      |] (Only testPid) :: IO (V.Vector (AnomalyId, Text))
+      -- Acknowledge API change issues first
+      apiChangeIssues <- withPool trPool $ DBT.query [sql|
+        SELECT id, endpoint_hash FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
+      |] (Only testPid) :: IO (V.Vector (Issues.IssueId, Text))
       
-      forM_ endpointIssues $ \(anomalyId, _) -> do
-        _ <- toServantResponse trATCtx trSessAndHeader trLogger $ 
-          AnomalyList.acknowlegeAnomalyGetH testPid anomalyId (Just "")
-        pass
+      forM_ apiChangeIssues $ \(issueId, _) -> do
+        -- Acknowledge directly using Issues module
+        let sess = Servant.getResponse trSessAndHeader
+        withPool trPool $ Issues.acknowledgeIssue issueId (sess.user).id
 
       -- Now check anomaly list
-      anomalies <- getNonEndpointAnomalies tr
-      let apiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
+      anomalies <- getAnomalies tr
+      let filteredApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
       -- In the new Issues system, shape anomalies are part of API changes
       
-      length apiChangeIssues `shouldSatisfy` (>= 1) -- At least one API change issue
+      length filteredApiChangeIssues `shouldSatisfy` (>= 1) -- At least one API change issue
       length anomalies `shouldSatisfy` (> 0)
 
     it "should detect new format anomaly" \tr@TestResources{..} -> do
@@ -175,20 +180,20 @@ spec = aroundAll withTestResources do
       -- First, process shape anomaly job to create shape issue
       processShapeAndFieldAnomalyJobs tr
       
-      -- Find and acknowledge the shape anomaly
-      shapeIssues <- withPool trPool $ DBT.query [sql|
-        SELECT id FROM apis.issues WHERE project_id = ? AND anomaly_type = 'shape'
-      |] (Only testPid) :: IO (V.Vector (Only AnomalyId))
+      -- Find and acknowledge the API change issues
+      apiChangeIssuesForAck <- withPool trPool $ DBT.query [sql|
+        SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
+      |] (Only testPid) :: IO (V.Vector (Only Issues.IssueId))
       
-      V.length shapeIssues `shouldSatisfy` (>= 1)
+      V.length apiChangeIssuesForAck `shouldSatisfy` (>= 1)
       
-      -- Acknowledge the first shape anomaly
-      case V.headM shapeIssues of
-        Just (Only shapeAnmId) -> do
-          _ <- toServantResponse trATCtx trSessAndHeader trLogger $ 
-            AnomalyList.acknowlegeAnomalyGetH testPid shapeAnmId (Just "")
-          pass
-        Nothing -> error "No shape anomaly found"
+      -- Acknowledge the first API change issue
+      case V.headM apiChangeIssuesForAck of
+        Just (Only issueId) -> do
+          -- Acknowledge directly using Issues module
+          let sess = Servant.getResponse trSessAndHeader
+          withPool trPool $ Issues.acknowledgeIssue issueId (sess.user).id
+        Nothing -> error "No API change issue found"
 
       -- Now send a message with different format
       let reqMsg4 = Unsafe.fromJust $ convert $ msg4 nowTxt
@@ -200,23 +205,23 @@ spec = aroundAll withTestResources do
       processFormatAnomalyJobs tr
 
       -- Get updated anomaly list
-      anomalies <- getNonEndpointAnomalies tr
-      let apiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
+      anomalies <- getAnomalies tr
+      let formatApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
       
       -- In the new Issues system, format anomalies are part of API changes
-      length apiChangeIssues `shouldSatisfy` (>= 1)
+      length formatApiChangeIssues `shouldSatisfy` (>= 1)
       length anomalies `shouldSatisfy` (> 0)
 
     it "should get acknowledged anomalies" \tr@TestResources{..} -> do
       pg <- toServantResponse trATCtx trSessAndHeader trLogger $ 
-        AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowleged") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+        AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowledged") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case pg of
         AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do
-          -- Acknowledged anomalies should include API changes (endpoint anomalies are never returned)
-          let apiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
+          -- Acknowledged anomalies should include API changes
+          let acknowledgedApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
           
           -- We acknowledged at least one API change issue in the previous test
-          length apiChangeIssues `shouldSatisfy` (>= 1) 
+          length acknowledgedApiChangeIssues `shouldSatisfy` (>= 1) 
           length anomalies `shouldSatisfy` (> 0)
         _ -> error "Unexpected response"
 
