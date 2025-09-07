@@ -526,7 +526,11 @@ anyValueToJSON Nothing = AE.Null
 anyValueToJSON (Just av) =
   case av ^. PCF.maybe'value of
     Nothing -> AE.Null
-    Just (PC.AnyValue'StringValue txt) -> AE.String txt
+    Just (PC.AnyValue'StringValue txt) ->
+      let encoded = AE.eitherDecode $ AE.encode txt
+       in case encoded of
+            Right v -> v
+            Left _ -> AE.String txt
     Just (PC.AnyValue'BoolValue b) -> AE.Bool b
     Just (PC.AnyValue'IntValue i) -> AE.Number (fromInteger (toInteger i))
     Just (PC.AnyValue'DoubleValue d) -> AE.Number (fromFloatDigits d)
@@ -642,6 +646,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
         if observedTimeNano >= minValidTimestampNanos && observedTimeNano /= 0
           then nanosecondsToUTC observedTimeNano
           else fallbackTime
+
       otelLog =
         OtelLogsAndSpans
           { project_id = pid.toText
