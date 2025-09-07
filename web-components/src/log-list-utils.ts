@@ -77,8 +77,14 @@ export const parseSummaryElement = (
   };
 };
 
+function colorizeJsonValues(jsonStr: string): string {
+  return jsonStr.replace(/:\s*("[^"]*"|\d+|true|false|null)/g, (match, value) => {
+    return `: <span class="text-textStrong font-medium">${value}</span>`;
+  });
+}
+
 // Unescape JSON strings
-export const unescapeJsonString = (str: string): string => str.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+export const unescapeJsonString = (str: string): string => colorizeJsonValues(str.replace(/\\"/g, '"').replace(/\\\\/g, '\\'));
 
 // Pure utility functions
 export const formatTimestamp = (input: string): string => {
@@ -132,4 +138,3 @@ export const getStyleClass = (style: string): string => {
   if (style.startsWith('right-')) return style.substring(6);
   return STYLE_MAPPINGS[style as keyof typeof STYLE_MAPPINGS] || 'badge-neutral';
 };
-

@@ -27,6 +27,7 @@ import {
   parseSummaryElement,
   unescapeJsonString,
 } from './log-list-utils';
+import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 
 // TypeScript declarations for global functions
 declare global {
@@ -740,8 +741,8 @@ export class LogList extends LitElement {
         ? [...current, ...newData]
         : [...newData, ...current]
       : isRecentFetch
-        ? [...newData, ...current]
-        : [...current, ...newData];
+      ? [...newData, ...current]
+      : [...current, ...newData];
     return result;
   }
 
@@ -911,7 +912,6 @@ export class LogList extends LitElement {
       })
       .map((element) => {
         const parsed = parseSummaryElement(element);
-
         if (parsed.type === 'plain') {
           const unescapedContent = unescapeJsonString(parsed.content);
           return html`<span class=${`fill-textStrong ${wrapClass}`}>${unescapedContent}</span>`;
@@ -941,7 +941,7 @@ export class LogList extends LitElement {
         // Text rendering
         if (includes(['text-weak', 'text-textWeak'], style)) {
           const unescapedValue = unescapeJsonString(value);
-          return html`<span class="text-textWeak">${unescapedValue}</span>`;
+          return html`<span class="text-textWeak">${unsafeHTML(unescapedValue)}</span>`;
         }
 
         if (style === 'text-textStrong') return html`<span class="text-textStrong">${value}</span>`;
@@ -1030,8 +1030,8 @@ export class LogList extends LitElement {
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
-            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
+          ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         return html`<div class=${clsx('flex w-full gap-1', this.wrapLines ? 'items-start' : 'items-center')}>
           ${this.view === 'tree'
             ? html`
@@ -1065,8 +1065,8 @@ export class LogList extends LitElement {
                         ${children}
                       </button>`
                     : depth === 0
-                      ? nothing
-                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                    ? nothing
+                    : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
                 </div>
               `
             : nothing}
@@ -1123,8 +1123,8 @@ export class LogList extends LitElement {
       this.isLiveStreaming
         ? html`<p class="h-5 leading-5 m-0">Live streaming latest data...</p>`
         : this.isFetchingRecent
-          ? html`<div class="loading loading-dots loading-md h-5"></div>`
-          : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
+        ? html`<div class="loading loading-dots loading-md h-5"></div>`
+        : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
     );
   }
 
