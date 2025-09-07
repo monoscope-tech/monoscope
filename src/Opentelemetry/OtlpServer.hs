@@ -523,14 +523,14 @@ keyValueToJSON !kvs =
 
 anyValueToJSON :: Maybe PC.AnyValue -> AE.Value
 anyValueToJSON Nothing = AE.Null
-anyValueToJSON (Just av) =
+anyValueToJSON (Just av) = do
   case av ^. PCF.maybe'value of
     Nothing -> AE.Null
-    Just (PC.AnyValue'StringValue txt) ->
-      let encoded = AE.eitherDecode $ AE.encode txt
-       in case encoded of
-            Right v -> v
-            Left _ -> AE.String txt
+    Just (PC.AnyValue'StringValue txt) -> do
+      let e = AE.eitherDecodeStrict' (encodeUtf8 (T.strip txt))
+      case e of
+        Right v -> AE.Object v
+        Left _ -> AE.String txt
     Just (PC.AnyValue'BoolValue b) -> AE.Bool b
     Just (PC.AnyValue'IntValue i) -> AE.Number (fromInteger (toInteger i))
     Just (PC.AnyValue'DoubleValue d) -> AE.Number (fromFloatDigits d)
@@ -543,6 +543,8 @@ anyValueToJSON (Just av) =
             ]
        in AE.Object (KEM.fromList pairs)
     Just (PC.AnyValue'BytesValue bs) ->
+      -- if the bytes is a json string, decode it
+      -- otherwise just return AE.string like it it nowl
       AE.String $ B64.extractBase64 $ B64.encodeBase64 bs
 
 
@@ -987,7 +989,7 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
 runServer :: Log.Logger -> AuthContext -> TracerProvider -> IO ()
 runServer appLogger appCtx tp = runServerWithHandlers def config (services appLogger appCtx tp)
   where
-    serverHost = "localhost"
+    serverHost = "0.0.0.0"
     serverPort = appCtx.config.grpcPort
     config :: ServerConfig
     config =
@@ -1037,7 +1039,6 @@ logsServiceExport :: Log.Logger -> AuthContext -> TracerProvider -> Proto LS.Exp
 logsServiceExport appLogger appCtx tp (Proto req) = do
   _ <- runBackground appLogger appCtx tp $ do
     Log.logInfo "Received logs export request" AE.Null
-
     currentTime <- liftIO getCurrentTime
 
     let !resourceLogs = V.fromList $ req ^. PLF.resourceLogs
