@@ -308,10 +308,6 @@ custom-setup
 library
   exposed-modules:
       BackgroundJobs
-      BackgroundJobs_BACKUP_63896
-      BackgroundJobs_BASE_63896
-      BackgroundJobs_LOCAL_63896
-      BackgroundJobs_REMOTE_63896
       Data.Default.Instances
       Data.Effectful.Notify
       Data.Effectful.UUID
