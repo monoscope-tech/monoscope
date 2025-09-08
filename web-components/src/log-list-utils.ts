@@ -88,7 +88,7 @@ ansi_up.escapeForHtml = false;
 
 // Unescape JSON strings
 export const unescapeJsonString = (str: string): string => {
-  return ansi_up.ansi_to_html(colorizeJsonValues(str.replace(/\\"/g, '"').replace(/\\\\/g, '\\')));
+  return colorizeJsonValues(ansi_up.ansi_to_text(str.replace(/\\"/g, '"').replace(/\\\\/g, '\\')));
 };
 
 // Pure utility functions

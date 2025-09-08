@@ -927,7 +927,7 @@ export class LogList extends LitElement {
         const parsed = parseSummaryElement(element);
         if (parsed.type === 'plain') {
           const unescapedContent = unescapeJsonString(parsed.content);
-          return html`<span class=${`fill-textStrong ${wrapClass}`}>${unescapedContent}</span>`;
+          return html`<span class=${`fill-textStrong ${wrapClass}`}>${unsafeHTML(unescapedContent)}</span>`;
         }
 
         const { field, style, value } = parsed;
