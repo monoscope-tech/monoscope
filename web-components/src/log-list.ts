@@ -535,8 +535,7 @@ export class LogList extends LitElement {
     this.shouldScrollToBottom = false;
     this.expandedTraces[spanId] = !this.expandedTraces[spanId];
     const expanded = this.expandedTraces[spanId];
-
-    for (let i = index - 1; i < this.spanListTree.length; i++) {
+    for (let i = index; i < this.spanListTree.length; i++) {
       const span = this.spanListTree[i];
       if (span.traceId === tracId) {
         if (span.id === spanId) {
@@ -651,7 +650,6 @@ export class LogList extends LitElement {
         }
       })
       .catch((error) => {
-        console.log(error);
         this.showErrorToast('Network error: Unable to fetch logs');
       })
       .finally(() => {
@@ -777,10 +775,7 @@ export class LogList extends LitElement {
 
   // Comment to allow classes be rendered.
   render() {
-    const list: (EventLine | 'start' | 'end')[] = [...this.spanListTree];
-    // end is used to render the load more button"
-    list.unshift('start');
-    list.push('end');
+    const list: EventLine[] = [...this.spanListTree];
 
     // Check if we're in initial loading state
     const isInitialLoading = this.isLoading && this.spanListTree.length === 0;
@@ -849,6 +844,7 @@ export class LogList extends LitElement {
                   `}
             </tr>
           </thead>
+          ${this.flipDirection ? this.renderLoadMore() : this.fetchRecent()}
           ${isInitialLoading
             ? loadingSkeleton(this.logsColumns.length || 6)
             : html`
@@ -861,15 +857,10 @@ export class LogList extends LitElement {
                   ${virtualize({
                     items: list,
                     renderItem: this.logItemRow,
-                    layout: {
-                      itemSize: {
-                        height: 28, // Fixed row height for better performance
-                        width: '100%',
-                      },
-                    },
                   })}
                 </tbody>
               `}
+          ${!this.flipDirection ? this.renderLoadMore() : this.fetchRecent()}
         </table>
 
         ${!this.shouldScrollToBottom && this.flipDirection
@@ -1070,7 +1061,6 @@ export class LogList extends LitElement {
                         @pointerdown=${(e: any) => {
                           e.stopPropagation();
                           e.preventDefault();
-                          console.log('pointerdown-------');
                           this.expandTrace(traceId, id, index);
                         }}
                         class=${`hover:border-strokeBrand-strong rounded-sm ml-1 cursor-pointer shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
@@ -1161,31 +1151,19 @@ export class LogList extends LitElement {
     return this.tableHeadingWrapper(title, column, classes);
   }
 
-  logItemRow = (rowData: EventLine | 'end' | 'start', index: number) => {
-    console.log(index);
-    if (rowData === 'end') {
-      if (this.flipDirection) {
-        return this.fetchRecent();
-      }
-      return this.renderLoadMore();
-    }
-    if (rowData === 'start') {
-      if (this.flipDirection) {
-        return this.renderLoadMore();
-      }
-      return this.fetchRecent();
+  logItemRow = (rowData: EventLine, index: number) => {
+    if (!rowData.show) {
+      return html`<tr class="h-[0px]"></tr>`;
     }
     try {
       const s = rowData.type === 'log' ? 'logs' : 'spans';
       const targetInfo = requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s);
-      const sessionId = lookupVecValue<string>(rowData.data, this.colIdxMap, 'session_id');
       const isNew = rowData.isNew;
       const rowHtml = html`
         <tr
           class=${clsx(
-            'item-row relative p-0 flex items-center overflow-y-hidden group cursor-pointer whitespace-nowrap hover:bg-fillWeaker',
-            isNew && 'animate-fadeBg',
-            this.view === 'list' || rowData.show ? 'h-[30px]' : 'h-[0px]'
+            'item-row relative p-0 flex items-center h-[30px] overflow-y-hidden group cursor-pointer whitespace-nowrap hover:bg-fillWeaker',
+            isNew && 'animate-fadeBg'
           )}
           @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
         >
@@ -1204,7 +1182,7 @@ export class LogList extends LitElement {
               </td>`;
             })}
           ${this.logsColumns.includes('latency_breakdown')
-            ? html`<td class="sticky right-0 bg-bgBase z-10 pl-2">${this.logItemCol(rowData, 'latency_breakdown')}</td>`
+            ? html`<td class="sticky right-0 bg-bgBase z-10 pl-2">${this.logItemCol(rowData, 'latency_breakdown', index)}</td>`
             : nothing}
         </tr>
       `;
