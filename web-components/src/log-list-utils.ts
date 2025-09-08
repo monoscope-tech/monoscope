@@ -143,26 +143,3 @@ export const getStyleClass = (style: string): string => {
   if (style.startsWith('right-')) return style.substring(6);
   return STYLE_MAPPINGS[style as keyof typeof STYLE_MAPPINGS] || 'badge-neutral';
 };
-
-export function binarySearchByStartNs(array: EventLine[], target: number) {
-  let low = 0;
-  let high = array.length - 1;
-
-  while (low <= high) {
-    const mid = (low + high) >> 1; // bitwise floor divide by 2
-    console.log(mid);
-    const midVal = array[mid].startNs;
-    console.log(array[mid].startNs, target);
-
-    if (midVal === target) {
-      return mid;
-    }
-    if (midVal < target) {
-      low = mid + 1;
-    } else {
-      high = mid - 1;
-    }
-  }
-
-  return 0;
-}
