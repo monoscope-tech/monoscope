@@ -26,6 +26,7 @@ import {
   calculateColumnWidth,
   parseSummaryElement,
   unescapeJsonString,
+  binarySearchByStartNs,
 } from './log-list-utils';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 
@@ -111,20 +112,28 @@ export class LogList extends LitElement {
     // Bind resize handler for immediate feedback
     this.boundHandleResize = this.handleResize.bind(this);
 
+    this.expandTrace = this.expandTrace.bind(this);
+
     // Initialize memoized functions
-    this.memoizedBuildSpanListTree = memoize(
-      (logs: any[][]) => groupSpans(logs, this.colIdxMap, this.expandedTraces, this.flipDirection),
-      (logs) => {
-        // Create a more efficient cache key
-        const logCount = logs.length;
-        const firstId = logs[0]?.[this.colIdxMap['id']] || '';
-        const lastId = logs[logs.length - 1]?.[this.colIdxMap['id']] || '';
-        const expandedCount = Object.values(this.expandedTraces).filter(Boolean).length;
-        // Include timestamp to ensure fresh data when new items arrive
-        const firstTimestamp = logs[0]?.[this.colIdxMap['timestamp']] || '';
-        return `${logCount}-${firstId}-${lastId}-${expandedCount}-${this.flipDirection}-${firstTimestamp}`;
-      }
-    );
+    // NOTICE: memoizing build span tree is not worth it
+    // we only build when there is new data (cache miss)
+    // memoizing keeps old data in the cache (consuming memory)
+    // we can clear cache each time we're building span list tree but at that point there is no reason to memoize
+    // memoizing only make things slow (cache lookup)
+
+    // this.memoizedBuildSpanListTree = memoize(
+    //   (logs: any[][]) => ,
+    //   (logs) => {
+    //     // Create a more efficient cache key
+    //     const logCount = logs.length;
+    //     const firstId = logs[0]?.[this.colIdxMap['id']] || '';
+    //     const lastId = logs[logs.length - 1]?.[this.colIdxMap['id']] || '';
+    //     const expandedCount = Object.values(this.expandedTraces).filter(Boolean).length;
+    //     // Include timestamp to ensure fresh data when new items arrive
+    //     const firstTimestamp = logs[0]?.[this.colIdxMap['timestamp']] || '';
+    //     return `${logCount}-${firstId}-${lastId}-${expandedCount}-${this.flipDirection}-${firstTimestamp}`;
+    //   }
+    // );
     this.memoizedRenderSummaryElements = memoize(
       (summaryArray: string[], wrapLines: boolean) => this._renderSummaryElementsImpl(summaryArray, wrapLines),
       (summaryArray, wrapLines) => {
@@ -517,28 +526,31 @@ export class LogList extends LitElement {
 
   buildSpanListTree(logs: any[][]) {
     // Use memoized version for better performance
-    const tree = this.memoizedBuildSpanListTree(logs);
+    const tree = groupSpans(logs, this.colIdxMap, this.expandedTraces, this.flipDirection);
     // Ensure tree maintains proper order
     return tree;
   }
 
-  expandTrace = (tracId: string, spanId: string) => {
+  expandTrace = (tracId: string, spanId: string, index: number) => {
     this.shouldScrollToBottom = false;
     this.expandedTraces[spanId] = !this.expandedTraces[spanId];
     const expanded = this.expandedTraces[spanId];
 
-    const affectedSpans = this.spanListTree.filter((span) => span.traceId === tracId);
-    affectedSpans.forEach((span) => {
-      if (span.id === spanId) {
-        span.expanded = expanded;
-        span.show = true;
-      } else if (span.parentIds.includes(spanId)) {
-        span.expanded = expanded;
-        span.show = expanded;
-        this.expandedTraces[span.id] = expanded;
+    for (let i = index - 1; i < this.spanListTree.length; i++) {
+      const span = this.spanListTree[i];
+      if (span.traceId === tracId) {
+        if (span.id === spanId) {
+          span.expanded = expanded;
+          span.show = true;
+        } else if (span.parentIds.includes(spanId)) {
+          span.expanded = expanded;
+          span.show = expanded;
+          this.expandedTraces[span.id] = expanded;
+        }
+      } else {
+        break;
       }
-    });
-
+    }
     // For user interactions, update immediately
     this.requestUpdate();
   };
@@ -639,6 +651,7 @@ export class LogList extends LitElement {
         }
       })
       .catch((error) => {
+        console.log(error);
         this.showErrorToast('Network error: Unable to fetch logs');
       })
       .finally(() => {
@@ -764,7 +777,7 @@ export class LogList extends LitElement {
 
   // Comment to allow classes be rendered.
   render() {
-    const list: (EventLine | 'start' | 'end')[] = this.view === 'tree' ? this.spanListTree.filter((sp) => sp.show) : [...this.spanListTree];
+    const list: (EventLine | 'start' | 'end')[] = [...this.spanListTree];
     // end is used to render the load more button"
     list.unshift('start');
     list.push('end');
@@ -954,7 +967,7 @@ export class LogList extends LitElement {
     return getStyleClass(style);
   }
 
-  logItemCol = (rowData: any, key: string): any => {
+  logItemCol = (rowData: EventLine, key: string, index: number): any => {
     const { data: dataArr, depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData;
     const wrapClass = this.wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
 
@@ -1057,7 +1070,8 @@ export class LogList extends LitElement {
                         @pointerdown=${(e: any) => {
                           e.stopPropagation();
                           e.preventDefault();
-                          this.expandTrace(traceId, id);
+                          console.log('pointerdown-------');
+                          this.expandTrace(traceId, id, index);
                         }}
                         class=${`hover:border-strokeBrand-strong rounded-sm ml-1 cursor-pointer shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
                       >
@@ -1147,7 +1161,8 @@ export class LogList extends LitElement {
     return this.tableHeadingWrapper(title, column, classes);
   }
 
-  logItemRow = (rowData: EventLine | 'end' | 'start') => {
+  logItemRow = (rowData: EventLine | 'end' | 'start', index: number) => {
+    console.log(index);
     if (rowData === 'end') {
       if (this.flipDirection) {
         return this.fetchRecent();
@@ -1168,8 +1183,9 @@ export class LogList extends LitElement {
       const rowHtml = html`
         <tr
           class=${clsx(
-            'item-row relative p-0 flex items-center group cursor-pointer whitespace-nowrap hover:bg-fillWeaker',
-            isNew && 'animate-fadeBg'
+            'item-row relative p-0 flex items-center overflow-y-hidden group cursor-pointer whitespace-nowrap hover:bg-fillWeaker',
+            isNew && 'animate-fadeBg',
+            this.view === 'list' || rowData.show ? 'h-[30px]' : 'h-[0px]'
           )}
           @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
         >
@@ -1184,7 +1200,7 @@ export class LogList extends LitElement {
                 }`}
                 style=${width ? `width: ${width}px;` : ''}
               >
-                ${this.logItemCol(rowData, column)}
+                ${this.logItemCol(rowData, column, index)}
               </td>`;
             })}
           ${this.logsColumns.includes('latency_breakdown')
