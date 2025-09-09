@@ -401,7 +401,7 @@ bodyWrapper bcfg child = do
         [text| window.addEventListener("load", (event) => {
         
         posthog.people.set_once({email: ${email}, name: "${name}", projectId: "${pidT}", projectTitle: "${pTitle}"});
-        window.monoscope = new Monoscope({projectId: "87576849-4941-49d3-a15d-680fef88a1a8", serviceName: "past-3_frontend", user:{email:${email}, name: "${name}"}});
+        window.monoscope = new Monoscope({ projectId: "6d06b402-a667-4878-b12a-8621b8c6f37d", serviceName: "past-3_frontend", user:{email:${email}, name: "${name}"}});
       });
       echarts.connect('default');
       |]
