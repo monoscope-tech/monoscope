@@ -398,6 +398,10 @@ library
       System.Types
       Utils
       Web.Auth
+      Web.Auth_BACKUP_38938
+      Web.Auth_BASE_38938
+      Web.Auth_LOCAL_38938
+      Web.Auth_REMOTE_38938
       Web.ClientMetadata
       Web.Error
       Web.Routes

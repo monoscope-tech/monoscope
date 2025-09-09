@@ -100,9 +100,6 @@ data EnvConfig = EnvConfig
   , enableTimefusionReads :: Bool
   , kafkaDeadLetterTopic :: Text
   , enableFreetier :: Bool
-  , basicAuthEnabled :: Bool
-  , basicAuthUsername :: Text
-  , basicAuthPassword :: Text
   , enableBrowserMonitoring :: Bool
   , -- External scripts configuration
     googleTagManagerId :: Maybe Text
@@ -113,6 +110,9 @@ data EnvConfig = EnvConfig
   , postHogApiKey :: Maybe Text
   , postHogApiHost :: Maybe Text
   , crispWebsiteId :: Maybe Text
+  , basicAuthEnabled :: Bool
+  , basicAuthUsername :: Text
+  , basicAuthPassword :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)
