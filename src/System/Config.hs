@@ -64,6 +64,7 @@ data EnvConfig = EnvConfig
   , discordClientSecret :: Text
   , discordBotToken :: Text
   , discordPublicKey :: Text
+  , discordWebhookUrl :: Text
   , courierClientKey :: Text
   , courierApiKey :: Text
   , environment :: Text

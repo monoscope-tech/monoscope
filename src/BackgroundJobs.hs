@@ -99,15 +99,11 @@ data BgJobs
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-webhookUrl :: String
-webhookUrl = "https://discord.com/api/webhooks/1230980245423788045/JQOJ7w3gmEduaOvPTnxEz4L8teDpX5PJoFkyQmqZHR8HtRqAkWIjv2Xk1aKadTyXuFy_"
-
-
-sendMessageToDiscord :: Text -> ATBackgroundCtx ()
-sendMessageToDiscord msg = do
+sendMessageToDiscord :: Text -> Text -> ATBackgroundCtx ()
+sendMessageToDiscord msg webhookUrl = do
   let message = AE.object ["content" AE..= msg]
   let opts = defaults & header "Content-Type" .~ ["application/json"]
-  response <- liftIO $ postWith opts webhookUrl message
+  response <- liftIO $ postWith opts (toString webhookUrl) message
   pass
 
 
@@ -183,7 +179,7 @@ processBackgroundJob authCtx job bgJob =
   - **Stack**: {stackString}
   - **Found us from**: {foundUsFrom}
   |]
-        sendMessageToDiscord msg
+        sendMessageToDiscord msg authCtx.config.discordWebhookUrl
     CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
       userM <- Users.userById userId
       whenJust userM \user -> do
