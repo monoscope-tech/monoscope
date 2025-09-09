@@ -26,7 +26,6 @@ import {
   calculateColumnWidth,
   parseSummaryElement,
   unescapeJsonString,
-  binarySearchByStartNs,
 } from './log-list-utils';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 
@@ -775,7 +774,9 @@ export class LogList extends LitElement {
 
   // Comment to allow classes be rendered.
   render() {
-    const list: EventLine[] = [...this.spanListTree];
+    const list: (EventLine | 'end' | 'start')[] = [...this.spanListTree];
+    list.push('end');
+    list.unshift('start');
 
     // Check if we're in initial loading state
     const isInitialLoading = this.isLoading && this.spanListTree.length === 0;
@@ -844,7 +845,6 @@ export class LogList extends LitElement {
                   `}
             </tr>
           </thead>
-          ${this.flipDirection ? this.renderLoadMore() : this.fetchRecent()}
           ${isInitialLoading
             ? loadingSkeleton(this.logsColumns.length || 6)
             : html`
@@ -857,10 +857,15 @@ export class LogList extends LitElement {
                   ${virtualize({
                     items: list,
                     renderItem: this.logItemRow,
+                    layout: {
+                      itemSize: {
+                        height: 28, // Fixed row height for better performance
+                        width: '100%',
+                      },
+                    },
                   })}
                 </tbody>
               `}
-          ${!this.flipDirection ? this.renderLoadMore() : this.fetchRecent()}
         </table>
 
         ${!this.shouldScrollToBottom && this.flipDirection
@@ -1151,9 +1156,21 @@ export class LogList extends LitElement {
     return this.tableHeadingWrapper(title, column, classes);
   }
 
-  logItemRow = (rowData: EventLine, index: number) => {
+  logItemRow = (rowData: EventLine | 'end' | 'start', index: number) => {
+    if (rowData === 'end') {
+      if (this.flipDirection) {
+        return this.fetchRecent();
+      }
+      return this.renderLoadMore();
+    }
+    if (rowData === 'start') {
+      if (this.flipDirection) {
+        return this.renderLoadMore();
+      }
+      return this.fetchRecent();
+    }
     if (!rowData.show) {
-      return html`<tr class="h-[0px]"></tr>`;
+      return html`<tr></tr>`;
     }
     try {
       const s = rowData.type === 'log' ? 'logs' : 'spans';
@@ -1162,7 +1179,7 @@ export class LogList extends LitElement {
       const rowHtml = html`
         <tr
           class=${clsx(
-            'item-row relative p-0 flex items-center h-[30px] overflow-y-hidden group cursor-pointer whitespace-nowrap hover:bg-fillWeaker',
+            'item-row relative p-0 flex items-center group cursor-pointer whitespace-nowrap hover:bg-fillWeaker',
             isNew && 'animate-fadeBg'
           )}
           @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
