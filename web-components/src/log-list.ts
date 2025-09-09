@@ -534,7 +534,7 @@ export class LogList extends LitElement {
     this.shouldScrollToBottom = false;
     this.expandedTraces[spanId] = !this.expandedTraces[spanId];
     const expanded = this.expandedTraces[spanId];
-    for (let i = index; i < this.spanListTree.length; i++) {
+    for (let i = index - 1; i < this.spanListTree.length; i++) {
       const span = this.spanListTree[i];
       if (span.traceId === tracId) {
         if (span.id === spanId) {
@@ -1170,7 +1170,7 @@ export class LogList extends LitElement {
       return this.fetchRecent();
     }
     if (!rowData.show) {
-      return html`<tr></tr>`;
+      return html`<tr class="h-0"></tr>`;
     }
     try {
       const s = rowData.type === 'log' ? 'logs' : 'spans';
@@ -1179,7 +1179,7 @@ export class LogList extends LitElement {
       const rowHtml = html`
         <tr
           class=${clsx(
-            'item-row relative p-0 flex items-center group cursor-pointer whitespace-nowrap hover:bg-fillWeaker',
+            'item-row relative p-0 h-[30px] flex items-center group cursor-pointer whitespace-nowrap hover:bg-fillWeaker',
             isNew && 'animate-fadeBg'
           )}
           @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
