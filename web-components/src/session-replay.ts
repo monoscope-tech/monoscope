@@ -144,14 +144,12 @@ export class SessionReplay extends LitElement {
     }
   }
 
-  debounce(fn :()=>void) {
-    if(this.timeout) {
-      clearTimeout(this.timeout)
+  debounce(fn: () => void) {
+    if (this.timeout) {
+      clearTimeout(this.timeout);
     }
-    this.timeout = setTimeout(()=> fn(),10)
+    this.timeout = setTimeout(() => fn(), 10);
   }
-
-
 
   updateContainerWidths() {
     const frameContainer = document.querySelector('.player-frame') as HTMLElement;
@@ -161,7 +159,7 @@ export class SessionReplay extends LitElement {
   updateScale = () => {
     this.updateContainerWidths();
     const el = this.player?.wrapper;
-    const widthScale = (this.containerWidth) / this.iframeWidth;
+    const widthScale = this.containerWidth / this.iframeWidth;
     const heightScale = this.containerHeight / this.iframeHeight;
     if (el) {
       el.style.transform = `scale(${Math.min(widthScale, heightScale)}) translate(-50%, -50%)`;
@@ -170,13 +168,12 @@ export class SessionReplay extends LitElement {
 
   protected updated(changedProperties: PropertyValues): void {
     if (this.player) {
-
       if (changedProperties.has('activityWidth')) {
-        this.debounce(()=> {
-        const mContainer = Number(getComputedStyle(this.replayerOuterContainer).width.replace('px', ''));
-        this.containerWidth = mContainer - this.activityWidth;
-        this.updateScale();
-        })
+        this.debounce(() => {
+          const mContainer = Number(getComputedStyle(this.replayerOuterContainer).width.replace('px', ''));
+          this.containerWidth = mContainer - this.activityWidth;
+          this.updateScale();
+        });
       }
       if (changedProperties.has('skipInactive')) {
         this.player?.setConfig({ skipInactive: this.skipInactive });
@@ -235,6 +232,7 @@ export class SessionReplay extends LitElement {
     });
 
     this.player = new Replayer(events, { root: target, plugins: [{ handler: this.handleConsoleEvents }], skipInactive: this.skipInactive });
+    this.trickPlayer = null;
     this.metaData = this.player.getMetaData();
     this.updateScale();
     this.play();
@@ -269,26 +267,25 @@ export class SessionReplay extends LitElement {
 
     const container = this.renderRoot.querySelector<HTMLDivElement>('#replayerOuterContainer');
 
-    if (container)  {
-    const resizeObserver = new ResizeObserver((entries) => {
-      this.debounce(()=> {
-      for (let entry of entries) {
-        const { width, height } = entry.contentRect;
-        const comp = getComputedStyle(this.replayerOuterContainer);
-        const mContainer = Number(comp.width.replace('px', ''));
-        const mHeight = Number(comp.height.replace("px",""))
-        this.containerWidth = mContainer - this.activityWidth;
-        this.containerHeight = mHeight - 110
+    if (container) {
+      const resizeObserver = new ResizeObserver((entries) => {
+        this.debounce(() => {
+          for (let entry of entries) {
+            const { width, height } = entry.contentRect;
+            const comp = getComputedStyle(this.replayerOuterContainer);
+            const mContainer = Number(comp.width.replace('px', ''));
+            const mHeight = Number(comp.height.replace('px', ''));
+            this.containerWidth = mContainer - this.activityWidth;
+            this.containerHeight = mHeight - 110;
 
-        this.updateScale();
-      }
-      })
-    });
+            this.updateScale();
+          }
+        });
+      });
 
-    // Start observing
-    resizeObserver.observe(container);
+      // Start observing
+      resizeObserver.observe(container);
     }
-
   }
 
   handleTimeSeek(e: any) {
@@ -343,9 +340,9 @@ export class SessionReplay extends LitElement {
         hoverColor = 'hover:bg-fillError-weak';
         break;
       case 'warn':
-        bgColor = 'bg-yellow-100';
+        bgColor = 'bg-yellow-100 dark:bg-yellow-900';
         textColor = 'text-textWarn';
-        hoverColor = 'hover:bg-fillWarn-weak';
+        hoverColor = 'hover:bg-yellow-900 dark:hover:bg-yellow-100';
         break;
       case 'info':
         bgColor = 'bg-fillBrand-weak dark:bg-blue-900';
