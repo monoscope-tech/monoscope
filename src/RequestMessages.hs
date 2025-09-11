@@ -54,7 +54,7 @@ import Models.Projects.Projects qualified as Projects
 import Relude
 import Relude.Unsafe as Unsafe (read)
 import Text.RE.Replace (matched)
-import Text.RE.TDFA (RE, SearchReplace, ed, re, (*=~/), (=~), (?=~))
+import Text.RE.TDFA (RE, SearchReplace, ed, re, (*=~/), (?=~))
 import Utils (DBField (), toXXHash)
 
 
