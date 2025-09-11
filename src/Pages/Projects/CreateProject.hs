@@ -1,5 +1,4 @@
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE PackageImports #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Pages.Projects.CreateProject (
@@ -61,7 +60,7 @@ import System.Config
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, redirectCS)
 import Utils (insertIfNotExist, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
-import "base64" Data.ByteString.Base64 qualified as B64
+import Data.ByteString.Base64 qualified as B64
 
 
 data CreateProjectForm = CreateProjectForm

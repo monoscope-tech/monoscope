@@ -40,6 +40,8 @@ import Effectful.Reader.Static (ask, asks)
 import Effectful.Time (Time, runTime)
 import Log (Logger)
 import Lucid (Html)
+import Effectful.Log (Log)
+import System.Logging (logInfo)
 import Lucid.Html5 (
   a_,
   body_,
@@ -60,7 +62,7 @@ import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
 import Servant (Header, Headers, NoContent (..), addHeader, noHeader)
 import Servant qualified
-import Servant.Server (Handler, ServerError (errHeaders), err302)
+import Servant.Server (Handler, ServerError (errHeaders), err302, err401)
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import System.Config (
   AuthContext (config, env, pool),
@@ -89,8 +91,9 @@ type APItoolkitAuthContext = AuthHandler Request (Headers '[Header "Set-Cookie" 
 validateBasicAuth :: EnvConfig -> ByteString -> Maybe (Text, Text)
 validateBasicAuth config authHeader = do
   let prefix = "Basic "
-  stripped <- T.stripPrefix prefix (decodeUtf8 authHeader)
-  decoded <- either (const Nothing) Just $ B64.decode (encodeUtf8 stripped)
+  let authHeaderText = decodeUtf8 authHeader
+  stripped <- T.stripPrefix prefix authHeaderText
+  let decoded = B64.decodeBase64Lenient (encodeUtf8 stripped)
   let decodedText = decodeUtf8 decoded
   case T.splitOn ":" decodedText of
     [username, password] -> 
@@ -111,14 +114,16 @@ authHandler logger env =
       & runTime
       & effToHandler
   where
-    handler :: (DB :> es, Error ServerError :> es, HTTP :> es, IOE :> es, Time :> es, UUIDEff :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
+    handler :: (DB :> es, Error ServerError :> es, HTTP :> es, IOE :> es, Time :> es, UUIDEff :> es, Log :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
     handler req = do
       -- Check if basic auth is enabled and try to authenticate
       if env.config.basicAuthEnabled
         then do
           let authHeader = L.lookup hAuthorization $ requestHeaders req
+          logInfo "Basic auth check" ("Auth header present: " <> show (isJust authHeader))
           case authHeader >>= validateBasicAuth env.config of
             Just (username, _password) -> do
+              logInfo "Basic auth success" ("User: " <> username)
               -- Basic auth successful, create a session for the basic auth user
               let isSidebarClosed = sidebarClosedFromCookie $ getCookies req
               let theme = themeFromCookie $ getCookies req
@@ -127,8 +132,20 @@ authHandler logger env =
               sessId <- authorizeUserAndPersist Nothing "Basic" "Auth" "" (username <> "@basic-auth.local")
               sessionByID (Just sessId) requestID isSidebarClosed theme Nothing
             Nothing -> do
-              -- No valid basic auth, fall back to cookie auth
-              proceedWithCookieAuth req
+              -- When basic auth is enabled, check if we have a valid cookie session
+              -- If not, we should require basic auth instead of redirecting to Auth0
+              let cookies = getCookies req
+              mbPersistentSessionId <- handlerToEff $ getSessionId cookies
+              mbPersistentSession <- join <$> mapM Sessions.getPersistentSession mbPersistentSessionId
+              case mbPersistentSession of
+                Just _ -> do
+                  -- We have a valid cookie session, proceed normally
+                  logInfo "Basic auth fallback" "Valid cookie session exists"
+                  proceedWithCookieAuth req
+                Nothing -> do
+                  -- No valid session and basic auth is enabled - return 401
+                  logInfo "Basic auth required" "No valid auth provided"
+                  throwError $ err401 {errHeaders = [("WWW-Authenticate", "Basic realm=\"APItoolkit\"")]}
         else
           -- Basic auth not enabled, use normal cookie auth
           proceedWithCookieAuth req

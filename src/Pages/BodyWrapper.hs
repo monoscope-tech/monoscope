@@ -1,4 +1,3 @@
-{-# LANGUAGE PackageImports #-}
 
 module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..)) where
 
@@ -21,7 +20,7 @@ import Pkg.THUtils
 import PyF
 import Relude
 import Utils (faSprite_, freeTierLimitExceededBanner)
-import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
+import Crypto.Hash.MD5 qualified as MD5
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]

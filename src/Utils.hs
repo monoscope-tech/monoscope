@@ -1,5 +1,4 @@
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE PackageImports #-}
 {-# LANGUAGE RankNTypes #-}
 
 module Utils (
@@ -94,7 +93,7 @@ import Servant
 import Text.Printf (printf)
 import Text.Regex.TDFA ((=~))
 import Text.Show
-import "base64" Data.ByteString.Base64 qualified as B64
+import Data.ByteString.Base64 qualified as B64
 
 
 -- Added only for satisfying the tests
