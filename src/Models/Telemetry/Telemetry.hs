@@ -88,7 +88,7 @@ import NeatInterpolation (text)
 import Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..))
 import Pkg.DeriveUtils (AesonText (..), unAesonTextMaybe)
 import Relude hiding (ask)
-import RequestMessages (sanitizeError)
+import RequestMessages (replaceAllFormats)
 import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
 import Utils (lookupValueText, toXXHash)
@@ -1072,7 +1072,7 @@ extractATError spanObj (AE.Object o) = do
       , message = msg
       , rootErrorMessage = msg
       , stackTrace = stack
-      , hash = Just (toXXHash (spanObj.project_id <> fromMaybe "" serviceName <> fromMaybe "" spanObj.name <> typ <> (sanitizeError $ msg <> stack)))
+      , hash = Just (toXXHash (spanObj.project_id <> fromMaybe "" serviceName <> fromMaybe "" spanObj.name <> typ <> (replaceAllFormats $ msg <> stack)))
       , technology = Nothing
       , serviceName = serviceName
       , requestMethod = method

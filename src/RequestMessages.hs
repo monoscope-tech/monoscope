@@ -15,7 +15,6 @@ module RequestMessages (
   valueToFields,
   redactJSON,
   replaceNullChars,
-  sanitizeError,
   fieldsToFieldDTO,
   sortVector,
   ensureUrlParams,
@@ -160,7 +159,7 @@ processErrors pid maybeSdkType maybeMethod maybePath err = (normalizedError, q, 
         , RequestDumps.requestMethod = maybeMethod <|> err.requestMethod
         , RequestDumps.requestPath = maybePath <|> err.requestPath
         }
-    defaultHash = toXXHash (pid.toText <> fromMaybe "" err.serviceName <> err.errorType <> sanitizeError (err.message <> err.stackTrace) <> maybe "" show maybeSdkType)
+    defaultHash = toXXHash (pid.toText <> fromMaybe "" err.serviceName <> err.errorType <> replaceAllFormats (err.message <> err.stackTrace) <> maybe "" show maybeSdkType)
 
 
 sortVector :: Ord a => V.Vector a -> V.Vector a
@@ -637,89 +636,3 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
     -- FIXME: or maybe it should operate on the entire list, and not just one value.
     format = fromMaybe "" $ V.map valueToFormat val V.!? 0
     !formatHash = fieldHash <> toXXHash format
-
-
-sanitizeError :: Text -> Text
-sanitizeError input = removeWhitespace $ foldl' replaceAll input sPatterns
-  where
-    replaceAll :: Text -> (RE, Text) -> Text
-    replaceAll txt (regex, fmt) = replaceAllRegex regex fmt txt
-
-    -- Replace all matches of the regex with the replacement
-    replaceAllRegex :: RE -> Text -> Text -> Text
-    replaceAllRegex regex rep txt =
-      let t = T.unpack txt
-          go "" = ""
-          go s = case s =~ regex of
-            (before, "", "") -> before
-            (before, match, after) -> before ++ T.unpack rep ++ go after
-       in T.pack $ go t
-
-    -- Remove all whitespace, newlines, carriage returns, and tabs
-    removeWhitespace :: Text -> Text
-    removeWhitespace = T.filter (not . isSpaceOrControl)
-
-    isSpaceOrControl :: Char -> Bool
-    isSpaceOrControl c = c == ' ' || c == '\n' || c == '\r' || c == '\t'
-
-
-sPatterns :: [(RE, Text)]
-sPatterns =
-  [ ([re|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|], "{uuid}")
-  , ([re|[0-9a-fA-F]{24}|], "{uuid}")
-  , ([re|[a-fA-F0-9]{64}|], "{sha256}")
-  , ([re|[a-fA-F0-9]{40}|], "{sha1}")
-  , ([re|[a-fA-F0-9]{32}|], "{md5}")
-  , ([re|4[0-9]{15}|], "{credit_card}")
-  , ([re|4[0-9]{12}|], "{credit_card}")
-  , ([re|5[1-5][0-9]{14}|], "{credit_card}")
-  , ([re|3[47][0-9]{13}|], "{credit_card}")
-  , ([re|[0-9A-Fa-f]{14,20}|], "{hex_id}")
-  , ([re|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|], "{jwt}")
-  , ([re|[A-Z]{2}[0-9]{2}[A-Za-z0-9]{4}[0-9]{7}[A-Za-z0-9]{0,16}|], "{iban}")
-  , ([re|[A-Za-z0-9+/]{20,}={0,2}|], "{base64}")
-  , ([re|(Mon|Tue|Wed|Thu|Fri|Sat|Sun), [0-9]{1,2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} [+\-][0-9]{4}|], "{rfc2822}")
-  , ([re|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+\-][0-9]{2}:[0-9]{2})?|], "{YYYY-MM-DDThh:mm:ss.sTZD}")
-  , ([re|[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}|], "{YYYY-MM-DD HH:MM:SS}")
-  , ([re|[0-9]{2}/[0-9]{2}/[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}|], "{MM/DD/YYYY HH:MM:SS}")
-  , ([re|[0-9]{2}-[0-9]{2}-[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}|], "{MM-DD-YYYY HH:MM:SS}")
-  , ([re|[0-9]{2}\.[0-9]{2}\.[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}|], "{DD.MM.YYYY HH:MM:SS}")
-  , ([re|[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}|], "{YYYY/MM/DD HH:MM:SS}")
-  , ([re|(0[1-9]|[12][0-9]|3[01])[/](0[1-9]|1[012])[/](19|20)[0-9][0-9]|], "{dd/mm/yyyy}")
-  , ([re|(0[1-9]|[12][0-9]|3[01])-(0[1-9]|1[012])-(19|20)[0-9][0-9]|], "{dd-mm-yyyy}")
-  , ([re|(0[1-9]|[12][0-9]|3[01])\.(0[1-9]|1[012])\.(19|20)[0-9][0-9]|], "{dd.mm.yyyy}")
-  , ([re|(0[1-9]|1[012])[/](0[1-9]|[12][0-9]|3[01])[/](19|20)[0-9][0-9]|], "{mm/dd/yyyy}")
-  , ([re|(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])-(19|20)[0-9][0-9]|], "{mm-dd-yyyy}")
-  , ([re|(0[1-9]|1[012])\.(0[1-9]|[12][0-9]|3[01])\.(19|20)[0-9][0-9]|], "{mm.dd.yyyy}")
-  , ([re|[0-9]{4}-[0-9]{2}-[0-9]{2}|], "{YYYY-MM-DD}")
-  , ([re|[0-9]{4}/[0-9]{2}/[0-9]{2}|], "{YYYY/MM/DD}")
-  , ([re|[0-9]{8}|], "{YYYYMMDD}")
-  , ([re|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{1,2}, [0-9]{4}|], "{Mon DD, YYYY}")
-  , ([re|[0-9]{1,2}-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-[0-9]{4}|], "{DD-Mon-YYYY}")
-  , ([re|[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}|], "{HH:MM:SS.mmm}")
-  , ([re|[0-9]{2}:[0-9]{2}:[0-9]{2}|], "{HH:MM:SS}")
-  , ([re|[0-9]{1,2}:[0-9]{2} (AM|PM|am|pm)|], "{H:MM AM/PM}")
-  , ([re|[0-9]{3}-[0-9]{2}-[0-9]{4}|], "{ssn}")
-  , ([re|\+1 \([0-9]{3}\) [0-9]{3}-[0-9]{4}|], "{phone}")
-  , ([re|((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/([0-9]|[12][0-9]|3[0-2])|], "{cidr}")
-  , ([re|((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)|], "{ipv4}")
-  , ([re|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|], "{email}")
-  , ([re|https?://[^\s]+|], "{url}")
-  , ([re|([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|], "{ipv6}")
-  , ([re|([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}|], "{mac}")
-  , ([re|:[0-9]{1,5}|], "{port}")
-  , ([re|[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}|], "{hostname}")
-  , ([re|[A-Za-z]:\\\\.*|], "{file_path}")
-  , ([re|[A-Za-z]:\\.*|], "{file_path}")
-  , ([re|/[A-Za-z0-9._/-]+|], "{file_path}")
-  , ([re|1[0-9]{12}|], "{epoch_ms}")
-  , ([re|1[0-9]{9}|], "{epoch_s}")
-  , ([re|pid[:=]?[0-9]+|], "{pid}")
-  , ([re|tid[:=]?[0-9]+|], "{tid}")
-  , ([re|Thread-[0-9]+|], "{thread}")
-  , ([re|session_[A-Za-z0-9\-]{8,}|], "{session_id}")
-  , ([re|[1-5][0-9]{2}|], "{http_status}")
-  , ([re|0x[0-9A-Fa-f]+|], "{hex}")
-  , ([re|[+-]?[0-9]+\.[0-9]+|], "{float}")
-  , ([re|[0-9]+|], "{integer}")
-  ]
