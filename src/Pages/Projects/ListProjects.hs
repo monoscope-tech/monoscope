@@ -10,6 +10,7 @@ import Data.Default (def)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask)
 import Fmt
 import Lucid
 import Models.Projects.Projects qualified as Projects
@@ -17,6 +18,7 @@ import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
 import Relude hiding (ask, asks)
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Utils (faSprite_)
 
@@ -24,12 +26,14 @@ import Utils (faSprite_)
 listProjectsGetH :: ATAuthCtx (RespHeaders ListProjectsGet)
 listProjectsGetH = do
   (sess, project) <- Sessions.sessionAndProject (Projects.ProjectId UUID.nil)
+  appCtx <- ask @AuthContext
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
           , pageTitle = "Projects"
           , hideNavbar = True
           , pageActions = Nothing
+          , config = appCtx.env
           }
 
   projects <- dbtToEff $ Projects.selectProjectsForUser sess.persistentSession.userId

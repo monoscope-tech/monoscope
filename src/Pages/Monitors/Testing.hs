@@ -14,6 +14,7 @@ import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Fmt.Internal.Core (fmt)
 import Fmt.Internal.Numeric (commaizeF)
@@ -29,6 +30,7 @@ import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (checkFreeTierExceeded, faSprite_)
@@ -73,6 +75,7 @@ unifiedMonitorsGetH
   -> ATAuthCtx (RespHeaders (PageCtx (ItemsList.ItemsPage UnifiedMonitorItem)))
 unifiedMonitorsGetH pid filterTM sinceM = do
   (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
   currTime <- Time.currentTime
 
   -- Parse filter
@@ -132,6 +135,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
           , menuItem = Just "Alerts"
           , docsLink = Just "https://apitoolkit.io/docs/monitors/"
           , freeTierExceeded = freeTierExceeded
+          , config = appCtx.env
           , pageActions = Just $ div_ [class_ "flex gap-2"] do
               a_ [class_ "btn btn-sm btn-primary gap-2", href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"] do
                 faSprite_ "bell" "regular" "h-4 w-4"
@@ -323,6 +327,7 @@ thresholdBox_ alert warning direction = do
 unifiedMonitorOverviewH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 unifiedMonitorOverviewH pid monitorId = do
   (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
   currTime <- Time.currentTime
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
 
@@ -342,6 +347,7 @@ unifiedMonitorOverviewH pid monitorId = do
           , menuItem = Just "Alerts"
           , docsLink = Just "https://apitoolkit.io/docs/monitors/"
           , freeTierExceeded = freeTierExceeded
+          , config = appCtx.config
           }
 
   case alertM of

@@ -113,6 +113,7 @@ linkProjectGetH pid slack_code onboardingM = do
           { sessM = Nothing
           , currProject = Nothing
           , pageTitle = "Slack app installed"
+          -- , enableBrowserMonitoring = envCfg.enableBrowserMonitoring
           }
   project <- liftIO $ withPool pool $ Projects.projectById pid
   case (token, project) of

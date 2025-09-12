@@ -1,5 +1,4 @@
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE PackageImports #-}
 {-# LANGUAGE RankNTypes #-}
 
 module Utils (
@@ -63,6 +62,7 @@ import Data.Aeson.Extra.Merge (lodashMerge)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.ByteString qualified as BS
+import Data.ByteString.Base64 qualified as B64
 import Data.Char (isDigit)
 import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
@@ -94,7 +94,6 @@ import Servant
 import Text.Printf (printf)
 import Text.Regex.TDFA ((=~))
 import Text.Show
-import "base64" Data.ByteString.Base64 qualified as B64
 
 
 -- Added only for satisfying the tests

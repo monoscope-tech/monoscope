@@ -4,6 +4,7 @@ import Data.Default
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Vector qualified as V
+import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx
@@ -16,7 +17,8 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components qualified as Components
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Relude
+import Relude hiding (ask)
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, parseTime, prettyPrintCount)
 
@@ -38,6 +40,7 @@ data MetricTree = MetricTree
 metricsOverViewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders MetricsOverViewGet)
 metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
   (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
   now <- Time.currentTime
   let tab = maybe "charts" (\t -> if t == "charts" then t else "datapoints") tabM
   let (from, to, currentRange) = parseTime fromM toM sinceM now
@@ -47,6 +50,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
           , currProject = Just project
           , prePageTitle = Just "Explorer"
           , pageTitle = "Metrics"
+          , config = appCtx.env
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-md p-0 tabs-outline items-center border"] do
               a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! "] "Events"
               a_ [href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! tab-active text-textStrong"] "Metrics"

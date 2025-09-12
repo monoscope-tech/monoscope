@@ -1,7 +1,6 @@
-{-# LANGUAGE PackageImports #-}
-
 module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..)) where
 
+import Crypto.Hash.MD5 qualified as MD5
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
 import Data.Text qualified as T
@@ -20,8 +19,8 @@ import Pkg.Components.Modals qualified as Components
 import Pkg.THUtils
 import PyF
 import Relude
+import System.Config (EnvConfig (..))
 import Utils (faSprite_, freeTierLimitExceededBanner)
-import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
@@ -67,6 +66,7 @@ data BWConfig = BWConfig
   , freeTierExceeded :: Bool
   , hideNavbar :: Bool -- When True, hides the entire navbar
   , headContent :: Maybe (Html ()) -- Optional HTML content to include in the head
+  , config :: EnvConfig
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -326,7 +326,7 @@ bodyWrapper bcfg child = do
                           div_ [class_ "skeleton h-16 w-full"] ""
                           div_ [class_ "skeleton h-16 w-full"] ""
 
-      externalHeadScripts_
+      externalHeadScripts_ bcfg.config
       alerts_
       script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
       script_
@@ -399,11 +399,16 @@ bodyWrapper bcfg child = do
       let pTitle = maybe "" (.title) bcfg.currProject
       script_
         [text| window.addEventListener("load", (event) => {
-        
-        posthog.people.set_once({email: ${email}, name: "${name}", projectId: "${pidT}", projectTitle: "${pTitle}"});
+                  posthog.people.set_once({email: ${email}, name: "${name}", projectId: "${pidT}", projectTitle: "${pTitle}"});
+                });
+                echarts.connect('default');
+      |]
+      -- Browser monitoring script (Monoscope) - only included when enabled
+      when bcfg.config.enableBrowserMonitoring
+        $ script_
+          [text| window.addEventListener("load", (event) => {
         window.monoscope = new Monoscope({ projectId: "6d06b402-a667-4878-b12a-8621b8c6f37d", serviceName: "past-3_frontend", user:{email:${email}, name: "${name}"}});
       });
-      echarts.connect('default');
       |]
 
 

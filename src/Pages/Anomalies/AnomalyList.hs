@@ -49,7 +49,7 @@ import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import System.Config (AuthContext)
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (checkFreeTierExceeded, escapedQueryPartial, faSprite_)
@@ -159,6 +159,7 @@ anomalyListGetH
   -> ATAuthCtx (RespHeaders AnomalyListGet)
 anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
   let (ackd, archived, currentFilterTab) = case filterTM of
         Just "Inbox" -> (False, False, "Inbox")
         Just "Acknowleged" -> (True, False, "Acknowleged")
@@ -589,6 +590,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
           , pageTitle = "Issues: Changes, Alerts & Errors"
           , menuItem = Just "Changes & Errors"
           , freeTierExceeded = freeTierExceeded
+          , config = appCtx.config
           , navTabs =
               Just
                 $ toHtml

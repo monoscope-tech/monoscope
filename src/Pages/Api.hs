@@ -1,8 +1,7 @@
-{-# LANGUAGE PackageImports #-}
-
 module Pages.Api (apiGetH, apiPostH, apiActivateH, apiDeleteH, GenerateAPIKeyForm (..), ApiGet (..), ApiMut (..)) where
 
 import Data.Base64.Types qualified as B64
+import Data.ByteString.Base64 qualified as B64
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.UUID as UUID (toText)
@@ -19,11 +18,10 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Relude hiding (ask)
-import System.Config (AuthContext (config), EnvConfig (apiKeyEncryptionSecretKey))
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
-import "base64" Data.ByteString.Base64 qualified as B64
 
 
 data GenerateAPIKeyForm = GenerateAPIKeyForm
@@ -89,6 +87,7 @@ instance ToHtml ApiMut where
 apiGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ApiGet)
 apiGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
   apiKeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
   let bwconf =
         (def :: BWConfig)
@@ -96,6 +95,7 @@ apiGetH pid = do
           , currProject = Just project
           , pageTitle = "API keys"
           , isSettingsPage = True
+          , config = appCtx.config
           }
   addRespHeaders $ ApiGet $ PageCtx bwconf (pid, apiKeys)
 

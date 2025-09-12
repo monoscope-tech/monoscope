@@ -29,6 +29,7 @@ import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTim
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (getAeson)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Apis.Anomalies qualified as Anomalies
@@ -40,7 +41,8 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Relude
+import Relude hiding (ask)
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Text.Printf (printf)
 import Utils (checkFreeTierExceeded, faSprite_)
@@ -170,6 +172,7 @@ instance ToHtml ReportsPost where
 singleReportGetH :: Projects.ProjectId -> Reports.ReportId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
 singleReportGetH pid rid hxRequestM = do
   (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
   report <- dbtToEff $ Reports.getReportById rid
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
   let bwconf =
@@ -178,6 +181,7 @@ singleReportGetH pid rid hxRequestM = do
           , currProject = Just project
           , pageTitle = "Report"
           , freeTierExceeded = freeTierExceeded
+          , config = appCtx.env
           }
   case hxRequestM of
     Just _ -> addRespHeaders $ ReportsGetSingle' (pid, report)
@@ -187,6 +191,7 @@ singleReportGetH pid rid hxRequestM = do
 reportsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
 reportsGetH pid page hxRequest hxBoosted = do
   (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
   let p = toString (fromMaybe "0" page)
   let pg = fromMaybe 0 (readMaybe p :: Maybe Int)
 
@@ -202,6 +207,7 @@ reportsGetH pid page hxRequest hxBoosted = do
               , currProject = Just project
               , pageTitle = "Reports"
               , freeTierExceeded = freeTierExceeded
+              , config = appCtx.env
               }
       addRespHeaders $ ReportsGetMain $ PageCtx bwconf (pid, reports, nextUrl, project.dailyNotif, project.weeklyNotif)
 

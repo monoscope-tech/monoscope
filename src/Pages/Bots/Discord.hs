@@ -13,7 +13,7 @@ import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
 import Models.Apis.Slack (DiscordData (..), getDashboardsForDiscord, getDiscordData, insertDiscordData, updateDiscordNotificationChannel)
 import Models.Projects.Projects qualified as Projects
-import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Relude hiding (ask, asks)
 import "cryptonite" Crypto.Error qualified as Crypto
 import "cryptonite" Crypto.PubKey.Ed25519 qualified as Ed25519
@@ -42,7 +42,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (parseQueryToAST)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
-import Servant.Server (ServerError (errBody), err400, err401)
+import Servant.Server (ServerError (errBody), err400, err401, err404)
 import System.Config (AuthContext (env), EnvConfig (..))
 import System.Types (ATBaseCtx)
 import Utils (toUriStr)
@@ -60,6 +60,7 @@ linkDiscordGetH pidM' codeM guildIdM = do
           { sessM = Nothing
           , currProject = Nothing
           , pageTitle = "Discord app installed"
+          , config = envCfg
           }
   case (pidM, codeM, guildIdM) of
     (Just pid, Just code, Just guildId) -> do
@@ -210,8 +211,8 @@ discordInteractionsH rawBody signatureM timestampM = do
   where
     validateSignature envCfg (Just sig) (Just tme) body
       | verifyDiscordSignature (encodeUtf8 envCfg.discordPublicKey) sig tme body = pass
-      | otherwise = throwError err401{errBody = "Invalid signature"}
-    validateSignature _ _ _ _ = throwError err401{errBody = "Invalid signature"}
+      | otherwise = throwError err404{errBody = "Invalid signature"}
+    validateSignature _ _ _ _ = throwError err404{errBody = "Invalid signature"}
 
     handleApplicationCommand :: DiscordInteraction -> EnvConfig -> AuthContext -> ATBaseCtx AE.Value
     handleApplicationCommand interaction envCfg authCtx = do
@@ -226,7 +227,7 @@ discordInteractionsH rawBody signatureM timestampM = do
     parseInteraction :: BS.ByteString -> ATBaseCtx DiscordInteraction
     parseInteraction rawBody' = do
       case AE.eitherDecode (fromStrict rawBody') of
-        Left e -> throwError err401{errBody = "Invalid interaction data"}
+        Left e -> throwError err404{errBody = "Invalid interaction data"}
         Right interaction -> pure interaction
 
     handleCommand :: InteractionData -> DiscordInteraction -> EnvConfig -> AuthContext -> DiscordData -> ATBaseCtx AE.Value

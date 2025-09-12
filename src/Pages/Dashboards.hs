@@ -21,6 +21,7 @@ import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
 import Effectful.Error.Static (Error, throwError)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxPatch_, hxPost_, hxPut_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
@@ -40,11 +41,12 @@ import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visType
 import Pkg.Components.Modals qualified as Modals
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Relude
+import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import Servant (NoContent (..), ServerError, err404, errBody)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Slugify (slugify)
 import Utils (checkFreeTierExceeded, faSprite_)
@@ -453,6 +455,7 @@ getDashAndVM dashId fileM = do
 dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
 dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
   (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
   (dashVM, dash) <- getDashAndVM dashId fileM
@@ -473,6 +476,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
           , prePageTitle = Just "Dashboards"
           , pageTitle = if dashVM.title == "" then "Untitled" else dashVM.title
           , pageTitleModalId = Just "pageTitleModalId"
+          , config = appCtx.config
           , freeTierExceeded = freeTierExceeded
           , pageActions = Just $ div_ [class_ "inline-flex gap-3 items-center leading-[0]"] do
               TimePicker.timepicker_ Nothing currentRange
@@ -806,6 +810,7 @@ dashboardsGet_ dg = do
 dashboardsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx DashboardsGet))
 dashboardsGetH pid embeddedM = do
   (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
   now <- Time.currentTime
   dashboards <- dbtToEff $ DBT.selectManyByField @Dashboards.DashboardVM [DBT.field| project_id |] pid
 
@@ -824,6 +829,7 @@ dashboardsGetH pid embeddedM = do
               , currProject = Just project
               , pageTitle = "Dashboards"
               , freeTierExceeded = freeTierExceeded
+              , config = appCtx.config
               , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "leading-none rounded-xl shadow-sm p-3 cursor-pointer bg-fillBrand-strong text-white"] "New Dashboard"
               }
       addRespHeaders $ PageCtx bwconf $ DashboardsGet{dashboards, projectId = pid, embedded = False}

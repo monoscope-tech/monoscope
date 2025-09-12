@@ -97,8 +97,15 @@ dateTime t endTM = do
       toHtml $ " - " <> formatTime defaultTimeLocale "%b. %d, %I:%M:%S %p" endT
 
 
-paymentPlanPicker :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Html ()
-paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled = do
+paymentPlanPicker :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
+paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicAuthEnabled = do
+  let gridCols =
+        if basicAuthEnabled
+          then "grid-cols-1"
+          else
+            if freePricingEnabled
+              then "grid-cols-3"
+              else "grid-cols-2"
   div_ [class_ "flex flex-col gap-8 w-full"] do
     div_ [class_ "flex flex-col gap-2 w-full"] do
       div_ [class_ "flex items-center justify-between w-full gap-4"] do
@@ -106,10 +113,11 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled = do
         p_ [class_ " text-textWeak", id_ "num_requests"] "25 Million"
       input_ [type_ "range", min_ "20000000", max_ "500000000", step_ "10000000", value_ "20000000", class_ "range range-primary range-sm w-full", id_ "price_range"]
     div_ [class_ "flex flex-col gap-8 mt-6 w-full"] do
-      div_ [class_ $ "grid gap-8 w-full " <> if freePricingEnabled then "grid-cols-3" else "grid-cols-2"] do
-        when freePricingEnabled $ freePricing pid (currentPlan == "Free")
-        popularPricing pid lemonUrl (currentPlan == "Bring nothing") freePricingEnabled
-        systemsPricing pid criticalUrl (currentPlan == "Bring your own storage")
+      div_ [class_ $ "grid gap-8 w-full " <> gridCols] do
+        when basicAuthEnabled $ openSourcePricing pid (currentPlan == "Open Source")
+        when (freePricingEnabled && not basicAuthEnabled) $ freePricing pid (currentPlan == "Free")
+        when (not basicAuthEnabled) $ popularPricing pid lemonUrl (currentPlan == "Bring nothing") freePricingEnabled
+        when (not basicAuthEnabled) $ systemsPricing pid criticalUrl (currentPlan == "Bring your own storage")
     script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
     script_
       [text|
@@ -314,6 +322,52 @@ systemsPricing pid critical isCurrent = do
       , "Unlimited data retention period"
       , "Query years of data via monoscope"
       , "No extra cost for data retention"
+      ]
+
+
+openSourcePricing :: Projects.ProjectId -> Bool -> Html ()
+openSourcePricing pid isCurrent = do
+  div_
+    [ class_ "relative bg-bgRaised rounded-2xl py-11 px-4 outline outline-strokeWeak overflow-hidden"
+    , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
+    , id_ "openSourcePricing"
+    , hxSwap_ "none"
+    , hxIndicator_ "#loadingIndicator"
+    , hxVals_ "{\"plan\": \"Open Source\"}"
+    ]
+    $ do
+      div_
+        [ class_ "flex flex-col gap-2 h-full relative"
+        ]
+        do
+          div_ [class_ "w-full h-36 right-[-20px] top-[-45px] absolute bg-gradient-to-bl from-green-500/10 to-green-500/0"] pass
+          div_ [class_ "flex-col justify-start items-start gap-1 flex"] $ do
+            div_ [class_ "text-xl font-semibold text-textStrong"] "Open Source Community Edition"
+            div_ [class_ "text-textStrong text-sm"] "Self-hosted deployment"
+          div_ [class_ "flex items-center gap-1 mt-4"] do
+            div_ [class_ "flex items-end"] do
+              span_ [class_ "text-textStrong text-xl"] "$"
+              span_ [class_ "text-4xl text-textStrong"] "0"
+            div_ [class_ "flex flex-col text-textWeak text-sm"] do
+              span_ [class_ ""] "Free forever"
+          div_ do
+            button_
+              ( [ class_ $ "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg " <> if isCurrent then "bg-fillDisabled cursor-not-allowed border-0 text-textInverse-strong" else "bg-green-600 hover:bg-green-700 text-white"
+                , type_ "submit"
+                ]
+                  <> if isCurrent then [disabled_ "disabled"] else []
+              )
+              do
+                if isCurrent then "Current plan" else "Continue with Open Source"
+          included features "What's included:"
+  where
+    features =
+      [ "Unlimited events"
+      , "Unlimited team members"
+      , "Self-hosted deployment"
+      , "Full control over your data"
+      , "Community support"
+      , "All APItoolkit features"
       ]
 
 

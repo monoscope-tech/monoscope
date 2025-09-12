@@ -1,5 +1,4 @@
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE PackageImports #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Pages.Projects.CreateProject (
@@ -24,6 +23,7 @@ import BackgroundJobs qualified
 import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64
+import Data.ByteString.Base64 qualified as B64
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default (..))
 import Data.Effectful.UUID qualified as UUID
@@ -61,7 +61,6 @@ import System.Config
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, redirectCS)
 import Utils (insertIfNotExist, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
-import "base64" Data.ByteString.Base64 qualified as B64
 
 
 data CreateProjectForm = CreateProjectForm
@@ -109,7 +108,7 @@ projectOnboarding = do
   sess <- Sessions.getSession
   projects <- dbtToEff $ Projects.selectProjectsForUser sess.persistentSession.userId
   let projectM = V.find (\pr -> pr.paymentPlan == "ONBOARDING") projects
-      bwconf = (def :: BWConfig){sessM = Just sess, currProject = Nothing, pageTitle = "New Project"}
+      bwconf = (def :: BWConfig){sessM = Just sess, currProject = Nothing, pageTitle = "New Project", config = appCtx.config}
   case projectM of
     Just p -> do
       let h = "/p/" <> p.id.toText <> "/onboarding"
@@ -138,6 +137,7 @@ projectOnboarding = do
 --         (def :: BWConfig)
 --           { sessM = Just sess
 --           , pageTitle = "Create Project"
+--           , config = appCtx.config
 --           }
 --   addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, False, def @CreateProjectForm, def @CreateProjectFormError)
 
@@ -192,6 +192,7 @@ projectSettingsGetH pid = do
           , currProject = Just project
           , pageTitle = "Project settings"
           , isSettingsPage = True
+          , config = appCtx.config
           }
   addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, project.paymentPlan, True, createProj, def @CreateProjectFormError)
 
@@ -276,15 +277,16 @@ getSubscriptionId orderId apiKey = do
           return $ Just res
         Left err -> do
           return Nothing
-newtype PricingUpdateForm = PricingUpdateForm
+data PricingUpdateForm = PricingUpdateForm
   { orderIdM :: Maybe Text
+  , plan :: Maybe Text
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (Default, FromForm)
 
 
 pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (RespHeaders (Html ()))
-pricingUpdateH pid PricingUpdateForm{orderIdM} = do
+pricingUpdateH pid PricingUpdateForm{orderIdM, plan} = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -300,24 +302,29 @@ pricingUpdateH pid PricingUpdateForm{orderIdM} = do
         users <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
         forM_ users $ \user -> ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original user.email) pid.toText project.title name
 
-  case orderIdM of
-    Just orderId -> do
-      getSubscriptionId (Just orderId) apiKey >>= \case
-        Just sub | not (null sub.dataVal) -> do
-          let target = sub.dataVal Unsafe.!! 0
-              subId = show target.attributes.firstSubscriptionItem.subscriptionId
-              firstSubId = show target.attributes.firstSubscriptionItem.id
-              productName = target.attributes.productName
-          _ <- updatePricing productName subId firstSubId orderId
-          handleOnboarding productName
-        _ -> addErrorToast "Something went wrong while fetching subscription id" Nothing
-    Nothing -> do
-      _ <- updatePricing "Free" "" "" ""
-      handleOnboarding "Free"
-      users <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
-      let usersToDel = (\u -> u.id) <$> V.tail users
-      _ <- dbtToEff $ ProjectMembers.softDeleteProjectMembers $ V.toList usersToDel
-      pass
+  -- Handle Open Source plan when basic auth is enabled
+  case plan of
+    Just "Open Source" | envCfg.basicAuthEnabled -> do
+      _ <- updatePricing "Open Source" "" "" ""
+      handleOnboarding "Open Source"
+    _ -> case orderIdM of
+      Just orderId -> do
+        getSubscriptionId (Just orderId) apiKey >>= \case
+          Just sub | not (null sub.dataVal) -> do
+            let target = sub.dataVal Unsafe.!! 0
+                subId = show target.attributes.firstSubscriptionItem.subscriptionId
+                firstSubId = show target.attributes.firstSubscriptionItem.id
+                productName = target.attributes.productName
+            _ <- updatePricing productName subId firstSubId orderId
+            handleOnboarding productName
+          _ -> addErrorToast "Something went wrong while fetching subscription id" Nothing
+      Nothing -> do
+        _ <- updatePricing "Free" "" "" ""
+        handleOnboarding "Free"
+        users <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
+        let usersToDel = (\u -> u.id) <$> V.tail users
+        _ <- dbtToEff $ ProjectMembers.softDeleteProjectMembers $ V.toList usersToDel
+        pass
   if project.paymentPlan == "ONBOARDING"
     then do
       redirectCS $ "/p/" <> pid.toText <> "/"
@@ -336,19 +343,20 @@ pricingUpdateGetH pid = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
+          , config = appCtx.config
           }
   let envCfg = appCtx.config
       lemon = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
-  addRespHeaders $ PageCtx bwconf $ pricingPage_ pid lemon critical project.paymentPlan appCtx.config.enableFreetier
+  addRespHeaders $ PageCtx bwconf $ pricingPage_ pid lemon critical project.paymentPlan appCtx.config.enableFreetier appCtx.config.basicAuthEnabled
 
 
-pricingPage_ :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Html ()
-pricingPage_ pid lemon critical paymentPlan enableFreeTier = do
+pricingPage_ :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
+pricingPage_ pid lemon critical paymentPlan enableFreeTier basicAuthEnabled = do
   section_ [class_ "w-full h-full overflow-y-auto py-12"] do
     div_ [class_ "flex flex-col max-w-4xl mx-auto gap-10 px-4"] do
       h1_ [class_ "font-semibold text-4xl text-textStrong"] "Update pricing"
-      paymentPlanPicker pid lemon critical paymentPlan enableFreeTier
+      paymentPlanPicker pid lemon critical paymentPlan enableFreeTier basicAuthEnabled
 
 
 processProjectPostForm :: Valor.Valid CreateProjectForm -> Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
@@ -447,12 +455,14 @@ createProjectBody sess pid envCfg paymentPlan cp cpe = do
 projectDeleteGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 projectDeleteGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Delete Project"
           , isSettingsPage = True
+          , config = appCtx.config
           }
   addRespHeaders $ PageCtx bwconf $ deleteProjectBody pid
 
