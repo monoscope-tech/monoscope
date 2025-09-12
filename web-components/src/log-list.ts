@@ -228,8 +228,8 @@ export class LogList extends LitElement {
     // Preserve all existing query parameters and add json=true
     const p = new URLSearchParams(window.location.search);
     p.set('json', 'true');
-    console.log(this.nextFetchUrl);
-    return `${this.nextFetchUrl}?${p.toString()}`;
+    const pathName = window.location.pathname;
+    return `${window.location.origin}${pathName}?${p.toString()}`;
   }
 
   private buildRecentFetchUrl(): string {
@@ -255,21 +255,8 @@ export class LogList extends LitElement {
     if (this.spanListTree.length === 0) {
       return this.buildJsonUrl();
     }
-
-    // Always get the last item based on current direction
-    // TODO: fix getting last or first item is not always correct
-    const lastItem = this.flipDirection ? this.spanListTree[0] : this.spanListTree[this.spanListTree.length - 1];
-    const timestamp = lastItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
-
-    if (!timestamp) {
-      console.warn('No timestamp found for last item, using default URL');
-      return this.buildJsonUrl();
-    }
-
-    // Build URL from scratch with correct cursor
-    const url = new URL(this.buildJsonUrl(), window.location.origin);
-    url.searchParams.set('cursor', timestamp);
-    return url.toString();
+    console.log(this.nextFetchUrl);
+    return this.nextFetchUrl;
   }
 
   async fetchInitialData() {
@@ -588,9 +575,10 @@ export class LogList extends LitElement {
           // Update state
           this.hasMore = logsData.length > 0;
           // Only update URLs if not in a concurrent request situation
-          if (!this.isLoadingMore && !this.isFetchingRecent) {
+          if (!this.isFetchingRecent) {
             this.nextFetchUrl = nextUrl || '';
-            this.recentFetchUrl = recentUrl || '';
+          } else {
+            this.recentFetchUrl = recentUrl;
           }
 
           // Update the count if provided
