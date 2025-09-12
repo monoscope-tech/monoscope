@@ -530,11 +530,12 @@ export class LogList extends LitElement {
     return tree;
   }
 
-  expandTrace = (tracId: string, spanId: string, index: number) => {
+  expandTrace = (tracId: string, spanId: string) => {
     this.shouldScrollToBottom = false;
     this.expandedTraces[spanId] = !this.expandedTraces[spanId];
     const expanded = this.expandedTraces[spanId];
-    for (let i = index - 1; i < this.spanListTree.length; i++) {
+    let found = false;
+    for (let i = 0; i < this.spanListTree.length; i++) {
       const span = this.spanListTree[i];
       if (span.traceId === tracId) {
         if (span.id === spanId) {
@@ -545,8 +546,11 @@ export class LogList extends LitElement {
           span.show = expanded;
           this.expandedTraces[span.id] = expanded;
         }
+        found = true;
       } else {
-        break;
+        if (found) {
+          break;
+        }
       }
     }
     // For user interactions, update immediately
@@ -774,7 +778,7 @@ export class LogList extends LitElement {
 
   // Comment to allow classes be rendered.
   render() {
-    const list: (EventLine | 'end' | 'start')[] = [...this.spanListTree];
+    const list: (EventLine | 'end' | 'start')[] = this.view === 'tree' ? this.spanListTree.filter((e) => e.show) : [...this.spanListTree];
     list.push('end');
     list.unshift('start');
 
@@ -963,7 +967,7 @@ export class LogList extends LitElement {
     return getStyleClass(style);
   }
 
-  logItemCol = (rowData: EventLine, key: string, index: number): any => {
+  logItemCol = (rowData: EventLine, key: string): any => {
     const { data: dataArr, depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData;
     const wrapClass = this.wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
 
@@ -1066,7 +1070,7 @@ export class LogList extends LitElement {
                         @pointerdown=${(e: any) => {
                           e.stopPropagation();
                           e.preventDefault();
-                          this.expandTrace(traceId, id, index);
+                          this.expandTrace(traceId, id);
                         }}
                         class=${`hover:border-strokeBrand-strong rounded-sm ml-1 cursor-pointer shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
                       >
@@ -1156,7 +1160,7 @@ export class LogList extends LitElement {
     return this.tableHeadingWrapper(title, column, classes);
   }
 
-  logItemRow = (rowData: EventLine | 'end' | 'start', index: number) => {
+  logItemRow = (rowData: EventLine | 'end' | 'start') => {
     if (rowData === 'end') {
       if (this.flipDirection) {
         return this.fetchRecent();
@@ -1168,9 +1172,6 @@ export class LogList extends LitElement {
         return this.renderLoadMore();
       }
       return this.fetchRecent();
-    }
-    if (!rowData.show) {
-      return html`<tr class="h-0"></tr>`;
     }
     try {
       const s = rowData.type === 'log' ? 'logs' : 'spans';
@@ -1195,11 +1196,11 @@ export class LogList extends LitElement {
                 }`}
                 style=${width ? `width: ${width}px;` : ''}
               >
-                ${this.logItemCol(rowData, column, index)}
+                ${this.logItemCol(rowData, column)}
               </td>`;
             })}
           ${this.logsColumns.includes('latency_breakdown')
-            ? html`<td class="sticky right-0 bg-bgBase z-10 pl-2">${this.logItemCol(rowData, 'latency_breakdown', index)}</td>`
+            ? html`<td class="sticky right-0 bg-bgBase z-10 pl-2">${this.logItemCol(rowData, 'latency_breakdown')}</td>`
             : nothing}
         </tr>
       `;
