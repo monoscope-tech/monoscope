@@ -66,7 +66,7 @@ data BWConfig = BWConfig
   , freeTierExceeded :: Bool
   , hideNavbar :: Bool -- When True, hides the entire navbar
   , headContent :: Maybe (Html ()) -- Optional HTML content to include in the head
-  , envConfig :: Maybe EnvConfig -- Environment configuration for telemetry
+  , config :: EnvConfig -- Environment configuration for telemetry
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -371,41 +371,24 @@ bodyWrapper bcfg child = do
       let pTitle = maybe "" (.title) bcfg.currProject
       script_
         [text| window.addEventListener("load", (event) => {
-<<<<<<< HEAD
                   posthog.people.set_once({email: ${email}, name: "${name}", projectId: "${pidT}", projectTitle: "${pTitle}"});
                 });
                 echarts.connect('default');
       |]
-      -- Browser monitoring script (Monoscope) - only included when enabled
-      when bcfg.config.enableBrowserMonitoring
+      -- Initialize Monoscope only when telemetryProjectId is available
+      when (bcfg.config.telemetryProjectId /= "")
         $ script_
           [text| window.addEventListener("load", (event) => {
-        window.monoscope = new Monoscope({ projectId: "6d06b402-a667-4878-b12a-8621b8c6f37d", serviceName: "past-3_frontend", user:{email:${email}, name: "${name}"}});
-||||||| parent of 2d24eaea (guard monoscope-browser init via an env variable)
-        
-        posthog.people.set_once({email: ${email}, name: "${name}", projectId: "${pidT}", projectTitle: "${pTitle}"});
-        window.monoscope = new Monoscope({ projectId: "6d06b402-a667-4878-b12a-8621b8c6f37d", serviceName: "past-3_frontend", user:{email:${email}, name: "${name}"}});
-=======
-        
-        posthog.people.set_once({email: ${email}, name: "${name}", projectId: "${pidT}", projectTitle: "${pTitle}"});
->>>>>>> 2d24eaea (guard monoscope-browser init via an env variable)
-      });
-      |]
-      -- Initialize Monoscope only when telemetryProjectId is available
-      whenJust bcfg.envConfig \envCfg ->
-        when (envCfg.telemetryProjectId /= "")
-          $ script_
-            [text| window.addEventListener("load", (event) => {
-            window.monoscope = new Monoscope({ 
-              projectId: "${envCfg.telemetryProjectId}", 
-              serviceName: "${envCfg.telemetryServiceName}", 
-              user: {
-                email: ${email}, 
-                name: "${name}"
-              }
-            });
+          window.monoscope = new Monoscope({ 
+            projectId: "${bcfg.envConfig.telemetryProjectId}", 
+            serviceName: "${bcfg.envConfig.telemetryServiceName}", 
+            user: {
+              email: ${email}, 
+              name: "${name}"
+            }
           });
-          |]
+        });
+        |]
 
 
 projectsDropDown :: Projects.Project -> V.Vector Projects.Project -> Html ()

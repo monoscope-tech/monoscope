@@ -20,7 +20,7 @@ import Pkg.Components.Widget (WidgetAxis (..))
 import Pkg.Components.Widget qualified as Widget
 import PyF qualified
 import Relude hiding (ask, asks)
-import System.Config (AuthContext (..), EnvConfig (..))
+import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (checkFreeTierExceeded)
 

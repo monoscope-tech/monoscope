@@ -18,7 +18,7 @@ import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
 import Relude hiding (ask, asks)
-import System.Config (AuthContext (..), EnvConfig (..))
+import System.Config (AuthContext (..))
 import System.Types
 import Utils (faSprite_)
 

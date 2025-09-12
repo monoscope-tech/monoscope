@@ -30,7 +30,7 @@ import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
-import System.Config (AuthContext (..), EnvConfig (..))
+import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (checkFreeTierExceeded, faSprite_)

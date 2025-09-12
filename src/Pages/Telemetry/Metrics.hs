@@ -18,7 +18,7 @@ import Pages.Components qualified as Components
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
-import System.Config (AuthContext (..), EnvConfig (..))
+import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, parseTime, prettyPrintCount)
 

@@ -46,7 +46,7 @@ import Relude.Unsafe qualified as Unsafe
 import Servant (NoContent (..), ServerError, err404, errBody)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
-import System.Config (AuthContext (..), EnvConfig (..))
+import System.Config (AuthContext (..))
 import System.Types
 import Text.Slugify (slugify)
 import Utils (checkFreeTierExceeded, faSprite_)
@@ -110,7 +110,7 @@ dashboardPage_ pid dashId dash dashVM = do
             , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
             , value_ $ maybeToMonoid var.value
             ]
-          <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
+            <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
   const tagifyInstances = new Map();
@@ -292,38 +292,38 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
             let issuesVM = V.map (AnomalyList.IssueVM False now "24h") issues
             pure
               $ widget
-              & #html
-                ?~ renderText
-                  ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-                      $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml)
-                  )
+                & #html
+                  ?~ renderText
+                    ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
+                        $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml)
+                    )
           Widget.WTStat -> do
             stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
             pure
               $ widget
-              & #dataset
-                ?~ def
-                  { Widget.source = AE.Null
-                  , Widget.value = stat.dataFloat
-                  }
+                & #dataset
+                  ?~ def
+                    { Widget.source = AE.Null
+                    , Widget.value = stat.dataFloat
+                    }
           _ -> do
             metricsD <-
               Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
             pure
               $ widget
-              & #dataset
-                ?~ Widget.WidgetDataset
-                  { source =
-                      AE.toJSON
-                        $ V.cons
-                          (AE.toJSON <$> metricsD.headers)
-                          (AE.toJSON <<$>> metricsD.dataset)
-                  , rowsPerMin = metricsD.rowsPerMin
-                  , value = Just metricsD.rowsCount
-                  , from = metricsD.from
-                  , to = metricsD.to
-                  , stats = metricsD.stats
-                  }
+                & #dataset
+                  ?~ Widget.WidgetDataset
+                    { source =
+                        AE.toJSON
+                          $ V.cons
+                            (AE.toJSON <$> metricsD.headers)
+                            (AE.toJSON <<$>> metricsD.dataset)
+                    , rowsPerMin = metricsD.rowsPerMin
+                    , value = Just metricsD.rowsCount
+                    , from = metricsD.from
+                    , to = metricsD.to
+                    , stats = metricsD.stats
+                    }
       else pure widget
   -- Recursively process child widgets, if any.
   case widget'.children of
