@@ -14,7 +14,7 @@ import Lucid
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (navBar)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Relude
@@ -118,6 +118,7 @@ shareLinkGetH sid = do
           { sessM = Nothing
           , currProject = Nothing
           , pageTitle = "Share request log"
+          , enableBrowserMonitoring = authCtx.config.enableBrowserMonitoring
           }
   pure $ ShareLinkGet $ PageCtx bwconf uiM
 

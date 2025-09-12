@@ -64,7 +64,7 @@ integrationsSettingsGetH pid = do
           }
   slackInfo <- getProjectSlackData pid
 
-  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations", isSettingsPage = True}
+  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations", isSettingsPage = True, enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring}
   addRespHeaders $ bodyWrapper bwconf $ integrationsBody sess.persistentSession appCtx.config True createProj (Just project.notificationsChannel) project.whatsappNumbers slackInfo
 
 

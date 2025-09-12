@@ -11,7 +11,7 @@ import Models.Users.Sessions qualified as Sessions
 import Network.Minio qualified as Minio
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (ask)
-import System.Config (AuthContext)
+import System.Config (AuthContext(..), EnvConfig(..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Utils (faSprite_)
 
@@ -58,8 +58,8 @@ brings3RemoveH pid = do
 bringS3GetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 bringS3GetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
-  appCtx <- ask @AuthContext
-  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Bring your own s3", isSettingsPage = True}
+  appCtx <- ask @AuthContext -- Get auth context
+  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Bring your own s3", isSettingsPage = True, enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring}
   addRespHeaders $ bodyWrapper bwconf $ bringS3Page pid project.s3Bucket
 
 

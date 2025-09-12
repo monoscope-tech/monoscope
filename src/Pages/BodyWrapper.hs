@@ -66,6 +66,7 @@ data BWConfig = BWConfig
   , freeTierExceeded :: Bool
   , hideNavbar :: Bool -- When True, hides the entire navbar
   , headContent :: Maybe (Html ()) -- Optional HTML content to include in the head
+  , enableBrowserMonitoring :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -400,9 +401,14 @@ bodyWrapper bcfg child = do
         [text| window.addEventListener("load", (event) => {
         
         posthog.people.set_once({email: ${email}, name: "${name}", projectId: "${pidT}", projectTitle: "${pTitle}"});
-        window.monoscope = new Monoscope({ projectId: "6d06b402-a667-4878-b12a-8621b8c6f37d", serviceName: "past-3_frontend", user:{email:${email}, name: "${name}"}});
       });
       echarts.connect('default');
+      |]
+      -- Browser monitoring script (Monoscope) - only included when enabled
+      when bcfg.enableBrowserMonitoring $ script_
+        [text| window.addEventListener("load", (event) => {
+        window.monoscope = new Monoscope({ projectId: "6d06b402-a667-4878-b12a-8621b8c6f37d", serviceName: "past-3_frontend", user:{email:${email}, name: "${name}"}});
+      });
       |]
 
 

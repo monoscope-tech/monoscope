@@ -192,7 +192,7 @@ sqlFromQueryComponents sqlCfg qc =
         Just "service-entry-spans" ->
           [fmt|WITH ranked_spans AS (SELECT *, resource->'service'->>'name' AS service_name,
                 ROW_NUMBER() OVER (PARTITION BY trace_id, resource->'service'->>'name' ORDER BY start_time) AS rn
-                FROM telemetry.spans where project_id='{sqlCfg.pid.toText}' and ({whereCondition})
+                FROM otel_logs_and_spans where project_id='{sqlCfg.pid.toText}' and ({whereCondition})
                 {groupByClause}
                 )
                SELECT {selectClause} FROM ranked_spans

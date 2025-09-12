@@ -108,7 +108,7 @@ projectOnboarding = do
   sess <- Sessions.getSession
   projects <- dbtToEff $ Projects.selectProjectsForUser sess.persistentSession.userId
   let projectM = V.find (\pr -> pr.paymentPlan == "ONBOARDING") projects
-      bwconf = (def :: BWConfig){sessM = Just sess, currProject = Nothing, pageTitle = "New Project"}
+      bwconf = (def :: BWConfig){sessM = Just sess, currProject = Nothing, pageTitle = "New Project", enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring}
   case projectM of
     Just p -> do
       let h = "/p/" <> p.id.toText <> "/onboarding"
@@ -137,6 +137,7 @@ projectOnboarding = do
 --         (def :: BWConfig)
 --           { sessM = Just sess
 --           , pageTitle = "Create Project"
+--           , enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring
 --           }
 --   addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, False, def @CreateProjectForm, def @CreateProjectFormError)
 
@@ -191,6 +192,7 @@ projectSettingsGetH pid = do
           , currProject = Just project
           , pageTitle = "Project settings"
           , isSettingsPage = True
+          , enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring
           }
   addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, project.paymentPlan, True, createProj, def @CreateProjectFormError)
 
@@ -275,15 +277,16 @@ getSubscriptionId orderId apiKey = do
           return $ Just res
         Left err -> do
           return Nothing
-newtype PricingUpdateForm = PricingUpdateForm
+data PricingUpdateForm = PricingUpdateForm
   { orderIdM :: Maybe Text
+  , plan :: Maybe Text
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (Default, FromForm)
 
 
 pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (RespHeaders (Html ()))
-pricingUpdateH pid PricingUpdateForm{orderIdM} = do
+pricingUpdateH pid PricingUpdateForm{orderIdM, plan} = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -299,7 +302,12 @@ pricingUpdateH pid PricingUpdateForm{orderIdM} = do
         users <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
         forM_ users $ \user -> ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original user.email) pid.toText project.title name
 
-  case orderIdM of
+  -- Handle Open Source plan when basic auth is enabled
+  case plan of
+    Just "Open Source" | envCfg.basicAuthEnabled -> do
+      _ <- updatePricing "Open Source" "" "" ""
+      handleOnboarding "Open Source"
+    _ -> case orderIdM of
     Just orderId -> do
       getSubscriptionId (Just orderId) apiKey >>= \case
         Just sub | not (null sub.dataVal) -> do
@@ -335,19 +343,20 @@ pricingUpdateGetH pid = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
+          , enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring
           }
   let envCfg = appCtx.config
       lemon = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
-  addRespHeaders $ PageCtx bwconf $ pricingPage_ pid lemon critical project.paymentPlan appCtx.config.enableFreetier
+  addRespHeaders $ PageCtx bwconf $ pricingPage_ pid lemon critical project.paymentPlan appCtx.config.enableFreetier appCtx.config.basicAuthEnabled
 
 
-pricingPage_ :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Html ()
-pricingPage_ pid lemon critical paymentPlan enableFreeTier = do
+pricingPage_ :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
+pricingPage_ pid lemon critical paymentPlan enableFreeTier basicAuthEnabled = do
   section_ [class_ "w-full h-full overflow-y-auto py-12"] do
     div_ [class_ "flex flex-col max-w-4xl mx-auto gap-10 px-4"] do
       h1_ [class_ "font-semibold text-4xl text-textStrong"] "Update pricing"
-      paymentPlanPicker pid lemon critical paymentPlan enableFreeTier
+      paymentPlanPicker pid lemon critical paymentPlan enableFreeTier basicAuthEnabled
 
 
 processProjectPostForm :: Valor.Valid CreateProjectForm -> Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
@@ -446,12 +455,14 @@ createProjectBody sess pid envCfg paymentPlan cp cpe = do
 projectDeleteGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 projectDeleteGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "Delete Project"
           , isSettingsPage = True
+          , enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring
           }
   addRespHeaders $ PageCtx bwconf $ deleteProjectBody pid
 

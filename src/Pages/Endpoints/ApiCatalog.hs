@@ -6,6 +6,7 @@ import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
 import Lucid
@@ -19,6 +20,7 @@ import Pkg.Components.Widget (WidgetAxis (..))
 import Pkg.Components.Widget qualified as Widget
 import PyF qualified
 import Relude hiding (ask, asks)
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (checkFreeTierExceeded)
 
@@ -26,6 +28,7 @@ import Utils (checkFreeTierExceeded)
 apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders CatalogList)
 apiCatalogH pid sortM timeFilter requestTypeM skipM = do
   (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
 
   let requestType = fromMaybe "Incoming" requestTypeM
 
@@ -149,6 +152,7 @@ endpointListGetH
   -> ATAuthCtx (RespHeaders EndpointRequestStatsVM)
 endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM hxBoostedM hxCurrentURL loadMoreM searchM = do
   (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
   let (ackd, archived, currentFilterTab) = case filterTM of
         Just "Active" -> (True, False, "Active")
         Just "Inbox" -> (False, False, "Inbox")
@@ -171,6 +175,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
           , prePageTitle = Just "API Catalog"
           , pageTitle = "Endpoints for " <> host
           , freeTierExceeded = freeTierExceeded
+          , enableBrowserMonitoring = appCtx.env.enableBrowserMonitoring
           , navTabs =
               Just
                 $ toHtml

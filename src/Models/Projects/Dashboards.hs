@@ -36,7 +36,7 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DashboardUtils qualified as DashboardUtils
 import Relude
-import Servant (FromHttpApiData, ServerError (..), err401)
+import Servant (FromHttpApiData, ServerError (..), err404)
 import System.Directory (listDirectory)
 
 
@@ -145,7 +145,7 @@ readDashboardEndpoint uri = do
   fileResp <- W.get (toString uri)
   Yml.decodeEither' (toStrict $ fileResp ^. W.responseBody)
     & either
-      (\e -> throwError $ err401{errBody = "Error decoding dashboard: " <> show e})
+      (\e -> throwError $ err404{errBody = "Error decoding dashboard: " <> show e})
       pure
 
 

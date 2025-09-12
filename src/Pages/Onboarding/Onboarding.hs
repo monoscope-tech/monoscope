@@ -47,9 +47,9 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import Servant (err401, errBody)
+import Servant (err404, errBody)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, redirectCS)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, redirectCS)
 import Utils (faSprite_, getOtelLangVersion, insertIfNotExist, lookupValueText, onpointerdown_)
 import Web.FormUrlEncoded
 
@@ -58,10 +58,11 @@ import Web.FormUrlEncoded
 onboardingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 onboardingGetH pid onboardingStepM = do
   (sess, project) <- Sessions.sessionAndProject pid
-  appContx <- ask @AuthContext
+  appCtx <- ask @AuthContext
   let bodyConfig =
         (def :: BWConfig)
           { currProject = Nothing
+          , enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring
           }
       questions = fromMaybe (AE.Object []) project.questions
       onboardingStep = fromMaybe "Info" onboardingStepM
@@ -90,16 +91,16 @@ onboardingGetH pid onboardingStepM = do
           emails = project.notifyEmails
           hasDiscord = isJust discord
           hasSlack = isJust slack
-      addRespHeaders $ PageCtx bodyConfig $ notifChannels appContx pid phone emails hasDiscord hasSlack
+      addRespHeaders $ PageCtx bodyConfig $ notifChannels appCtx pid phone emails hasDiscord hasSlack
     "Integration" -> do
       apiKey <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
       let key = if V.length apiKey > 0 then let defKey = V.head apiKey in defKey.keyPrefix else "<API_KEY>"
       addRespHeaders $ PageCtx bodyConfig $ integrationsPage pid key
     "Pricing" -> do
-      let lemonUrl = appContx.config.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
-          critical = appContx.config.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
+      let lemonUrl = appCtx.config.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
+          critical = appCtx.config.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
           paymentPlan = project.paymentPlan
-      addRespHeaders $ PageCtx bodyConfig $ pricingPage pid lemonUrl critical paymentPlan appContx.config.enableFreetier
+      addRespHeaders $ PageCtx bodyConfig $ pricingPage pid lemonUrl critical paymentPlan appCtx.config.enableFreetier appCtx.config.basicAuthEnabled
     _ -> do
       let firstName = sess.user.firstName
           lastName = sess.user.lastName
@@ -189,7 +190,7 @@ checkIntegrationGet pid languageM = do
           let l = fromMaybe "" (getOtelLangVersion lg)
            in "and resource ->> 'telemetry.sdk.language' = '" <> l <> "'"
         _ -> ""
-      q = [text|SELECT span_id, span_name FROM telemetry.spans WHERE project_id = ? $extrQ|]
+      q = [text|SELECT context___span_id, name FROM otel_logs_and_spans WHERE project_id = ? $extrQ|]
   v <- dbtToEff (queryOne (Query $ encodeUtf8 q) (Only pid) :: (DBT IO (Maybe (Text, Text))))
   if isJust v
     then do
@@ -199,7 +200,9 @@ checkIntegrationGet pid languageM = do
         _ -> do
           redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Pricing"
           addRespHeaders ""
-    else throwError (err401{errBody = "No events found yet"})
+    else do
+      addErrorToast "No events found yet" Nothing
+      addRespHeaders ""
 
 
 verifiedCheck :: Html ()
@@ -264,13 +267,13 @@ onboardingCompleteBody pid = do
   script_ [src_ "/public/assets/js/confetti.js"] ("" :: Text)
 
 
-pricingPage :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Html ()
-pricingPage pid lemon critical paymentPlan freeTierEnabled = do
+pricingPage :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
+pricingPage pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled = do
   div_ [class_ "w-[1100px] mx-auto mt-[70px] mb-10 mx-auto"] $ do
     div_ [class_ "flex-col gap-6 flex w-full"] $ do
       div_ [class_ "w-1/2"] $ do
         stepIndicator 5 "Please pick a plan" $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
-      paymentPlanPicker pid lemon critical paymentPlan freeTierEnabled
+      paymentPlanPicker pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled
       div_ [class_ "flex flex-col gap-2 w-full"] do
         span_ [class_ " text-textStrong text-2xl font-semibold mt-20"] "FAQ"
         div_ [class_ "flex flex-col mt-4 w-full"] do
@@ -407,8 +410,8 @@ integrationsPage pid apikey =
         $ div_ [class_ "max-w-[550px]"]
         $ stepIndicator 4 "Instrument your apps or servers"
         $ "/p/"
-        <> pid.toText
-        <> "/onboarding?step=NotifChannel"
+          <> pid.toText
+          <> "/onboarding?step=NotifChannel"
       div_ [class_ "flex-col w-full gap-4 flex mt-4 px-12 overflow-y-auto flex-grow"] do
         p_ [class_ "text-textStrong"] do
           "Send Logs, Metrics or Traces. Select an item below for instructions. "
@@ -512,7 +515,7 @@ integrationsPage pid apikey =
                           , hxSelect_ "#mainArticle"
                           , hxIndicator_ $ "#fw-indicator-" <> lang
                           ]
-                        <> [checked_ | idx == 0]
+                          <> [checked_ | idx == 0]
                       unless (T.null fwIcon) $ img_ [class_ "h-5 w-5", src_ $ "https://apitoolkit.io/assets/img/framework-logos/" <> fwIcon]
                       span_ $ toHtml fwName
 

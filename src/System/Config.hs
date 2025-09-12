@@ -103,6 +103,7 @@ data EnvConfig = EnvConfig
   , basicAuthEnabled :: Bool
   , basicAuthUsername :: Text
   , basicAuthPassword :: Text
+  , enableBrowserMonitoring :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)

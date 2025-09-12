@@ -18,7 +18,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Relude hiding (ask)
-import System.Config (AuthContext (config), EnvConfig (apiKeyEncryptionSecretKey))
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
@@ -88,6 +88,7 @@ instance ToHtml ApiMut where
 apiGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ApiGet)
 apiGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
   apiKeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
   let bwconf =
         (def :: BWConfig)
@@ -95,6 +96,7 @@ apiGetH pid = do
           , currProject = Just project
           , pageTitle = "API keys"
           , isSettingsPage = True
+          , enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring
           }
   addRespHeaders $ ApiGet $ PageCtx bwconf (pid, apiKeys)
 

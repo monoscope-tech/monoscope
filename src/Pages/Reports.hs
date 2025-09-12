@@ -29,6 +29,7 @@ import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTim
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (getAeson)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Apis.Anomalies qualified as Anomalies
@@ -40,7 +41,8 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Relude
+import Relude hiding (ask)
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Text.Printf (printf)
 import Utils (checkFreeTierExceeded, faSprite_)
@@ -100,45 +102,45 @@ instance AE.FromJSON ReportAnomalyType where
           Just "ATEndpoint" ->
             ATEndpoint
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
               <*> o
-              AE..: "endpointMethod"
+                AE..: "endpointMethod"
               <*> o
-              AE..: "eventsCount"
+                AE..: "eventsCount"
           Just "ATShape" ->
             ATShape
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
               <*> o
-              AE..: "endpointMethod"
+                AE..: "endpointMethod"
               <*> o
-              AE..: "targetHash"
+                AE..: "targetHash"
               <*> o
-              AE..: "newUniqueFields"
+                AE..: "newUniqueFields"
               <*> o
-              AE..: "updatedFieldFormats"
+                AE..: "updatedFieldFormats"
               <*> o
-              AE..: "deletedFields"
+                AE..: "deletedFields"
               <*> o
-              AE..: "eventsCount"
+                AE..: "eventsCount"
           Just "ATFormat" ->
             ATFormat
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
               <*> o
-              AE..: "keyPath"
+                AE..: "keyPath"
               <*> o
-              AE..: "endpointMethod"
+                AE..: "endpointMethod"
               <*> o
-              AE..: "formatType"
+                AE..: "formatType"
               <*> o
-              AE..: "formatExamples"
+                AE..: "formatExamples"
               <*> o
-              AE..: "eventsCount"
+                AE..: "eventsCount"
           Just "ATRuntimeException" ->
             ATRuntimeException
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
           _ -> pure UnknownAnomaly
 
 
@@ -170,6 +172,7 @@ instance ToHtml ReportsPost where
 singleReportGetH :: Projects.ProjectId -> Reports.ReportId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
 singleReportGetH pid rid hxRequestM = do
   (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
   report <- dbtToEff $ Reports.getReportById rid
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
   let bwconf =
@@ -178,6 +181,7 @@ singleReportGetH pid rid hxRequestM = do
           , currProject = Just project
           , pageTitle = "Report"
           , freeTierExceeded = freeTierExceeded
+          , enableBrowserMonitoring = appCtx.env.enableBrowserMonitoring
           }
   case hxRequestM of
     Just _ -> addRespHeaders $ ReportsGetSingle' (pid, report)
@@ -187,6 +191,7 @@ singleReportGetH pid rid hxRequestM = do
 reportsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
 reportsGetH pid page hxRequest hxBoosted = do
   (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
   let p = toString (fromMaybe "0" page)
   let pg = fromMaybe 0 (readMaybe p :: Maybe Int)
 
@@ -202,6 +207,7 @@ reportsGetH pid page hxRequest hxBoosted = do
               , currProject = Just project
               , pageTitle = "Reports"
               , freeTierExceeded = freeTierExceeded
+              , enableBrowserMonitoring = appCtx.env.enableBrowserMonitoring
               }
       addRespHeaders $ ReportsGetMain $ PageCtx bwconf (pid, reports, nextUrl, project.dailyNotif, project.weeklyNotif)
 
@@ -452,23 +458,23 @@ getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
                 AE.Success (apiData :: Issues.APIChangeData) ->
                   AE.object
                     $ baseObject
-                    <> [ "tag" AE..= "ATShape"
-                       , "deletedFields" AE..= length apiData.deletedFields
-                       , "endpointMethod" AE..= apiData.endpointMethod
-                       , "endpointUrlPath" AE..= apiData.endpointPath
-                       , "newUniqueFields" AE..= length apiData.newFields
-                       , "updatedFields" AE..= length apiData.modifiedFields
-                       ]
+                      <> [ "tag" AE..= "ATShape"
+                         , "deletedFields" AE..= length apiData.deletedFields
+                         , "endpointMethod" AE..= apiData.endpointMethod
+                         , "endpointUrlPath" AE..= apiData.endpointPath
+                         , "newUniqueFields" AE..= length apiData.newFields
+                         , "updatedFields" AE..= length apiData.modifiedFields
+                         ]
                 _ -> AE.object baseObject
             Issues.RuntimeException ->
               case AE.fromJSON (getAeson issue.issueData) of
                 AE.Success (errorData :: Issues.RuntimeExceptionData) ->
                   AE.object
                     $ baseObject
-                    <> [ "tag" AE..= "ATRuntimeException"
-                       , "endpointMethod" AE..= fromMaybe "UNKNOWN" errorData.requestMethod
-                       , "endpointUrlPath" AE..= fromMaybe "/" errorData.requestPath
-                       ]
+                      <> [ "tag" AE..= "ATRuntimeException"
+                         , "endpointMethod" AE..= fromMaybe "UNKNOWN" errorData.requestMethod
+                         , "endpointUrlPath" AE..= fromMaybe "/" errorData.requestPath
+                         ]
                 _ -> AE.object baseObject
             _ -> AE.object baseObject
 
