@@ -104,8 +104,8 @@ data EnvConfig = EnvConfig
   , basicAuthUsername :: Text
   , basicAuthPassword :: Text
   , enableBrowserMonitoring :: Bool
-  -- External scripts configuration
-  , googleTagManagerId :: Maybe Text
+  , -- External scripts configuration
+    googleTagManagerId :: Maybe Text
   , googleAdsConversionId :: Maybe Text
   , facebookPixelId1 :: Maybe Text
   , facebookPixelId2 :: Maybe Text
