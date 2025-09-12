@@ -307,24 +307,24 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan} = do
     Just "Open Source" | envCfg.basicAuthEnabled -> do
       _ <- updatePricing "Open Source" "" "" ""
       handleOnboarding "Open Source"
-    _ -> case orderIdM of {}
-    Just orderId -> do
-      getSubscriptionId (Just orderId) apiKey >>= \case
-        Just sub | not (null sub.dataVal) -> do
-          let target = sub.dataVal Unsafe.!! 0
-              subId = show target.attributes.firstSubscriptionItem.subscriptionId
-              firstSubId = show target.attributes.firstSubscriptionItem.id
-              productName = target.attributes.productName
-          _ <- updatePricing productName subId firstSubId orderId
-          handleOnboarding productName
-        _ -> addErrorToast "Something went wrong while fetching subscription id" Nothing
-    Nothing -> do
-      _ <- updatePricing "Free" "" "" ""
-      handleOnboarding "Free"
-      users <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
-      let usersToDel = (\u -> u.id) <$> V.tail users
-      _ <- dbtToEff $ ProjectMembers.softDeleteProjectMembers $ V.toList usersToDel
-      pass
+    _ -> case orderIdM of
+      Just orderId -> do
+        getSubscriptionId (Just orderId) apiKey >>= \case
+          Just sub | not (null sub.dataVal) -> do
+            let target = sub.dataVal Unsafe.!! 0
+                subId = show target.attributes.firstSubscriptionItem.subscriptionId
+                firstSubId = show target.attributes.firstSubscriptionItem.id
+                productName = target.attributes.productName
+            _ <- updatePricing productName subId firstSubId orderId
+            handleOnboarding productName
+          _ -> addErrorToast "Something went wrong while fetching subscription id" Nothing
+      Nothing -> do
+        _ <- updatePricing "Free" "" "" ""
+        handleOnboarding "Free"
+        users <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
+        let usersToDel = (\u -> u.id) <$> V.tail users
+        _ <- dbtToEff $ ProjectMembers.softDeleteProjectMembers $ V.toList usersToDel
+        pass
   if project.paymentPlan == "ONBOARDING"
     then do
       redirectCS $ "/p/" <> pid.toText <> "/"
