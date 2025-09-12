@@ -99,9 +99,13 @@ dateTime t endTM = do
 
 paymentPlanPicker :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
 paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicAuthEnabled = do
-  let gridCols = if basicAuthEnabled then "grid-cols-1"
-                 else if freePricingEnabled then "grid-cols-3" 
-                 else "grid-cols-2"
+  let gridCols =
+        if basicAuthEnabled
+          then "grid-cols-1"
+          else
+            if freePricingEnabled
+              then "grid-cols-3"
+              else "grid-cols-2"
   div_ [class_ "flex flex-col gap-8 w-full"] do
     div_ [class_ "flex flex-col gap-2 w-full"] do
       div_ [class_ "flex items-center justify-between w-full gap-4"] do
@@ -348,9 +352,11 @@ openSourcePricing pid isCurrent = do
               span_ [class_ ""] "Free forever"
           div_ do
             button_
-              ([ class_ $ "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg " <> if isCurrent then "bg-fillDisabled cursor-not-allowed border-0 text-textInverse-strong" else "bg-green-600 hover:bg-green-700 text-white"
-              , type_ "submit"
-              ] <> if isCurrent then [disabled_ "disabled"] else [])
+              ( [ class_ $ "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg " <> if isCurrent then "bg-fillDisabled cursor-not-allowed border-0 text-textInverse-strong" else "bg-green-600 hover:bg-green-700 text-white"
+                , type_ "submit"
+                ]
+                  <> if isCurrent then [disabled_ "disabled"] else []
+              )
               do
                 if isCurrent then "Current plan" else "Continue with Open Source"
           included features "What's included:"
@@ -363,6 +369,7 @@ openSourcePricing pid isCurrent = do
       , "Community support"
       , "All APItoolkit features"
       ]
+
 
 included :: [Text] -> Html () -> Html ()
 included features title =

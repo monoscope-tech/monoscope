@@ -10,6 +10,7 @@ import Data.Aeson.KeyMap qualified as KEM
 import Data.Base64.Types qualified as B64
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
+import Data.ByteString.Base64 qualified as B64
 import Data.Cache qualified as Cache
 import Data.Effectful.UUID (UUIDEff)
 import Data.HashMap.Strict qualified as HashMap
@@ -63,7 +64,6 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (runBackground)
 import Utils (b64ToJson, freeTierDailyMaxEvents, nestedJsonFromDotNotation)
-import Data.ByteString.Base64 qualified as B64
 
 
 -- | Minimum valid timestamp in nanoseconds (Year 2000)

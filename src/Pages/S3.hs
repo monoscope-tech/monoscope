@@ -11,7 +11,7 @@ import Models.Users.Sessions qualified as Sessions
 import Network.Minio qualified as Minio
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (ask)
-import System.Config (AuthContext(..), EnvConfig(..))
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Utils (faSprite_)
 

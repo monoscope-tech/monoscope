@@ -14,9 +14,9 @@ module Web.Auth (
 
 import Control.Error (note)
 import Control.Lens qualified as L
-import Data.ByteString.Base64 qualified as B64
 import Control.Monad.Except qualified as T
 import Data.Aeson.Lens (key, _String)
+import Data.ByteString.Base64 qualified as B64
 import Data.Effectful.UUID (UUIDEff, runUUID)
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.List qualified as L
@@ -34,14 +34,13 @@ import Effectful (
  )
 import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
+import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.PostgreSQL.Transact.Effect qualified as DB
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time (Time, runTime)
 import Log (Logger)
 import Lucid (Html)
-import Effectful.Log (Log)
-import System.Logging (logInfo)
 import Lucid.Html5 (
   a_,
   body_,
@@ -55,7 +54,7 @@ import Lucid.Html5 (
 import Models.Users.Sessions (craftSessionCookie, emptySessionCookie)
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
-import Network.HTTP.Types (hCookie, hAuthorization)
+import Network.HTTP.Types (hAuthorization, hCookie)
 import Network.Wai (Request (rawPathInfo, rawQueryString, requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Pkg.ConvertKit qualified as ConvertKit
@@ -72,13 +71,14 @@ import System.Config (
     auth0Domain,
     auth0LogoutRedirect,
     auth0Secret,
-    convertkitApiKey,
-    environment,
     basicAuthEnabled,
+    basicAuthPassword,
     basicAuthUsername,
-    basicAuthPassword
+    convertkitApiKey,
+    environment
   ),
  )
+import System.Logging (logInfo)
 import System.Logging qualified as Logging
 import System.Types (ATBaseCtx)
 import Utils (escapedQueryPartial)
@@ -96,7 +96,7 @@ validateBasicAuth config authHeader = do
   let decoded = B64.decodeBase64Lenient (encodeUtf8 stripped)
   let decodedText = decodeUtf8 decoded
   case T.splitOn ":" decodedText of
-    [username, password] -> 
+    [username, password] ->
       if username == config.basicAuthUsername && password == config.basicAuthPassword
         then Just (username, password)
         else Nothing
@@ -114,7 +114,7 @@ authHandler logger env =
       & runTime
       & effToHandler
   where
-    handler :: (DB :> es, Error ServerError :> es, HTTP :> es, IOE :> es, Time :> es, UUIDEff :> es, Log :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
+    handler :: (DB :> es, Error ServerError :> es, HTTP :> es, IOE :> es, Log :> es, Time :> es, UUIDEff :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
     handler req = do
       -- Check if basic auth is enabled and try to authenticate
       if env.config.basicAuthEnabled
@@ -145,11 +145,11 @@ authHandler logger env =
                 Nothing -> do
                   -- No valid session and basic auth is enabled - return 401
                   logInfo "Basic auth required" "No valid auth provided"
-                  throwError $ err401 {errHeaders = [("WWW-Authenticate", "Basic realm=\"APItoolkit\"")]}
+                  throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"APItoolkit\"")]}
         else
           -- Basic auth not enabled, use normal cookie auth
           proceedWithCookieAuth req
-    
+
     proceedWithCookieAuth req = do
       let cookies = getCookies req
       mbPersistentSessionId <- handlerToEff $ getSessionId cookies
