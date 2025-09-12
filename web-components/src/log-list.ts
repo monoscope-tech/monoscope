@@ -255,7 +255,6 @@ export class LogList extends LitElement {
     if (this.spanListTree.length === 0) {
       return this.buildJsonUrl();
     }
-    console.log(this.nextFetchUrl);
     return this.nextFetchUrl;
   }
 
