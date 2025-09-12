@@ -66,7 +66,7 @@ data BWConfig = BWConfig
   , freeTierExceeded :: Bool
   , hideNavbar :: Bool -- When True, hides the entire navbar
   , headContent :: Maybe (Html ()) -- Optional HTML content to include in the head
-  , config :: EnvConfig
+  , envConfig :: Maybe EnvConfig -- Environment configuration for telemetry
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -147,34 +147,6 @@ bodyWrapper bcfg child = do
 
         script_
           [text|
-
-            function codeToggle(e) {
-              if(e.target.checked) {
-                   window.updateEditorVal()
-                }
-            }
-            function addToAssertions(event, assertion, operation) {
-                const parent = event.target.closest(".tab-content")
-                const step = Number(parent.getAttribute('data-step'));
-                const target = event.target.parentNode.parentNode.parentNode
-                const path = target.getAttribute('data-field-path');
-                const value = target.getAttribute('data-field-value');
-                let expression = "$.resp.json." + path
-                if(operation) {
-                  expression +=  ' ' + operation + ' ' + value;
-                  }
-                window.updateStepAssertions(assertion, expression, step);
-            }
-
-         function saveStepData()  {
-           const data = document.getElementById('stepsEditor').collectionSteps
-           const parsedData = validateYaml(data)
-           if(parsedData === undefined) {
-              return undefined
-            }
-           return parsedData;
-          }
-
           function getTags() {
             console.log("here")
             const tag = window.tagify.value
@@ -399,6 +371,7 @@ bodyWrapper bcfg child = do
       let pTitle = maybe "" (.title) bcfg.currProject
       script_
         [text| window.addEventListener("load", (event) => {
+<<<<<<< HEAD
                   posthog.people.set_once({email: ${email}, name: "${name}", projectId: "${pidT}", projectTitle: "${pTitle}"});
                 });
                 echarts.connect('default');
@@ -408,8 +381,31 @@ bodyWrapper bcfg child = do
         $ script_
           [text| window.addEventListener("load", (event) => {
         window.monoscope = new Monoscope({ projectId: "6d06b402-a667-4878-b12a-8621b8c6f37d", serviceName: "past-3_frontend", user:{email:${email}, name: "${name}"}});
+||||||| parent of 2d24eaea (guard monoscope-browser init via an env variable)
+        
+        posthog.people.set_once({email: ${email}, name: "${name}", projectId: "${pidT}", projectTitle: "${pTitle}"});
+        window.monoscope = new Monoscope({ projectId: "6d06b402-a667-4878-b12a-8621b8c6f37d", serviceName: "past-3_frontend", user:{email:${email}, name: "${name}"}});
+=======
+        
+        posthog.people.set_once({email: ${email}, name: "${name}", projectId: "${pidT}", projectTitle: "${pTitle}"});
+>>>>>>> 2d24eaea (guard monoscope-browser init via an env variable)
       });
       |]
+      -- Initialize Monoscope only when telemetryProjectId is available
+      whenJust bcfg.envConfig \envCfg ->
+        when (envCfg.telemetryProjectId /= "")
+          $ script_
+            [text| window.addEventListener("load", (event) => {
+            window.monoscope = new Monoscope({ 
+              projectId: "${envCfg.telemetryProjectId}", 
+              serviceName: "${envCfg.telemetryServiceName}", 
+              user: {
+                email: ${email}, 
+                name: "${name}"
+              }
+            });
+          });
+          |]
 
 
 projectsDropDown :: Projects.Project -> V.Vector Projects.Project -> Html ()
@@ -459,9 +455,6 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
         -- Full logos (shown when sidebar is expanded)
         img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:block dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
         img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:dark:block", src_ "/public/assets/svgs/logo_white.svg"]
-      -- Mini logos (shown when sidebar is collapsed)
-      -- img_ [class_ "h-10 w-10 block group-has-[#sidenav-toggle:checked]/pg:hidden dark:hidden", src_ "/public/assets/svgs/logo_mini_black.svg"]
-      -- img_ [class_ "h-10 w-10 hidden dark:block group-has-[#sidenav-toggle:checked]/pg:dark:hidden", src_ "/public/assets/svgs/logo_mini_white.svg"]
       label_ [class_ "cursor-pointer text-strokeStrong"] do
         input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`)|]] <> [checked_ | sess.isSidebarClosed])
         faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
@@ -513,7 +506,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , href_ $ "/p/" <> project.id.toText <> "/settings"
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-textBrand leading-none "] (faSprite_ "gear" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
     a_
       [ class_ "hover:bg-fillBrand-weak "
       , target_ "blank"
@@ -522,7 +515,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , href_ "https://apitoolkit.io/docs/"
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-textBrand leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
 
     -- Dark mode toggle
     div_
@@ -562,7 +555,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , [__| on click js posthog.reset(); end |]
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center  rounded-full bg-fillError-weak text-textError leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 
 -- mapM_ renderNavBottomItem $ navBottomList project.id.toText

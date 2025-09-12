@@ -344,6 +344,10 @@ library
       Pages.Anomalies.AnomalyList
       Pages.Api
       Pages.BodyWrapper
+      Pages.BodyWrapper_BACKUP_56070
+      Pages.BodyWrapper_BASE_56070
+      Pages.BodyWrapper_LOCAL_56070
+      Pages.BodyWrapper_REMOTE_56070
       Pages.Bots.Discord
       Pages.Bots.Slack
       Pages.Bots.Utils
@@ -398,10 +402,6 @@ library
       System.Types
       Utils
       Web.Auth
-      Web.Auth_BACKUP_38938
-      Web.Auth_BASE_38938
-      Web.Auth_LOCAL_38938
-      Web.Auth_REMOTE_38938
       Web.ClientMetadata
       Web.Error
       Web.Routes
