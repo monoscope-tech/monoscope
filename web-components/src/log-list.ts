@@ -785,6 +785,17 @@ export class LogList extends LitElement {
 
         .animate-fadeBg {
           animation: fadeBg 2s ease-out;
+          will-change: background-color;
+        }
+
+        /* Performance optimizations that can't be done with Tailwind */
+        .contain-layout-style-paint {
+          contain: layout style paint;
+        }
+        
+        .content-visibility-auto {
+          content-visibility: auto;
+          contain-intrinsic-size: auto 28px;
         }
       </style>
       ${this.options()}
@@ -792,10 +803,9 @@ export class LogList extends LitElement {
         ${ref(this.containerRef)}
         @scroll=${(e) => {
           this.debouncedHandleScroll(e);
-          this.requestUpdate();
         }}
         class=${clsx(
-          'relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto',
+          'relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto will-change-transform contain-layout-style-paint content-visibility-auto',
           isInitialLoading && 'overflow-hidden'
         )}
         id="logs_list_container_inner"
@@ -1167,7 +1177,7 @@ export class LogList extends LitElement {
       const rowHtml = html`
         <tr
           class=${clsx(
-            'item-row relative p-0 h-[30px] flex items-center group cursor-pointer whitespace-nowrap hover:bg-fillWeaker',
+            'item-row relative p-0 h-[30px] flex items-center group cursor-pointer whitespace-nowrap hover:bg-fillWeaker contain-layout-style-paint content-visibility-auto',
             isNew && 'animate-fadeBg'
           )}
           @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
