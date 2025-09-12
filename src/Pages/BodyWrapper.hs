@@ -326,7 +326,7 @@ bodyWrapper bcfg child = do
                           div_ [class_ "skeleton h-16 w-full"] ""
                           div_ [class_ "skeleton h-16 w-full"] ""
 
-      externalHeadScripts_
+      externalHeadScripts_ bcfg.config
       alerts_
       script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
       script_

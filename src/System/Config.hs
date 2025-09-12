@@ -104,6 +104,15 @@ data EnvConfig = EnvConfig
   , basicAuthUsername :: Text
   , basicAuthPassword :: Text
   , enableBrowserMonitoring :: Bool
+  -- External scripts configuration
+  , googleTagManagerId :: Maybe Text
+  , googleAdsConversionId :: Maybe Text
+  , facebookPixelId1 :: Maybe Text
+  , facebookPixelId2 :: Maybe Text
+  , linkedInPartnerId :: Maybe Text
+  , postHogApiKey :: Maybe Text
+  , postHogApiHost :: Maybe Text
+  , crispWebsiteId :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)
