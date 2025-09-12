@@ -87,6 +87,7 @@ export class LogList extends LitElement {
   private handleMouseUp: (() => void) | null = null;
   private sessionPlayerWrapper: HTMLElement | null = null;
   private containerRef = createRef<HTMLDivElement>();
+  private nextFetchUrl = '';
 
   // Memoized functions
   private memoizedBuildSpanListTree: any;
@@ -227,8 +228,8 @@ export class LogList extends LitElement {
     // Preserve all existing query parameters and add json=true
     const p = new URLSearchParams(window.location.search);
     p.set('json', 'true');
-    const pathName = window.location.pathname;
-    return `${window.location.origin}${pathName}?${p.toString()}`;
+    console.log(this.nextFetchUrl);
+    return `${this.nextFetchUrl}?${p.toString()}`;
   }
 
   private buildRecentFetchUrl(): string {
