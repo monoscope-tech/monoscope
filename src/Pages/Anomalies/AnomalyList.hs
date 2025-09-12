@@ -590,7 +590,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
           , pageTitle = "Issues: Changes, Alerts & Errors"
           , menuItem = Just "Changes & Errors"
           , freeTierExceeded = freeTierExceeded
-          , enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring
+          , config = appCtx.config
           , navTabs =
               Just
                 $ toHtml

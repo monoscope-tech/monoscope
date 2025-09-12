@@ -175,7 +175,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
           , prePageTitle = Just "API Catalog"
           , pageTitle = "Endpoints for " <> host
           , freeTierExceeded = freeTierExceeded
-          , enableBrowserMonitoring = appCtx.env.enableBrowserMonitoring
+          , config = appCtx.env
           , navTabs =
               Just
                 $ toHtml

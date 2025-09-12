@@ -62,7 +62,7 @@ onboardingGetH pid onboardingStepM = do
   let bodyConfig =
         (def :: BWConfig)
           { currProject = Nothing
-          , enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring
+          , config = appCtx.config
           }
       questions = fromMaybe (AE.Object []) project.questions
       onboardingStep = fromMaybe "Info" onboardingStepM

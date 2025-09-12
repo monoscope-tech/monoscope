@@ -33,7 +33,7 @@ listProjectsGetH = do
           , pageTitle = "Projects"
           , hideNavbar = True
           , pageActions = Nothing
-          , enableBrowserMonitoring = appCtx.env.enableBrowserMonitoring
+          , config = appCtx.env
           }
 
   projects <- dbtToEff $ Projects.selectProjectsForUser sess.persistentSession.userId

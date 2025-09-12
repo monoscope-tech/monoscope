@@ -1,6 +1,6 @@
-
 module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..)) where
 
+import Crypto.Hash.MD5 qualified as MD5
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
 import Data.Text qualified as T
@@ -19,8 +19,8 @@ import Pkg.Components.Modals qualified as Components
 import Pkg.THUtils
 import PyF
 import Relude
+import System.Config (EnvConfig (..))
 import Utils (faSprite_, freeTierLimitExceededBanner)
-import Crypto.Hash.MD5 qualified as MD5
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
@@ -66,7 +66,7 @@ data BWConfig = BWConfig
   , freeTierExceeded :: Bool
   , hideNavbar :: Bool -- When True, hides the entire navbar
   , headContent :: Maybe (Html ()) -- Optional HTML content to include in the head
-  , enableBrowserMonitoring :: Bool
+  , config :: EnvConfig
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -399,14 +399,14 @@ bodyWrapper bcfg child = do
       let pTitle = maybe "" (.title) bcfg.currProject
       script_
         [text| window.addEventListener("load", (event) => {
-        
-        posthog.people.set_once({email: ${email}, name: "${name}", projectId: "${pidT}", projectTitle: "${pTitle}"});
-      });
-      echarts.connect('default');
+                  posthog.people.set_once({email: ${email}, name: "${name}", projectId: "${pidT}", projectTitle: "${pTitle}"});
+                });
+                echarts.connect('default');
       |]
       -- Browser monitoring script (Monoscope) - only included when enabled
-      when bcfg.enableBrowserMonitoring $ script_
-        [text| window.addEventListener("load", (event) => {
+      when bcfg.config.enableBrowserMonitoring
+        $ script_
+          [text| window.addEventListener("load", (event) => {
         window.monoscope = new Monoscope({ projectId: "6d06b402-a667-4878-b12a-8621b8c6f37d", serviceName: "past-3_frontend", user:{email:${email}, name: "${name}"}});
       });
       |]
@@ -513,7 +513,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , href_ $ "/p/" <> project.id.toText <> "/settings"
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-textBrand leading-none "] (faSprite_ "gear" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
     a_
       [ class_ "hover:bg-fillBrand-weak "
       , target_ "blank"
@@ -522,7 +522,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , href_ "https://apitoolkit.io/docs/"
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-textBrand leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
 
     -- Dark mode toggle
     div_
@@ -562,7 +562,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , [__| on click js posthog.reset(); end |]
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center  rounded-full bg-fillError-weak text-textError leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 
 -- mapM_ renderNavBottomItem $ navBottomList project.id.toText

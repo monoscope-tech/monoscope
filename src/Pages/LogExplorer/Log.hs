@@ -460,7 +460,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           , pageTitle = "Explorer"
           , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/api-log-explorer/"
           , freeTierExceeded = freeTierExceeded
-          , enableBrowserMonitoring = authCtx.config.enableBrowserMonitoring
+          , config = authCtx.config
           , headContent = headContent
           , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
               label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs"] do

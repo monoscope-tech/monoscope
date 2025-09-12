@@ -137,7 +137,7 @@ manageMembersGetH pid = do
           , pageTitle = "Manage members"
           , currProject = Just project
           , isSettingsPage = True
-          , enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring
+          , config = appCtx.config
           }
   addRespHeaders $ ManageMembersGet $ PageCtx bwconf projMembers
 

@@ -60,7 +60,7 @@ linkDiscordGetH pidM' codeM guildIdM = do
           { sessM = Nothing
           , currProject = Nothing
           , pageTitle = "Discord app installed"
-          , enableBrowserMonitoring = envCfg.enableBrowserMonitoring
+          , config = envCfg
           }
   case (pidM, codeM, guildIdM) of
     (Just pid, Just code, Just guildId) -> do

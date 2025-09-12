@@ -135,7 +135,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
           , menuItem = Just "Alerts"
           , docsLink = Just "https://apitoolkit.io/docs/monitors/"
           , freeTierExceeded = freeTierExceeded
-          , enableBrowserMonitoring = appCtx.env.enableBrowserMonitoring
+          , config = appCtx.env
           , pageActions = Just $ div_ [class_ "flex gap-2"] do
               a_ [class_ "btn btn-sm btn-primary gap-2", href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"] do
                 faSprite_ "bell" "regular" "h-4 w-4"
@@ -347,7 +347,7 @@ unifiedMonitorOverviewH pid monitorId = do
           , menuItem = Just "Alerts"
           , docsLink = Just "https://apitoolkit.io/docs/monitors/"
           , freeTierExceeded = freeTierExceeded
-          , enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring
+          , config = appCtx.config
           }
 
   case alertM of

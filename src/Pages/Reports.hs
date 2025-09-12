@@ -181,7 +181,7 @@ singleReportGetH pid rid hxRequestM = do
           , currProject = Just project
           , pageTitle = "Report"
           , freeTierExceeded = freeTierExceeded
-          , enableBrowserMonitoring = appCtx.env.enableBrowserMonitoring
+          , config = appCtx.env
           }
   case hxRequestM of
     Just _ -> addRespHeaders $ ReportsGetSingle' (pid, report)
@@ -207,7 +207,7 @@ reportsGetH pid page hxRequest hxBoosted = do
               , currProject = Just project
               , pageTitle = "Reports"
               , freeTierExceeded = freeTierExceeded
-              , enableBrowserMonitoring = appCtx.env.enableBrowserMonitoring
+              , config = appCtx.env
               }
       addRespHeaders $ ReportsGetMain $ PageCtx bwconf (pid, reports, nextUrl, project.dailyNotif, project.weeklyNotif)
 

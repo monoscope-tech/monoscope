@@ -59,7 +59,7 @@ bringS3GetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 bringS3GetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext -- Get auth context
-  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Bring your own s3", isSettingsPage = True, enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring}
+  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Bring your own s3", isSettingsPage = True, config = appCtx.config}
   addRespHeaders $ bodyWrapper bwconf $ bringS3Page pid project.s3Bucket
 
 

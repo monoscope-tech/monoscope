@@ -118,7 +118,7 @@ shareLinkGetH sid = do
           { sessM = Nothing
           , currProject = Nothing
           , pageTitle = "Share request log"
-          , enableBrowserMonitoring = authCtx.config.enableBrowserMonitoring
+          , config = authCtx.config
           }
   pure $ ShareLinkGet $ PageCtx bwconf uiM
 

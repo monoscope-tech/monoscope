@@ -108,7 +108,7 @@ projectOnboarding = do
   sess <- Sessions.getSession
   projects <- dbtToEff $ Projects.selectProjectsForUser sess.persistentSession.userId
   let projectM = V.find (\pr -> pr.paymentPlan == "ONBOARDING") projects
-      bwconf = (def :: BWConfig){sessM = Just sess, currProject = Nothing, pageTitle = "New Project", enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring}
+      bwconf = (def :: BWConfig){sessM = Just sess, currProject = Nothing, pageTitle = "New Project", config = appCtx.config}
   case projectM of
     Just p -> do
       let h = "/p/" <> p.id.toText <> "/onboarding"
@@ -137,7 +137,7 @@ projectOnboarding = do
 --         (def :: BWConfig)
 --           { sessM = Just sess
 --           , pageTitle = "Create Project"
---           , enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring
+--           , config = appCtx.config
 --           }
 --   addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, False, def @CreateProjectForm, def @CreateProjectFormError)
 
@@ -192,7 +192,7 @@ projectSettingsGetH pid = do
           , currProject = Just project
           , pageTitle = "Project settings"
           , isSettingsPage = True
-          , enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring
+          , config = appCtx.config
           }
   addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, project.paymentPlan, True, createProj, def @CreateProjectFormError)
 
@@ -343,7 +343,7 @@ pricingUpdateGetH pid = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring
+          , config = appCtx.config
           }
   let envCfg = appCtx.config
       lemon = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
@@ -462,7 +462,7 @@ projectDeleteGetH pid = do
           , currProject = Just project
           , pageTitle = "Delete Project"
           , isSettingsPage = True
-          , enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring
+          , config = appCtx.config
           }
   addRespHeaders $ PageCtx bwconf $ deleteProjectBody pid
 

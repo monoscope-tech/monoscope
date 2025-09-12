@@ -476,7 +476,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
           , prePageTitle = Just "Dashboards"
           , pageTitle = if dashVM.title == "" then "Untitled" else dashVM.title
           , pageTitleModalId = Just "pageTitleModalId"
-          , enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring
+          , config = appCtx.config
           , freeTierExceeded = freeTierExceeded
           , pageActions = Just $ div_ [class_ "inline-flex gap-3 items-center leading-[0]"] do
               TimePicker.timepicker_ Nothing currentRange
@@ -829,7 +829,7 @@ dashboardsGetH pid embeddedM = do
               , currProject = Just project
               , pageTitle = "Dashboards"
               , freeTierExceeded = freeTierExceeded
-              , enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring
+              , config = appCtx.config
               , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "leading-none rounded-xl shadow-sm p-3 cursor-pointer bg-fillBrand-strong text-white"] "New Dashboard"
               }
       addRespHeaders $ PageCtx bwconf $ DashboardsGet{dashboards, projectId = pid, embedded = False}

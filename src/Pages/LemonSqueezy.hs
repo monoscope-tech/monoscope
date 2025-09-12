@@ -145,7 +145,7 @@ manageBillingGetH pid from = do
           , currProject = Just project
           , pageTitle = "Manage billing"
           , isSettingsPage = True
-          , enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring
+          , config = appCtx.config
           }
   let lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText

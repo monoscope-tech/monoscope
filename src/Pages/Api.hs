@@ -96,7 +96,7 @@ apiGetH pid = do
           , currProject = Just project
           , pageTitle = "API keys"
           , isSettingsPage = True
-          , enableBrowserMonitoring = appCtx.config.enableBrowserMonitoring
+          , config = appCtx.config
           }
   addRespHeaders $ ApiGet $ PageCtx bwconf (pid, apiKeys)
 
