@@ -19,7 +19,7 @@ import Pkg.DBUtils qualified as DBUtils
 import Relude
 import Servant.Server (Handler)
 import System.Clock (TimeSpec (TimeSpec))
-import System.Envy (FromEnv (..), ReadShowVar (..), Var (..), decodeEnv, fromVar, toVar)
+import System.Envy (DefConfig (..), FromEnv (..), ReadShowVar (..), Var (..), decodeWithDefaults, fromVar, toVar)
 import System.Logging qualified as Logging
 
 
@@ -109,6 +109,19 @@ data EnvConfig = EnvConfig
   deriving anyclass (Default, FromEnv)
 
 
+instance DefConfig EnvConfig where
+  defConfig =
+    (def :: EnvConfig)
+      { port = 8080
+      , environment = "DEV"
+      , migrationsDir = "./static/migrations/"
+      , messagesPerPubsubPullBatch = 200
+      , rrwebTopics = ["rrweb-client"]
+      , loggingDestination = Logging.StdOut
+      , smtpPort = 465
+      }
+
+
 -- Support unmarshalling a coma separated text into a text list
 instance Var [Text] where
   fromVar = Just . T.splitOn "," . toText
@@ -177,7 +190,5 @@ configToEnv config = do
 
 getAppContext :: Eff '[Fail, IOE] AuthContext
 getAppContext = do
-  configE <- liftIO (decodeEnv :: IO (Either String EnvConfig))
-  case configE of
-    Left errMsg -> error $ toText errMsg
-    Right config -> configToEnv config
+  config <- liftIO (decodeWithDefaults defConfig)
+  configToEnv config
