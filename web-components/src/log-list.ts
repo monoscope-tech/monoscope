@@ -233,7 +233,8 @@ export class LogList extends LitElement {
   }
 
   private buildRecentFetchUrl(): string {
-    if (this.spanListTree.length === 0 || !this.recentFetchUrl) {
+    console.log(this.recentFetchUrl);
+    if (this.spanListTree.length === 0 || this.recentFetchUrl) {
       return this.recentFetchUrl;
     }
 
@@ -246,7 +247,7 @@ export class LogList extends LitElement {
     date.setTime(date.getTime() + 500); // Add 500ms (half a second)
 
     // Replace just the 'to' parameter in the existing recentFetchUrl
-    const url = new URL(this.recentFetchUrl, window.location.origin);
+    const url = new URL(this.recentFetchUrl, window.location.origin + window.location.pathname);
     url.searchParams.set('to', date.toISOString());
     return url.toString();
   }
@@ -559,6 +560,8 @@ export class LogList extends LitElement {
       .then((data) => {
         if (!data.error) {
           let { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, count } = data;
+
+          console.log(recentUrl);
           // Validate required fields - but allow empty arrays
           if (!Array.isArray(logsData)) {
             this.showErrorToast('Invalid data format received');
@@ -568,10 +571,13 @@ export class LogList extends LitElement {
 
           // Update state
           this.hasMore = logsData.length > 0;
+          if (logsData.length === 0) return;
+
           // Only update URLs if not in a concurrent request situation
-          if (!this.isFetchingRecent) {
-            this.nextFetchUrl = nextUrl || '';
-          } else {
+          if (isLoadMore || isRefresh || this.spanListTree.length === 0) {
+            this.nextFetchUrl = nextUrl;
+          }
+          if (isRecentFetch || this.spanListTree.length === 0) {
             this.recentFetchUrl = recentUrl;
           }
 
@@ -632,6 +638,7 @@ export class LogList extends LitElement {
 
           this.updateColumnMaxWidthMap(logsData);
         } else {
+          console.log(data, url);
           this.showErrorToast(data.message || 'Failed to fetch logs');
         }
       })
