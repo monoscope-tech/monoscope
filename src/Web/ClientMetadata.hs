@@ -4,8 +4,8 @@ module Web.ClientMetadata (ClientMetadata (..), clientMetadataH) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (ToJSON)
-import "base64" Data.ByteString.Base64 qualified as B64
 import Data.Text qualified as T
+import "base64" Data.ByteString.Base64 qualified as B64
 
 import Data.UUID qualified as UUID
 import Deriving.Aeson qualified as DAE
