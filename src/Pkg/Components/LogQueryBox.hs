@@ -71,7 +71,7 @@ logQueryBox_ config = do
                   on keydown[key=='Space' and shiftKey] from document set #ai-search-chkbox.checked to true
                   |]
               ]
-              <> [checked_ | isJust config.targetWidgetPreview]
+            <> [checked_ | isJust config.targetWidgetPreview]
           script_
             [text|
             document.addEventListener('keydown', function(e) {
@@ -209,7 +209,7 @@ logQueryBox_ config = do
                      end
                   |]
                 ]
-                <> [checked_ | config.alert]
+              <> [checked_ | config.alert]
             span_ "create alert"
 
   -- Include initialization code for the query editor
@@ -238,7 +238,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
                       end
                    |]
           ]
-          <> [checked_ | vizType == defaultVizType]
+        <> [checked_ | vizType == defaultVizType]
       span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
       span_ [] $ toHtml label
 
