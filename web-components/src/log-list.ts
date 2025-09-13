@@ -238,12 +238,12 @@ export class LogList extends LitElement {
       // Build URL from current location with json=true
       const url = new URL(window.location.href);
       url.searchParams.set('json', 'true');
-      
+
       // If we have data, update the 'to' parameter to fetch newer data
       if (this.spanListTree.length > 0) {
         const firstItem = this.flipDirection ? this.spanListTree[this.spanListTree.length - 1] : this.spanListTree[0];
         const timestamp = firstItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
-        
+
         if (timestamp) {
           const date = new Date(timestamp);
           date.setTime(date.getTime() + 10); // Add 10ms
@@ -253,7 +253,7 @@ export class LogList extends LitElement {
           url.searchParams.delete('since');
         }
       }
-      
+
       return url.toString();
     }
 
@@ -280,20 +280,20 @@ export class LogList extends LitElement {
     if (this.spanListTree.length === 0) {
       return this.buildJsonUrl();
     }
-    
+
     // Build URL dynamically based on the actual last item in the list
     const url = new URL(window.location.href);
     url.searchParams.set('json', 'true');
-    
+
     // Get the timestamp from the last item (oldest, since we order by timestamp desc)
     const lastItem = this.spanListTree[this.spanListTree.length - 1];
     const timestamp = lastItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
-    
+
     if (timestamp) {
       // Set cursor to the last item's timestamp to fetch older data
       url.searchParams.set('cursor', timestamp);
     }
-    
+
     return url.toString();
   }
 
@@ -307,7 +307,7 @@ export class LogList extends LitElement {
 
   debouncedRefetchLogs = debounce(async () => {
     this.refetchLogs();
-  }, 300);
+  }, 50);
 
   toggleColumnOnTable = (col: string) => {
     const p = new URLSearchParams(window.location.search);
@@ -319,7 +319,7 @@ export class LogList extends LitElement {
         : [...cols.slice(0, cols.indexOf('summary')), col, ...cols.slice(cols.indexOf('summary'))];
     p.set('cols', newCols.join(','));
     window.history.replaceState({}, '', `${window.location.pathname}?${p}${window.location.hash}`);
-    this.fetchData(this.buildJsonUrl(), false);
+    this.fetchData(this.buildJsonUrl(), true);
   };
 
   handleChartZoom = (params: { batch?: { startValue: string; endValue: string }[] }) => {
@@ -642,7 +642,7 @@ export class LogList extends LitElement {
               // Reset scroll position based on flipDirection
               // Use requestAnimationFrame to ensure DOM is updated before scrolling
               requestAnimationFrame(() => {
-                const container = this.logsContainer || document.querySelector('#logs_list_container_inner') as HTMLElement;
+                const container = this.logsContainer || (document.querySelector('#logs_list_container_inner') as HTMLElement);
                 if (container) {
                   if (this.flipDirection) {
                     // When flipDirection is true (oldest at top, newest at bottom), scroll to bottom to show newest
