@@ -15,4 +15,5 @@ RUN apt-get update && apt-get install -y \
 COPY apitoolkit-server-exe /opt/apitoolkit/
 RUN chmod +x /opt/apitoolkit/apitoolkit-server-exe
 COPY static /opt/apitoolkit/static
+COPY web-components/dist /opt/apitoolkit/static/public/assets/web-components/dist
 CMD ["/opt/apitoolkit/apitoolkit-server-exe"]
