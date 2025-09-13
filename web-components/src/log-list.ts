@@ -233,7 +233,6 @@ export class LogList extends LitElement {
   }
 
   private buildRecentFetchUrl(): string {
-    console.log(this.recentFetchUrl);
     if (this.spanListTree.length === 0 || this.recentFetchUrl) {
       return this.recentFetchUrl;
     }
@@ -561,7 +560,6 @@ export class LogList extends LitElement {
         if (!data.error) {
           let { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, count } = data;
 
-          console.log(recentUrl);
           // Validate required fields - but allow empty arrays
           if (!Array.isArray(logsData)) {
             this.showErrorToast('Invalid data format received');
@@ -638,7 +636,6 @@ export class LogList extends LitElement {
 
           this.updateColumnMaxWidthMap(logsData);
         } else {
-          console.log(data, url);
           this.showErrorToast(data.message || 'Failed to fetch logs');
         }
       })
