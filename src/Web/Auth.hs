@@ -1,6 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE PackageImports #-}
+{-# LANGUAGE RankNTypes #-}
 
 module Web.Auth (
   logoutH,
@@ -17,7 +17,6 @@ import Control.Error (note)
 import Control.Lens qualified as L
 import Control.Monad.Except qualified as T
 import Data.Aeson.Lens (key, _String)
-import "base64" Data.ByteString.Base64 qualified as B64
 import Data.Effectful.UUID (UUIDEff, runUUID)
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.List qualified as L
@@ -84,6 +83,7 @@ import System.Logging qualified as Logging
 import System.Types (ATBaseCtx)
 import Utils (escapedQueryPartial)
 import Web.Cookie (Cookies, SetCookie, parseCookies)
+import "base64" Data.ByteString.Base64 qualified as B64
 
 
 type APItoolkitAuthContext = AuthHandler Request (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
