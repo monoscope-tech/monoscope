@@ -71,7 +71,7 @@ logQueryBox_ config = do
                   on keydown[key=='Space' and shiftKey] from document set #ai-search-chkbox.checked to true
                   |]
               ]
-            <> [checked_ | isJust config.targetWidgetPreview]
+              <> [checked_ | isJust config.targetWidgetPreview]
           script_
             [text|
             document.addEventListener('keydown', function(e) {
@@ -193,7 +193,7 @@ logQueryBox_ config = do
 
         div_ [class_ "flex justify-end gap-2"] do
           fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[#viz-logs:checked]/pg:block"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "timeline"
+            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "hide timeline"
           fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1"] do
             input_
               $ [ type_ "checkbox"
@@ -209,7 +209,7 @@ logQueryBox_ config = do
                      end
                   |]
                 ]
-              <> [checked_ | config.alert]
+                <> [checked_ | config.alert]
             span_ "create alert"
 
   -- Include initialization code for the query editor
@@ -238,7 +238,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
                       end
                    |]
           ]
-        <> [checked_ | vizType == defaultVizType]
+          <> [checked_ | vizType == defaultVizType]
       span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
       span_ [] $ toHtml label
 
