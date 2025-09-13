@@ -533,11 +533,6 @@ export class LogList extends LitElement {
           span.show = expanded;
           this.expandedTraces[span.id] = expanded;
         }
-        found = true;
-      } else {
-        if (found) {
-          break;
-        }
       }
     }
     // For user interactions, update immediately

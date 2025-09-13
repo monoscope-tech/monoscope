@@ -169,7 +169,7 @@ sqlFromQueryComponents sqlCfg qc =
           -- For summarize queries, don't apply a default limit to ensure we get complete data
           case qc.finalSummarizeQuery of
             Just _ -> "" -- No limit for summarize queries unless explicitly specified
-            Nothing -> "limit 150" -- Default limit for non-summarize queries
+            Nothing -> "limit 40" -- Default limit for non-summarize queries
 
       -- Create a properly formatted WHERE clause condition
       whereCondition =
