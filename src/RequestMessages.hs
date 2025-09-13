@@ -8,6 +8,7 @@
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import qualified Data.Aeson as AE
 -- >>> import qualified Data.Vector as V
+-- >>> import RequestMessages (redactJSON, dedupFields, replaceAllFormats)
 
 module RequestMessages (
   RequestMessage (..),
