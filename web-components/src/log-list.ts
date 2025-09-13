@@ -233,7 +233,32 @@ export class LogList extends LitElement {
   }
 
   private buildRecentFetchUrl(): string {
-    if (this.spanListTree.length === 0 || this.recentFetchUrl) {
+    // If recentFetchUrl is not set, build from current URL
+    if (!this.recentFetchUrl) {
+      // Build URL from current location with json=true
+      const url = new URL(window.location.href);
+      url.searchParams.set('json', 'true');
+      
+      // If we have data, update the 'from' parameter to fetch newer data
+      if (this.spanListTree.length > 0) {
+        const firstItem = this.flipDirection ? this.spanListTree[this.spanListTree.length - 1] : this.spanListTree[0];
+        const timestamp = firstItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
+        
+        if (timestamp) {
+          const date = new Date(timestamp);
+          date.setTime(date.getTime() + 1); // Add 1ms to get data after this timestamp
+          url.searchParams.set('from', date.toISOString());
+          // Remove cursor and since params for recent fetch
+          url.searchParams.delete('cursor');
+          url.searchParams.delete('since');
+        }
+      }
+      
+      return url.toString();
+    }
+
+    // If we have no data yet, just return the recentFetchUrl as is
+    if (this.spanListTree.length === 0) {
       return this.recentFetchUrl;
     }
 
