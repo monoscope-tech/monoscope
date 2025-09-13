@@ -45,9 +45,7 @@ spec = do
     it "summarize query query" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\""
       let expected =
-            [text|
-SELECT  FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((method = 'GET')) ORDER BY timestamp DESC limit 150
-      |]
+            [text| SELECT  FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((method = 'GET')) ORDER BY timestamp DESC limit 150 |]
       normT (fromMaybe "" c.finalSummarizeQuery) `shouldBe` normT expected
     it "summarize query by time bin" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\" | summarize count(*) by bin(timestamp, 1d)"
