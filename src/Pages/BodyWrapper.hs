@@ -1,6 +1,7 @@
+{-# LANGUAGE PackageImports #-}
 module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..)) where
 
-import Crypto.Hash.MD5 qualified as MD5
+import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
 import Data.Text qualified as T

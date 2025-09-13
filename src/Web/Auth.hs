@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE PackageImports #-}
 
 module Web.Auth (
   logoutH,
@@ -16,7 +17,7 @@ import Control.Error (note)
 import Control.Lens qualified as L
 import Control.Monad.Except qualified as T
 import Data.Aeson.Lens (key, _String)
-import Data.ByteString.Base64 qualified as B64
+import "base64" Data.ByteString.Base64 qualified as B64
 import Data.Effectful.UUID (UUIDEff, runUUID)
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.List qualified as L
