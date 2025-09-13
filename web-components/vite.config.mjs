@@ -37,6 +37,7 @@ export default defineConfig({
     outDir: '../static/public/assets/web-components/dist',
     emptyOutDir: true,
     assetsDir: 'assets',
+    sourcemap: true, // Enable source maps for production builds
     chunkSizeWarningLimit: 10000, // Increased chunk size limit (in kB)
     rollupOptions: {
       output: {

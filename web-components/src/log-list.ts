@@ -106,7 +106,7 @@ export class LogList extends LitElement {
     // Initialize log list component
 
     // Initialize debounced functions
-    this.debouncedHandleScroll = debounce(this.handleScroll.bind(this), 50);
+    this.debouncedHandleScroll = debounce(this.handleScroll.bind(this), 5);
     this.debouncedFetchData = debounce(this.fetchData.bind(this), 300);
 
     // Bind resize handler for immediate feedback
@@ -233,7 +233,32 @@ export class LogList extends LitElement {
   }
 
   private buildRecentFetchUrl(): string {
-    if (this.spanListTree.length === 0 || this.recentFetchUrl) {
+    // If recentFetchUrl is not set, build from current URL
+    if (!this.recentFetchUrl) {
+      // Build URL from current location with json=true
+      const url = new URL(window.location.href);
+      url.searchParams.set('json', 'true');
+
+      // If we have data, update the 'to' parameter to fetch newer data
+      if (this.spanListTree.length > 0) {
+        const firstItem = this.flipDirection ? this.spanListTree[this.spanListTree.length - 1] : this.spanListTree[0];
+        const timestamp = firstItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
+
+        if (timestamp) {
+          const date = new Date(timestamp);
+          date.setTime(date.getTime() + 10); // Add 10ms
+          url.searchParams.set('to', date.toISOString());
+          // Remove cursor and since params for recent fetch
+          url.searchParams.delete('cursor');
+          url.searchParams.delete('since');
+        }
+      }
+
+      return url.toString();
+    }
+
+    // If we have no data yet, just return the recentFetchUrl as is
+    if (this.spanListTree.length === 0) {
       return this.recentFetchUrl;
     }
 
@@ -243,7 +268,7 @@ export class LogList extends LitElement {
     if (!timestamp) return this.recentFetchUrl;
 
     const date = new Date(timestamp);
-    date.setTime(date.getTime() + 500); // Add 500ms (half a second)
+    date.setTime(date.getTime() + 10); // Add 10ms
 
     // Replace just the 'to' parameter in the existing recentFetchUrl
     const url = new URL(this.recentFetchUrl, window.location.origin + window.location.pathname);
@@ -255,7 +280,21 @@ export class LogList extends LitElement {
     if (this.spanListTree.length === 0) {
       return this.buildJsonUrl();
     }
-    return this.nextFetchUrl;
+
+    // Build URL dynamically based on the actual last item in the list
+    const url = new URL(window.location.href);
+    url.searchParams.set('json', 'true');
+
+    // Get the timestamp from the last item (oldest, since we order by timestamp desc)
+    const lastItem = this.spanListTree[this.spanListTree.length - 1];
+    const timestamp = lastItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
+
+    if (timestamp) {
+      // Set cursor to the last item's timestamp to fetch older data
+      url.searchParams.set('cursor', timestamp);
+    }
+
+    return url.toString();
   }
 
   async fetchInitialData() {
@@ -268,7 +307,7 @@ export class LogList extends LitElement {
 
   debouncedRefetchLogs = debounce(async () => {
     this.refetchLogs();
-  }, 300);
+  }, 50);
 
   toggleColumnOnTable = (col: string) => {
     const p = new URLSearchParams(window.location.search);
@@ -280,7 +319,7 @@ export class LogList extends LitElement {
         : [...cols.slice(0, cols.indexOf('summary')), col, ...cols.slice(cols.indexOf('summary'))];
     p.set('cols', newCols.join(','));
     window.history.replaceState({}, '', `${window.location.pathname}?${p}${window.location.hash}`);
-    this.fetchData(this.buildJsonUrl(), false);
+    this.fetchData(this.buildJsonUrl(), true);
   };
 
   handleChartZoom = (params: { batch?: { startValue: string; endValue: string }[] }) => {
@@ -493,6 +532,7 @@ export class LogList extends LitElement {
     } else {
       if (container.scrollTop === 0) this.handleRecentConcatenation();
     }
+    this.requestUpdate();
   }
 
   private batchRequestUpdate(source: string) {
@@ -599,7 +639,20 @@ export class LogList extends LitElement {
             // Replace all data
             this.spanListTree = tree;
             if (this.spanListTree.length > 0) {
-              this.scrollToBottom();
+              // Reset scroll position based on flipDirection
+              // Use requestAnimationFrame to ensure DOM is updated before scrolling
+              requestAnimationFrame(() => {
+                const container = this.logsContainer || (document.querySelector('#logs_list_container_inner') as HTMLElement);
+                if (container) {
+                  if (this.flipDirection) {
+                    // When flipDirection is true (oldest at top, newest at bottom), scroll to bottom to show newest
+                    container.scrollTop = container.scrollHeight;
+                  } else {
+                    // When flipDirection is false (newest at top, oldest at bottom), scroll to top to show newest
+                    container.scrollTop = 0;
+                  }
+                }
+              });
             }
           } else if (isRecentFetch) {
             // Mark new items for visual distinction
@@ -785,17 +838,25 @@ export class LogList extends LitElement {
 
         .animate-fadeBg {
           animation: fadeBg 2s ease-out;
+          will-change: background-color;
+        }
+
+        /* Performance optimizations that can't be done with Tailwind */
+        .contain-layout-style-paint {
+          contain: layout style paint;
+        }
+        
+        .content-visibility-auto {
+          content-visibility: auto;
+          contain-intrinsic-size: auto 28px;
         }
       </style>
       ${this.options()}
       <div
         ${ref(this.containerRef)}
-        @scroll=${(e) => {
-          this.debouncedHandleScroll(e);
-          this.requestUpdate();
-        }}
+        @scroll=${this.debouncedHandleScroll}
         class=${clsx(
-          'relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto',
+          'relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto will-change-transform contain-layout-style-paint content-visibility-auto',
           isInitialLoading && 'overflow-hidden'
         )}
         id="logs_list_container_inner"
@@ -1167,7 +1228,7 @@ export class LogList extends LitElement {
       const rowHtml = html`
         <tr
           class=${clsx(
-            'item-row relative p-0 h-[30px] flex items-center group cursor-pointer whitespace-nowrap hover:bg-fillWeaker',
+            'item-row relative p-0 h-[30px] flex items-center group cursor-pointer whitespace-nowrap hover:bg-fillWeaker contain-layout-style-paint content-visibility-auto',
             isNew && 'animate-fadeBg'
           )}
           @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
@@ -1652,7 +1713,6 @@ function emptyState(cols: number) {
     </tr>
   `;
 }
-
 function requestDumpLogItemUrlPath(rd: any[], colIdxMap: ColIdxMap, source: string): [string, string, string] {
   const rdId = lookupVecValue<string>(rd, colIdxMap, 'id');
   const rdCreatedAt = lookupVecValue<string>(rd, colIdxMap, 'created_at') || lookupVecValue<string>(rd, colIdxMap, 'timestamp');

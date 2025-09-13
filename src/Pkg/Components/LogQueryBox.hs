@@ -193,7 +193,7 @@ logQueryBox_ config = do
 
         div_ [class_ "flex justify-end gap-2"] do
           fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[#viz-logs:checked]/pg:block"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "timeline"
+            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "hide timeline"
           fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1"] do
             input_
               $ [ type_ "checkbox"

@@ -553,7 +553,7 @@ export class SessionReplay extends LitElement {
             <div class="flex items-center gap-4 text-xs font-semibold">
               <div class="dropdown">
                 <div tabindex="0" role="button" class="cursor-pointer">Console</div>
-                <ul tabindex="0" class="dropdown-content menu space-y-1 text-xs bg-base-100 border w-max rounded-box z-1 p-1 shadow">
+                <ul tabindex="0" class="dropdown-content menu flex flex-col gap-1 text-xs bg-base-100 border w-max rounded-box z-1 p-1 shadow">
                   <li>
                     <button
                       class="px-4 hover:bg-fillweak py-1 ${this.consoleEventsEnable[0] ? 'bg-fillBrand-weak text-blue-700' : ''}"
