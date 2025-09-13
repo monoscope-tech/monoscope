@@ -1,7 +1,7 @@
 FROM ubuntu:24.04
 RUN mkdir -p /opt/apitoolkit/
 # Set the LANG environment variable
-ENV LANG C.UTF-8
+ENV LANG=C.UTF-8
 WORKDIR /opt/apitoolkit
 RUN apt-get update && apt-get install -y \
   ca-certificates \
@@ -15,5 +15,6 @@ RUN apt-get update && apt-get install -y \
 COPY apitoolkit-server-exe /opt/apitoolkit/
 RUN chmod +x /opt/apitoolkit/apitoolkit-server-exe
 COPY static /opt/apitoolkit/static
+# Copy web-components dist if it exists
 COPY web-components/dist /opt/apitoolkit/static/public/assets/web-components/dist
 CMD ["/opt/apitoolkit/apitoolkit-server-exe"]

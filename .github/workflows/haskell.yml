@@ -228,12 +228,45 @@ jobs:
         with:
           name: build-artifacts
 
-      - name: Copy binary to root
+      - name: List downloaded artifacts
         run: |
-          echo "::group::Prepare binary for Docker"
+          echo "::group::List artifact structure"
+          ls -la
+          echo "---"
+          find . -type f -name "*.js" -o -name "*.css" | head -20
+          echo "---"
+          if [ -d "web-components" ]; then
+            echo "web-components directory exists"
+            ls -la web-components/
+          fi
+          if [ -d "dist" ]; then
+            echo "dist directory exists"
+            ls -la dist/
+          fi
+          echo "::endgroup::"
+
+      - name: Prepare files for Docker build
+        run: |
+          echo "::group::Prepare files for Docker"
+          # Copy binary to root
           cp ./build-output/apitoolkit-server-exe . || cp ./build-output/* ./apitoolkit-server-exe
           chmod +x ./apitoolkit-server-exe
-          ls -la apitoolkit-server-exe
+          
+          # Ensure web-components dist is in the expected location
+          # The artifacts might be flattened, so we need to recreate the structure
+          if [ ! -d "web-components/dist" ] && [ -d "dist" ]; then
+            echo "Creating web-components directory structure"
+            mkdir -p web-components
+            mv dist web-components/
+          fi
+          
+          # List final structure
+          echo "Final directory structure:"
+          ls -la
+          if [ -d "web-components" ]; then
+            echo "web-components contents:"
+            ls -la web-components/
+          fi
           echo "::endgroup::"
 
       - name: Set up Docker Buildx
