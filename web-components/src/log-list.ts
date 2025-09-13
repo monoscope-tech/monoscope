@@ -600,7 +600,20 @@ export class LogList extends LitElement {
             // Replace all data
             this.spanListTree = tree;
             if (this.spanListTree.length > 0) {
-              this.scrollToBottom();
+              // Reset scroll position based on flipDirection
+              // Use requestAnimationFrame to ensure DOM is updated before scrolling
+              requestAnimationFrame(() => {
+                const container = this.logsContainer || document.querySelector('#logs_list_container_inner') as HTMLElement;
+                if (container) {
+                  if (this.flipDirection) {
+                    // When flipDirection is true (oldest at top, newest at bottom), scroll to bottom to show newest
+                    container.scrollTop = container.scrollHeight;
+                  } else {
+                    // When flipDirection is false (newest at top, oldest at bottom), scroll to top to show newest
+                    container.scrollTop = 0;
+                  }
+                }
+              });
             }
           } else if (isRecentFetch) {
             // Mark new items for visual distinction
