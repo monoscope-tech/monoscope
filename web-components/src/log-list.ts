@@ -106,7 +106,7 @@ export class LogList extends LitElement {
     // Initialize log list component
 
     // Initialize debounced functions
-    this.debouncedHandleScroll = debounce(this.handleScroll.bind(this), 50);
+    this.debouncedHandleScroll = debounce(this.handleScroll.bind(this), 5);
     this.debouncedFetchData = debounce(this.fetchData.bind(this), 300);
 
     // Bind resize handler for immediate feedback
@@ -493,6 +493,7 @@ export class LogList extends LitElement {
     } else {
       if (container.scrollTop === 0) this.handleRecentConcatenation();
     }
+    this.requestUpdate();
   }
 
   private batchRequestUpdate(source: string) {
@@ -801,9 +802,7 @@ export class LogList extends LitElement {
       ${this.options()}
       <div
         ${ref(this.containerRef)}
-        @scroll=${(e) => {
-          this.debouncedHandleScroll(e);
-        }}
+        @scroll=${this.debouncedHandleScroll}
         class=${clsx(
           'relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto will-change-transform contain-layout-style-paint content-visibility-auto',
           isInitialLoading && 'overflow-hidden'
@@ -1662,7 +1661,6 @@ function emptyState(cols: number) {
     </tr>
   `;
 }
-
 function requestDumpLogItemUrlPath(rd: any[], colIdxMap: ColIdxMap, source: string): [string, string, string] {
   const rdId = lookupVecValue<string>(rd, colIdxMap, 'id');
   const rdCreatedAt = lookupVecValue<string>(rd, colIdxMap, 'created_at') || lookupVecValue<string>(rd, colIdxMap, 'timestamp');
