@@ -280,7 +280,21 @@ export class LogList extends LitElement {
     if (this.spanListTree.length === 0) {
       return this.buildJsonUrl();
     }
-    return this.nextFetchUrl;
+    
+    // Build URL dynamically based on the actual last item in the list
+    const url = new URL(window.location.href);
+    url.searchParams.set('json', 'true');
+    
+    // Get the timestamp from the last item (oldest, since we order by timestamp desc)
+    const lastItem = this.spanListTree[this.spanListTree.length - 1];
+    const timestamp = lastItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
+    
+    if (timestamp) {
+      // Set cursor to the last item's timestamp to fetch older data
+      url.searchParams.set('cursor', timestamp);
+    }
+    
+    return url.toString();
   }
 
   async fetchInitialData() {
