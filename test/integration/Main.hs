@@ -9,5 +9,5 @@ import Test.Hspec (hspec)
 main :: IO ()
 main = do
   -- FIXME: figure out why some of the doctests are not working correctly and fix them. Maybe upgrade the dependency first.
-  -- mainFromCabal "apitoolkit-server" =<< getArgs
+  -- mainFromCabal "monoscope" =<< getArgs
   hspec Spec.spec

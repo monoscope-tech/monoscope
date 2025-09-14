@@ -108,8 +108,8 @@ jobs:
 
   build-and-deploy:
     name: Build and Deploy Docker Image
-    needs: test
     runs-on: ubuntu-latest
+    if: always()
     permissions:
       contents: 'read'
       id-token: 'write'
