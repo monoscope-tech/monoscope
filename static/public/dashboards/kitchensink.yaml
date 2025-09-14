@@ -1,5 +1,5 @@
 title: "Kitchen Sink Dashboard"
-description: This dashboard is a demo example that shoes different widgets available on APItoolkit 
+description: This dashboard is a demo example that shows different widgets available on Monoscope 
 refresh_interval: 60s
 time_range:
   since: 6h 

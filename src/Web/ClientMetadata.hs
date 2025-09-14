@@ -20,7 +20,7 @@ import Relude.Unsafe ((!!))
 import Servant (err401)
 import System.Config (
   AuthContext (config),
-  EnvConfig (apiKeyEncryptionSecretKey, apitoolkitPusherServiceAccountB64, requestPubsubTopics),
+  EnvConfig (apiKeyEncryptionSecretKey, monoscopePusherServiceAccountB64, requestPubsubTopics),
  )
 import System.Types (ATBaseCtx)
 
@@ -59,7 +59,7 @@ clientMetadataH (Just authTextB64) = do
                 project <- Projects.projectById pApiKey.projectId
                 pure (pApiKey, project)
 
-          let serviceAccountJson = case AE.decodeStrict . B64.decodeBase64Lenient . encodeUtf8 $ appCtx.config.apitoolkitPusherServiceAccountB64 of
+          let serviceAccountJson = case AE.decodeStrict . B64.decodeBase64Lenient . encodeUtf8 $ appCtx.config.monoscopePusherServiceAccountB64 of
                 Just val -> val
                 Nothing -> error "Failed to decode service account from environment variable"
 

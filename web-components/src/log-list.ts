@@ -1682,7 +1682,7 @@ function loadingSkeleton(cols: number) {
 
 function emptyState(cols: number) {
   let title = `No Events found`;
-  let subText = `You're either not sending events to APItoolkit yet or no results matched your query/filter`;
+  let subText = `You're either not sending events to Monoscope yet or no results matched your query/filter`;
   return html`
     <tr class="w-full flex justify-center">
       <td colspan=${String(cols)} class="w-full mx-auto">
@@ -1701,7 +1701,7 @@ function emptyState(cols: number) {
             </h2>
             <p class="text-sm max-w-md font-medium text-textWeak leading-relaxed">${subText}</p>
             <a
-              href="https://apitoolkit.io/docs/sdks/"
+              href="https://monoscope.tech/docs/sdks/"
               target="_BLANK"
               class="btn text-sm w-max mx-auto btn-primary bg-gradient-to-r from-fillBrand-strong to-fillBrand-weak hover:shadow-lg transition-all duration-300 hover:scale-105 border-0"
             >

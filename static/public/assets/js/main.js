@@ -1,4 +1,4 @@
-// Utility functions for APIToolkit
+// Utility functions for Monoscope
 
 /**
  * Debounce function to limit how often a function can be called

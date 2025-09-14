@@ -341,7 +341,7 @@ make timescaledb-docker
 Add the following to your PostgreSQL configuration:
 
 ```sql
-ALTER system SET cron.database_name = 'apitoolkit';
+ALTER system SET cron.database_name = 'monoscope';
 ALTER system SET shared_preload_libraries = 'pg_cron';
 ```
 
@@ -401,7 +401,7 @@ Unit tests don't require a database connection and run much faster. They include
 ```haskell
 make test-unit
 # OR
-stack test apitoolkit-server:unit-tests --ghc-options=-w
+stack test monoscope-server:unit-tests --ghc-options=-w
 ```
 
 ### Run unit tests with file watching for development
@@ -409,15 +409,15 @@ stack test apitoolkit-server:unit-tests --ghc-options=-w
 ```haskell
 make live-test-unit
 # OR
-stack test apitoolkit-server:unit-tests --ghc-options=-w --file-watch
+stack test monoscope-server:unit-tests --ghc-options=-w --file-watch
 ```
 
 ### Run a specific individual test
 
 ```haskell
-stack test --test-arguments "--match=SeedingConfig" apitoolkit-server:tests
+stack test --test-arguments "--match=SeedingConfig" monoscope-server:tests
 # OR
-stack test --ta "--match=SeedingConfig" apitoolkit-server:tests
+stack test --ta "--match=SeedingConfig" monoscope-server:tests
 ```
 
 </details>

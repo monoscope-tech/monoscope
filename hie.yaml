@@ -1,16 +1,16 @@
 cradle:
   stack:
     - path: "./src"
-      component: "apitoolkit-server:lib"
+      component: "monoscope-server:lib"
 
     - path: "./app/Main.hs"
-      component: "apitoolkit-server:exe:apitoolkit-server-exe"
+      component: "monoscope-server:exe:monoscope-server-exe"
 
-    - path: "./app/Paths_apitoolkit_server.hs"
-      component: "apitoolkit-server:exe:apitoolkit-server-exe"
+    - path: "./app/Paths_monoscope_server.hs"
+      component: "monoscope-server:exe:monoscope-server-exe"
 
     - path: "./test"
-      component: "apitoolkit-server:test:apitoolkit-server-test"
+      component: "monoscope-server:test:monoscope-server-test"
 
 
 dependencies:

@@ -27,7 +27,7 @@ spec = aroundAll withTestResources do
             CreateProject.CreateProjectForm
               { title = "Test Project CI"
               , description = "Test Description"
-              , emails = ["test@apitoolkit.io"]
+              , emails = ["test@monoscope.tech"]
               , permissions = [ProjectMembers.PAdmin]
               , timeZone = ""
               }
@@ -53,7 +53,7 @@ spec = aroundAll withTestResources do
             CreateProject.CreateProjectForm
               { title = "Test Project CI2"
               , description = "Test Description2"
-              , emails = ["test@apitoolkit.io"]
+              , emails = ["test@monoscope.tech"]
               , permissions = [ProjectMembers.PAdmin]
               , timeZone = "Africa/Accra"
               }

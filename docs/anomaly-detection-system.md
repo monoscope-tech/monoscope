@@ -2,7 +2,7 @@
 
 ## Overview
 
-The APIToolkit anomaly detection system automatically identifies and tracks changes in API behavior, including:
+The Monoscope anomaly detection system automatically identifies and tracks changes in API behavior, including:
 - New endpoints, request/response shapes, and field formats
 - Runtime exceptions and errors
 - Performance degradations and threshold violations

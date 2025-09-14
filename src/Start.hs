@@ -15,7 +15,7 @@ startApp = do
   _ <- Safe.try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException ())
   withTracer $ \tracer -> do
     tp <- getGlobalTracerProvider
-    Server.runAPItoolkit tp
+    Server.runMonoscope tp
     pass
   where
     withTracer :: ((TracerOptions -> Tracer) -> IO c) -> IO c
@@ -24,5 +24,5 @@ startApp = do
         initializeGlobalTracerProvider
         shutdownTracerProvider
         ( \tracerProvider -> do
-            f $ makeTracer tracerProvider "apitoolkit-server"
+            f $ makeTracer tracerProvider "monoscope-server"
         )

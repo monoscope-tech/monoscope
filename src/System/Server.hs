@@ -1,6 +1,6 @@
 {-# LANGUAGE RankNTypes #-}
 
-module System.Server (runAPItoolkit) where
+module System.Server (runMonoscope) where
 
 import BackgroundJobs qualified
 import Colourista.IO (blueMessage)
@@ -37,14 +37,14 @@ import System.Types (effToServantHandler)
 import Web.Routes qualified as Routes
 
 
-runAPItoolkit :: TracerProvider -> IO ()
-runAPItoolkit tp =
+runMonoscope :: TracerProvider -> IO ()
+runMonoscope tp =
   Safe.bracket
     (getAppContext & runFailIO & runEff)
-    (runEff . shutdownAPItoolkit)
+    (runEff . shutdownMonoscope)
     \env -> runEff . runTime . runConcurrent $ do
       let baseURL = "http://localhost:" <> show env.config.port
-      liftIO $ blueMessage $ "Starting APItoolkit server on " <> baseURL
+      liftIO $ blueMessage $ "Starting Monoscope server on " <> baseURL
       let withLogger = Logging.makeLogger env.config.loggingDestination
       withLogger \l -> runServer l env tp
 
@@ -57,7 +57,7 @@ runServer appLogger env tp = do
         defaultSettings
           & setPort env.config.port
           & setOnException \_ exception ->
-            Log.runLogT "apitoolkit" appLogger Log.LogAttention
+            Log.runLogT "monoscope" appLogger Log.LogAttention
               $ Log.logAttention "Unhandled exception"
               $ AE.object ["exception" AE..= show @String exception]
   let wrappedServer =
@@ -96,8 +96,8 @@ mkServer logger env tp = do
     (Routes.genAuthServerContext logger env)
 
 
-shutdownAPItoolkit :: AuthContext -> Eff '[IOE] ()
-shutdownAPItoolkit env =
+shutdownMonoscope :: AuthContext -> Eff '[IOE] ()
+shutdownMonoscope env =
   liftIO $ do
     Pool.destroyAllResources env.pool
     Pool.destroyAllResources env.jobsPool

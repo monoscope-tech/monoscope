@@ -1,14 +1,14 @@
-# APIToolkit Query Language (AQL) - Complete Grammar Reference
+# Monoscope Query Language (MQL) - Complete Grammar Reference
 
-This document provides a comprehensive reference for the APIToolkit Query Language (AQL), used for querying telemetry data including spans, metrics, and logs.
+This document provides a comprehensive reference for the Monoscope Query Language (MQL), used for querying telemetry data including spans, metrics, and logs.
 
-# Quick Start: AQL vs Standard KQL
+# Quick Start: MQL vs Standard KQL
 
 ────────────────────────────────
 
-AQL is inspired by KQL but designed specifically for observability data with some key differences:
+MQL is inspired by KQL but designed specifically for observability data with some key differences:
 
-```aql
+```mql
 // AQL supports deep nested field access with dots
 parent.child.grandchild == "value"
 
@@ -243,21 +243,21 @@ The default table is selected via a dropdown in the UI. When no table is explici
 ──────────────────────
 
 ## 3.1 Simple Fields
-```aql
+```mql
 method              // Simple field access
 status_code         // Underscore-separated field names
 level               // Severity level field
 ```
 
 ## 3.2 Nested JSON Fields
-```aql
+```mql
 request_body.message        // Nested field access
 attributes.http.method      // Deep nesting
 resource.service.name       // OpenTelemetry resource fields
 ```
 
 ## 3.3 Array Access
-```aql
+```mql
 errors[0]                   // First element
 tags[*]                     // All elements (wildcard)
 request_body.roles[1]       // Nested array access
@@ -265,7 +265,7 @@ events[*].name              // Field in all array elements
 ```
 
 ## 3.4 Complex Paths
-```aql
+```mql
 request_body.tags[*].name   // Field in all array elements
 errors[0].message           // Field in specific array element
 attributes.db.query.text    // Deep nested field
@@ -274,19 +274,19 @@ attributes.db.query.text    // Deep nested field
 ## 3.5 Array Operations Detail
 
 ### Array Contains Any Element
-```aql
+```mql
 tags[*] == "production"          // Any tag equals "production"
 // → SQL: EXISTS (SELECT 1 FROM jsonb_array_elements_text(tags) AS t WHERE t = 'production')
 ```
 
 ### Array Field Access
-```aql
+```mql
 errors[*].code == 500            // Any error has code 500
 // → SQL: EXISTS (SELECT 1 FROM jsonb_array_elements(errors) AS e WHERE e->>'code' = '500')
 ```
 
 ### Array Length
-```aql
+```mql
 array_length(tags) > 3           // More than 3 tags
 // → SQL: jsonb_array_length(tags) > 3
 ```
@@ -296,14 +296,14 @@ array_length(tags) > 3           // More than 3 tags
 ─────────────────────────────
 
 ## 4.1 Strings
-```aql
+```mql
 "GET"                       // Simple string
 "user said \"hello\""       // Escaped quotes
 "/api/v1/users"            // Path strings
 ```
 
 ## 4.2 Numbers
-```aql
+```mql
 123                        // Integer
 45.67                      // Float
 6.02e23                    // Scientific notation
@@ -311,7 +311,7 @@ array_length(tags) > 3           // More than 3 tags
 ```
 
 ## 4.3 Booleans
-```aql
+```mql
 true                       // Boolean true
 false                      // Boolean false
 TRUE                       // Case-insensitive
@@ -319,7 +319,7 @@ FALSE                      // Case-insensitive
 ```
 
 ## 4.4 Arrays
-```aql
+```mql
 [1, 2, 3]                  // Number array
 ["GET", "POST", "PUT"]     // String array
 (200, 404, 500)            // Alternative syntax
@@ -327,7 +327,7 @@ FALSE                      // Case-insensitive
 ```
 
 ## 4.5 Duration Values
-```aql
+```mql
 100ns                      // 100 nanoseconds
 250µs                      // 250 microseconds (or 250us)
 5ms                        // 5 milliseconds
@@ -339,7 +339,7 @@ FALSE                      // Case-insensitive
 ```
 
 ## 4.6 Null Values
-```aql
+```mql
 null                       // Null value
 NULL                       // Case-insensitive
 ```
@@ -349,7 +349,7 @@ NULL                       // Case-insensitive
 ────────────────────
 
 ## 5.1 Basic Filtering
-```aql
+```mql
 // Simple equality
 method == "GET"
 
@@ -364,7 +364,7 @@ response_body.error_code != null
 ```
 
 ## 5.2 Set Operations
-```aql
+```mql
 // Value in list
 method in ("GET", "POST", "PUT")
 
@@ -376,7 +376,7 @@ user_role in ("admin", "moderator")
 ```
 
 ## 5.3 Text Search Operations
-```aql
+```mql
 // Word search (case-insensitive)
 message has "error"
 log_level !has "debug"
@@ -397,7 +397,7 @@ url !endswith ".css"
 ```
 
 ## 5.4 Pattern Matching
-```aql
+```mql
 // Regex matching
 email matches regex ".*@company\.com"
 error_code matches regex "^HTTP_[45]\d{2}$"
@@ -407,7 +407,7 @@ log_message matches regex "\berror\b"
 request_id matches regex "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"
 ```
 ## 5.5 Duration Comparisons
-```aql
+```mql
 // Performance monitoring
 duration > 500ms
 response_time <= 2s
@@ -419,7 +419,7 @@ latency > 250ms OR timeout == true
 ```
 
 ## 5.6 Array and Nested Field Queries
-```aql
+```mql
 // Array element access
 errors[0].type == "ValidationError"
 tags[*] == "production"
@@ -434,7 +434,7 @@ events[*].attributes.user.roles[*] in ("admin", "super_admin")
 ```
 
 ## 5.7 Existence Checks
-```aql
+```mql
 // Field presence
 user.timezone exists
 request_body.optional_field !exists
@@ -447,7 +447,7 @@ request_body.payment_info exists AND status_code == 400
 ## 5.8 Aggregation Queries
 
 ### Basic Aggregations
-```aql
+```mql
 // Simple count
 summarize count()
 
@@ -462,7 +462,7 @@ summarize
 ```
 
 ### Group By Operations
-```aql
+```mql
 // Group by single field
 summarize count() by service_name
 
@@ -474,7 +474,7 @@ summarize count() by attributes.http.method, response.status_code
 ```
 
 ### Time-Series Aggregation
-```aql
+```mql
 // Auto time binning
 summarize count() by bin_auto(timestamp)
 
@@ -495,7 +495,7 @@ summarize
 ```
 
 ## 5.9 Extend Operations
-```aql
+```mql
 // Calculate new fields
 extend response_time_ms = duration / 1ms
 
@@ -511,7 +511,7 @@ extend
 ```
 
 ## 5.10 Project Operations
-```aql
+```mql
 // Select specific fields
 project timestamp, service_name, duration
 
@@ -526,7 +526,7 @@ project-away request_body, response_body
 ```
 
 ## 5.11 Sorting
-```aql
+```mql
 // Simple sort
 sort by timestamp desc
 
@@ -539,7 +539,7 @@ summarize count() by endpoint
 ```
 
 ## 5.12 Multi-Stage Pipeline Queries
-```aql
+```mql
 // Source selection with filtering and aggregation
 spans
 | where service_name == "checkout" and duration > 100ms
@@ -571,7 +571,7 @@ spans
 ```
 
 ## 5.13 Advanced Filter Combinations
-```aql
+```mql
 // Complex logical combinations
 (method == "POST" or method == "PUT") 
 and status_code >= 400 
@@ -600,7 +600,7 @@ and (
 ──────────────────────────────
 
 ## 6.1 Spans Data Source
-```aql
+```mql
 spans                      // OpenTelemetry spans
 
 // Common span fields
@@ -610,7 +610,7 @@ spans | where status_code >= 400
 ```
 
 ## 6.2 Metrics Data Source  
-```aql
+```mql
 metrics                    // OpenTelemetry metrics
 
 // Common metric operations
@@ -619,7 +619,7 @@ metrics | where value > 80
 ```
 
 ## 6.3 Logs Data Source
-```aql
+```mql
 logs                       // Application logs
 
 // Common log operations
@@ -638,20 +638,20 @@ AQL follows KQL conventions for the `where` keyword:
 ### Rules for the `where` keyword:
 
 1. When a table/source is explicitly specified, a `where` clause must follow:
-   ```aql
+   ```mql
    spans | where status_code >= 400
    metrics | where cpu_usage > 80
    ```
 
 2. When using the default table (no table specified), the `where` keyword becomes optional:
-   ```aql
+   ```mql
    // These are equivalent when using the default table:
    status_code >= 400
    where status_code >= 400
    ```
 
 3. Subsequent filter conditions after other sections always require the `where` keyword:
-   ```aql
+   ```mql
    // Filter after summarize requires 'where'
    status_code >= 400 | summarize count() by endpoint | where count_value > 100
    spans | where method == "POST" | summarize count() | where count_value > 10
@@ -710,7 +710,7 @@ AQL follows KQL conventions for the `where` keyword:
 ────────────────────────────
 
 ## 9.1 Find Slow Database Queries
-```aql
+```mql
 attributes.db.statement exists 
 and duration > 500ms 
 and attributes.db.system == "postgresql"
@@ -719,7 +719,7 @@ and attributes.db.system == "postgresql"
 ```
 
 ## 9.2 API Error Rate by Endpoint
-```aql
+```mql
 // Calculate error rate percentage
 summarize 
     error_count = countif(status_code >= 400),
@@ -731,7 +731,7 @@ summarize
 ```
 
 ## 9.3 Trace Through Nested Request Data
-```aql
+```mql
 request_body.user.permissions[*] has "admin"
 and request_body.action.type == "delete"
 and request_body.action.target.sensitive == true
@@ -739,7 +739,7 @@ and request_body.action.target.sensitive == true
 ```
 
 ## 9.4 Service Health Dashboard Query
-```aql
+```mql
 // Get service health metrics for last hour
 where timestamp > ago(1h)
 | summarize 
@@ -756,7 +756,7 @@ where timestamp > ago(1h)
 ```
 
 ## 9.5 User Session Analysis
-```aql
+```mql
 // Analyze user session patterns
 attributes.user.id exists
 | summarize 
@@ -770,7 +770,7 @@ attributes.user.id exists
 ```
 
 ## 9.6 Resource Usage Anomalies
-```aql
+```mql
 // Find resource usage spikes
 metrics
 | where metric_name in ("cpu_usage", "memory_usage", "disk_io")
@@ -787,7 +787,7 @@ metrics
 
 ──────────────────────────────────────
 
-The AQL parser translates queries into optimized PostgreSQL with JSON support:
+The MQL parser translates queries into optimized PostgreSQL with JSON support:
 
 ## 10.1 Field Access Translation
 - Simple fields: `method` → `method`
@@ -844,7 +844,7 @@ CREATE INDEX idx_time_service ON spans(timestamp, service_name);
 ## 11.2 Performance Best Practices
 
 1. **Always filter by time range when possible**
-   ```aql
+   ```mql
    // Good: Limits data scan
    where timestamp > ago(1h) and status_code >= 500
    
@@ -853,7 +853,7 @@ CREATE INDEX idx_time_service ON spans(timestamp, service_name);
    ```
 
 2. **Use specific field paths instead of wildcards**
-   ```aql
+   ```mql
    // Good: Direct path
    where errors[0].code == 500
    
@@ -862,7 +862,7 @@ CREATE INDEX idx_time_service ON spans(timestamp, service_name);
    ```
 
 3. **Limit results early in the pipeline**
-   ```aql
+   ```mql
    // Good: Filter before aggregation
    where service_name == "api" 
    | summarize count() by endpoint
@@ -877,7 +877,7 @@ CREATE INDEX idx_time_service ON spans(timestamp, service_name);
    - Avoid: Deep JSON paths in primary filters
 
 5. **Optimize time binning**
-   ```aql
+   ```mql
    // Good: Appropriate bin size for time range
    where timestamp > ago(1h)
    | summarize count() by bin(timestamp, 1m)

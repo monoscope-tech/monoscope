@@ -1,7 +1,7 @@
 {
   "name": "monaco-aql-editor",
   "version": "1.0.0",
-  "description": "Monaco editor with APIToolkit Query Language (AQL) support",
+  "description": "Monaco editor with Monoscope Query Language (MQL) support",
   "scripts": {
     "dev": "vite",
     "watch": "vite build --watch",

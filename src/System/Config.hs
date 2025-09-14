@@ -78,7 +78,7 @@ data EnvConfig = EnvConfig
   , openaiBaseUrl :: Text
   , chartShotUrl :: Text
   , hostUrl :: Text
-  , apitoolkitPusherServiceAccountB64 :: Text
+  , monoscopePusherServiceAccountB64 :: Text
   , twilioAccountSid :: Text
   , twilioAuthToken :: Text
   , whatsappFromNumber :: Text

@@ -31,7 +31,7 @@ COPY *.cabal cabal.project* Setup.hs LICENSE README.md auto-instrument-config.to
 RUN --mount=type=cache,target=/root/.cabal/store \
   --mount=type=cache,target=/build/dist-newstyle \
   cabal update && \
-  cabal build --only-dependencies exe:apitoolkit-server-exe -j$(nproc)
+  cabal build --only-dependencies exe:monoscope -j$(nproc)
 
 # Copy source code
 COPY src ./src
@@ -43,9 +43,9 @@ COPY static ./static
 # Build executable
 RUN --mount=type=cache,target=/root/.cabal/store \
   --mount=type=cache,target=/build/dist-newstyle \
-  cabal build exe:apitoolkit-server-exe -j$(nproc) && \
+  cabal build exe:monoscope -j$(nproc) && \
   mkdir -p /build/dist && \
-  find dist-newstyle -name apitoolkit-server-exe -type f -executable | head -1 | xargs -I {} cp {} /build/dist/
+  find dist-newstyle -name monoscope -type f -executable | head -1 | xargs -I {} cp {} /build/dist/
 
 # Stage 2: Build frontend assets
 FROM node:18-alpine AS frontend-builder
@@ -79,7 +79,6 @@ FROM debian:12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ca-certificates \
   libgmp10 \
-  libgrpc++1.51 \
   librdkafka1 \
   libpq5 \
   libsnappy1v5 \
@@ -90,19 +89,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
-RUN useradd -m -U -s /bin/false apitoolkit
+RUN useradd -m -U -s /bin/false monoscope
 
-WORKDIR /opt/apitoolkit
+WORKDIR /opt/monoscope
 
 # Copy artifacts
-COPY --from=haskell-builder /build/dist/apitoolkit-server-exe ./
+COPY --from=haskell-builder /build/dist/monoscope ./
 COPY --from=frontend-builder /build/static ./static
 
 # Set ownership and permissions
-RUN chown -R apitoolkit:apitoolkit /opt/apitoolkit && \
-    chmod +x apitoolkit-server-exe
+RUN chown -R monoscope:monoscope /opt/monoscope && \
+  chmod +x monoscope
 
-USER apitoolkit
+USER monoscope
 
 EXPOSE 8080
-ENTRYPOINT ["./apitoolkit-server-exe"]
+ENTRYPOINT ["./monoscope"]

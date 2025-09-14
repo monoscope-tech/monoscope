@@ -627,13 +627,13 @@ SELECT manage_updated_at('projects.redacted_fields');
 CREATE INDEX IF NOT EXISTS idx_projects_redacted_fields_project_id ON projects.redacted_fields(project_id);
 
 
--- apitoolkit_daily_job should be executed every day at midnight
-CREATE OR REPLACE PROCEDURE apitoolkit_daily_job(job_id int, config jsonb) LANGUAGE PLPGSQL AS
+-- monoscope_daily_job should be executed every day at midnight
+CREATE OR REPLACE PROCEDURE monoscope_daily_job(job_id int, config jsonb) LANGUAGE PLPGSQL AS
 $$ BEGIN
   INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyJob'));
 END;
 $$;
-SELECT add_job('apitoolkit_daily_job', schedule_interval => interval '1 DAY', initial_start => '2024-05-16 00:00'::timestamptz);
+SELECT add_job('monoscope_daily_job', schedule_interval => interval '1 DAY', initial_start => '2024-05-16 00:00'::timestamptz);
 
 CREATE TABLE IF NOT EXISTS apis.share_requests
  (
@@ -863,7 +863,7 @@ SELECT add_job('tests.check_tests_to_trigger', '10min');
 INSERT into projects.projects (id, title) VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project');
 
 
-INSERT into users.users (id, email, first_name, last_name) VALUES ('00000000-0000-0000-0000-000000000000', 'hello@apitoolkit.io', 'Guest', 'User');
+INSERT into users.users (id, email, first_name, last_name) VALUES ('00000000-0000-0000-0000-000000000000', 'hello@monoscope.tech', 'Guest', 'User');
 
 INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', 'view');
 

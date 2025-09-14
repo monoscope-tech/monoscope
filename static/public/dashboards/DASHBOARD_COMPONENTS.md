@@ -1,7 +1,7 @@
 # Dashboard Components Documentation
 
 ## Overview
-This document describes the dashboard components used in APIToolkit dashboards and potential future enhancements for the dashboard engine.
+This document describes the dashboard components used in Monoscope dashboards and potential future enhancements for the dashboard engine.
 
 ## Current Widget Types
 
@@ -188,4 +188,4 @@ This document describes the dashboard components used in APIToolkit dashboards a
 2. **Medium Priority**: map, waterfall, annotations
 3. **Low Priority**: sankey, treemap, radar
 
-These enhancements would significantly improve the dashboard experience and provide more powerful data visualization capabilities for APIToolkit users.
+These enhancements would significantly improve the dashboard experience and provide more powerful data visualization capabilities for Monoscope users.

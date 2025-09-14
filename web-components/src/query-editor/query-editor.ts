@@ -1604,7 +1604,7 @@ export class QueryEditorComponent extends LitElement {
         <div class="p-1">
           <label
             class="px-3 py-0.5 inline-flex gap-2 items-center cursor-pointer border border-strokeBrand-strong text-textBrand hover:border-strokeBrand-weak rounded-sm group-has-[.ai-search:checked]/fltr:hidden"
-            data-tippy-content="Write queries in natural language with APItoolkit AI"
+            data-tippy-content="Write queries in natural language with Monoscope AI"
             for="ai-search-chkbox"
           >
             <svg class="inline-block icon h-4 w-4 text-iconBrand ">

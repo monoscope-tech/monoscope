@@ -2,7 +2,7 @@
 
 ## Overview
 
-This guide documents the comprehensive test suite created for the anomaly detection system in APIToolkit. The tests verify the complete flow from HTTP request ingestion through anomaly detection, issue creation, and notification sending.
+This guide documents the comprehensive test suite created for the anomaly detection system in Monoscope. The tests verify the complete flow from HTTP request ingestion through anomaly detection, issue creation, and notification sending.
 
 ## Test Structure
 

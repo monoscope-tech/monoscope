@@ -91,7 +91,7 @@ data Endpoint = Endpoint
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Endpoint
 
 
--- | endpointToUrlPath builds an apitoolkit path link to the endpoint details page of that endpoint.
+-- | endpointToUrlPath builds a monoscope path link to the endpoint details page of that endpoint.
 endpointToUrlPath :: Endpoint -> Text
 endpointToUrlPath enp = endpointUrlPath enp.projectId enp.id
 

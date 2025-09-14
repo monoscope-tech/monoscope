@@ -260,7 +260,7 @@ onboardingCompleteBody pid = do
         $ faSprite_ "circle-check" "regular" "h-8 w-8 text-iconSuccess"
       div_ [class_ "flex flex-col gap-2"] do
         h3_ [class_ " text-textStrong font-semibold text-2xl"] "Onboarding completed!"
-        p_ [class_ " text-textWeak text-sm"] "You're all set! You can now start using exploring the apitoolkit dashboard by clicking the button below."
+        p_ [class_ " text-textWeak text-sm"] "You're all set! You can now start using exploring the monoscope dashboard by clicking the button below."
       a_ [class_ "btn-primary py-2 font-semibold rounded-lg text-center mt-1", href_ $ "/p/" <> pid.toText <> "/"] "Go to your dashboard"
   script_ [src_ "/public/assets/js/confetti.js"] ("" :: Text)
 
@@ -275,9 +275,9 @@ pricingPage pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled = do
       div_ [class_ "flex flex-col gap-2 w-full"] do
         span_ [class_ " text-textStrong text-2xl font-semibold mt-20"] "FAQ"
         div_ [class_ "flex flex-col mt-4 w-full"] do
-          faQ "What is an event?" "An event is any of span, log, or metric that you send to APItoolkit."
-          faQ "How do you handle security and sensitive data?" "We employ encryption and authentication measures to ensure the security of your data during transmission and storage. All our SDKs also support redacting data. You can simply specify the JSONPath to the fields that you don't want the SDKs to forward to APItoolkit, and those sensitive fields will be stripped out/redacted before the data even leaves your servers and replaced with the text \"CLIENT REDACTED\" on our end. We will never see anything you don't want us to see."
-          faQ "What makes us better than others?" "Aside the observerbility features like traces, logs, metrics etc. APItoolkit takes it a step further by monitoring request payloads for both incoming and outgoing requests, automatic error reportings like sentry and payload changes detections which gives engineering teams with all the information the need to seamlessly debug and fix issues in their servers."
+          faQ "What is an event?" "An event is any of span, log, or metric that you send to Monoscope."
+          faQ "How do you handle security and sensitive data?" "We employ encryption and authentication measures to ensure the security of your data during transmission and storage. All our SDKs also support redacting data. You can simply specify the JSONPath to the fields that you don't want the SDKs to forward to Monoscope, and those sensitive fields will be stripped out/redacted before the data even leaves your servers and replaced with the text \"CLIENT REDACTED\" on our end. We will never see anything you don't want us to see."
+          faQ "What makes us better than others?" "Aside the observerbility features like traces, logs, metrics etc. Monoscope takes it a step further by monitoring request payloads for both incoming and outgoing requests, automatic error reportings like sentry and payload changes detections which gives engineering teams with all the information the need to seamlessly debug and fix issues in their servers."
 
 
 -- Group is a tuple of (Group Name, List of languages in that group)
@@ -489,7 +489,7 @@ integrationsPage pid apikey =
                       ""
 
                 div_ [class_ "text-center mt-3"]
-                  $ a_ [href_ "https://www.youtube.com/@apitoolkit", target_ "_blank", class_ "text-textBrand hover:underline text-sm font-medium"] do
+                  $ a_ [href_ "https://www.youtube.com/@monoscope", target_ "_blank", class_ "text-textBrand hover:underline text-sm font-medium"] do
                     "Watch more tutorials →"
 
           -- Display guides for all integration options
@@ -514,7 +514,7 @@ integrationsPage pid apikey =
                           , hxIndicator_ $ "#fw-indicator-" <> lang
                           ]
                         <> [checked_ | idx == 0]
-                      unless (T.null fwIcon) $ img_ [class_ "h-5 w-5", src_ $ "https://apitoolkit.io/assets/img/framework-logos/" <> fwIcon]
+                      unless (T.null fwIcon) $ img_ [class_ "h-5 w-5", src_ $ "https://monoscope.tech/assets/img/framework-logos/" <> fwIcon]
                       span_ $ toHtml fwName
 
                 div_ [class_ "relative p-8"] do
@@ -680,7 +680,7 @@ onboardingConfigBody pid loca func = do
               forM_ locations $ createBinaryField "radio" "location" [loca]
           div_ [class_ "flex-col gap-2 flex"] $ do
             div_ [class_ "items-center flex gap-[2px]"] $ do
-              span_ [class_ " text-textStrong"] "Which APItoolkit features will you be using?"
+              span_ [class_ " text-textStrong"] "Which Monoscope features will you be using?"
               span_ [class_ " text-textWeak"] "*"
             div_ [class_ "pt-2 flex-col gap-4 flex"] $ do
               forM_ functionalities $ createBinaryField "checkbox" "functionality" func
@@ -825,11 +825,11 @@ universalIndicator =
     span_ [class_ "loading loading-dots loading-lg"] ""
 
 
--- | Proxy handler for fetching documentation from apitoolkit.io
+-- | Proxy handler for fetching documentation from monoscope.tech
 -- This bypasses CORS restrictions by fetching the content server-side
 proxyLandingH :: [Text] -> ATAuthCtx (RespHeaders Text)
 proxyLandingH path = do
-  let baseUrl = "https://apitoolkit.io/"
+  let baseUrl = "https://monoscope.tech/"
       fullUrl = baseUrl <> T.intercalate "/" path
 
   response <- W.get (toString fullUrl)

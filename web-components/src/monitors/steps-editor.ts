@@ -639,7 +639,7 @@ ${stepData._json}</textarea
               <summary class="label-text text-lg mb-2 cursor-pointer">
                 <div class="inline-flex text-lg gap-2 items-center cursor-pointer  text-textStrong font-medium">
                   Add Assertions <span class="font-normal  text-textWeak">(optional)</span>
-                  <a href="https://apitoolkit.io/docs/dashboard/dashboard-pages/api-tests/#test-definition-syntax" class="" target="_blank">
+                  <a href="https://monoscope.tech/docs/dashboard/dashboard-pages/api-tests/#test-definition-syntax" class="" target="_blank">
                     ${faSprite_('circle-info', 'regular', 'w-3 h-3 text-iconNeutral')}
                   </a>
                 </div>

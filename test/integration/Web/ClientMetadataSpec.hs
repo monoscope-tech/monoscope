@@ -56,7 +56,7 @@ spec = aroundAll withTestResources do
     expectedClientMetadata =
       ClientMetadata
         { projectId = testId
-        , topicId = "apitoolkit-prod-default"
+        , topicId = "monoscope-prod-default"
         , pubsubProjectId = "past-3"
         , pubsubPushServiceAccount = [aesonQQ|{}|]
         }
