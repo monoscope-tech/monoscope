@@ -1,5 +1,11 @@
 @import 'tailwindcss';
-@source "./public/*.{html,js,hs}";
+@source "../../../../src/**/*.{html,js,hs}";
+@source "../**/*.{html,js}";
+@source "../testeditor.js";
+@source "../steps-editor.js";
+@source "../steps-assertions.js";
+@source "../explorer-list.js";
+@source "../../../../web-components/**/*.{js,jsx,ts,tsx,vue}";
 
 @layer base, utilities, custom;
 

@@ -12,136 +12,8 @@ env:
   GHC_VERSION: 9.10.2
 
 jobs:
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: 'read'
-      id-token: 'write'
-    outputs:
-      cache-key: ${{ steps.cache-key.outputs.key }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Generate cache key
-        id: cache-key
-        run: |
-          echo "key=${{ runner.os }}-build-${{ hashFiles('**/*.cabal', '**/cabal.project*', '**/package-lock.json') }}" >> $GITHUB_OUTPUT
-
-      # Setup all toolchains early to maximize parallel downloads
-      - uses: haskell-actions/setup@v2
-        with:
-          ghc-version: ${{ env.GHC_VERSION }}
-          cabal-version: 'latest'
-
-      - name: Setup node env
-        uses: actions/setup-node@v4
-        with:
-          node-version: 18
-          cache: 'npm'
-
-      # Unified cache for all dependencies
-      - name: Cache all dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cabal/store
-            dist-newstyle
-            node_modules
-            web-components/node_modules
-          key: ${{ steps.cache-key.outputs.key }}
-          restore-keys: |
-            ${{ runner.os }}-build-
-
-      # Install and cache system dependencies
-      - name: Install system dependencies
-        uses: awalsh128/cache-apt-pkgs-action@latest
-        with:
-          packages: libssl-dev librdkafka-dev protobuf-compiler libsnappy-dev libgrpc-dev libpq-dev libldap2-dev libsasl2-dev liblz4-dev libzstd-dev pkg-config
-          version: 1.0
-
-      - name: Set OpenSSL environment variables
-        run: |
-          echo "OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)" >> $GITHUB_ENV
-          echo "OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)" >> $GITHUB_ENV
-
-      # Update cabal index early
-      - name: Update cabal index
-        run: cabal update
-
-      # Build frontend assets
-      - name: Build frontend assets
-        run: |
-          echo "::group::NPM install"
-          npm ci --prefer-offline --no-audit
-          echo "::endgroup::"
-
-          echo "::group::Build Tailwind CSS"
-          npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
-          echo "::endgroup::"
-
-          echo "::group::Build web components"
-          cd web-components
-          npm ci --prefer-offline --no-audit
-          npm run build
-          cd ..
-          echo "::endgroup::"
-
-      # Build Haskell project
-      - name: Configure Haskell project
-        run: |
-          cabal configure --enable-tests --enable-benchmarks --ghc-options="-O2 -j4"
-
-      - name: Build dependencies only
-        run: |
-          echo "::group::Building Haskell dependencies"
-          # Build only dependencies first to fail fast
-          cabal build --only-dependencies exe:apitoolkit-server-exe -j4
-          echo "::endgroup::"
-
-      - name: Build and install executable
-        run: |
-          echo "::group::Building executable and dependencies"
-          # Build only what we need for deployment
-          cabal build exe:apitoolkit-server-exe -j4
-          echo "::endgroup::"
-
-          mkdir -p ./build-output
-          echo "::group::Copy executable"
-          # Use find to locate the built executable and copy it
-          find dist-newstyle -name apitoolkit-server-exe -type f -executable | head -1 | xargs -I {} cp {} ./build-output/
-          # Verify it's statically linked
-          ldd ./build-output/apitoolkit-server-exe || echo "Binary appears to be statically linked"
-          echo "::endgroup::"
-          echo "::group::Verify executable"
-          ls -la ./build-output/
-          echo "::endgroup::"
-
-      # Save cache always
-      - name: Save cache
-        uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: |
-            ~/.cabal/store
-            dist-newstyle
-            node_modules
-            web-components/node_modules
-          key: ${{ steps.cache-key.outputs.key }}
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-artifacts
-          path: |
-            ./build-output
-            ./static
-            ./web-components/dist
-          retention-days: 1
-
   test:
     name: Test
-    needs: build
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -163,12 +35,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Download build artifacts which include static files
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: build-artifacts
-
       # Install and cache system dependencies
       - name: Install system dependencies
         uses: awalsh128/cache-apt-pkgs-action@latest
@@ -186,88 +52,47 @@ jobs:
           ghc-version: ${{ env.GHC_VERSION }}
           cabal-version: 'latest'
 
-      # Restore unified cache from build job - this includes everything already built
-      - name: Restore cache
+      # Cache Haskell dependencies
+      - name: Cache Haskell dependencies
         uses: actions/cache@v4
         with:
           path: |
             ~/.cabal/store
             dist-newstyle
-            node_modules
-            web-components/node_modules
-          key: ${{ needs.build.outputs.cache-key }}
-          fail-on-cache-miss: true
+          key: ${{ runner.os }}-test-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
+          restore-keys: |
+            ${{ runner.os }}-test-
 
-      # No need to update cabal or configure - reuse from build
+      - name: Update cabal index
+        run: cabal update
+
+      - name: Configure project
+        run: cabal configure --enable-tests --enable-benchmarks --ghc-options="-O0 -j8"
+
+      - name: Build dependencies
+        run: cabal build --only-dependencies all -j4
+
       - name: Run ${{ matrix.test }}
         env:
           USE_EXTERNAL_DB: true
         run: |
           echo "::group::Running ${{ matrix.test }}"
-          # Run test without rebuilding - everything should be cached
           if [ "${{ matrix.test }}" = "doctests" ]; then
-            # For doctests, use cabal exec to ensure proper environment
-            cabal exec -- cabal test ${{ matrix.test }} --builddir=dist-newstyle -j --ghc-options="-O0 -j8" --test-show-details=direct
+            cabal exec -- cabal test ${{ matrix.test }} --ghc-options="-O0 -j8" --test-show-details=direct
           else
-            cabal test ${{ matrix.test }} --builddir=dist-newstyle -j --ghc-options="-O0 -j8" --test-show-details=direct
+            cabal test ${{ matrix.test }} --ghc-options="-O0 -j8" --test-show-details=direct
           fi
           echo "::endgroup::"
 
-  deploy:
-    name: Deploy
-    needs: build
-    runs-on: ubuntu-24.04
+  build-and-deploy:
+    name: Build and Deploy Docker Image
+    needs: test
+    runs-on: ubuntu-latest
     permissions:
       contents: 'read'
       id-token: 'write'
     steps:
       - uses: actions/checkout@v4
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: build-artifacts
-
-      - name: List downloaded artifacts
-        run: |
-          echo "::group::List artifact structure"
-          ls -la
-          echo "---"
-          find . -type f -name "*.js" -o -name "*.css" | head -20
-          echo "---"
-          if [ -d "web-components" ]; then
-            echo "web-components directory exists"
-            ls -la web-components/
-          fi
-          if [ -d "dist" ]; then
-            echo "dist directory exists"
-            ls -la dist/
-          fi
-          echo "::endgroup::"
-
-      - name: Prepare files for Docker build
-        run: |
-          echo "::group::Prepare files for Docker"
-          # Copy binary to root
-          cp ./build-output/apitoolkit-server-exe . || cp ./build-output/* ./apitoolkit-server-exe
-          chmod +x ./apitoolkit-server-exe
-          
-          # Ensure web-components dist is in the expected location
-          # The artifacts might be flattened, so we need to recreate the structure
-          if [ ! -d "web-components/dist" ] && [ -d "dist" ]; then
-            echo "Creating web-components directory structure"
-            mkdir -p web-components
-            mv dist web-components/
-          fi
-          
-          # List final structure
-          echo "Final directory structure:"
-          ls -la
-          if [ -d "web-components" ]; then
-            echo "web-components contents:"
-            ls -la web-components/
-          fi
-          echo "::endgroup::"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -292,6 +117,8 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
           provenance: false
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
 
       - name: Deploy Image to CapRrover
         uses: caprover/deploy-from-github@v1.1.2

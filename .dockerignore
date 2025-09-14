@@ -1,0 +1,76 @@
+# Git files
+# .git is needed for GitHash
+.gitignore
+.gitmodules
+
+# Build artifacts
+dist-newstyle
+.stack-work
+node_modules
+web-components/node_modules
+web-components/dist
+build-output
+build.log
+*.log
+
+# IDE files
+.vscode
+.idea
+*.swp
+*.swo
+*.vim
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation
+CLAUDE.md
+docs/
+*.md
+!README.md
+!LICENSE
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Test artifacts
+coverage/
+.nyc_output/
+test-results/
+*.tix
+
+# Environment files
+.env*
+!.env.example
+
+# Haskell build files
+*.hi
+*.o
+*.dyn_hi
+*.dyn_o
+.ghc.environment.*
+.cabal-sandbox/
+cabal.sandbox.config
+
+# Cache directories
+.cache/
+.npm/
+.cabal/
+
+# Development tools
+.ghcid
+.hlint.yaml
+.stylish-haskell.yaml
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Docker files (don't copy Docker files into the image)
+Dockerfile*
+docker-compose*
+.dockerignore
