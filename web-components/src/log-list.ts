@@ -818,9 +818,8 @@ export class LogList extends LitElement {
 
   // Comment to allow classes be rendered.
   render() {
-    const list: (EventLine | 'end' | 'start')[] = this.view === 'tree' ? this.spanListTree.filter((e) => e.show) : [...this.spanListTree];
-    list.push('end');
-    list.unshift('start');
+    // Only include actual data items in the virtualized list
+    const list: EventLine[] = this.view === 'tree' ? this.spanListTree.filter((e) => e.show) : [...this.spanListTree];
 
     // Check if we're in initial loading state
     const isInitialLoading = this.isLoading && this.spanListTree.length === 0;
@@ -900,6 +899,9 @@ export class LogList extends LitElement {
           ${isInitialLoading
             ? loadingSkeleton(this.logsColumns.length || 6)
             : html`
+                <!-- Render buttons outside the virtualizer based on scroll direction -->
+                ${!this.flipDirection ? this.fetchRecent() : this.renderLoadMore()}
+                
                 <tbody
                   class="min-w-0 text-sm"
                   @rangeChanged=${(event: RangeChangedEvent) => {
@@ -917,6 +919,8 @@ export class LogList extends LitElement {
                     },
                   })}
                 </tbody>
+                
+                ${!this.flipDirection ? this.renderLoadMore() : this.fetchRecent()}
               `}
         </table>
 
@@ -1208,19 +1212,7 @@ export class LogList extends LitElement {
     return this.tableHeadingWrapper(title, column, classes);
   }
 
-  logItemRow = (rowData: EventLine | 'end' | 'start') => {
-    if (rowData === 'end') {
-      if (this.flipDirection) {
-        return this.fetchRecent();
-      }
-      return this.renderLoadMore();
-    }
-    if (rowData === 'start') {
-      if (this.flipDirection) {
-        return this.renderLoadMore();
-      }
-      return this.fetchRecent();
-    }
+  logItemRow = (rowData: EventLine) => {
     try {
       const s = rowData.type === 'log' ? 'logs' : 'spans';
       const targetInfo = requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s);
