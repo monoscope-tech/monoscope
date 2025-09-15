@@ -1,10 +1,10 @@
 cabal-version: 2.0
 
--- This file has been generated from package.yaml by hpack version 0.38.1.
+-- This file has been generated from package.yaml by hpack version 0.37.0.
 --
 -- see: https://github.com/sol/hpack
 
-name:           monoscope
+name:           monoscope-server
 version:        0.1.0.0
 description:    Please see the README on GitHub at <https://github.com/githubuser/monoscope#readme>
 homepage:       https://github.com/githubuser/monoscope#readme
@@ -334,7 +334,7 @@ library
     , yaml
   default-language: GHC2021
 
-executable monoscope
+executable monoscope-server
   main-is: Main.hs
   hs-source-dirs:
       app
@@ -371,7 +371,7 @@ executable monoscope
       proto-lens-protoc:proto-lens-protoc
   build-depends:
       hs-opentelemetry-instrumentation-auto
-    , monoscope
+    , monoscope-server
     , relude >=1.2.0.0
   mixins:
       relude (Relude as Prelude)
@@ -418,7 +418,7 @@ test-suite doctests
       base
     , doctest >=0.20
     , hs-opentelemetry-instrumentation-auto
-    , monoscope
+    , monoscope-server
     , relude >=1.2.0.0
   default-language: GHC2021
 
@@ -486,7 +486,7 @@ test-suite integration-tests
     , generic-lens
     , hs-opentelemetry-instrumentation-auto
     , hspec
-    , monoscope
+    , monoscope-server
     , odd-jobs
     , pg-entity
     , pg-transact
@@ -550,7 +550,7 @@ test-suite unit-tests
     , hspec
     , log-base
     , log-effectful
-    , monoscope
+    , monoscope-server
     , neat-interpolation
     , relude >=1.2.0.0
     , uuid
