@@ -64,6 +64,7 @@ export class LogList extends LitElement {
   @state() private isFetchingRecent: boolean = false;
   @state() private isLoadingMore: boolean = false;
   @state() private fetchedNew: boolean = false;
+  @state() private visibleItems: EventLine[] = [];
 
   // Refs for DOM elements
   @query('#logs_list_container_inner') private logsContainer?: HTMLElement;
@@ -362,6 +363,12 @@ export class LogList extends LitElement {
     this.requestUpdate();
   };
 
+  changeView = (view: 'tree' | 'list') => {
+    this.view = view;
+    this.updateVisibleItems();
+    this.requestUpdate();
+  };
+
   connectedCallback() {
     super.connectedCallback();
     // Initialize empty state
@@ -369,6 +376,7 @@ export class LogList extends LitElement {
     this.colIdxMap = {};
     this.serviceColors = {};
     this.spanListTree = [];
+    this.visibleItems = [];
     this.hasMore = false;
 
     // Project ID is now passed as a property from the server
@@ -557,6 +565,14 @@ export class LogList extends LitElement {
     return tree;
   }
 
+  private updateVisibleItems() {
+    if (this.view === 'tree') {
+      this.visibleItems = this.spanListTree.filter(e => e.show);
+    } else {
+      this.visibleItems = this.spanListTree;
+    }
+  }
+
   expandTrace = (tracId: string, spanId: string) => {
     this.shouldScrollToBottom = false;
     this.expandedTraces[spanId] = !this.expandedTraces[spanId];
@@ -575,6 +591,8 @@ export class LogList extends LitElement {
         }
       }
     }
+    // Update visible items after changing show properties
+    this.updateVisibleItems();
     // For user interactions, update immediately
     this.requestUpdate();
   };
@@ -638,6 +656,7 @@ export class LogList extends LitElement {
           if (isRefresh) {
             // Replace all data
             this.spanListTree = tree;
+            this.updateVisibleItems();
             if (this.spanListTree.length > 0) {
               // Reset scroll position based on flipDirection
               // Use requestAnimationFrame to ensure DOM is updated before scrolling
@@ -677,14 +696,17 @@ export class LogList extends LitElement {
               } else {
                 // Add directly to the tree
                 this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);
+                this.updateVisibleItems();
               }
             } else {
               // Fallback if container not found
               this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);
+              this.updateVisibleItems();
             }
           } else {
             // loading older logs
             this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);
+            this.updateVisibleItems();
           }
 
           this.updateColumnMaxWidthMap(logsData);
@@ -813,13 +835,14 @@ export class LogList extends LitElement {
     // Use addWithFlipDirection for consistent ordering
     this.spanListTree = this.addWithFlipDirection(this.spanListTree, this.recentDataToBeAdded, true);
     this.recentDataToBeAdded = [];
+    this.updateVisibleItems();
     this.batchRequestUpdate('recentConcatenation');
   }
 
   // Comment to allow classes be rendered.
   render() {
-    // Only include actual data items in the virtualized list
-    const list: EventLine[] = this.view === 'tree' ? this.spanListTree.filter((e) => e.show) : this.spanListTree;
+    // Use cached visible items instead of filtering on every render
+    const list: EventLine[] = this.visibleItems;
 
     // Check if we're in initial loading state
     const isInitialLoading = this.isLoading && this.spanListTree.length === 0;
@@ -1341,7 +1364,7 @@ export class LogList extends LitElement {
   options() {
     const viewButton = (view: 'tree' | 'list', icon: string, label: string) =>
       html` <button
-        @pointerdown=${() => (this.view = view)}
+        @pointerdown=${() => this.changeView(view)}
         class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
           this.view === view ? 'bg-fillWeak text-textStrong' : 'text-textWeak hover:bg-fillWeaker'
         }`}
