@@ -2,37 +2,48 @@
 
 ## Critical Issues Identified
 
-### 1. **Virtualization renders ALL items**
-- The virtualizer is rendering all items in the list instead of just visible ones
-- Missing `totalItems` property causes it to render everything
-- This is the primary cause of browser freezing with large datasets
+### 1. **Virtualization Configuration Issue**
+- The `@lit-labs/virtualizer` v2.1.0 doesn't use `totalItems` property - this is incorrect
+- The virtualizer works with the `items` array directly
+- Real issue: ALL items including hidden ones are being passed to virtualizer
+- In tree view, the filter `this.spanListTree.filter((e) => e.show)` runs on every render
+- Sentinel values ('start', 'end') are included in the virtualized list
 
 ### 2. **Synchronous heavy computations**
 - `groupSpans` and `flattenSpanTree` process all data synchronously on the main thread
 - No chunking or async processing for large datasets
 - Blocks UI during processing
 
-### 3. **Excessive re-renders**
-- Multiple `requestUpdate()` calls without proper batching
-- Every small state change triggers a full re-render
-- No optimization for partial updates
+### 3. **Inefficient Update Batching**
+- Already has `batchRequestUpdate()` but it's not used consistently
+- Many direct `requestUpdate()` calls bypass the batching mechanism
+- The batch timer is only 16ms (one frame), too short for effective batching
 
 ### 4. **Memory leaks**
 - Event listeners not properly cleaned up
 - Memoization caches grow unbounded
 - References to DOM elements kept in memory
+- Circular references in span tree structure
 
 ### 5. **Inefficient DOM queries**
 - Repeated querySelector calls in hot paths
 - No caching of frequently accessed elements
+- DOM refs exist but not consistently used
 
 ## High-Impact, Low-Risk Optimizations
 
 ### 1. Fix Virtualization (HIGHEST IMPACT)
 **Current issue:**
 ```typescript
+// In render():
+const list: (EventLine | 'end' | 'start')[] = this.view === 'tree' 
+  ? this.spanListTree.filter((e) => e.show)  // Filters on EVERY render!
+  : [...this.spanListTree];
+list.push('end');    // Sentinel values complicate virtualization
+list.unshift('start');
+
 ${virtualize({
-  items: list,
+  items: list,  // Includes ALL items + sentinels
   renderItem: this.logItemRow,
   layout: {
     itemSize: {
@@ -43,34 +54,59 @@ ${virtualize({
 })}
 ```
 
-**Fix needed:**
-- Add `totalItems` property
-- Implement proper scroll handling
-- Configure buffer sizes for smooth scrolling
+**Correct fix needed:**
+- Cache visible items to avoid filtering on every render
+- Remove sentinel items from virtualized list
+- Handle start/end items separately outside virtualizer
+- Implement proper list updates only when data changes
 
-**Expected impact:** 80-90% reduction in initial render time
+**Expected impact:** 70-80% reduction in initial render time
 
-### 2. Batch Updates & Debouncing
+### 2. Fix Scroll Performance Issues
 **Current issues:**
-- `debouncedHandleScroll` only has 5ms delay
-- Multiple `requestUpdate()` calls in sequence
-- No batching of state changes
+- `debouncedHandleScroll` with 5ms is reasonable for smooth scrolling
+- Batching updates with 50ms+ delay causes choppy, sluggish scrolling
+- The real issue is what happens INSIDE the scroll handler, not the frequency
 
-**Fixes needed:**
-- Increase scroll debounce to 50-100ms
-- Implement update batching with requestAnimationFrame
-- Consolidate state updates
+**Root causes of choppy scrolling:**
+- The scroll handler calls `requestUpdate()` on every scroll event
+- The entire component re-renders, including re-filtering the list
+- The virtualizer recalculates everything on each render
 
-### 3. Optimize Data Processing
-**Current issue in `groupSpans`:**
-- Processes entire dataset synchronously
-- Creates many intermediate objects
-- No early exit conditions
+**Correct fixes needed:**
+- Remove unnecessary `requestUpdate()` calls from scroll handler
+- Only update UI when scroll state actually changes (e.g., reaching top/bottom)
+- Let the virtualizer handle its own scroll updates internally
+- Keep scroll debounce low (5-10ms) for smooth interaction
 
-**Fixes needed:**
-- Process data in chunks of 100-500 items
-- Use `requestIdleCallback` for non-critical processing
-- Optimize lodash chain operations
+### 3. Smart Update Batching (Use Carefully!)
+**When to batch updates:**
+- Multiple property changes from data fetching
+- Background processes
+- Non-interactive state changes
+
+**When NOT to batch:**
+- Scroll events
+- User interactions (clicks, typing)
+- Animations
+- Any UI that needs immediate feedback
+
+**Correct approach:**
+```typescript
+// Immediate updates for interactions:
+handleUserClick() {
+  this.someState = newValue;
+  this.requestUpdate(); // Immediate!
+}
+
+// Batched updates for background changes:
+handleDataFetch(data) {
+  this.data1 = data.part1;
+  this.data2 = data.part2;
+  this.data3 = data.part3;
+  this.batchRequestUpdate('data-fetch'); // Batch multiple changes
+}
+```
 
 ### 4. Memory Management
 **Issues found:**
@@ -96,38 +132,40 @@ ${virtualize({
 
 ## Implementation Order
 
-### Phase 1: Immediate Impact (Day 1)
-1. **Fix virtualization configuration**
-   - Add totalItems calculation
-   - Configure proper buffer zones
-   - Test with large datasets
+### Phase 1: Immediate Impact (2-4 hours)
+1. **Fix virtualization**
+   - Add `visibleItems` cache to avoid filtering on every render
+   - Remove sentinel items from virtualized list
+   - Update visible items only when data changes
+   - Test with 10k+ log entries
 
-2. **Implement update batching**
-   - Create centralized update queue
-   - Use requestAnimationFrame
-   - Reduce re-render frequency
+2. **Fix scroll performance**
+   - Remove `requestUpdate()` from scroll handler except when state changes
+   - Keep scroll debounce LOW (5-10ms) for smooth interaction
+   - Let virtualizer handle its own internal scroll updates
+   - Only update UI for actual state changes (reaching top/bottom)
 
-### Phase 2: Data Processing (Day 2)
-3. **Add data chunking**
-   - Split `groupSpans` into async chunks
-   - Show progressive loading
-   - Maintain UI responsiveness
+### Phase 2: Data Processing (4-6 hours)
+3. **Optimize data processing**
+   - Implement incremental updates instead of rebuilding entire tree
+   - Cache DOM element references consistently
+   - Optimize `expandTrace` to avoid full tree traversal
 
-4. **Optimize hot paths**
-   - Cache DOM queries
-   - Reduce object allocations
-   - Optimize loops
+4. **Memory management**
+   - Add memoization cache clearing
+   - Fix event listener cleanup in `disconnectedCallback`
+   - Remove circular references
 
-### Phase 3: Polish & Cleanup (Day 3)
-5. **Memory optimization**
-   - Fix event listener leaks
-   - Implement proper cleanup
-   - Add memory profiling
+### Phase 3: Polish & Testing (2-4 hours)
+5. **Performance monitoring**
+   - Add performance marks to measure improvements
+   - Test with large datasets (10k, 50k, 100k items)
+   - Profile memory usage over time
 
 6. **Summary rendering optimization**
-   - Cache template results
-   - Reduce template complexity
-   - Batch DOM updates
+   - Use existing memoization more effectively
+   - Reduce template complexity for badges
+   - Batch DOM updates in column operations
 
 ## Testing Strategy
 
@@ -154,10 +192,10 @@ ${virtualize({
 ## Expected Results
 
 ### Performance Improvements
-- **Initial load**: 80-90% faster
-- **Scrolling**: 60fps smooth scrolling
-- **Memory**: 50% reduction in usage
-- **CPU**: 70% reduction in usage
+- **Initial load**: 70-80% faster (by not filtering on every render)
+- **Scrolling**: Smooth 60fps (by removing unnecessary requestUpdate calls)
+- **Memory**: 50% reduction in usage (by fixing leaks and caching)
+- **CPU**: 60% reduction during scroll (virtualizer only renders visible items)
 
 ### User Experience
 - No more browser freezing
@@ -183,70 +221,155 @@ ${virtualize({
 
 ### 1. Virtualization Fix
 ```typescript
-// Add total items tracking
-@state() private totalItems: number = 0;
+// Add visible items cache
+@state() private visibleItems: EventLine[] = [];
+@state() private dataVersion: number = 0;  // Track data changes
 
-// Update virtualize call
-${virtualize({
-  items: list,
-  totalItems: this.totalItems,
-  renderItem: this.logItemRow,
-  layout: {
-    itemSize: {
-      height: 28,
-      width: '100%',
-    },
-  },
-  // Add buffer configuration
-  scrollOptions: {
-    buffer: 10, // Items to render outside viewport
-    threshold: 0.5, // When to load more
-  },
-})}
+// Update visible items only when data changes
+private updateVisibleItems() {
+  if (this.view === 'tree') {
+    this.visibleItems = this.spanListTree.filter(e => e.show);
+  } else {
+    this.visibleItems = [...this.spanListTree];
+  }
+  this.dataVersion++;
+}
+
+// In render(), handle sentinels separately:
+render() {
+  const showRecentButton = this.recentDataToBeAdded.length > 0 && !this.flipDirection;
+  const showLoadMore = this.hasMore && this.spanListTree.length > 0;
+  
+  return html`
+    ${showRecentButton ? this.fetchRecent() : nothing}
+    
+    <tbody>
+      ${virtualize({
+        items: this.visibleItems,  // No sentinels, only actual data
+        renderItem: this.logItemRow,
+        layout: {
+          itemSize: { height: 28, width: '100%' }
+        }
+      })}
+    </tbody>
+    
+    ${showLoadMore ? this.renderLoadMore() : nothing}
+  `;
+}
 ```
 
-### 2. Batched Updates
+### 2. Fix Scroll Performance
 ```typescript
-private updateQueue = new Set<string>();
-private updateFrame: number | null = null;
+// The problem: handleScroll calls requestUpdate() on EVERY scroll event!
+private handleScroll(event: any) {
+  const container = event.target;
+  if (this.flipDirection) {
+    if (container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
+      this.shouldScrollToBottom = true;
+    } else {
+      this.shouldScrollToBottom = false;
+      this.handleRecentConcatenation();
+    }
+  } else {
+    if (container.scrollTop === 0) this.handleRecentConcatenation();
+  }
+  this.requestUpdate(); // THIS IS THE PROBLEM - removes smooth scrolling!
+}
 
-private queueUpdate(source: string) {
-  this.updateQueue.add(source);
-  
-  if (!this.updateFrame) {
-    this.updateFrame = requestAnimationFrame(() => {
-      this.updateFrame = null;
-      this.updateQueue.clear();
+// FIXED VERSION:
+private handleScroll(event: any) {
+  const container = event.target;
+  if (this.flipDirection) {
+    const wasAtBottom = this.shouldScrollToBottom;
+    const isAtBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
+    
+    if (wasAtBottom !== isAtBottom) {
+      this.shouldScrollToBottom = isAtBottom;
+      if (!isAtBottom) this.handleRecentConcatenation();
+      // Only update when state actually changes
       this.requestUpdate();
-    });
+    }
+  } else {
+    if (container.scrollTop === 0) this.handleRecentConcatenation();
   }
+  // NO requestUpdate() on every scroll!
+}
+
+// Keep debounce LOW for smooth scrolling:
+this.debouncedHandleScroll = debounce(this.handleScroll.bind(this), 10); // 10ms max
+```
+
+### 3. Why Batching Causes Sluggish Scrolling
+```typescript
+// DON'T DO THIS - causes choppy scrolling:
+private batchRequestUpdate(source: string) {
+  // 50ms delay means scroll updates are delayed by 50ms!
+  this.updateBatchTimer = setTimeout(() => {
+    this.requestUpdate();
+  }, 50); 
+}
+
+// For scroll-related updates, use immediate updates:
+private handleScroll(event: any) {
+  // ... scroll logic ...
+  if (stateChanged) {
+    this.requestUpdate(); // Immediate update for UI responsiveness
+  }
+}
+
+// Batching is only good for non-interactive updates:
+// - Data fetching completions
+// - Background processes
+// - Multiple property changes at once
+// But NOT for user interactions like scrolling!
+```
+
+### 4. Memory Management Fixes
+```typescript
+// Clear memoization cache periodically
+private clearMemoizationCache() {
+  if (this.memoizedRenderSummaryElements?.cache) {
+    this.memoizedRenderSummaryElements.cache.clear();
+  }
+}
+
+// Call in disconnectedCallback and when data refreshes
+disconnectedCallback() {
+  // ... existing cleanup ...
+  this.clearMemoizationCache();
+  // Break circular references
+  this.spanListTree = [];
+  this.visibleItems = [];
+  this.expandedTraces = {};
 }
 ```
 
-### 3. Chunked Processing
-```typescript
-async function processSpansInChunks(data: any[][], chunkSize = 500) {
-  const chunks = [];
-  
-  for (let i = 0; i < data.length; i += chunkSize) {
-    chunks.push(data.slice(i, i + chunkSize));
-  }
-  
-  const results = [];
-  for (const chunk of chunks) {
-    await new Promise(resolve => requestIdleCallback(resolve));
-    results.push(...processChunk(chunk));
-  }
-  
-  return results;
-}
-```
+## Implementation Checklist
+
+### Quick Wins (Do First)
+- [ ] Add `visibleItems` cache state variable
+- [ ] Update `render()` to remove sentinel items from virtualizer
+- [ ] Fix `handleScroll` to only call `requestUpdate()` when state changes
+- [ ] Keep scroll debounce at 5-10ms (NOT 50ms)
+- [ ] Do NOT batch scroll-related updates
+
+### Medium Effort
+- [ ] Implement `updateVisibleItems()` method
+- [ ] Call `updateVisibleItems()` only when data changes
+- [ ] Optimize `handleScroll` to only update when state changes
+- [ ] Add `clearMemoizationCache()` method
+- [ ] Fix memory leaks in `disconnectedCallback`
+
+### Testing & Validation
+- [ ] Test with 10,000 log entries
+- [ ] Verify 60fps scrolling performance
+- [ ] Check memory usage doesn't grow unbounded
+- [ ] Ensure all features still work (expand/collapse, live streaming, etc.)
 
 ## Next Steps
 
-1. Review plan with team
-2. Set up performance monitoring
-3. Create feature branch
-4. Implement Phase 1
-5. Measure improvements
-6. Iterate based on results
+1. Start with Quick Wins - these are low risk, high impact
+2. Test each change individually before moving to the next
+3. Use Chrome DevTools Performance tab to measure improvements
+4. Document actual performance gains vs expected
+5. Share results with team before proceeding to Phase 2
