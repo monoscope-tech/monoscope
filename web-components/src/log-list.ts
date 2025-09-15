@@ -795,8 +795,8 @@ export class LogList extends LitElement {
         ? [...current, ...newData]
         : [...newData, ...current]
       : isRecentFetch
-      ? [...newData, ...current]
-      : [...current, ...newData];
+        ? [...newData, ...current]
+        : [...current, ...newData];
     return result;
   }
 
@@ -819,7 +819,7 @@ export class LogList extends LitElement {
   // Comment to allow classes be rendered.
   render() {
     // Only include actual data items in the virtualized list
-    const list: EventLine[] = this.view === 'tree' ? this.spanListTree.filter((e) => e.show) : [...this.spanListTree];
+    const list: EventLine[] = this.view === 'tree' ? this.spanListTree.filter((e) => e.show) : this.spanListTree;
 
     // Check if we're in initial loading state
     const isInitialLoading = this.isLoading && this.spanListTree.length === 0;
@@ -844,7 +844,7 @@ export class LogList extends LitElement {
         .contain-layout-style-paint {
           contain: layout style paint;
         }
-        
+
         .content-visibility-auto {
           content-visibility: auto;
           contain-intrinsic-size: auto 28px;
@@ -901,7 +901,7 @@ export class LogList extends LitElement {
             : html`
                 <!-- Render buttons outside the virtualizer based on scroll direction -->
                 ${!this.flipDirection ? this.fetchRecent() : this.renderLoadMore()}
-                
+
                 <tbody
                   class="min-w-0 text-sm"
                   @rangeChanged=${(event: RangeChangedEvent) => {
@@ -919,7 +919,7 @@ export class LogList extends LitElement {
                     },
                   })}
                 </tbody>
-                
+
                 ${!this.flipDirection ? this.renderLoadMore() : this.fetchRecent()}
               `}
         </table>
@@ -1095,8 +1095,8 @@ export class LogList extends LitElement {
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
-          ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
+            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         return html`<div class=${clsx('flex w-full gap-1', this.wrapLines ? 'items-start' : 'items-center')}>
           ${this.view === 'tree'
             ? html`
@@ -1130,8 +1130,8 @@ export class LogList extends LitElement {
                         ${children}
                       </button>`
                     : depth === 0
-                    ? nothing
-                    : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                      ? nothing
+                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
                 </div>
               `
             : nothing}
@@ -1188,8 +1188,8 @@ export class LogList extends LitElement {
       this.isLiveStreaming
         ? html`<p class="h-5 leading-5 m-0">Live streaming latest data...</p>`
         : this.isFetchingRecent
-        ? html`<div class="loading loading-dots loading-md h-5"></div>`
-        : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
+          ? html`<div class="loading loading-dots loading-md h-5"></div>`
+          : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
     );
   }
 
