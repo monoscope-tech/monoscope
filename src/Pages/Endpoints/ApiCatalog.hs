@@ -31,16 +31,17 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
   appCtx <- ask @AuthContext
 
   let requestType = fromMaybe "Incoming" requestTypeM
+  let sortV = fromMaybe "events" sortM
+  let filterV = fromMaybe "24H" timeFilter
 
-  hostsAndEvents <- dbtToEff $ Endpoints.dependenciesAndEventsCount pid requestType (fromMaybe "events" sortM) (fromMaybe 0 skipM)
+  hostsAndEvents <- dbtToEff $ Endpoints.dependenciesAndEventsCount pid requestType sortV (fromMaybe 0 skipM) filterV
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
 
   currTime <- Time.currentTime
 
-  let sortV = fromMaybe "events" sortM
-  let filterV = fromMaybe "14d" timeFilter
+ 
 
-  let currentURL = "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=" <> requestType <> "&since=" <> filterV
+  let currentURL = "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=" <> requestType
       nextFetchUrl = Just $ currentURL <> "&skip=" <> maybe "20" (\x -> show $ 20 + x) skipM
 
   let listCfg =

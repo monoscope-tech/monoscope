@@ -292,6 +292,9 @@ body {
     --color-info: var(--color-fillInformation-weak);
   }
 
+  .bg-bgRaised  {
+    @apply bg-fillWeak border
+  }
   /* Skeleton loader styles */
   .skeleton-shimmer {
     background: linear-gradient(
