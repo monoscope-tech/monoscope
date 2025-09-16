@@ -279,14 +279,18 @@ getProjectHosts pid = query q (Only pid)
     q = [sql| SELECT DISTINCT host FROM apis.endpoints where  project_id = ? AND outgoing=false AND host!= '' |]
 
 
-dependenciesAndEventsCount :: Projects.ProjectId -> Text -> Text -> Int -> DBT IO (V.Vector HostEvents)
-dependenciesAndEventsCount pid requestType sortT skip = do
+dependenciesAndEventsCount :: Projects.ProjectId -> Text -> Text -> Int -> Text -> DBT IO (V.Vector HostEvents)
+dependenciesAndEventsCount pid requestType sortT skip timeF = do
   query (Query $ encodeUtf8 q) (pid, isOutgoing, isOutgoing, pid, skip)
   where
     orderBy = case sortT of
       "first_seen" -> "first_seen ASC"
       "last_seen" -> "last_seen DESC"
       _ -> "eventsCount DESC"
+
+    timeRange = case timeF of 
+      "14D" -> "timestamp > now() - interval '14 day'"
+      _ -> "timestamp > now() - interval '1 day'"
 
     endpointFilter = case requestType of
       "Outgoing" -> "ep.outgoing = true"
@@ -303,7 +307,8 @@ WITH filtered_requests AS (
            MAX(timestamp) AS last_seen,
            MIN(timestamp) AS first_seen
     FROM otel_logs_and_spans
-    WHERE project_id = ?
+    WHERE project_id = ? 
+      AND $timeRange
       AND (name = 'monoscope.http' OR name = 'apitoolkit-http-span')
       AND kind IN (CASE  WHEN ? THEN 'client' ELSE 'server' END, CASE  WHEN ? THEN NULL ELSE 'internal' END)
     GROUP BY host

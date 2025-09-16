@@ -292,6 +292,7 @@ body {
     --color-info: var(--color-fillInformation-weak);
   }
 
+
   /* Skeleton loader styles */
   .skeleton-shimmer {
     background: linear-gradient(

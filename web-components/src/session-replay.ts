@@ -1,10 +1,12 @@
-import { html, LitElement, nothing, PropertyValues } from 'lit';
+import { html, LitElement, nothing, PropertyValues, TemplateResult } from 'lit';
 import { customElement, property, query, state } from 'lit/decorators.js';
 import { EventType, eventWithTime } from '@rrweb/types';
-import { faSprite_ } from './monitors/test-editor-utils';
 import { ConsoleEvent } from './types/types';
 import { Replayer } from '@rrweb/replay';
 
+export function faSprite_(iconName: string, kind: string, classes: string): TemplateResult {
+  return html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`;
+}
 const MS_10 = 10000;
 @customElement('session-replay')
 export class SessionReplay extends LitElement {
@@ -553,7 +555,10 @@ export class SessionReplay extends LitElement {
             <div class="flex items-center gap-4 text-xs font-semibold">
               <div class="dropdown">
                 <div tabindex="0" role="button" class="cursor-pointer">Console</div>
-                <ul tabindex="0" class="dropdown-content menu flex flex-col gap-1 text-xs bg-base-100 border w-max rounded-box z-1 p-1 shadow">
+                <ul
+                  tabindex="0"
+                  class="dropdown-content menu flex flex-col gap-1 text-xs bg-base-100 border w-max rounded-box z-1 p-1 shadow"
+                >
                   <li>
                     <button
                       class="px-4 hover:bg-fillweak py-1 ${this.consoleEventsEnable[0] ? 'bg-fillBrand-weak text-blue-700' : ''}"
