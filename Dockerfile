@@ -1,4 +1,29 @@
-# Stage 1: Build Haskell application
+# Stage 1: Build frontend assets
+FROM node:18-alpine AS frontend-builder
+
+WORKDIR /build
+
+# Copy package files
+COPY package*.json ./
+COPY web-components/package*.json ./web-components/
+
+# Install dependencies
+RUN --mount=type=cache,target=/root/.npm \
+  npm ci --prefer-offline --no-audit && \
+  cd web-components && npm ci --prefer-offline --no-audit
+
+# Copy source files
+COPY tailwind.config.js ./
+COPY static ./static
+COPY web-components ./web-components
+# Copy Haskell source files for Tailwind CSS scanning
+COPY src ./src
+
+# Build assets
+RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify && \
+  cd web-components && NODE_ENV=production npx vite build --mode production --sourcemap false
+
+# Stage 2: Build Haskell application
 FROM haskell:9.10.2 AS haskell-builder
 
 # Install system dependencies (combined into single layer)
@@ -38,7 +63,9 @@ COPY src ./src
 COPY test ./test
 COPY app ./app
 COPY proto ./proto
-COPY static ./static
+
+# Copy built frontend assets from frontend-builder stage
+COPY --from=frontend-builder /build/static ./static
 
 # Build executable
 RUN --mount=type=cache,target=/root/.cabal/store \
@@ -46,31 +73,6 @@ RUN --mount=type=cache,target=/root/.cabal/store \
   cabal build exe:monoscope -j$(nproc) && \
   mkdir -p /build/dist && \
   find dist-newstyle -name monoscope -type f -executable | head -1 | xargs -I {} cp {} /build/dist/
-
-# Stage 2: Build frontend assets
-FROM node:18-alpine AS frontend-builder
-
-WORKDIR /build
-
-# Copy package files
-COPY package*.json ./
-COPY web-components/package*.json ./web-components/
-
-# Install dependencies
-RUN --mount=type=cache,target=/root/.npm \
-  npm ci --prefer-offline --no-audit && \
-  cd web-components && npm ci --prefer-offline --no-audit
-
-# Copy source files
-COPY tailwind.config.js ./
-COPY static ./static
-COPY web-components ./web-components
-# Copy Haskell source files for Tailwind CSS scanning
-COPY src ./src
-
-# Build assets
-RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify && \
-  cd web-components && NODE_ENV=production npx vite build --mode production --sourcemap false
 
 # Stage 3: Final runtime image using debian slim
 FROM debian:12-slim
