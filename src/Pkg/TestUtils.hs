@@ -450,7 +450,7 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
               { apiKeyEncryptionSecretKey = "apitoolkit123456123456apitoolkit"
               , convertkitApiKey = ""
               , convertkitApiSecret = ""
-              , requestPubsubTopics = ["apitoolkit-prod-default"]
+              , requestPubsubTopics = ["monoscope-prod-default"]
               , enableBackgroundJobs = True
               }
           )
