@@ -15,16 +15,13 @@ declare global {
     } | null;
     testVariables: any;
     logListTable: Element | null;
-    collectionSteps: any[];
     collectionResults: any[] | undefined;
     dashboardRefreshInterval: number;
     dashboardRefreshTimer: NodeJS.Timeout | null;
-    updateStepAssertions: (assertion: string, expression: string, step: number) => void;
     updateStepsWithErrors: (errors: any[]) => void;
     updateCollectionResults: (results: any[]) => void;
     updateEditorVal: () => void;
     bindFunctionsToObjects: (rootObj: any, obj: any) => any;
-    addCollectionStep: () => void;
     validateYaml: (data: any) => void;
     evalScriptsFromContent: (container: HTMLElement) => void;
     params: () => Record<string, string>;
@@ -78,39 +75,7 @@ export type Assertion = {
   status?: 'PASSED' | 'FAILED' | 'PENDING';
 };
 
-export type Step = {
-  [key: string]: any;
-  title?: string;
-  asserts?: Record<string, string>[];
-  headers?: Record<string, string>;
-  params?: Record<string, string>;
-  json?: string | object;
-  requestBody?: Record<string, string>;
-  exports?: Record<string, string>[];
-  disabled?: boolean;
-  followRedirects?: boolean;
-  allowRedirects?: boolean;
-  ignoreSSLErrors?: boolean;
-  timeout?: number;
-  httpVersion?: string;
-  _method?: HttpMethod;
-  _url?: string;
-  _assertions?: Assertion[];
-  _requestType?: string;
-};
 
-export type TestkitStep = {
-  title: string;
-  headers: Record<string, string>;
-  exports: Record<string, string>;
-  asserts: Record<string, string>[];
-  params: Record<string, string>;
-  disabled: boolean;
-  requestBody: Record<string, any>;
-  followRedirect: boolean;
-  ignoreSSLErrors: boolean;
-  timeout: number;
-};
 
 export type ColIdxMap = Record<string, number>;
 
