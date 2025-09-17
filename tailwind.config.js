@@ -4,8 +4,6 @@ module.exports = {
     './static/public/assets/js/charts.js',
     './static/public/assets/js/widgets.js',
     './static/public/assets/testeditor.js',
-    './static/public/assets/steps-editor.js',
-    './static/public/assets/steps-assertions.js',
     './static/public/assets/explorer-list.js',
     './static/public/**/*.{html,js}',
     './web-components/**/*.{js,jsx,ts,tsx,vue}',

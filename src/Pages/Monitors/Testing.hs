@@ -37,7 +37,7 @@ import Utils (checkFreeTierExceeded, faSprite_)
 
 
 -- | Types for unified monitor view
-data MonitorType = MTAlert | MTMultiStep
+data MonitorType = MTAlert
   deriving (Eq, Show)
 
 
@@ -267,20 +267,14 @@ unifiedMonitorCard item = do
               do
                 faSprite_ (if item.status `elem` ["Active", "Passing"] then "pause" else "play") "regular" "h-5 w-5"
   where
-    (typeIcon, typeLabel, typeColorClass) = case item.monitorType of
-      MTAlert -> ("bell", "Alert", "bg-fillWarning-weak text-iconWarning")
-      MTMultiStep -> ("list-check", "Multi-step", "bg-fillBrand-weak text-iconBrand")
+    (typeIcon, typeLabel, typeColorClass) = ("bell", "Alert", "bg-fillWarning-weak text-iconWarning")
 
     -- Use unified overview route for both types
     detailsUrl = "/p/" <> item.projectId <> "/monitors/" <> item.monitorId <> "/overview"
 
-    editUrl = case item.monitorType of
-      MTAlert -> "/p/" <> item.projectId <> "/log_explorer/?alert=" <> item.monitorId
-      MTMultiStep -> "/p/" <> item.projectId <> "/monitors/collection?col_id=" <> item.monitorId
+    editUrl = "/p/" <> item.projectId <> "/log_explorer/?alert=" <> item.monitorId
 
-    toggleUrl = case item.monitorType of
-      MTAlert -> "/p/" <> item.projectId <> "/alerts/" <> item.monitorId <> "/toggle_active"
-      MTMultiStep -> "/p/" <> item.projectId <> "/monitors/" <> item.monitorId <> "/toggle_active"
+    toggleUrl = "/p/" <> item.projectId <> "/alerts/" <> item.monitorId <> "/toggle_active"
 
 
 -- | Shared status badge component used across monitors
