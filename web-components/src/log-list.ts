@@ -457,7 +457,6 @@ export class LogList extends LitElement {
     }
   }
 
-
   disconnectedCallback() {
     // Clean up all observers and timers
     if (this._loadMoreObserver) {
@@ -504,6 +503,7 @@ export class LogList extends LitElement {
     this.mouseState = { x: event.clientX };
   }
 
+  // TODO: investigate if this should be deleted
   private handleScroll(event: any) {
     const container = event.target;
     if (this.flipDirection) {
@@ -549,18 +549,18 @@ export class LogList extends LitElement {
       items = this.spanListTree;
     }
     this.visibleItems = items;
-    
+
     // Build virtual list with special items
     const virtualItems: VirtualListItem[] = [];
-    
+
     // Add fetch recent button at the start (for non-flipped) or end (for flipped)
     if (!this.flipDirection && items.length > 0) {
       virtualItems.push({ type: 'fetchRecent' });
     }
-    
+
     // Add all data items
     virtualItems.push(...items);
-    
+
     // Add load more button at the end (for non-flipped) or start (for flipped)
     if (!this.flipDirection && (this.hasMore || items.length > 0)) {
       virtualItems.push({ type: 'loadMore' });
@@ -573,7 +573,7 @@ export class LogList extends LitElement {
         virtualItems.unshift({ type: 'loadMore' });
       }
     }
-    
+
     this.virtualListItems = virtualItems;
   }
 
@@ -877,7 +877,6 @@ export class LogList extends LitElement {
       ${this.options()}
       <div
         ${ref(this.containerRef)}
-        @scroll=${this.debouncedHandleScroll}
         class=${clsx(
           'relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto will-change-transform contain-layout-style-paint content-visibility-auto',
           isInitialLoading && 'overflow-hidden'
@@ -1183,7 +1182,7 @@ export class LogList extends LitElement {
 
     // Use a ref to observe when this element comes into view
     const loadMoreRef = createRef<HTMLTableRowElement>();
-    
+
     // Set up observer after render
     requestAnimationFrame(() => {
       if (loadMoreRef.value && !this.isLoadingMore && !this.isLoading) {
@@ -1197,11 +1196,11 @@ export class LogList extends LitElement {
           {
             root: this.logsContainer,
             rootMargin: '100px',
-            threshold: 0.1
+            threshold: 0.1,
           }
         );
         observer.observe(loadMoreRef.value);
-        
+
         // Store observer for cleanup
         if (this._loadMoreObserver) {
           this._loadMoreObserver.disconnect();
@@ -1216,8 +1215,7 @@ export class LogList extends LitElement {
           <div class="h-8 flex items-center justify-center">
             ${this.isLoading || this.isLoadingMore
               ? html`<div class="loading loading-dots loading-md h-5"></div>`
-              : this.createLoadButton('Load more', () => this.fetchData(this.buildLoadMoreUrl(), false, false, true))
-            }
+              : this.createLoadButton('Load more', () => this.fetchData(this.buildLoadMoreUrl(), false, false, true))}
           </div>
         </td>
       </tr>
