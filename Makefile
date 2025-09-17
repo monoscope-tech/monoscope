@@ -19,13 +19,13 @@ live-reload:
 	ghcid --command 'cabal repl monoscope --ghc-options="-w -j4 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=ghc-9.10.2' --test ':run Start.startApp' --warnings
 
 live-test-reload:
-	ghcid --command 'cabal repl lib:monoscope-server test/unit/Main.hs --ghc-options="-w -j4" --with-compiler=ghc-9.10.2' --test ':run main' --warnings
+	ghcid --command 'cabal repl lib:monoscope test/unit/Main.hs --ghc-options="-w -j4" --with-compiler=ghc-9.10.2' --test ':run main' --warnings
 
 live-test-reload-unit:
-	ghcid --test 'cabal test monoscope-server:unit-tests --ghc-options="-w -j4" --test-show-details=streaming'
+	ghcid --test 'cabal test monoscope:unit-tests --ghc-options="-w -j4" --test-show-details=streaming'
 
 live-test-reload-all:
-	ghcid --test 'cabal test monoscope-server:tests --ghc-options="-w -j4" --test-show-details=streaming'
+	ghcid --test 'cabal test monoscope:tests --ghc-options="-w -j4" --test-show-details=streaming'
 
 hot-reload:
 	livereload -f reload.trigger static/public/ & \
@@ -56,7 +56,7 @@ test-integration:
 	USE_EXTERNAL_DB=true cabal test integration-tests -j --ghc-options="-O0 -j8" --test-show-details=direct --test-options='--color '
 
 live-test-unit:
-	ghcid --test 'cabal test monoscope-server:unit-tests --ghc-options="-w -j4" --test-show-details=streaming'
+	ghcid --test 'cabal test monoscope:unit-tests --ghc-options="-w -j4" --test-show-details=streaming'
 
 fmt:
 	fourmolu --mode inplace $$(find ./src/ -name '*.hs')

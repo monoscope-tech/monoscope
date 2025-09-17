@@ -1,10 +1,9 @@
 'use strict';
-import { virtualize } from '@lit-labs/virtualizer/virtualize.js';
+import '@lit-labs/virtualizer';
 import { LitElement, html, css, TemplateResult, nothing } from 'lit';
 import { customElement, state, query, property } from 'lit/decorators.js';
 import { ref, createRef } from 'lit/directives/ref.js';
 import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, Trace, TraceDataMap } from './types/types';
-import { RangeChangedEvent, VisibilityChangedEvent } from '@lit-labs/virtualizer';
 import debounce from 'lodash/debounce';
 import memoize from 'lodash/memoize';
 import { includes, startsWith, map, forEach, compact, pick, chunk, chain } from 'lodash';
@@ -46,6 +45,9 @@ const _ensureBadgeClasses = html`
   <span class="bg-fillBrand-strong bg-fillWarning-strong bg-fillError-strong bg-fillSuccess-strong bg-fillWarning-strong bg-fillInformation-strong bg-fillBrand-strong bg-fillBrand-strong bg-fillStrong bg-fillWarning-strong"></span>
 `;
 
+// Special item types for virtual list
+type VirtualListItem = EventLine | { type: 'fetchRecent' } | { type: 'loadMore' };
+
 @customElement('log-list')
 export class LogList extends LitElement {
   @property({ type: String }) projectId: string = '';
@@ -64,6 +66,8 @@ export class LogList extends LitElement {
   @state() private isFetchingRecent: boolean = false;
   @state() private isLoadingMore: boolean = false;
   @state() private fetchedNew: boolean = false;
+  @state() private visibleItems: EventLine[] = [];
+  @state() private virtualListItems: VirtualListItem[] = [];
 
   // Refs for DOM elements
   @query('#logs_list_container_inner') private logsContainer?: HTMLElement;
@@ -81,7 +85,7 @@ export class LogList extends LitElement {
   private liveStreamInterval: NodeJS.Timeout | null = null;
   private barChart: any = null;
   private lineChart: any = null;
-  private _observer: IntersectionObserver | null = null;
+  private _loadMoreObserver: IntersectionObserver | null = null;
   private updateBatchTimer: NodeJS.Timeout | null = null;
   private pendingUpdates: Set<string> = new Set();
   private handleMouseUp: (() => void) | null = null;
@@ -362,6 +366,12 @@ export class LogList extends LitElement {
     this.requestUpdate();
   };
 
+  changeView = (view: 'tree' | 'list') => {
+    this.view = view;
+    this.updateVisibleItems();
+    this.requestUpdate();
+  };
+
   connectedCallback() {
     super.connectedCallback();
     // Initialize empty state
@@ -369,6 +379,7 @@ export class LogList extends LitElement {
     this.colIdxMap = {};
     this.serviceColors = {};
     this.spanListTree = [];
+    this.visibleItems = [];
     this.hasMore = false;
 
     // Project ID is now passed as a property from the server
@@ -417,7 +428,7 @@ export class LogList extends LitElement {
   }
 
   firstUpdated() {
-    this.setupIntersectionObserver();
+    // Initialization handled by lit-virtualizer
   }
 
   updated(changedProperties: Map<string, any>) {
@@ -446,39 +457,12 @@ export class LogList extends LitElement {
     }
   }
 
-  setupIntersectionObserver() {
-    if (this._observer) {
-      this._observer.disconnect();
-    }
-
-    // Use refs instead of DOM queries
-    if (!this.loaderElement || !this.logsContainer) {
-      setTimeout(() => {
-        this.setupIntersectionObserver();
-      }, 1000);
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          this.debouncedFetchData(this.buildLoadMoreUrl(), false, false, true);
-        }
-      },
-      {
-        root: this.logsContainer,
-        threshold: [0, 0.2, 0.4, 0.6, 0.8, 1],
-      }
-    );
-    observer.observe(this.loaderElement);
-    this._observer = observer;
-  }
 
   disconnectedCallback() {
     // Clean up all observers and timers
-    if (this._observer) {
-      this._observer.disconnect();
-      this._observer = null;
+    if (this._loadMoreObserver) {
+      this._loadMoreObserver.disconnect();
+      this._loadMoreObserver = null;
     }
     if (this.updateBatchTimer) {
       clearTimeout(this.updateBatchTimer);
@@ -557,6 +541,42 @@ export class LogList extends LitElement {
     return tree;
   }
 
+  private updateVisibleItems() {
+    let items: EventLine[];
+    if (this.view === 'tree') {
+      items = this.spanListTree.filter((e) => e.show);
+    } else {
+      items = this.spanListTree;
+    }
+    this.visibleItems = items;
+    
+    // Build virtual list with special items
+    const virtualItems: VirtualListItem[] = [];
+    
+    // Add fetch recent button at the start (for non-flipped) or end (for flipped)
+    if (!this.flipDirection && items.length > 0) {
+      virtualItems.push({ type: 'fetchRecent' });
+    }
+    
+    // Add all data items
+    virtualItems.push(...items);
+    
+    // Add load more button at the end (for non-flipped) or start (for flipped)
+    if (!this.flipDirection && (this.hasMore || items.length > 0)) {
+      virtualItems.push({ type: 'loadMore' });
+    } else if (this.flipDirection) {
+      // For flipped direction, add buttons in reverse order
+      if (items.length > 0) {
+        virtualItems.push({ type: 'fetchRecent' });
+      }
+      if (this.hasMore || items.length > 0) {
+        virtualItems.unshift({ type: 'loadMore' });
+      }
+    }
+    
+    this.virtualListItems = virtualItems;
+  }
+
   expandTrace = (tracId: string, spanId: string) => {
     this.shouldScrollToBottom = false;
     this.expandedTraces[spanId] = !this.expandedTraces[spanId];
@@ -575,6 +595,8 @@ export class LogList extends LitElement {
         }
       }
     }
+    // Update visible items after changing show properties
+    this.updateVisibleItems();
     // For user interactions, update immediately
     this.requestUpdate();
   };
@@ -638,6 +660,7 @@ export class LogList extends LitElement {
           if (isRefresh) {
             // Replace all data
             this.spanListTree = tree;
+            this.updateVisibleItems();
             if (this.spanListTree.length > 0) {
               // Reset scroll position based on flipDirection
               // Use requestAnimationFrame to ensure DOM is updated before scrolling
@@ -677,14 +700,17 @@ export class LogList extends LitElement {
               } else {
                 // Add directly to the tree
                 this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);
+                this.updateVisibleItems();
               }
             } else {
               // Fallback if container not found
               this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);
+              this.updateVisibleItems();
             }
           } else {
             // loading older logs
             this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);
+            this.updateVisibleItems();
           }
 
           this.updateColumnMaxWidthMap(logsData);
@@ -795,8 +821,8 @@ export class LogList extends LitElement {
         ? [...current, ...newData]
         : [...newData, ...current]
       : isRecentFetch
-      ? [...newData, ...current]
-      : [...current, ...newData];
+        ? [...newData, ...current]
+        : [...current, ...newData];
     return result;
   }
 
@@ -813,15 +839,12 @@ export class LogList extends LitElement {
     // Use addWithFlipDirection for consistent ordering
     this.spanListTree = this.addWithFlipDirection(this.spanListTree, this.recentDataToBeAdded, true);
     this.recentDataToBeAdded = [];
+    this.updateVisibleItems();
     this.batchRequestUpdate('recentConcatenation');
   }
 
   // Comment to allow classes be rendered.
   render() {
-    const list: (EventLine | 'end' | 'start')[] = this.view === 'tree' ? this.spanListTree.filter((e) => e.show) : [...this.spanListTree];
-    list.push('end');
-    list.unshift('start');
-
     // Check if we're in initial loading state
     const isInitialLoading = this.isLoading && this.spanListTree.length === 0;
 
@@ -845,7 +868,7 @@ export class LogList extends LitElement {
         .contain-layout-style-paint {
           contain: layout style paint;
         }
-        
+
         .content-visibility-auto {
           content-visibility: auto;
           contain-intrinsic-size: auto 28px;
@@ -900,22 +923,17 @@ export class LogList extends LitElement {
           ${isInitialLoading
             ? loadingSkeleton(this.logsColumns.length || 6)
             : html`
-                <tbody
-                  class="min-w-0 text-sm"
-                  @rangeChanged=${(event: RangeChangedEvent) => {
-                    this.setupIntersectionObserver();
-                  }}
-                >
-                  ${virtualize({
-                    items: list,
-                    renderItem: this.logItemRow,
-                    layout: {
+                <tbody class="min-w-0 text-sm">
+                  <lit-virtualizer
+                    .items=${this.virtualListItems}
+                    .renderItem=${this.renderVirtualItem}
+                    .layout=${{
                       itemSize: {
                         height: 28, // Fixed row height for better performance
                         width: '100%',
                       },
-                    },
-                  })}
+                    }}
+                  ></lit-virtualizer>
                 </tbody>
               `}
         </table>
@@ -1091,8 +1109,8 @@ export class LogList extends LitElement {
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
-          ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
+            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         return html`<div class=${clsx('flex w-full gap-1', this.wrapLines ? 'items-start' : 'items-center')}>
           ${this.view === 'tree'
             ? html`
@@ -1126,8 +1144,8 @@ export class LogList extends LitElement {
                         ${children}
                       </button>`
                     : depth === 0
-                    ? nothing
-                    : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                      ? nothing
+                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
                 </div>
               `
             : nothing}
@@ -1151,28 +1169,62 @@ export class LogList extends LitElement {
   createLoadingRow = (id: string | null, content: TemplateResult) => html`
     <tr class="w-full flex relative" ${id ? `id="${id}"` : ''}>
       <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
-        ${id === null ? html`<div class="absolute -top-[500px] w-[1px] h-[500px] left-0" id="loader"></div>` : nothing}
         <div class="h-8 flex items-center justify-center">${content}</div>
       </td>
     </tr>
   `;
 
-  renderLoadMore() {
+  renderLoadMoreButton = () => {
     if (this.spanListTree.length === 0 && !this.isLoading && !this.hasMore && !this.flipDirection) {
       return emptyState(this.logsColumns.length);
     }
 
     if (!this.hasMore || !this.spanListTree.length) return html`<tr></tr>`;
 
-    return this.createLoadingRow(
-      null,
-      this.isLoading || this.isLoadingMore
-        ? html`<div class="loading loading-dots loading-md h-5"></div>`
-        : this.createLoadButton('Load more', () => this.fetchData(this.buildLoadMoreUrl(), false, false, true))
-    );
-  }
+    // Use a ref to observe when this element comes into view
+    const loadMoreRef = createRef<HTMLTableRowElement>();
+    
+    // Set up observer after render
+    requestAnimationFrame(() => {
+      if (loadMoreRef.value && !this.isLoadingMore && !this.isLoading) {
+        const observer = new IntersectionObserver(
+          ([entry]) => {
+            if (entry.isIntersecting && !this.isLoadingMore && !this.isLoading) {
+              this.debouncedFetchData(this.buildLoadMoreUrl(), false, false, true);
+              observer.disconnect();
+            }
+          },
+          {
+            root: this.logsContainer,
+            rootMargin: '100px',
+            threshold: 0.1
+          }
+        );
+        observer.observe(loadMoreRef.value);
+        
+        // Store observer for cleanup
+        if (this._loadMoreObserver) {
+          this._loadMoreObserver.disconnect();
+        }
+        this._loadMoreObserver = observer;
+      }
+    });
 
-  fetchRecent() {
+    return html`
+      <tr class="w-full flex relative" ${ref(loadMoreRef)}>
+        <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
+          <div class="h-8 flex items-center justify-center">
+            ${this.isLoading || this.isLoadingMore
+              ? html`<div class="loading loading-dots loading-md h-5"></div>`
+              : this.createLoadButton('Load more', () => this.fetchData(this.buildLoadMoreUrl(), false, false, true))
+            }
+          </div>
+        </td>
+      </tr>
+    `;
+  };
+
+  renderFetchRecentButton = () => {
     if (this.spanListTree.length === 0 && !this.isLoading && !this.hasMore && this.flipDirection) {
       return emptyState(this.logsColumns.length);
     }
@@ -1184,9 +1236,17 @@ export class LogList extends LitElement {
       this.isLiveStreaming
         ? html`<p class="h-5 leading-5 m-0">Live streaming latest data...</p>`
         : this.isFetchingRecent
-        ? html`<div class="loading loading-dots loading-md h-5"></div>`
-        : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
+          ? html`<div class="loading loading-dots loading-md h-5"></div>`
+          : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
     );
+  };
+
+  renderLoadMore() {
+    return this.renderLoadMoreButton();
+  }
+
+  fetchRecent() {
+    return this.renderFetchRecentButton();
   }
 
   logTableHeading(column: string) {
@@ -1208,19 +1268,19 @@ export class LogList extends LitElement {
     return this.tableHeadingWrapper(title, column, classes);
   }
 
-  logItemRow = (rowData: EventLine | 'end' | 'start') => {
-    if (rowData === 'end') {
-      if (this.flipDirection) {
-        return this.fetchRecent();
-      }
-      return this.renderLoadMore();
+  renderVirtualItem = (item: VirtualListItem) => {
+    // Handle special item types efficiently
+    if ('type' in item && item.type === 'fetchRecent') {
+      return this.renderFetchRecentButton();
     }
-    if (rowData === 'start') {
-      if (this.flipDirection) {
-        return this.renderLoadMore();
-      }
-      return this.fetchRecent();
+    if ('type' in item && item.type === 'loadMore') {
+      return this.renderLoadMoreButton();
     }
+    // Regular event line item
+    return this.logItemRow(item as EventLine);
+  };
+
+  logItemRow = (rowData: EventLine) => {
     try {
       const s = rowData.type === 'log' ? 'logs' : 'spans';
       const targetInfo = requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s);
@@ -1349,7 +1409,7 @@ export class LogList extends LitElement {
   options() {
     const viewButton = (view: 'tree' | 'list', icon: string, label: string) =>
       html` <button
-        @pointerdown=${() => (this.view = view)}
+        @pointerdown=${() => this.changeView(view)}
         class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
           this.view === view ? 'bg-fillWeak text-textStrong' : 'text-textWeak hover:bg-fillWeaker'
         }`}
