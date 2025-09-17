@@ -836,4 +836,5 @@ proxyLandingH path = do
 
   let content = fromMaybe "" $ response L.^? W.responseBody
       textContent = decodeUtf8 content
-  addRespHeaders textContent
+      textContent' = T.replace "href=\"/" "href=\"https://monoscope.tech/" textContent
+  addRespHeaders textContent'
