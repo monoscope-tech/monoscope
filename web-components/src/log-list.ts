@@ -1,10 +1,9 @@
 'use strict';
-import { virtualize } from '@lit-labs/virtualizer/virtualize.js';
+import '@lit-labs/virtualizer';
 import { LitElement, html, css, TemplateResult, nothing } from 'lit';
 import { customElement, state, query, property } from 'lit/decorators.js';
 import { ref, createRef } from 'lit/directives/ref.js';
 import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, Trace, TraceDataMap } from './types/types';
-import { RangeChangedEvent, VisibilityChangedEvent } from '@lit-labs/virtualizer';
 import debounce from 'lodash/debounce';
 import memoize from 'lodash/memoize';
 import { includes, startsWith, map, forEach, compact, pick, chunk, chain } from 'lodash';
@@ -86,7 +85,6 @@ export class LogList extends LitElement {
   private liveStreamInterval: NodeJS.Timeout | null = null;
   private barChart: any = null;
   private lineChart: any = null;
-  private _observer: IntersectionObserver | null = null;
   private _loadMoreObserver: IntersectionObserver | null = null;
   private updateBatchTimer: NodeJS.Timeout | null = null;
   private pendingUpdates: Set<string> = new Set();
@@ -430,7 +428,7 @@ export class LogList extends LitElement {
   }
 
   firstUpdated() {
-    this.setupIntersectionObserver();
+    // Initialization handled by lit-virtualizer
   }
 
   updated(changedProperties: Map<string, any>) {
@@ -459,21 +457,9 @@ export class LogList extends LitElement {
     }
   }
 
-  setupIntersectionObserver() {
-    // The intersection observer is no longer needed since we're using virtual list items
-    // The virtualizer will handle visibility efficiently
-    if (this._observer) {
-      this._observer.disconnect();
-      this._observer = null;
-    }
-  }
 
   disconnectedCallback() {
     // Clean up all observers and timers
-    if (this._observer) {
-      this._observer.disconnect();
-      this._observer = null;
-    }
     if (this._loadMoreObserver) {
       this._loadMoreObserver.disconnect();
       this._loadMoreObserver = null;
@@ -937,22 +923,17 @@ export class LogList extends LitElement {
           ${isInitialLoading
             ? loadingSkeleton(this.logsColumns.length || 6)
             : html`
-                <tbody
-                  class="min-w-0 text-sm"
-                  @rangeChanged=${(event: RangeChangedEvent) => {
-                    this.setupIntersectionObserver();
-                  }}
-                >
-                  ${virtualize({
-                    items: this.virtualListItems,
-                    renderItem: this.renderVirtualItem,
-                    layout: {
+                <tbody class="min-w-0 text-sm">
+                  <lit-virtualizer
+                    .items=${this.virtualListItems}
+                    .renderItem=${this.renderVirtualItem}
+                    .layout=${{
                       itemSize: {
                         height: 28, // Fixed row height for better performance
                         width: '100%',
                       },
-                    },
-                  })}
+                    }}
+                  ></lit-virtualizer>
                 </tbody>
               `}
         </table>
