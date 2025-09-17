@@ -39,8 +39,6 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
 
   currTime <- Time.currentTime
 
- 
-
   let currentURL = "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=" <> requestType
       nextFetchUrl = Just $ currentURL <> "&skip=" <> maybe "20" (\x -> show $ 20 + x) skipM
 

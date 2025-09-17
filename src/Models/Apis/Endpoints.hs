@@ -288,7 +288,7 @@ dependenciesAndEventsCount pid requestType sortT skip timeF = do
       "last_seen" -> "last_seen DESC"
       _ -> "eventsCount DESC"
 
-    timeRange = case timeF of 
+    timeRange = case timeF of
       "14D" -> "timestamp > now() - interval '14 day'"
       _ -> "timestamp > now() - interval '1 day'"
 
