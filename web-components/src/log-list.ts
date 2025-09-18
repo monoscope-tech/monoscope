@@ -1072,7 +1072,14 @@ export class LogList extends LitElement {
         `;
         return latencyHtml;
       case 'summary':
-        const summaryArray = this.parseSummaryData(dataArr);
+        // Cache rendered summary directly on the row data
+        if (!rowData._summaryCache || rowData._summaryCache.wrapLines !== this.wrapLines) {
+          const summaryArray = this.parseSummaryData(dataArr);
+          rowData._summaryCache = {
+            content: this.renderSummaryElements(summaryArray, this.wrapLines),
+            wrapLines: this.wrapLines
+          };
+        }
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
@@ -1117,7 +1124,7 @@ export class LogList extends LitElement {
               `
             : nothing}
           <div class=${clsx('flex items-center gap-1', this.wrapLines ? 'break-all flex-wrap' : 'overflow-hidden')}>
-            ${this.renderSummaryElements(summaryArray, this.wrapLines)}
+            ${rowData._summaryCache.content}
           </div>
         </div>`;
       case 'service':
