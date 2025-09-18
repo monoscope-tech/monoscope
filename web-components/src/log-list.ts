@@ -92,9 +92,7 @@ export class LogList extends LitElement {
   private containerRef = createRef<HTMLDivElement>();
   private nextFetchUrl = '';
 
-
   // Debounced functions
-  private debouncedHandleScroll: any;
   private debouncedFetchData: any;
 
   // Bound functions for event listeners
@@ -103,19 +101,11 @@ export class LogList extends LitElement {
   constructor() {
     super();
 
-    // Initialize log list component
-
-    // Initialize debounced functions
-    this.debouncedHandleScroll = debounce(this.handleScroll.bind(this), 5);
     this.debouncedFetchData = debounce(this.fetchData.bind(this), 300);
-
     // Bind resize handler for immediate feedback
     this.boundHandleResize = this.handleResize.bind(this);
 
     this.expandTrace = this.expandTrace.bind(this);
-
-
-    // Setup all event listeners
     this.setupEventListeners();
   }
 
@@ -471,22 +461,6 @@ export class LogList extends LitElement {
     this.mouseState = { x: event.clientX };
   }
 
-  // TODO: investigate if this should be deleted
-  private handleScroll(event: any) {
-    const container = event.target;
-    if (this.flipDirection) {
-      if (container.scrollTop + container.clientHeight >= container.scrollHeight - 1) {
-        this.shouldScrollToBottom = true;
-      } else {
-        this.shouldScrollToBottom = false;
-        this.handleRecentConcatenation();
-      }
-    } else {
-      if (container.scrollTop === 0) this.handleRecentConcatenation();
-    }
-    this.requestUpdate();
-  }
-
   private batchRequestUpdate(source: string) {
     this.pendingUpdates.add(source);
     if (this.updateBatchTimer) {
@@ -788,8 +762,8 @@ export class LogList extends LitElement {
         ? [...current, ...newData]
         : [...newData, ...current]
       : isRecentFetch
-      ? [...newData, ...current]
-      : [...current, ...newData];
+        ? [...newData, ...current]
+        : [...current, ...newData];
     return result;
   }
 
@@ -1102,8 +1076,8 @@ export class LogList extends LitElement {
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
-          ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
+            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         return html`<div class=${clsx('flex w-full gap-1', this.wrapLines ? 'items-start' : 'items-center')}>
           ${this.view === 'tree'
             ? html`
@@ -1137,8 +1111,8 @@ export class LogList extends LitElement {
                         ${children}
                       </button>`
                     : depth === 0
-                    ? nothing
-                    : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                      ? nothing
+                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
                 </div>
               `
             : nothing}
@@ -1228,8 +1202,8 @@ export class LogList extends LitElement {
       this.isLiveStreaming
         ? html`<p class="h-5 leading-5 m-0">Live streaming latest data...</p>`
         : this.isFetchingRecent
-        ? html`<div class="loading loading-dots loading-md h-5"></div>`
-        : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
+          ? html`<div class="loading loading-dots loading-md h-5"></div>`
+          : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
     );
   };
 
