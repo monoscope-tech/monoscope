@@ -561,95 +561,54 @@ export class LogList extends LitElement {
       .then((response) => response.json())
       .then((data) => {
         if (!data.error) {
-          let { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, count } = data;
+          const { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, count } = data;
 
-          // Validate required fields - but allow empty arrays
-          if (!Array.isArray(logsData)) {
-            this.showErrorToast('Invalid data format received');
-            this.requestUpdate();
-            return;
-          }
+          if (!Array.isArray(logsData)) return this.showErrorToast('Invalid data format received');
+          if (logsData.length === 0) return (this.hasMore = false);
 
           // Update state
-          this.hasMore = logsData.length > 0;
-          if (logsData.length === 0) return;
-
-          // Only update URLs if not in a concurrent request situation
-          if (isLoadMore || isRefresh || this.spanListTree.length === 0) {
-            this.nextFetchUrl = nextUrl;
-          }
-          if (isRecentFetch || this.spanListTree.length === 0) {
-            this.recentFetchUrl = recentUrl;
-          }
-
-          // Update the count if provided
+          this.hasMore = true;
+          if (isLoadMore || isRefresh || !this.spanListTree.length) this.nextFetchUrl = nextUrl;
+          if (isRecentFetch || !this.spanListTree.length) this.recentFetchUrl = recentUrl;
           if (count !== undefined) {
             this.totalCount = count;
             this.updateRowCountDisplay(count);
           }
-
-          // Only update service colors if new ones are provided
-          if (serviceColors && Object.keys(serviceColors).length > 0) {
-            Object.assign(this.serviceColors, serviceColors);
-          }
-
+          if (serviceColors) Object.assign(this.serviceColors, serviceColors);
           this.logsColumns = cols;
           this.colIdxMap = colIdxMap;
 
-          let tree = this.buildSpanListTree(logsData);
+          const tree = this.buildSpanListTree(logsData);
 
           if (isRefresh) {
-            // Replace all data
             this.spanListTree = tree;
             this.updateVisibleItems();
-            if (this.spanListTree.length > 0) {
-              // Reset scroll position based on flipDirection
-              // Use requestAnimationFrame to ensure DOM is updated before scrolling
+            if (tree.length > 0) {
               requestAnimationFrame(() => {
-                const container = this.logsContainer || (document.querySelector('#logs_list_container_inner') as HTMLElement);
-                if (container) {
-                  if (this.flipDirection) {
-                    // When flipDirection is true (oldest at top, newest at bottom), scroll to bottom to show newest
-                    container.scrollTop = container.scrollHeight;
-                  } else {
-                    // When flipDirection is false (newest at top, oldest at bottom), scroll to top to show newest
-                    container.scrollTop = 0;
-                  }
-                }
+                const container = this.logsContainer || document.querySelector('#logs_list_container_inner');
+                if (container) container.scrollTop = this.flipDirection ? container.scrollHeight : 0;
               });
             }
           } else if (isRecentFetch) {
-            // Mark new items for visual distinction
             this.fetchedNew = true;
             tree.forEach((t) => (t.isNew = true));
 
-            // For live streaming, check scroll position to decide where to add
             const container = this.logsContainer;
-            if (container) {
-              const scrolledToBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
+            const scrolledToBottom = container && container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
+            
+            if (scrolledToBottom) this.shouldScrollToBottom = true;
 
-              if (container && scrolledToBottom) {
-                this.shouldScrollToBottom = true;
-              }
+            const shouldBuffer = this.isLiveStreaming && 
+              ((container?.scrollTop > 30 && !this.flipDirection) || 
+               (!scrolledToBottom && this.flipDirection));
 
-              if (this.isLiveStreaming && container.scrollTop > 30 && !this.flipDirection) {
-                // User has scrolled up, add to recent buffer
-                this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
-              } else if (this.isLiveStreaming && !scrolledToBottom && this.flipDirection) {
-                // In flip mode and not at bottom, add to recent buffer
-                this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
-              } else {
-                // Add directly to the tree
-                this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);
-                this.updateVisibleItems();
-              }
+            if (shouldBuffer) {
+              this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
             } else {
-              // Fallback if container not found
               this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);
               this.updateVisibleItems();
             }
           } else {
-            // loading older logs
             this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);
             this.updateVisibleItems();
           }
