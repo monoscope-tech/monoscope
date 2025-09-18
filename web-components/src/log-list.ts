@@ -792,8 +792,25 @@ export class LogList extends LitElement {
     let lTarget = this.virtualListItems[last];
     lTarget = lTarget.type === 'fetchRecent' || lTarget.type === 'loadMore' ? (this.virtualListItems[last - 1] as EventLine) : lTarget;
 
-    const startTime = lookupVecValue(fTarget.data, this.colIdxMap, 'timestamp');
-    const endTime = lookupVecValue(lTarget.data, this.colIdxMap, 'timestamp');
+    const endTime = lookupVecValue(fTarget.data, this.colIdxMap, 'timestamp');
+    const startTimeRaw = lookupVecValue(lTarget.data, this.colIdxMap, 'timestamp');
+
+    // Convert to numbers (timestamps in ms)
+    let startTime = new Date(startTimeRaw).getTime();
+    let end = new Date(endTime).getTime();
+
+    if (this.flipDirection) {
+      const v = startTime;
+      startTime = end;
+      end = v;
+    }
+
+    const MIN_RANGE = 10 * 60 * 1000; // 10 minutes in ms
+
+    if (end - startTime < MIN_RANGE) {
+      startTime = end - MIN_RANGE;
+    }
+
     if (this.barChart) {
       this.barChart.setOption({
         series: [
@@ -813,7 +830,6 @@ export class LogList extends LitElement {
         ],
       });
     }
-    console.log(startTime, endTime);
   }
 
   // Comment to allow classes be rendered.
