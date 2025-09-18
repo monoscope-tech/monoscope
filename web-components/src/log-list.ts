@@ -5,7 +5,7 @@ import { customElement, state, query, property } from 'lit/decorators.js';
 import { ref, createRef } from 'lit/directives/ref.js';
 import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, Trace, TraceDataMap } from './types/types';
 import debounce from 'lodash/debounce';
-import { includes, startsWith, map, forEach, compact, pick, chunk, chain } from 'lodash';
+import { includes, startsWith, map, forEach, compact, pick, chunk, chain, lt } from 'lodash';
 import clsx from 'clsx';
 import {
   formatTimestamp,
@@ -721,8 +721,8 @@ export class LogList extends LitElement {
         ? [...current, ...newData]
         : [...newData, ...current]
       : isRecentFetch
-        ? [...newData, ...current]
-        : [...current, ...newData];
+      ? [...newData, ...current]
+      : [...current, ...newData];
     return result;
   }
 
@@ -746,9 +746,11 @@ export class LogList extends LitElement {
   handleVisibilityChange(e: any) {
     const first = e.first;
     const last = e.last;
+    if (!first || !last) return;
+
     let fTarget = this.virtualListItems[first];
-    fTarget = fTarget.type === 'fetchRecent' || fTarget.type === 'loadMore' ? (this.virtualListItems[first + 1] as EventLine) : fTarget;
     let lTarget = this.virtualListItems[last];
+    fTarget = fTarget.type === 'fetchRecent' || fTarget.type === 'loadMore' ? (this.virtualListItems[first + 1] as EventLine) : fTarget;
     lTarget = lTarget.type === 'fetchRecent' || lTarget.type === 'loadMore' ? (this.virtualListItems[last - 1] as EventLine) : lTarget;
 
     const endTime = lookupVecValue(fTarget.data, this.colIdxMap, 'timestamp');
@@ -1052,14 +1054,14 @@ export class LogList extends LitElement {
           const summaryArray = this.parseSummaryData(dataArr);
           rowData._summaryCache = {
             content: this.renderSummaryElements(summaryArray, this.wrapLines),
-            wrapLines: this.wrapLines
+            wrapLines: this.wrapLines,
           };
         }
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
-            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
+          ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         return html`<div class=${clsx('flex w-full gap-1', this.wrapLines ? 'items-start' : 'items-center')}>
           ${this.view === 'tree'
             ? html`
@@ -1093,8 +1095,8 @@ export class LogList extends LitElement {
                         ${children}
                       </button>`
                     : depth === 0
-                      ? nothing
-                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                    ? nothing
+                    : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
                 </div>
               `
             : nothing}
@@ -1184,8 +1186,8 @@ export class LogList extends LitElement {
       this.isLiveStreaming
         ? html`<p class="h-5 leading-5 m-0">Live streaming latest data...</p>`
         : this.isFetchingRecent
-          ? html`<div class="loading loading-dots loading-md h-5"></div>`
-          : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
+        ? html`<div class="loading loading-dots loading-md h-5"></div>`
+        : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
     );
   };
 

@@ -219,8 +219,8 @@ export class SessionReplay extends LitElement {
     this.consoleEventsEnable = [...this.consoleEventsEnable];
   }
 
-  async initiatePlayer(events: eventWithTime[]) {
-    if (events.length < 2) return;
+  async initiatePlayer(events: eventWithTime[] | undefined) {
+    if (!events || events.length < 2) return;
     this.events = events;
     const target = document.querySelector('#playerWrapper') as HTMLElement;
     this.currentTime = 0;
