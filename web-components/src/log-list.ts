@@ -5,7 +5,6 @@ import { customElement, state, query, property } from 'lit/decorators.js';
 import { ref, createRef } from 'lit/directives/ref.js';
 import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, Trace, TraceDataMap } from './types/types';
 import debounce from 'lodash/debounce';
-import memoize from 'lodash/memoize';
 import { includes, startsWith, map, forEach, compact, pick, chunk, chain } from 'lodash';
 import clsx from 'clsx';
 import {
@@ -93,9 +92,6 @@ export class LogList extends LitElement {
   private containerRef = createRef<HTMLDivElement>();
   private nextFetchUrl = '';
 
-  // Memoized functions
-  private memoizedBuildSpanListTree: any;
-  private memoizedRenderSummaryElements: any;
 
   // Debounced functions
   private debouncedHandleScroll: any;
@@ -118,34 +114,6 @@ export class LogList extends LitElement {
 
     this.expandTrace = this.expandTrace.bind(this);
 
-    // Initialize memoized functions
-    // NOTICE: memoizing build span tree is not worth it
-    // we only build when there is new data (cache miss)
-    // memoizing keeps old data in the cache (consuming memory)
-    // we can clear cache each time we're building span list tree but at that point there is no reason to memoize
-    // memoizing only make things slow (cache lookup)
-
-    // this.memoizedBuildSpanListTree = memoize(
-    //   (logs: any[][]) => ,
-    //   (logs) => {
-    //     // Create a more efficient cache key
-    //     const logCount = logs.length;
-    //     const firstId = logs[0]?.[this.colIdxMap['id']] || '';
-    //     const lastId = logs[logs.length - 1]?.[this.colIdxMap['id']] || '';
-    //     const expandedCount = Object.values(this.expandedTraces).filter(Boolean).length;
-    //     // Include timestamp to ensure fresh data when new items arrive
-    //     const firstTimestamp = logs[0]?.[this.colIdxMap['timestamp']] || '';
-    //     return `${logCount}-${firstId}-${lastId}-${expandedCount}-${this.flipDirection}-${firstTimestamp}`;
-    //   }
-    // );
-    this.memoizedRenderSummaryElements = memoize(
-      (summaryArray: string[], wrapLines: boolean) => this._renderSummaryElementsImpl(summaryArray, wrapLines),
-      (summaryArray, wrapLines) => {
-        // Use a hash of the array content for efficient caching
-        const hash = summaryArray.length + '-' + summaryArray[0] + '-' + summaryArray[summaryArray.length - 1] + '-' + wrapLines;
-        return hash;
-      }
-    );
 
     // Setup all event listeners
     this.setupEventListeners();
@@ -535,7 +503,6 @@ export class LogList extends LitElement {
   }
 
   buildSpanListTree(logs: any[][]) {
-    // Use memoized version for better performance
     const tree = groupSpans(logs, this.colIdxMap, this.expandedTraces, this.flipDirection);
     // Ensure tree maintains proper order
     return tree;
@@ -1008,12 +975,6 @@ export class LogList extends LitElement {
 
   renderSummaryElements(summaryArray: string[], wrapLines: boolean): any {
     if (!Array.isArray(summaryArray)) return nothing;
-
-    // Use memoized version for better performance
-    return this.memoizedRenderSummaryElements(summaryArray, wrapLines);
-  }
-
-  private _renderSummaryElementsImpl(summaryArray: string[], wrapLines: boolean): any {
     const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
 
     return summaryArray
