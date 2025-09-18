@@ -865,6 +865,8 @@ export class LogList extends LitElement {
                 borderType: 'dashed',
               },
               data: [[{ xAxis: endTime }, { xAxis: startTime }]],
+              z: 999,
+              zlevel: 999, // separate canvas laye
             },
           },
         ],
