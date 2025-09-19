@@ -346,9 +346,9 @@ queryLibItem_ isRecent qli =
           , term "data-tippy-content" "Delete query"
           , hxGet_ $ "/p/" <> qli.projectId.toText <> "/log_explorer?layout=DeleteQuery&queryLibId=" <> qli.id.toText
           , hxVals_ "js:{query:window.getQueryFromEditor()}"
-          , hxTarget_ "#queryLibraryTabListEl"
+          , hxTarget_ "#queryLibraryParentEl"
           , hxSwap_ "outerHTML"
-          , hxSelect_ "#queryLibraryTabListEl"
+          , hxSelect_ "#queryLibraryParentEl"
           , hxPushUrl_ "false"
           ] $ faSprite_ "trash-can" "regular" "h-3 w-3"
 
