@@ -573,8 +573,15 @@ toUriStr s = decodeUtf8 $ urlEncode True (encodeUtf8 s)
 
 parseTime :: Maybe Text -> Maybe Text -> Maybe Text -> UTCTime -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
 parseTime fromM toM sinceM now = case sinceM of
+  Just "5M" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 300) now, Just now, Just ("Last 5 min", ""))
+  Just "15M" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 900) now, Just now, Just ("Last 15 min", ""))
+  Just "30M" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 1800) now, Just now, Just ("Last 30 min", ""))
   Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just ("Last Hour", ""))
+  Just "3H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 3) now, Just now, Just ("Last 3 Hours", ""))
+  Just "6H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 6) now, Just now, Just ("Last 6 Hours", ""))
+  Just "12H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 12) now, Just now, Just ("Last 12 Hours", ""))
   Just "24H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just now, Just ("Last 24 Hours", ""))
+  Just "3D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 3) now, Just now, Just ("Last 3 Days", ""))
   Just "7D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just now, Just ("Last 7 Days", ""))
   Just "14D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just now, Just ("Last 14 Days", ""))
   _ -> do

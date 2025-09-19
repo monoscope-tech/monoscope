@@ -66,8 +66,8 @@ parseSince now since =
 
 
 parseTimeRange :: UTCTime -> TimePicker -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
-parseTimeRange now (TimePicker Nothing Nothing Nothing) = parseSince now "24H"
-parseTimeRange now (TimePicker (Just "") Nothing Nothing) = parseSince now "24H"
+parseTimeRange now (TimePicker Nothing Nothing Nothing) = parseSince now "1H"
+parseTimeRange now (TimePicker (Just "") Nothing Nothing) = parseSince now "1H"
 parseTimeRange now (TimePicker Nothing fromM toM) = parseFromAndTo now fromM toM
 parseTimeRange now (TimePicker (Just "") fromM toM) = parseFromAndTo now fromM toM
 parseTimeRange now (TimePicker sinceM _ _) = parseSince now (maybeToMonoid sinceM)
@@ -89,8 +89,15 @@ parseFromAndTo now fromM toM =
 -----------------------------------------------------------------------------------------------------
 timePickerItems :: [(Text, Text)]
 timePickerItems =
-  [ ("1H", "Last Hour")
-  , ("24H", "Last 24 Hours")
+  [ ("5M", "Last 5 mins")
+  , ("15M", "Last 15 mins")
+  , ("30M", "Last 30 mins")
+  , ("1H", "Last hour")
+  , ("3H", "Last 3 hours")
+  , ("6H", "Last 6 hours")
+  , ("12H", "Last 12 hours")
+  , ("24H", "Last 24 hours")
+  , ("3D", "Last 3 days")
   , ("7D", "Last 7 days")
   , ("14D", "Last 14 days")
   ]
@@ -114,10 +121,10 @@ timepicker_ submitForm currentRange = fieldset_
       do
         faSprite_ "calendar" "regular" "h-4 w-4 text-iconNeutral "
         let attrs = maybe [] (\(s, e) -> [term "data-start" s, term "data-end" e]) currentRange
-        span_ (attrs ++ [class_ "inline-block leading-none", id_ "currentRange"]) $ toHtml (maybe "Last 24 Hours" (\(s, e) -> s <> if T.null e then "" else "-" <> e) currentRange)
+        span_ (attrs ++ [class_ "inline-block leading-none", id_ "currentRange"]) $ toHtml (maybe "Last Hour" (\(s, e) -> s <> if T.null e then "" else "-" <> e) currentRange)
         faSprite_ "chevron-down" "regular" "h-3 w-3"
 
-    -- DaisyUI popover content
+    -- DaisyUI popover contentd
     ul_
       [ class_ "dropdown dropdown-end menu w-96 rounded-box bg-bgOverlay shadow-lg"
       , term "popover" ""
