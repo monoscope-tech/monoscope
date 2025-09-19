@@ -595,12 +595,11 @@ export class LogList extends LitElement {
 
             const container = this.logsContainer;
             const scrolledToBottom = container && container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
-            
+
             if (scrolledToBottom) this.shouldScrollToBottom = true;
 
-            const shouldBuffer = this.isLiveStreaming && 
-              ((container?.scrollTop > 30 && !this.flipDirection) || 
-               (!scrolledToBottom && this.flipDirection));
+            const shouldBuffer =
+              this.isLiveStreaming && ((container?.scrollTop > 30 && !this.flipDirection) || (!scrolledToBottom && this.flipDirection));
 
             if (shouldBuffer) {
               this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
@@ -766,7 +765,7 @@ export class LogList extends LitElement {
       end = v;
     }
 
-    const MIN_RANGE = 10 * 60 * 1000; // 10 minutes in ms
+    const MIN_RANGE = 30 * 1000; // 10 minutes in ms
 
     if (end - startTime < MIN_RANGE) {
       startTime = end - MIN_RANGE;
