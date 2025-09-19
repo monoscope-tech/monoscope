@@ -37,7 +37,7 @@ export default defineConfig({
     outDir: '../static/public/assets/web-components/dist',
     emptyOutDir: true,
     assetsDir: 'assets',
-    sourcemap: process.env.NODE_ENV !== 'production', // Disable source maps in production to save memory
+    sourcemap: true, // Enable source maps for debugging
     chunkSizeWarningLimit: 10000, // Increased chunk size limit (in kB)
     rollupOptions: {
       output: {

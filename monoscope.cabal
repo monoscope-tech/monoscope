@@ -326,6 +326,7 @@ library
     , vector
     , vector-algorithms
     , wai
+    , wai-extra
     , wai-log
     , wai-middleware-static
     , warp

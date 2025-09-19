@@ -235,6 +235,7 @@ library:
     - valor >= 1.0.0.0
     - vector
     - wai
+    - wai-extra
     - warp
     - wreq
     - xxhash
