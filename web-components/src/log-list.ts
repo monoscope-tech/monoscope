@@ -765,7 +765,7 @@ export class LogList extends LitElement {
       end = v;
     }
 
-    const MIN_RANGE = 30 * 1000; // 10 minutes in ms
+    const MIN_RANGE = 30 * 1000; // 30 s
 
     if (end - startTime < MIN_RANGE) {
       startTime = end - MIN_RANGE;
