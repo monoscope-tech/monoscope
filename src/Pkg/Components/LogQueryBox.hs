@@ -245,11 +245,11 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
 
 -- | Query library component for saved and recent queries
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
-queryLibrary_ pid queryLibSaved queryLibRecent = div_ [class_ "dropdown dropdown-bottom dropdown-start", id_ "queryLibraryParentEl"] do
-  div_
-    [class_ "cursor-pointer relative text-textWeak rounded-lg border border-strokeStrong h-full flex gap-2 items-center px-2 mb-2", tabindex_ "0", role_ "button"]
+queryLibrary_ pid queryLibSaved queryLibRecent = details_ [class_ "dropdown", id_ "queryLibraryParentEl"] do
+  summary_
+    [class_ "cursor-pointer relative text-textWeak rounded-lg border border-strokeStrong h-full flex gap-2 items-center px-2 mb-2 select-none list-none"]
     (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
-  div_ [class_ "dropdown-content z-20"] $ div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-fillWeak p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
+  div_ [class_ "dropdown-content z-20 mt-2"] $ div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-fillWeak p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
     tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
     tabPanel_ "Recent" (queryLibraryContent_ "Recent" queryLibRecent)
   where
