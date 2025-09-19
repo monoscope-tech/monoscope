@@ -999,34 +999,6 @@ jsonTreeAuxillaryCode pid query = do
 |]
 
 
--- { id :: QueryMonitorId
--- , createdAt :: UTCTime
--- , updatedAt :: UTCTime
--- , projectId :: Projects.ProjectId
--- , checkIntervalMins :: Int
--- , alertThreshold :: Int
--- , warningThreshold :: Maybe Int
--- , logQuery :: Text
--- , logQueryAsSql :: Text
--- , lastEvaluated :: UTCTime
--- , warningLastTriggered :: Maybe UTCTime
--- , alertLastTriggered :: Maybe UTCTime
--- , triggerLessThan :: Bool
--- , thresholdSustainedForMins :: Int
--- , alertConfig :: MonitorAlertConfig
--- , deactivatedAt :: Maybe UTCTime
--- , deletedAt :: Maybe UTCTime
--- }
-
---  { title :: Text
---   , severity :: Text
---   , subject :: Text
---   , message :: Text
---   , emails :: V.Vector (CI.CI Text)
---   , emailAll :: Bool
---   , slackChannels :: V.Vector Text
---   }
-
 -- | Render alert configuration form for creating log-based alerts
 alertConfigurationForm_ :: Projects.ProjectId -> Maybe Monitors.QueryMonitor -> Html ()
 alertConfigurationForm_ pid alertM = do
