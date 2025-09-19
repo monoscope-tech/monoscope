@@ -256,12 +256,12 @@ queryLibrary_ pid queryLibSaved queryLibRecent = details_ [class_ "dropdown", id
     tabPanel_ :: Text -> Html () -> Html ()
     tabPanel_ label content = do
       input_ $ [type_ "radio", name_ "querylib", role_ "tab", class_ "tab", Aria.label_ label] <> [checked_ | label == "Saved"]
-      div_ [role_ "tabpanel", class_ "tab-content bg-bgBase shadow-lg rounded-box h-full max-h-[60dvh] w-[40vw] space-y-2 overflow-y-scroll"] content
+      div_ [role_ "tabpanel", class_ "tab-content bg-bgBase shadow-lg rounded-box h-full max-h-[60dvh] w-[40vw] overflow-y-auto"] content
 
     queryLibraryContent_ :: Text -> V.Vector Projects.QueryLibItem -> Html ()
     queryLibraryContent_ label items = do
       searchBar_ label
-      div_ [class_ $ "border divide-y rounded-xl p-3 dataLibContent" <> label] $ V.forM_ items queryLibItem_
+      div_ [class_ $ "divide-y divide-strokeWeak dataLibContent" <> label] $ V.forM_ items queryLibItem_
 
     searchBar_ :: Text -> Html ()
     searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 p-3 bg-bgBase z-20"] do
@@ -274,7 +274,7 @@ queryLibrary_ pid queryLibSaved queryLibRecent = details_ [class_ "dropdown", id
           , term "data-filterParent" $ "dataLibContent" <> label
           , [__|on keyup
                  if the event's key is 'Escape' set my value to '' then trigger keyup
-                 else show <.group/> in .{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()|]
+                 else show <.query-item/> in .{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()|]
           ]
       when (label == "Saved") do
         label_ [class_ "tabs tabs-md tabs-box tabs-outline bg-fillWeak text-textInverse-weak shrink items-center", role_ "tablist"] do
@@ -298,44 +298,55 @@ visTypes =
   ]
 
 
--- | Individual query library item rendering
+-- | Simplified query library item with reduced DOM nodes
 queryLibItem_ :: Projects.QueryLibItem -> Html ()
 queryLibItem_ qli =
-  div_ [class_ $ "clear p-3 space-y-2 hover:bg-fillWeaker cursor-pointer group " <> if qli.byMe then "" else "hidden group-has-[#queryLibraryGroup:checked]/pg:block"] do
-    div_ [class_ "inline-flex gap-2 float-right"] do
-      div_ [class_ "flex opacity-0 transition-opacity duration-300 group-hover:opacity-100 gap-2"] do
-        a_
-          [ class_ "tooltip"
-          , term "data-tip" "run query"
-          , term "data-query" qli.queryText
-          , [__| on click call #filterElement.handleAddQuery({detail: JSON.parse(@data-query)})|]
-          ]
-          $ faSprite_ "play" "regular" "h-4 w-4"
-        a_ [class_ "tooltip", term "data-tip" "copy query to clipboard", [__|install Copy(content: (next <.queryText/> ))|]] $ faSprite_ "copy" "regular" "h-4 w-4"
-        when qli.byMe $ a_ [class_ "tooltip", term "data-tip" "edit query title", [__|on click set #queryLibId.value to @data-queryId then set #saveQueryMdl.checked to true|], term "data-queryId" qli.id.toText] $ faSprite_ "pen-to-square" "regular" "h-4 w-4"
-        when qli.byMe
-          $ a_
-            [ class_ "tooltip"
-            , term "data-tip" "delete query"
-            , hxGet_ $ "/p/" <> qli.projectId.toText <> "/log_explorer?layout=DeleteQuery&queryLibId=" <> qli.id.toText
-            , hxVals_ "js:{query:window.getQueryFromEditor()}"
-            , hxTarget_ "#queryLibraryTabListEl"
-            , hxSwap_ "outerHTML"
-            , hxSelect_ "#queryLibraryTabListEl"
-            , hxPushUrl_ "false"
-            ]
-          $ faSprite_ "trash-can" "regular" "h-4 w-4"
-      label_ [class_ ""] do
-        input_ [class_ "hidden", type_ "checkbox"]
-        span_ [class_ ""] $ faSprite_ "ellipsis-vertical" "regular" "h-4 w-4"
-        ul_ [class_ "hidden peer-checked:block z-30"] do
-          li_ "Send query to alert"
-          li_ "Send query to a dashboard"
-    strong_ $ whenJust qli.title toHtml
-    pre_
-      $ code_ [class_ "language-js bg-transparent! queryText whitespace-pre-wrap break-words"]
-      $ toHtml qli.queryText
-    div_ [class_ "gap-3 flex"] $ time_ [datetime_ "", term "data-tippy-content" "created on"] (toHtml $ displayTimestamp $ formatUTC qli.createdAt) >> when qli.byMe " by me"
+  div_ 
+    [ class_ $ "query-item p-3 hover:bg-fillWeaker cursor-pointer group relative " <> if qli.byMe then "" else "hidden group-has-[#queryLibraryGroup:checked]/pg:block"
+    , term "data-query" qli.queryText
+    , term "data-query-id" qli.id.toText
+    , term "data-pid" qli.projectId.toText
+    ] do
+    -- Main content area
+    div_ [class_ "pr-8", onclick_ $ "document.getElementById('filterElement').handleAddQuery(JSON.parse(this.closest('.query-item').dataset.query))"] do
+      div_ [class_ "flex items-baseline gap-2 mb-1"] do
+        whenJust qli.title (\title -> span_ [class_ "font-medium text-sm"] $ toHtml title <> " •")
+        small_ [class_ "text-textWeak text-xs whitespace-nowrap"] $ 
+          toHtml (displayTimestamp $ formatUTC qli.createdAt) >> when qli.byMe " • by me"
+      code_ [class_ "queryText text-xs block whitespace-pre-wrap break-words opacity-75"] $ toHtml qli.queryText
+    
+    -- Actions (simplified, shown on hover)
+    div_ [class_ "query-actions absolute top-0 right-3 opacity-0 group-hover:opacity-100 flex gap-1"] do
+      button_ 
+        [ type_ "button"
+        , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
+        , term "data-tippy-content" "Run this query"
+        , onclick_ $ "event.preventDefault(); document.getElementById('filterElement').handleAddQuery(this.closest('.query-item').dataset.query, true)"
+        ] $ faSprite_ "play" "regular" "h-3 w-3"
+      button_ 
+        [ type_ "button"
+        , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
+        , term "data-tippy-content" "Copy query to clipboard"
+        , onclick_ $ "event.preventDefault(); navigator.clipboard.writeText(this.closest('.query-item').dataset.query).then(() => { document.body.dispatchEvent(new CustomEvent('successToast', {detail: {value: ['Query copied to clipboard']}})); })"
+        ] $ faSprite_ "copy" "regular" "h-3 w-3"
+      when qli.byMe do
+        button_
+          [ type_ "button"
+          , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
+          , term "data-tippy-content" "Edit query title"
+          , onclick_ $ "event.preventDefault(); document.getElementById('queryLibId').value = '" <> qli.id.toText <> "'; document.getElementById('saveQueryMdl').checked = true;"
+          ] $ faSprite_ "pen-to-square" "regular" "h-3 w-3"
+        button_
+          [ type_ "button"
+          , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
+          , term "data-tippy-content" "Delete query"
+          , hxGet_ $ "/p/" <> qli.projectId.toText <> "/log_explorer?layout=DeleteQuery&queryLibId=" <> qli.id.toText
+          , hxVals_ "js:{query:window.getQueryFromEditor()}"
+          , hxTarget_ "#queryLibraryTabListEl"
+          , hxSwap_ "outerHTML"
+          , hxSelect_ "#queryLibraryTabListEl"
+          , hxPushUrl_ "false"
+          ] $ faSprite_ "trash-can" "regular" "h-3 w-3"
 
 
 -- | Initialization code for the query editor that sets up schema data, query library, and popular searches
