@@ -1067,13 +1067,6 @@ code, pre, .code, .monospace {
     display: none;
   }
 
-  /* TODO: check if this should be deleted */
-
-  .CodeMirror {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 16px;
-    @apply bg-fillWeak;
-  }
 
   .collapsed .tree-children-count {
     display: inline !important;
