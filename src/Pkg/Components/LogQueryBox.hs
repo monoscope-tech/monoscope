@@ -43,12 +43,14 @@ logQueryBox_ :: LogQueryBoxConfig -> Html ()
 logQueryBox_ config = do
   Components.modal_ "saveQueryMdl" "" $ form_
     [ class_ "flex flex-col p-3 gap-3"
+    , id_ "saveQueryForm"
     , hxGet_ $ "/p/" <> config.pid.toText <> "/log_explorer?layout=SaveQuery"
-    , hxVals_ "js:{query:window.getQueryFromEditor()}"
+    , hxVals_ "js:{query: document.getElementById('saveQueryMdl').dataset.pendingQuery || window.getQueryFromEditor()}"
     , hxTarget_ "#queryLibraryParentEl"
     , hxSwap_ "outerHTML"
     , hxSelect_ "#queryLibraryParentEl"
     , hxPushUrl_ "false"
+    , [__|on htmx:afterRequest set #saveQueryMdl.dataset.pendingQuery to null|]
     ]
     do
       strong_ "Please input a title for your query"
@@ -175,7 +177,7 @@ logQueryBox_ config = do
               div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-end"] do
                 div_ [class_ "rounded-lg px-3 py-2 text-textStrong inline-flex items-center border border-strokeStrong h-full", tabindex_ "0", role_ "button"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5 text-iconNeutral"
                 ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-1 w-60 p-2 shadow-lg"] do
-                  li_ $ label_ [Lucid.for_ "saveQueryMdl"] "Save query to Query Library"
+                  li_ $ label_ [Lucid.for_ "saveQueryMdl", onclick_ "document.getElementById('saveQueryMdl').dataset.pendingQuery = null;"] "Save query to Query Library"
             button_
               [ type_ "submit"
               , class_ "leading-none rounded-lg px-3 py-2 cursor-pointer !h-auto btn btn-primary"
@@ -261,7 +263,7 @@ queryLibrary_ pid queryLibSaved queryLibRecent = details_ [class_ "dropdown", id
     queryLibraryContent_ :: Text -> V.Vector Projects.QueryLibItem -> Html ()
     queryLibraryContent_ label items = do
       searchBar_ label
-      div_ [class_ $ "divide-y divide-strokeWeak dataLibContent" <> label] $ V.forM_ items queryLibItem_
+      div_ [class_ $ "divide-y divide-strokeWeak dataLibContent" <> label] $ V.forM_ items (queryLibItem_ (label == "Recent"))
 
     searchBar_ :: Text -> Html ()
     searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 p-3 bg-bgBase z-20"] do
@@ -277,10 +279,10 @@ queryLibrary_ pid queryLibSaved queryLibRecent = details_ [class_ "dropdown", id
                  else show <.query-item/> in .{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()|]
           ]
       when (label == "Saved") do
-        label_ [class_ "tabs tabs-md tabs-box tabs-outline bg-fillWeak text-textInverse-weak shrink items-center", role_ "tablist"] do
+        label_ [class_ "tabs tabs-sm tabs-box tabs-outline bg-fillWeak text-textInverse-weak shrink items-center h-10", role_ "tablist"] do
           input_ [class_ "hidden", type_ "checkbox", id_ "queryLibraryGroup"]
-          div_ [role_ "tab", class_ "tab h-full bg-fillWeaker group-has-[#queryLibraryGroup:checked]/pg:bg-transparent", term "data-tippy-content" "My Queries"] $ faSprite_ "user" "solid" "w-5 h-5"
-          div_ [role_ "tab", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-fillWeaker", term "data-tippy-content" "All team Queries"] $ faSprite_ "users" "solid" "w-5 h-5"
+          div_ [role_ "tab", class_ "tab h-full bg-fillWeaker group-has-[#queryLibraryGroup:checked]/pg:bg-transparent px-3", term "data-tippy-content" "My Queries"] $ faSprite_ "user" "regular" "w-3.5 h-3.5"
+          div_ [role_ "tab", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-fillWeaker px-3", term "data-tippy-content" "All team Queries"] $ faSprite_ "users" "regular" "w-3.5 h-3.5"
 
 
 -- | Visualization types used across the application
@@ -299,8 +301,8 @@ visTypes =
 
 
 -- | Simplified query library item with reduced DOM nodes
-queryLibItem_ :: Projects.QueryLibItem -> Html ()
-queryLibItem_ qli =
+queryLibItem_ :: Bool -> Projects.QueryLibItem -> Html ()
+queryLibItem_ isRecent qli =
   div_ 
     [ class_ $ "query-item p-3 hover:bg-fillWeaker cursor-pointer group relative " <> if qli.byMe then "" else "hidden group-has-[#queryLibraryGroup:checked]/pg:block"
     , term "data-query" qli.queryText
@@ -333,10 +335,12 @@ queryLibItem_ qli =
         button_
           [ type_ "button"
           , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
-          , term "data-tippy-content" "Edit query title"
-          , onclick_ $ "event.preventDefault(); document.getElementById('queryLibId').value = '" <> qli.id.toText <> "'; document.getElementById('saveQueryMdl').checked = true;"
-          ] $ faSprite_ "pen-to-square" "regular" "h-3 w-3"
-        button_
+          , term "data-tippy-content" $ if isRecent then "Save as named query" else "Edit query title"
+          , onclick_ $ if isRecent 
+              then "event.preventDefault(); document.getElementById('saveQueryMdl').dataset.pendingQuery = this.closest('.query-item').dataset.query; document.getElementById('queryLibId').value = ''; document.getElementById('saveQueryMdl').checked = true;"
+              else "event.preventDefault(); document.getElementById('queryLibId').value = '" <> qli.id.toText <> "'; document.getElementById('saveQueryMdl').checked = true;"
+          ] $ faSprite_ (if isRecent then "floppy-disk" else "pen-to-square") "regular" "h-3 w-3"
+        unless isRecent $ button_
           [ type_ "button"
           , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
           , term "data-tippy-content" "Delete query"

@@ -461,7 +461,7 @@ displayTimestamp :: Text -> Text
 displayTimestamp inputDateString =
   maybe
     T.empty
-    (toText . formatTime defaultTimeLocale "%b %d %H:%M:%S")
+    (toText . formatTime defaultTimeLocale "%b %d %H:%M")
     (parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (toString inputDateString) :: Maybe UTCTime)
 
 
