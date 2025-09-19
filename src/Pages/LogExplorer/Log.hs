@@ -100,7 +100,11 @@ renderFacets facetSummary = do
         [ ("level", "Log Level", levelColorFn)
         , ("kind", "Kind", const "")
         , ("name", "Operation Name", const "")
-        , ("status_code", "Status Code", statusColorFn)
+        , ("status_code", "Status Code", \val -> case val of
+            "OK" -> "bg-fillSuccess-strong"
+            "ERROR" -> "bg-fillError-strong"
+            "UNSET" -> "bg-fillWeak"
+            _ -> "bg-fillStrong")
         , ("resource___service___name", "Service", const "")
         , ("resource___service___version", "Service Version", const "")
         , ("attributes___http___request___method", "HTTP Method", methodColorFn)
@@ -194,6 +198,22 @@ renderFacets facetSummary = do
       document.getElementById("filterElement").toggleSubQuery(queryFragment);
     }
     
+    function toggleFacetSection(sectionName) {
+      const container = document.getElementById('section-' + sectionName.replace(/\s+/g, '-'));
+      const chevron = event.currentTarget.querySelector('.fa-chevron-down');
+      
+      container.classList.toggle('hidden');
+      chevron.classList.toggle('-rotate-90');
+    }
+    
+    function toggleFacet(key) {
+      const valuesDiv = document.getElementById('facet-' + key);
+      const chevron = document.querySelector('.facet-chevron-' + key);
+      
+      valuesDiv.classList.toggle('hidden');
+      chevron.classList.toggle('-rotate-90');
+    }
+    
     // Function to update facet checkboxes based on query content
     function syncFacetCheckboxes() {
       const filterEl = document.getElementById("filterElement");
@@ -216,6 +236,26 @@ renderFacets facetSummary = do
       
       // Listen for query changes via the custom event
       window.addEventListener('update-query', syncFacetCheckboxes);
+      
+      // Handle more/less toggles
+      document.querySelectorAll('input[id^="more-"]').forEach(cb => {
+        cb.addEventListener('change', function() {
+          const parent = this.parentElement;
+          const moreText = parent.querySelector('.more-text');
+          const lessText = parent.querySelector('.less-text');
+          const hiddenValues = parent.querySelector('.hidden-values');
+          
+          if (this.checked) {
+            moreText.classList.add('hidden');
+            lessText.classList.remove('hidden');
+            hiddenValues.classList.remove('hidden');
+          } else {
+            moreText.classList.remove('hidden');
+            lessText.classList.add('hidden');
+            hiddenValues.classList.add('hidden');
+          }
+        });
+      });
     });
   |]
 
@@ -224,110 +264,114 @@ renderFacets facetSummary = do
   forM_ facetGroups $ \(groupName, facetDisplays) -> renderFacetSection groupName facetDisplays facetMap True
   where
     renderFacetSection :: Text -> [(Text, Text, Text -> Text)] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
-    renderFacetSection sectionName facetDisplays facetMap collapsed = div_ [class_ "facet-section-group"] do
-      label_ [class_ "p-3 bg-fillWeak rounded-lg cursor-pointer flex gap-3 items-center peer"] do
-        input_ $ [class_ "hidden peer", type_ "checkbox", name_ $ "section-" <> sectionName] ++ [checked_ | collapsed]
-        span_ [class_ "peer-checked:-rotate-90 transition-transform duration-150 flex"] $ faSprite_ "chevron-down" "regular" "w-3 h-3"
-        toHtml sectionName
-      div_ [class_ "xmax-h-auto divide-y peer-has-checked:max-h-0 peer-has-checked:overflow-hidden transition-[max-height] duration-150"] $ forM_ facetDisplays \(key, displayName, colorFn) ->
-        whenJust (HM.lookup key facetMap) \values ->
-          div_ [class_ "facet-section flex flex-col transition-all duration-150 rounded-lg group"] do
-            div_ [class_ "p-3 flex justify-between items-center cursor-pointer peer"] do
-              label_ [class_ "gap-3 flex items-center cursor-pointer"] do
-                -- Check if this facet's checkboxes should be unchecked by default (first 4 in Common Filters)
-                let commonFilterKeys = ["level", "kind", "name", "status_code"]
-                    shouldBeUnchecked = sectionName == "Common Filters" && key `elem` commonFilterKeys
-                input_ $ [class_ "hidden peer", type_ "checkbox", name_ $ "group-" <> key] ++ [checked_ | not shouldBeUnchecked]
-                span_ [class_ "peer-checked:-rotate-90 transition-transform duration-150 flex"] $ faSprite_ "chevron-down" "regular" "w-3 h-3"
-                let dotKey = T.replace "___" "." key
-                span_ [term "data-tippy-content" dotKey] (toHtml displayName)
-              -- Add vertical ellipsis dropdown menu
-              div_ [class_ "dropdown dropdown-end"] do
-                a_ [tabindex_ "0", class_ "cursor-pointer"] do
-                  faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
-                ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow bg-base-100 rounded-box w-52"] do
-                  li_
-                    $ a_
-                      [ term "data-field" (T.replace "___" "." key)
-                      , class_ "flex gap-2 items-center"
-                      , [__|
-                       init 
-                          set cols to params().cols or '' then 
-                          set colsX to cols.split(',') then
-                          if colsX contains @data-field
-                            set innerHTML of first <span/> in me to 'Remove column'
-                          end
-                        on click
-                          call #resultTable.toggleColumnOnTable(@data-field) then
-                          set cols to params().cols or '' then
-                          set colsX to cols.split(',')
-                          if colsX contains @data-field
-                            set innerHTML of first <span/> in me to 'Remove column'
-                          else
-                            set innerHTML of first <span/> in me to 'Add as table column'
-                          end
-                        |]
-                      ]
-                      do
-                        faSprite_ "table-column" "regular" "w-4 h-4 text-iconNeutral"
-                        span_ [] "Add as table column"
-                  li_
-                    $ a_
-                      [ term "data-field" (T.replace "___" "." key)
-                      , term "data-key" key
-                      , class_ "flex gap-2 items-center"
-                      , [__|
-                        init call window.updateGroupByButtonText(event, me) end
-                        on refreshItem call window.updateGroupByButtonText(event, me) end
-
-                        on click
-                          call document.querySelector('query-builder').toggleGroupByField(@data-field) then
-                          trigger refreshItem on me
-                        end
-                    |]
-                      ]
-                      do
-                        faSprite_ "group-by" "regular" "w-4 h-4 text-iconNeutral"
-                        span_ [] "Group by"
-
-            div_ [class_ "pl-5 xmax-h-auto peer-has-checked:max-h-0 peer-has-checked:overflow-hidden transition-[max-height] duration-150"] do
-              -- Prepare value lists and add toggle when needed
-              let valuesWithIndices = zip [0 ..] values
-                  (visibleValues, hiddenValues) = splitAt 5 valuesWithIndices
-                  hiddenCount = length hiddenValues
-
-                  -- Helper function to render a facet value item
-                  renderFacetValue (FacetValue val count) =
-                    div_ [class_ "facet-item flex justify-between items-center hover:bg-fillWeak transition-colors duration-150 rounded-md p-1 last:pb-3"] do
-                      label_ [class_ "flex gap-3 items-center cursor-pointer flex-1 min-w-0 overflow-hidden"] do
-                        input_
-                          [ type_ "checkbox"
-                          , class_ "checkbox checkbox-sm"
-                          , name_ key
-                          , onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
-                          , term "data-tippy-content" (T.replace "___" "." key <> " == \"" <> val <> "\"")
-                          , term "data-field" (T.replace "___" "." key)
-                          , term "data-value" val
+    renderFacetSection sectionName facetDisplays facetMap collapsed = do
+      -- Simplified structure using just divs for facet sections
+      div_ [class_ "facet-section-group"] do
+        -- Section header
+        div_ [class_ "p-2 bg-fillWeak rounded-lg cursor-pointer flex gap-2 items-center", onclick_ ("toggleFacetSection('" <> sectionName <> "')")] do
+          faSprite_ "chevron-down" "regular" $ "w-3 h-3 transition-transform " <> if collapsed then "-rotate-90" else ""
+          span_ [class_ "font-medium text-sm"] (toHtml sectionName)
+        
+        -- Facets container
+        div_ [class_ $ "facets-container mt-1 " <> if collapsed then "hidden" else "", id_ $ "section-" <> T.replace " " "-" sectionName] do
+          forM_ (zip [0..] facetDisplays) \(idx, (key, displayName, colorFn)) ->
+            whenJust (HM.lookup key facetMap) \values -> do
+              let shouldBeExpanded = sectionName == "Common Filters" && idx < 4
+              div_ [class_ "facet-section border-t border-strokeWeak"] do
+                -- Facet header with actions
+                div_ [class_ "flex items-center justify-between hover:bg-fillWeak rounded"] do
+                  div_ [class_ "p-2 flex items-center gap-2 cursor-pointer flex-1", onclick_ ("toggleFacet('" <> key <> "')")] do
+                    faSprite_ "chevron-down" "regular" $ "w-2.5 h-2.5 transition-transform facet-chevron-" <> key <> if shouldBeExpanded then "" else " -rotate-90"
+                    span_ [class_ "text-sm", term "data-tippy-content" (T.replace "___" "." key)] (toHtml displayName)
+                
+                  
+                  -- Dropdown menu for actions  
+                  div_ [class_ "dropdown dropdown-end", onclick_ "event.stopPropagation()"] do
+                    a_ [tabindex_ "0", class_ "cursor-pointer p-2 hover:bg-fillWeak rounded"] do
+                      faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
+                    ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow bg-base-100 rounded-box w-52"] do
+                      li_
+                        $ a_
+                          [ term "data-field" (T.replace "___" "." key)
+                          , class_ "flex gap-2 items-center"
+                          , [__|
+                           init 
+                              set cols to params().cols or '' then 
+                              set colsX to cols.split(',') then
+                              if colsX contains @data-field
+                                set innerHTML of first <span/> in me to 'Remove column'
+                              end
+                            on click
+                              call #resultTable.toggleColumnOnTable(@data-field) then
+                              set cols to params().cols or '' then
+                              set colsX to cols.split(',')
+                              if colsX contains @data-field
+                                set innerHTML of first <span/> in me to 'Remove column'
+                              else
+                                set innerHTML of first <span/> in me to 'Add as table column'
+                              end
+                            |]
                           ]
+                          do
+                            faSprite_ "table-column" "regular" "w-4 h-4 text-iconNeutral"
+                            span_ [] "Add as table column"
+                      li_
+                        $ a_
+                          [ term "data-field" (T.replace "___" "." key)
+                          , term "data-key" key
+                          , class_ "flex gap-2 items-center"
+                          , [__|
+                            init call window.updateGroupByButtonText(event, me) end
+                            on refreshItem call window.updateGroupByButtonText(event, me) end
 
-                        span_ [class_ "facet-value truncate", term "data-tippy-content" val] do
-                          let colorClass = colorFn val
-                          unless (T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm mr-1.5"] " "
-                          toHtml val
-                      span_ [class_ "facet-count text-textWeak ml-1"] $ toHtml $ prettyPrintCount count
+                            on click
+                              call document.querySelector('query-builder').toggleGroupByField(@data-field) then
+                              trigger refreshItem on me
+                            end
+                        |]
+                          ]
+                          do
+                            faSprite_ "group-by" "regular" "w-4 h-4 text-iconNeutral"
+                            span_ [] "Group by"
 
-              div_ [class_ "values-container"] do
-                forM_ visibleValues \(_, value) -> renderFacetValue value
-                when (hiddenCount > 0) do
-                  input_ [type_ "checkbox", class_ "hidden peer/more", id_ $ "more-toggle-" <> key]
-                  div_ [class_ "hidden peer-checked/more:block"]
-                    $ forM_ hiddenValues \(_, value) -> renderFacetValue value
+                -- Render facet values
+                div_ [class_ $ "facet-values pl-7 pr-2 pb-2 space-y-1" <> if shouldBeExpanded then "" else " hidden", id_ $ "facet-" <> key] do
+                  let valuesWithIndices = zip [0 ..] values
+                      (visibleValues, hiddenValues) = splitAt 5 valuesWithIndices
+                      hiddenCount = length hiddenValues
 
-                  label_ [class_ "text-textBrand px-3 py-3 cursor-pointer hover:underline peer-checked/more:hidden flex items-center gap-1", Lucid.for_ $ "more-toggle-" <> key] do
-                    toHtml $ "+ More (" <> prettyPrintCount hiddenCount <> ")"
+                      -- Helper function to render a facet value item
+                      renderFacetValue (FacetValue val count) =
+                        label_ [class_ "facet-item flex items-center justify-between py-0.5 px-1 hover:bg-fillWeak rounded cursor-pointer"] do
+                          div_ [class_ "flex items-center gap-2 min-w-0 flex-1"] do
+                            input_
+                              [ type_ "checkbox"
+                              , class_ "checkbox checkbox-xs"
+                              , name_ key
+                              , onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
+                              , term "data-tippy-content" (T.replace "___" "." key <> " == \"" <> val <> "\"")
+                              , term "data-field" (T.replace "___" "." key)
+                              , term "data-value" val
+                              ]
 
-                  label_ [class_ "text-textBrand px-3 py-3 cursor-pointer hover:underline hidden peer-checked/more:flex items-center gap-1", Lucid.for_ $ "more-toggle-" <> key] do
-                    toHtml $ "- Less (" <> prettyPrintCount hiddenCount <> ")"
+                            let colorClass = colorFn val
+                            unless (T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-0.5 h-3 rounded-sm"] ""
+                            span_ [class_ "facet-value truncate text-xs", term "data-tippy-content" val] (toHtml val)
+                          
+                          span_ [class_ "facet-count text-xs text-textWeak shrink-0"] $ toHtml $ prettyPrintCount count
+
+                  -- Render visible values
+                  forM_ visibleValues \(_, value) -> renderFacetValue value
+                  
+                  -- Show more/less toggle for hidden values
+                  when (hiddenCount > 0) do
+                    let moreId = "more-" <> key
+                    input_ [type_ "checkbox", class_ "hidden", id_ moreId]
+                    label_ [class_ "text-textBrand text-xs px-1 py-0.5 cursor-pointer hover:underline", Lucid.for_ moreId] do
+                      span_ [class_ "more-text"] $ toHtml $ "+ More (" <> prettyPrintCount hiddenCount <> ")"
+                      span_ [class_ "less-text hidden"] $ toHtml $ "- Less (" <> prettyPrintCount hiddenCount <> ")"
+                    
+                    div_ [class_ "hidden-values hidden"] $ forM_ hiddenValues \(_, value) -> renderFacetValue value
 
 
 resizer_ :: Text -> Text -> Bool -> Html ()
