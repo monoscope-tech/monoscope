@@ -229,16 +229,16 @@ renderFacets facetSummary = do
   where
     renderFacetSection :: Text -> [(Text, Text, Text -> Text)] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
     renderFacetSection sectionName facetDisplays facetMap collapsed = do
-      -- Use Tailwind group modifier for toggle functionality
-      label_ [class_ "facet-section-group group/section block"] do
+      -- Use div with group for section
+      div_ [class_ "facet-section-group group/section block"] do
         input_ $ [type_ "checkbox", class_ "hidden peer", id_ $ "toggle-" <> T.replace " " "-" sectionName] ++ [checked_ | not collapsed]
-        -- Section header
-        div_ [class_ "p-2 bg-fillWeak rounded-lg cursor-pointer flex gap-2 items-center"] do
-          faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform group-has-[:checked]/section:rotate-0 -rotate-90"
+        -- Section header - use label to toggle checkbox
+        label_ [class_ "p-2 bg-fillWeak rounded-lg cursor-pointer flex gap-2 items-center peer-checked:[&>svg]:rotate-0", Lucid.for_ $ "toggle-" <> T.replace " " "-" sectionName] do
+          faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform -rotate-90"
           span_ [class_ "font-medium text-sm"] (toHtml sectionName)
         
         -- Facets container
-        div_ [class_ "facets-container mt-1 max-h-0 overflow-hidden group-has-[:checked]/section:max-h-[2000px] transition-[max-height] duration-300"] do
+        div_ [class_ "facets-container mt-1 max-h-0 overflow-hidden peer-checked:max-h-[2000px] transition-[max-height] duration-300"] do
             forM_ (zip [0..] facetDisplays) \(idx, (key, displayName, colorFn)) ->
               whenJust (HM.lookup key facetMap) \values -> do
                 let shouldBeExpanded = sectionName == "Common Filters" && idx < 4
