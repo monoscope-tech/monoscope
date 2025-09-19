@@ -1,17 +1,16 @@
 cradle:
   stack:
-    - path: "./src"
-      component: "monoscope-server:lib"
+    - path: './src'
+      component: 'monoscope:lib'
 
-    - path: "./app/Main.hs"
-      component: "monoscope-server:exe:monoscope-server-exe"
+    - path: './app/Main.hs'
+      component: 'monoscope:exe:monoscope-exe'
 
-    - path: "./app/Paths_monoscope_server.hs"
-      component: "monoscope-server:exe:monoscope-server-exe"
+    - path: './app/Paths_monoscope.hs'
+      component: 'monoscope:exe:monoscope-exe'
 
-    - path: "./test"
-      component: "monoscope-server:test:monoscope-server-test"
-
+    - path: './test'
+      component: 'monoscope:test:monoscope-test'
 
 dependencies:
   - package.yaml

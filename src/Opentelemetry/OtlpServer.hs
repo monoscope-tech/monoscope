@@ -886,7 +886,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
           , end_time = Just validEndTime
           , events = fmap AesonText eventsJson
           , links = linksJson
-          , name = Just $ pSpan ^. PTF.name
+          , name = Just $ if pSpan ^. PTF.name == "apitoolkit-http-span" then "monoscope.http" else pSpan ^. PTF.name
           , parent_id = parentId
           , summary = V.empty -- Will be populated after creation
           , date = validStartTime

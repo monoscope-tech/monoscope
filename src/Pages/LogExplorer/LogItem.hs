@@ -160,14 +160,14 @@ expandAPIlogItemH pid rdId timestamp sourceM = do
               let trIdM = record.context >>= (.trace_id)
               if record.name
                 /= Just "apitoolkit-http-span"
-                || record.name
-                /= Just "monoscope.http"
+                && record.name
+                  /= Just "monoscope.http"
                 then do
                   case trIdM of
                     Just trId -> do
                       if authCtx.env.enableTimefusionReads
-                        then labeled @"timefusion" @DB $ Telemetry.spanRecordByName pid trId (fromMaybe "apitoolkit-http-span" record.name)
-                        else Telemetry.spanRecordByName pid trId (fromMaybe "apitoolkit-http-span" record.name)
+                        then labeled @"timefusion" @DB $ Telemetry.spanRecordByName pid trId "monoscope.http"
+                        else Telemetry.spanRecordByName pid trId "monoscope.http"
                     _ -> pure Nothing
                 else pure Nothing
             _ -> pure Nothing

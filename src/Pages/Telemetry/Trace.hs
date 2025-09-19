@@ -43,7 +43,8 @@ traceH pid trId spanIdM nav = do
             if targetIndex < V.length spanRecords - 1
               then Just (spanRecords V.! (targetIndex + 1))
               else Nothing
-      addRespHeaders $ SpanDetails pid targetSpan Nothing (prevSpan >>= \s -> Just s.spanId) (nextSpan >>= \s -> Just s.spanId)
+      let atpSpan = V.find (\x -> x.name == Just "apitoolkit-http-span" || x.name == Just "monoscope.http") spanRecords'
+      addRespHeaders $ SpanDetails pid targetSpan atpSpan (prevSpan >>= \s -> Just s.spanId) (nextSpan >>= \s -> Just s.spanId)
     else do
       traceItemM <- Telemetry.getTraceDetails pid trId
       case traceItemM of
