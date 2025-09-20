@@ -33,10 +33,12 @@ externalHeadScripts_ config = do
 
   -- Facebook Pixel Code
   when (isJust config.facebookPixelId1 || isJust config.facebookPixelId2) $ do
-    let pixelInitScript = mconcat $ catMaybes
-          [ config.facebookPixelId1 <&> \pixelId -> [fmt|fbq('init', '{pixelId}'); fbq('track', 'PageView');|]
-          , config.facebookPixelId2 <&> \pixelId -> [fmt|fbq('init', '{pixelId}'); fbq('track', 'PageView');|]
-          ]
+    let pixelInitScript =
+          mconcat
+            $ catMaybes
+              [ config.facebookPixelId1 <&> \pixelId -> [fmt|fbq('init', '{pixelId}'); fbq('track', 'PageView');|]
+              , config.facebookPixelId2 <&> \pixelId -> [fmt|fbq('init', '{pixelId}'); fbq('track', 'PageView');|]
+              ]
     script_
       [fmt|
           setTimeout(function(){{
