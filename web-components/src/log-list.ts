@@ -25,6 +25,9 @@ import {
   parseSummaryElement,
   unescapeJsonString,
   calculateAutoBinWidth,
+  createCachedIconRenderer,
+  WEAK_TEXT_STYLES,
+  RIGHT_PREFIX_REGEX,
 } from './log-list-utils';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 
@@ -809,9 +812,6 @@ export class LogList extends LitElement {
     this.updateVisibleItems();
     this.batchRequestUpdate('recentConcatenation');
   }
-
-  private isScrolling = false;
-  private scrollEndTimer: ReturnType<typeof setTimeout> | null = null;
   
   handleVisibilityChange = (e: any) => {
     const first = e.first;
@@ -880,45 +880,6 @@ export class LogList extends LitElement {
       } catch (e) {
         // Fall back to default if chart access fails
       }
-
-      if (end - startTime < MIN_RANGE) {
-        startTime = end - MIN_RANGE;
-      }
-
-      if (this.barChart) {
-        this.barChart.setOption({
-          series: [
-            {
-              markArea: {
-                itemStyle: {
-                  color: 'rgba(0, 104, 255, .5)',
-                  borderColor: 'rgb(0 104 255)',
-                  borderWidth: 1,
-                  borderType: 'dashed',
-                },
-                data: [[{ xAxis: endTime }, { xAxis: startTimeRaw }]],
-                z: 999,
-                zlevel: 999,
-              },
-            },
-          ],
-        });
-      }
-
-      const endTime = lookupVecValue(fTarget.data, this.colIdxMap, 'timestamp');
-      const startTimeRaw = lookupVecValue(lTarget.data, this.colIdxMap, 'timestamp');
-
-      // Convert to numbers (timestamps in ms)
-      let startTime = new Date(startTimeRaw).getTime();
-      let end = new Date(endTime).getTime();
-
-      if (this.flipDirection) {
-        const v = startTime;
-        startTime = end;
-        end = v;
-      }
-
-      const MIN_RANGE = 30 * 1000; // 30 s
 
       if (end - startTime < MIN_RANGE) {
         startTime = end - MIN_RANGE;
@@ -1123,55 +1084,113 @@ export class LogList extends LitElement {
   private parseSummaryData(dataArr: any[]): string[] {
     return lookupVecValue<string[]>(dataArr, this.colIdxMap, 'summary');
   }
-
-  renderSummaryElements(summaryArray: string[], wrapLines: boolean): any {
-    if (!Array.isArray(summaryArray)) return nothing;
-    const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
-
-    return summaryArray
-      .filter((el) => {
-        const parsed = parseSummaryElement(el);
-        return parsed.type === 'plain' || !startsWith(parsed.style, 'right-');
-      })
-      .map((element) => {
-        const parsed = parseSummaryElement(element);
-        if (parsed.type === 'plain') {
-          const unescapedContent = unescapeJsonString(parsed.content);
-          return html`<span class=${`fill-textStrong ${wrapClass}`}>${unsafeHTML(unescapedContent)}</span>`;
+  
+  // Ultra-optimized renderSummaryElements using closure for caching
+  renderSummaryElements = (() => {
+    // Private cache with fast hashing
+    const cache = new Map<number, TemplateResult[]>();
+    const parseCache = new WeakMap<string[], any[]>();
+    const unescapeCache = new Map<string, string>();
+    
+    // FNV-1a hash for ultra-fast cache keys
+    const hashArray = (arr: string[], wrap: boolean): number => {
+      let hash = 0x811c9dc5; // FNV offset basis
+      for (let i = 0; i < arr.length; i++) {
+        const str = arr[i];
+        for (let j = 0; j < str.length; j++) {
+          hash ^= str.charCodeAt(j);
+          hash = Math.imul(hash, 0x01000193); // FNV prime
         }
-
-        const { field, style, value } = parsed;
-
-        // Special icon handling
-        const iconConfig = {
-          request_type: () =>
-            renderIconWithTooltip(
-              'w-4',
-              `${value} Request`,
-              faSprite(
-                value === 'incoming' ? 'arrow-down-left' : 'arrow-up-right',
-                'solid',
-                value === 'incoming' ? 'h-3 fill-iconNeutral' : 'h-3 fill-iconBrand'
-              )
-            ),
-          kind: () =>
-            value === 'internal' ? renderIconWithTooltip('w-4 ml-2', 'Internal span', faSprite('function', 'regular', 'h-3 w-3')) : nothing,
-          'db.system': () => renderIconWithTooltip('w-4 ml-2', value, faSprite('database', 'regular', 'h-3 w-3 fill-iconNeutral')),
-        };
-
-        if (iconConfig[field]) return iconConfig[field]();
-
-        // Text rendering
-        if (includes(['text-weak', 'text-textWeak'], style)) {
-          const unescapedValue = unescapeJsonString(value);
-          return html`<span class="text-textWeak">${unsafeHTML(unescapedValue)}</span>`;
+      }
+      return (hash >>> 0) | (wrap ? 0x80000000 : 0);
+    };
+    
+    // Cached unescaping with bounded cache
+    const getCachedUnescape = (str: string): string => {
+      let unescaped = unescapeCache.get(str);
+      if (unescaped === undefined) {
+        unescaped = unescapeJsonString(str);
+        // Bounded cache - evict oldest when limit reached
+        if (unescapeCache.size >= 1024) {
+          const firstKey = unescapeCache.keys().next().value;
+          unescapeCache.delete(firstKey);
         }
-
-        if (style === 'text-textStrong') return html`<span class="text-textStrong">${value}</span>`;
-
-        return renderBadge(clsx('cbadge-sm', this.getStyleClass(style), wrapClass), value);
-      });
-  }
+        unescapeCache.set(str, unescaped);
+      }
+      return unescaped;
+    };
+    
+    // Create cached icon renderer instance
+    const renderIcon = createCachedIconRenderer();
+    
+    // The main render function
+    return function(this: LogList, summaryArray: string[], wrapLines: boolean): TemplateResult[] {
+      if (!summaryArray?.length) return [];
+      
+      // Check main render cache first
+      const cacheKey = hashArray(summaryArray, wrapLines);
+      const cached = cache.get(cacheKey);
+      if (cached) return cached;
+      
+      // Get or parse elements
+      let parsed = parseCache.get(summaryArray);
+      if (!parsed) {
+        parsed = summaryArray.map(el => parseSummaryElement(el));
+        parseCache.set(summaryArray, parsed);
+      }
+      
+      const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
+      const result: TemplateResult[] = [];
+      
+      // Optimized single pass with early continues
+      for (let i = 0; i < parsed.length; i++) {
+        const p = parsed[i];
+        
+        // Skip right-aligned elements
+        if (p.type !== 'plain' && RIGHT_PREFIX_REGEX.test(p.style)) continue;
+        
+        if (p.type === 'plain') {
+          result.push(html`<span class=${`fill-textStrong ${wrapClass}`}>${unsafeHTML(getCachedUnescape(p.content))}</span>`);
+          continue;
+        }
+        
+        const { field, style, value } = p;
+        
+        // Fast switch for icon fields
+        switch (field) {
+          case 'request_type':
+          case 'kind':
+          case 'db.system': {
+            const icon = renderIcon(field, value);
+            if (icon) {
+              result.push(icon);
+              continue;
+            }
+            break;
+          }
+        }
+        
+        // Direct style checks with early returns
+        if (style === 'text-textStrong') {
+          result.push(html`<span class="text-textStrong">${value}</span>`);
+        } else if (WEAK_TEXT_STYLES.has(style)) {
+          result.push(html`<span class="text-textWeak">${unsafeHTML(getCachedUnescape(value))}</span>`);
+        } else {
+          result.push(renderBadge(clsx('cbadge-sm', this.getStyleClass(style), wrapClass), value));
+        }
+      }
+      
+      // Bounded main cache with bulk eviction
+      if (cache.size >= 512) {
+        // Remove oldest 256 entries
+        const entries = Array.from(cache.keys()).slice(0, 256);
+        entries.forEach(k => cache.delete(k));
+      }
+      
+      cache.set(cacheKey, result);
+      return result;
+    };
+  })();
 
   getStyleClass(style: string): string {
     return getStyleClass(style);
@@ -1217,20 +1236,26 @@ export class LogList extends LitElement {
           const summaryArr = this.parseSummaryData(dataArr);
           const rightAlignedBadges: TemplateResult[] = [];
 
-          summaryArr.forEach((element: string) => {
-            if (element.includes(';') && element.includes('⇒')) {
-              const [fieldAndStyle, value] = element.split('⇒');
-              const [field, style] = fieldAndStyle.split(';');
-
-              // Only process elements with styles starting with "right-"
-              if (style.startsWith('right-')) {
-                const badgeStyle = this.getStyleClass(style);
-                rightAlignedBadges.push(
-                  field === 'session' ? this.createSessionButton(value) : renderBadge(`cbadge-sm ${badgeStyle} bg-opacity-100`, value)
-                );
-              }
-            }
-          });
+          // Use optimized parsing for right-aligned badges
+          for (let i = 0; i < summaryArr.length; i++) {
+            const element = summaryArr[i];
+            const sepIdx = element.indexOf('⇒');
+            if (sepIdx === -1) continue;
+            
+            const semiIdx = element.indexOf(';');
+            if (semiIdx === -1 || semiIdx > sepIdx) continue;
+            
+            const style = element.substring(semiIdx + 1, sepIdx);
+            if (!RIGHT_PREFIX_REGEX.test(style)) continue;
+            
+            const field = element.substring(0, semiIdx);
+            const value = element.substring(sepIdx + 1);
+            const badgeStyle = this.getStyleClass(style);
+            
+            rightAlignedBadges.push(
+              field === 'session' ? this.createSessionButton(value) : renderBadge(`cbadge-sm ${badgeStyle} bg-opacity-100`, value)
+            );
+          }
 
           const latencyHtml = html`
             <div class="flex justify-end items-center gap-1 text-textWeak pl-1 rounded-lg bg-bgBase" style="min-width:${currentWidth}px">

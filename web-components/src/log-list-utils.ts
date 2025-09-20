@@ -56,16 +56,21 @@ export const calculateColumnWidth = (content: string, column: string): number =>
   return content.length * charWidth;
 };
 
+// Constants for parsing
+const SEPARATOR = '⇒';
+const SEMICOLON = ';';
+
 // Parse summary element format: "field;style⇒value"
 export const parseSummaryElement = (
   element: string
 ): { type: 'plain'; content: string } | { type: 'formatted'; field: string; style: string; value: string } => {
-  const separatorIndex = element.indexOf('⇒');
+  // Early exit for common case
+  const separatorIndex = element.indexOf(SEPARATOR);
   if (separatorIndex === -1) {
     return { type: 'plain', content: element };
   }
 
-  const semicolonIndex = element.indexOf(';');
+  const semicolonIndex = element.indexOf(SEMICOLON);
   if (semicolonIndex === -1 || semicolonIndex > separatorIndex) {
     return { type: 'plain', content: element };
   }
@@ -78,18 +83,44 @@ export const parseSummaryElement = (
   };
 };
 
+// Pre-compiled regex for better performance
+const JSON_VALUE_REGEX = /:\s*("[^"]*"|\d+|true|false|null)/g;
+
 function colorizeJsonValues(jsonStr: string): string {
-  return jsonStr.replace(/:\s*("[^"]*"|\d+|true|false|null)/g, (match, value) => {
-    return `: <span class="text-textStrong font-medium">${value}</span>`;
-  });
+  return jsonStr.replace(JSON_VALUE_REGEX, ': <span class="text-textStrong font-medium">$1</span>');
 }
 
 const ansi_up = new AnsiUp();
 ansi_up.escapeForHtml = false;
 
-// Unescape JSON strings
+// Pre-compiled regex patterns
+const ESCAPED_QUOTE_REGEX = /\\"/g;
+const ESCAPED_BACKSLASH_REGEX = /\\\\/g;
+
+// Unescape JSON strings - optimized with early exits
 export const unescapeJsonString = (str: string): string => {
-  return colorizeJsonValues(ansi_up.ansi_to_text(str.replace(/\\"/g, '"').replace(/\\\\/g, '\\')));
+  // Early exit if string doesn't need processing
+  if (!str.includes('\\') && !str.includes('\x1b') && !str.includes(':')) {
+    return str;
+  }
+  
+  // Only unescape if needed
+  let result = str;
+  if (str.includes('\\"') || str.includes('\\\\')) {
+    result = result.replace(ESCAPED_QUOTE_REGEX, '"').replace(ESCAPED_BACKSLASH_REGEX, '\\');
+  }
+  
+  // Only process ANSI if likely present
+  if (result.includes('\x1b')) {
+    result = ansi_up.ansi_to_text(result);
+  }
+  
+  // Only colorize if there are colons (JSON-like content)
+  if (result.includes(':')) {
+    result = colorizeJsonValues(result);
+  }
+  
+  return result;
 };
 
 // Pure utility functions
@@ -98,7 +129,11 @@ export const formatTimestamp = (input: string): string => {
   return isValid(date) ? format(date, 'MMM dd HH:mm:ss') + `.${date.getUTCMilliseconds().toString().padStart(3, '0')}` : '';
 };
 
-export const lookupVecValue = <T = any>(vec: any[], colIdxMap: ColIdxMap, key: string): T => get(vec, colIdxMap[key] ?? -1, '') as T;
+export const lookupVecValue = <T = any>(vec: any[], colIdxMap: ColIdxMap, key: string): T => {
+  const idx = colIdxMap[key];
+  // Direct array access is faster than lodash.get for simple array lookups
+  return (idx !== undefined && idx >= 0 && idx < vec.length ? vec[idx] : '') as T;
+};
 
 export const getErrorClassification = (reqVec: any[], colIdxMap: ColIdxMap) => {
   const hasErrors = lookupVecValue(reqVec, colIdxMap, 'errors');
@@ -131,6 +166,74 @@ export const renderBadge = (classes: string, title: string, tooltip?: string): T
 
 export const renderIconWithTooltip = (classes: string, tooltip: string, icon: TemplateResult): TemplateResult =>
   html`<span class=${clsx('shrink-0 inline-flex tooltip tooltip-right', classes)} data-tip=${tooltip}>${icon}</span>`;
+
+// Icon configurations for summary elements
+export const SUMMARY_ICON_CONFIGS = {
+  request_type: (value: string) => ({
+    className: 'w-4',
+    tooltip: `${value} Request`,
+    iconName: value === 'incoming' ? 'arrow-down-left' : 'arrow-up-right',
+    iconType: 'solid' as const,
+    iconClass: value === 'incoming' ? 'h-3 fill-iconNeutral' : 'h-3 fill-iconBrand'
+  }),
+  kind: (value: string) => value === 'internal' ? ({
+    className: 'w-4 ml-2',
+    tooltip: 'Internal span',
+    iconName: 'function',
+    iconType: 'regular' as const,
+    iconClass: 'h-3 w-3'
+  }) : null,
+  'db.system': (value: string) => ({
+    className: 'w-4 ml-2',
+    tooltip: value,
+    iconName: 'database',
+    iconType: 'regular' as const,
+    iconClass: 'h-3 w-3 fill-iconNeutral'
+  })
+} as const;
+
+// Optimized icon renderer with caching
+export const createCachedIconRenderer = () => {
+  const cache = new Map<string, TemplateResult>();
+  
+  return (field: string, value: string): TemplateResult | null => {
+    const cacheKey = `${field}:${value}`;
+    
+    // Check cache first
+    if (cache.has(cacheKey)) {
+      return cache.get(cacheKey)!;
+    }
+    
+    // Get configuration
+    const configFn = SUMMARY_ICON_CONFIGS[field as keyof typeof SUMMARY_ICON_CONFIGS];
+    if (!configFn) {
+      cache.set(cacheKey, null as any);
+      return null;
+    }
+    
+    const config = configFn(value);
+    if (!config) {
+      cache.set(cacheKey, null as any);
+      return null;
+    }
+    
+    // Render icon
+    const result = renderIconWithTooltip(
+      config.className,
+      config.tooltip,
+      faSprite(config.iconName, config.iconType, config.iconClass)
+    );
+    
+    // Bounded cache - prevent memory leaks
+    if (cache.size >= 512) {
+      const firstKey = cache.keys().next().value;
+      cache.delete(firstKey);
+    }
+    
+    cache.set(cacheKey, result);
+    return result;
+  };
+};
 
 export const generateId = (): string => Math.random().toString(36).substring(2, 15);
 
@@ -167,3 +270,9 @@ export const calculateAutoBinWidth = (durationMs: number) => {
     return 24 * 60 * 60 * 1000;
   }
 };
+
+// Set of weak text styles for O(1) lookup
+export const WEAK_TEXT_STYLES = new Set(['text-weak', 'text-textWeak']);
+
+// Pre-compiled regex for performance
+export const RIGHT_PREFIX_REGEX = /^right-/;
