@@ -143,3 +143,26 @@ export const getStyleClass = (style: string): string => {
   if (style.startsWith('right-')) return style.substring(6);
   return STYLE_MAPPINGS[style as keyof typeof STYLE_MAPPINGS] || 'badge-neutral';
 };
+
+export const calculateAutoBinWidth = (durationMs: number) => {
+  const seconds = durationMs / 1000;
+  const minutes = seconds / 60;
+  const hours = minutes / 60;
+  const days = hours / 24;
+
+  if (hours <= 1) {
+    return 30 * 1000;
+  } else if (hours <= 6) {
+    return 60 * 1000;
+  } else if (hours <= 14) {
+    return 5 * 60_000;
+  } else if (hours <= 48) {
+    return 10 * 60_000;
+  } else if (days < 7) {
+    return 60 * 60 * 1000;
+  } else if (days < 30) {
+    return 6 * 60 * 60 * 1000;
+  } else {
+    return 24 * 60 * 60 * 1000;
+  }
+};

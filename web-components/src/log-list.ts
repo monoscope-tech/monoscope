@@ -24,6 +24,7 @@ import {
   calculateColumnWidth,
   parseSummaryElement,
   unescapeJsonString,
+  calculateAutoBinWidth,
 } from './log-list-utils';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 
@@ -606,21 +607,22 @@ export class LogList extends LitElement {
             tree.forEach((t) => (t.isNew = true));
 
             const container = this.logsContainer;
-            
+
             if (container) {
               // Read all scroll properties in one go
               const scrollMetrics = {
                 scrollTop: container.scrollTop,
                 clientHeight: container.clientHeight,
-                scrollHeight: container.scrollHeight
+                scrollHeight: container.scrollHeight,
               };
-              
+
               const scrolledToBottom = scrollMetrics.scrollTop + scrollMetrics.clientHeight >= scrollMetrics.scrollHeight - 1;
-              
+
               if (scrolledToBottom) this.shouldScrollToBottom = true;
 
               const shouldBuffer =
-                this.isLiveStreaming && ((scrollMetrics.scrollTop > 30 && !this.flipDirection) || (!scrolledToBottom && this.flipDirection));
+                this.isLiveStreaming &&
+                ((scrollMetrics.scrollTop > 30 && !this.flipDirection) || (!scrolledToBottom && this.flipDirection));
 
               if (shouldBuffer) {
                 this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
@@ -700,17 +702,17 @@ export class LogList extends LitElement {
     // Use refs when available, fallback to querySelector
     const sideView = this.logDetailsContainer || (document.querySelector('#log_details_container')! as HTMLElement);
     const resizerWrapper = this.resizerWrapper || document.querySelector('#resizer-details_width-wrapper');
-    
+
     // Batch DOM reads and writes
     requestAnimationFrame(() => {
       const width = sideView.offsetWidth;
       this.shouldScrollToBottom = false;
-      
+
       if (width < 50) {
         sideView.style.width = `550px`;
         updateUrlState('details_width', '550');
       }
-      
+
       // Always show the resizer when a log row is clicked
       if (resizerWrapper) {
         resizerWrapper.classList.remove('hidden', 'opacity-0', 'pointer-events-none');
@@ -782,6 +784,12 @@ export class LogList extends LitElement {
     fTarget = fTarget.type === 'fetchRecent' || fTarget.type === 'loadMore' ? (this.virtualListItems[first + 1] as EventLine) : fTarget;
     lTarget = lTarget.type === 'fetchRecent' || lTarget.type === 'loadMore' ? (this.virtualListItems[last - 1] as EventLine) : lTarget;
 
+    const xAxis = this.barChart.getModel().getComponent('xAxis', 0);
+    const xAxisData = xAxis.axis.scale;
+    const minValue = xAxisData.getExtent()[0];
+    const maxValue = xAxisData.getExtent()[1];
+    const timDiff = maxValue - minValue;
+
     const endTime = lookupVecValue(fTarget.data, this.colIdxMap, 'timestamp');
     const startTimeRaw = lookupVecValue(lTarget.data, this.colIdxMap, 'timestamp');
 
@@ -795,7 +803,7 @@ export class LogList extends LitElement {
       end = v;
     }
 
-    const MIN_RANGE = 30 * 1000; // 30 s
+    let MIN_RANGE = calculateAutoBinWidth(timDiff);
 
     if (end - startTime < MIN_RANGE) {
       startTime = end - MIN_RANGE;
