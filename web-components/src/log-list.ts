@@ -1156,17 +1156,17 @@ export class LogList extends LitElement {
         
         const { field, style, value } = p;
         
-        // Fast switch for icon fields
-        switch (field) {
-          case 'request_type':
-          case 'kind':
-          case 'db.system': {
-            const icon = renderIcon(field, value);
-            if (icon) {
-              result.push(icon);
-              continue;
-            }
-            break;
+        // Skip rendering 'kind=database' as text since db.system icon will be shown
+        if (field === 'kind' && value === 'database') {
+          continue;
+        }
+        
+        // Check for icon fields first
+        if (field === 'request_type' || field === 'kind' || field === 'db.system') {
+          const icon = renderIcon(field, value);
+          if (icon) {
+            result.push(icon);
+            continue;
           }
         }
         
