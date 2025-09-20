@@ -184,7 +184,7 @@
   --color-warning-content: rgb(143 108 26);
   --color-error: rgba(255 74 74 / 0.05);
   --color-error-content: rgb(199 58 58);
-  --radius-selector: 0.5rem;
+  --radius-selector: 0.4rem;
   --radius-field: 0.4rem;
   --radius-box: 1rem;
   --size-selector: 0.25rem;
@@ -220,7 +220,7 @@
   --color-warning-content: rgb(224 190 112);
   --color-error: rgba(255 156 156 / 0.08);
   --color-error-content: rgb(255 156 156);
-  --radius-selector: 0.5rem;
+  --radius-selector: 0.3rem;
   --radius-field: 0.4rem;
   --radius-box: 1rem;
   --size-selector: 0.25rem;
@@ -1067,13 +1067,6 @@ code, pre, .code, .monospace {
     display: none;
   }
 
-  /* TODO: check if this should be deleted */
-
-  .CodeMirror {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 16px;
-    @apply bg-fillWeak;
-  }
 
   .collapsed .tree-children-count {
     display: inline !important;

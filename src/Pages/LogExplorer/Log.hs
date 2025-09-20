@@ -100,7 +100,11 @@ renderFacets facetSummary = do
         [ ("level", "Log Level", levelColorFn)
         , ("kind", "Kind", const "")
         , ("name", "Operation Name", const "")
-        , ("status_code", "Status Code", statusColorFn)
+        , ("status_code", "Status Code", \val -> case val of
+            "OK" -> "bg-fillSuccess-strong"
+            "ERROR" -> "bg-fillError-strong"
+            "UNSET" -> "bg-fillWeak"
+            _ -> "bg-fillStrong")
         , ("resource___service___name", "Service", const "")
         , ("resource___service___version", "Service Version", const "")
         , ("attributes___http___request___method", "HTTP Method", methodColorFn)
@@ -123,6 +127,24 @@ renderFacets facetSummary = do
             , ("attributes___url___fragment", "URL Fragment", const "")
             , ("attributes___url___query", "URL Query", const "")
             , ("attributes___user_agent___original", "User Agent", const "")
+            ]
+          )
+        ,
+          ( "Severity"
+          ,
+            [ ("severity___severity_text", "Severity Text", levelColorFn)
+            , ("severity___severity_number", "Severity Number", const "")
+            , ("status_message", "Status Message", const "")
+            ]
+          )
+        ,
+          ( "Resource"
+          ,
+            [ ("resource___service___instance___id", "Service Instance ID", const "")
+            , ("resource___service___namespace", "Service Namespace", const "")
+            , ("resource___telemetry___sdk___language", "SDK Language", const "")
+            , ("resource___telemetry___sdk___name", "SDK Name", const "")
+            , ("resource___telemetry___sdk___version", "SDK Version", const "")
             ]
           )
         ,
@@ -166,24 +188,6 @@ renderFacets facetSummary = do
             , ("attributes___exception___message", "Exception Message", const "")
             ]
           )
-        ,
-          ( "Resource"
-          ,
-            [ ("resource___service___instance___id", "Service Instance ID", const "")
-            , ("resource___service___namespace", "Service Namespace", const "")
-            , ("resource___telemetry___sdk___language", "SDK Language", const "")
-            , ("resource___telemetry___sdk___name", "SDK Name", const "")
-            , ("resource___telemetry___sdk___version", "SDK Version", const "")
-            ]
-          )
-        ,
-          ( "Severity"
-          ,
-            [ ("severity___severity_text", "Severity Text", levelColorFn)
-            , ("severity___severity_number", "Severity Number", const "")
-            , ("status_message", "Status Message", const "")
-            ]
-          )
         ]
 
   -- Add JS for filtering with checkbox sync
@@ -224,110 +228,113 @@ renderFacets facetSummary = do
   forM_ facetGroups $ \(groupName, facetDisplays) -> renderFacetSection groupName facetDisplays facetMap True
   where
     renderFacetSection :: Text -> [(Text, Text, Text -> Text)] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
-    renderFacetSection sectionName facetDisplays facetMap collapsed = div_ [class_ "facet-section-group"] do
-      label_ [class_ "p-3 bg-fillWeak rounded-lg cursor-pointer flex gap-3 items-center peer"] do
-        input_ $ [class_ "hidden peer", type_ "checkbox", name_ $ "section-" <> sectionName] ++ [checked_ | collapsed]
-        span_ [class_ "peer-checked:-rotate-90 transition-transform duration-150 flex"] $ faSprite_ "chevron-down" "regular" "w-3 h-3"
-        toHtml sectionName
-      div_ [class_ "xmax-h-auto divide-y peer-has-checked:max-h-0 peer-has-checked:overflow-hidden transition-[max-height] duration-150"] $ forM_ facetDisplays \(key, displayName, colorFn) ->
-        whenJust (HM.lookup key facetMap) \values ->
-          div_ [class_ "facet-section flex flex-col transition-all duration-150 rounded-lg group"] do
-            div_ [class_ "p-3 flex justify-between items-center cursor-pointer peer"] do
-              label_ [class_ "gap-3 flex items-center cursor-pointer"] do
-                -- Check if this facet's checkboxes should be unchecked by default (first 4 in Common Filters)
-                let commonFilterKeys = ["level", "kind", "name", "status_code"]
-                    shouldBeUnchecked = sectionName == "Common Filters" && key `elem` commonFilterKeys
-                input_ $ [class_ "hidden peer", type_ "checkbox", name_ $ "group-" <> key] ++ [checked_ | not shouldBeUnchecked]
-                span_ [class_ "peer-checked:-rotate-90 transition-transform duration-150 flex"] $ faSprite_ "chevron-down" "regular" "w-3 h-3"
-                let dotKey = T.replace "___" "." key
-                span_ [term "data-tippy-content" dotKey] (toHtml displayName)
-              -- Add vertical ellipsis dropdown menu
-              div_ [class_ "dropdown dropdown-end"] do
-                a_ [tabindex_ "0", class_ "cursor-pointer"] do
-                  faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
-                ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow bg-base-100 rounded-box w-52"] do
-                  li_
-                    $ a_
-                      [ term "data-field" (T.replace "___" "." key)
-                      , class_ "flex gap-2 items-center"
-                      , [__|
-                       init 
-                          set cols to params().cols or '' then 
-                          set colsX to cols.split(',') then
-                          if colsX contains @data-field
-                            set innerHTML of first <span/> in me to 'Remove column'
-                          end
-                        on click
-                          call #resultTable.toggleColumnOnTable(@data-field) then
-                          set cols to params().cols or '' then
-                          set colsX to cols.split(',')
-                          if colsX contains @data-field
-                            set innerHTML of first <span/> in me to 'Remove column'
-                          else
-                            set innerHTML of first <span/> in me to 'Add as table column'
-                          end
-                        |]
-                      ]
-                      do
-                        faSprite_ "table-column" "regular" "w-4 h-4 text-iconNeutral"
-                        span_ [] "Add as table column"
-                  li_
-                    $ a_
-                      [ term "data-field" (T.replace "___" "." key)
-                      , term "data-key" key
-                      , class_ "flex gap-2 items-center"
-                      , [__|
-                        init call window.updateGroupByButtonText(event, me) end
-                        on refreshItem call window.updateGroupByButtonText(event, me) end
+    renderFacetSection sectionName facetDisplays facetMap collapsed = do
+      -- Use div with group for section
+      div_ [class_ "facet-section-group group/section block"] do
+        input_ $ [type_ "checkbox", class_ "hidden peer", id_ $ "toggle-" <> T.replace " " "-" sectionName] ++ [checked_ | not collapsed]
+        -- Section header - use label to toggle checkbox
+        label_ [class_ "p-2 bg-fillWeak rounded-lg cursor-pointer flex gap-2 items-center peer-checked:[&>svg]:rotate-0", Lucid.for_ $ "toggle-" <> T.replace " " "-" sectionName] do
+          faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform -rotate-90"
+          span_ [class_ "font-medium text-sm"] (toHtml sectionName)
+        
+        -- Facets container
+        div_ [class_ "facets-container mt-1 max-h-0 overflow-hidden peer-checked:max-h-[2000px] transition-[max-height] duration-300"] do
+            forM_ (zip [0..] facetDisplays) \(idx, (key, displayName, colorFn)) ->
+              whenJust (HM.lookup key facetMap) \values -> do
+                let shouldBeExpanded = sectionName == "Common Filters" && idx < 4
+                label_ [class_ "facet-section border-t border-strokeWeak group/facet block"] do
+                  input_ $ [type_ "checkbox", class_ "hidden", id_ $ "facet-toggle-" <> key] ++ [checked_ | shouldBeExpanded]
+                  -- Facet header with actions
+                  div_ [class_ "flex items-center justify-between hover:bg-fillWeak rounded"] do
+                    div_ [class_ "p-2 flex items-center gap-2 cursor-pointer flex-1"] do
+                      faSprite_ "chevron-down" "regular" "w-2.5 h-2.5 transition-transform group-has-[:checked]/facet:rotate-0 -rotate-90"
+                      span_ [class_ "text-sm", term "data-tippy-content" (T.replace "___" "." key)] (toHtml displayName)
+                    
+                    -- Dropdown menu for actions  
+                    div_ [class_ "dropdown dropdown-end", onclick_ "event.stopPropagation()"] do
+                      a_ [tabindex_ "0", class_ "cursor-pointer p-2 hover:bg-fillWeak rounded"] do
+                        faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
+                      ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow bg-base-100 rounded-box w-52"] do
+                        li_
+                          $ a_
+                            [ term "data-field" (T.replace "___" "." key)
+                            , class_ "flex gap-2 items-center"
+                            , [__|
+                             init 
+                                set cols to params().cols or '' then 
+                                set colsX to cols.split(',') then
+                                if colsX contains @data-field
+                                  set innerHTML of first <span/> in me to 'Remove column'
+                                end
+                              on click
+                                call #resultTable.toggleColumnOnTable(@data-field) then
+                                set cols to params().cols or '' then
+                                set colsX to cols.split(',')
+                                if colsX contains @data-field
+                                  set innerHTML of first <span/> in me to 'Remove column'
+                                else
+                                  set innerHTML of first <span/> in me to 'Add as table column'
+                                end
+                              |]
+                            ]
+                            do
+                              faSprite_ "table-column" "regular" "w-4 h-4 text-iconNeutral"
+                              span_ [] "Add as table column"
+                        li_
+                          $ a_
+                            [ term "data-field" (T.replace "___" "." key)
+                            , term "data-key" key
+                            , class_ "flex gap-2 items-center"
+                            , [__|
+                              init call window.updateGroupByButtonText(event, me) end
+                              on refreshItem call window.updateGroupByButtonText(event, me) end
 
-                        on click
-                          call document.querySelector('query-builder').toggleGroupByField(@data-field) then
-                          trigger refreshItem on me
-                        end
-                    |]
-                      ]
-                      do
-                        faSprite_ "group-by" "regular" "w-4 h-4 text-iconNeutral"
-                        span_ [] "Group by"
+                              on click
+                                call document.querySelector('query-builder').toggleGroupByField(@data-field) then
+                                trigger refreshItem on me
+                              end
+                          |]
+                            ]
+                            do
+                              faSprite_ "group-by" "regular" "w-4 h-4 text-iconNeutral"
+                              span_ [] "Group by"
 
-            div_ [class_ "pl-5 xmax-h-auto peer-has-checked:max-h-0 peer-has-checked:overflow-hidden transition-[max-height] duration-150"] do
-              -- Prepare value lists and add toggle when needed
-              let valuesWithIndices = zip [0 ..] values
-                  (visibleValues, hiddenValues) = splitAt 5 valuesWithIndices
-                  hiddenCount = length hiddenValues
+                  -- Render facet values (uses group-has-checked to show/hide)
+                  div_ [class_ "facet-values pl-7 pr-2 mb-1 space-y-1 max-h-0 overflow-hidden group-has-[:checked]/facet:max-h-[1000px] transition-[max-height] duration-200"] do
+                    let valuesWithIndices = zip [0 ..] values
+                        (visibleValues, hiddenValues) = splitAt 5 valuesWithIndices
+                        hiddenCount = length hiddenValues
+                        -- Helper function to render a facet value item
+                        renderFacetValue (FacetValue val count) =
+                          label_ [class_ "facet-item flex items-center justify-between py-0.5 px-1 hover:bg-fillWeak rounded cursor-pointer"] do
+                            div_ [class_ "flex items-center gap-2 min-w-0 flex-1"] do
+                              input_
+                                [ type_ "checkbox"
+                                , class_ "checkbox checkbox-xs"
+                                , name_ key
+                                , onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
+                                , term "data-tippy-content" (T.replace "___" "." key <> " == \"" <> val <> "\"")
+                                , term "data-field" (T.replace "___" "." key)
+                                , term "data-value" val
+                                ]
 
-                  -- Helper function to render a facet value item
-                  renderFacetValue (FacetValue val count) =
-                    div_ [class_ "facet-item flex justify-between items-center hover:bg-fillWeak transition-colors duration-150 rounded-md p-1 last:pb-3"] do
-                      label_ [class_ "flex gap-3 items-center cursor-pointer flex-1 min-w-0 overflow-hidden"] do
-                        input_
-                          [ type_ "checkbox"
-                          , class_ "checkbox checkbox-sm"
-                          , name_ key
-                          , onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
-                          , term "data-tippy-content" (T.replace "___" "." key <> " == \"" <> val <> "\"")
-                          , term "data-field" (T.replace "___" "." key)
-                          , term "data-value" val
-                          ]
-
-                        span_ [class_ "facet-value truncate", term "data-tippy-content" val] do
-                          let colorClass = colorFn val
-                          unless (T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-1 h-5 rounded-sm mr-1.5"] " "
-                          toHtml val
-                      span_ [class_ "facet-count text-textWeak ml-1"] $ toHtml $ prettyPrintCount count
-
-              div_ [class_ "values-container"] do
-                forM_ visibleValues \(_, value) -> renderFacetValue value
-                when (hiddenCount > 0) do
-                  input_ [type_ "checkbox", class_ "hidden peer/more", id_ $ "more-toggle-" <> key]
-                  div_ [class_ "hidden peer-checked/more:block"]
-                    $ forM_ hiddenValues \(_, value) -> renderFacetValue value
-
-                  label_ [class_ "text-textBrand px-3 py-3 cursor-pointer hover:underline peer-checked/more:hidden flex items-center gap-1", Lucid.for_ $ "more-toggle-" <> key] do
-                    toHtml $ "+ More (" <> prettyPrintCount hiddenCount <> ")"
-
-                  label_ [class_ "text-textBrand px-3 py-3 cursor-pointer hover:underline hidden peer-checked/more:flex items-center gap-1", Lucid.for_ $ "more-toggle-" <> key] do
-                    toHtml $ "- Less (" <> prettyPrintCount hiddenCount <> ")"
+                              let colorClass = colorFn val
+                              unless (T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-0.5 h-3 rounded-sm"] ""
+                              span_ [class_ "facet-value truncate text-xs", term "data-tippy-content" val] (toHtml val)
+                    
+                            span_ [class_ "facet-count text-xs text-textWeak shrink-0"] $ toHtml $ prettyPrintCount count
+                    -- Render visible values
+                    forM_ visibleValues \(_, value) -> renderFacetValue value
+                    
+                    -- Show more/less toggle for hidden values
+                    when (hiddenCount > 0) do
+                      let moreId = "more-" <> key
+                      input_ [type_ "checkbox", class_ "hidden peer/more", id_ moreId]
+                      label_ [class_ "text-textBrand text-xs px-1 py-0.5 cursor-pointer hover:underline", Lucid.for_ moreId] do
+                        span_ [class_ "peer-checked/more:hidden"] $ toHtml $ "+ More (" <> prettyPrintCount hiddenCount <> ")"
+                        span_ [class_ "hidden peer-checked/more:inline"] $ toHtml $ "- Less (" <> prettyPrintCount hiddenCount <> ")"
+                      
+                      div_ [class_ "hidden peer-checked/more:block space-y-1"] $ forM_ hiddenValues \(_, value) -> renderFacetValue value
 
 
 resizer_ :: Text -> Text -> Bool -> Html ()
@@ -998,34 +1005,6 @@ jsonTreeAuxillaryCode pid query = do
 
 |]
 
-
--- { id :: QueryMonitorId
--- , createdAt :: UTCTime
--- , updatedAt :: UTCTime
--- , projectId :: Projects.ProjectId
--- , checkIntervalMins :: Int
--- , alertThreshold :: Int
--- , warningThreshold :: Maybe Int
--- , logQuery :: Text
--- , logQueryAsSql :: Text
--- , lastEvaluated :: UTCTime
--- , warningLastTriggered :: Maybe UTCTime
--- , alertLastTriggered :: Maybe UTCTime
--- , triggerLessThan :: Bool
--- , thresholdSustainedForMins :: Int
--- , alertConfig :: MonitorAlertConfig
--- , deactivatedAt :: Maybe UTCTime
--- , deletedAt :: Maybe UTCTime
--- }
-
---  { title :: Text
---   , severity :: Text
---   , subject :: Text
---   , message :: Text
---   , emails :: V.Vector (CI.CI Text)
---   , emailAll :: Bool
---   , slackChannels :: V.Vector Text
---   }
 
 -- | Render alert configuration form for creating log-based alerts
 alertConfigurationForm_ :: Projects.ProjectId -> Maybe Monitors.QueryMonitor -> Html ()

@@ -38,6 +38,7 @@ export class SessionReplay extends LitElement {
   private containerHeight = 550;
   private iframeWidth = 1117;
   private trickPlayer: Replayer | null = null;
+  private trickPlayerCleanupTimer: number | null = null;
   private observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
       if (mutation.type === 'attributes' && (mutation.attributeName === 'width' || mutation.attributeName === 'height')) {
@@ -53,6 +54,7 @@ export class SessionReplay extends LitElement {
 
   private iframeHeight = 927;
   private timer: number | null = null;
+  private resizeObserver: ResizeObserver | null = null;
   private consoleTypesCounts = { error: 0, warn: 0, info: 0 };
   private metaData: { startTime: number; endTime: number; totalTime: number } = { startTime: 0, endTime: 0, totalTime: 0 };
   constructor() {
@@ -95,6 +97,18 @@ export class SessionReplay extends LitElement {
       this.fetchNewSessionData(sessionId);
       updateUrlState('session_replay', sessionId);
     });
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    // Clean up global listeners and resources
+    this.observer?.disconnect();
+    this.resizeObserver?.disconnect();
+    this.stopTimer();
+    this.player?.destroy();
+    this.trickPlayer?.destroy();
+    // Note: We cannot remove document/window listeners added in constructor
+    // as they are global and might be used by other instances
   }
 
   handleConsoleEvents(event: eventWithTime) {
@@ -229,7 +243,7 @@ export class SessionReplay extends LitElement {
       if (event.type === EventType.Plugin && event.data.plugin === 'rrweb/console@1') {
         const level = (event as ConsoleEvent).data.payload.level;
         this.consoleTypesCounts[level] += 1;
-        this.consoleEvents = [...this.consoleEvents, event as ConsoleEvent];
+        this.consoleEvents.push(event as ConsoleEvent);
       }
     });
 
@@ -240,6 +254,26 @@ export class SessionReplay extends LitElement {
     this.play();
     this.observer.disconnect();
     this.observer.observe(this.player.iframe, { attributes: true, attributeFilter: ['width', 'height'] });
+
+    // Create ResizeObserver only when player is active
+    const container = this.renderRoot.querySelector<HTMLDivElement>('#replayerOuterContainer');
+    if (container && !this.resizeObserver) {
+      this.resizeObserver = new ResizeObserver((entries) => {
+        this.debounce(() => {
+          for (let entry of entries) {
+            const { width, height } = entry.contentRect;
+            const comp = getComputedStyle(this.replayerOuterContainer);
+            const mContainer = Number(comp.width.replace('px', ''));
+            const mHeight = Number(comp.height.replace('px', ''));
+            this.containerWidth = mContainer - this.activityWidth;
+            this.containerHeight = mHeight - 110;
+
+            this.updateScale();
+          }
+        });
+      });
+      this.resizeObserver.observe(container);
+    }
   }
 
   fetchNewSessionData(sessionId: string) {
@@ -264,30 +298,10 @@ export class SessionReplay extends LitElement {
   protected firstUpdated(_changedProperties: PropertyValues): void {
     const mContainer = Number(getComputedStyle(this.replayerOuterContainer).width.replace('px', ''));
     this.containerWidth = mContainer - this.activityWidth;
-    const events = JSON.parse(localStorage.getItem('qq') || '[]').events;
-    this.initiatePlayer(events);
 
-    const container = this.renderRoot.querySelector<HTMLDivElement>('#replayerOuterContainer');
-
-    if (container) {
-      const resizeObserver = new ResizeObserver((entries) => {
-        this.debounce(() => {
-          for (let entry of entries) {
-            const { width, height } = entry.contentRect;
-            const comp = getComputedStyle(this.replayerOuterContainer);
-            const mContainer = Number(comp.width.replace('px', ''));
-            const mHeight = Number(comp.height.replace('px', ''));
-            this.containerWidth = mContainer - this.activityWidth;
-            this.containerHeight = mHeight - 110;
-
-            this.updateScale();
-          }
-        });
-      });
-
-      // Start observing
-      resizeObserver.observe(container);
-    }
+    // TODO: Remove auto-initialization to improve performance
+    // const events = JSON.parse(localStorage.getItem('qq') || '[]').events;
+    // this.initiatePlayer(events);
   }
 
   handleTimeSeek(e: any) {
@@ -299,6 +313,12 @@ export class SessionReplay extends LitElement {
   }
 
   handleTrickPlay(e: any) {
+    // Clear any pending cleanup timer
+    if (this.trickPlayerCleanupTimer) {
+      clearTimeout(this.trickPlayerCleanupTimer);
+      this.trickPlayerCleanupTimer = null;
+    }
+
     if (!this.trickPlayer) {
       this.trickPlayer = new Replayer(this.events, { root: document.querySelector('#trickPlayerContainer')! });
     }
@@ -323,6 +343,8 @@ export class SessionReplay extends LitElement {
     this.stopTimer();
     this.consoleEvents = [];
     this.player?.destroy();
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
   }
 
   displayConsoleEvent = (event: ConsoleEvent) => {
@@ -427,7 +449,9 @@ export class SessionReplay extends LitElement {
                   (s) =>
                     html`<li>
                       <button
-                        class="px-4 rounded py-1 hover:bg-fillWeak ${this.playSpeed == s ? 'bg-fillBrand-strong text-white' : ''}"
+                        class="px-4 rounded py-1 cursor-pointer hover:bg-fillWeak ${this.playSpeed == s
+                          ? 'bg-fillBrand-strong text-white'
+                          : ''}"
                         @click=${() => (this.playSpeed = s)}
                       >
                         ${s}x
@@ -474,16 +498,16 @@ export class SessionReplay extends LitElement {
               ${this.isLoading
                 ? html`<div class="italic text-7xl font-medium text-gray-100">Loading...</div>`
                 : this.finished
-                ? html`
-                    <button @click=${() => this.goTo(0)} class="cursor-pointer">
-                      ${faSprite_('replay', 'regular', 'w-14 h-14 text-gray-100')}
-                    </button>
-                  `
-                : html`
-                    <button @click=${() => (this.paused = false)} class="cursor-pointer">
-                      ${faSprite_('p-play', 'regular', 'w-14 h-14 text-gray-100')}
-                    </button>
-                  `}
+                  ? html`
+                      <button @click=${() => this.goTo(0)} class="cursor-pointer">
+                        ${faSprite_('replay', 'regular', 'w-14 h-14 text-gray-100')}
+                      </button>
+                    `
+                  : html`
+                      <button @click=${() => (this.paused = false)} class="cursor-pointer">
+                        ${faSprite_('p-play', 'regular', 'w-14 h-14 text-gray-100')}
+                      </button>
+                    `}
             </div>
           </div>
           <div class="flex flex-col items-center w-full py-4 h-32">
@@ -494,6 +518,14 @@ export class SessionReplay extends LitElement {
               @mousemove=${this.handleTrickPlay}
               @mouseleave=${() => {
                 this.trickPlayer?.pause();
+                // Destroy trick player after use to free memory
+                this.trickPlayerCleanupTimer = window.setTimeout(() => {
+                  if (this.trickPlayer) {
+                    this.trickPlayer.destroy();
+                    this.trickPlayer = null;
+                  }
+                  this.trickPlayerCleanupTimer = null;
+                }, 1000);
               }}
               class="relative progress-container h-1.5 cursor-pointer rounded group bg-gray-200"
               style="width:calc(100% - 32px)"
@@ -601,7 +633,7 @@ export class SessionReplay extends LitElement {
           <div class="flex items-center h-10 bg-fillWeak border-t">
             <button
               @click=${() => (this.syncScrolling = !this.syncScrolling)}
-              class="text-xs font-semibold h-full px-2 hover:bg-fillWeaker ${this.syncScrolling ? 'text-textBrand' : ''}"
+              class="text-xs font-semibold h-full px-2 cursor-pointer hover:bg-fillWeaker ${this.syncScrolling ? 'text-textBrand' : ''}"
             >
               Sync scrolling
             </button>

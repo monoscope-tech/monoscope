@@ -529,6 +529,39 @@ integrationsPage pid apikey =
                     , class_ "prose-a:!text-textBrand prose-a:!underline"
                     ]
                     ""
+    
+    -- Highlight.js CDN for syntax highlighting
+    link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css"]
+    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"] ("" :: Text)
+    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"] ("" :: Text)
+    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"] ("" :: Text)
+    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/go.min.js"] ("" :: Text)
+    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/java.min.js"] ("" :: Text)
+    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/csharp.min.js"] ("" :: Text)
+    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/php.min.js"] ("" :: Text)
+    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/elixir.min.js"] ("" :: Text)
+    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"] ("" :: Text)
+    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/shell.min.js"] ("" :: Text)
+    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/yaml.min.js"] ("" :: Text)
+    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/json.min.js"] ("" :: Text)
+    
+    -- Initialize highlight.js after HTMX loads content
+    script_
+      [text|
+        // Initialize highlight.js
+        hljs.highlightAll();
+        
+        // Re-highlight after HTMX swaps content
+        document.body.addEventListener('htmx:afterSwap', function(event) {
+          // Only highlight content in the integration documentation area
+          const target = event.detail.target;
+          if (target && (target.id.startsWith('fw-content-') || target.classList.contains('lang-guide'))) {
+            target.querySelectorAll('pre code').forEach((block) => {
+              hljs.highlightElement(block);
+            });
+          }
+        });
+      |]
 
 
 languageItem :: Projects.ProjectId -> Text -> Text -> Html ()
