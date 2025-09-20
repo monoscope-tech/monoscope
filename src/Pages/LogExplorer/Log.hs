@@ -210,11 +210,15 @@ renderFacets facetSummary = do
       // Need to get the query directly from the monaco editor
       const query = filterEl.editor ? filterEl.editor.getValue() : "";
       
-      document.querySelectorAll('input[type="checkbox"][data-field][data-value]').forEach(cb => {
-        const field = cb.getAttribute('data-field');
-        const value = cb.getAttribute('data-value');
-        const fragment = field + ' == "' + value + '"';
-        cb.checked = query.includes(fragment);
+      // Batch DOM updates using requestAnimationFrame
+      requestAnimationFrame(() => {
+        const checkboxes = document.querySelectorAll('input[type="checkbox"][data-field][data-value]');
+        checkboxes.forEach(cb => {
+          const field = cb.getAttribute('data-field');
+          const value = cb.getAttribute('data-value');
+          const fragment = field + ' == "' + value + '"';
+          cb.checked = query.includes(fragment);
+        });
       });
     }
     
@@ -350,19 +354,27 @@ resizer_ targetId urlParam increasingDirection =
     , term "data-url-param" urlParam
     , [__|
         js 
+          let rafId = null;
+          let currentWidth = null;
+          
           function applyMove(el, newWidth){
-            requestAnimationFrame(()=>el.style.width=newWidth+'px')
+            currentWidth = newWidth;
+            if (rafId) cancelAnimationFrame(rafId);
+            rafId = requestAnimationFrame(() => {
+              el.style.width = newWidth + 'px';
+              rafId = null;
+            });
           }
           return {applyMove}
         end
         on mousedown
-          log 'on mouse down' then
           add .select-none to body then
           set :startX to event.clientX then
           set :target to #{@data-resize-target} then
           set :startWidth to the :target's offsetWidth then
           set :urlParam to @data-url-param then
-          set :isRightPanel to (@data-resize-direction == 'decrease')
+          set :isRightPanel to (@data-resize-direction == 'decrease') then
+          set :lastWidth to :startWidth
         end
         
         on mousemove from #facets_and_loglist
@@ -372,13 +384,14 @@ resizer_ targetId urlParam increasingDirection =
                 then set newWidth to :startWidth - deltaX
                 else set newWidth to :startWidth + deltaX end
                 if newWidth < 0 set newWidth to 0 end
+                set :lastWidth to newWidth then
                 call applyMove(:target, newWidth)
             end 
         end
         
         on mouseup from #facets_and_loglist
           if :startX is not null
-            set finalWidth to the :target's offsetWidth then
+            set finalWidth to :lastWidth then
             remove .select-none from body then
 
             call updateUrlState(:urlParam, finalWidth) then

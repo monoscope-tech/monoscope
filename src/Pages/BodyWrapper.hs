@@ -169,12 +169,16 @@ bodyWrapper bcfg child = do
             const tabs = nav.querySelectorAll(".a-tab" + exCls);
             const contents = nav.querySelectorAll(".a-tab-content" + exClsC);
             const targetElement = document.querySelector(target);
-            tabs.forEach(tab => {
-              tab.classList.remove(activeClass);
-            })
-            me.classList.add(activeClass);
-            contents.forEach(content => content.classList.add("hidden"));
-            targetElement.classList.remove("hidden");
+            
+            // Batch DOM updates using requestAnimationFrame
+            requestAnimationFrame(() => {
+              tabs.forEach(tab => {
+                tab.classList.remove(activeClass);
+              });
+              me.classList.add(activeClass);
+              contents.forEach(content => content.classList.add("hidden"));
+              targetElement.classList.remove("hidden");
+            });
         }
 
         function setCookie(cname, cvalue, exdays = 365) {
