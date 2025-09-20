@@ -411,7 +411,7 @@ bodyWrapper bcfg child = do
                   if (typeof posthog !== 'undefined' && posthog && posthog.people && posthog.people.set_once) {
                     posthog.people.set_once({email: ${email}, name: "${name}", projectId: "${pidT}", projectTitle: "${pTitle}"});
                   }
-                  echarts.connect('default');
+                  // echarts.connect('default');
                 });
       |]
       -- Initialize Monoscope only when telemetryProjectId is available

@@ -46,9 +46,17 @@ const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt
 
 const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) => {
   if (!data) return opt;
+  
+  // Avoid unnecessary updates if data structure hasn't changed
   const cols = data[0]?.slice(1);
-  opt.series = cols?.map((n: any, i: number) => createSeriesConfig(widgetData, n, i, opt));
-  opt.legend.data = cols;
+  const currentLegendData = opt.legend?.data;
+  
+  // Only update if legend data has actually changed
+  if (JSON.stringify(cols) !== JSON.stringify(currentLegendData)) {
+    opt.series = cols?.map((n: any, i: number) => createSeriesConfig(widgetData, n, i, opt));
+    opt.legend.data = cols;
+  }
+  
   return opt;
 };
 
@@ -56,12 +64,15 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   if (!shouldFetch) return;
 
   const { query, querySQL, pid, chartId, summarizeBy, summarizeByPrefix } = widgetData;
-  const loader = $(`${chartId}_loader`);
-  // Show loader before fetch
-  if (loader) loader.classList.remove('hidden');
-
-  const borderedItem = $(`${chartId}_bordered`);
-  if (borderedItem) borderedItem.classList.add('spotlight-border');
+  
+  // Batch DOM updates before fetch
+  requestAnimationFrame(() => {
+    const loader = $(`${chartId}_loader`);
+    const borderedItem = $(`${chartId}_bordered`);
+    
+    if (loader) loader.classList.remove('hidden');
+    if (borderedItem) borderedItem.classList.add('spotlight-border');
+  });
 
   try {
     const params = new URLSearchParams(window.location.search);
@@ -124,9 +135,14 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   } catch (e) {
     console.error('Failed to fetch new data:', e);
   } finally {
-    // Hide loader after fetch completes (success or failure)
-    if (loader) loader.classList.add('hidden');
-    if (borderedItem) borderedItem.classList.remove('spotlight-border');
+    // Batch DOM updates after fetch completes
+    requestAnimationFrame(() => {
+      const loader = $(`${chartId}_loader`);
+      const borderedItem = $(`${chartId}_bordered`);
+      
+      if (loader) loader.classList.add('hidden');
+      if (borderedItem) borderedItem.classList.remove('spotlight-border');
+    });
   }
 };
 
@@ -155,6 +171,40 @@ type WidGetData = {
   widgetType: string;
   queryAST: string;
   legendPosition?: string;
+};
+
+// Global resize queue to batch chart resize operations
+const resizeQueue = new Set<string>();
+let resizeFrameScheduled = false;
+
+const processResizeQueue = () => {
+  if (resizeQueue.size === 0) {
+    resizeFrameScheduled = false;
+    return;
+  }
+  
+  // Process all queued resizes in a single frame
+  resizeQueue.forEach(chartId => {
+    const chartEl = $(chartId);
+    if (chartEl) {
+      const chart = (window as any).echarts.getInstanceByDom(chartEl);
+      if (chart && !chart.isDisposed()) {
+        chart.resize();
+      }
+    }
+  });
+  
+  resizeQueue.clear();
+  resizeFrameScheduled = false;
+};
+
+const queueChartResize = (chartId: string) => {
+  resizeQueue.add(chartId);
+  
+  if (!resizeFrameScheduled) {
+    resizeFrameScheduled = true;
+    requestAnimationFrame(processResizeQueue);
+  }
 };
 
 const chartWidget = (widgetData: WidGetData) => {
@@ -223,7 +273,10 @@ const chartWidget = (widgetData: WidGetData) => {
   // Expose threshold functionality on chart element
   (chartEl as any).applyThresholds = (thresholds: Record<string, number>) => applyThresholds(chart, thresholds);
 
-  const resizeObserver = new ResizeObserver(() => requestAnimationFrame(() => (window as any).echarts.getInstanceByDom(chartEl).resize()));
+  // Use global resize queue to batch resize operations
+  const resizeObserver = new ResizeObserver(() => {
+    queueChartResize(chartId);
+  });
   if (chartEl) {
     resizeObserver.observe(chartEl);
   }
@@ -281,17 +334,15 @@ const chartWidget = (widgetData: WidGetData) => {
   });
 
   // Listen for theme changes
+  let themeChangeScheduled = false;
   const observer = new MutationObserver((mutations) => {
-    mutations.forEach((mutation) => {
-      if (mutation.type === 'attributes' && mutation.attributeName === 'data-theme') {
+    const themeChanged = mutations.some(m => m.type === 'attributes' && m.attributeName === 'data-theme');
+    
+    if (themeChanged && !themeChangeScheduled) {
+      themeChangeScheduled = true;
+      
+      requestAnimationFrame(() => {
         const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
-        const newTheme = isDarkMode ? 'dark' : widgetData.theme || 'default';
-        
-        // Dispose and reinitialize chart with new theme
-        chart.dispose();
-        const newChart = (window as any).echarts.init(chartEl, newTheme);
-        newChart.group = 'default';
-        (window as any)[`${chartType}Chart`] = newChart;
         
         // Get CSS variable values from body (where theme is applied)
         const computedStyle = getComputedStyle(document.body);
@@ -300,6 +351,7 @@ const chartWidget = (widgetData: WidGetData) => {
         const tooltipTextColor = computedStyle.getPropertyValue('--color-textStrong').trim();
         const tooltipBorderColor = computedStyle.getPropertyValue('--color-borderWeak').trim();
         
+        // Update theme-related options
         if (textColor) {
           opt.legend = opt.legend || {};
           opt.legend.textStyle = opt.legend.textStyle || {};
@@ -314,10 +366,20 @@ const chartWidget = (widgetData: WidGetData) => {
         opt.tooltip.borderColor = tooltipBorderColor || (isDarkMode ? '#555' : '#ccc');
         opt.tooltip.borderWidth = 1;
         
-        // Restore the chart with current options and data
-        newChart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source));
-      }
-    });
+        // Update background style for series
+        if (opt.series?.[0]) {
+          opt.series.forEach((s: any) => {
+            if (s.backgroundStyle) {
+              s.backgroundStyle = isDarkMode ? DARK_BACKGROUND_STYLE : DEFAULT_BACKGROUND_STYLE;
+            }
+          });
+        }
+        
+        // Apply updated options without recreating the chart
+        chart.setOption(opt, false);
+        themeChangeScheduled = false;
+      });
+    }
   });
 
   observer.observe(document.body, {
@@ -374,25 +436,41 @@ function buildWidgetOrder(container: HTMLElement) {
   // Use :scope to select only direct children.
   const items = container.querySelectorAll(':scope > .grid-stack-item') as NodeListOf<HTMLElement & { gridstackNode: Record<string, any> }>;
   const order: Record<string, any> = {};
+  
+  // Batch read all layout properties first
+  const itemsData: Array<{el: HTMLElement, id: string, node: any, nestedGrid: HTMLElement | null}> = [];
+  
   items.forEach((el) => {
     if (!el.id || !el.id.endsWith('_widgetEl')) return;
     const widgetId = el.id.slice(0, -'_widgetEl'.length);
+    const nestedGrid = el.querySelector('.nested-grid') as HTMLElement | null;
+    
+    itemsData.push({
+      el,
+      id: widgetId,
+      node: el.gridstackNode,
+      nestedGrid
+    });
+  });
+  
+  // Now process the collected data without further DOM reads
+  itemsData.forEach(({id, node, nestedGrid}) => {
     const reorderItem: any = {
-      x: el.gridstackNode.x,
-      y: el.gridstackNode.y,
-      w: el.gridstackNode.w,
-      h: el.gridstackNode.h,
+      x: node.x,
+      y: node.y,
+      w: node.w,
+      h: node.h,
     };
-    // Check for a nested grid within this grid item.
-    const nestedGridContainer = el.querySelector('.nested-grid') as HTMLElement | null;
-    if (nestedGridContainer) {
-      const childOrder = buildWidgetOrder(nestedGridContainer);
+    
+    if (nestedGrid) {
+      const childOrder = buildWidgetOrder(nestedGrid);
       if (Object.keys(childOrder).length > 0) {
         reorderItem.children = childOrder;
       }
     }
-    order[widgetId] = reorderItem;
+    order[id] = reorderItem;
   });
+  
   return order;
 }
 
