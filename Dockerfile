@@ -23,6 +23,12 @@ COPY src ./src
 RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify && \
   cd web-components && NODE_ENV=production npx vite build --mode production --sourcemap false
 
+# Copy workbox config
+COPY workbox-config.js ./
+
+# Generate service worker after building assets
+RUN npx workbox generateSW workbox-config.js
+
 # Stage 2: Build Haskell application
 FROM haskell:9.10.2 AS haskell-builder
 
