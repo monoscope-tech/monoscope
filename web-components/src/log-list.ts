@@ -96,7 +96,7 @@ export class LogList extends LitElement {
 
   // Debounced functions
   private debouncedFetchData: any;
-  private debouncedUpdateChartMarkArea: any;
+  private debouncedUpdateChartMarkArea: ReturnType<typeof debounce>;
 
   // Bound functions for event listeners
   private boundHandleResize: any;
@@ -438,17 +438,11 @@ export class LogList extends LitElement {
   scrollToBottom() {
     // Use ref instead of DOM query
     if (this.logsContainer) {
-      // Batch scroll update in next frame to avoid forced reflow
+      // Batch all DOM operations in a single animation frame
       requestAnimationFrame(() => {
         if (this.logsContainer) {
-          // Read height first, then write in a separate operation
-          const height = this.logsContainer.scrollHeight;
-          // Use a micro-task to separate read from write
-          Promise.resolve().then(() => {
-            if (this.logsContainer) {
-              this.logsContainer.scrollTop = height;
-            }
-          });
+          // Direct assignment without reading first - browser handles this efficiently
+          this.logsContainer.scrollTop = this.logsContainer.scrollHeight;
         }
       });
     }
@@ -642,20 +636,18 @@ export class LogList extends LitElement {
             const container = this.logsContainer;
 
             if (container) {
-              // Read all scroll properties in one go
-              const scrollMetrics = {
-                scrollTop: container.scrollTop,
-                clientHeight: container.clientHeight,
-                scrollHeight: container.scrollHeight,
-              };
+              // Batch DOM reads
+              const scrollTop = container.scrollTop;
+              const clientHeight = container.clientHeight;
+              const scrollHeight = container.scrollHeight;
 
-              const scrolledToBottom = scrollMetrics.scrollTop + scrollMetrics.clientHeight >= scrollMetrics.scrollHeight - 1;
+              const scrolledToBottom = scrollTop + clientHeight >= scrollHeight - 1;
 
               if (scrolledToBottom) this.shouldScrollToBottom = true;
 
               const shouldBuffer =
                 this.isLiveStreaming &&
-                ((scrollMetrics.scrollTop > 30 && !this.flipDirection) || (!scrolledToBottom && this.flipDirection));
+                ((scrollTop > 30 && !this.flipDirection) || (!scrolledToBottom && this.flipDirection));
 
               if (shouldBuffer) {
                 this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
@@ -818,17 +810,33 @@ export class LogList extends LitElement {
     this.batchRequestUpdate('recentConcatenation');
   }
 
-  handleVisibilityChange = debounce((e: any) => {
+  private isScrolling = false;
+  private scrollEndTimer: ReturnType<typeof setTimeout> | null = null;
+  
+  handleVisibilityChange = (e: any) => {
     const first = e.first;
     const last = e.last;
     if (!first || !last) return;
 
     // Store visibility range for deferred chart update
     this.lastVisibilityRange = { first, last };
-
-    // Debounce the actual chart update
+    
+    // Mark as scrolling
+    this.isScrolling = true;
+    
+    // Clear existing timer
+    if (this.scrollEndTimer) {
+      clearTimeout(this.scrollEndTimer);
+    }
+    
+    // Set timer to detect scroll end
+    this.scrollEndTimer = setTimeout(() => {
+      this.isScrolling = false;
+    }, 50);
+    
+    // Debounced chart update (runs at most every 100ms)
     this.debouncedUpdateChartMarkArea();
-  }, 150);
+  };
 
   private updateChartMarkArea() {
     if (!this.lastVisibilityRange || !this.barChart) return;
@@ -937,11 +945,14 @@ export class LogList extends LitElement {
       }
     };
 
-    // Use requestIdleCallback if available, otherwise fall back to setTimeout
+    // Skip chart updates during active scrolling
+    if (this.isScrolling) return;
+    
+    // Use requestIdleCallback for non-critical chart updates
     if ('requestIdleCallback' in window) {
-      (window as any).requestIdleCallback(updateChart, { timeout: 200 });
+      (window as any).requestIdleCallback(updateChart, { timeout: 500 });
     } else {
-      setTimeout(updateChart, 100);
+      setTimeout(updateChart, 250);
     }
   }
 
@@ -986,6 +997,23 @@ export class LogList extends LitElement {
           will-change: transform;
           contain: strict;
         }
+        
+        /* Column width styles using CSS custom properties */
+        .col-trace_id { width: var(--col-trace_id-width); min-width: var(--col-trace_id-width); max-width: var(--col-trace_id-width); }
+        .col-severity_text { width: var(--col-severity_text-width); min-width: var(--col-severity_text-width); max-width: var(--col-severity_text-width); }
+        .col-parent_span_id { width: var(--col-parent_span_id-width); min-width: var(--col-parent_span_id-width); max-width: var(--col-parent_span_id-width); }
+        .col-errors { width: var(--col-errors-width); min-width: var(--col-errors-width); max-width: var(--col-errors-width); }
+        .col-kind { width: var(--col-kind-width); min-width: var(--col-kind-width); max-width: var(--col-kind-width); }
+        .col-span_name { width: var(--col-span_name-width); min-width: var(--col-span_name-width); max-width: var(--col-span_name-width); }
+        .col-status { width: var(--col-status-width); min-width: var(--col-status-width); max-width: var(--col-status-width); }
+        .col-start_time { width: var(--col-start_time-width); min-width: var(--col-start_time-width); max-width: var(--col-start_time-width); }
+        .col-end_time { width: var(--col-end_time-width); min-width: var(--col-end_time-width); max-width: var(--col-end_time-width); }
+        .col-duration { width: var(--col-duration-width); min-width: var(--col-duration-width); max-width: var(--col-duration-width); }
+        .col-timestamp { width: var(--col-timestamp-width); min-width: var(--col-timestamp-width); max-width: var(--col-timestamp-width); }
+        .col-service { width: var(--col-service-width); min-width: var(--col-service-width); max-width: var(--col-service-width); }
+        .col-summary.break-all { width: var(--col-summary-width); min-width: var(--col-summary-width); }
+        .col-summary:not(.break-all) { width: var(--col-summary-width); min-width: var(--col-summary-width); max-width: var(--col-summary-width); }
+        .col-latency_breakdown { width: var(--col-latency_breakdown-width); min-width: var(--col-latency_breakdown-width); max-width: var(--col-latency_breakdown-width); }
       </style>
       ${this.options()}
       <div
@@ -1007,9 +1035,18 @@ export class LogList extends LitElement {
               </button>
             </div>`
           : nothing}
-        <table class="table-fixed ${this.wrapLines ? 'w-full' : 'w-max'} relative ctable table-pin-rows table-pin-cols text-sm">
-          <thead class="z-10 sticky top-0">
-            <tr class="text-textStrong border-b flex min-w-0 relative font-medium ">
+        <table 
+          class="table-fixed ${this.wrapLines ? 'w-full' : 'w-max'} relative ctable table-pin-rows table-pin-cols text-sm"
+          style=${Object.entries(this.logsColumns.reduce((acc, column) => {
+            const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
+            if (width) {
+              acc[`--col-${column}-width`] = `${width}px`;
+            }
+            return acc;
+          }, {} as Record<string, string>)).map(([k, v]) => `${k}: ${v}`).join('; ')}
+        >
+          <thead class="z-10 sticky top-0 isolate">
+            <tr class="text-textStrong border-b flex min-w-0 relative font-medium isolate">
               ${isInitialLoading
                 ? html`
                     ${[...Array(6)].map(
@@ -1407,24 +1444,32 @@ export class LogList extends LitElement {
       const s = rowData.type === 'log' ? 'logs' : 'spans';
       const targetInfo = requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s);
       const isNew = rowData.isNew;
+      
+      // Pre-calculate CSS custom properties for widths
+      const columnStyles = this.logsColumns.reduce((acc, column) => {
+        const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
+        if (width) {
+          acc[`--col-${column}-width`] = `${width}px`;
+        }
+        return acc;
+      }, {} as Record<string, string>);
+      
       const rowHtml = html`
         <tr
           class=${clsx(
-            'item-row relative p-0 flex group cursor-pointer whitespace-nowrap hover:bg-fillWeaker contain-layout-style-paint content-visibility-auto',
+            'item-row relative p-0 flex group cursor-pointer whitespace-nowrap hover:bg-fillWeaker contain-layout-style-paint content-visibility-auto isolate',
             !this.wrapLines && 'h-[28px]',
             isNew && 'animate-fadeBg'
           )}
+          style=${Object.entries(columnStyles).map(([k, v]) => `${k}: ${v}`).join('; ')}
           @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
         >
           ${this.logsColumns
             .filter((v) => v !== 'latency_breakdown')
             .map((column) => {
-              const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
+              const hasWidth = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
               return html`<td
-                class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-bgBase relative pl-2 ${column === 'summary' ? 'flex-1' : 'flex-shrink-0'}`}
-                style=${width
-                  ? `width: ${width}px; min-width: ${width}px; ${this.wrapLines && column === 'summary' ? '' : `max-width: ${width}px`}`
-                  : ''}
+                class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-bgBase relative pl-2 ${column === 'summary' ? 'flex-1' : 'flex-shrink-0'} ${hasWidth ? `col-${column}` : ''}`}
               >
                 ${this.logItemCol(rowData, column)}
               </td>`;
@@ -1450,8 +1495,7 @@ export class LogList extends LitElement {
 
     return html`
       <td
-        class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${classes}`}
-        style=${finalWidth ? `width: ${finalWidth}px; min-width: ${finalWidth}px; max-width: ${finalWidth}px` : ''}
+        class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${classes} ${finalWidth ? `col-${column}` : ''}`}
       >
         <div class="dropdown font-medium text-base" data-tippy-content=${title}>
           <div tabindex="0" role="button" class="py-1">
