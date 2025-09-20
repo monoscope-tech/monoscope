@@ -2,6 +2,15 @@ import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { schemaManager } from './query-editor';
 
+// Simple debounce utility
+function debounce<T extends (...args: any[]) => any>(func: T, wait: number): T {
+  let timeout: NodeJS.Timeout;
+  return ((...args: Parameters<T>) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
+  }) as T;
+}
+
 /**
  * Query builder component for GROUP BY, AGG, SORT, LIMIT operations
  * Works with the query-editor component to update the query
@@ -127,13 +136,33 @@ export class QueryBuilderComponent extends LitElement {
           }
         });
 
+        // Cache button position to avoid repeated getBoundingClientRect calls
+        let cachedButtonRect: DOMRect | null = null;
+        
+        // Update cached position when needed
+        const updateButtonPosition = () => {
+          cachedButtonRect = sortByButton.getBoundingClientRect();
+        };
+        
         // Position the sort popover relative to the button
         const positionSortPopover = () => {
-          const buttonRect = sortByButton.getBoundingClientRect();
-          // Position to the right of the button
-          sortByPopover.style.left = `${buttonRect.right + 5}px`;
-          sortByPopover.style.top = `${buttonRect.top}px`;
+          if (!cachedButtonRect) {
+            updateButtonPosition();
+          }
+          if (cachedButtonRect) {
+            // Position to the right of the button
+            sortByPopover.style.left = `${cachedButtonRect.right + 5}px`;
+            sortByPopover.style.top = `${cachedButtonRect.top}px`;
+          }
         };
+        
+        // Update position on scroll/resize
+        const debouncedUpdate = debounce(() => {
+          cachedButtonRect = null;
+        }, 100);
+        
+        window.addEventListener('scroll', debouncedUpdate, true);
+        window.addEventListener('resize', debouncedUpdate);
 
         // Click event for the sort by button
         sortByButton.addEventListener('pointerdown', (e) => {

@@ -411,7 +411,12 @@ export class LogList extends LitElement {
   scrollToBottom() {
     // Use ref instead of DOM query
     if (this.logsContainer) {
-      this.logsContainer.scrollTop = this.logsContainer.scrollHeight;
+      // Batch scroll update in next frame to avoid forced reflow
+      requestAnimationFrame(() => {
+        if (this.logsContainer) {
+          this.logsContainer.scrollTop = this.logsContainer.scrollHeight;
+        }
+      });
     }
   }
 
@@ -594,12 +599,22 @@ export class LogList extends LitElement {
             tree.forEach((t) => (t.isNew = true));
 
             const container = this.logsContainer;
-            const scrolledToBottom = container && container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
+            // Cache scroll measurements to avoid multiple reflows
+            let scrollTop = 0, clientHeight = 0, scrollHeight = 0;
+            let scrolledToBottom = false;
+            
+            if (container) {
+              // Batch read all scroll properties at once
+              scrollTop = container.scrollTop;
+              clientHeight = container.clientHeight;
+              scrollHeight = container.scrollHeight;
+              scrolledToBottom = scrollTop + clientHeight >= scrollHeight - 1;
+            }
 
             if (scrolledToBottom) this.shouldScrollToBottom = true;
 
             const shouldBuffer =
-              this.isLiveStreaming && ((container?.scrollTop > 30 && !this.flipDirection) || (!scrolledToBottom && this.flipDirection));
+              this.isLiveStreaming && ((scrollTop > 30 && !this.flipDirection) || (!scrolledToBottom && this.flipDirection));
 
             if (shouldBuffer) {
               this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
@@ -678,14 +693,22 @@ export class LogList extends LitElement {
     // Use refs when available, fallback to querySelector
     const sideView = this.logDetailsContainer || (document.querySelector('#log_details_container')! as HTMLElement);
     const resizerWrapper = this.resizerWrapper || document.querySelector('#resizer-details_width-wrapper');
-    const width = Number(getComputedStyle(sideView).width.replace('px', ''));
-    this.shouldScrollToBottom = false;
-    if (width < 50) {
-      sideView.style.width = `550px`;
-      updateUrlState('details_width', '550');
-    }
-    // Always show the resizer when a log row is clicked
-    if (resizerWrapper) resizerWrapper.classList.remove('hidden', 'opacity-0', 'pointer-events-none');
+    
+    // Batch DOM reads and writes
+    requestAnimationFrame(() => {
+      const width = sideView.offsetWidth;
+      this.shouldScrollToBottom = false;
+      
+      if (width < 50) {
+        sideView.style.width = `550px`;
+        updateUrlState('details_width', '550');
+      }
+      
+      // Always show the resizer when a log row is clicked
+      if (resizerWrapper) {
+        resizerWrapper.classList.remove('hidden', 'opacity-0', 'pointer-events-none');
+      }
+    });
 
     // Use event delegation instead of querying all rows
     const prevActive = event.currentTarget.parentElement?.querySelector('.bg-fillBrand-strong');
@@ -1398,17 +1421,24 @@ export class LogList extends LitElement {
             ${this.renderCheckbox('Wrap lines', 'wrap-text', this.wrapLines, (checked) => {
               this.wrapLines = checked;
               if (this.wrapLines) {
-                let width = Number(window.getComputedStyle(document.getElementById('logs_list_container_inner')!).width.replace('px', ''));
-                this.logsColumns.forEach((col) => {
-                  if (col !== 'summary' && this.columnMaxWidthMap[col]) {
-                    width -= this.columnMaxWidthMap[col] + 8;
+                // Defer layout read to next frame to avoid forced reflow
+                requestAnimationFrame(() => {
+                  const container = document.getElementById('logs_list_container_inner');
+                  if (container) {
+                    let width = container.offsetWidth;
+                    this.logsColumns.forEach((col) => {
+                      if (col !== 'summary' && this.columnMaxWidthMap[col]) {
+                        width -= this.columnMaxWidthMap[col] + 8;
+                      }
+                    });
+                    this.columnMaxWidthMap['summary'] = width - 20;
+                    this.requestUpdate();
                   }
                 });
-                this.columnMaxWidthMap['summary'] = width - 20;
               } else {
                 this.columnMaxWidthMap['summary'] = 450 * 8;
+                this.requestUpdate();
               }
-              this.requestUpdate();
             })}
 
             <columns-settings .columns=${this.logsColumns} @columns-changed=${this.handleColumnsChanged}></columns-settings>

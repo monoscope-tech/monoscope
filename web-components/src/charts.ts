@@ -1,4 +1,14 @@
 const SCROLL_BAR_WIDTH = 7;
+
+// Simple debounce utility
+function debounce<T extends (...args: any[]) => any>(func: T, wait: number): T {
+  let timeout: NodeJS.Timeout;
+  return ((...args: Parameters<T>) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
+  }) as T;
+}
+
 const getErrorIndicator = () =>
   elt(
     'span',
@@ -107,14 +117,18 @@ export function flameGraphChart(data: FlameGraphItem[], renderAt: string, colors
   //   return recur(json);
   // };
 
-  const renderItem = (item: ItemsWithStyle, renderAt: string, rootVal: number) => {
+  const renderItem = (item: ItemsWithStyle, renderAt: string, rootVal: number, containerWidth?: number) => {
     const [level, xStart, xEnd] = item.value;
+    
+    // Get container - we need it for appending the element
     const container = document.querySelector('#' + renderAt) as HTMLElement;
-
     if (!container) return;
-    const containerWidth = container.offsetWidth - SCROLL_BAR_WIDTH;
-    const startPix = (containerWidth * xStart) / rootVal;
-    const width = (containerWidth * xEnd) / rootVal;
+    
+    // Use cached containerWidth if provided, otherwise calculate it
+    const actualWidth = containerWidth || container.offsetWidth - SCROLL_BAR_WIDTH;
+    
+    const startPix = (actualWidth * xStart) / rootVal;
+    const width = (actualWidth * xEnd) / rootVal;
     const height = 20;
     const yStart = height * level + (level + 1) * 3;
 
@@ -157,10 +171,13 @@ export function flameGraphChart(data: FlameGraphItem[], renderAt: string, colors
       const rootVal = stackTrace.sort((a, b) => b.value - a.value)[0].value || 1;
       maxDuration = rootVal;
       generateTimeIntervals(rootVal, 'time-container');
+      
+      // Cache container width to avoid multiple reflows
+      const containerWidth = container.offsetWidth - SCROLL_BAR_WIDTH;
       const data = recursionJson(stackTrace);
       const sortedData = data.sort((a, b) => b.value[2] - a.value[2]);
       sortedData.forEach((item) => {
-        renderItem(item, target, rootVal);
+        renderItem(item, target, rootVal, containerWidth);
       });
     }
   }
@@ -168,24 +185,46 @@ export function flameGraphChart(data: FlameGraphItem[], renderAt: string, colors
   flameGraph(fData, renderAt);
 
   const flameGraphContainer = document.querySelector('#flame-graph-container')!;
+  
+  // Cache DOM elements and values outside the mousemove handler
+  const lineContainer = document.querySelector('#time-bar-indicator') as HTMLElement;
+  const timeElement = document.querySelector('#line-time') as HTMLElement;
+  const timeContainer = document.querySelector('#time-container') as HTMLElement;
+  let cachedBoundingX: number | null = null;
+  let cachedContainerWidth: number | null = null;
+
+  // Update cache when needed
+  const updateCache = () => {
+    if (flameGraphContainer) {
+      cachedBoundingX = flameGraphContainer.getBoundingClientRect().x;
+    }
+    if (timeContainer) {
+      cachedContainerWidth = timeContainer.offsetWidth - SCROLL_BAR_WIDTH;
+    }
+  };
+  
+  // Initial cache update
+  updateCache();
+  
+  // Update cache on resize
+  window.addEventListener('resize', debounce(updateCache, 250));
 
   flameGraphContainer.addEventListener('mousemove', (e) => {
-    if (e.currentTarget) {
-      const boundingX = (e.currentTarget as HTMLElement).getBoundingClientRect().x;
-      const lineContainer = document.querySelector('#time-bar-indicator') as HTMLElement;
-      const time = document.querySelector('#line-time') as HTMLElement;
-      const container = document.querySelector('#time-container') as HTMLElement;
-      const left = (e as MouseEvent).clientX - boundingX;
-      lineContainer.style.left = `${left}px`;
-      const containerWidth = container.offsetWidth - SCROLL_BAR_WIDTH;
-      const currTime = (maxDuration * (left - 8)) / containerWidth;
-      const [f, u] = formatDuration(currTime);
-      time.textContent = `${f}${u}`;
-      if (left < 9 || left > containerWidth + 8) {
-        lineContainer.style.display = 'none';
-      } else {
-        lineContainer.style.display = 'block';
-      }
+    if (e.currentTarget && cachedBoundingX !== null && cachedContainerWidth !== null) {
+      const left = (e as MouseEvent).clientX - cachedBoundingX;
+      
+      requestAnimationFrame(() => {
+        lineContainer.style.left = `${left}px`;
+        const currTime = (maxDuration * (left - 8)) / cachedContainerWidth;
+        const [f, u] = formatDuration(currTime);
+        timeElement.textContent = `${f}${u}`;
+        
+        if (left < 9 || left > cachedContainerWidth + 8) {
+          lineContainer.style.display = 'none';
+        } else {
+          lineContainer.style.display = 'block';
+        }
+      });
     }
   });
   flameGraphContainer.addEventListener('mouseleave', (e) => {
@@ -225,9 +264,14 @@ function buildHierachy(spans: FlameGraphItem[]) {
 
 function generateTimeIntervals(duration: number, target: string) {
   const container = document.querySelector('#' + target) as HTMLElement;
-  container.innerHTML = '';
+  if (!container) return;
+  
+  // Cache width calculation
   const containerWidth = target === 'waterfall-time-container' ? 550 : container.offsetWidth - SCROLL_BAR_WIDTH;
   const intervalWidth = containerWidth / 9;
+  
+  // Clear container after reading width
+  container.innerHTML = '';
   const intervals = [];
   for (let i = 0; i < 10; i++) {
     const t = Math.floor((i * duration) / 9);
