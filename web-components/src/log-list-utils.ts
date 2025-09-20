@@ -12,8 +12,8 @@ export const COLUMN_WIDTHS = {
   raw_url: 'w-[25ch] shrink-0 overflow-hidden',
   url_path: 'w-[25ch] shrink-0 overflow-hidden',
   summary: 'w-3/4 shrink-1',
-  timestamp: 'w-[17ch] shrink-0',
-  created_at: 'w-[17ch] shrink-0',
+  timestamp: 'w-[20ch] shrink-0', // Increased for "MMM dd HH:mm:ss.SSS" format
+  created_at: 'w-[20ch] shrink-0', // Increased for "MMM dd HH:mm:ss.SSS" format
   latency_breakdown: 'sticky right-0 shrink-0',
   service: 'w-[16ch] shrink-0',
 } as const;
@@ -43,7 +43,8 @@ export const COLUMN_DEFAULTS = {
 } as const;
 
 export const CHAR_WIDTHS = {
-  timestamp: 6.5,
+  timestamp: 7.2, // Adjusted for better timestamp display
+  created_at: 7.2, // Adjusted for better timestamp display
   default: 8.5,
 } as const;
 

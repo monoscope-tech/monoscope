@@ -68,6 +68,7 @@ export class LogList extends LitElement {
   @state() private fetchedNew: boolean = false;
   @state() private visibleItems: EventLine[] = [];
   @state() private virtualListItems: VirtualListItem[] = [];
+  @state() private fixedColumnWidths: Record<string, number> = {};
 
   // Refs for DOM elements
   @query('#logs_list_container_inner') private logsContainer?: HTMLElement;
@@ -95,14 +96,20 @@ export class LogList extends LitElement {
 
   // Debounced functions
   private debouncedFetchData: any;
+  private debouncedUpdateChartMarkArea: any;
 
   // Bound functions for event listeners
   private boundHandleResize: any;
+  private isCalculatingWidths: boolean = false;
+  private lastVisibilityRange: { first: number; last: number } | null = null;
+  private isScrolling = false;
+  private scrollEndTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     super();
 
     this.debouncedFetchData = debounce(this.fetchData.bind(this), 300);
+    this.debouncedUpdateChartMarkArea = debounce(this.updateChartMarkArea.bind(this), 100);
     // Bind resize handler for immediate feedback
     this.boundHandleResize = this.handleResize.bind(this);
 
@@ -341,10 +348,29 @@ export class LogList extends LitElement {
     this.visibleItems = [];
     this.hasMore = false;
 
+    // Initialize fixed column widths
+    this.initializeFixedColumnWidths();
+
     // Project ID is now passed as a property from the server
 
     // Fetch initial data from the JSON endpoint
     this.fetchInitialData();
+  }
+
+  private initializeFixedColumnWidths() {
+    // Set fixed widths for all columns to avoid dynamic calculations during scroll
+    this.fixedColumnWidths = {
+      id: 24,
+      timestamp: 175, // Further increased to ensure full "MMM dd HH:mm:ss.SSS" format fits
+      created_at: 175, // Further increased to ensure full "MMM dd HH:mm:ss.SSS" format fits
+      status_code: 102,
+      method: 102,
+      raw_url: 212,
+      url_path: 212,
+      service: 136,
+      summary: 3600,
+      latency_breakdown: 120, // Reduced by 20% from 150px (total 40% reduction from original)
+    };
   }
 
   private updateRowCountDisplay(count: number) {
@@ -442,6 +468,10 @@ export class LogList extends LitElement {
       clearInterval(this.liveStreamInterval);
       this.liveStreamInterval = null;
     }
+    if (this.scrollEndTimer) {
+      clearTimeout(this.scrollEndTimer);
+      this.scrollEndTimer = null;
+    }
 
     // Clean up event listeners
     window.removeEventListener('mousemove', this.boundHandleResize);
@@ -457,6 +487,9 @@ export class LogList extends LitElement {
     if (this.lineChart) {
       this.lineChart.off('datazoom', this.handleChartZoom);
     }
+    
+    // Note: Caches in renderSummaryElements closure will be garbage collected
+    // when the component is destroyed
 
     super.disconnectedCallback();
   }
@@ -672,30 +705,41 @@ export class LogList extends LitElement {
     this.requestUpdate();
   }
   updateColumnMaxWidthMap = (recVecs: any[][]) => {
-    // Defer non-critical calculations
+    if (this.isCalculatingWidths) return;
+    this.isCalculatingWidths = true;
+
+    // Use fixed widths primarily, only calculate for custom columns
     requestAnimationFrame(() => {
-      // Process in batches for better performance
-      const batches = chunk(recVecs, 100);
-      forEach(batches, (batch) => {
-        batch.forEach((vec) => {
-          Object.entries(this.colIdxMap).forEach(([key, value]) => {
-            if (key === 'id') return;
-
-            // Set defaults for special columns
-            if (COLUMN_DEFAULTS[key as keyof typeof COLUMN_DEFAULTS] && !this.columnMaxWidthMap[key]) {
-              this.columnMaxWidthMap[key] = COLUMN_DEFAULTS[key as keyof typeof COLUMN_DEFAULTS];
-            }
-
-            // Skip if already set for special columns
-            if ((key === 'latency_breakdown' || key === 'summary') && this.columnMaxWidthMap[key]) return;
-
-            const target = calculateColumnWidth(String(vec[value]), key);
-            const minWidth = MIN_COLUMN_WIDTH * (CHAR_WIDTHS[key as keyof typeof CHAR_WIDTHS] || CHAR_WIDTHS.default);
-
-            this.columnMaxWidthMap[key] = Math.max(this.columnMaxWidthMap[key] || minWidth, target);
-          });
+      try {
+        // Use fixed widths for standard columns
+        Object.entries(this.fixedColumnWidths).forEach(([key, width]) => {
+          if (!this.columnMaxWidthMap[key]) {
+            this.columnMaxWidthMap[key] = width;
+          }
         });
-      });
+
+        // Only calculate widths for non-standard columns
+        const customColumns = Object.keys(this.colIdxMap).filter((key) => !this.fixedColumnWidths[key] && key !== 'id');
+
+        if (customColumns.length > 0) {
+          // Process only first 10 rows for custom columns
+          const sampleRows = recVecs.slice(0, 10);
+          customColumns.forEach((key) => {
+            const value = this.colIdxMap[key];
+            let maxWidth = MIN_COLUMN_WIDTH * CHAR_WIDTHS.default;
+
+            sampleRows.forEach((vec) => {
+              const content = String(vec[value] || '');
+              const target = content.length * CHAR_WIDTHS.default;
+              maxWidth = Math.max(maxWidth, target);
+            });
+
+            this.columnMaxWidthMap[key] = Math.min(maxWidth, 400); // Cap at 400px
+          });
+        }
+      } finally {
+        this.isCalculatingWidths = false;
+      }
     });
   };
   toggleLogRow = (event: any, targetInfo: [string, string, string], pid: string) => {
@@ -752,8 +796,8 @@ export class LogList extends LitElement {
         ? [...current, ...newData]
         : [...newData, ...current]
       : isRecentFetch
-      ? [...newData, ...current]
-      : [...current, ...newData];
+        ? [...newData, ...current]
+        : [...current, ...newData];
     return result;
   }
 
@@ -774,59 +818,130 @@ export class LogList extends LitElement {
     this.batchRequestUpdate('recentConcatenation');
   }
 
-  handleVisibilityChange(e: any) {
+  handleVisibilityChange = debounce((e: any) => {
     const first = e.first;
     const last = e.last;
     if (!first || !last) return;
 
-    let fTarget = this.virtualListItems[first];
-    let lTarget = this.virtualListItems[last];
-    fTarget = fTarget.type === 'fetchRecent' || fTarget.type === 'loadMore' ? (this.virtualListItems[first + 1] as EventLine) : fTarget;
-    lTarget = lTarget.type === 'fetchRecent' || lTarget.type === 'loadMore' ? (this.virtualListItems[last - 1] as EventLine) : lTarget;
+    // Store visibility range for deferred chart update
+    this.lastVisibilityRange = { first, last };
 
-    const xAxis = this.barChart.getModel().getComponent('xAxis', 0);
-    const xAxisData = xAxis.axis.scale;
-    const minValue = xAxisData.getExtent()[0];
-    const maxValue = xAxisData.getExtent()[1];
-    const timDiff = maxValue - minValue;
+    // Debounce the actual chart update
+    this.debouncedUpdateChartMarkArea();
+  }, 150);
 
-    const endTime = lookupVecValue(fTarget.data, this.colIdxMap, 'timestamp');
-    const startTimeRaw = lookupVecValue(lTarget.data, this.colIdxMap, 'timestamp');
+  private updateChartMarkArea() {
+    if (!this.lastVisibilityRange || !this.barChart) return;
 
-    // Convert to numbers (timestamps in ms)
-    let startTime = new Date(startTimeRaw).getTime();
-    let end = new Date(endTime).getTime();
+    const { first, last } = this.lastVisibilityRange;
 
-    if (this.flipDirection) {
-      const v = startTime;
-      startTime = end;
-      end = v;
-    }
+    // Use requestIdleCallback for non-critical chart updates
+    const updateChart = () => {
+      let fTarget = this.virtualListItems[first];
+      let lTarget = this.virtualListItems[last];
 
-    let MIN_RANGE = calculateAutoBinWidth(timDiff);
+      if (!fTarget || !lTarget) return;
 
-    if (end - startTime < MIN_RANGE) {
-      startTime = end - MIN_RANGE;
-    }
+      fTarget = fTarget.type === 'fetchRecent' || fTarget.type === 'loadMore' ? (this.virtualListItems[first + 1] as EventLine) : fTarget;
+      lTarget = lTarget.type === 'fetchRecent' || lTarget.type === 'loadMore' ? (this.virtualListItems[last - 1] as EventLine) : lTarget;
 
-    if (this.barChart) {
-      this.barChart.setOption({
-        series: [
-          {
-            markArea: {
-              itemStyle: {
-                color: 'rgba(0, 104, 255, .5)',
-                borderColor: 'rgb(0 104 255)',
-                borderWidth: 1,
-                borderType: 'dashed',
+      if (!fTarget || !lTarget || !('data' in fTarget) || !('data' in lTarget)) return;
+      
+      const endTime = lookupVecValue(fTarget.data, this.colIdxMap, 'timestamp');
+      const startTimeRaw = lookupVecValue(lTarget.data, this.colIdxMap, 'timestamp');
+
+      // Convert to numbers (timestamps in ms)
+      let startTime = new Date(startTimeRaw).getTime();
+      let end = new Date(endTime).getTime();
+
+      if (this.flipDirection) {
+        const v = startTime;
+        startTime = end;
+        end = v;
+      }
+      
+      // Get time range from chart to calculate appropriate bin width
+      let MIN_RANGE = 30 * 1000; // Default 30s
+      try {
+        const xAxis = this.barChart.getModel().getComponent('xAxis', 0);
+        const xAxisData = xAxis.axis.scale;
+        const minValue = xAxisData.getExtent()[0];
+        const maxValue = xAxisData.getExtent()[1];
+        const timDiff = maxValue - minValue;
+        MIN_RANGE = calculateAutoBinWidth(timDiff);
+      } catch (e) {
+        // Fall back to default if chart access fails
+      }
+
+      if (end - startTime < MIN_RANGE) {
+        startTime = end - MIN_RANGE;
+      }
+
+      if (this.barChart) {
+        this.barChart.setOption({
+          series: [
+            {
+              markArea: {
+                itemStyle: {
+                  color: 'rgba(0, 104, 255, .5)',
+                  borderColor: 'rgb(0 104 255)',
+                  borderWidth: 1,
+                  borderType: 'dashed',
+                },
+                data: [[{ xAxis: endTime }, { xAxis: startTimeRaw }]],
+                z: 999,
+                zlevel: 999,
               },
-              data: [[{ xAxis: endTime }, { xAxis: startTime }]],
-              z: 999,
-              zlevel: 999, // separate canvas laye
             },
-          },
-        ],
-      });
+          ],
+        });
+      }
+
+      const endTime = lookupVecValue(fTarget.data, this.colIdxMap, 'timestamp');
+      const startTimeRaw = lookupVecValue(lTarget.data, this.colIdxMap, 'timestamp');
+
+      // Convert to numbers (timestamps in ms)
+      let startTime = new Date(startTimeRaw).getTime();
+      let end = new Date(endTime).getTime();
+
+      if (this.flipDirection) {
+        const v = startTime;
+        startTime = end;
+        end = v;
+      }
+
+      const MIN_RANGE = 30 * 1000; // 30 s
+
+      if (end - startTime < MIN_RANGE) {
+        startTime = end - MIN_RANGE;
+      }
+
+      if (this.barChart) {
+        this.barChart.setOption({
+          series: [
+            {
+              markArea: {
+                itemStyle: {
+                  color: 'rgba(0, 104, 255, .5)',
+                  borderColor: 'rgb(0 104 255)',
+                  borderWidth: 1,
+                  borderType: 'dashed',
+                },
+                data: [[{ xAxis: endTime }, { xAxis: startTimeRaw }]],
+                z: 999,
+                zlevel: 999,
+              },
+            },
+          ],
+        });
+      }
+    };
+
+    // Use requestIdleCallback if available, otherwise fall back to setTimeout
+    if ('requestIdleCallback' in window) {
+      (window as any).requestIdleCallback(updateChart, { timeout: 200 });
+    } else {
+      setTimeout(updateChart, 100);
     }
   }
 
@@ -860,16 +975,27 @@ export class LogList extends LitElement {
           content-visibility: auto;
           contain-intrinsic-size: auto 28px;
         }
+
+        /* Fixed table layout for performance */
+        table {
+          table-layout: fixed;
+        }
+
+        /* Optimize virtualizer container */
+        lit-virtualizer {
+          will-change: transform;
+          contain: strict;
+        }
       </style>
       ${this.options()}
       <div
         ${ref(this.containerRef)}
         class=${clsx(
-          'relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto will-change-transform contain-layout-style-paint content-visibility-auto',
+          'relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto will-change-scroll contain-strict',
           isInitialLoading && 'overflow-hidden'
         )}
         id="logs_list_container_inner"
-        style="min-height: 500px;"
+        style="min-height: 500px; overflow-anchor: none;"
       >
         ${this.recentDataToBeAdded.length > 0 && !this.flipDirection
           ? html` <div class="sticky top-[30px] z-50 flex justify-center">
@@ -881,7 +1007,7 @@ export class LogList extends LitElement {
               </button>
             </div>`
           : nothing}
-        <table class="table-auto w-max relative ctable table-pin-rows table-pin-cols">
+        <table class="table-fixed ${this.wrapLines ? 'w-full' : 'w-max'} relative ctable table-pin-rows table-pin-cols text-sm">
           <thead class="z-10 sticky top-0">
             <tr class="text-textStrong border-b flex min-w-0 relative font-medium ">
               ${isInitialLoading
@@ -909,14 +1035,14 @@ export class LogList extends LitElement {
           ${isInitialLoading
             ? loadingSkeleton(this.logsColumns.length || 6)
             : html`
-                <tbody class="min-w-0 text-sm">
+                <tbody class="min-w-0 text-xs">
                   <lit-virtualizer
                     .items=${this.virtualListItems}
                     .renderItem=${this.renderVirtualItem}
                     @visibilityChanged=${this.handleVisibilityChange}
                     .layout=${{
                       itemSize: {
-                        height: 28, // Fixed row height for better performance
+                        ...(!this.wrapLines && { height: 28 }), // Fixed height only when wrap is disabled
                         width: '100%',
                       },
                     }}
@@ -1039,52 +1165,60 @@ export class LogList extends LitElement {
           >
         </div>`;
       case 'latency_breakdown':
-        const { traceStart, traceEnd, startNs, duration, childrenTimeSpans } = rowData;
-        const color = this.serviceColors[lookupVecValue<string>(dataArr, this.colIdxMap, 'span_name')] || 'bg-black';
-        const chil = childrenTimeSpans.map(({ startNs, duration, data }: { startNs: number; duration: number; data: any }) => ({
-          startNs: startNs - traceStart,
-          duration,
-          color: this.serviceColors[lookupVecValue<string>(data, this.colIdxMap, 'span_name')] || 'bg-black',
-        }));
-        const width = this.columnMaxWidthMap['latency_breakdown'] || 200;
+        // Cache rendered latency breakdown
+        const currentWidth = this.columnMaxWidthMap['latency_breakdown'] || 200;
+        if (!rowData._latencyCache || rowData._latencyCache.width !== currentWidth || rowData._latencyCache.expanded !== expanded) {
+          const { traceStart, traceEnd, startNs, duration, childrenTimeSpans } = rowData;
+          const color = this.serviceColors[lookupVecValue<string>(dataArr, this.colIdxMap, 'span_name')] || 'bg-black';
+          const chil = childrenTimeSpans.map(({ startNs, duration, data }: { startNs: number; duration: number; data: any }) => ({
+            startNs: startNs - traceStart,
+            duration,
+            color: this.serviceColors[lookupVecValue<string>(data, this.colIdxMap, 'span_name')] || 'bg-black',
+          }));
 
-        // Extract right-aligned badges from summary array
-        const summaryArr = this.parseSummaryData(dataArr);
+          // Extract right-aligned badges from summary array
+          const summaryArr = this.parseSummaryData(dataArr);
+          const rightAlignedBadges: TemplateResult[] = [];
 
-        const rightAlignedBadges: TemplateResult[] = [];
+          summaryArr.forEach((element: string) => {
+            if (element.includes(';') && element.includes('⇒')) {
+              const [fieldAndStyle, value] = element.split('⇒');
+              const [field, style] = fieldAndStyle.split(';');
 
-        summaryArr.forEach((element: string) => {
-          if (element.includes(';') && element.includes('⇒')) {
-            const [fieldAndStyle, value] = element.split('⇒');
-            const [field, style] = fieldAndStyle.split(';');
-
-            // Only process elements with styles starting with "right-"
-            if (style.startsWith('right-')) {
-              const badgeStyle = this.getStyleClass(style);
-              rightAlignedBadges.push(
-                field === 'session' ? this.createSessionButton(value) : renderBadge(`cbadge-sm ${badgeStyle} bg-opacity-100`, value)
-              );
+              // Only process elements with styles starting with "right-"
+              if (style.startsWith('right-')) {
+                const badgeStyle = this.getStyleClass(style);
+                rightAlignedBadges.push(
+                  field === 'session' ? this.createSessionButton(value) : renderBadge(`cbadge-sm ${badgeStyle} bg-opacity-100`, value)
+                );
+              }
             }
-          }
-        });
+          });
 
-        const latencyHtml = html`
-          <div class="flex justify-end items-center gap-1 text-textWeak pl-1 rounded-lg bg-bgBase" style="min-width:${width}px">
-            ${rightAlignedBadges}
-            ${spanLatencyBreakdown({
-              start: startNs - traceStart,
-              depth,
-              duration,
-              traceEnd,
-              color,
-              children: chil,
-              barWidth: width - 12,
-              expanded,
-            })}
-            <span class="w-1"></span>
-          </div>
-        `;
-        return latencyHtml;
+          const latencyHtml = html`
+            <div class="flex justify-end items-center gap-1 text-textWeak pl-1 rounded-lg bg-bgBase" style="min-width:${currentWidth}px">
+              ${rightAlignedBadges}
+              ${spanLatencyBreakdown({
+                start: startNs - traceStart,
+                depth,
+                duration,
+                traceEnd,
+                color,
+                children: chil,
+                barWidth: currentWidth - 12,
+                expanded,
+              })}
+              <span class="w-1"></span>
+            </div>
+          `;
+          
+          rowData._latencyCache = {
+            content: latencyHtml,
+            width: currentWidth,
+            expanded: expanded,
+          };
+        }
+        return rowData._latencyCache.content;
       case 'summary':
         // Cache rendered summary directly on the row data
         if (!rowData._summaryCache || rowData._summaryCache.wrapLines !== this.wrapLines) {
@@ -1097,8 +1231,8 @@ export class LogList extends LitElement {
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
-          ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
+            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         return html`<div class=${clsx('flex w-full gap-1', this.wrapLines ? 'items-start' : 'items-center')}>
           ${this.view === 'tree'
             ? html`
@@ -1132,8 +1266,8 @@ export class LogList extends LitElement {
                         ${children}
                       </button>`
                     : depth === 0
-                    ? nothing
-                    : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                      ? nothing
+                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
                 </div>
               `
             : nothing}
@@ -1223,8 +1357,8 @@ export class LogList extends LitElement {
       this.isLiveStreaming
         ? html`<p class="h-5 leading-5 m-0">Live streaming latest data...</p>`
         : this.isFetchingRecent
-        ? html`<div class="loading loading-dots loading-md h-5"></div>`
-        : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
+          ? html`<div class="loading loading-dots loading-md h-5"></div>`
+          : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
     );
   };
 
@@ -1239,20 +1373,21 @@ export class LogList extends LitElement {
   logTableHeading(column: string) {
     if (column === 'id') return html`<td class="p-0 m-0 whitespace-nowrap w-3 pl-2.5"></td>`;
 
+    const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
     const config = {
-      timestamp: { title: 'timestamp', classes: 'w-[17ch] shrink-0' },
-      created_at: { title: 'timestamp', classes: 'w-[17ch] shrink-0' },
+      timestamp: { title: 'timestamp', classes: 'shrink-0' },
+      created_at: { title: 'timestamp', classes: 'shrink-0' },
       latency_breakdown: { title: 'latency', classes: 'sticky right-0 shrink-0' },
-      status_code: { title: 'status', classes: 'shrink-0 w-[12ch]' },
-      method: { title: 'method', classes: 'shrink-0 w-[12ch]' },
-      raw_url: { title: column, classes: 'w-[25ch] shrink-0' },
-      url_path: { title: column, classes: 'w-[25ch] shrink-0' },
-      service: { title: 'service', classes: 'w-[16ch] shrink-0' },
-      summary: { title: 'summary', classes: 'w-[1400px] shrink-1' },
+      status_code: { title: 'status', classes: 'shrink-0' },
+      method: { title: 'method', classes: 'shrink-0' },
+      raw_url: { title: column, classes: 'shrink-0' },
+      url_path: { title: column, classes: 'shrink-0' },
+      service: { title: 'service', classes: 'shrink-0' },
+      summary: { title: 'summary', classes: 'shrink-1' },
     };
 
-    const { title = column, classes = 'w-[16ch] shrink-0' } = config[column] || {};
-    return this.tableHeadingWrapper(title, column, classes);
+    const { title = column, classes = 'shrink-0' } = config[column] || {};
+    return this.tableHeadingWrapper(title, column, classes, width);
   }
 
   renderVirtualItem = (item: VirtualListItem) => {
@@ -1275,7 +1410,8 @@ export class LogList extends LitElement {
       const rowHtml = html`
         <tr
           class=${clsx(
-            'item-row relative p-0 h-[30px] flex items-center group cursor-pointer whitespace-nowrap hover:bg-fillWeaker contain-layout-style-paint content-visibility-auto',
+            'item-row relative p-0 flex group cursor-pointer whitespace-nowrap hover:bg-fillWeaker contain-layout-style-paint content-visibility-auto',
+            !this.wrapLines && 'h-[28px]',
             isNew && 'animate-fadeBg'
           )}
           @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
@@ -1283,13 +1419,12 @@ export class LogList extends LitElement {
           ${this.logsColumns
             .filter((v) => v !== 'latency_breakdown')
             .map((column) => {
-              const tableDataWidth = getColumnWidth(column);
-              let width = this.columnMaxWidthMap[column];
+              const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
               return html`<td
-                class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-bgBase relative pl-2 ${
-                  column === 'summary' ? '' : tableDataWidth
-                }`}
-                style=${width ? `width: ${width}px;` : ''}
+                class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-bgBase relative pl-2 ${column === 'summary' ? 'flex-1' : 'flex-shrink-0'}`}
+                style=${width
+                  ? `width: ${width}px; min-width: ${width}px; ${this.wrapLines && column === 'summary' ? '' : `max-width: ${width}px`}`
+                  : ''}
               >
                 ${this.logItemCol(rowData, column)}
               </td>`;
@@ -1307,18 +1442,16 @@ export class LogList extends LitElement {
     }
   };
 
-  tableHeadingWrapper(title: string, column: string, classes: string) {
-    let width = this.columnMaxWidthMap[column];
-    if (column === 'latency_breakdown' && !width) {
-      width = 100;
+  tableHeadingWrapper(title: string, column: string, classes: string, width?: number) {
+    const finalWidth = width || this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
+    if (!finalWidth && column === 'latency_breakdown') {
+      this.columnMaxWidthMap[column] = 200;
     }
 
     return html`
       <td
-        class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${
-          classes ? classes : ''
-        }`}
-        style=${width ? `width: ${width}px` : ''}
+        class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${classes}`}
+        style=${finalWidth ? `width: ${finalWidth}px; min-width: ${finalWidth}px; max-width: ${finalWidth}px` : ''}
       >
         <div class="dropdown font-medium text-base" data-tippy-content=${title}>
           <div tabindex="0" role="button" class="py-1">
@@ -1436,22 +1569,25 @@ export class LogList extends LitElement {
             ${this.renderCheckbox('Wrap lines', 'wrap-text', this.wrapLines, (checked) => {
               this.wrapLines = checked;
               if (this.wrapLines) {
-                // Defer layout read to next frame to avoid forced reflow
                 requestAnimationFrame(() => {
-                  const container = document.getElementById('logs_list_container_inner');
+                  const container = this.logsContainer;
                   if (container) {
-                    let width = container.offsetWidth;
+                    let availableWidth = container.offsetWidth;
+                    // Subtract widths of all non-summary columns
                     this.logsColumns.forEach((col) => {
-                      if (col !== 'summary' && this.columnMaxWidthMap[col]) {
-                        width -= this.columnMaxWidthMap[col] + 8;
+                      if (col !== 'summary') {
+                        const width = this.columnMaxWidthMap[col] || this.fixedColumnWidths[col] || 0;
+                        availableWidth -= width + 8; // 8px for padding
                       }
                     });
-                    this.columnMaxWidthMap['summary'] = width - 20;
+                    // Set a reasonable max width for summary column
+                    this.columnMaxWidthMap['summary'] = Math.max(300, availableWidth - 40); // Min 300px, with 40px buffer
                     this.requestUpdate();
                   }
                 });
               } else {
-                this.columnMaxWidthMap['summary'] = 450 * 8;
+                // Reset to default wide width when wrap is disabled
+                this.columnMaxWidthMap['summary'] = this.fixedColumnWidths['summary'];
                 this.requestUpdate();
               }
             })}
@@ -1720,7 +1856,7 @@ const skeletonRow = (rowIdx: number, cols: number) => html`
 function loadingSkeleton(cols: number) {
   const actualCols = cols || 6;
   return html`
-    <tbody class="min-w-0 text-sm">
+    <tbody class="min-w-0 text-xs">
       <tr class="w-full flex justify-center">
         <td colspan=${String(actualCols)} class="w-full">
           <div class="text-center py-6">

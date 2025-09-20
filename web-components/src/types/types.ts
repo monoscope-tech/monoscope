@@ -110,6 +110,7 @@ export type EventLine = {
   children: number;
   childrenTimeSpans: ChildrenForLatency[];
   _summaryCache?: { content: any; wrapLines: boolean };
+  _latencyCache?: { content: any; width: number; expanded: boolean };
 } & Omit<APTEvent, 'children'>;
 
 export type Trace = {
