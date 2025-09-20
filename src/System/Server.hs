@@ -16,8 +16,8 @@ import Effectful.Time (runTime)
 import Log qualified
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setOnException, setPort)
 import Network.Wai.Log qualified as WaiLog
+import Network.Wai.Middleware.Gzip (GzipFiles (..), GzipSettings (..), def, gzip)
 import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
-import Network.Wai.Middleware.Gzip (gzip, GzipSettings(..), GzipFiles(..), def)
 import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
 import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
@@ -61,10 +61,11 @@ runServer appLogger env tp = do
             Log.runLogT "monoscope" appLogger Log.LogAttention
               $ Log.logAttention "Unhandled exception"
               $ AE.object ["exception" AE..= show @String exception]
-  let compressionSettings = def
-        { gzipFiles = GzipCompress
-        , gzipSizeThreshold = 860 -- Compress responses larger than 860 bytes
-        }
+  let compressionSettings =
+        def
+          { gzipFiles = GzipCompress
+          , gzipSizeThreshold = 860 -- Compress responses larger than 860 bytes
+          }
   let wrappedServer =
         heartbeatMiddleware
           . gzip compressionSettings

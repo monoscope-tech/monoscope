@@ -303,54 +303,62 @@ visTypes =
 -- | Simplified query library item with reduced DOM nodes
 queryLibItem_ :: Bool -> Projects.QueryLibItem -> Html ()
 queryLibItem_ isRecent qli =
-  div_ 
+  div_
     [ class_ $ "query-item p-3 hover:bg-fillWeaker cursor-pointer group relative " <> if qli.byMe then "" else "hidden group-has-[#queryLibraryGroup:checked]/pg:block"
     , term "data-query" qli.queryText
     , term "data-query-id" qli.id.toText
     , term "data-pid" qli.projectId.toText
-    ] do
-    -- Main content area
-    div_ [class_ "pr-8", onclick_ $ "document.getElementById('filterElement').handleAddQuery(JSON.parse(this.closest('.query-item').dataset.query))"] do
-      div_ [class_ "flex items-baseline gap-2 mb-1"] do
-        whenJust qli.title (\title -> span_ [class_ "font-medium text-sm"] $ toHtml title <> " •")
-        small_ [class_ "text-textWeak text-xs whitespace-nowrap"] $ 
-          toHtml (displayTimestamp $ formatUTC qli.createdAt) >> when qli.byMe " • by me"
-      code_ [class_ "queryText text-xs block whitespace-pre-wrap break-words opacity-75"] $ toHtml qli.queryText
-    
-    -- Actions (simplified, shown on hover)
-    div_ [class_ "query-actions absolute top-0 right-3 opacity-0 group-hover:opacity-100 flex gap-1"] do
-      button_ 
-        [ type_ "button"
-        , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
-        , term "data-tippy-content" "Run this query"
-        , onclick_ $ "event.preventDefault(); document.getElementById('filterElement').handleAddQuery(this.closest('.query-item').dataset.query, true)"
-        ] $ faSprite_ "play" "regular" "h-3 w-3"
-      button_ 
-        [ type_ "button"
-        , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
-        , term "data-tippy-content" "Copy query to clipboard"
-        , onclick_ $ "event.preventDefault(); navigator.clipboard.writeText(this.closest('.query-item').dataset.query).then(() => { document.body.dispatchEvent(new CustomEvent('successToast', {detail: {value: ['Query copied to clipboard']}})); })"
-        ] $ faSprite_ "copy" "regular" "h-3 w-3"
-      when qli.byMe do
+    ]
+    do
+      -- Main content area
+      div_ [class_ "pr-8", onclick_ $ "document.getElementById('filterElement').handleAddQuery(JSON.parse(this.closest('.query-item').dataset.query))"] do
+        div_ [class_ "flex items-baseline gap-2 mb-1"] do
+          whenJust qli.title (\title -> span_ [class_ "font-medium text-sm"] $ toHtml title <> " •")
+          small_ [class_ "text-textWeak text-xs whitespace-nowrap"]
+            $ toHtml (displayTimestamp $ formatUTC qli.createdAt)
+            >> when qli.byMe " • by me"
+        code_ [class_ "queryText text-xs block whitespace-pre-wrap break-words opacity-75"] $ toHtml qli.queryText
+
+      -- Actions (simplified, shown on hover)
+      div_ [class_ "query-actions absolute top-0 right-3 opacity-0 group-hover:opacity-100 flex gap-1"] do
         button_
           [ type_ "button"
           , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
-          , term "data-tippy-content" $ if isRecent then "Save as named query" else "Edit query title"
-          , onclick_ $ if isRecent 
-              then "event.preventDefault(); document.getElementById('saveQueryMdl').dataset.pendingQuery = this.closest('.query-item').dataset.query; document.getElementById('queryLibId').value = ''; document.getElementById('saveQueryMdl').checked = true;"
-              else "event.preventDefault(); document.getElementById('queryLibId').value = '" <> qli.id.toText <> "'; document.getElementById('saveQueryMdl').checked = true;"
-          ] $ faSprite_ (if isRecent then "floppy-disk" else "pen-to-square") "regular" "h-3 w-3"
-        unless isRecent $ button_
+          , term "data-tippy-content" "Run this query"
+          , onclick_ $ "event.preventDefault(); document.getElementById('filterElement').handleAddQuery(this.closest('.query-item').dataset.query, true)"
+          ]
+          $ faSprite_ "play" "regular" "h-3 w-3"
+        button_
           [ type_ "button"
           , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
-          , term "data-tippy-content" "Delete query"
-          , hxGet_ $ "/p/" <> qli.projectId.toText <> "/log_explorer?layout=DeleteQuery&queryLibId=" <> qli.id.toText
-          , hxVals_ "js:{query:window.getQueryFromEditor()}"
-          , hxTarget_ "#queryLibraryParentEl"
-          , hxSwap_ "outerHTML"
-          , hxSelect_ "#queryLibraryParentEl"
-          , hxPushUrl_ "false"
-          ] $ faSprite_ "trash-can" "regular" "h-3 w-3"
+          , term "data-tippy-content" "Copy query to clipboard"
+          , onclick_ $ "event.preventDefault(); navigator.clipboard.writeText(this.closest('.query-item').dataset.query).then(() => { document.body.dispatchEvent(new CustomEvent('successToast', {detail: {value: ['Query copied to clipboard']}})); })"
+          ]
+          $ faSprite_ "copy" "regular" "h-3 w-3"
+        when qli.byMe do
+          button_
+            [ type_ "button"
+            , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
+            , term "data-tippy-content" $ if isRecent then "Save as named query" else "Edit query title"
+            , onclick_
+                $ if isRecent
+                  then "event.preventDefault(); document.getElementById('saveQueryMdl').dataset.pendingQuery = this.closest('.query-item').dataset.query; document.getElementById('queryLibId').value = ''; document.getElementById('saveQueryMdl').checked = true;"
+                  else "event.preventDefault(); document.getElementById('queryLibId').value = '" <> qli.id.toText <> "'; document.getElementById('saveQueryMdl').checked = true;"
+            ]
+            $ faSprite_ (if isRecent then "floppy-disk" else "pen-to-square") "regular" "h-3 w-3"
+          unless isRecent
+            $ button_
+              [ type_ "button"
+              , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
+              , term "data-tippy-content" "Delete query"
+              , hxGet_ $ "/p/" <> qli.projectId.toText <> "/log_explorer?layout=DeleteQuery&queryLibId=" <> qli.id.toText
+              , hxVals_ "js:{query:window.getQueryFromEditor()}"
+              , hxTarget_ "#queryLibraryParentEl"
+              , hxSwap_ "outerHTML"
+              , hxSelect_ "#queryLibraryParentEl"
+              , hxPushUrl_ "false"
+              ]
+            $ faSprite_ "trash-can" "regular" "h-3 w-3"
 
 
 -- | Initialization code for the query editor that sets up schema data, query library, and popular searches

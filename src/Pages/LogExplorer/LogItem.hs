@@ -161,7 +161,7 @@ expandAPIlogItemH pid rdId timestamp sourceM = do
               if record.name
                 /= Just "apitoolkit-http-span"
                 && record.name
-                  /= Just "monoscope.http"
+                /= Just "monoscope.http"
                 then do
                   case trIdM of
                     Just trId -> do

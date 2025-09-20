@@ -529,7 +529,7 @@ integrationsPage pid apikey =
                     , class_ "prose-a:!text-textBrand prose-a:!underline"
                     ]
                     ""
-    
+
     -- Highlight.js CDN for syntax highlighting
     link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css"]
     script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"] ("" :: Text)
@@ -544,7 +544,7 @@ integrationsPage pid apikey =
     script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/shell.min.js"] ("" :: Text)
     script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/yaml.min.js"] ("" :: Text)
     script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/json.min.js"] ("" :: Text)
-    
+
     -- Initialize highlight.js after HTMX loads content
     script_
       [text|
