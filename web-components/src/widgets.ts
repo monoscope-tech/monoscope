@@ -243,24 +243,27 @@ const chartWidget = (widgetData: WidGetData) => {
   (window as any)[`${chartType}Chart`] = chart;
 
   // Get CSS variable values from body (where theme is applied)
+  // Cache all computed style reads to minimize reflows
   const computedStyle = getComputedStyle(document.body);
-  const textColor = computedStyle.getPropertyValue('--color-textWeak').trim();
-  const tooltipBg = computedStyle.getPropertyValue('--color-bgRaised').trim();
-  const tooltipTextColor = computedStyle.getPropertyValue('--color-textStrong').trim();
-  const tooltipBorderColor = computedStyle.getPropertyValue('--color-borderWeak').trim();
+  const styles = {
+    textColor: computedStyle.getPropertyValue('--color-textWeak').trim(),
+    tooltipBg: computedStyle.getPropertyValue('--color-bgRaised').trim(),
+    tooltipTextColor: computedStyle.getPropertyValue('--color-textStrong').trim(),
+    tooltipBorderColor: computedStyle.getPropertyValue('--color-borderWeak').trim()
+  };
   
-  if (textColor) {
+  if (styles.textColor) {
     opt.legend = opt.legend || {};
     opt.legend.textStyle = opt.legend.textStyle || {};
-    opt.legend.textStyle.color = textColor;
+    opt.legend.textStyle.color = styles.textColor;
   }
   
   // Configure tooltip styling
   opt.tooltip = opt.tooltip || {};
-  opt.tooltip.backgroundColor = tooltipBg || (isDarkMode ? 'rgba(50, 50, 50, 0.9)' : 'rgba(255, 255, 255, 0.9)');
+  opt.tooltip.backgroundColor = styles.tooltipBg || (isDarkMode ? 'rgba(50, 50, 50, 0.9)' : 'rgba(255, 255, 255, 0.9)');
   opt.tooltip.textStyle = opt.tooltip.textStyle || {};
-  opt.tooltip.textStyle.color = tooltipTextColor || (isDarkMode ? '#e0e0e0' : '#333');
-  opt.tooltip.borderColor = tooltipBorderColor || (isDarkMode ? '#555' : '#ccc');
+  opt.tooltip.textStyle.color = styles.tooltipTextColor || (isDarkMode ? '#e0e0e0' : '#333');
+  opt.tooltip.borderColor = styles.tooltipBorderColor || (isDarkMode ? '#555' : '#ccc');
   opt.tooltip.borderWidth = 1;
   
   // Override server's background style with theme-appropriate one
@@ -345,25 +348,28 @@ const chartWidget = (widgetData: WidGetData) => {
         const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
         
         // Get CSS variable values from body (where theme is applied)
+        // Cache all computed style reads to minimize reflows
         const computedStyle = getComputedStyle(document.body);
-        const textColor = computedStyle.getPropertyValue('--color-textWeak').trim();
-        const tooltipBg = computedStyle.getPropertyValue('--color-bgRaised').trim();
-        const tooltipTextColor = computedStyle.getPropertyValue('--color-textStrong').trim();
-        const tooltipBorderColor = computedStyle.getPropertyValue('--color-borderWeak').trim();
+        const styles = {
+          textColor: computedStyle.getPropertyValue('--color-textWeak').trim(),
+          tooltipBg: computedStyle.getPropertyValue('--color-bgRaised').trim(),
+          tooltipTextColor: computedStyle.getPropertyValue('--color-textStrong').trim(),
+          tooltipBorderColor: computedStyle.getPropertyValue('--color-borderWeak').trim()
+        };
         
         // Update theme-related options
-        if (textColor) {
+        if (styles.textColor) {
           opt.legend = opt.legend || {};
           opt.legend.textStyle = opt.legend.textStyle || {};
-          opt.legend.textStyle.color = textColor;
+          opt.legend.textStyle.color = styles.textColor;
         }
         
         // Configure tooltip styling
         opt.tooltip = opt.tooltip || {};
-        opt.tooltip.backgroundColor = tooltipBg || (isDarkMode ? 'rgba(50, 50, 50, 0.9)' : 'rgba(255, 255, 255, 0.9)');
+        opt.tooltip.backgroundColor = styles.tooltipBg || (isDarkMode ? 'rgba(50, 50, 50, 0.9)' : 'rgba(255, 255, 255, 0.9)');
         opt.tooltip.textStyle = opt.tooltip.textStyle || {};
-        opt.tooltip.textStyle.color = tooltipTextColor || (isDarkMode ? '#e0e0e0' : '#333');
-        opt.tooltip.borderColor = tooltipBorderColor || (isDarkMode ? '#555' : '#ccc');
+        opt.tooltip.textStyle.color = styles.tooltipTextColor || (isDarkMode ? '#e0e0e0' : '#333');
+        opt.tooltip.borderColor = styles.tooltipBorderColor || (isDarkMode ? '#555' : '#ccc');
         opt.tooltip.borderWidth = 1;
         
         // Update background style for series

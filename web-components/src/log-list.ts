@@ -414,7 +414,14 @@ export class LogList extends LitElement {
       // Batch scroll update in next frame to avoid forced reflow
       requestAnimationFrame(() => {
         if (this.logsContainer) {
-          this.logsContainer.scrollTop = this.logsContainer.scrollHeight;
+          // Read height first, then write in a separate operation
+          const height = this.logsContainer.scrollHeight;
+          // Use a micro-task to separate read from write
+          Promise.resolve().then(() => {
+            if (this.logsContainer) {
+              this.logsContainer.scrollTop = height;
+            }
+          });
         }
       });
     }
@@ -599,28 +606,28 @@ export class LogList extends LitElement {
             tree.forEach((t) => (t.isNew = true));
 
             const container = this.logsContainer;
-            // Cache scroll measurements to avoid multiple reflows
-            let scrollTop = 0, clientHeight = 0, scrollHeight = 0;
-            let scrolledToBottom = false;
             
             if (container) {
-              // Batch read all scroll properties at once
-              scrollTop = container.scrollTop;
-              clientHeight = container.clientHeight;
-              scrollHeight = container.scrollHeight;
-              scrolledToBottom = scrollTop + clientHeight >= scrollHeight - 1;
-            }
+              // Read all scroll properties in one go
+              const scrollMetrics = {
+                scrollTop: container.scrollTop,
+                clientHeight: container.clientHeight,
+                scrollHeight: container.scrollHeight
+              };
+              
+              const scrolledToBottom = scrollMetrics.scrollTop + scrollMetrics.clientHeight >= scrollMetrics.scrollHeight - 1;
+              
+              if (scrolledToBottom) this.shouldScrollToBottom = true;
 
-            if (scrolledToBottom) this.shouldScrollToBottom = true;
+              const shouldBuffer =
+                this.isLiveStreaming && ((scrollMetrics.scrollTop > 30 && !this.flipDirection) || (!scrolledToBottom && this.flipDirection));
 
-            const shouldBuffer =
-              this.isLiveStreaming && ((scrollTop > 30 && !this.flipDirection) || (!scrolledToBottom && this.flipDirection));
-
-            if (shouldBuffer) {
-              this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
-            } else {
-              this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);
-              this.updateVisibleItems();
+              if (shouldBuffer) {
+                this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
+              } else {
+                this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);
+                this.updateVisibleItems();
+              }
             }
           } else {
             this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);

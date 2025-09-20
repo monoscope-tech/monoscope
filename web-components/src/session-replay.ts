@@ -207,7 +207,14 @@ export class SessionReplay extends LitElement {
       }
       if (changedProperties.has('currentEventTime')) {
         if (this.syncScrolling) {
-          document.querySelector('#a-' + this.currentEventTime)?.scrollIntoView();
+          // Defer scrollIntoView to avoid forced reflow during property changes
+          requestAnimationFrame(() => {
+            const element = document.querySelector('#a-' + this.currentEventTime);
+            if (element) {
+              // Use smooth scrolling to reduce reflow impact
+              element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          });
         }
       }
     }
