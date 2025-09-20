@@ -33,23 +33,24 @@ externalHeadScripts_ config = do
 
   -- Facebook Pixel Code
   when (isJust config.facebookPixelId1 || isJust config.facebookPixelId2) $ do
+    let pixelInitScript = mconcat $ catMaybes
+          [ config.facebookPixelId1 <&> \pixelId -> [fmt|fbq('init', '{pixelId}'); fbq('track', 'PageView');|]
+          , config.facebookPixelId2 <&> \pixelId -> [fmt|fbq('init', '{pixelId}'); fbq('track', 'PageView');|]
+          ]
     script_
-      [raw|
-          setTimeout(function(){
+      [fmt|
+          setTimeout(function(){{
       !function(f,b,e,v,n,t,s)
-    {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
-    n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+    {{if(f.fbq)return;n=f.fbq=function(){{n.callMethod?
+    n.callMethod.apply(n,arguments):n.queue.push(arguments)}};
     if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
     n.queue=[];t=b.createElement(e);t.async=!0;
     t.src=v;s=b.getElementsByTagName(e)[0];
-    s.parentNode.insertBefore(t,s)}(window,document,'script',
+    s.parentNode.insertBefore(t,s)}}(window,document,'script',
     'https://connect.facebook.net/en_US/fbevents.js');
+      {pixelInitScript}
+      }},3000);
       |]
-    whenJust config.facebookPixelId1 $ \pixelId -> do
-      script_ [fmt|fbq('init', '{pixelId}'); fbq('track', 'PageView')|]
-    whenJust config.facebookPixelId2 $ \pixelId -> do
-      script_ [fmt|fbq('init', '{pixelId}'); fbq('track', 'PageView')|]
-    script_ [raw|},3000);|]
     whenJust config.facebookPixelId2 $ \pixelId ->
       noscript_ $ img_ [height_ "1", width_ "1", src_ $ "https://www.facebook.com/tr?id=" <> pixelId <> "&ev=PageView&noscript=1"]
   -- End Facebook Pixel Code

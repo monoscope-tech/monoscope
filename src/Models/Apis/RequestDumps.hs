@@ -388,7 +388,7 @@ incrementByOneMillisecond dateStr =
     maybeTime = parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" dateStr :: Maybe UTCTime
 
 
-requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Bool -> Text
+requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Bool -> Text
 requestDumpLogUrlPath pid q cols cursor since fromV toV layout source recent = "/p/" <> pid.toText <> "/log_explorer?" <> T.intercalate "&" params
   where
     recentTo = cursor >>= (\x -> Just (toText . incrementByOneMillisecond . toString $ x))
@@ -402,7 +402,7 @@ requestDumpLogUrlPath pid q cols cursor since fromV toV layout source recent = "
         , fmap ("from=" <>) (toQueryParam <$> fromV)
         , if recent then fmap ("to=" <>) (toQueryParam <$> recentTo) else fmap ("to=" <>) (toQueryParam <$> toV)
         , fmap ("layout=" <>) (toQueryParam <$> layout)
-        , Just ("source=" <> toQueryParam source)
+        , fmap ("source=" <>) (toQueryParam <$> source)
         ]
 
 

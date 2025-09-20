@@ -358,9 +358,11 @@ bodyWrapper bcfg child = do
       let pTitle = maybe "" (.title) bcfg.currProject
       script_
         [text| window.addEventListener("load", (event) => {
-                  posthog.people.set_once({email: ${email}, name: "${name}", projectId: "${pidT}", projectTitle: "${pTitle}"});
+                  if (typeof posthog !== 'undefined' && posthog && posthog.people && posthog.people.set_once) {
+                    posthog.people.set_once({email: ${email}, name: "${name}", projectId: "${pidT}", projectTitle: "${pTitle}"});
+                  }
+                  echarts.connect('default');
                 });
-                echarts.connect('default');
       |]
       -- Initialize Monoscope only when telemetryProjectId is available
       when (bcfg.config.telemetryProjectId /= "")

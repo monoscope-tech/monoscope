@@ -344,12 +344,19 @@ renderFacets facetSummary = do
 resizer_ :: Text -> Text -> Bool -> Html ()
 resizer_ targetId urlParam increasingDirection =
   div_
-    [ class_ "group relative shrink-0 h-full flex items-center justify-center border-l hover:border-strokeBrand-strong cursor-ew-resize overflow-visible select-none"
+    [ class_ "group px-r relative shrink-0 h-full flex items-center justify-center  cursor-ew-resize overflow-visible select-none"
     , term "data-resize-target" targetId
     , term "data-resize-direction" (if increasingDirection then "increase" else "decrease")
     , term "data-url-param" urlParam
     , [__|
+        js 
+          function applyMove(el, newWidth){
+            requestAnimationFrame(()=>el.style.width=newWidth+'px')
+          }
+          return {applyMove}
+        end
         on mousedown
+          log 'on mouse down' then
           add .select-none to body then
           set :startX to event.clientX then
           set :target to #{@data-resize-target} then
@@ -358,18 +365,18 @@ resizer_ targetId urlParam increasingDirection =
           set :isRightPanel to (@data-resize-direction == 'decrease')
         end
         
-        on mousemove from window
-          if :startX is not null
-            set deltaX to (event.clientX - :startX) then
-            if :isRightPanel
-            then set newWidth to :startWidth - deltaX
-            else set newWidth to :startWidth + deltaX end
-            if newWidth < 0 set newWidth to 0 end
-            set the :target's *width to newWidth + 'px'
-          end
+        on mousemove from #facets_and_loglist
+            if :startX is not null
+                set deltaX to (event.clientX - :startX) then
+                if :isRightPanel
+                then set newWidth to :startWidth - deltaX
+                else set newWidth to :startWidth + deltaX end
+                if newWidth < 0 set newWidth to 0 end
+                call applyMove(:target, newWidth)
+            end 
         end
         
-        on mouseup from window
+        on mouseup from #facets_and_loglist
           if :startX is not null
             set finalWidth to the :target's offsetWidth then
             remove .select-none from body then
@@ -381,12 +388,12 @@ resizer_ targetId urlParam increasingDirection =
         end
       |]
     ]
-    do
-      div_
-        [ id_ $ "resizer-" <> urlParam
-        , class_ "absolute left-1/2 top-1/2 z-50 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-bgBase rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"
-        ]
-        $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
+    $ div_ [class_ "h-full border-l hover:border-strokeBrand-strong"]
+    $ div_
+      [ id_ $ "resizer-" <> urlParam
+      , class_ "absolute left-1/2 top-1/2 z-50 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-bgBase rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"
+      ]
+    $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
 
 
 keepNonEmpty :: Maybe Text -> Maybe Text
@@ -457,7 +464,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
 
   -- Build preload URL using the same function that builds the JSON URLs
-  let preloadUrl = RequestDumps.requestDumpLogUrlPath pid queryM' cols' (formatUTC <$> cursorM') sinceM fromM toM Nothing source False
+  let preloadUrl = RequestDumps.requestDumpLogUrlPath pid queryM' cols' (formatUTC <$> cursorM') sinceM fromM toM Nothing sourceM False
       -- Also preload the chart data request
       chartDataUrl = "/chart_data?pid=" <> pid.toText <> "&query=summarize+count%28*%29+by+bin_auto%28timestamp%29%2C+status_code"
       headContent = Just $ do
@@ -494,10 +501,10 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           colIdxMap = listToIndexHashMap colNames
           reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
           reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
-          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") source False
-          recentLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' reqFirstCreatedAtM sinceM fromM toM (Just "loadmore") source True
+          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") sourceM False
+          recentLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' reqFirstCreatedAtM sinceM fromM toM (Just "loadmore") sourceM True
 
-          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing source False
+          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
           serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") requestVecs
           colors = getServiceColors (V.catMaybes serviceNames)
       let page =
@@ -704,9 +711,9 @@ apiLogsPage page = do
             , Widget._projectId = Just page.pid
             }
 
-    div_ [class_ "flex h-full gap-3.5 overflow-y-hidden"] do
+    div_ [class_ "flex h-full gap-3.5 overflow-y-hidden", id_ "facets_and_loglist"] do
       -- FACETS
-      div_ [class_ "w-68 text-sm shrink-0 flex flex-col h-full overflow-y-scroll gap-2 group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden ", id_ "facets-container"] do
+      div_ [class_ "w-68 will-change-[width] contain-[layout_style] text-sm shrink-0 flex flex-col h-full overflow-y-scroll gap-2 group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden ", id_ "facets-container"] do
         div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
           span_ [class_ "absolute inset-y-0 left-3 flex items-center", Aria.hidden_ "true"]
             $ faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
@@ -729,7 +736,7 @@ apiLogsPage page = do
 
       let dW = fromMaybe "100%" page.detailsWidth
           showTrace = isJust page.showTrace
-      div_ [class_ "grow relative flex flex-col shrink-1 min-w-0 w-full h-full ", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
+      div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
         -- Filters and row count header
         div_ [class_ "flex gap-2  pt-1 text-sm -mb-6 z-10 w-max bg-bgBase"] do
           label_ [class_ "gap-1 flex items-center cursor-pointer"] do
