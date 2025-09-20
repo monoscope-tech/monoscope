@@ -63,7 +63,7 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
                   , title = "No " <> requestType <> " Requests Monitored."
                   , description = "You're currently not monitoring your " <> T.toLower requestType <> " integrations."
                   , actionText = "See monitoring guide"
-                  , destination = Right "https://apitoolkit.io/docs/sdks/nodejs/expressjs/#monitoring-axios-requests"
+                  , destination = Right "https://monoscope.tech/docs/sdks/nodejs/expressjs/#monitoring-axios-requests"
                   }
           , elemID = "anomalyListForm"
           }
@@ -215,9 +215,9 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                     $ ItemsList.ZeroState
                       { icon = "empty-set"
                       , title = "Waiting for events"
-                      , description = "You're currently not sending any data to APItoolkit from your backends yet."
+                      , description = "You're currently not sending any data to monoscope from your backends yet."
                       , actionText = "Read the setup guide"
-                      , destination = Right "https://apitoolkit.io/docs/sdks/"
+                      , destination = Right "https://monoscope.tech/docs/sdks/"
                       }
               , elemID = "anomalyListForm"
               , ..

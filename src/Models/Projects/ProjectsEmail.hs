@@ -21,7 +21,7 @@ contentMail =
     <> link
   where
     mailBody = "ApiToolKit Mail Invite. Click on the link below"
-    link = "<a href =https://apitoolkit.io>"
+    link = "<a href =https://monoscope.tech>"
 
 
 patternMatchMailContent :: Maybe T.Text -> Maybe (NonEmpty MailContent)

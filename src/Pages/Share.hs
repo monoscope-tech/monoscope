@@ -69,7 +69,7 @@ copyLink rid = do
         div_ [class_ "text-[#000833]/60"] "Share this link with anyone to give them access to this event. Lasts for 48 hours only."
         div_ [class_ "h-1 w-full  bg-fillWeak"] pass
         div_ [class_ "flex-col gap-6 flex"] $ do
-          let url = "https://app.apitoolkit.io/share/r/" <> rid
+          let url = "https://app.monoscope.tech/share/r/" <> rid
           div_ [class_ "flex flex-col gap-2 items-center"] do
             div_ [class_ "mt-2  text-textSuccess"] do
               strong_ [class_ "block pt-2 text-textWeak text-xs truncate ...", id_ "shareURL"] $ toHtml url

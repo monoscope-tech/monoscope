@@ -133,7 +133,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
           , currProject = Just project
           , pageTitle = "Alerts"
           , menuItem = Just "Alerts"
-          , docsLink = Just "https://apitoolkit.io/docs/monitors/"
+          , docsLink = Just "https://monoscope.tech/docs/monitors/"
           , freeTierExceeded = freeTierExceeded
           , config = appCtx.env
           , pageActions = Just $ div_ [class_ "flex gap-2"] do
@@ -339,7 +339,7 @@ unifiedMonitorOverviewH pid monitorId = do
           , pageTitle = "Alerts Overview"
           , prePageTitle = Just "Alerts"
           , menuItem = Just "Alerts"
-          , docsLink = Just "https://apitoolkit.io/docs/monitors/"
+          , docsLink = Just "https://monoscope.tech/docs/monitors/"
           , freeTierExceeded = freeTierExceeded
           , config = appCtx.config
           }

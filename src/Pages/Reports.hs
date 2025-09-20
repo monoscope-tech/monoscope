@@ -102,45 +102,45 @@ instance AE.FromJSON ReportAnomalyType where
           Just "ATEndpoint" ->
             ATEndpoint
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
               <*> o
-              AE..: "endpointMethod"
+                AE..: "endpointMethod"
               <*> o
-              AE..: "eventsCount"
+                AE..: "eventsCount"
           Just "ATShape" ->
             ATShape
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
               <*> o
-              AE..: "endpointMethod"
+                AE..: "endpointMethod"
               <*> o
-              AE..: "targetHash"
+                AE..: "targetHash"
               <*> o
-              AE..: "newUniqueFields"
+                AE..: "newUniqueFields"
               <*> o
-              AE..: "updatedFieldFormats"
+                AE..: "updatedFieldFormats"
               <*> o
-              AE..: "deletedFields"
+                AE..: "deletedFields"
               <*> o
-              AE..: "eventsCount"
+                AE..: "eventsCount"
           Just "ATFormat" ->
             ATFormat
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
               <*> o
-              AE..: "keyPath"
+                AE..: "keyPath"
               <*> o
-              AE..: "endpointMethod"
+                AE..: "endpointMethod"
               <*> o
-              AE..: "formatType"
+                AE..: "formatType"
               <*> o
-              AE..: "formatExamples"
+                AE..: "formatExamples"
               <*> o
-              AE..: "eventsCount"
+                AE..: "eventsCount"
           Just "ATRuntimeException" ->
             ATRuntimeException
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
           _ -> pure UnknownAnomaly
 
 
@@ -458,23 +458,23 @@ getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
                 AE.Success (apiData :: Issues.APIChangeData) ->
                   AE.object
                     $ baseObject
-                    <> [ "tag" AE..= "ATShape"
-                       , "deletedFields" AE..= length apiData.deletedFields
-                       , "endpointMethod" AE..= apiData.endpointMethod
-                       , "endpointUrlPath" AE..= apiData.endpointPath
-                       , "newUniqueFields" AE..= length apiData.newFields
-                       , "updatedFields" AE..= length apiData.modifiedFields
-                       ]
+                      <> [ "tag" AE..= "ATShape"
+                         , "deletedFields" AE..= length apiData.deletedFields
+                         , "endpointMethod" AE..= apiData.endpointMethod
+                         , "endpointUrlPath" AE..= apiData.endpointPath
+                         , "newUniqueFields" AE..= length apiData.newFields
+                         , "updatedFields" AE..= length apiData.modifiedFields
+                         ]
                 _ -> AE.object baseObject
             Issues.RuntimeException ->
               case AE.fromJSON (getAeson issue.issueData) of
                 AE.Success (errorData :: Issues.RuntimeExceptionData) ->
                   AE.object
                     $ baseObject
-                    <> [ "tag" AE..= "ATRuntimeException"
-                       , "endpointMethod" AE..= fromMaybe "UNKNOWN" errorData.requestMethod
-                       , "endpointUrlPath" AE..= fromMaybe "/" errorData.requestPath
-                       ]
+                      <> [ "tag" AE..= "ATRuntimeException"
+                         , "endpointMethod" AE..= fromMaybe "UNKNOWN" errorData.requestMethod
+                         , "endpointUrlPath" AE..= fromMaybe "/" errorData.requestPath
+                         ]
                 _ -> AE.object baseObject
             _ -> AE.object baseObject
 
@@ -560,7 +560,7 @@ reportEmail pid report' =
         h4_ [style_ "font-size: 1.5rem; font-weight: bold; text-transform: capitalize; margin-bottom: 5px"] $ toHtml report'.reportType <> " report"
         p_ [style_ ""] $ show $ localDay (zonedTimeToLocalTime report'.createdAt)
         a_
-          [ href_ $ "https://app.apitoolkit.io/p/" <> show pid.unProjectId <> "/reports/" <> show report'.id.reportId
+          [ href_ $ "https://app.monoscope.tech/p/" <> show pid.unProjectId <> "/reports/" <> show report'.id.reportId
           , style_ "background-color:#3b82f6; margin-top:20px; text-decoration: none; padding: .5em 1em; color: #FCFDFF; display:inline-block; border-radius:.4em; mso-padding-alt:0;text-underline-color:#005959"
           ]
           "View in browser"
@@ -623,7 +623,7 @@ reportEmail pid report' =
                 h5_ [style_ "font-weight: bold; font-size:18px; margin-bottom: 1rem"] "Performance"
                 renderEmailEndpointsTable v.endpoints
           Nothing -> pass
-      a_ [href_ $ "https://app.apitoolkit.io/p/" <> show pid.unProjectId <> "/reports", style_ "width: 100%; text-align: center; color:#3b82f6; margin: 20px; padding-bottom:20px"] "Turn off email alerts"
+      a_ [href_ $ "https://app.monoscope.tech/p/" <> show pid.unProjectId <> "/reports", style_ "width: 100%; text-align: center; color:#3b82f6; margin: 20px; padding-bottom:20px"] "Turn off email alerts"
       div_ [style_ "margin-top: 20px"] pass
 
 

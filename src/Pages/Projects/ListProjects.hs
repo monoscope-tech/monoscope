@@ -81,7 +81,7 @@ listProjectsBody sessM projects demoProject = do
           span_ [class_ "swap-off"] $ faSprite_ "sun-bright" "regular" "h-5 w-5"
           -- Moon icon (shown in dark mode)
           span_ [class_ "swap-on"] $ faSprite_ "moon-stars" "regular" "h-5 w-5"
-        a_ [class_ "btn btn-ghost btn-sm", href_ "https://apitoolkit.io/docs/", target_ "_blank"] "Docs"
+        a_ [class_ "btn btn-ghost btn-sm", href_ "https://monoscope.tech/docs/", target_ "_blank"] "Docs"
         a_ [class_ "btn btn-ghost btn-sm text-textError", href_ "/logout"] "Logout"
 
   section_ [id_ "main-content", class_ "mx-auto p-6 pb-36 pt-20 overflow-y-auto h-full"] do
