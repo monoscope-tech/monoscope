@@ -202,7 +202,53 @@ bodyWrapper bcfg child = do
         var currentISOTimeStringVar = ((new Date()).toISOString().split(".")[0])+"+00:00";
         document.addEventListener('DOMContentLoaded', function(){
           // htmx.config.useTemplateFragments = true
-          tippy('[data-tippy-content]');
+          // Lazy tooltip initialization for better performance
+          function initTooltips() {
+            document.querySelectorAll('[data-tippy-content]:not([data-tippy-initialized])').forEach(element => {
+              element.setAttribute('data-tippy-initialized', 'true');
+              
+              // Add mouseenter listener only once per element
+              element.addEventListener('mouseenter', function() {
+                if (!element._tippy) {
+                  const instance = tippy(element, {
+                    delay: [100, 0],
+                    duration: 0,
+                    updateDuration: 0,
+                    animateFill: false,
+                    moveTransition: '',
+                    animation: false,
+                    touch: false,
+                    followCursor: false,
+                    flipOnUpdate: false,
+                    lazy: true,
+                    popperOptions: {
+                        strategy: 'absolute',  // Required for scrolling containers
+                        
+                        modifiers: [
+                          {
+                            name: 'computeStyles',
+                            options: {
+                              gpuAcceleration: true,  // Still use GPU acceleration!
+                              adaptive: false,         // Reduce style recalculations
+                            },
+                          },
+                        ],
+                      },
+                  });
+                  // Show tooltip immediately on first hover
+                  instance.show();
+                }
+              }, { once: true }); // Listener removes itself after first trigger
+            });
+          }
+          
+          // Initialize tooltips for current elements
+          initTooltips();
+          
+          // Re-initialize for dynamically added content
+          document.body.addEventListener('htmx:afterSwap', initTooltips);
+          document.body.addEventListener('htmx:afterSettle', initTooltips);
+          
           var notyf = new Notyf({
               duration: 5000,
               position: {x: 'right', y: 'top'},

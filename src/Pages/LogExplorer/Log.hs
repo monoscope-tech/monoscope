@@ -238,7 +238,7 @@ renderFacets facetSummary = do
     renderFacetSection :: Text -> [(Text, Text, Text -> Text)] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
     renderFacetSection sectionName facetDisplays facetMap collapsed = do
       -- Use div with group for section
-      div_ [class_ "facet-section-group group/section block"] do
+      div_ [class_ "facet-section-group group/section block contain-[layout_style]"] do
         input_ $ [type_ "checkbox", class_ "hidden peer", id_ $ "toggle-" <> T.replace " " "-" sectionName] ++ [checked_ | not collapsed]
         -- Section header - use label to toggle checkbox
         label_ [class_ "p-2 bg-fillWeak rounded-lg cursor-pointer flex gap-2 items-center peer-checked:[&>svg]:rotate-0", Lucid.for_ $ "toggle-" <> T.replace " " "-" sectionName] do
@@ -250,7 +250,7 @@ renderFacets facetSummary = do
           forM_ (zip [0 ..] facetDisplays) \(idx, (key, displayName, colorFn)) ->
             whenJust (HM.lookup key facetMap) \values -> do
               let shouldBeExpanded = sectionName == "Common Filters" && idx < 4
-              label_ [class_ "facet-section border-t border-strokeWeak group/facet block"] do
+              label_ [class_ "facet-section border-t border-strokeWeak group/facet block contain-[layout_style]"] do
                 input_ $ [type_ "checkbox", class_ "hidden", id_ $ "facet-toggle-" <> key] ++ [checked_ | shouldBeExpanded]
                 -- Facet header with actions
                 div_ [class_ "flex items-center justify-between hover:bg-fillWeak rounded"] do
@@ -259,7 +259,7 @@ renderFacets facetSummary = do
                     span_ [class_ "text-sm", term "data-tippy-content" (T.replace "___" "." key)] (toHtml displayName)
 
                   -- Dropdown menu for actions
-                  div_ [class_ "dropdown dropdown-end", onclick_ "event.stopPropagation()"] do
+                  div_ [class_ "dropdown dropdown-end contain-[layout_style]", onclick_ "event.stopPropagation()"] do
                     a_ [tabindex_ "0", class_ "cursor-pointer p-2 hover:bg-fillWeak rounded"] do
                       faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
                     ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow bg-base-100 rounded-box w-52"] do
@@ -314,7 +314,7 @@ renderFacets facetSummary = do
                       hiddenCount = length hiddenValues
                       -- Helper function to render a facet value item
                       renderFacetValue (FacetValue val count) =
-                        label_ [class_ "facet-item flex items-center justify-between py-0.5 px-1 hover:bg-fillWeak rounded cursor-pointer"] do
+                        label_ [class_ "facet-item flex items-center justify-between py-0.5 px-1 hover:bg-fillWeak rounded cursor-pointer will-change-[background-color]"] do
                           div_ [class_ "flex items-center gap-2 min-w-0 flex-1"] do
                             input_
                               [ type_ "checkbox"
