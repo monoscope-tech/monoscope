@@ -131,7 +131,7 @@ spec = aroundAll withTestResources do
       -- After acknowledging endpoint, child anomalies should be visible
       anomalies <- getAnomalies tr
       -- In the new Issues system, shape/field/format anomalies are all API changes
-      let visibleApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
+      let visibleApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
       
       -- There should be API change issues visible after acknowledging the endpoint
       V.length visibleApiChangeIssues `shouldSatisfy` (> 0)
@@ -168,7 +168,7 @@ spec = aroundAll withTestResources do
 
       -- Now check anomaly list
       anomalies <- getAnomalies tr
-      let filteredApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
+      let filteredApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
       -- In the new Issues system, shape anomalies are part of API changes
       
       length filteredApiChangeIssues `shouldSatisfy` (>= 1) -- At least one API change issue
@@ -207,7 +207,7 @@ spec = aroundAll withTestResources do
 
       -- Get updated anomaly list
       anomalies <- getAnomalies tr
-      let formatApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
+      let formatApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
       
       -- In the new Issues system, format anomalies are part of API changes
       length formatApiChangeIssues `shouldSatisfy` (>= 1)
@@ -219,7 +219,7 @@ spec = aroundAll withTestResources do
       case pg of
         AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do
           -- Acknowledged anomalies should include API changes
-          let acknowledgedApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
+          let acknowledgedApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
           
           -- We acknowledged at least one API change issue in the previous test
           length acknowledgedApiChangeIssues `shouldSatisfy` (>= 1) 
