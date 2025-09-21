@@ -634,7 +634,7 @@ virtualTable page = do
   termRaw
     "log-list"
     [ id_ "resultTable"
-    , class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0"
+    , class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0 rr-block"
     , term "windowTarget" "logList"
     , term "projectId" page.pid.toText
     ]
@@ -1157,8 +1157,8 @@ alertConfigurationForm_ pid alertM = do
                                      })
                                    end|]
                             ]
-                          ++ [required_ "" | req]
-                          ++ [value_ (maybe "" (show) vM) | isJust vM]
+                            ++ [required_ "" | req]
+                            ++ [value_ (maybe "" (show) vM) | isJust vM]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)
