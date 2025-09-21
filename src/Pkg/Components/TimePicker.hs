@@ -104,10 +104,8 @@ timePickerItems =
 
 
 timepicker_ :: Maybe Text -> Maybe (Text, Text) -> Html ()
-timepicker_ submitForm currentRange = fieldset_
-  [ class_ "border border-strokeWeak p-0 inline-block rounded-lg overflow-hidden dash-variable text-sm shadow-xs -mt-1.5"
-  ]
-  do
+timepicker_ submitForm currentRange = do
+  fieldset_ [class_ "border border-strokeWeak p-0 inline-block rounded-lg overflow-hidden dash-variable text-sm shadow-xs -mt-1.5"] do
     legend_ [id_ "offsetIndicator", class_ "px-1 ml-2 text-xs text-textWeak"] "UTC+00"
     input_ [type_ "hidden", id_ "since_input"]
     input_ [type_ "hidden", id_ "custom_range_input"]
@@ -124,45 +122,47 @@ timepicker_ submitForm currentRange = fieldset_
         span_ (attrs ++ [class_ "inline-block leading-none", id_ "currentRange"]) $ toHtml (maybe "Last Hour" (\(s, e) -> s <> if T.null e then "" else "-" <> e) currentRange)
         faSprite_ "chevron-down" "regular" "h-3 w-3"
 
-    -- DaisyUI popover contentd
-    ul_
+  -- DaisyUI popover contentd
+  div_ [class_ "relative w-max bg-red-500"] do
+    div_
       [ class_ "dropdown dropdown-end menu w-96 rounded-box bg-bgOverlay shadow-lg"
       , term "popover" ""
       , id_ "timepicker-popover"
       , term "style" "position-anchor:--timepicker-anchor"
       ]
       do
-        li_ [class_ "menu-title"] "Select Time Range"
-        let action =
-              maybe
-                "window.setQueryParamAndReload('since', my @data-value)"
-                (\fm -> [fmt|htmx.trigger("#{fm}", "submit")|])
-                submitForm
-            onClickHandler =
-              [text|on click set #custom_range_input's value to my @data-value
+        div_ [class_ "absolute top-0 left-0 z-50 hidden", id_ "timepickerSidebar", [__| on click halt|]] $ div_ [id_ "startTime", class_ "hidden"] ""
+        ul_ [] do
+          li_ [class_ "menu-title"] "Select Time Range"
+          let action =
+                maybe
+                  "window.setQueryParamAndReload('since', my @data-value)"
+                  (\fm -> [fmt|htmx.trigger("#{fm}", "submit")|])
+                  submitForm
+              onClickHandler =
+                [text|on click set #custom_range_input's value to my @data-value
                     then set #currentRange's innerText to my @data-title
                     then call window.setParams({since:@data-value, from:'', to:''})
                     then ${action} |]
-            timePickerLink val title =
-              li_ $ a_
-                [ class_ "flex items-center justify-between hover:bg-base-200 rounded-lg px-3 py-2"
-                , term "data-value" val
-                , term "data-title" title
-                , termRaw "_" onClickHandler
-                ]
-                do
-                  span_ [class_ "text-sm"] $ toHtml title
-                  span_ [class_ "text-xs text-base-content/60"] $ toHtml val
-        mapM_ (uncurry timePickerLink) timePickerItems
-        li_ $ a_
-          [ [__| on click toggle .hidden on #timepickerSidebar |]
-          ]
-          do
-            faSprite_ "calendar" "regular" "h-4 w-4 mr-2 text-iconNeutral"
-            span_ "Custom date range"
+              timePickerLink val title =
+                li_ $ a_
+                  [ class_ "flex items-center justify-between hover:bg-base-200 rounded-lg px-3 py-2"
+                  , term "data-value" val
+                  , term "data-title" title
+                  , termRaw "_" onClickHandler
+                  ]
+                  do
+                    span_ [class_ "text-sm"] $ toHtml title
+                    span_ [class_ "text-xs text-base-content/60"] $ toHtml val
+          mapM_ (uncurry timePickerLink) timePickerItems
+          li_ $ a_
+            [ [__| on click toggle .hidden on #timepickerSidebar |]
+            ]
+            do
+              faSprite_ "calendar" "regular" "h-4 w-4 mr-2 text-iconNeutral"
+              span_ "Custom date range"
 
         -- Custom date range picker (hidden by default)
-        div_ [class_ "relative hidden", id_ "timepickerSidebar"] $ div_ [id_ "startTime", class_ "hidden"] ""
         let submitAction =
               maybe
                 "window.setParams({from: formatDate(start), to: formatDate(end), since: ''}, true);"
@@ -188,7 +188,18 @@ timepicker_ submitForm currentRange = fieldset_
           inline: true,
           plugins: ['RangePlugin', 'TimePlugin'],
           autoApply: false,
+          documentClick: (e) => {
+            if(e.target.classList.contains('easepick-wrapper')) {
+              return;
+            }
+            document.querySelector('#timepickerSidebar').classList.add('hidden');
+            return true;
+          },
           setup(picker) {
+            picker.on("clear", () => {
+              document.querySelector('#timepickerSidebar').classList.add('hidden');
+            });
+            
             picker.on('select', ({ detail: { start, end } }) => {
               startMs = start.getTime();
               endMs = end.getTime();
