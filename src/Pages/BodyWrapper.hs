@@ -406,6 +406,8 @@ bodyWrapper bcfg child = do
       let name = maybe "" (\sess -> sess.persistentSession.user.getUser.firstName <> " " <> sess.persistentSession.user.getUser.lastName) bcfg.sessM
       let pidT = maybe "" (.id.toText) bcfg.currProject
       let pTitle = maybe "" (.title) bcfg.currProject
+      let telemetryProjectId = bcfg.config.telemetryProjectId
+      let telemetryServiceName = bcfg.config.telemetryServiceName
       script_
         [text| window.addEventListener("load", (event) => {
                   if (typeof posthog !== 'undefined' && posthog && posthog.people && posthog.people.set_once) {
@@ -418,15 +420,15 @@ bodyWrapper bcfg child = do
       when (bcfg.config.telemetryProjectId /= "")
         $ script_
           [text| window.addEventListener("load", (event) => {
-          window.monoscope = new Monoscope({ 
-            projectId: "${bcfg.envConfig.telemetryProjectId}", 
-            serviceName: "${bcfg.envConfig.telemetryServiceName}", 
-            user: {
-              email: ${email}, 
-              name: "${name}"
-            }
+            window.monoscope = new Monoscope({ 
+              projectId: "${telemetryProjectId}", 
+              serviceName: "${telemetryServiceName}", 
+              user: {
+                email: ${email}, 
+                name: "${name}"
+              }
+            });
           });
-        });
         |]
 
 
@@ -528,7 +530,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , href_ $ "/p/" <> project.id.toText <> "/settings"
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-textBrand leading-none "] (faSprite_ "gear" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
     a_
       [ class_ "hover:bg-fillBrand-weak "
       , target_ "blank"
@@ -537,7 +539,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , href_ "https://apitoolkit.io/docs/"
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-textBrand leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
 
     -- Dark mode toggle
     div_
@@ -577,7 +579,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , [__| on click js posthog.reset(); end |]
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center  rounded-full bg-fillError-weak text-textError leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 
 -- mapM_ renderNavBottomItem $ navBottomList project.id.toText

@@ -82,11 +82,10 @@ runServer appLogger env tp = do
       $ concat
         [ [async $ runSettings warpSettings wrappedServer]
         , [async $ Safe.withException (Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages) exceptionLogger | env.config.enablePubsubService]
-        , -- , [async $ Safe.withException (Queue.pubsubService appLogger env tp env.config.rrwebPubsubTopics processReplayEvents) exceptionLogger | env.config.enableReplayService]
-          [async $ Safe.withException bgJobWorker exceptionLogger | env.config.enableBackgroundJobs]
+        , [async $ Safe.withException bgJobWorker exceptionLogger | env.config.enableBackgroundJobs]
         , [async $ Safe.withException (OtlpServer.runServer appLogger env tp) exceptionLogger]
         , [async $ Safe.withException (Queue.kafkaService appLogger env tp env.config.kafkaTopics OtlpServer.processList) exceptionLogger | env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics]
-        , [async $ Safe.withException (Queue.kafkaService appLogger env tp env.config.rrwebTopics processReplayEvents) exceptionLogger]
+        , [async $ Safe.withException (Queue.kafkaService appLogger env tp env.config.rrwebTopics processReplayEvents) exceptionLogger | env.config.enableReplayService]
         ]
   void $ liftIO $ waitAnyCancel asyncs
 
