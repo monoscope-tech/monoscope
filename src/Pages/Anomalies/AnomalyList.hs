@@ -604,9 +604,9 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
                       ]
                   }
           }
-      issuesVM = V.map (IssueVM False currTime filterV) issues
+      issuesVM = V.map (IssueVM False False currTime filterV) issues
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
-    (Just "slider", Just "true", _, _) -> ALSlider currTime pid endpointM (Just $ V.map (IssueVM True currTime filterV) issues)
+    (Just "slider", Just "true", _, _) -> ALSlider currTime pid endpointM (Just $ V.map (IssueVM True False currTime filterV) issues)
     (_, _, _, Just "true") -> ALItemsRows $ ItemsList.ItemsRows nextFetchUrl issuesVM
     _ -> ALItemsPage $ PageCtx bwconf (ItemsList.ItemsPage listCfg issuesVM)
 
@@ -634,7 +634,7 @@ anomalyListSlider _ pid eid Nothing = do
         span_ [class_ "text-lg text-textStrong"] "Ongoing Issues and Monitors"
       div_ [class_ "flex flex-row mt-2"] ""
 anomalyListSlider currTime _ _ (Just issues) = do
-  let anomalyIds = T.replace "\"" "'" $ show $ fmap (Issues.issueIdText . (\(IssueVM _ _ _ issue) -> issue.id)) issues
+  let anomalyIds = T.replace "\"" "'" $ show $ fmap (Issues.issueIdText . (\(IssueVM _ _ _ _ issue) -> issue.id)) issues
   let totalAnomaliesTxt = toText $ if length issues > 10 then ("10+" :: Text) else show (length issues)
   div_ do
     script_ [text| var rem = (x,y)=>((x%y)==0?1:(x%y)); |]
@@ -679,57 +679,60 @@ anomalyAccentColor True False = "bg-fillSuccess-weak"
 anomalyAccentColor False False = "bg-fillError-strong"
 
 
-data IssueVM = IssueVM Bool UTCTime Text Issues.IssueL
+data IssueVM = IssueVM Bool Bool UTCTime Text Issues.IssueL
   deriving stock (Show)
 
 
 instance ToHtml IssueVM where
   {-# INLINE toHtml #-}
-  toHtml (IssueVM hideByDefault currTime timeFilter issue) = toHtmlRaw $ renderIssue hideByDefault currTime timeFilter issue
+  toHtml (IssueVM hideByDefault isWidget currTime timeFilter issue) = toHtmlRaw $ renderIssue hideByDefault currTime timeFilter issue isWidget
   toHtmlRaw = toHtml
 
 
-renderIssue :: Bool -> UTCTime -> Text -> Issues.IssueL -> Html ()
-renderIssue hideByDefault currTime timeFilter issue = do
+renderIssue :: Bool -> UTCTime -> Text -> Issues.IssueL -> Bool -> Html ()
+renderIssue hideByDefault currTime timeFilter issue isWidget = do
   let issueId = Issues.issueIdText issue.id
   let timeSinceString = prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
 
-  div_ [class_ $ "flex py-4 gap-8 items-start itemsListItem p-6 " <> if hideByDefault then "card-round" else "", style_ (if hideByDefault then "display:none" else "")] do
+  div_ [class_ $ "flex gap-8 items-start itemsListItem " <> if isWidget then "p-3 " else "px-6 py-4" <> if hideByDefault then "card-round" else "", style_ (if hideByDefault then "display:none" else "")] do
     -- Checkbox and accent color
-    div_ [class_ $ "h-4 flex space-x-3 w-8 items-center justify-center " <> if hideByDefault then "hidden" else ""] do
-      a_ [class_ $ anomalyAccentColor (isJust issue.acknowledgedAt) (isJust issue.archivedAt) <> " w-2 h-full"] ""
-      input_ [term "aria-label" "Select Issue", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "anomalyId", value_ issueId]
+    unless isWidget
+      $ div_ [class_ $ "h-4 flex space-x-3 w-8 items-center justify-center " <> if hideByDefault then "hidden" else ""] do
+        a_ [class_ $ anomalyAccentColor (isJust issue.acknowledgedAt) (isJust issue.archivedAt) <> " w-2 h-full"] ""
+        input_ [term "aria-label" "Select Issue", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "anomalyId", value_ issueId]
 
     -- Main section with title, badges, and metadata
     div_ [class_ "flex-1 min-w-0"] do
       -- Title and badges row
-      div_ [class_ "flex items-center gap-3 mb-3 flex-wrap"] do
+      div_ [class_ $ "flex gap-3 mb-3 flex-wrap " <> if isWidget then "flex-col" else " items-center "] do
         h3_ [class_ "text-textStrong text-base"] $ toHtml issue.title
 
         -- Issue type badge
-        case issue.issueType of
-          Issues.RuntimeException ->
-            span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-strong text-textInverse-strong shadow-sm"] do
-              faSprite_ "triangle-alert" "regular" "w-3 h-3"
-              "ERROR"
-          Issues.QueryAlert ->
-            span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-strong text-textInverse-strong shadow-sm"] do
-              faSprite_ "zap" "regular" "w-3 h-3"
-              "ALERT"
-          Issues.APIChange ->
-            if issue.critical
-              then span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-strong text-textInverse-strong shadow-sm"] do
-                faSprite_ "exclamation-triangle" "regular" "w-3 h-3"
-                "BREAKING"
-              else span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillInformation-strong text-textInverse-strong shadow-sm"] do
-                faSprite_ "info" "regular" "w-3 h-3 mr-0.5"
-                "Incremental"
+        div_ [class_ "flex items-center gap-2"] do
+          -- Type badge
+          case issue.issueType of
+            Issues.RuntimeException ->
+              span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-strong text-textInverse-strong shadow-sm"] do
+                faSprite_ "triangle-alert" "regular" "w-3 h-3"
+                "ERROR"
+            Issues.QueryAlert ->
+              span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-strong text-textInverse-strong shadow-sm"] do
+                faSprite_ "zap" "regular" "w-3 h-3"
+                "ALERT"
+            Issues.APIChange ->
+              if issue.critical
+                then span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-strong text-textInverse-strong shadow-sm"] do
+                  faSprite_ "exclamation-triangle" "regular" "w-3 h-3"
+                  "BREAKING"
+                else span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillInformation-strong text-textInverse-strong shadow-sm"] do
+                  faSprite_ "info" "regular" "w-3 h-3 mr-0.5"
+                  "Incremental"
 
-        -- Severity badge
-        case issue.severity of
-          "critical" -> span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
-          "warning" -> span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "WARNING"
-          _ -> pass
+          -- Severity badge
+          case issue.severity of
+            "critical" -> span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
+            "warning" -> span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "WARNING"
+            _ -> pass
 
       -- Metadata row (method, endpoint, service, time)
       div_ [class_ "flex items-center gap-4 text-sm text-textWeak mb-3 flex-wrap"] do
@@ -800,7 +803,7 @@ renderIssue hideByDefault currTime timeFilter issue = do
         Issues.RuntimeException -> do
           case AE.fromJSON (getAeson issue.issueData) of
             AE.Success (exceptionData :: Issues.RuntimeExceptionData) -> do
-              div_ [class_ "bg-fillError-weak border border-strokeError-weak rounded-lg p-4 text-sm font-mono text-fillError-strong mb-4"] do
+              div_ [class_ "bg-fillError-weak border overflow-x-scroll border-strokeError-weak rounded-lg p-4 text-sm font-mono text-fillError-strong mb-4"] do
                 pre_ [class_ "whitespace-pre-wrap"] $ toHtml exceptionData.stackTrace
             _ -> pass
         Issues.QueryAlert -> do
@@ -844,9 +847,9 @@ renderIssue hideByDefault currTime timeFilter issue = do
         button_
           [ class_
               $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
-              <> if isAcknowledged
-                then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80"
-                else "bg-fillPrimary text-textInverse-strong hover:bg-fillPrimary/90"
+                <> if isAcknowledged
+                  then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80"
+                  else "bg-fillPrimary text-textInverse-strong hover:bg-fillPrimary/90"
           , hxGet_ acknowledgeEndpoint
           , hxSwap_ "outerHTML"
           , hxTarget_ "closest .itemsListItem"
@@ -861,9 +864,9 @@ renderIssue hideByDefault currTime timeFilter issue = do
         button_
           [ class_
               $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
-              <> if isArchived
-                then "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak hover:bg-fillWarning-weak/80"
-                else "border border-strokeWeak text-textStrong hover:bg-fillWeak"
+                <> if isArchived
+                  then "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak hover:bg-fillWarning-weak/80"
+                  else "border border-strokeWeak text-textStrong hover:bg-fillWeak"
           , hxGet_ archiveEndpoint
           , hxSwap_ "outerHTML"
           , hxTarget_ "closest .itemsListItem"
@@ -873,7 +876,8 @@ renderIssue hideByDefault currTime timeFilter issue = do
             span_ [class_ "leading-none"] $ if isArchived then "Unarchive" else "Archive"
 
     -- Events count
-    div_ [class_ "w-36 flex items-start justify-center"]
+    unless isWidget
+      $ div_ [class_ "w-36 flex items-start justify-center"]
       $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Issue in the last 14days"]
       $ show issue.eventCount
 
@@ -1164,7 +1168,7 @@ anomalyAcknowlegeButton pid aid acked host = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
-        <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+          <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" "acknowlege issue"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -1180,7 +1184,7 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
-        <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+          <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"
