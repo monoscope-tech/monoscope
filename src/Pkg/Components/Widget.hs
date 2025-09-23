@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -57,6 +57,9 @@ data WidgetType
   | WTTreeMap
   | WTPieChart
   | WTAnomalies
+  | WTTable
+  | WTTraces
+  | WTFlamegraph
   deriving stock (Enum, Eq, Generic, Show, THS.Lift)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "WT", DAE.CamelToSnake]] WidgetType
@@ -126,6 +129,8 @@ data Widget = Widget
   , standalone :: Maybe Bool -- Not used in a grid stack
   , allowZoom :: Maybe Bool -- Allow zooming in the chart
   , showMarkArea :: Maybe Bool -- Show mark area in the chart
+  , columns :: Maybe [TableColumn] -- Table columns
+  , onRowClick :: Maybe RowClickAction -- Action when table row is clicked
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, NFData)
@@ -161,6 +166,30 @@ data WidgetAxis = WidgetAxis
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetAxis
 
 
+data TableColumn = TableColumn
+  { field :: Text
+  , title :: Text
+  , unit :: Maybe Text
+  , clickable :: Maybe Bool
+  , link :: Maybe Text
+  , width :: Maybe Text
+  , align :: Maybe Text
+  }
+  deriving stock (Generic, Show, THS.Lift)
+  deriving anyclass (Default, NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] TableColumn
+
+
+data RowClickAction = RowClickAction
+  { setVariable :: Maybe Text
+  , value :: Maybe Text
+  , navigateToTab :: Maybe Text
+  }
+  deriving stock (Generic, Show, THS.Lift)
+  deriving anyclass (Default, NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] RowClickAction
+
+
 -- Used when converting a widget json to its html representation. Eg in a query chart builder
 widgetPostH :: Projects.ProjectId -> Widget -> ATAuthCtx (RespHeaders Widget)
 widgetPostH pid widget = addRespHeaders (widget & (#_projectId ?~ pid))
@@ -183,6 +212,10 @@ widgetHelper_ w' = case w.wType of
         whenJust w.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
         span_ [class_ "text-sm"] $ toHtml $ maybeToMonoid w.title
     div_ [class_ "grid-stack nested-grid  h-full -mx-2"] $ forM_ (fromMaybe [] w.children) (\wChild -> widgetHelper_ (wChild{_isNested = Just True}))
+  WTTable -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ renderTable w
+  WTLogs -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ div_ [class_ "p-3"] "Logs widget coming soon"
+  WTTraces -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ div_ [class_ "p-3"] "Traces widget coming soon"
+  WTFlamegraph -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
   _ -> gridItem_ $ div_ [class_ $ " w-full h-full group/wgt " <> paddingBtm] $ renderChart w
   where
     w = w' & #id %~ maybe (slugify <$> w.title) Just
@@ -314,6 +347,120 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
                 |]
               ]
               "Delete widget"
+
+
+-- Table widget rendering
+renderTable :: Widget -> Html ()
+renderTable widget = do
+  let tableId = maybeToMonoid widget.id
+  renderWidgetHeader widget tableId widget.title Nothing Nothing Nothing Nothing (widget.hideSubtitle == Just True)
+  div_ [class_ "overflow-x-auto p-3"] do
+    table_ [class_ "table table-zebra table-sm", id_ tableId] do
+      -- Table header
+      thead_ [] do
+        tr_ [] do
+          forM_ (fromMaybe [] widget.columns) \col -> do
+            th_ [class_ $ "text-left " <> fromMaybe "" col.align] $ toHtml col.title
+      -- Table body will be populated by JavaScript
+      tbody_ [id_ $ tableId <> "_body"] ""
+    
+    -- JavaScript for table functionality
+    let query = decodeUtf8 $ AE.encode widget.query
+    let querySQL = maybeToMonoid widget.sql
+    let pid = decodeUtf8 $ AE.encode $ widget._projectId <&> (.toText)
+    let onRowClick = decodeUtf8 $ AE.encode widget.onRowClick
+    let columns = decodeUtf8 $ AE.encode widget.columns
+    
+    script_ [type_ "text/javascript"]
+      [text|
+      (function() {
+        const tableId = '${tableId}';
+        const query = ${query};
+        const querySQL = `${querySQL}`;
+        const pid = ${pid};
+        const onRowClick = ${onRowClick};
+        const columns = ${columns};
+        
+        async function loadTableData() {
+          try {
+            const params = new URLSearchParams({
+              ...Object.fromEntries(new URLSearchParams(location.search)),
+              query: query || '',
+              query_sql: querySQL || '',
+              data_type: 'text'
+            });
+            
+            const response = await fetch(`/chart_data?$${params}`);
+            const data = await response.json();
+            
+            if (data.data_text && data.data_text.length > 0) {
+              const tbody = document.getElementById(tableId + '_body');
+              tbody.innerHTML = '';
+              
+              // Skip header row if present
+              const startIdx = data.headers ? 1 : 0;
+              
+              data.data_text.slice(startIdx).forEach(row => {
+                const tr = document.createElement('tr');
+                tr.className = 'hover cursor-pointer';
+                
+                columns.forEach((col, idx) => {
+                  const td = document.createElement('td');
+                  td.className = col.align || '';
+                  const value = row[col.field] || row[idx] || '';
+                  td.textContent = value;
+                  if (col.unit) td.textContent += ' ' + col.unit;
+                  tr.appendChild(td);
+                });
+                
+                // Add row click handler
+                if (onRowClick && onRowClick.setVariable) {
+                  tr.onclick = () => {
+                    const rowData = {};
+                    columns.forEach((col, idx) => {
+                      rowData[col.field] = row[col.field] || row[idx] || '';
+                    });
+                    
+                    // Set variable
+                    if (onRowClick.setVariable) {
+                      const varName = onRowClick.setVariable;
+                      const value = onRowClick.value ? 
+                        onRowClick.value.replace(/\{\{row\.(\w+)\}\}/g, (_, field) => rowData[field]) :
+                        rowData[columns[0].field];
+                      
+                      const url = new URL(window.location);
+                      url.searchParams.set('var-' + varName, value);
+                      history.pushState({}, '', url);
+                      window.dispatchEvent(new Event('update-query'));
+                      
+                      // Navigate to tab if specified
+                      if (onRowClick.navigateToTab && window.switchDashboardTab) {
+                        const tabs = document.querySelectorAll('[data-tab-index]');
+                        tabs.forEach((tab, idx) => {
+                          if (tab.textContent.includes(onRowClick.navigateToTab)) {
+                            window.switchDashboardTab(idx);
+                          }
+                        });
+                      }
+                    }
+                  };
+                }
+                
+                tbody.appendChild(tr);
+              });
+            }
+          } catch (error) {
+            console.error('Error loading table data:', error);
+          }
+        }
+        
+        // Load data on initialization
+        loadTableData();
+        
+        // Reload on variable changes
+        window.addEventListener('update-query', loadTableData);
+      })();
+      |]
 
 
 renderChart :: Widget -> Html ()
