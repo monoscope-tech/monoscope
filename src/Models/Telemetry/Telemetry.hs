@@ -93,6 +93,12 @@ import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
 import Utils (lookupValueText, toXXHash)
 
+import Data.Text (Text)
+import Data.Text qualified as T
+import Data.Time (UTCTime)
+import Data.Vector qualified as V
+import GHC.Generics (Generic)
+
 
 -- Helper function to get nested value from a map using dot notation
 getNestedValue :: [Text] -> Map Text AE.Value -> Maybe AE.Value
@@ -1094,3 +1100,183 @@ getProjectStatsForReport projectId start end = dbtToEff $ query q (projectId, st
            GROUP BY resource___service___name 
            ORDER BY total_events DESC;
         |]
+
+
+data LogGroup = LogGroup
+  { template :: V.Vector Text -- Template with wildcards (e.g., ["GET", "<*>", "HTTP/1.1"])
+  , templateStr :: Text -- String representation for display
+  , logIds :: V.Vector Text -- References to actual logs
+  , frequency :: Int -- Number of logs matching this pattern
+  , firstSeen :: UTCTime -- When pattern was first created
+  , lastSeen :: UTCTime -- When pattern was last updated
+  , sampleLogs :: V.Vector Text -- Keep a few sample logs for context
+  }
+  deriving (Generic, Show)
+  deriving anyclass (NFData)
+
+
+-- deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogGroup
+
+-- Level 2: Group by first token (after preprocessing)
+data DrainLevelTwo = DrainLevelTwo
+  { firstToken :: Text -- The first token used for grouping
+  , logGroups :: V.Vector LogGroup -- Leaf clusters
+  }
+  deriving (Generic, Show)
+  deriving anyclass (NFData)
+
+
+-- deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DrainLevelTwo
+
+-- Level 1: Group by log length (number of tokens)
+data DrainLevelOne = DrainLevelOne
+  { tokenCount :: Int -- Number of tokens (avoiding 'length' name conflict)
+  , children :: V.Vector DrainLevelTwo -- Second level nodes
+  }
+  deriving (Generic, Show)
+  deriving anyclass (NFData)
+
+
+-- deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DrainLevelOne
+
+-- Level 0: Root of the DRAIN tree
+data DrainTree = DrainTree
+  { serviceName :: Text -- Name/identifier for this service's logs
+  , children :: V.Vector DrainLevelOne -- First level nodes (grouped by length)
+  , totalLogs :: Int -- Total logs processed
+  , totalPatterns :: Int -- Total unique patterns found
+  , lastUpdated :: UTCTime -- When tree was last modified
+  , config :: DrainConfig -- Configuration parameters
+  }
+  deriving (Generic, Show)
+  deriving anyclass (NFData)
+
+
+-- deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DrainTree
+
+-- Configuration for DRAIN algorithm
+data DrainConfig = DrainConfig
+  { similarityThreshold :: Double -- Threshold for pattern matching (0.0-1.0)
+  , maxLogGroups :: Int -- Maximum clusters per leaf
+  , maxSampleLogs :: Int -- Maximum sample logs to keep
+  , wildcardToken :: Text -- Token used for wildcards (usually "<*>")
+  , maxPatterns :: Int -- Global limit on total patterns
+  }
+  deriving (Generic, Show)
+  deriving anyclass (NFData)
+
+
+-- deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DrainConfig
+
+-- Default configuration
+defaultDrainConfig :: DrainConfig
+defaultDrainConfig =
+  DrainConfig
+    { similarityThreshold = 0.6
+    , maxLogGroups = 100
+    , maxSampleLogs = 3
+    , wildcardToken = "<*>"
+    , maxPatterns = 10000
+    }
+
+
+-- Helper functions for tree operations
+
+-- Create empty tree
+emptyDrainTree :: Text -> UTCTime -> DrainTree
+emptyDrainTree serviceName now =
+  DrainTree
+    { serviceName = serviceName
+    , children = V.empty
+    , totalLogs = 0
+    , totalPatterns = 0
+    , lastUpdated = now
+    , config = defaultDrainConfig
+    }
+
+
+-- Create empty log group
+createLogGroup :: V.Vector Text -> Text -> Text -> UTCTime -> LogGroup
+createLogGroup templateTokens templateString logId now =
+  LogGroup
+    { template = templateTokens
+    , templateStr = templateString
+    , logIds = V.singleton logId
+    , frequency = 1
+    , firstSeen = now
+    , lastSeen = now
+    , sampleLogs = V.singleton templateString
+    }
+
+
+-- Update log group with new log
+updateLogGroup :: LogGroup -> Text -> Text -> UTCTime -> LogGroup
+updateLogGroup group logId originalLog now =
+  group
+    { logIds = V.cons logId (logIds group)
+    , frequency = frequency group + 1
+    , lastSeen = now
+    , sampleLogs =
+        V.take
+          (maxSampleLogs defaultDrainConfig)
+          (V.cons originalLog (sampleLogs group))
+    }
+
+
+-- Tree navigation helpers
+findLevelOne :: Int -> V.Vector DrainLevelOne -> Maybe DrainLevelOne
+findLevelOne targetLength levels =
+  V.find (\level -> tokenCount level == targetLength) levels
+
+
+findLevelTwo :: Text -> V.Vector DrainLevelTwo -> Maybe DrainLevelTwo
+findLevelTwo targetToken levels =
+  V.find (\level -> firstToken level == targetToken) levels
+
+
+-- Pattern similarity calculation
+calculateSimilarity :: V.Vector Text -> V.Vector Text -> Double
+calculateSimilarity tokens1 tokens2
+  | V.length tokens1 /= V.length tokens2 = 0.0
+  | V.null tokens1 = 1.0
+  | otherwise =
+      let matches = V.length $ V.filter Relude.id $ V.zipWith (==) tokens1 tokens2
+          total = V.length tokens1
+       in fromIntegral matches / fromIntegral total
+
+
+-- Create template from two log patterns (merge with wildcards)
+createTemplate :: Text -> V.Vector Text -> V.Vector Text -> V.Vector Text
+createTemplate wildcardToken log1Tokens log2Tokens =
+  V.zipWith (\t1 t2 -> if t1 == t2 then t1 else wildcardToken) log1Tokens log2Tokens
+
+
+-- Statistics extraction
+data DrainStats = DrainStats
+  { totalLogCount :: Int
+  , totalPatternCount :: Int
+  , avgLogsPerPattern :: Double
+  , levelOneCount :: Int
+  , levelTwoCount :: Int
+  }
+  deriving (Generic, Show)
+  deriving anyclass (NFData)
+
+
+getTreeStats :: DrainTree -> DrainStats
+getTreeStats tree =
+  let levelOneCount = V.length (children tree)
+      levelTwoCount = V.sum $ V.map (V.length . children) (children tree)
+      totalPatterns = totalPatterns tree
+      totalLogs = totalLogs tree
+      avgLogs =
+        if totalPatterns > 0
+          then fromIntegral totalLogs / fromIntegral totalPatterns
+          else 0.0
+   in DrainStats
+        { totalLogCount = totalLogs
+        , totalPatternCount = totalPatterns
+        , avgLogsPerPattern = avgLogs
+        , levelOneCount = levelOneCount
+        , levelTwoCount = levelTwoCount
+        }
