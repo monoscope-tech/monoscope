@@ -147,6 +147,7 @@ data AuthContext = AuthContext
   , timefusionPgPool :: Pool.Pool Connection
   , projectCache :: Cache Projects.ProjectId Projects.ProjectCache
   , projectKeyCache :: Cache Text (Maybe Projects.ProjectId)
+  , logTemplateCache :: Cache Projects.ProjectId
   , config :: EnvConfig
   }
 
