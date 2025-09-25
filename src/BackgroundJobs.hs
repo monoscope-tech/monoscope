@@ -222,9 +222,9 @@ processBackgroundJob authCtx job bgJob =
           pass
 
         -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
-        -- forM_ [0 .. 287] \interval -> do
-        --   let scheduledTime2 = addUTCTime (fromIntegral $ interval * 300) currentTime
-        --   scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteSpanProcessing scheduledTime2) scheduledTime2
+        forM_ [0 .. 287] \interval -> do
+          let scheduledTime2 = addUTCTime (fromIntegral $ interval * 300) currentTime
+          scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteSpanProcessing scheduledTime2) scheduledTime2
 
         -- Schedule 1-minute error processing jobs (1440 jobs per hour = 24 hours * 60 per hour)
         forM_ [0 .. 1439] \interval -> do
