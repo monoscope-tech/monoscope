@@ -44,6 +44,11 @@ module Models.Telemetry.Telemetry (
   SpanLink (..),
   atMapText,
   atMapInt,
+  DrainTree (..),
+  updateTreeWithLog,
+  emptyDrainTree,
+  defaultDrainConfig,
+  getAllLogGroups,
 )
 where
 
@@ -1115,9 +1120,6 @@ data LogGroup = LogGroup
   deriving anyclass (NFData)
 
 
--- deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogGroup
-
--- Level 2: Group by first token (after preprocessing)
 data DrainLevelTwo = DrainLevelTwo
   { firstToken :: Text -- The first token used for grouping
   , logGroups :: V.Vector LogGroup -- Leaf clusters
@@ -1126,12 +1128,9 @@ data DrainLevelTwo = DrainLevelTwo
   deriving anyclass (NFData)
 
 
--- deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DrainLevelTwo
-
--- Level 1: Group by log length (number of tokens)
 data DrainLevelOne = DrainLevelOne
   { tokenCount :: Int -- Number of tokens (avoiding 'length' name conflict)
-  , children :: V.Vector DrainLevelTwo -- Second level nodes
+  , nodes :: V.Vector DrainLevelTwo -- Second level nodes
   }
   deriving (Generic, Show)
   deriving anyclass (NFData)
@@ -1141,20 +1140,15 @@ data DrainLevelOne = DrainLevelOne
 
 -- Level 0: Root of the DRAIN tree
 data DrainTree = DrainTree
-  { serviceName :: Text -- Name/identifier for this service's logs
-  , children :: V.Vector DrainLevelOne -- First level nodes (grouped by length)
+  { children :: V.Vector DrainLevelOne -- First level nodes (grouped by length)
   , totalLogs :: Int -- Total logs processed
   , totalPatterns :: Int -- Total unique patterns found
-  , lastUpdated :: UTCTime -- When tree was last modified
   , config :: DrainConfig -- Configuration parameters
   }
   deriving (Generic, Show)
   deriving anyclass (NFData)
 
 
--- deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DrainTree
-
--- Configuration for DRAIN algorithm
 data DrainConfig = DrainConfig
   { similarityThreshold :: Double -- Threshold for pattern matching (0.0-1.0)
   , maxLogGroups :: Int -- Maximum clusters per leaf
@@ -1166,9 +1160,6 @@ data DrainConfig = DrainConfig
   deriving anyclass (NFData)
 
 
--- deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DrainConfig
-
--- Default configuration
 defaultDrainConfig :: DrainConfig
 defaultDrainConfig =
   DrainConfig
@@ -1180,22 +1171,16 @@ defaultDrainConfig =
     }
 
 
--- Helper functions for tree operations
-
--- Create empty tree
-emptyDrainTree :: Text -> UTCTime -> DrainTree
-emptyDrainTree serviceName now =
+emptyDrainTree :: DrainTree
+emptyDrainTree =
   DrainTree
-    { serviceName = serviceName
-    , children = V.empty
+    { children = V.empty
     , totalLogs = 0
     , totalPatterns = 0
-    , lastUpdated = now
     , config = defaultDrainConfig
     }
 
 
--- Create empty log group
 createLogGroup :: V.Vector Text -> Text -> Text -> UTCTime -> LogGroup
 createLogGroup templateTokens templateString logId now =
   LogGroup
@@ -1211,19 +1196,18 @@ createLogGroup templateTokens templateString logId now =
 
 -- Update log group with new log
 updateLogGroup :: LogGroup -> Text -> Text -> UTCTime -> LogGroup
-updateLogGroup group logId originalLog now =
-  group
-    { logIds = V.cons logId (logIds group)
-    , frequency = frequency group + 1
+updateLogGroup group' logId originalLog now =
+  group'
+    { logIds = V.cons logId (logIds group')
+    , frequency = frequency group' + 1
     , lastSeen = now
     , sampleLogs =
         V.take
           (maxSampleLogs defaultDrainConfig)
-          (V.cons originalLog (sampleLogs group))
+          (V.cons originalLog (sampleLogs group'))
     }
 
 
--- Tree navigation helpers
 findLevelOne :: Int -> V.Vector DrainLevelOne -> Maybe DrainLevelOne
 findLevelOne targetLength levels =
   V.find (\level -> tokenCount level == targetLength) levels
@@ -1245,38 +1229,124 @@ calculateSimilarity tokens1 tokens2
        in fromIntegral matches / fromIntegral total
 
 
--- Create template from two log patterns (merge with wildcards)
 createTemplate :: Text -> V.Vector Text -> V.Vector Text -> V.Vector Text
 createTemplate wildcardToken log1Tokens log2Tokens =
   V.zipWith (\t1 t2 -> if t1 == t2 then t1 else wildcardToken) log1Tokens log2Tokens
 
 
--- Statistics extraction
-data DrainStats = DrainStats
-  { totalLogCount :: Int
-  , totalPatternCount :: Int
-  , avgLogsPerPattern :: Double
-  , levelOneCount :: Int
-  , levelTwoCount :: Int
-  }
-  deriving (Generic, Show)
-  deriving anyclass (NFData)
-
-
-getTreeStats :: DrainTree -> DrainStats
-getTreeStats tree =
-  let levelOneCount = V.length (children tree)
-      levelTwoCount = V.sum $ V.map (V.length . children) (children tree)
-      totalPatterns = totalPatterns tree
-      totalLogs = totalLogs tree
-      avgLogs =
-        if totalPatterns > 0
-          then fromIntegral totalLogs / fromIntegral totalPatterns
-          else 0.0
-   in DrainStats
-        { totalLogCount = totalLogs
-        , totalPatternCount = totalPatterns
-        , avgLogsPerPattern = avgLogs
-        , levelOneCount = levelOneCount
-        , levelTwoCount = levelTwoCount
+updateTreeWithLog :: DrainTree -> Int -> Text -> V.Vector Text -> Text -> Text -> UTCTime -> DrainTree
+updateTreeWithLog tree tokenCount firstToken tokensVec logId logContent now =
+  let (updatedChildren, wasUpdated) = updateOrCreateLevelOne (children tree) tokenCount firstToken tokensVec logId logContent now (config tree)
+      newTotalLogs = totalLogs tree + 1
+      newTotalPatterns = if wasUpdated then totalPatterns tree else totalPatterns tree + 1
+   in tree
+        { children = updatedChildren
+        , totalLogs = newTotalLogs
+        , totalPatterns = newTotalPatterns
         }
+
+
+updateOrCreateLevelOne :: V.Vector DrainLevelOne -> Int -> Text -> V.Vector Text -> Text -> Text -> UTCTime -> DrainConfig -> (V.Vector DrainLevelOne, Bool)
+updateOrCreateLevelOne levelOnes targetCount firstToken tokensVec logId logContent now config =
+  case V.findIndex (\level -> tokenCount level == targetCount) levelOnes of
+    Just index ->
+      let existingLevel = levelOnes V.! index
+          (updatedChildren, wasUpdated) = updateOrCreateLevelTwo (nodes existingLevel) firstToken tokensVec logId logContent now config
+          updatedLevel = existingLevel{nodes = updatedChildren}
+          updatedLevelOnes = levelOnes V.// [(index, updatedLevel)]
+       in (updatedLevelOnes, wasUpdated)
+    Nothing ->
+      let newLogGroup = createLogGroup tokensVec (T.unwords $ V.toList tokensVec) logId now
+          newLevelTwo = DrainLevelTwo{firstToken = firstToken, logGroups = V.singleton newLogGroup}
+          newLevelOne = DrainLevelOne{tokenCount = targetCount, nodes = V.singleton newLevelTwo}
+          updatedLevelOnes = V.cons newLevelOne levelOnes
+       in (updatedLevelOnes, False)
+
+
+updateOrCreateLevelTwo :: V.Vector DrainLevelTwo -> Text -> V.Vector Text -> Text -> Text -> UTCTime -> DrainConfig -> (V.Vector DrainLevelTwo, Bool)
+updateOrCreateLevelTwo levelTwos targetToken tokensVec logId logContent now config =
+  case V.findIndex (\level -> firstToken level == targetToken) levelTwos of
+    Just index ->
+      -- Found existing level two node
+      let existingLevel = levelTwos V.! index
+          (updatedLogGroups, wasUpdated) = updateOrCreateLogGroup (logGroups existingLevel) tokensVec logId logContent now config
+          updatedLevel = existingLevel{logGroups = updatedLogGroups}
+          updatedLevelTwos = levelTwos V.// [(index, updatedLevel)]
+       in (updatedLevelTwos, wasUpdated)
+    Nothing ->
+      -- Create new level two node
+      let newLogGroup = createLogGroup tokensVec (T.unwords $ V.toList tokensVec) logId now
+          newLevelTwo = DrainLevelTwo{firstToken = targetToken, logGroups = V.singleton newLogGroup}
+          updatedLevelTwos = V.cons newLevelTwo levelTwos
+       in (updatedLevelTwos, False) -- New pattern created
+
+
+updateOrCreateLogGroup :: V.Vector LogGroup -> V.Vector Text -> Text -> Text -> UTCTime -> DrainConfig -> (V.Vector LogGroup, Bool)
+updateOrCreateLogGroup logGroups tokensVec logId logContent now config =
+  case findBestMatch logGroups tokensVec (similarityThreshold config) of
+    Just (index, bestGroup) ->
+      let updatedTemplate =
+            if V.length tokensVec == V.length (template bestGroup)
+              then mergeTemplates (template bestGroup) tokensVec (wildcardToken config)
+              else template bestGroup -- Shouldn't happen due to tree structure
+          updatedGroup = updateLogGroupWithTemplate bestGroup updatedTemplate logId logContent now (maxSampleLogs config)
+          updatedGroups = logGroups V.// [(index, updatedGroup)]
+       in (updatedGroups, True) -- Existing pattern updated
+    Nothing ->
+      -- Create new log group
+      if V.length logGroups >= maxLogGroups config
+        then
+          -- At capacity - could implement LRU eviction here
+          -- For now, just update the first group (simplistic approach)
+          let firstGroup = V.head logGroups
+              updatedGroup = updateLogGroup firstGroup logId logContent now
+              updatedGroups = V.cons updatedGroup (V.tail logGroups)
+           in (updatedGroups, True)
+        else
+          -- Create new pattern
+          let newGroup = createLogGroup tokensVec (T.unwords $ V.toList tokensVec) logId now
+              updatedGroups = V.cons newGroup logGroups
+           in (updatedGroups, False)
+
+
+findBestMatch :: V.Vector LogGroup -> V.Vector Text -> Double -> Maybe (Int, LogGroup)
+findBestMatch logGroups tokensVec threshold =
+  let candidates = V.indexed logGroups
+      similarities =
+        V.map
+          ( \(idx, grp) ->
+              (idx, grp, calculateSimilarity (template grp) tokensVec)
+          )
+          candidates
+      validMatches = V.filter (\(_, _, sim) -> sim >= threshold) similarities
+   in if V.null validMatches
+        then Nothing
+        else
+          let (bestIdx, bestGroup, _) = V.maximumBy (\(_, _, s1) (_, _, s2) -> compare s1 s2) validMatches
+           in Just (bestIdx, bestGroup)
+
+
+mergeTemplates :: V.Vector Text -> V.Vector Text -> Text -> V.Vector Text
+mergeTemplates template1 template2 wildcardToken =
+  V.zipWith (\t1 t2 -> if t1 == t2 then t1 else wildcardToken) template1 template2
+
+
+-- Update log group with new template and log information
+updateLogGroupWithTemplate :: LogGroup -> V.Vector Text -> Text -> Text -> UTCTime -> Int -> LogGroup
+updateLogGroupWithTemplate group' newTemplate logId originalLog now maxSamples =
+  group'
+    { template = newTemplate
+    , templateStr = T.unwords $ V.toList newTemplate
+    , logIds = V.cons logId (logIds group')
+    , frequency = frequency group' + 1
+    , lastSeen = now
+    , sampleLogs = V.take maxSamples (V.cons originalLog (sampleLogs group'))
+    }
+
+
+getAllLogGroups :: DrainTree -> V.Vector (Text, V.Vector Text)
+getAllLogGroups tree =
+  let levelOnes = children tree
+      levelTwos = V.concatMap nodes levelOnes
+      allLogGroups = V.concatMap logGroups levelTwos
+   in V.map (\grp -> (templateStr grp, logIds grp)) allLogGroups

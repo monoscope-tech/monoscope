@@ -9,7 +9,7 @@ import Data.Effectful.UUID qualified as UUID
 import Data.List.Extra (chunksOf, groupBy)
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
+import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getCurrentTime, getZonedTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime)
 import Data.UUID qualified as UUID
@@ -60,6 +60,7 @@ import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
+import RequestMessages (replaceAllFormats)
 import RequestMessages qualified
 import System.Config qualified as Config
 import System.Logging qualified as Log
@@ -355,6 +356,36 @@ processFiveMinuteSpans scheduledTime = do
   Log.logInfo "Completed 5-minute span processing" ()
 
 
+-- drainTree :: Telemetry.DrainTree
+-- drainTree = Telemetry.emptyDrainTree
+
+logsPatternExtraction :: UTCTime -> ATBackgroundCtx ()
+logsPatternExtraction scheduledTime = do
+  otelLogs <- dbtToEff $ query [sql| SELECT id::text, body::text FROM otel_logs_and_spans WHERE timestamp > now() - interval '2 hour' and kind = 'log' and log_pattern is null and body is not null limit 2000|] ()
+  Log.logInfo "Fetched OTEL logs for pattern extraction" ("log_count", AE.toJSON $ V.length otelLogs)
+  let drainTree = processBatch otelLogs scheduledTime Telemetry.emptyDrainTree
+      patterns = Telemetry.getAllLogGroups drainTree
+  Log.logInfo "Extracted log patterns" ("pattern_count", AE.toJSON $ V.length patterns)
+  -- Update logs with patterns in batches of 1000
+  forM_ patterns \p -> do
+    _ <- dbtToEff $ execute [sql| UPDATE otel_logs_and_spans SET log_pattern = ? WHERE id::text=Any(?) |] p
+    pass
+  Log.logInfo "Completed log pattern extraction" ()
+  pass
+  where
+    processNewLog :: Text -> Text -> UTCTime -> Telemetry.DrainTree -> Telemetry.DrainTree
+    processNewLog logId logContent now tree = do
+      let tokensVec = V.fromList $ T.words $ replaceAllFormats $ logContent
+          tokenCount = V.length tokensVec
+          firstToken = if V.null tokensVec then "" else V.head tokensVec
+       in if tokenCount == 0
+            then tree -- Skip empty logs
+            else Telemetry.updateTreeWithLog tree tokenCount firstToken tokensVec logId logContent now
+    processBatch :: V.Vector (Text, Text) -> UTCTime -> Telemetry.DrainTree -> Telemetry.DrainTree
+    processBatch logBatch now initialTree = do
+      V.foldl (\tree (logId, logContent) -> processNewLog logId logContent now tree) initialTree logBatch
+
+
 -- | Process errors from OpenTelemetry spans to detect runtime exceptions
 -- This job runs every minute to extract errors from span data and create
 -- runtime exception issues for tracking and notification.
@@ -375,8 +406,10 @@ processOneMinuteErrors scheduledTime = do
   -- since we use hashes of errors and don't insert same error twice
   -- we can increase the window to account for time spent on kafka
   -- use two minutes for now before use a better solution
-  let oneMinuteAgo = addUTCTime (-60 * 2) scheduledTime
-
+  let oneMinuteAgo = addUTCTime (-60 * 5) scheduledTime
+  Log.logInfo "Logs pattern extraction begin" ()
+  logsPatternExtraction oneMinuteAgo
+  Log.logInfo "Logs pattern extraction complete" ()
   -- Get all spans with errors from time window
   -- Check for:
   -- 1. Spans with error status codes
