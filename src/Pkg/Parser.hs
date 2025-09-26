@@ -342,6 +342,7 @@ sqlFromQueryComponents sqlCfg qc =
           { finalColumns = listToColNames selectedCols
           , countQuery
           , finalSqlQuery = finalSqlQuery
+          , whereClause = Just whereCondition
           , finalSummarizeQuery = Just summarizeQuery
           , finalAlertQuery = Just alertQuery
           }
