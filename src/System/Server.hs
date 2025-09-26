@@ -20,6 +20,7 @@ import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Gzip (GzipFiles (..), GzipSettings (..), def, gzip)
 import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
 import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
+import OpenTelemetry.Resource.Telemetry (Telemetry (Telemetry))
 import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Replay (processReplayEvents)

@@ -98,6 +98,12 @@ import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
 import Utils (lookupValueText, toXXHash)
 
+import Data.Text (Text)
+import Data.Text qualified as T
+import Data.Time (UTCTime)
+import Data.Vector qualified as V
+import GHC.Generics (Generic)
+
 
 -- Helper function to get nested value from a map using dot notation
 getNestedValue :: [Text] -> Map Text AE.Value -> Maybe AE.Value
