@@ -98,12 +98,6 @@ import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
 import Utils (lookupValueText, toXXHash)
 
-import Data.Text (Text)
-import Data.Text qualified as T
-import Data.Time (UTCTime)
-import Data.Vector qualified as V
-import GHC.Generics (Generic)
-
 
 -- Helper function to get nested value from a map using dot notation
 getNestedValue :: [Text] -> Map Text AE.Value -> Maybe AE.Value
@@ -1208,16 +1202,6 @@ updateLogGroup group' logId originalLog now =
     }
 
 
-findLevelOne :: Int -> V.Vector DrainLevelOne -> Maybe DrainLevelOne
-findLevelOne targetLength levels =
-  V.find (\level -> tokenCount level == targetLength) levels
-
-
-findLevelTwo :: Text -> V.Vector DrainLevelTwo -> Maybe DrainLevelTwo
-findLevelTwo targetToken levels =
-  V.find (\level -> firstToken level == targetToken) levels
-
-
 -- Pattern similarity calculation
 calculateSimilarity :: V.Vector Text -> V.Vector Text -> Double
 calculateSimilarity tokens1 tokens2
@@ -1227,11 +1211,6 @@ calculateSimilarity tokens1 tokens2
       let matches = V.length $ V.filter Relude.id $ V.zipWith (==) tokens1 tokens2
           total = V.length tokens1
        in fromIntegral matches / fromIntegral total
-
-
-createTemplate :: Text -> V.Vector Text -> V.Vector Text -> V.Vector Text
-createTemplate wildcardToken log1Tokens log2Tokens =
-  V.zipWith (\t1 t2 -> if t1 == t2 then t1 else wildcardToken) log1Tokens log2Tokens
 
 
 updateTreeWithLog :: DrainTree -> Int -> Text -> V.Vector Text -> Text -> Text -> UTCTime -> DrainTree

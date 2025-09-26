@@ -239,7 +239,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
             $ [ type_ "radio"
               , name_ "visualization"
               , id_ $ "viz-" <> vizType
-              , class_ $ if vizType == "logs" || vizType == "patterns" then "default-chart" else "normal-chart"
+              , class_ $ if vizType == "logs" || vizType == "patterns" then "default-chart" else "no-chart"
               , value_ vizType
               , term "data-update-url" (if updateUrl then "true" else "false")
               , term "data-container-id" containerSelector

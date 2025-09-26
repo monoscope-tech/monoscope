@@ -695,7 +695,7 @@ apiLogsPage page = do
           , alert = isJust page.alert
           }
 
-      div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[#timeseries_line:checked]/pg:hidden group-has-[#viz-timeseries:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 ", style_ "aspect-ratio: 10 / 1;"] do
+      div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[#no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 ", style_ "aspect-ratio: 10 / 1;"] do
         let (tp, query, title) = case page.vizType of
               Just "patterns" -> (WTTimeseriesLine, "log_pattern != null | summarize count(*) by bin_auto(timestamp), log_pattern", "Log patterns")
               _ -> (WTTimeseries, "summarize count(*) by bin_auto(timestamp), status_code", "All traces")
