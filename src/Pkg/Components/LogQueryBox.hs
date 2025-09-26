@@ -194,9 +194,9 @@ logQueryBox_ config = do
         -- Results will be rendered by the virtual table component
 
         div_ [class_ "flex justify-end gap-2"] do
-          fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[#viz-logs:checked]/pg:block"] do
+          fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[.default-chart:checked]/pg:block"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "hide timeline"
-          fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1"] do
+          fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 group-has-[#viz-patterns:checked]/pg:hidden"] do
             input_
               $ [ type_ "checkbox"
                 , id_ "create-alert-toggle"
@@ -239,6 +239,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
             $ [ type_ "radio"
               , name_ "visualization"
               , id_ $ "viz-" <> vizType
+              , class_ $ if vizType == "logs" || vizType == "patterns" then "default-chart" else "normal-chart"
               , value_ vizType
               , term "data-update-url" (if updateUrl then "true" else "false")
               , term "data-container-id" containerSelector
