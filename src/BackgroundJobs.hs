@@ -96,6 +96,7 @@ data BgJobs
   | SlackNotification Projects.ProjectId Text
   | EnhanceIssuesWithLLM Projects.ProjectId (V.Vector Issues.IssueId)
   | ProcessIssuesEnhancement UTCTime
+  | FifteenMinutesLogsPatternProcessing UTCTime
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -272,6 +273,7 @@ processBackgroundJob authCtx job bgJob =
     SlackNotification pid message -> sendSlackMessage pid message
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> processIssuesEnhancement scheduledTime
+    FifteenMinutesLogsPatternProcessing scheduledTime -> logsPatternExtraction scheduledTime
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -327,6 +329,7 @@ processFiveMinuteSpans :: UTCTime -> ATBackgroundCtx ()
 processFiveMinuteSpans scheduledTime = do
   ctx <- ask @Config.AuthContext
   let fiveMinutesAgo = addUTCTime (-300) scheduledTime
+
   Log.logInfo "Getting HTTP spans from 5-minute window" ()
   -- Get APIToolkit-specific HTTP spans (excludes generic telemetry)
   httpSpans <-
@@ -361,6 +364,7 @@ processFiveMinuteSpans scheduledTime = do
 
 logsPatternExtraction :: UTCTime -> ATBackgroundCtx ()
 logsPatternExtraction scheduledTime = do
+  Log.logInfo "Logs pattern extraction begin" ()
   otelLogs <- dbtToEff $ query [sql| SELECT id::text, body::text FROM otel_logs_and_spans WHERE timestamp > now() - interval '2 hour' and kind = 'log' and log_pattern is null and body is not null limit 2000|] ()
   Log.logInfo "Fetched OTEL logs for pattern extraction" ("log_count", AE.toJSON $ V.length otelLogs)
   let drainTree = processBatch otelLogs scheduledTime Telemetry.emptyDrainTree
@@ -406,10 +410,7 @@ processOneMinuteErrors scheduledTime = do
   -- since we use hashes of errors and don't insert same error twice
   -- we can increase the window to account for time spent on kafka
   -- use two minutes for now before use a better solution
-  let oneMinuteAgo = addUTCTime (-60 * 5) scheduledTime
-  Log.logInfo "Logs pattern extraction begin" ()
-  logsPatternExtraction oneMinuteAgo
-  Log.logInfo "Logs pattern extraction complete" ()
+  let oneMinuteAgo = addUTCTime (-60 * 2) scheduledTime
   -- Get all spans with errors from time window
   -- Check for:
   -- 1. Spans with error status codes
