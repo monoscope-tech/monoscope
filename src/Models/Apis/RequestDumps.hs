@@ -16,6 +16,7 @@ module Models.Apis.RequestDumps (
   getLast24hTotalRequest,
   getLastSevenDaysTotalRequest,
   parseSDKType,
+  fetchLogPatterns,
 )
 where
 
@@ -521,6 +522,17 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
   logItemsV <- checkpoint (toAnnotation ("selectLogTable", q)) $ executeArbitraryQuery q
   Only c <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
   pure $ Right (logItemsV, queryComponents.toColNames, c)
+
+
+fetchLogPatterns :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Eff es (V.Vector (Text, Int))
+fetchLogPatterns pid queryAST dateRange sourceM = do
+  now <- Time.currentTime
+  let (_, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now sourceM Nothing){dateRange}) queryAST
+      pidTxt = pid.toText
+      whereCondition = fromMaybe [text|project_id=${pidTxt}|] $ queryComponents.whereClause
+      q = [text|select log_pattern, count(*) as p_count from otel_logs_and_spans where ${whereCondition} and log_pattern is not null GROUP BY log_pattern HAVING COUNT(*) > 2 ORDER BY p_count desc;|]
+  v <- dbtToEff $ query (Query $ encodeUtf8 q) ()
+  pure v
 
 
 queryCount :: DB :> es => Text -> Eff es (Maybe (Only Int))

@@ -73,7 +73,7 @@ logQueryBox_ config = do
                   on keydown[key=='Space' and shiftKey] from document set #ai-search-chkbox.checked to true
                   |]
               ]
-            <> [checked_ | isJust config.targetWidgetPreview]
+              <> [checked_ | isJust config.targetWidgetPreview]
           script_
             [text|
             document.addEventListener('keydown', function(e) {
@@ -211,7 +211,7 @@ logQueryBox_ config = do
                      end
                   |]
                 ]
-              <> [checked_ | config.alert]
+                <> [checked_ | config.alert]
             span_ "create alert"
 
   -- Include initialization code for the query editor
@@ -224,25 +224,35 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
   div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-fillWeak p-1 rounded-lg", id_ "visualizationTabs", role_ "tablist"] do
     let defaultVizType = if alert then "viz-timeseries" else fromMaybe "logs" vizTypeM
         containerSelector = fromMaybe "visualization-widget-container" widgetContainerId
-    forM_ visTypes $ \(icon, label, vizType, emoji) -> label_ [class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
-      input_
-        $ [ type_ "radio"
-          , name_ "visualization"
-          , id_ $ "viz-" <> vizType
-          , value_ vizType
-          , term "data-update-url" (if updateUrl then "true" else "false")
-          , term "data-container-id" containerSelector
-          , [__| on change
-                      if my.checked
-                        call updateVizTypeInUrl(my.value, @data-update-url === 'true')
-                        set widgetJSON.type to my.value
-                        send 'update-widget' to #{@data-container-id}
-                      end
-                   |]
-          ]
-        <> [checked_ | vizType == defaultVizType]
-      span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
-      span_ [] $ toHtml label
+
+    forM_ visTypes $ \(icon, label, vizType, emoji) -> do
+      label_
+        [ term "data-value" vizType
+        , term "data-reload" $ if vizTypeM == Just "patterns" || vizType == "patterns" then "patterns" else ""
+        , class_ "tab !shadow-none !border-strokeWeak flex gap-1"
+        , [__| on click 
+               if @data-reload == "patterns" then window.setParams({viz_type:@data-value}, true) end
+          |]
+        ]
+        do
+          input_
+            $ [ type_ "radio"
+              , name_ "visualization"
+              , id_ $ "viz-" <> vizType
+              , value_ vizType
+              , term "data-update-url" (if updateUrl then "true" else "false")
+              , term "data-container-id" containerSelector
+              , [__| on change
+                          if my.checked
+                            call updateVizTypeInUrl(my.value, @data-update-url === 'true')
+                            set widgetJSON.type to my.value
+                            send 'update-widget' to #{@data-container-id}
+                          end
+                       |]
+              ]
+              <> [checked_ | vizType == defaultVizType]
+          span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
+          span_ [] $ toHtml label
 
 
 -- | Query library component for saved and recent queries
@@ -292,6 +302,7 @@ visTypes =
   [ ("list-view", "Logs", "logs", "📋")
   , ("bar-chart", "Bar", "timeseries", "📊")
   , ("duo-line-chart", "Line", "timeseries_line", "📈")
+  , ("log-patterns", "Patterns", "patterns", "🔍")
   -- , ("duo-pie-chart", "Pie", "pie_chart", "🥧")
   -- , ("duo-scatter-chart", "Scatter", "distribution", "📉")
   -- , ("hashtag", "Number", "stat", "🔢")
@@ -316,7 +327,7 @@ queryLibItem_ isRecent qli =
           whenJust qli.title (\title -> span_ [class_ "font-medium text-sm"] $ toHtml title <> " •")
           small_ [class_ "text-textWeak text-xs whitespace-nowrap"]
             $ toHtml (displayTimestamp $ formatUTC qli.createdAt)
-            >> when qli.byMe " • by me"
+              >> when qli.byMe " • by me"
         code_ [class_ "queryText text-xs block whitespace-pre-wrap break-words opacity-75"] $ toHtml qli.queryText
 
       -- Actions (simplified, shown on hover)

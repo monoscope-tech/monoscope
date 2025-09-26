@@ -39,7 +39,7 @@ import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), currProject, pageActions, pageTitle, sessM)
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, queryEditorInitializationCode, queryLibrary_)
 import Pkg.Components.TimePicker qualified as Components
-import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseriesLine))
+import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine, WTTimeseriesStat))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (pSource, parseQueryToAST, toQText)
 import Relude hiding (ask)
@@ -455,7 +455,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
         Nothing -> return Nothing
 
   -- Skip table load on initial page load unless it's a JSON request
-  let shouldSkipLoad = layoutM == Nothing && hxRequestM == Nothing && jsonM /= Just "true"
+  let shouldSkipLoad = layoutM == Nothing && hxRequestM == Nothing && jsonM /= Just "true" || vizTypeM == Just "patterns"
       fetchLogs =
         if authCtx.env.enableTimefusionReads
           then labeled @"timefusion" @DB $ RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
@@ -475,6 +475,12 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
 
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
+
+  patterns <- case vizTypeM of
+    Just "patterns" -> do
+      patternsResult <- RequestDumps.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM)
+      return $ Just patternsResult
+    _ -> return Nothing
 
   -- Build preload URL using the same function that builds the JSON URLs
   let preloadUrl = RequestDumps.requestDumpLogUrlPath pid queryM' cols' (formatUTC <$> cursorM') sinceM fromM toM Nothing sourceM False
@@ -550,6 +556,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
               , facets = facetSummary
               , vizType = vizTypeM
               , alert = alertDM
+              , patterns = patterns
               }
       let jsonResponse = LogsGetJson requestVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap resultCount
       addRespHeaders $ case (layoutM, hxRequestM, jsonM) of
@@ -624,6 +631,7 @@ data ApiLogsPageData = ApiLogsPageData
   , facets :: Maybe Models.Apis.Fields.Types.FacetSummary
   , vizType :: Maybe Text
   , alert :: Maybe Monitors.QueryMonitor
+  , patterns :: Maybe (V.Vector (Text, Int))
   }
 
 
@@ -687,10 +695,13 @@ apiLogsPage page = do
           , alert = isJust page.alert
           }
 
-      div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[#viz-logs:not(:checked)]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 ", style_ "aspect-ratio: 10 / 1;"] do
-        Widget.widget_ $ (def :: Widget.Widget){Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code", Widget.unit = Just "rows", Widget.title = Just "All traces", Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True, Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
-
-        Widget.widget_
+      div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[#viz-timeseries:checked]/pg:hidden group-has-[#viz-timeseries_line:checked]/pg:hidden  group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 ", style_ "aspect-ratio: 10 / 1;"] do
+        let (tp, query, title) = case page.vizType of
+              Just "patterns" -> (WTTimeseriesLine, "log_pattern != null | summarize count(*) by bin_auto(timestamp), log_pattern", "Log patterns")
+              _ -> (WTTimeseries, "summarize count(*) by bin_auto(timestamp), status_code", "All traces")
+        Widget.widget_ $ (def :: Widget.Widget){Widget.wType = tp, Widget.query = Just query, Widget.unit = Just "rows", Widget.title = Just title, Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True, Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
+        unless (page.vizType == Just "patterns")
+          $ Widget.widget_
           $ (def :: Widget.Widget)
             { Widget.wType = WTTimeseriesLine
             , Widget.standalone = Just True
@@ -723,18 +734,21 @@ apiLogsPage page = do
             , Widget.hideLegend = Just True
             , Widget._projectId = Just page.pid
             }
-
-    div_ [class_ "flex h-full gap-3.5 overflow-y-hidden", id_ "facets_and_loglist"] do
-      -- FACETS
-      div_ [class_ "w-68 will-change-[width] contain-[layout_style] text-sm shrink-0 flex flex-col h-full overflow-y-scroll gap-2 group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden ", id_ "facets-container"] do
-        div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
-          span_ [class_ "absolute inset-y-0 left-3 flex items-center", Aria.hidden_ "true"]
-            $ faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
-          input_
-            [ placeholder_ "Search filters..."
-            , class_ "rounded-lg pl-10 pr-3 py-1.5 border border-strokeStrong w-full"
-            , term "data-filterParent" "facets-container"
-            , [__| on keyup 
+    whenJust page.patterns \patternsData ->
+      div_ [class_ "overflow-y-auto max-h-96 border border-strokeWeak rounded mt-3"] do
+        patternList patternsData page.pid
+    unless (page.vizType == Just "patterns")
+      $ div_ [class_ "flex h-full gap-3.5 overflow-y-hidden", id_ "facets_and_loglist"] do
+        -- FACETS
+        div_ [class_ "w-68 will-change-[width] contain-[layout_style] text-sm shrink-0 flex flex-col h-full overflow-y-scroll gap-2 group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden ", id_ "facets-container"] do
+          div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
+            span_ [class_ "absolute inset-y-0 left-3 flex items-center", Aria.hidden_ "true"]
+              $ faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
+            input_
+              [ placeholder_ "Search filters..."
+              , class_ "rounded-lg pl-10 pr-3 py-1.5 border border-strokeStrong w-full"
+              , term "data-filterParent" "facets-container"
+              , [__| on keyup 
                     if the event's key is 'Escape' 
                       set my value to '' then trigger keyup 
                     else 
@@ -742,24 +756,24 @@ apiLogsPage page = do
                       show <div.facet-section/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
                       show <div.facet-value/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
                   |]
-            ]
-        whenJust page.facets renderFacets
+              ]
+          whenJust page.facets renderFacets
 
-      div_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] $ resizer_ "facets-container" "facets_width" True
+        div_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] $ resizer_ "facets-container" "facets_width" True
 
-      let dW = fromMaybe "100%" page.detailsWidth
-          showTrace = isJust page.showTrace
-      div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
-        -- Filters and row count header
-        div_ [class_ "flex gap-2  pt-1 text-sm -mb-6 z-10 w-max bg-bgBase"] do
-          label_ [class_ "gap-1 flex items-center cursor-pointer"] do
-            faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
-            span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
-            span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
-            "filters"
-            input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked); setTimeout(() => { const editor = document.getElementById('filterElement'); if (editor && editor.refreshLayout) editor.refreshLayout(); }, 200);"]
-            script_
-              $ [text|
+        let dW = fromMaybe "100%" page.detailsWidth
+            showTrace = isJust page.showTrace
+        div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
+          -- Filters and row count header
+          div_ [class_ "flex gap-2  pt-1 text-sm -mb-6 z-10 w-max bg-bgBase"] do
+            label_ [class_ "gap-1 flex items-center cursor-pointer"] do
+              faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
+              span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
+              span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
+              "filters"
+              input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked); setTimeout(() => { const editor = document.getElementById('filterElement'); if (editor && editor.refreshLayout) editor.refreshLayout(); }, 200);"]
+              script_
+                $ [text|
               document.getElementById('toggle-filters').checked = localStorage.getItem('toggle-filter-checked') === 'true';
               // Ensure editor layout is correct on initial load
               setTimeout(() => {
@@ -769,15 +783,15 @@ apiLogsPage page = do
                 }
               }, 300);
             |]
-          span_ [class_ "text-strokeWeak "] "|"
-          div_ [class_ ""] $ span_ [class_ "text-textStrong", id_ "row-count-display"] (toHtml $ prettyPrintCount page.resultCount) >> span_ [class_ "text-textStrong"] (toHtml " rows")
+            span_ [class_ "text-strokeWeak "] "|"
+            div_ [class_ ""] $ span_ [class_ "text-textStrong", id_ "row-count-display"] (toHtml $ prettyPrintCount page.resultCount) >> span_ [class_ "text-textStrong"] (toHtml " rows")
 
-        -- Visualization widget that shows when not in logs view
-        div_ [class_ "flex-1 min-h-0 group-has-[#viz-logs:checked]/pg:hidden"] do
-          let pid = page.pid.toText
-          let vizType = maybe "\"timeseries\"" show page.vizType
-          script_
-            [text| var widgetJSON = {
+          -- Visualization widget that shows when not in logs view
+          div_ [class_ "flex-1 min-h-0 group-has-[#viz-logs:checked]/pg:hidden"] do
+            let pid = page.pid.toText
+            let vizType = maybe "\"timeseries\"" show page.vizType
+            script_
+              [text| var widgetJSON = {
                   "id": "visualization-widget",
                   "type": ${vizType}, 
                   "title": "Visualization",
@@ -788,45 +802,45 @@ apiLogsPage page = do
                   "layout": {"w": 6, "h": 4}
                 };
                 |]
-          div_
-            [ id_ "visualization-widget-container"
-            , class_ " w-full"
-            , style_ "aspect-ratio: 4 / 2;"
-            , hxPost_ ("/p/" <> page.pid.toText <> "/widget")
-            , hxTrigger_ "intersect once, update-widget"
-            , hxTarget_ "this"
-            , hxSwap_ "innerHTML"
-            , hxVals_ "js:{...widgetJSON}"
-            , hxExt_ "json-enc"
-            , term "hx-sync" "this:replace"
-            ]
-            ""
+            div_
+              [ id_ "visualization-widget-container"
+              , class_ " w-full"
+              , style_ "aspect-ratio: 4 / 2;"
+              , hxPost_ ("/p/" <> page.pid.toText <> "/widget")
+              , hxTrigger_ "intersect once, update-widget"
+              , hxTarget_ "this"
+              , hxSwap_ "innerHTML"
+              , hxVals_ "js:{...widgetJSON}"
+              , hxExt_ "json-enc"
+              , term "hx-sync" "this:replace"
+              ]
+              ""
 
-        -- Trace view container
-        div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-bgBase transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
-          whenJust page.showTrace \trId -> do
-            let url = "/p/" <> page.pid.toText <> "/traces/" <> trId
-            span_ [class_ "loading loading-dots loading-md"] ""
-            div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one", term "hx-sync" "this:replace"] pass
+          -- Trace view container
+          div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-bgBase transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
+            whenJust page.showTrace \trId -> do
+              let url = "/p/" <> page.pid.toText <> "/traces/" <> trId
+              span_ [class_ "loading loading-dots loading-md"] ""
+              div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one", term "hx-sync" "this:replace"] pass
 
-        -- Logs view section (also within the scrollable container)
-        div_ [class_ "flex-1 min-h-0 flex flex-col"] do
-          -- Virtual table for logs
-          div_ [class_ "flex-1 min-h-0 hidden group-has-[#viz-logs:checked]/pg:block"] $ virtualTable page
+          -- Logs view section (also within the scrollable container)
+          div_ [class_ "flex-1 min-h-0 flex flex-col"] do
+            -- Virtual table for logs
+            div_ [class_ "flex-1 min-h-0 hidden group-has-[#viz-logs:checked]/pg:block"] $ virtualTable page
 
-      -- Alert configuration panel on the right
-      div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block"] $ resizer_ "alert_container" "alert_width" False
+        -- Alert configuration panel on the right
+        div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block"] $ resizer_ "alert_container" "alert_width" False
 
-      div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block", id_ "alert_container", style_ "width: 500px;"] do
-        alertConfigurationForm_ page.pid page.alert
+        div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block", id_ "alert_container", style_ "width: 500px;"] do
+          alertConfigurationForm_ page.pid page.alert
 
-      div_ [class_ $ "transition-opacity duration-200 " <> if isJust page.targetEvent then "" else "opacity-0 pointer-events-none hidden", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
+        div_ [class_ $ "transition-opacity duration-200 " <> if isJust page.targetEvent then "" else "opacity-0 pointer-events-none hidden", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
 
-      div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0", id_ "log_details_container"] do
-        span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
-        whenJust page.targetEvent \te -> do
-          script_
-            [text|
+        div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0", id_ "log_details_container"] do
+          span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
+          whenJust page.targetEvent \te -> do
+            script_
+              [text|
             document.addEventListener('DOMContentLoaded', function() {
               const detailsContainer = document.getElementById('log_details_container');
               if (detailsContainer) {
@@ -840,8 +854,8 @@ apiLogsPage page = do
               }
               });
           |]
-          let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
-          div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
+            let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
+            div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
 
   jsonTreeAuxillaryCode page.pid page.query
   queryEditorInitializationCode page.queryLibRecent page.queryLibSaved page.vizType
@@ -1157,8 +1171,8 @@ alertConfigurationForm_ pid alertM = do
                                      })
                                    end|]
                             ]
-                          ++ [required_ "" | req]
-                          ++ [value_ (maybe "" (show) vM) | isJust vM]
+                            ++ [required_ "" | req]
+                            ++ [value_ (maybe "" (show) vM) | isJust vM]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)
@@ -1273,3 +1287,33 @@ alertConfigurationForm_ pid alertM = do
               do
                 faSprite_ "plus" "regular" "w-3.5 h-3.5"
                 if isJust alertM then "Update alert" else "Create Alert"
+
+
+patternList :: V.Vector (Text, Int) -> Projects.ProjectId -> Html ()
+patternList patterns pid = do
+  let total = V.foldl' (\acc (_, c) -> acc + c) 0 patterns
+  table_ [class_ "min-w-full table table-sm rounded-2xl text-sm"] $ do
+    thead_ [class_ "sticky top-0 bg-bgBase z-10 text-xs"]
+      $ tr_
+      $ do
+        th_ [class_ "px-4 py-2 text-left"] "Chart"
+        th_ [class_ "px-4 py-2 text-left"] "Count"
+        th_ [class_ "px-4 py-2 text-left"] "%"
+        th_ [class_ "px-4 py-2 text-left"] "Pattern"
+    tbody_ [class_ "divide-y divide-border"]
+      $ forM_ patterns
+      $ \p -> renderPattern p total pid
+
+
+renderPattern :: (Text, Int) -> Int -> Projects.ProjectId -> Html ()
+renderPattern (template, count) total pid =
+  tr_ [class_ "hover:bg-fillWeak"] $ do
+    td_ [class_ "px-4 py-2"] do
+      Widget.widget_ $ (def :: Widget.Widget){Widget.wType = WTTimeseries, Widget.query = Just $ "summarize count() by bin_auto(timestamp)", Widget.naked = Just True, Widget.hideLegend = Just True, Widget._projectId = Just pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
+    td_ [class_ "px-4 py-2 font-mono"] (toHtml (show count))
+    td_ [class_ "px-4 py-2"]
+      $ toHtml (take 4 (show (fromIntegral count / fromIntegral total * 100 :: Double)) ++ "%")
+    td_ [class_ "px-4 py-2 max-w-xl truncate whitespace-nowrap"]
+      $ code_
+        [class_ "bg-muted/50 px-2 py-1 rounded font-mono text-foreground"]
+        (toHtml template)
