@@ -223,6 +223,11 @@ processBackgroundJob authCtx job bgJob =
           _ <- scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob scheduledTime hour) scheduledTime
           pass
 
+        -- Schedule 15-minute log pattern extraction jobs (96 jobs per day = 24 hours * 4 per hour)
+        forM_ [0 .. 95] \interval -> do
+          let scheduledTime1 = addUTCTime (fromIntegral $ interval * 900) currentTime
+          scheduleJob conn "background_jobs" (BackgroundJobs.FifteenMinutesLogsPatternProcessing scheduledTime1) scheduledTime1
+
         -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
         forM_ [0 .. 287] \interval -> do
           let scheduledTime2 = addUTCTime (fromIntegral $ interval * 300) currentTime
