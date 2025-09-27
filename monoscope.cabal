@@ -124,6 +124,7 @@ library
       Pkg.DeriveUtils
       Pkg.Google
       Pkg.Mail
+      Pkg.Drain
       Pkg.Parser
       Pkg.Parser.Core
       Pkg.Parser.Expr
@@ -507,6 +508,7 @@ test-suite unit-tests
       Data.Effectful.NotifySpec
       Pkg.Parser.ExprSpec
       Pkg.ParserSpec
+      Pkg.DrainSpec
       RequestMessagesSpec
       Spec
   hs-source-dirs:
@@ -555,4 +557,6 @@ test-suite unit-tests
     , neat-interpolation
     , relude >=1.2.0.0
     , uuid
+    , vector
+    , time
   default-language: GHC2021
