@@ -88,9 +88,9 @@ tabs:
         sql: |
           SELECT 
             resource___service___name as service_name,
-            COUNT(*)::float / GREATEST(1, EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp)))) as throughput,
-            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*))), 2)::float as error_rate,
-            ROUND((approx_percentile(0.95, percentile_agg(duration)) / 1e6), 2)::float as p95_latency
+            (COUNT(*)::float / GREATEST(1, EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp)))))::text as throughput,
+            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*))), 2)::text as error_rate,
+            ROUND((approx_percentile(0.95, percentile_agg(duration)) / 1e6)::numeric, 2)::text as p95_latency
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}' 
             AND resource___service___name IS NOT NULL
@@ -117,7 +117,7 @@ tabs:
             title: 'Global Error Rate'
             icon: bug
             sql: |
-              SELECT ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*))), 2)::float
+              SELECT ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::float
               FROM otel_logs_and_spans
               WHERE project_id='{{project_id}}'
                 AND (kind = 'server' OR name = 'apitoolkit-http-span')
@@ -159,7 +159,7 @@ tabs:
           SELECT 
             extract(epoch from time_bucket('5m', timestamp))::integer AS time,
             resource___service___name as service,
-            COUNT(*) as count
+            COUNT(*)::float as count
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND resource___service___name IS NOT NULL
@@ -179,7 +179,7 @@ tabs:
           SELECT 
             extract(epoch from time_bucket('5m', timestamp))::integer AS time,
             resource___service___name as service,
-            COUNT(*) as count
+            COUNT(*)::float as count
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND status_code = 'ERROR'
@@ -216,9 +216,9 @@ tabs:
             COALESCE(hashes[1], '') as endpoint_hash,
             COALESCE(attributes___url___path, '') as endpoint,
             COALESCE(attributes___http___request___method, '') as method,
-            COUNT(*) as requests,
-            COUNT(*) FILTER (WHERE COALESCE(attributes___http___response___status_code, 0) >= 400) as errors,
-            ROUND((approx_percentile(0.95, percentile_agg(duration)) / 1e6), 2)::float as p95_latency
+            COUNT(*)::text as requests,
+            COUNT(*) FILTER (WHERE COALESCE(attributes___http___response___status_code, 0) >= 400)::text as errors,
+            ROUND((approx_percentile(0.95, percentile_agg(duration)) / 1e6)::numeric, 2)::text as p95_latency
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND resource___service___name = '{{var-service}}'
@@ -245,7 +245,7 @@ tabs:
   #           title: 'Service Error Rate'
   #           icon: bug
   #           sql: |
-  #             SELECT ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*))), 2)::float
+  #             SELECT ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::float
   #             FROM otel_logs_and_spans
   #             WHERE project_id='{{project_id}}'
   #               AND resource___service___name = '{{var-service}}'
@@ -336,7 +336,7 @@ tabs:
   #           title: 'Resource Error Rate'
   #           icon: bug
   #           sql: |
-  #             SELECT ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400) * 100.0 / GREATEST(1, COUNT(*))), 2)::float
+  #             SELECT ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400) * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::float
   #             FROM otel_logs_and_spans
   #             WHERE project_id='{{project_id}}'
   #               AND '{{var-resource}}' = ANY(hashes)
@@ -355,7 +355,7 @@ tabs:
   #           title: 'P95 Latency'
   #           icon: trending-up
   #           sql: |
-  #             SELECT ROUND((approx_percentile(0.95, percentile_agg(duration)) / 1e6), 2)::float
+  #             SELECT ROUND((approx_percentile(0.95, percentile_agg(duration)) / 1e6)::numeric, 2)::float
   #             FROM otel_logs_and_spans
   #             WHERE project_id='{{project_id}}'
   #               AND '{{var-resource}}' = ANY(hashes)
@@ -434,7 +434,7 @@ tabs:
   #           title: 'Error Rate'
   #           icon: bug
   #           sql: |
-  #             SELECT ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*))), 2)::float
+  #             SELECT ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::float
   #             FROM otel_logs_and_spans
   #             WHERE project_id='{{project_id}}'
   #               AND kind IS NOT NULL
@@ -565,8 +565,8 @@ tabs:
   #         SELECT
   #           attributes___db___system___name as db_system,
   #           COUNT(*) as operations,
-  #           ROUND(AVG(duration) / 1e6, 2) as avg_duration,
-  #           ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*))), 2)::float as error_rate,
+  #           ROUND((AVG(duration) / 1e6)::numeric, 2) as avg_duration,
+  #           ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::float as error_rate,
   #           COUNT(*)::float / GREATEST(1, EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp)))) as throughput
   #         FROM otel_logs_and_spans
   #         WHERE project_id='{{project_id}}'
@@ -591,7 +591,7 @@ tabs:
   #           title: 'Query Error Rate'
   #           icon: bug
   #           sql: |
-  #             SELECT ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*))), 2)::float
+  #             SELECT ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::float
   #             FROM otel_logs_and_spans
   #             WHERE project_id='{{project_id}}'
   #               AND attributes___db___system___name IS NOT NULL
@@ -636,7 +636,7 @@ tabs:
   #           attributes___db___statement as query,
   #           attributes___db___operation as operation,
   #           attributes___db___system___name as database,
-  #           ROUND(duration / 1e6, 2) as duration_ms,
+  #           ROUND((duration / 1e6)::numeric, 2) as duration_ms,
   #           resource___service___name as service,
   #           timestamp
   #         FROM otel_logs_and_spans
