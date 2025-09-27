@@ -398,7 +398,7 @@ spec = do
       RequestMessages.replaceAllFormats "Hash: a94a8fe5ccb19ba61c4c0873d391e987982fbbd3, Status: 403, Port: :8443" `shouldBe` "Hash: {sha1}, Status: {integer}, Port: {port}"
       
     it "should handle date with port patterns" do
-      RequestMessages.replaceAllFormats "Processing request 123456 at 2023-10-15:3000" `shouldBe` "Processing request {integer} at {integer}-{integer}-{integer}{port}"
+      RequestMessages.replaceAllFormats "Processing request 123456 at 2023-10-15:3000" `shouldBe` "Processing request {integer} at {YYYY-MM-DD}{port}"
       
     it "should handle various mixed patterns" do
       RequestMessages.replaceAllFormats "Mixed: 192.168.1.1 123 :80 404" `shouldBe` "Mixed: {ipv4} {integer} {port} {integer}"
@@ -419,13 +419,13 @@ spec = do
       RequestMessages.replaceAllFormats "Connection timeout to 192.168.1.100:3306 after 30000ms" `shouldBe` "Connection timeout to {ipv4}{port} after {integer}ms"
       RequestMessages.replaceAllFormats "Failed to connect to database at localhost:5432" `shouldBe` "Failed to connect to database at localhost{port}"
       RequestMessages.replaceAllFormats "Error: Invalid UUID c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd in request" `shouldBe` "Error: Invalid UUID {uuid} in request"
-      RequestMessages.replaceAllFormats "Authentication failed for user@example.com from IP 10.0.0.5" `shouldBe` "Authentication failed for user@example.com from IP {ipv4}"
+      RequestMessages.replaceAllFormats "Authentication failed for user@example.com from IP 10.0.0.5" `shouldBe` "Authentication failed for {email} from IP {ipv4}"
       RequestMessages.replaceAllFormats "Request ID: 507f1f77bcf86cd799439011 failed with status 500" `shouldBe` "Request ID: {uuid} failed with status {integer}"
       
     it "should handle log lines with timestamps" do
-      RequestMessages.replaceAllFormats "2023-10-14 10:29:38 ERROR: Connection refused" `shouldBe` "{integer}-{integer}-{integer} {integer}{port}{port} ERROR: Connection refused"
-      RequestMessages.replaceAllFormats "[2023-10-14T10:29:38.123Z] INFO: Server started on port 8080" `shouldBe` "[{integer}-{integer}-{integer}T{integer}{port}{port}.{integer}Z] INFO: Server started on port {integer}"
-      RequestMessages.replaceAllFormats "Oct 14, 2023 - User 12345 logged in from 192.168.1.50" `shouldBe` "Oct {integer}, {integer} - User {integer} logged in from {ipv4}"
+      RequestMessages.replaceAllFormats "2023-10-14 10:29:38 ERROR: Connection refused" `shouldBe` "{YYYY-MM-DD HH:MM:SS} ERROR: Connection refused"
+      RequestMessages.replaceAllFormats "[2023-10-14T10:29:38.123Z] INFO: Server started on port 8080" `shouldBe` "[{YYYY-MM-DDThh:mm:ss.sTZD}] INFO: Server started on port {integer}"
+      RequestMessages.replaceAllFormats "Oct 14, 2023 - User 12345 logged in from 192.168.1.50" `shouldBe` "{Mon DD, YYYY} - User {integer} logged in from {ipv4}"
       
     it "should handle file paths in error messages" do
       RequestMessages.replaceAllFormats "File not found: /usr/local/app/config.json" `shouldBe` "File not found: /usr/local/app/config.json"
@@ -457,9 +457,9 @@ spec = do
       RequestMessages.replaceAllFormats "Timeout connecting to host api.example.com on port 443" `shouldBe` "Timeout connecting to host api.example.com on port {integer}"
       
     it "should handle security-related messages" do
-      RequestMessages.replaceAllFormats "Invalid JWT: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U" `shouldBe` "Invalid JWT: eyJhbGciOiJIUzI{integer}NiIsInR{integer}cCI{integer}IkpXVCJ{integer}.eyJzdWIiOiIxMjM{integer}NTY{integer}ODkwIn{integer}.dozjgNryP{integer}J{integer}jVmNHl{integer}w{integer}N_XgL{integer}n{integer}I{integer}PlFUP{integer}THsR{integer}U"
+      RequestMessages.replaceAllFormats "Invalid JWT: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U" `shouldBe` "Invalid JWT: {jwt}"
       RequestMessages.replaceAllFormats "Unauthorized access from IP 10.20.30.40 to /admin" `shouldBe` "Unauthorized access from IP {ipv4} to /admin"
-      RequestMessages.replaceAllFormats "Failed login attempt for user@example.com from 192.168.1.100" `shouldBe` "Failed login attempt for user@example.com from {ipv4}"
+      RequestMessages.replaceAllFormats "Failed login attempt for user@example.com from 192.168.1.100" `shouldBe` "Failed login attempt for {email} from {ipv4}"
       
     it "should preserve non-matching text" do
       RequestMessages.replaceAllFormats "This is plain text with no patterns" `shouldBe` "This is plain text with no patterns"
@@ -469,7 +469,7 @@ spec = do
     it "should handle edge cases in replacement" do
       RequestMessages.replaceAllFormats "" `shouldBe` ""
       RequestMessages.replaceAllFormats "123456789012345" `shouldBe` "{integer}"
-      RequestMessages.replaceAllFormats "123.456.789.012" `shouldBe` "{integer}.{integer}.{integer}.{integer}"
+      RequestMessages.replaceAllFormats "123.456.789.012" `shouldBe` "{float}.{float}"
       RequestMessages.replaceAllFormats "::::::" `shouldBe` "::::::"
       RequestMessages.replaceAllFormats "0x0x0x0x" `shouldBe` "{hex}x{hex}x"
       
@@ -477,7 +477,7 @@ spec = do
       RequestMessages.replaceAllFormats "pod-abc123def-xyz789" `shouldBe` "pod-abc{integer}def-xyz{integer}"
       RequestMessages.replaceAllFormats "container-550e8400-e29b-41d4-a716-446655440000" `shouldBe` "container-{uuid}"
       RequestMessages.replaceAllFormats "node-192.168.1.100:30000" `shouldBe` "node-{ipv4}{port}"
-      RequestMessages.replaceAllFormats "deployment-v1.2.3-20231014" `shouldBe` "deployment-v{integer}.{integer}.{integer}-{integer}"
+      RequestMessages.replaceAllFormats "deployment-v1.2.3-20231014" `shouldBe` "deployment-v{float}.{integer}-{integer}"
       
     it "should handle cloud provider identifiers" do
       RequestMessages.replaceAllFormats "arn:aws:s3:::my-bucket/path/to/file.txt" `shouldBe` "arn:aws:s{integer}:::my-bucket/path/to/file.txt"
@@ -486,13 +486,13 @@ spec = do
       RequestMessages.replaceAllFormats "vpc-abc123def456" `shouldBe` "vpc-abc{integer}def{integer}"
       
     it "should handle performance metrics" do
-      RequestMessages.replaceAllFormats "Response time: 123.456ms" `shouldBe` "Response time: {integer}.{integer}ms"
-      RequestMessages.replaceAllFormats "CPU usage: 85.5%" `shouldBe` "CPU usage: {integer}.{integer}%"
+      RequestMessages.replaceAllFormats "Response time: 123.456ms" `shouldBe` "Response time: {float}ms"
+      RequestMessages.replaceAllFormats "CPU usage: 85.5%" `shouldBe` "CPU usage: {float}%"
       RequestMessages.replaceAllFormats "Memory: 4096MB/8192MB" `shouldBe` "Memory: {integer}MB/{integer}MB"
       RequestMessages.replaceAllFormats "Requests/sec: 10000" `shouldBe` "Requests/sec: {integer}"
       
     it "should handle complex nested patterns" do
-      RequestMessages.replaceAllFormats "[2023-10-14T10:29:38Z] [ERROR] Connection to db-master.region.rds.amazonaws.com:5432 failed: timeout after 30000ms" `shouldBe` "[{integer}-{integer}-{integer}T{integer}{port}{port}Z] [ERROR] Connection to db-master.region.rds.amazonaws.com{port} failed: timeout after {integer}ms"
+      RequestMessages.replaceAllFormats "[2023-10-14T10:29:38Z] [ERROR] Connection to db-master.region.rds.amazonaws.com:5432 failed: timeout after 30000ms" `shouldBe` "[{YYYY-MM-DDThh:mm:ss.sTZD}] [ERROR] Connection to db-master.region.rds.amazonaws.com{port} failed: timeout after {integer}ms"
       RequestMessages.replaceAllFormats "User c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd from 192.168.1.100 accessed /api/v2/data/12345 at 1634567890" `shouldBe` "User {uuid} from {ipv4} accessed /api/v{integer}/data/{integer} at {integer}"
 
 -- describe "requestMessageEndpoint" do
