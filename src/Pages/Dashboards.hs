@@ -194,12 +194,12 @@ dashboardPage_ pid dashId dash dashVM allParams = do
   });
 
     |]
-  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-5 pb-6 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-2 group/pg", id_ "dashboardPage"] do
+  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-5 pb-6 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-20 group/pg", id_ "dashboardPage"] do
     case dash.tabs of
       Just tabs -> do
         -- Tab system with CSS-based switching
         let activeTabIdx = fromMaybe 0 $ readMaybe . toString =<< join (List.lookup "tab" allParams)
-        div_ [class_ "h-full dashboard-tabs-container"] do
+        div_ [class_ "dashboard-tabs-container"] do
           forM_ (zip [0 ..] tabs) \(idx, tab) -> do
             -- Tab content panel
             div_
