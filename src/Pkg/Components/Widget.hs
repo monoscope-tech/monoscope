@@ -360,7 +360,8 @@ renderTable widget = do
     -- Card container that takes remaining space
     div_ [class_ "flex-1 flex min-h-0"] do
       div_
-        [ class_ $ "h-full w-full flex flex-col " 
+        [ class_
+            $ "h-full w-full flex flex-col "
             <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ tableId <> "_bordered"
         ]
@@ -375,15 +376,16 @@ renderTable widget = do
                     th_ [class_ $ "text-left bg-bgRaised sticky top-0 " <> fromMaybe "" col.align] $ toHtml col.title
               -- Table body
               tbody_ [id_ $ tableId <> "_body"] ""
-    
+
     -- JavaScript for table functionality
     let query = decodeUtf8 $ AE.encode widget.query
     let querySQL = maybeToMonoid widget.sql
     let pid = decodeUtf8 $ AE.encode $ widget._projectId <&> (.toText)
     let onRowClick = decodeUtf8 $ AE.encode widget.onRowClick
     let columns = decodeUtf8 $ AE.encode widget.columns
-    
-    script_ [type_ "text/javascript"]
+
+    script_
+      [type_ "text/javascript"]
       [text|
       (function() {
         const tableId = '${tableId}';
