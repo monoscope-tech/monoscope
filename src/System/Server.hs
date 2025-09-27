@@ -9,7 +9,6 @@ import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
 import Data.Pool as Pool (destroyAllResources)
 import Data.Text qualified as T
-import Data.Time (getCurrentTime)
 import Effectful
 import Effectful.Concurrent (runConcurrent)
 import Effectful.Fail (runFailIO)
