@@ -559,11 +559,12 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
               , patterns = patterns
               }
       let jsonResponse = LogsGetJson requestVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap resultCount
-      addRespHeaders $ case (layoutM, hxRequestM, jsonM) of
-        (Just "SaveQuery", _, _) -> LogsQueryLibrary pid queryLibSaved queryLibRecent
-        (Just "resultTable", Just "true", _) -> jsonResponse
-        (Just "all", Just "true", _) -> jsonResponse
-        (_, _, Just "true") -> jsonResponse
+      addRespHeaders $ case (layoutM, hxRequestM, jsonM, vizTypeM) of
+        (_, Just "true", _, Just "patterns") -> LogsPatternList pid (fromMaybe V.empty patterns)
+        (Just "SaveQuery", _, _, _) -> LogsQueryLibrary pid queryLibSaved queryLibRecent
+        (Just "resultTable", Just "true", _, _) -> jsonResponse
+        (Just "all", Just "true", _, _) -> jsonResponse
+        (_, _, Just "true", _) -> jsonResponse
         _ -> LogPage $ PageCtx bwconf page
     Nothing -> do
       case (layoutM, hxRequestM, hxBoostedM, jsonM) of
@@ -581,12 +582,14 @@ data LogsGet
   | LogsGetErrorSimple Text
   | LogsGetJson (V.Vector (V.Vector AE.Value)) (HM.HashMap Text Text) Text Text Text [Text] (HM.HashMap Text Int) Int
   | LogsQueryLibrary Projects.ProjectId (V.Vector Projects.QueryLibItem) (V.Vector Projects.QueryLibItem)
+  | LogsPatternList Projects.ProjectId (V.Vector (Text, Int))
 
 
 instance ToHtml LogsGet where
   toHtml (LogPage (PageCtx conf pa_dat)) = toHtml $ PageCtx conf $ apiLogsPage pa_dat
   toHtml (LogsGetErrorSimple err) = span_ [class_ "text-textError"] $ toHtml err
   toHtml (LogsGetError (PageCtx conf err)) = toHtml $ PageCtx conf err
+  toHtml (LogsPatternList pid patterns) = toHtml $ patternList patterns pid
   toHtml (LogsQueryLibrary pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent
   toHtml (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL cols colIdxMap count) =
     span_ [] $ toHtml (decodeUtf8 $ AE.encode $ AE.toJSON (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL cols colIdxMap count) :: Text)
@@ -1292,24 +1295,58 @@ alertConfigurationForm_ pid alertM = do
 patternList :: V.Vector (Text, Int) -> Projects.ProjectId -> Html ()
 patternList patterns pid = do
   let total = V.foldl' (\acc (_, c) -> acc + c) 0 patterns
-  table_ [class_ "min-w-full table table-sm rounded-2xl text-sm"] $ do
-    thead_ [class_ "sticky top-0 bg-bgBase z-10 text-xs"]
-      $ tr_
-      $ do
-        th_ [class_ "px-4 py-2 text-left"] "Chart"
-        th_ [class_ "px-4 py-2 text-left"] "Count"
-        th_ [class_ "px-4 py-2 text-left"] "%"
-        th_ [class_ "px-4 py-2 text-left"] "Pattern"
-    tbody_ [class_ "divide-y divide-border"]
-      $ forM_ patterns
-      $ \p -> renderPattern p total pid
+  if V.null patterns
+    then div_ [class_ "p-6 bg-bgBase rounded-lg text-center", id_ "pattern-list"] $ do
+      faSprite_ "magnifying-glass" "regular" "w-6 h-6 mx-auto text-iconNeutral"
+      h3_ [class_ "mt-3 text-sm font-medium text-textStrong"] "No patterns found"
+      p_ [class_ "mt-1 text-xs text-textWeak"] "Try expanding the time range or adjust your query to surface patterns."
+      div_ [class_ "mt-3"]
+        $ button_
+          [ class_ "btn btn-sm btn-ghost"
+          , onpointerdown_ "dispatchEvent(new Event('update-query'))"
+          ]
+          "Refresh"
+    else do
+      table_ [class_ "min-w-full table table-sm rounded-2xl text-sm", id_ "pattern-list"] $ do
+        thead_ [class_ "sticky top-0 bg-bgBase z-10 text-xs"]
+          $ tr_
+          $ do
+            th_ [class_ "px-4 py-2 text-left"] ""
+            th_ [class_ "px-4 py-2 text-left"] "Count"
+            th_ [class_ "px-4 py-2 text-left"] "%"
+            th_ [class_ "px-4 py-2 text-left"] "Pattern"
+        tbody_ [class_ "divide-y divide-border"]
+          $ forM_ patterns
+          $ \p -> renderPattern p total pid
+  script_
+    [text|
+       ['submit', 'add-query', 'update-query'].forEach((ev) =>
+         window.addEventListener(ev, () => {
+          const p = new URLSearchParams(window.location.search);
+          const pathName = window.location.pathname;
+          const url = window.location.origin + pathName + "?" + p.toString();
+          htmx.ajax('GET', url, { target: '#pattern-list', swap: 'outerHTML', indicator: '#details_indicator' });
+      })
+    );
+    |]
 
 
 renderPattern :: (Text, Int) -> Int -> Projects.ProjectId -> Html ()
 renderPattern (template, count) total pid =
-  tr_ [class_ "hover:bg-fillWeak"] $ do
-    td_ [class_ "px-4 py-2"] do
-      Widget.widget_ $ (def :: Widget.Widget){Widget.wType = WTTimeseries, Widget.query = Just $ "summarize count() by bin_auto(timestamp)", Widget.naked = Just True, Widget.hideLegend = Just True, Widget._projectId = Just pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
+  tr_ [class_ "hover:bg-fillWeaker"] $ do
+    td_ [class_ "flex items-center justify-center w-32 h-12"]
+      $ Widget.widget_
+      $ (def :: Widget.Widget)
+        { Widget.wType = WTTimeseries
+        , Widget.query = Just $ "kind == \"log\" | summarize count() by bin_auto(timestamp)"
+        , Widget.naked = Just True
+        , Widget.xAxis = Just (def{showAxisLabel = Just False})
+        , Widget.yAxis = Just (def{showAxisLabel = Just False})
+        , Widget.hideLegend = Just True
+        , Widget._projectId = Just pid
+        , Widget.standalone = Just True
+        , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
+        }
     td_ [class_ "px-4 py-2 font-mono"] (toHtml (show count))
     td_ [class_ "px-4 py-2"]
       $ toHtml (take 4 (show (fromIntegral count / fromIntegral total * 100 :: Double)) ++ "%")
