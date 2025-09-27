@@ -1182,16 +1182,6 @@ createLogGroup templateTokens templateString logId now =
     }
 
 
--- Update log group with new log
-updateLogGroup :: LogGroup -> Text -> Text -> UTCTime -> LogGroup
-updateLogGroup group' logId originalLog now =
-  group'
-    { logIds = V.cons logId (logIds group')
-    , frequency = frequency group' + 1
-    , lastSeen = now
-    }
-
-
 -- Pattern similarity calculation
 calculateSimilarity :: V.Vector Text -> V.Vector Text -> Double
 calculateSimilarity tokens1 tokens2

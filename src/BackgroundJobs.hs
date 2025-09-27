@@ -369,19 +369,22 @@ logsPatternExtraction :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
 logsPatternExtraction scheduledTime pid = do
   Log.logInfo "Logs pattern extraction begin" ()
   -- use existing patterns for high accurancy
-  logsWithPatterns <- dbtToEff $ query [sql| SELECT DISTINCT ON (log_pattern) id::text, log_pattern FROM otel_logs_and_spans WHERE project_id = ? AND timestamp > now() - interval '6 hour' AND kind = 'log' AND log_pattern IS NOT NULL|] (pid)
   otelLogs <- dbtToEff $ query [sql|  SELECT id::text, body::text FROM otel_logs_and_spans  WHERE project_id = ? AND timestamp > now() - interval '1 hour' and kind = 'log' and log_pattern is null and body is not null |] (pid)
-  let finalVals = logsWithPatterns <> otelLogs
-  Log.logInfo "Fetched OTEL logs for pattern extraction" ("log_count", AE.toJSON $ V.length finalVals)
-  let drainTree = processBatch finalVals scheduledTime Telemetry.emptyDrainTree
-      patterns = Telemetry.getAllLogGroups drainTree
-  Log.logInfo "Extracted log patterns" ("pattern_count", AE.toJSON $ V.length patterns)
-
-  forM_ patterns \p -> do
-    _ <- dbtToEff $ execute [sql| UPDATE otel_logs_and_spans SET log_pattern = ? WHERE id::text=Any(?) |] p
+  Relude.when (null otelLogs) $ do
+    Log.logInfo "No logs found for pattern extraction" ()
+  unless (null otelLogs) $ do
+    logsWithPatterns <- dbtToEff $ query [sql| SELECT DISTINCT ON (log_pattern) id::text, log_pattern FROM otel_logs_and_spans WHERE project_id = ? AND timestamp > now() - interval '6 hour' AND kind = 'log' AND log_pattern IS NOT NULL|] (pid)
+    Log.logInfo "Fetched logs for pattern extraction" ("log_count", AE.toJSON $ V.length otelLogs)
+    let finalVals = logsWithPatterns <> otelLogs
+    Log.logInfo "Fetched OTEL logs for pattern extraction" ("log_count", AE.toJSON $ V.length finalVals)
+    let drainTree = processBatch finalVals scheduledTime Telemetry.emptyDrainTree
+        patterns = Telemetry.getAllLogGroups drainTree
+    Log.logInfo "Extracted log patterns" ("pattern_count", AE.toJSON $ V.length patterns)
+    forM_ patterns \p -> do
+      _ <- dbtToEff $ execute [sql| UPDATE otel_logs_and_spans SET log_pattern = ? WHERE id::text=Any(?) |] p
+      pass
+    Log.logInfo "Completed log pattern extraction" ()
     pass
-  Log.logInfo "Completed log pattern extraction" ()
-  pass
   where
     processNewLog :: Text -> Text -> UTCTime -> Telemetry.DrainTree -> Telemetry.DrainTree
     processNewLog logId logContent now tree = do
