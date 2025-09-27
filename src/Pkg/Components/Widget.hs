@@ -353,16 +353,28 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
 renderTable :: Widget -> Html ()
 renderTable widget = do
   let tableId = maybeToMonoid widget.id
-  renderWidgetHeader widget tableId widget.title Nothing Nothing Nothing Nothing (widget.hideSubtitle == Just True)
-  div_ [class_ "overflow-x-auto p-3"] do
-    table_ [class_ "table table-zebra table-sm", id_ tableId] do
-      -- Table header
-      thead_ [] do
-        tr_ [] do
-          forM_ (fromMaybe [] widget.columns) \col -> do
-            th_ [class_ $ "text-left " <> fromMaybe "" col.align] $ toHtml col.title
-      -- Table body will be populated by JavaScript
-      tbody_ [id_ $ tableId <> "_body"] ""
+  div_ [class_ "gap-0.5 flex flex-col h-full"] do
+    -- Widget header outside the card
+    unless (widget.naked == Just True)
+      $ renderWidgetHeader widget tableId widget.title Nothing Nothing Nothing Nothing (widget.hideSubtitle == Just True)
+    -- Card container that takes remaining space
+    div_ [class_ "flex-1 flex min-h-0"] do
+      div_
+        [ class_ $ "h-full w-full flex flex-col " 
+            <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
+        , id_ $ tableId <> "_bordered"
+        ]
+        do
+          -- Single scrollable table container
+          div_ [class_ "h-full overflow-auto p-3"] do
+            table_ [class_ "table table-zebra table-sm w-full relative", id_ tableId] do
+              -- Sticky table header
+              thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
+                tr_ [] do
+                  forM_ (fromMaybe [] widget.columns) \col -> do
+                    th_ [class_ $ "text-left bg-bgRaised sticky top-0 " <> fromMaybe "" col.align] $ toHtml col.title
+              -- Table body
+              tbody_ [id_ $ tableId <> "_body"] ""
     
     -- JavaScript for table functionality
     let query = decodeUtf8 $ AE.encode widget.query
