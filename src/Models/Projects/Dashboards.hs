@@ -1,4 +1,4 @@
-module Models.Projects.Dashboards (Dashboard (..), DashboardVM (..), DashboardId (..), readDashboardFile, Variable (..), VariableType (..), getDashboardById, readDashboardsFromDirectory, readDashboardEndpoint, replaceQueryVariables) where
+module Models.Projects.Dashboards (Dashboard (..), DashboardVM (..), DashboardId (..), readDashboardFile, Variable (..), VariableType (..), Tab (..), getDashboardById, readDashboardsFromDirectory, readDashboardEndpoint, replaceQueryVariables) where
 
 import Control.Exception (try)
 import Control.Lens
@@ -84,7 +84,8 @@ data Dashboard = Dashboard
   , refreshInterval :: Maybe Text -- Refresh interval
   , timeRange :: Maybe TimePicker.TimePicker
   , variables :: Maybe [Variable]
-  , widgets :: [Widget.Widget] -- List of widgets
+  , tabs :: Maybe [Tab] -- List of tabs
+  , widgets :: [Widget.Widget] -- List of widgets (for backward compatibility)
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, NFData)
@@ -110,10 +111,22 @@ data Variable = Variable
   , query :: Maybe Text
   , options :: Maybe [[Text]]
   , value :: Maybe Text
+  , dependsOn :: Maybe Text -- Variable this one depends on
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "_v", DAE.CamelToSnake]] Variable
+
+
+data Tab = Tab
+  { name :: Text
+  , icon :: Maybe Text
+  , requires :: Maybe Text -- Required variable name for tab to be active
+  , widgets :: [Widget.Widget]
+  }
+  deriving stock (Generic, Show, THS.Lift)
+  deriving anyclass (Default, NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Tab
 
 
 readDashboardsFromDirectory :: FilePath -> Q Exp
@@ -149,9 +162,9 @@ readDashboardEndpoint uri = do
       pure
 
 
-replaceQueryVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> Variable -> Variable
-replaceQueryVariables pid mf mt allParams variable =
-  let mappng = DashboardUtils.variablePresets pid.toText mf mt allParams
+replaceQueryVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Variable -> Variable
+replaceQueryVariables pid mf mt allParams currentTime variable =
+  let mappng = DashboardUtils.variablePresets pid.toText mf mt allParams currentTime
    in variable
         & #sql . _Just %~ DashboardUtils.replacePlaceholders mappng
         & #query . _Just %~ DashboardUtils.replacePlaceholders mappng

@@ -6,6 +6,7 @@ import Data.Default
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as Wreq
 import Data.Generics.Labels ()
+import Data.List qualified as List
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
@@ -54,16 +55,16 @@ import Utils qualified
 import Web.FormUrlEncoded (FromForm)
 
 
-data DashboardGet = DashboardGet Projects.ProjectId Dashboards.DashboardId Dashboards.Dashboard Dashboards.DashboardVM
+data DashboardGet = DashboardGet Projects.ProjectId Dashboards.DashboardId Dashboards.Dashboard Dashboards.DashboardVM [(Text, Maybe Text)]
 
 
 instance ToHtml DashboardGet where
-  toHtml (DashboardGet pid dashId dash dashVM) = toHtml $ dashboardPage_ pid dashId dash dashVM
+  toHtml (DashboardGet pid dashId dash dashVM allParams) = toHtml $ dashboardPage_ pid dashId dash dashVM allParams
   toHtmlRaw = toHtml
 
 
-dashboardPage_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> Html ()
-dashboardPage_ pid dashId dash dashVM = do
+dashboardPage_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> [(Text, Maybe Text)] -> Html ()
+dashboardPage_ pid dashId dash dashVM allParams = do
   -- when  $ freeTierLimitExceededBanner pid.toText
   Modals.modal_ "pageTitleModalId" ""
     $ form_
@@ -80,37 +81,62 @@ dashboardPage_ pid dashId dash dashVM = do
         label_ [Lucid.for_ "pageTitleModalId", class_ "btn btn-outline cursor-pointer"] "Cancel"
         button_ [type_ "submit", class_ "btn btn-primary"] "Save"
 
-  whenJust dash.variables \variables -> do
-    div_ [class_ "flex bg-fillWeaker px-6 py-2 gap-2"]
-      $ forM_ variables \var -> fieldset_ [class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg overflow-hidden dash-variable text-sm"] do
-        legend_ [class_ "px-1 ml-2 text-xs"] $ toHtml $ fromMaybe var.key var.title <> memptyIfFalse (var.required == Just True) " *"
-        let whitelist =
-              maybe
-                "[]"
-                ( decodeUtf8
-                    . fromLazy
-                    . AE.encode
-                    . map \opt ->
-                      AE.object
-                        [ "value" AE..= (opt Unsafe.!! 0)
-                        , "name" AE..= fromMaybe (opt Unsafe.!! 0) (opt !!? 1)
-                        ]
-                )
-                var.options
-
-        input_
-          $ [ type_ "text"
-            , name_ var.key
-            , class_ "tagify-select-input"
-            , data_ "whitelistjson" whitelist
-            , data_ "enforce-whitelist" "true"
-            , data_ "mode" $ if var.multi == Just True then "" else "select"
-            , data_ "query_sql" $ maybeToMonoid var.sql
-            , data_ "query" $ maybeToMonoid var.query
-            , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
-            , value_ $ maybeToMonoid var.value
+  -- Render variables and tabs in the same container
+  when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-fillWeaker px-6 py-2 gap-4 items-center flex-wrap"] do
+    -- Tabs section (on the left)
+    whenJust dash.tabs \tabs -> do
+      let activeTabIdx = fromMaybe 0 $ readMaybe . toString =<< join (List.lookup "tab" allParams)
+      div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline"] do
+        forM_ (zip [0 ..] tabs) \(idx, tab) -> do
+          let tabId = "dashboard-tab-" <> dashId.toText <> "-" <> show idx
+          label_
+            [ role_ "tab"
+            , class_ $ "tab group flex items-center gap-2 has-[:checked]:tab-active"
             ]
-          <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
+            do
+              input_
+                ( [ type_ "radio"
+                  , name_ $ "dashboard-tabs-" <> dashId.toText
+                  , id_ tabId
+                  , class_ "hidden"
+                  , onchange_ $ "const url = new URL(location); url.searchParams.set('tab', '" <> show idx <> "'); history.pushState({}, '', url)"
+                  ]
+                    <> [checked_ | idx == activeTabIdx]
+                )
+              toHtml tab.name
+
+    -- Variables section (pushed to the right)
+    whenJust dash.variables \variables -> do
+      div_ [class_ $ "flex gap-2 flex-wrap " <> if isJust dash.tabs then "ml-auto" else ""] do
+        forM_ variables \var -> fieldset_ [class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg overflow-hidden dash-variable text-sm"] do
+          legend_ [class_ "px-1 ml-2 text-xs"] $ toHtml $ fromMaybe var.key var.title <> memptyIfFalse (var.required == Just True) " *"
+          let whitelist =
+                maybe
+                  "[]"
+                  ( decodeUtf8
+                      . fromLazy
+                      . AE.encode
+                      . map \opt ->
+                        AE.object
+                          [ "value" AE..= (opt Unsafe.!! 0)
+                          , "name" AE..= fromMaybe (opt Unsafe.!! 0) (opt !!? 1)
+                          ]
+                  )
+                  var.options
+
+          input_
+            $ [ type_ "text"
+              , name_ var.key
+              , class_ "tagify-select-input"
+              , data_ "whitelistjson" whitelist
+              , data_ "enforce-whitelist" "true"
+              , data_ "mode" $ if var.multi == Just True then "" else "select"
+              , data_ "query_sql" $ maybeToMonoid var.sql
+              , data_ "query" $ maybeToMonoid var.query
+              , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
+              , value_ $ maybeToMonoid var.value
+              ]
+            <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
   const tagifyInstances = new Map();
@@ -168,14 +194,33 @@ dashboardPage_ pid dashId dash dashVM = do
   });
 
     |]
-  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-5 pb-6 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-2 group/pg", id_ "dashboardPage"] do
-    div_
-      [class_ "grid-stack -m-2"]
-      do
-        forM_ dash.widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
-        when (null dash.widgets) $ label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center *:right-0!  *:bottom-0! ", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
-          faSprite_ "plus" "regular" "h-8 w-8"
-          span_ "Add a widget"
+  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-5 pb-6 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-20 group/pg", id_ "dashboardPage"] do
+    case dash.tabs of
+      Just tabs -> do
+        -- Tab system with CSS-based switching
+        let activeTabIdx = fromMaybe 0 $ readMaybe . toString =<< join (List.lookup "tab" allParams)
+        div_ [class_ "dashboard-tabs-container"] do
+          forM_ (zip [0 ..] tabs) \(idx, tab) -> do
+            -- Tab content panel
+            div_
+              [ class_ $ "tab-panel grid-stack -m-2" <> if idx == activeTabIdx then "" else " hidden"
+              , data_ "tab-index" (show idx)
+              , id_ $ "tab-panel-" <> dashId.toText <> "-" <> show idx
+              ]
+              do
+                forM_ tab.widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
+                when (null tab.widgets) $ label_ [id_ $ "add_widget_tab_" <> show idx, class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
+                  faSprite_ "plus" "regular" "h-8 w-8"
+                  span_ "Add a widget"
+      Nothing -> do
+        -- Fall back to old behavior for dashboards without tabs
+        div_
+          [class_ "grid-stack -m-2"]
+          do
+            forM_ (dash :: Dashboards.Dashboard).widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
+            when (null (dash :: Dashboards.Dashboard).widgets) $ label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center *:right-0!  *:bottom-0! ", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
+              faSprite_ "plus" "regular" "h-8 w-8"
+              span_ "Add a widget"
     let projectId = pid.toText
     let dashboardId = dashId.toText
     -- Add hidden element for the auto-refresh handler
@@ -183,8 +228,20 @@ dashboardPage_ pid dashId dash dashVM = do
 
     script_
       [text|
-
       document.addEventListener('DOMContentLoaded', () => {
+        // Handle tab switching
+        document.querySelectorAll('input[name="dashboard-tabs-${dashboardId}"]').forEach(radio => {
+          radio.addEventListener('change', function() {
+            if (this.checked) {
+              const tabIndex = this.id.split('-').pop();
+              // Hide all panels
+              document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
+              // Show active panel
+              document.getElementById('tab-panel-${dashboardId}-' + tabIndex).classList.remove('hidden');
+            }
+          });
+        });
+        
         GridStack.renderCB = function(el, w) {
           el.innerHTML = w.content;
           const scripts = Array.from(el.querySelectorAll('script'));
@@ -196,22 +253,28 @@ dashboardPage_ pid dashId dash dashVM = do
           });
         };
 
-        // Initialize the main grid.
-        var gridStackInstance = GridStack.init({
-          column: 12,
-          acceptWidgets: true,
-          cellHeight: '5rem',
-          // margin: '0.5rem',
-          marginTop: '0.05rem',
-          marginLeft: '0.5rem',
-          marginRight: '0.5rem',
-          marginBottom: '2rem',
-          handleClass: 'grid-stack-handle',
-          styleInHead: true,
-          staticGrid: false,
-        },document.querySelector('.grid-stack'));
-         // gridStackInstance.compact()
-        gridStackInstance.on('removed change', debounce(updateWidgetOrder('${projectId}', '${dashboardId}'), 200));
+        // Initialize all grids (for both tabs and non-tab dashboards)
+        const gridInstances = [];
+        document.querySelectorAll('.grid-stack').forEach(gridEl => {
+          if (!gridEl.classList.contains('grid-stack-initialized')) {
+            const grid = GridStack.init({
+              column: 12,
+              acceptWidgets: true,
+              cellHeight: '5rem',
+              marginTop: '0.05rem',
+              marginLeft: '0.5rem',
+              marginRight: '0.5rem',
+              marginBottom: '2rem',
+              handleClass: 'grid-stack-handle',
+              styleInHead: true,
+              staticGrid: false,
+            }, gridEl);
+            
+            grid.on('removed change', debounce(updateWidgetOrder('${projectId}', '${dashboardId}'), 200));
+            gridEl.classList.add('grid-stack-initialized');
+            gridInstances.push(grid);
+          }
+        });
 
         // Initialize nested grids and bind change events.
         const nestedGridInstances = [];
@@ -262,87 +325,64 @@ loadDashboardFromVM dashVM = case dashVM.schema of
 
 -- Process a single dashboard variable recursively.
 processVariable :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Variable -> ATAuthCtx Dashboards.Variable
-processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
-  let (fromD, toD, _currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
-  let variable = Dashboards.replaceQueryVariables pid fromD toD allParams variableBase
-  let variable' = variable{Dashboards.value = join (Map.lookup ("var-" <> variable.key) $ Map.fromList allParams) <|> variable.value}
+processVariable pid now timeRange@(sinceStr, fromDStr, toDStr) allParams variableBase = do
+  let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
+      paramsMap = Map.fromList allParams
+      variable' = Dashboards.replaceQueryVariables pid fromD toD allParams now variableBase
+      variable = variable'{Dashboards.value = join (Map.lookup ("var-" <> variable'.key) paramsMap) <|> variable'.value}
 
-  case variable'._vType of
-    Dashboards.VTQuery -> case variable.sql of
-      Nothing -> pure variable
-      Just sqlQuery -> do
-        queryResults <- dbtToEff $ query_ (Query $ encodeUtf8 sqlQuery)
-        pure variable'{Dashboards.options = Just $ V.toList queryResults}
-    _ -> pure variable'
+  case variable._vType of
+    Dashboards.VTQuery | Just sqlQuery <- variable.sql -> do
+      queryResults <- dbtToEff $ query_ (Query $ encodeUtf8 sqlQuery)
+      pure variable{Dashboards.options = Just $ V.toList queryResults}
+    _ -> pure variable
 
 
 -- Process a single widget recursively.
 processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
-processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
-  let (_fromD, _toD, _currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
-  let widgetBase' = if isNothing widgetBase._projectId then widgetBase{Widget._projectId = Just pid} else widgetBase
+processWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widgetBase = do
+  let widget = widgetBase & #_projectId %~ (<|> Just pid)
 
-  let widget = widgetBase'
   widget' <-
     if widget.eager == Just True || widget.wType == Widget.WTAnomalies
-      then do
-        case widget.wType of
-          Widget.WTAnomalies -> do
-            issues <- dbtToEff $ Issues.selectIssues pid Nothing (Just False) (Just False) 2 0
-            let issuesVM = V.map (AnomalyList.IssueVM False True now "24h") issues
-            pure
-              $ widget
-              & #html
-                ?~ renderText
-                  ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-                      $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml)
-                  )
-          Widget.WTStat -> do
-            stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
-            pure
-              $ widget
-              & #dataset
-                ?~ def
-                  { Widget.source = AE.Null
-                  , Widget.value = stat.dataFloat
-                  }
-          _ -> do
-            metricsD <-
-              Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
-            pure
-              $ widget
-              & #dataset
-                ?~ Widget.WidgetDataset
-                  { source =
-                      AE.toJSON
-                        $ V.cons
-                          (AE.toJSON <$> metricsD.headers)
-                          (AE.toJSON <<$>> metricsD.dataset)
-                  , rowsPerMin = metricsD.rowsPerMin
-                  , value = Just metricsD.rowsCount
-                  , from = metricsD.from
-                  , to = metricsD.to
-                  , stats = metricsD.stats
-                  }
+      then processEagerWidget pid now timeRange allParams widget
       else pure widget
-  -- Recursively process child widgets, if any.
-  case widget'.children of
-    Nothing -> pure widget'
-    Just childWidgets -> do
-      -- Process child widgets, preserving any dashboard ID from the parent
-      let processWithParentContext childWidget =
-            processWidget
-              pid
-              now
-              (sinceStr, fromDStr, toDStr)
-              allParams
-              ( if isJust widget'._dashboardId && isNothing childWidget._dashboardId
-                  then childWidget{Widget._dashboardId = widget'._dashboardId}
-                  else childWidget
-              )
 
-      newChildren <- traverse processWithParentContext childWidgets
-      pure $ widget' & (#children ?~ newChildren)
+  -- Recursively process child widgets
+  forOf (#children . _Just . traverse) widget' $ \child ->
+    processWidget pid now timeRange allParams
+      $ child
+      & #_dashboardId %~ (<|> widget'._dashboardId)
+
+
+processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
+processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case widget.wType of
+  Widget.WTAnomalies -> do
+    issues <- dbtToEff $ Issues.selectIssues pid Nothing (Just False) (Just False) 2 0
+    let issuesVM = V.map (AnomalyList.IssueVM False True now "24h") issues
+    pure
+      $ widget
+      & #html
+        ?~ renderText
+          ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
+              $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml)
+          )
+  Widget.WTStat -> do
+    stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
+    pure $ widget & #dataset ?~ def{Widget.source = AE.Null, Widget.value = stat.dataFloat}
+  _ -> do
+    metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
+    pure
+      $ widget
+      & #dataset
+        ?~ Widget.WidgetDataset
+          { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
+          , rowsPerMin = metricsD.rowsPerMin
+          , value = Just metricsD.rowsCount
+          , from = metricsD.from
+          , to = metricsD.to
+          , stats = metricsD.stats
+          }
 
 
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
@@ -357,13 +397,13 @@ dashboardWidgetPutH pid dashId widgetIdM widget = do
                 if (w.id == Just normalizedWidgetId) || (maybeToMonoid (slugify <$> w.title) == normalizedWidgetId)
                   then widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just normalizedWidgetId}
                   else w
-              updatedWidgets = map updateWidget dash.widgets
+              updatedWidgets = map updateWidget (dash :: Dashboards.Dashboard).widgets
               updatedWidget = widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just normalizedWidgetId}
-          (dash{Dashboards.widgets = updatedWidgets}, updatedWidget)
+          ((dash :: Dashboards.Dashboard){Dashboards.widgets = updatedWidgets}, updatedWidget)
         Nothing -> do
           -- When adding a new widget
           let widgetUpdated = widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just uid, Widget._centerTitle = Nothing}
-          (dash{Dashboards.widgets = dash.widgets <> [widgetUpdated]}, widgetUpdated)
+          ((dash :: Dashboards.Dashboard){Dashboards.widgets = (dash :: Dashboards.Dashboard).widgets <> [widgetUpdated]}, widgetUpdated)
 
   _ <- dbtToEff $ DBT.updateFieldsBy @Dashboards.DashboardVM [[DBT.field| schema |]] ([DBT.field| id |], dashId) (Only dash')
 
@@ -397,8 +437,8 @@ dashboardWidgetReorderPatchH
 dashboardWidgetReorderPatchH pid dashId widgetOrder = do
   (_, dash) <- getDashAndVM dashId Nothing
 
-  let sortedWidgets = reorderWidgets widgetOrder dash.widgets
-      newDash = dash{Dashboards.widgets = sortedWidgets}
+  let sortedWidgets = reorderWidgets widgetOrder (dash :: Dashboards.Dashboard).widgets
+      newDash = (dash :: Dashboards.Dashboard){Dashboards.widgets = sortedWidgets}
 
   _ <-
     dbtToEff
@@ -413,29 +453,28 @@ dashboardWidgetReorderPatchH pid dashId widgetOrder = do
 -- | Rebuild the widget tree based solely on the reorder patch.
 -- Widgets not mentioned in the patch are dropped.
 reorderWidgets :: Map Text WidgetReorderItem -> [Widget.Widget] -> [Widget.Widget]
-reorderWidgets patch ws = go patch
+reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
   where
-    go :: Map Text WidgetReorderItem -> [Widget.Widget]
-    go =
-      mapMaybe
-        ( \(wid, item) ->
-            Map.lookup wid (flattenWidgets ws) >>= \orig ->
-              let newLayout = mergeLayout (Widget.layout orig) item
-                  newChildren = item.children <&> go
-               in Just (orig{Widget.layout = newLayout, Widget.children = newChildren})
-        )
-        . Map.toList
+    widgetMap = mkWidgetMap ws
 
-    flattenWidgets :: [Widget.Widget] -> Map Text Widget.Widget
-    flattenWidgets =
-      foldr
-        (\w acc -> Map.insert (fromMaybe (maybeToMonoid $ slugify <$> w.title) w.id) w (Map.union (flattenWidgets (fromMaybe [] w.children)) acc))
-        Map.empty
+    findAndUpdate (wid, item) = do
+      orig <- Map.lookup wid widgetMap
+      let newLayout =
+            Just
+              $ maybe def Relude.id orig.layout
+              & #x %~ (<|> item.x)
+              & #y %~ (<|> item.y)
+              & #w %~ (<|> item.w)
+              & #h %~ (<|> item.h)
+      pure
+        orig
+          { Widget.layout = newLayout
+          , Widget.children = item.children <&> (`reorderWidgets` fromMaybe [] orig.children)
+          }
 
-    mergeLayout :: Maybe Widget.Layout -> WidgetReorderItem -> Maybe Widget.Layout
-    mergeLayout mLayout wri = Just (Widget.Layout (wri.x <|> ox) (wri.y <|> oy) (wri.w <|> ow) (wri.h <|> oh))
-      where
-        Widget.Layout ox oy ow oh = fromMaybe (Widget.Layout Nothing Nothing Nothing Nothing) mLayout
+    mkWidgetMap = Map.fromList . concatMap flatten
+    flatten w = (widgetId w, w) : maybe [] (concatMap flatten) w.children
+    widgetId w = fromMaybe (maybeToMonoid $ slugify <$> w.title) w.id
 
 
 getDashAndVM :: (DB :> es, Error ServerError :> es, Wreq.HTTP :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
@@ -458,6 +497,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
   appCtx <- ask @AuthContext
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
+
   (dashVM, dash) <- getDashAndVM dashId fileM
   dash' <- forOf (#variables . traverse . traverse) dash (processVariable pid now (sinceStr, fromDStr, toDStr) allParams)
 
@@ -465,7 +505,11 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
         processed <- processWidget pid now (sinceStr, fromDStr, toDStr) allParams w
         pure $ processed{Widget._dashboardId = Just dashId.toText}
 
+  -- Process widgets in the main widgets array
   dash'' <- forOf (#widgets . traverse) dash' processWidgetWithDashboardId
+
+  -- Also process widgets in tabs if they exist
+  dash''' <- forOf (#tabs . _Just . traverse . #widgets . traverse) dash'' processWidgetWithDashboardId
 
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
 
@@ -507,7 +551,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
                         "Delete dashboard"
           , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/dashboard/"
           }
-  addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM
+  addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash''' dashVM allParams
 
 
 -- | A unified widget viewer/editor component that uses DaisyUI tabs without JavaScript
@@ -586,14 +630,18 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
   div_ [class_ "flex justify-between items-center mb-4"] do
     div_ [class_ "flex justify-between"] do
       unless isNewWidget
-        $ div_ [class_ "tabs tabs-box tabs-md p-0 tabs-outline items-center border"] do
-          label_ [role_ "tab", class_ "tab h-auto! has-[:checked]:tab-active"] do
-            input_ ([type_ "radio", value_ "Overview", class_ "hidden page-drawer-tab-overview", name_ $ wid <> "-drawer-tab"] <> if effectiveActiveTab /= "edit" then [checked_] else mempty)
-            "Overview"
-
-          label_ [role_ "tab", class_ "tab h-auto! has-[:checked]:tab-active "] do
-            input_ ([type_ "radio", value_ "Edit", class_ "hidden page-drawer-tab page-drawer-tab-edit", name_ $ wid <> "-drawer-tab"] <> if effectiveActiveTab == "edit" then [checked_] else mempty)
-            "Edit"
+        $ div_ [class_ "tabs tabs-box tabs-outline"] do
+          let mkTab tabName isActive = label_ [role_ "tab", class_ "tab has-[:checked]:tab-active"] do
+                input_
+                  $ [ type_ "radio"
+                    , value_ tabName
+                    , class_ $ "hidden page-drawer-tab-" <> T.toLower tabName
+                    , name_ $ wid <> "-drawer-tab"
+                    ]
+                  <> [checked_ | isActive]
+                toHtml tabName
+          mkTab "Overview" (effectiveActiveTab /= "edit")
+          mkTab "Edit" (effectiveActiveTab == "edit")
       when isNewWidget $ h3_ [class_ "text-lg font-normal"] "Add a new widget"
 
     div_ [class_ "flex items-center gap-2"] do
@@ -718,7 +766,7 @@ renderDashboardListItem checked tmplClass title value description icon prview = 
               |]
   ]
   do
-    input_ ([class_ $ "hidden " <> tmplClass, type_ "radio", name_ "file", value_ value] <> [checked_ | checked])
+    input_ $ [class_ $ "hidden " <> tmplClass, type_ "radio", name_ "file", value_ value] <> [checked_ | checked]
     span_ [class_ "p-1 px-2 bg-fillWeak rounded-md"] $ faSprite_ (fromMaybe "square-dashed" icon) "regular" "w-4 h-4"
     span_ [class_ "grow"] $ toHtml title
     span_ [class_ "px-2 p-1 invisible group-has-[input:checked]/it:visible"] $ faSprite_ "chevron-right" "regular" "w-4 h-4"
@@ -1029,7 +1077,7 @@ data WidgetMoveForm = WidgetMoveForm
 dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATAuthCtx (RespHeaders Widget.Widget)
 dashboardDuplicateWidgetPostH pid dashId widgetId = do
   (_, dash) <- getDashAndVM dashId Nothing
-  let widgetToDuplicateM = find (\w -> (w.id == Just widgetId) || (maybeToMonoid (slugify <$> w.title) == widgetId)) dash.widgets
+  let widgetToDuplicateM = find (\w -> (w.id == Just widgetId) || (maybeToMonoid (slugify <$> w.title) == widgetId)) (dash :: Dashboards.Dashboard).widgets
   case widgetToDuplicateM of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
     Just widgetToDuplicate -> do
@@ -1045,7 +1093,7 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
               , Widget._dashboardId = Just dashId.toText
               }
 
-      let updatedDash = dash{Dashboards.widgets = dash.widgets <> [widgetCopy]}
+      let updatedDash = (dash :: Dashboards.Dashboard){Dashboards.widgets = (dash :: Dashboards.Dashboard).widgets <> [widgetCopy]}
       now <- Time.currentTime
       _ <-
         dbtToEff
@@ -1063,7 +1111,7 @@ dashboardWidgetExpandGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Tex
 dashboardWidgetExpandGetH pid dashId widgetId = do
   (_, dash) <- getDashAndVM dashId Nothing
   now <- Time.currentTime
-  let widgetToExpandM = find (\w -> (w.id == Just widgetId) || (maybeToMonoid (slugify <$> w.title) == widgetId)) dash.widgets
+  let widgetToExpandM = find (\w -> (w.id == Just widgetId) || (maybeToMonoid (slugify <$> w.title) == widgetId)) (dash :: Dashboards.Dashboard).widgets
 
   case widgetToExpandM of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}

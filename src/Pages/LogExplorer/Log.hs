@@ -726,7 +726,7 @@ apiLogsPage page = do
                                       ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
                                 FROM otel_logs_and_spans
                                 WHERE project_id='{{project_id}}'
-                                  {{time_filter}} {{query_ast_filters}}
+                                  ({{time_filter}} ({{query_ast_filters}}))
                                   AND duration IS NOT NULL
                                 GROUP BY timeB
                                 HAVING COUNT(*) > 0
