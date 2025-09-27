@@ -55,6 +55,7 @@ import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, creat
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.Reports qualified as RP
+import Pkg.Drain qualified as Drain
 import Pkg.Mail (NotificationAlerts (EndpointAlert, ReportAlert, RuntimeErrorAlert), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
 import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
@@ -376,8 +377,8 @@ logsPatternExtraction scheduledTime pid = do
     Log.logInfo "Fetched logs for pattern extraction" ("log_count", AE.toJSON $ V.length otelLogs)
     let finalVals = logsWithPatterns <> otelLogs
     Log.logInfo "Fetched OTEL logs for pattern extraction" ("log_count", AE.toJSON $ V.length finalVals)
-    let drainTree = processBatch finalVals scheduledTime Telemetry.emptyDrainTree
-        patterns = Telemetry.getAllLogGroups drainTree
+    let drainTree = processBatch finalVals scheduledTime Drain.emptyDrainTree
+        patterns = Drain.getAllLogGroups drainTree
     Log.logInfo "Extracted log patterns" ("pattern_count", AE.toJSON $ V.length patterns)
     forM_ patterns \p -> do
       _ <- dbtToEff $ execute [sql| UPDATE otel_logs_and_spans SET log_pattern = ? WHERE id::text=Any(?) |] p
@@ -385,15 +386,15 @@ logsPatternExtraction scheduledTime pid = do
     Log.logInfo "Completed log pattern extraction" ()
     pass
   where
-    processNewLog :: Text -> Text -> UTCTime -> Telemetry.DrainTree -> Telemetry.DrainTree
+    processNewLog :: Text -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
     processNewLog logId logContent now tree = do
       let tokensVec = V.fromList $ T.words $ replaceAllFormats $ logContent
           tokenCount = V.length tokensVec
           firstToken = if V.null tokensVec then "" else V.head tokensVec
        in if tokenCount == 0
             then tree -- Skip empty logs
-            else Telemetry.updateTreeWithLog tree tokenCount firstToken tokensVec logId logContent now
-    processBatch :: V.Vector (Text, Text) -> UTCTime -> Telemetry.DrainTree -> Telemetry.DrainTree
+            else Drain.updateTreeWithLog tree tokenCount firstToken tokensVec logId logContent now
+    processBatch :: V.Vector (Text, Text) -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
     processBatch logBatch now initialTree = do
       V.foldl (\tree (logId, logContent) -> processNewLog logId logContent now tree) initialTree logBatch
 

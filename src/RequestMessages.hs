@@ -444,11 +444,62 @@ replaceAllFormats input = restorePlaceholders $ processPatterns input formatPatt
       , [ed|[a-fA-F0-9]{40}///〖×SHA-ONE×〗|]
       , [ed|[a-fA-F0-9]{32}///〖×MD-FIVE×〗|]
       , [ed|[0-9a-fA-F]{24}///〖×UUID×〗|]
+      , -- Visa 13 or 16 digits
+        [ed|5[1-5][0-9]{14}///{credit_card}|]
+      , -- Mastercard
+        [ed|3[47][0-9]{13}///{credit_card}|]
+      , -- Amex
+        [ed|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+///{jwt}|]
+      , -- JWT
+        -- IBAN (moved before base64)
+        [ed|[A-Z]{2}[0-9]{2}[A-Za-z0-9]{4}[0-9]{7}[A-Za-z0-9]{0,16}///{iban}|]
+      , -- Date patterns (before file paths to avoid conflicts)
+        [ed|(Mon|Tue|Wed|Thu|Fri|Sat|Sun), [0-9]{1,2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} [+\-][0-9]{4}///{rfc2822}|]
+      , [ed|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+\-][0-9]{2}:[0-9]{2})?///{YYYY-MM-DDThh:mm:ss.sTZD}|]
+      , -- ISO 8601
+        [ed|[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}///{YYYY-MM-DD HH:MM:SS}|]
+      , -- MySQL datetime
+        [ed|[0-9]{2}/[0-9]{2}/[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}///{MM/DD/YYYY HH:MM:SS}|]
+      , -- US datetime
+        [ed|[0-9]{2}-[0-9]{2}-[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}///{MM-DD-YYYY HH:MM:SS}|]
+      , [ed|[0-9]{2}\.[0-9]{2}\.[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}///{DD.MM.YYYY HH:MM:SS}|]
+      , -- European datetime
+        [ed|(0[1-9]|[12][0-9]|3[01])[/](0[1-9]|1[012])[/](19|20)[0-9][0-9]///{dd/mm/yyyy}|]
+      , -- European date
+        [ed|(0[1-9]|[12][0-9]|3[01])-(0[1-9]|1[012])-(19|20)[0-9][0-9]///{dd-mm-yyyy}|]
+      , [ed|(0[1-9]|[12][0-9]|3[01])\.(0[1-9]|1[012])\.(19|20)[0-9][0-9]///{dd.mm.yyyy}|]
+      , [ed|(0[1-9]|1[012])[/](0[1-9]|[12][0-9]|3[01])[/](19|20)[0-9][0-9]///{mm/dd/yyyy}|]
+      , -- US date
+        [ed|(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])-(19|20)[0-9][0-9]///{mm-dd-yyyy}|]
+      , [ed|(0[1-9]|1[012])\.(0[1-9]|[12][0-9]|3[01])\.(19|20)[0-9][0-9]///{mm.dd.yyyy}|]
+      , [ed|[0-9]{4}-[0-9]{2}-[0-9]{2}///{YYYY-MM-DD}|]
+      , -- ISO date
+        [ed|[0-9]{4}/[0-9]{2}/[0-9]{2}///{YYYY/MM/DD}|]
+      , -- Compact date
+        [ed|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{1,2}, [0-9]{4}///{Mon DD, YYYY}|]
+      , -- Long month
+        [ed|[0-9]{1,2}-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-[0-9]{4}///{DD-Mon-YYYY}|]
+      , -- Oracle date
+        -- Time patterns
+        [ed|[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}///{HH:MM:SS.mmm}|]
+      , -- Time with milliseconds
+        [ed|[0-9]{2}:[0-9]{2}:[0-9]{2}///{HH:MM:SS}|]
+      , -- Time only
+        [ed|[0-9]{1,2}:[0-9]{2} (AM|PM|am|pm)///{H:MM AM/PM}|]
+      , -- Personal identifiers
+        [ed|[0-9]{3}-[0-9]{2}-[0-9]{4}///{ssn}|]
+      , [ed|\+1 \([0-9]{3}\) [0-9]{3}-[0-9]{4}///{phone}|]
       , -- Network patterns
         [ed|(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)///〖×IPV-FOUR×〗|]
       , [ed|:[0-9]{1,5}///〖×PORT×〗|]
+      , [ed|https?://[^\s]+///{url}|]
+      , [ed|([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}///{ipv6}|]
+      , [ed|([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}///{mac}|]
+      , [ed|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}///{email}|]
       , -- Hex numbers (must come before general integers)
         [ed|0x[0-9A-Fa-f]+///〖×HEX×〗|]
+      , --- float
+        [ed|[+-]?[0-9]+\.[0-9]+///{float}|]
       , -- Numbers (including HTTP status codes)
         [ed|[0-9]+///〖×INTEGER×〗|]
       ]
