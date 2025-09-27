@@ -6,6 +6,7 @@ import Data.Default
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as Wreq
 import Data.Generics.Labels ()
+import Data.List qualified as List
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
@@ -54,16 +55,34 @@ import Utils qualified
 import Web.FormUrlEncoded (FromForm)
 
 
-data DashboardGet = DashboardGet Projects.ProjectId Dashboards.DashboardId Dashboards.Dashboard Dashboards.DashboardVM
+data DashboardGet = DashboardGet Projects.ProjectId Dashboards.DashboardId Dashboards.Dashboard Dashboards.DashboardVM [(Text, Maybe Text)]
 
 
 instance ToHtml DashboardGet where
-  toHtml (DashboardGet pid dashId dash dashVM) = toHtml $ dashboardPage_ pid dashId dash dashVM
+  toHtml (DashboardGet pid dashId dash dashVM allParams) = toHtml $ dashboardPage_ pid dashId dash dashVM allParams
   toHtmlRaw = toHtml
 
 
-dashboardPage_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> Html ()
-dashboardPage_ pid dashId dash dashVM = do
+dashboardPage_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> [(Text, Maybe Text)] -> Html ()
+dashboardPage_ pid dashId dash dashVM allParams = div_ [class_ "dashboard-page-wrapper"] do
+  -- Hidden radio inputs for tab state at the top level
+  whenJust dash.tabs \tabs -> do
+    forM_ (zip [0 ..] tabs) \(idx, tab) -> do
+      let tabId = "dashboard-tab-" <> dashId.toText <> "-" <> show idx
+      -- Check URL params for active tab, default to 0
+      let activeTabParam = List.lookup "tab" allParams
+      let isActive = case activeTabParam of
+            Just (Just tabStr) -> tabStr == show idx
+            _ -> idx == 0
+      
+      input_ 
+        ( [ type_ "radio"
+          , name_ $ "dashboard-tabs-" <> dashId.toText
+          , id_ tabId
+          , class_ "sr-only peer"
+          ] <> if isActive then [checked_] else []
+        )
+  
   -- when  $ freeTierLimitExceededBanner pid.toText
   Modals.modal_ "pageTitleModalId" ""
     $ form_
@@ -80,37 +99,55 @@ dashboardPage_ pid dashId dash dashVM = do
         label_ [Lucid.for_ "pageTitleModalId", class_ "btn btn-outline cursor-pointer"] "Cancel"
         button_ [type_ "submit", class_ "btn btn-primary"] "Save"
 
-  whenJust dash.variables \variables -> do
-    div_ [class_ "flex bg-fillWeaker px-6 py-2 gap-2"]
-      $ forM_ variables \var -> fieldset_ [class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg overflow-hidden dash-variable text-sm"] do
-        legend_ [class_ "px-1 ml-2 text-xs"] $ toHtml $ fromMaybe var.key var.title <> memptyIfFalse (var.required == Just True) " *"
-        let whitelist =
-              maybe
-                "[]"
-                ( decodeUtf8
-                    . fromLazy
-                    . AE.encode
-                    . map \opt ->
-                      AE.object
-                        [ "value" AE..= (opt Unsafe.!! 0)
-                        , "name" AE..= fromMaybe (opt Unsafe.!! 0) (opt !!? 1)
-                        ]
-                )
-                var.options
+  -- Render variables and tabs in the same container
+  when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-fillWeaker px-6 py-2 gap-4 items-center flex-wrap"] do
+    -- Tabs section (on the left)
+    whenJust dash.tabs \tabs -> do
+      div_ [role_ "tablist", class_ "tabs tabs-boxed"] do
+        forM_ (zip [0 ..] tabs) \(idx, tab) -> do
+          let tabId = "dashboard-tab-" <> dashId.toText <> "-" <> show idx
 
-        input_
-          $ [ type_ "text"
-            , name_ var.key
-            , class_ "tagify-select-input"
-            , data_ "whitelistjson" whitelist
-            , data_ "enforce-whitelist" "true"
-            , data_ "mode" $ if var.multi == Just True then "" else "select"
-            , data_ "query_sql" $ maybeToMonoid var.sql
-            , data_ "query" $ maybeToMonoid var.query
-            , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
-            , value_ $ maybeToMonoid var.value
+          label_
+            [ Lucid.for_ tabId
+            , role_ "tab"
+            , class_ $ "tab flex items-center gap-2"
             ]
-          <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
+            do
+              whenJust tab.icon \icon -> faSprite_ icon "regular" "w-3 h-3"
+              toHtml tab.name
+
+    -- Variables section (pushed to the right)
+    whenJust dash.variables \variables -> do
+      div_ [class_ $ "flex gap-2 flex-wrap " <> if isJust dash.tabs then "ml-auto" else ""] do
+        forM_ variables \var -> fieldset_ [class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg overflow-hidden dash-variable text-sm"] do
+          legend_ [class_ "px-1 ml-2 text-xs"] $ toHtml $ fromMaybe var.key var.title <> memptyIfFalse (var.required == Just True) " *"
+          let whitelist =
+                maybe
+                  "[]"
+                  ( decodeUtf8
+                      . fromLazy
+                      . AE.encode
+                      . map \opt ->
+                        AE.object
+                          [ "value" AE..= (opt Unsafe.!! 0)
+                          , "name" AE..= fromMaybe (opt Unsafe.!! 0) (opt !!? 1)
+                          ]
+                  )
+                  var.options
+
+          input_
+            $ [ type_ "text"
+              , name_ var.key
+              , class_ "tagify-select-input"
+              , data_ "whitelistjson" whitelist
+              , data_ "enforce-whitelist" "true"
+              , data_ "mode" $ if var.multi == Just True then "" else "select"
+              , data_ "query_sql" $ maybeToMonoid var.sql
+              , data_ "query" $ maybeToMonoid var.query
+              , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
+              , value_ $ maybeToMonoid var.value
+              ]
+              <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
   const tagifyInstances = new Map();
@@ -168,44 +205,44 @@ dashboardPage_ pid dashId dash dashVM = do
   });
 
     |]
-  -- Add tabs rendering after variables
-  whenJust dash.tabs \tabs -> do
-    div_ [class_ "flex bg-fillWeaker px-6 py-2 gap-2 border-b border-strokeWeak sticky top-0 z-20"] do
-      forM_ (zip [0..] tabs) \(idx, tab) -> do
-        let tabId = "tab-" <> show idx
-        let isActive = idx == 0 -- First tab is active by default
-        let requiresVar = fromMaybe "" tab.requires
-        button_
-          [ class_ $ "px-4 py-2 rounded-lg font-medium text-sm flex items-center gap-2 transition-colors " 
-              <> if isActive then "bg-fillStrong text-textStrong" else "text-textWeak hover:bg-fillWeak"
-          , id_ tabId
-          , data_ "tab-index" (show idx)
-          , data_ "requires" requiresVar
-          , onclick_ $ "window.switchDashboardTab(" <> show idx <> ")"
-          ] do
-          whenJust tab.icon \icon -> faSprite_ icon "regular" "w-4 h-4"
-          toHtml tab.name
-
   section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-5 pb-6 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-2 group/pg", id_ "dashboardPage"] do
     case dash.tabs of
       Just tabs -> do
-        -- Render tabs content
-        forM_ (zip [0..] tabs) \(idx, tab) -> do
-          let isActive = idx == 0
-          div_
-            [ class_ $ "tab-content grid-stack -m-2 " <> if isActive then "" else "hidden"
-            , id_ $ "tab-content-" <> show idx
-            , data_ "tab-index" (show idx)
-            ] do
-            if isJust tab.requires && not isActive
-              then div_ [class_ "flex flex-col items-center justify-center h-64 text-textWeak"] do
-                faSprite_ "exclamation-triangle" "regular" "w-12 h-12 mb-4"
-                p_ [class_ "text-lg"] $ "Please select a " <> toHtml (fromMaybe "" tab.requires) <> " to view this tab"
-              else do
-                forM_ tab.widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
-                when (null tab.widgets) $ label_ [id_ $ "add_widget_tab_" <> show idx, class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
-                  faSprite_ "plus" "regular" "h-8 w-8"
-                  span_ "Add a widget"
+        -- Tab system with CSS-based switching
+        div_ [class_ "h-full dashboard-tabs-container"] do
+          -- Style for tab panels visibility
+          let tabStyles = T.intercalate "\n" ["#dashboard-tab-" <> dashId.toText <> "-" <> show idx <> ":checked ~ * .tab-panel-" <> show idx <> " { display: block; }" | idx <- [0 .. length tabs - 1]]
+          style_
+            []
+            [text|
+              .tab-panel { display: none; }
+              ${tabStyles}
+            |]
+
+          forM_ (zip [0 ..] tabs) \(idx, tab) -> do
+            let tabPanelClass = "tab-panel-" <> show idx
+            let requiresVar = fromMaybe "" tab.requires
+            let hasRequiredVar = case tab.requires of
+                  Nothing -> True
+                  Just req -> case List.lookup ("var-" <> req) allParams of
+                    Just (Just val) -> not (T.null val)
+                    _ -> False
+
+            -- Tab content panel
+            div_
+              [ class_ $ "tab-panel grid-stack -m-2 " <> tabPanelClass
+              , data_ "tab-index" (show idx)
+              ]
+              do
+                if isJust tab.requires && not hasRequiredVar
+                  then div_ [class_ "flex flex-col items-center justify-center h-64 text-textWeak"] do
+                    faSprite_ "exclamation-triangle" "regular" "w-12 h-12 mb-4"
+                    p_ [class_ "text-lg"] $ "Please select a " <> toHtml requiresVar <> " to view this tab"
+                  else do
+                    forM_ tab.widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
+                    when (null tab.widgets) $ label_ [id_ $ "add_widget_tab_" <> show idx, class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
+                      faSprite_ "plus" "regular" "h-8 w-8"
+                      span_ "Add a widget"
       Nothing -> do
         -- Fall back to old behavior for dashboards without tabs
         div_
@@ -222,93 +259,28 @@ dashboardPage_ pid dashId dash dashVM = do
 
     script_
       [text|
-
-      // Tab switching functionality
-      window.switchDashboardTab = function(tabIndex) {
-        // Hide all tab contents
-        document.querySelectorAll('.tab-content').forEach(content => {
-          content.classList.add('hidden');
-        });
-        
-        // Remove active state from all tabs
-        document.querySelectorAll('[data-tab-index]').forEach(tab => {
-          if (tab.tagName === 'BUTTON') {
-            tab.classList.remove('bg-fillStrong', 'text-textStrong');
-            tab.classList.add('text-textWeak');
-          }
-        });
-        
-        // Show selected tab content
-        const selectedContent = document.querySelector('#tab-content-' + tabIndex);
-        if (selectedContent) {
-          selectedContent.classList.remove('hidden');
-          
-          // Check if tab has requirements
-          const selectedTab = document.querySelector('#tab-' + tabIndex);
-          const requires = selectedTab?.dataset.requires;
-          
-          if (requires) {
-            // Check if required variable has a value
-            const varValue = new URLSearchParams(window.location.search).get('var-' + requires);
-            if (!varValue || varValue === '') {
-              // Show placeholder instead
-              selectedContent.innerHTML = '<div class="flex flex-col items-center justify-center h-64 text-textWeak">' +
-                '<svg class="w-12 h-12 mb-4"><!-- exclamation-triangle icon --></svg>' +
-                '<p class="text-lg">Please select a ' + requires + ' to view this tab</p>' +
-                '</div>';
-              return;
-            }
-          }
-          
-          // Initialize GridStack for this tab if not already initialized
-          if (!selectedContent.dataset.gridInitialized) {
-            initializeGridForTab(selectedContent);
-            selectedContent.dataset.gridInitialized = 'true';
-          }
-        }
-        
-        // Update active tab style
-        const selectedTab = document.querySelector('#tab-' + tabIndex);
-        if (selectedTab) {
-          selectedTab.classList.remove('text-textWeak');
-          selectedTab.classList.add('bg-fillStrong', 'text-textStrong');
-        }
-        
-        // Update URL with current tab
-        const url = new URL(window.location);
-        url.searchParams.set('tab', tabIndex);
-        history.pushState({}, '', url);
-      };
-
-      function initializeGridForTab(container) {
-        const gridEl = container;
-        if (!gridEl || gridEl.classList.contains('grid-stack-initialized')) return;
-        
-        const grid = GridStack.init({
-          column: 12,
-          acceptWidgets: true,
-          cellHeight: '5rem',
-          marginTop: '0.05rem',
-          marginLeft: '0.5rem',
-          marginRight: '0.5rem',
-          marginBottom: '2rem',
-          handleClass: 'grid-stack-handle',
-          styleInHead: true,
-          staticGrid: false,
-        }, gridEl);
-        
-        grid.on('removed change', debounce(updateWidgetOrder('${projectId}', '${dashboardId}'), 200));
-        gridEl.classList.add('grid-stack-initialized');
-      }
-
-      // Check URL for active tab on load
-      window.addEventListener('load', () => {
-        const urlParams = new URLSearchParams(window.location.search);
-        const activeTab = urlParams.get('tab') || '0';
-        window.switchDashboardTab(parseInt(activeTab));
-      });
-
       document.addEventListener('DOMContentLoaded', () => {
+        // Handle tab persistence through URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const activeTabIndex = urlParams.get('tab') || '0';
+        const activeTabId = 'dashboard-tab-${dashboardId}-' + activeTabIndex;
+        const activeTabElement = document.getElementById(activeTabId);
+        if (activeTabElement) {
+          activeTabElement.checked = true;
+        }
+        
+        // Update URL when tab changes
+        document.querySelectorAll('input[name="dashboard-tabs-${dashboardId}"]').forEach(radio => {
+          radio.addEventListener('change', function() {
+            if (this.checked) {
+              const tabIndex = this.id.split('-').pop();
+              const url = new URL(window.location);
+              url.searchParams.set('tab', tabIndex);
+              history.pushState({}, '', url);
+            }
+          });
+        });
+        
         GridStack.renderCB = function(el, w) {
           el.innerHTML = w.content;
           const scripts = Array.from(el.querySelectorAll('script'));
@@ -320,28 +292,28 @@ dashboardPage_ pid dashId dash dashVM = do
           });
         };
 
-        // Initialize grids based on whether we have tabs or not
-        if (document.querySelector('.tab-content')) {
-          // Dashboard has tabs - initialization handled by tab switching
-          window.switchDashboardTab(parseInt(new URLSearchParams(window.location.search).get('tab') || '0'));
-        } else {
-          // No tabs - initialize single grid
-          var gridStackInstance = GridStack.init({
-            column: 12,
-            acceptWidgets: true,
-            cellHeight: '5rem',
-            // margin: '0.5rem',
-            marginTop: '0.05rem',
-            marginLeft: '0.5rem',
-            marginRight: '0.5rem',
-            marginBottom: '2rem',
-            handleClass: 'grid-stack-handle',
-            styleInHead: true,
-            staticGrid: false,
-          },document.querySelector('.grid-stack'));
-           // gridStackInstance.compact()
-          gridStackInstance.on('removed change', debounce(updateWidgetOrder('${projectId}', '${dashboardId}'), 200));
-        }
+        // Initialize all grids (for both tabs and non-tab dashboards)
+        const gridInstances = [];
+        document.querySelectorAll('.grid-stack').forEach(gridEl => {
+          if (!gridEl.classList.contains('grid-stack-initialized')) {
+            const grid = GridStack.init({
+              column: 12,
+              acceptWidgets: true,
+              cellHeight: '5rem',
+              marginTop: '0.05rem',
+              marginLeft: '0.5rem',
+              marginRight: '0.5rem',
+              marginBottom: '2rem',
+              handleClass: 'grid-stack-handle',
+              styleInHead: true,
+              staticGrid: false,
+            }, gridEl);
+            
+            grid.on('removed change', debounce(updateWidgetOrder('${projectId}', '${dashboardId}'), 200));
+            gridEl.classList.add('grid-stack-initialized');
+            gridInstances.push(grid);
+          }
+        });
 
         // Initialize nested grids and bind change events.
         const nestedGridInstances = [];
@@ -422,38 +394,38 @@ processWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetBase = do
             let issuesVM = V.map (AnomalyList.IssueVM False True now "24h") issues
             pure
               $ widget
-              & #html
-                ?~ renderText
-                  ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-                      $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml)
-                  )
+                & #html
+                  ?~ renderText
+                    ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
+                        $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml)
+                    )
           Widget.WTStat -> do
             stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
             pure
               $ widget
-              & #dataset
-                ?~ def
-                  { Widget.source = AE.Null
-                  , Widget.value = stat.dataFloat
-                  }
+                & #dataset
+                  ?~ def
+                    { Widget.source = AE.Null
+                    , Widget.value = stat.dataFloat
+                    }
           _ -> do
             metricsD <-
               Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
             pure
               $ widget
-              & #dataset
-                ?~ Widget.WidgetDataset
-                  { source =
-                      AE.toJSON
-                        $ V.cons
-                          (AE.toJSON <$> metricsD.headers)
-                          (AE.toJSON <<$>> metricsD.dataset)
-                  , rowsPerMin = metricsD.rowsPerMin
-                  , value = Just metricsD.rowsCount
-                  , from = metricsD.from
-                  , to = metricsD.to
-                  , stats = metricsD.stats
-                  }
+                & #dataset
+                  ?~ Widget.WidgetDataset
+                    { source =
+                        AE.toJSON
+                          $ V.cons
+                            (AE.toJSON <$> metricsD.headers)
+                            (AE.toJSON <<$>> metricsD.dataset)
+                    , rowsPerMin = metricsD.rowsPerMin
+                    , value = Just metricsD.rowsCount
+                    , from = metricsD.from
+                    , to = metricsD.to
+                    , stats = metricsD.stats
+                    }
       else pure widget
   -- Recursively process child widgets, if any.
   case widget'.children of
@@ -588,6 +560,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
   appCtx <- ask @AuthContext
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
+
   (dashVM, dash) <- getDashAndVM dashId fileM
   dash' <- forOf (#variables . traverse . traverse) dash (processVariable pid now (sinceStr, fromDStr, toDStr) allParams)
 
@@ -597,7 +570,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
 
   -- Process widgets in the main widgets array
   dash'' <- forOf (#widgets . traverse) dash' processWidgetWithDashboardId
-  
+
   -- Also process widgets in tabs if they exist
   dash''' <- forOf (#tabs . _Just . traverse . #widgets . traverse) dash'' processWidgetWithDashboardId
 
@@ -641,7 +614,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
                         "Delete dashboard"
           , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/dashboard/"
           }
-  addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash''' dashVM
+  addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash''' dashVM allParams
 
 
 -- | A unified widget viewer/editor component that uses DaisyUI tabs without JavaScript

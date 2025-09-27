@@ -218,7 +218,7 @@ widgetHelper_ w' = case w.wType of
   WTFlamegraph -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
   _ -> gridItem_ $ div_ [class_ $ " w-full h-full group/wgt " <> paddingBtm] $ renderChart w
   where
-    w = w' & #id %~ maybe (slugify <$> w.title) Just
+    w = w' & #id %~ maybe (slugify <$> w'.title) Just
     gridStackHandleClass = if w._isNested == Just True then "nested-grid-stack-handle" else "grid-stack-handle"
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w)), ("h", (.h))]
     attrs = concat [maybe [] (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= layoutField) | (name, layoutField) <- layoutFields]
@@ -387,7 +387,8 @@ renderTable widget = do
               ...Object.fromEntries(new URLSearchParams(location.search)),
               query: query || '',
               query_sql: querySQL || '',
-              data_type: 'text'
+              data_type: 'text',
+              pid: pid || ''
             });
             
             const response = await fetch(`/chart_data?$${params}`);

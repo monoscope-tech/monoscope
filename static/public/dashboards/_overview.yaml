@@ -13,6 +13,7 @@ variables:
       FROM otel_logs_and_spans 
       WHERE project_id='{{project_id}}' 
         AND resource___service___name IS NOT NULL 
+        {{time_filter}}
       LIMIT 100
     default: ''
     multi: false
@@ -22,13 +23,15 @@ variables:
     type: query
     sql: |
       SELECT DISTINCT 
-        hashes[1] as value,
+        COALESCE(hashes[1], '') as value,
         attributes___http___request___method || ' ' || attributes___url___path as label
       FROM otel_logs_and_spans
       WHERE project_id='{{project_id}}'
         AND resource___service___name = '{{var-service}}'
         AND attributes___http___request___method IS NOT NULL
         AND attributes___url___path IS NOT NULL
+        AND hashes[1] IS NOT NULL
+        {{time_filter}}
       LIMIT 500
     default: ''
     multi: false
@@ -42,6 +45,7 @@ variables:
       FROM otel_logs_and_spans
       WHERE project_id='{{project_id}}'
         AND attributes___db___system___name IS NOT NULL
+        {{time_filter}}
       LIMIT 50
     default: ''
     multi: false
@@ -52,6 +56,15 @@ tabs:
   - name: Overview
     icon: grid
     widgets:
+      # Test Simple Widget
+      - type: stat
+        title: Test Widget
+        layout: { w: 3, h: 2 }
+        sql: |
+          SELECT 42.0::float
+        unit: test
+        eager: true
+
       # Services Table
       - type: table
         title: Services Overview
@@ -86,131 +99,135 @@ tabs:
           GROUP BY resource___service___name
           ORDER BY throughput DESC
           LIMIT 50
-  #
-  #     # System Metrics
-  #     - type: group
-  #       title: System Metrics
-  #       layout: { w: 12, h: 4 }
-  #       children:
-  #         - type: 'timeseries_stat'
-  #           title: 'Total Requests'
-  #           icon: list-tree
-  #           query: kind=="server" OR name=="apitoolkit-http-span" OR name=="monoscope.http" | summarize count() by bin_auto(timestamp)
-  #           unit: reqs
-  #           eager: true
-  #           layout: { w: 3, h: 2 }
-  #
-  #         - type: 'stat'
-  #           title: 'Global Error Rate'
-  #           icon: bug
-  #           sql: |
-  #             SELECT ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*))), 2)::float
-  #             FROM otel_logs_and_spans
-  #             WHERE project_id='{{project_id}}'
-  #               AND (kind = 'server' OR name = 'apitoolkit-http-span')
-  #               {{time_filter}}
-  #           unit: '%'
-  #           eager: true
-  #           layout: { w: 3, h: 2 }
-  #
-  #         - type: 'stat'
-  #           title: 'Active Services'
-  #           icon: server
-  #           query: attributes.service.name != null | summarize count(distinct(attributes.service.name))
-  #           unit: services
-  #           eager: true
-  #           layout: { w: 3, h: 2 }
-  #
-  #         - type: 'stat'
-  #           title: 'DB Systems'
-  #           icon: database
-  #           query: attributes.db.system != null | summarize count(distinct(attributes.db.system))
-  #           unit: systems
-  #           eager: true
-  #           layout: { w: 3, h: 2 }
-  #
-  #     # Request Volume by Service
-  #     - type: 'timeseries'
-  #       title: 'Request Volume by Service'
-  #       query: attributes.service.name != null AND kind=="server" | summarize count() by bin_auto(timestamp), attributes.service.name | top 10 by count()
-  #       unit: reqs
-  #       layout: { w: 6, h: 4 }
-  #
-  #     # Error Rates by Service
-  #     - type: 'timeseries'
-  #       title: 'Error Rates by Service'
-  #       theme: 'roma'
-  #       query: status.code=="ERROR" AND attributes.service.name != null | summarize count() by bin_auto(timestamp), attributes.service.name | top 10 by count()
-  #       unit: errors
-  #       layout: { w: 6, h: 4 }
-  #
-  #     # System Latency Percentiles
-  #     - type: 'timeseries_line'
-  #       title: 'System Latency Percentiles (ms)'
-  #       hide_subtitle: true
-  #       summarize_by: max
-  #       sql: |
-  #         SELECT timeB, quantile, value
-  #         FROM (
-  #           SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
-  #                  ARRAY[
-  #                    (approx_percentile(0.50, percentile_agg(duration)) / 1e6)::float,
-  #                    (approx_percentile(0.75, percentile_agg(duration)) / 1e6)::float,
-  #                    (approx_percentile(0.90, percentile_agg(duration)) / 1e6)::float,
-  #                    (approx_percentile(0.95, percentile_agg(duration)) / 1e6)::float,
-  #                    (approx_percentile(0.99, percentile_agg(duration)) / 1e6)::float
-  #                  ] AS values,
-  #                  ARRAY['p50', 'p75', 'p90', 'p95', 'p99'] AS quantiles
-  #           FROM otel_logs_and_spans
-  #           WHERE project_id='{{project_id}}'
-  #             AND kind IS NOT NULL
-  #             {{time_filter}}
-  #           GROUP BY timeB
-  #         ) s,
-  #         LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
-  #       layout: { w: 12, h: 4 }
-  #
-  # - name: Service Summary
-  #   icon: server
-  #   requires: service
-  #   widgets:
-  #     # Service Endpoints Table
-  #     - type: table
-  #       title: Service Endpoints
-  #       layout: { w: 12, h: 6 }
-  #       on_row_click:
-  #         set_variable: resource
-  #         value: '{{row.endpoint_hash}}'
-  #         navigate_to_tab: 'Resources'
-  #       columns:
-  #         - field: endpoint
-  #           title: Endpoint
-  #         - field: method
-  #           title: Method
-  #         - field: requests
-  #           title: Requests
-  #         - field: errors
-  #           title: Errors
-  #         - field: p95_latency
-  #           title: P95 Latency
-  #           unit: ms
-  #       sql: |
-  #         SELECT
-  #           hashes[1] as endpoint_hash,
-  #           attributes___url___path as endpoint,
-  #           attributes___http___request___method as method,
-  #           COUNT(*) as requests,
-  #           COUNT(*) FILTER (WHERE COALESCE(attributes___http___response___status_code, 0) >= 400) as errors,
-  #           ROUND((approx_percentile(0.95, percentile_agg(duration)) / 1e6), 2)::float as p95_latency
-  #         FROM otel_logs_and_spans
-  #         WHERE project_id='{{project_id}}'
-  #           AND resource___service___name = '{{var-service}}'
-  #           AND kind = 'server'
-  #           AND attributes___http___request___method IS NOT NULL
-  #           {{time_filter}}
-  #         GROUP BY endpoint_hash, endpoint, method
-  #         ORDER BY requests DESC
-  #         LIMIT 100
+      #
+      # System Metrics
+      - type: group
+        title: System Metrics
+        layout: { w: 12, h: 4 }
+        children:
+          - type: 'timeseries_stat'
+            title: 'Total Requests'
+            icon: list-tree
+            query: kind=="server" OR name=="apitoolkit-http-span" OR name=="monoscope.http" | summarize count() by bin_auto(timestamp)
+            unit: reqs
+            eager: true
+            layout: { w: 3, h: 2 }
+
+          - type: 'stat'
+            title: 'Global Error Rate'
+            icon: bug
+            sql: |
+              SELECT ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*))), 2)::float
+              FROM otel_logs_and_spans
+              WHERE project_id='{{project_id}}'
+                AND (kind = 'server' OR name = 'apitoolkit-http-span')
+                {{time_filter}}
+            unit: '%'
+            eager: true
+            layout: { w: 3, h: 2 }
+
+          - type: 'stat'
+            title: 'Active Services'
+            icon: server
+            sql: |
+              SELECT COUNT(DISTINCT resource___service___name)::float
+              FROM otel_logs_and_spans
+              WHERE project_id='{{project_id}}'
+                AND resource___service___name IS NOT NULL
+                {{time_filter}}
+            unit: services
+            eager: true
+            layout: { w: 3, h: 2 }
+
+          - type: 'stat'
+            title: 'DB Systems'
+            icon: database
+            sql: |
+              SELECT COUNT(DISTINCT attributes___db___system___name)::float
+              FROM otel_logs_and_spans
+              WHERE project_id='{{project_id}}'
+                AND attributes___db___system___name IS NOT NULL
+                {{time_filter}}
+            unit: systems
+            eager: true
+            layout: { w: 3, h: 2 }
+
+      # Request Volume by Service
+      - type: 'timeseries'
+        title: 'Request Volume by Service'
+        sql: |
+          SELECT 
+            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            resource___service___name as service,
+            COUNT(*) as count
+          FROM otel_logs_and_spans
+          WHERE project_id='{{project_id}}'
+            AND resource___service___name IS NOT NULL
+            AND kind = 'server'
+            {{time_filter}}
+          GROUP BY time, service
+          ORDER BY time DESC
+          LIMIT 1000
+        unit: reqs
+        layout: { w: 6, h: 4 }
+
+      # Error Rates by Service
+      - type: 'timeseries'
+        title: 'Error Rates by Service'
+        theme: 'roma'
+        sql: |
+          SELECT 
+            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            resource___service___name as service,
+            COUNT(*) as count
+          FROM otel_logs_and_spans
+          WHERE project_id='{{project_id}}'
+            AND status_code = 'ERROR'
+            AND resource___service___name IS NOT NULL
+            {{time_filter}}
+          GROUP BY time, service
+          ORDER BY time DESC
+          LIMIT 1000
+        unit: errors
+        layout: { w: 6, h: 4 }
+
+  - name: Service Summary
+    icon: server
+    requires: service
+    widgets:
+      # Service Endpoints Table
+      - type: table
+        title: Service Endpoints
+        layout: { w: 12, h: 6 }
+        columns:
+          - field: endpoint
+            title: Endpoint
+          - field: method
+            title: Method
+          - field: requests
+            title: Requests
+          - field: errors
+            title: Errors
+          - field: p95_latency
+            title: P95 Latency
+            unit: ms
+        sql: |
+          SELECT
+            COALESCE(hashes[1], '') as endpoint_hash,
+            COALESCE(attributes___url___path, '') as endpoint,
+            COALESCE(attributes___http___request___method, '') as method,
+            COUNT(*) as requests,
+            COUNT(*) FILTER (WHERE COALESCE(attributes___http___response___status_code, 0) >= 400) as errors,
+            ROUND((approx_percentile(0.95, percentile_agg(duration)) / 1e6), 2)::float as p95_latency
+          FROM otel_logs_and_spans
+          WHERE project_id='{{project_id}}'
+            AND resource___service___name = '{{var-service}}'
+            AND kind = 'server'
+            AND attributes___http___request___method IS NOT NULL
+            {{time_filter}}
+          GROUP BY endpoint_hash, endpoint, method
+          ORDER BY requests DESC
+          LIMIT 100
   #
   #     # Service Health Indicators
   #     - type: group

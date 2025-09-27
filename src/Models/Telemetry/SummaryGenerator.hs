@@ -103,7 +103,7 @@ generateLogSummary otel =
             _ -> Nothing
         ]
    in
-    V.fromList $ if null elements then rawDataLogElements else elements
+    V.fromList elements
   where
     severityStyle sev = case sev of
       SLDebug -> "badge-neutral"
