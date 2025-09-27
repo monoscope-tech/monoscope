@@ -1108,7 +1108,6 @@ data LogGroup = LogGroup
   , frequency :: Int -- Number of logs matching this pattern
   , firstSeen :: UTCTime -- When pattern was first created
   , lastSeen :: UTCTime -- When pattern was last updated
-  , sampleLogs :: V.Vector Text -- Keep a few sample logs for context
   }
   deriving (Generic, Show)
   deriving anyclass (NFData)
@@ -1146,9 +1145,7 @@ data DrainTree = DrainTree
 data DrainConfig = DrainConfig
   { similarityThreshold :: Double -- Threshold for pattern matching (0.0-1.0)
   , maxLogGroups :: Int -- Maximum clusters per leaf
-  , maxSampleLogs :: Int -- Maximum sample logs to keep
   , wildcardToken :: Text -- Token used for wildcards (usually "<*>")
-  , maxPatterns :: Int -- Global limit on total patterns
   }
   deriving (Generic, Show)
   deriving anyclass (NFData)
@@ -1157,11 +1154,9 @@ data DrainConfig = DrainConfig
 defaultDrainConfig :: DrainConfig
 defaultDrainConfig =
   DrainConfig
-    { similarityThreshold = 0.6
-    , maxLogGroups = 100
-    , maxSampleLogs = 3
+    { similarityThreshold = 0.5
+    , maxLogGroups = 1000
     , wildcardToken = "<*>"
-    , maxPatterns = 10000
     }
 
 
@@ -1184,7 +1179,6 @@ createLogGroup templateTokens templateString logId now =
     , frequency = 1
     , firstSeen = now
     , lastSeen = now
-    , sampleLogs = V.singleton templateString
     }
 
 
@@ -1195,10 +1189,6 @@ updateLogGroup group' logId originalLog now =
     { logIds = V.cons logId (logIds group')
     , frequency = frequency group' + 1
     , lastSeen = now
-    , sampleLogs =
-        V.take
-          (maxSampleLogs defaultDrainConfig)
-          (V.cons originalLog (sampleLogs group'))
     }
 
 
@@ -1260,6 +1250,22 @@ updateOrCreateLevelTwo levelTwos targetToken tokensVec logId logContent now conf
        in (updatedLevelTwos, False) -- New pattern created
 
 
+leastRecentlyUsedIndex :: V.Vector LogGroup -> Int
+leastRecentlyUsedIndex logGroups =
+  V.ifoldl'
+    ( \acc i g ->
+        case acc of
+          Nothing -> Just (i, lastSeen g)
+          Just (j, t) ->
+            if lastSeen g < t
+              then Just (i, lastSeen g)
+              else Just (j, t)
+    )
+    Nothing
+    logGroups
+    & maybe 0 fst -- fallback to 0 if somehow empty
+
+
 updateOrCreateLogGroup :: V.Vector LogGroup -> V.Vector Text -> Text -> Text -> UTCTime -> DrainConfig -> (V.Vector LogGroup, Bool)
 updateOrCreateLogGroup logGroups tokensVec logId logContent now config =
   case findBestMatch logGroups tokensVec (similarityThreshold config) of
@@ -1267,22 +1273,20 @@ updateOrCreateLogGroup logGroups tokensVec logId logContent now config =
       let updatedTemplate =
             if V.length tokensVec == V.length (template bestGroup)
               then mergeTemplates (template bestGroup) tokensVec (wildcardToken config)
-              else template bestGroup -- Shouldn't happen due to tree structure
-          updatedGroup = updateLogGroupWithTemplate bestGroup updatedTemplate logId logContent now (maxSampleLogs config)
+              else template bestGroup
+          updatedGroup = updateLogGroupWithTemplate bestGroup updatedTemplate logId logContent now
           updatedGroups = logGroups V.// [(index, updatedGroup)]
-       in (updatedGroups, True) -- Existing pattern updated
+       in (updatedGroups, True)
     Nothing ->
-      -- Create new log group
       if V.length logGroups >= maxLogGroups config
         then
-          -- At capacity - could implement LRU eviction here
-          -- For now, just update the first group (simplistic approach)
-          let firstGroup = V.head logGroups
-              updatedGroup = updateLogGroup firstGroup logId logContent now
-              updatedGroups = V.cons updatedGroup (V.tail logGroups)
-           in (updatedGroups, True)
+          -- At capacity → evict least recently used
+          let victimIdx = leastRecentlyUsedIndex logGroups
+              newGroup = createLogGroup tokensVec (T.unwords $ V.toList tokensVec) logId now
+              updatedGroups = logGroups V.// [(victimIdx, newGroup)]
+           in (updatedGroups, False)
         else
-          -- Create new pattern
+          -- Still space → just append
           let newGroup = createLogGroup tokensVec (T.unwords $ V.toList tokensVec) logId now
               updatedGroups = V.cons newGroup logGroups
            in (updatedGroups, False)
@@ -1311,15 +1315,14 @@ mergeTemplates template1 template2 wildcardToken =
 
 
 -- Update log group with new template and log information
-updateLogGroupWithTemplate :: LogGroup -> V.Vector Text -> Text -> Text -> UTCTime -> Int -> LogGroup
-updateLogGroupWithTemplate group' newTemplate logId originalLog now maxSamples =
+updateLogGroupWithTemplate :: LogGroup -> V.Vector Text -> Text -> Text -> UTCTime -> LogGroup
+updateLogGroupWithTemplate group' newTemplate logId originalLog now =
   group'
     { template = newTemplate
     , templateStr = T.unwords $ V.toList newTemplate
     , logIds = V.cons logId (logIds group')
     , frequency = frequency group' + 1
     , lastSeen = now
-    , sampleLogs = V.take maxSamples (V.cons originalLog (sampleLogs group'))
     }
 
 
