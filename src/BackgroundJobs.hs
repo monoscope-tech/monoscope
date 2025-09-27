@@ -96,7 +96,7 @@ data BgJobs
   | SlackNotification Projects.ProjectId Text
   | EnhanceIssuesWithLLM Projects.ProjectId (V.Vector Issues.IssueId)
   | ProcessIssuesEnhancement UTCTime
-  | FifteenMinutesLogsPatternProcessing UTCTime
+  | FifteenMinutesLogsPatternProcessing UTCTime Projects.ProjectId
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -223,11 +223,6 @@ processBackgroundJob authCtx job bgJob =
           _ <- scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob scheduledTime hour) scheduledTime
           pass
 
-        -- Schedule 15-minute log pattern extraction jobs (96 jobs per day = 24 hours * 4 per hour)
-        forM_ [0 .. 95] \interval -> do
-          let scheduledTime1 = addUTCTime (fromIntegral $ interval * 900) currentTime
-          scheduleJob conn "background_jobs" (BackgroundJobs.FifteenMinutesLogsPatternProcessing scheduledTime1) scheduledTime1
-
         -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
         forM_ [0 .. 287] \interval -> do
           let scheduledTime2 = addUTCTime (fromIntegral $ interval * 300) currentTime
@@ -246,7 +241,13 @@ processBackgroundJob authCtx job bgJob =
       -- Handle regular daily jobs for each project
       projects <- dbtToEff $ query [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
       forM_ projects \p -> do
+        -- Schedule 15-minute log pattern extraction jobs (96 jobs per day = 24 hours * 4 per hour)
+
         liftIO $ withResource authCtx.jobsPool \conn -> do
+          forM_ [0 .. 95] \interval -> do
+            let scheduledTime1 = addUTCTime (fromIntegral $ interval * 900) currentTime
+            _ <- scheduleJob conn "background_jobs" (BackgroundJobs.FifteenMinutesLogsPatternProcessing scheduledTime1 p) scheduledTime1
+            pass
           Relude.when (dayOfWeek currentDay == Monday)
             $ void
             $ createJob conn "background_jobs"
@@ -278,7 +279,7 @@ processBackgroundJob authCtx job bgJob =
     SlackNotification pid message -> sendSlackMessage pid message
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> processIssuesEnhancement scheduledTime
-    FifteenMinutesLogsPatternProcessing scheduledTime -> logsPatternExtraction scheduledTime
+    FifteenMinutesLogsPatternProcessing scheduledTime pid -> logsPatternExtraction scheduledTime pid
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -364,18 +365,19 @@ processFiveMinuteSpans scheduledTime = do
   Log.logInfo "Completed 5-minute span processing" ()
 
 
--- drainTree :: Telemetry.DrainTree
--- drainTree = Telemetry.emptyDrainTree
-
-logsPatternExtraction :: UTCTime -> ATBackgroundCtx ()
-logsPatternExtraction scheduledTime = do
+logsPatternExtraction :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
+logsPatternExtraction scheduledTime pid = do
   Log.logInfo "Logs pattern extraction begin" ()
-  otelLogs <- dbtToEff $ query [sql| SELECT id::text, body::text FROM otel_logs_and_spans WHERE timestamp > now() - interval '2 hour' and kind = 'log' and log_pattern is null and body is not null limit 2000|] ()
-  Log.logInfo "Fetched OTEL logs for pattern extraction" ("log_count", AE.toJSON $ V.length otelLogs)
-  let drainTree = processBatch otelLogs scheduledTime Telemetry.emptyDrainTree
+  let fifteenMinutesAgo = addUTCTime (-900) scheduledTime
+  -- use existing patterns for high accurancy
+  logsWithPatterns <- dbtToEff $ query [sql| SELECT DISTINCT ON (log_pattern) id::text, log_pattern FROM otel_logs_and_spans WHERE project_id = ? AND timestamp > now() - interval '6 hour' AND kind = 'log' AND log_pattern IS NOT NULL|] (pid)
+  otelLogs <- dbtToEff $ query [sql|  SELECT id::text, body::text FROM otel_logs_and_spans  WHERE project_id = ? AND timestamp >= ? AND timestamp < ?  and kind = 'log' and log_pattern is null and body is not null |] (pid, fifteenMinutesAgo, scheduledTime)
+  let finalVals = logsWithPatterns <> otelLogs
+  Log.logInfo "Fetched OTEL logs for pattern extraction" ("log_count", AE.toJSON $ V.length finalVals)
+  let drainTree = processBatch finalVals scheduledTime Telemetry.emptyDrainTree
       patterns = Telemetry.getAllLogGroups drainTree
   Log.logInfo "Extracted log patterns" ("pattern_count", AE.toJSON $ V.length patterns)
-  -- Update logs with patterns in batches of 1000
+
   forM_ patterns \p -> do
     _ <- dbtToEff $ execute [sql| UPDATE otel_logs_and_spans SET log_pattern = ? WHERE id::text=Any(?) |] p
     pass

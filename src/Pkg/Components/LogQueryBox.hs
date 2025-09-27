@@ -74,7 +74,6 @@ logQueryBox_ config = do
                   |]
               ]
               <> [checked_ | isJust config.targetWidgetPreview]
-              <> [checked_ | isJust config.targetWidgetPreview]
           script_
             [text|
             document.addEventListener('keydown', function(e) {
@@ -225,25 +224,36 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
   div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-fillWeak p-1 rounded-lg", id_ "visualizationTabs", role_ "tablist"] do
     let defaultVizType = if alert then "viz-timeseries" else fromMaybe "logs" vizTypeM
         containerSelector = fromMaybe "visualization-widget-container" widgetContainerId
-    forM_ visTypes $ \(icon, label, vizType, emoji) -> label_ [class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
-      input_
-        $ [ type_ "radio"
-          , name_ "visualization"
-          , id_ $ "viz-" <> vizType
-          , value_ vizType
-          , term "data-update-url" (if updateUrl then "true" else "false")
-          , term "data-container-id" containerSelector
-          , [__| on change
-                      if my.checked
-                        call updateVizTypeInUrl(my.value, @data-update-url === 'true')
-                        set widgetJSON.type to my.value
-                        send 'update-widget' to #{@data-container-id}
-                      end
-                   |]
-          ]
-          <> [checked_ | vizType == defaultVizType]
-      span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
-      span_ [] $ toHtml label
+
+    forM_ visTypes $ \(icon, label, vizType, emoji) -> do
+      label_
+        [ term "data-value" vizType
+        , term "data-reload" $ if vizTypeM == Just "patterns" || vizType == "patterns" then "patterns" else ""
+        , class_ "tab !shadow-none !border-strokeWeak flex gap-1"
+        , [__| on click 
+               if @data-reload == "patterns" then window.setParams({viz_type:@data-value}, true) end
+          |]
+        ]
+        do
+          input_
+            $ [ type_ "radio"
+              , name_ "visualization"
+              , id_ $ "viz-" <> vizType
+              , class_ $ if vizType == "logs" || vizType == "patterns" then "default-chart" else "no-chart"
+              , value_ vizType
+              , term "data-update-url" (if updateUrl then "true" else "false")
+              , term "data-container-id" containerSelector
+              , [__| on change
+                          if my.checked
+                            call updateVizTypeInUrl(my.value, @data-update-url === 'true')
+                            set widgetJSON.type to my.value
+                            send 'update-widget' to #{@data-container-id}
+                          end
+                       |]
+              ]
+              <> [checked_ | vizType == defaultVizType]
+          span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
+          span_ [] $ toHtml label
 
 
 -- | Query library component for saved and recent queries
