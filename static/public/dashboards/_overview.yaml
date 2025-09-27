@@ -56,6 +56,11 @@ tabs:
   - name: Overview
     icon: grid
     widgets:
+      # Anomalies
+      - type: anomalies
+        title: 'Ongoing Issues'
+        layout: { w: 12, h: 3 }
+
       # Services Table
       - type: table
         title: Services Overview
@@ -86,6 +91,7 @@ tabs:
           WHERE project_id='{{project_id}}' 
             AND resource___service___name IS NOT NULL
             AND kind = 'server'
+            AND duration IS NOT NULL
             {{time_filter}}
           GROUP BY resource___service___name
           ORDER BY COUNT(*)::numeric / GREATEST(1, EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp))) / 60) DESC
@@ -193,6 +199,127 @@ tabs:
         unit: errors
         layout: { w: 6, h: 4 }
 
+      # HTTP Requests by Status Code
+      - type: 'timeseries'
+        title: 'HTTP Requests by Status Code'
+        sql: |
+          SELECT 
+            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            COALESCE(attributes___http___response___status_code::text, 'unknown') as status_code,
+            COUNT(*)::float as count
+          FROM otel_logs_and_spans
+          WHERE project_id='{{project_id}}'
+            AND (kind = 'server' OR name = 'apitoolkit-http-span' OR name = 'monoscope.http')
+            AND attributes___http___response___status_code IS NOT NULL
+            {{time_filter}}
+          GROUP BY time, attributes___http___response___status_code
+          ORDER BY time DESC
+          LIMIT 1000
+        unit: reqs
+        layout: { w: 6, h: 4 }
+
+      # HTTP Errors Distribution
+      - type: 'timeseries'
+        title: 'HTTP Errors (4xx & 5xx) - Incoming'
+        theme: 'roma'
+        sql: |
+          SELECT 
+            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            CASE 
+              WHEN attributes___http___response___status_code BETWEEN 400 AND 499 THEN '4xx'
+              WHEN attributes___http___response___status_code >= 500 THEN '5xx'
+              ELSE attributes___http___response___status_code::text
+            END as error_category,
+            COUNT(*)::float as count
+          FROM otel_logs_and_spans
+          WHERE project_id='{{project_id}}'
+            AND (kind = 'server' OR name = 'apitoolkit-http-span' OR name = 'monoscope.http')
+            AND attributes___http___response___status_code IS NOT NULL
+            AND COALESCE(attributes___http___response___status_code, 0) >= 400
+            {{time_filter}}
+          GROUP BY time, error_category
+          ORDER BY time DESC
+          LIMIT 1000
+        unit: errors
+        layout: { w: 6, h: 4 }
+
+      # Request Latency Percentiles
+      - type: 'timeseries_line'
+        title: 'Request Latency Percentiles (ms)'
+        hide_subtitle: true
+        summarize_by: max
+        sql: |
+          SELECT timeB, quantile, value
+          FROM (
+            SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
+                   ARRAY[
+                     (approx_percentile(0.50, percentile_agg(duration)) / 1e6)::float,
+                     (approx_percentile(0.75, percentile_agg(duration)) / 1e6)::float,
+                     (approx_percentile(0.90, percentile_agg(duration)) / 1e6)::float,
+                     (approx_percentile(0.95, percentile_agg(duration)) / 1e6)::float,
+                     (approx_percentile(0.99, percentile_agg(duration)) / 1e6)::float
+                   ] AS values,
+                   ARRAY['p50', 'p75', 'p90', 'p95', 'p99'] AS quantiles
+            FROM otel_logs_and_spans
+            WHERE project_id='{{project_id}}'
+              AND (kind = 'server' OR name = 'apitoolkit-http-span' OR name = 'monoscope.http')
+              AND duration IS NOT NULL
+              {{time_filter}}
+            GROUP BY timeB
+          ) s,
+          LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
+        layout: { w: 6, h: 4 }
+
+      # Events by Service
+      - type: 'timeseries'
+        title: 'Events by Service'
+        sql: |
+          SELECT 
+            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            resource___service___name as service,
+            COUNT(*)::float as count
+          FROM otel_logs_and_spans
+          WHERE project_id='{{project_id}}'
+            AND resource___service___name IS NOT NULL
+            {{time_filter}}
+          GROUP BY time, service
+          ORDER BY time DESC
+          LIMIT 1000
+        unit: events
+        layout: { w: 12, h: 4 }
+
+      # Requests by Endpoint
+      - type: 'timeseries'
+        title: 'Requests by Endpoint'
+        sql: |
+          WITH top_endpoints AS (
+            SELECT 
+              attributes___http___request___method || ' ' || attributes___url___path as endpoint,
+              COUNT(*) as total_count
+            FROM otel_logs_and_spans
+            WHERE project_id='{{project_id}}'
+              AND (kind = 'server' OR name = 'apitoolkit-http-span' OR name = 'monoscope.http')
+              AND attributes___http___response___status_code IS NOT NULL
+              AND attributes___url___path IS NOT NULL
+              {{time_filter}}
+            GROUP BY endpoint
+            ORDER BY total_count DESC
+            LIMIT 10
+          )
+          SELECT 
+            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            attributes___http___request___method || ' ' || attributes___url___path as endpoint,
+            COUNT(*)::float as count
+          FROM otel_logs_and_spans o
+          INNER JOIN top_endpoints t ON (o.attributes___http___request___method || ' ' || o.attributes___url___path) = t.endpoint
+          WHERE o.project_id='{{project_id}}'
+            AND (o.kind = 'server' OR o.name = 'apitoolkit-http-span' OR o.name = 'monoscope.http')
+            {{time_filter}}
+          GROUP BY time, endpoint
+          ORDER BY time DESC
+        unit: reqs
+        layout: { w: 12, h: 4 }
+
   - name: Service Summary
     icon: server
     requires: service
@@ -226,6 +353,7 @@ tabs:
             AND resource___service___name = '{{var-service}}'
             AND kind = 'server'
             AND attributes___http___request___method IS NOT NULL
+            AND duration IS NOT NULL
             {{time_filter}}
           GROUP BY endpoint_hash, endpoint, method
           ORDER BY requests DESC
@@ -277,6 +405,7 @@ tabs:
               WHERE project_id='{{project_id}}'
                 AND resource___service___name = '{{var-service}}'
                 AND kind = 'server'
+                AND duration IS NOT NULL
                 {{time_filter}}
             unit: ms
             layout: { w: 3, h: 2 }
@@ -307,7 +436,7 @@ tabs:
             AND resource___service___name = '{{var-service}}'
             AND kind = 'server'
             {{time_filter}}
-          GROUP BY time, status_code
+          GROUP BY time, attributes___http___response___status_code
           ORDER BY time DESC
           LIMIT 1000
         unit: reqs
@@ -334,6 +463,7 @@ tabs:
             WHERE project_id='{{project_id}}'
               AND resource___service___name = '{{var-service}}'
               AND kind = 'server'
+              AND duration IS NOT NULL
               {{time_filter}}
             GROUP BY timeB
           ) s,
@@ -355,7 +485,7 @@ tabs:
             AND kind = 'server'
             AND COALESCE(attributes___http___response___status_code, 0) >= 400
             {{time_filter}}
-          GROUP BY time, status_code
+          GROUP BY time, attributes___http___response___status_code
           ORDER BY time DESC
           LIMIT 1000
         layout: { w: 6, h: 4 }
@@ -372,6 +502,7 @@ tabs:
             WHERE project_id='{{project_id}}'
               AND resource___service___name = '{{var-service}}'
               AND name IS NOT NULL
+              AND duration IS NOT NULL
               {{time_filter}}
             GROUP BY name
             ORDER BY avg_duration_ms DESC
@@ -380,11 +511,12 @@ tabs:
           SELECT 
             extract(epoch from time_bucket('5m', timestamp))::integer AS time,
             o.name,
-            AVG(o.duration) / 1e6 as value
+            AVG(o.duration)::float / 1e6 as value
           FROM otel_logs_and_spans o
           INNER JOIN operation_stats s ON o.name = s.name
           WHERE o.project_id='{{project_id}}'
             AND o.resource___service___name = '{{var-service}}'
+            AND o.duration IS NOT NULL
             {{time_filter}}
           GROUP BY time, o.name
           ORDER BY time DESC
@@ -438,6 +570,7 @@ tabs:
               FROM otel_logs_and_spans
               WHERE project_id='{{project_id}}'
                 AND '{{var-resource}}' = ANY(hashes)
+                AND duration IS NOT NULL
                 {{time_filter}}
             unit: ms
             layout: { w: 3, h: 2 }
@@ -450,6 +583,7 @@ tabs:
               FROM otel_logs_and_spans
               WHERE project_id='{{project_id}}'
                 AND '{{var-resource}}' = ANY(hashes)
+                AND duration IS NOT NULL
                 {{time_filter}}
             unit: ms
             layout: { w: 3, h: 2 }
@@ -466,7 +600,7 @@ tabs:
           WHERE project_id='{{project_id}}'
             AND '{{var-resource}}' = ANY(hashes)
             {{time_filter}}
-          GROUP BY time, status_code
+          GROUP BY time, attributes___http___response___status_code
           ORDER BY time DESC
           LIMIT 1000
         unit: reqs
@@ -492,6 +626,7 @@ tabs:
             FROM otel_logs_and_spans
             WHERE project_id='{{project_id}}'
               AND '{{var-resource}}' = ANY(hashes)
+              AND duration IS NOT NULL
               {{time_filter}}
             GROUP BY timeB
           ) s,
@@ -512,7 +647,7 @@ tabs:
             AND '{{var-resource}}' = ANY(hashes)
             AND (status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400)
             {{time_filter}}
-          GROUP BY time, status_code
+          GROUP BY time, attributes___http___response___status_code
           ORDER BY time DESC
           LIMIT 1000
         layout: { w: 6, h: 4 }
@@ -590,6 +725,7 @@ tabs:
               FROM otel_logs_and_spans
               WHERE project_id='{{project_id}}'
                 AND parent_span_id = ''
+                AND duration IS NOT NULL
                 {{time_filter}}
             unit: ms
             layout: { w: 3, h: 2 }
@@ -617,7 +753,7 @@ tabs:
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND resource___service___name IS NOT NULL
-            {{#if var-service}}AND resource___service___name = '{{var-service}}'{{/if}}
+            AND ('{{var-service}}' = '' OR resource___service___name = '{{var-service}}')
             {{time_filter}}
           GROUP BY time, service_name
           ORDER BY time DESC
@@ -636,7 +772,8 @@ tabs:
             FROM otel_logs_and_spans
             WHERE project_id='{{project_id}}'
               AND name IS NOT NULL
-              {{#if var-service}}AND resource___service___name = '{{var-service}}'{{/if}}
+              AND ('{{var-service}}' = '' OR resource___service___name = '{{var-service}}')
+              AND duration IS NOT NULL
               {{time_filter}}
             GROUP BY name
             ORDER BY avg_duration_ms DESC
@@ -649,7 +786,8 @@ tabs:
           FROM otel_logs_and_spans o
           INNER JOIN operation_stats s ON o.name = s.name
           WHERE o.project_id='{{project_id}}'
-            {{#if var-service}}AND o.resource___service___name = '{{var-service}}'{{/if}}
+            AND ('{{var-service}}' = '' OR o.resource___service___name = '{{var-service}}')
+            AND o.duration IS NOT NULL
             {{time_filter}}
           GROUP BY time, o.name
           ORDER BY time DESC
@@ -665,7 +803,7 @@ tabs:
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND parent_span_id = ''
-            {{#if var-service}}AND resource___service___name = '{{var-service}}'{{/if}}
+            AND ('{{var-service}}' = '' OR resource___service___name = '{{var-service}}')
             {{time_filter}}
           ORDER BY timestamp DESC
           LIMIT 1
@@ -679,7 +817,7 @@ tabs:
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND parent_span_id = ''
-            {{#if var-service}}AND resource___service___name = '{{var-service}}'{{/if}}
+            AND ('{{var-service}}' = '' OR resource___service___name = '{{var-service}}')
             {{time_filter}}
           ORDER BY timestamp DESC
           LIMIT 20
@@ -757,7 +895,7 @@ tabs:
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND level IS NOT NULL
-            {{#if var-service}}AND resource___service___name = '{{var-service}}'{{/if}}
+            AND ('{{var-service}}' = '' OR resource___service___name = '{{var-service}}')
             {{time_filter}}
           GROUP BY time, level
           ORDER BY time DESC
@@ -776,7 +914,7 @@ tabs:
             FROM otel_logs_and_spans
             WHERE project_id='{{project_id}}'
               AND level IN ('ERROR', 'FATAL')
-              {{#if var-service}}AND resource___service___name = '{{var-service}}'{{/if}}
+              AND ('{{var-service}}' = '' OR resource___service___name = '{{var-service}}')
               {{time_filter}}
             GROUP BY resource___service___name
             ORDER BY error_count DESC
@@ -790,7 +928,7 @@ tabs:
           INNER JOIN service_stats s ON o.resource___service___name = s.resource___service___name
           WHERE o.project_id='{{project_id}}'
             AND o.level IN ('ERROR', 'FATAL')
-            {{#if var-service}}AND o.resource___service___name = '{{var-service}}'{{/if}}
+            AND ('{{var-service}}' = '' OR o.resource___service___name = '{{var-service}}')
             {{time_filter}}
           GROUP BY time, service_name
           ORDER BY time DESC
@@ -805,8 +943,8 @@ tabs:
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND body IS NOT NULL
-            {{#if var-service}}AND resource___service___name = '{{var-service}}'{{/if}}
-            {{#if var-resource}}AND '{{var-resource}}' = ANY(hashes){{/if}}
+            AND ('{{var-service}}' = '' OR resource___service___name = '{{var-service}}')
+            AND ('{{var-resource}}' = '' OR '{{var-resource}}' = ANY(hashes))
             {{time_filter}}
           ORDER BY timestamp DESC
           LIMIT 500
@@ -845,6 +983,7 @@ tabs:
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND attributes___db___system___name IS NOT NULL
+            AND duration IS NOT NULL
             {{time_filter}}
           GROUP BY db_system
           ORDER BY COUNT(*) DESC
@@ -865,7 +1004,7 @@ tabs:
               FROM otel_logs_and_spans
               WHERE project_id='{{project_id}}'
                 AND attributes___db___system___name IS NOT NULL
-                {{#if var-database}}AND attributes___db___system___name = '{{var-database}}'{{/if}}
+                AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
                 {{time_filter}}
               GROUP BY time
               ORDER BY time DESC
@@ -881,7 +1020,7 @@ tabs:
               FROM otel_logs_and_spans
               WHERE project_id='{{project_id}}'
                 AND attributes___db___system___name IS NOT NULL
-                {{#if var-database}}AND attributes___db___system___name = '{{var-database}}'{{/if}}
+                AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
                 {{time_filter}}
             unit: '%'
             layout: { w: 3, h: 2 }
@@ -894,7 +1033,8 @@ tabs:
               FROM otel_logs_and_spans
               WHERE project_id='{{project_id}}'
                 AND attributes___db___system___name IS NOT NULL
-                {{#if var-database}}AND attributes___db___system___name = '{{var-database}}'{{/if}}
+                AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
+                AND duration IS NOT NULL
                 {{time_filter}}
             unit: ms
             layout: { w: 3, h: 2 }
@@ -907,7 +1047,7 @@ tabs:
               FROM otel_logs_and_spans
               WHERE project_id='{{project_id}}'
                 AND attributes___db___operation IS NOT NULL
-                {{#if var-database}}AND attributes___db___system___name = '{{var-database}}'{{/if}}
+                AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
                 {{time_filter}}
             unit: types
             layout: { w: 3, h: 2 }
@@ -923,7 +1063,8 @@ tabs:
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND attributes___db___operation IS NOT NULL
-            {{#if var-database}}AND attributes___db___system___name = '{{var-database}}'{{/if}}
+            AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
+            AND duration IS NOT NULL
             {{time_filter}}
           GROUP BY time, operation
           ORDER BY time DESC
@@ -943,7 +1084,7 @@ tabs:
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND attributes___db___system___name IS NOT NULL
-            {{#if var-database}}AND attributes___db___system___name = '{{var-database}}'{{/if}}
+            AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
             {{time_filter}}
           GROUP BY time, db_system, db_name
           ORDER BY time DESC
@@ -965,7 +1106,7 @@ tabs:
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND attributes___db___statement IS NOT NULL
-            {{#if var-database}}AND attributes___db___system___name = '{{var-database}}'{{/if}}
+            AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
             {{time_filter}}
           ORDER BY duration DESC
           LIMIT 50
@@ -983,7 +1124,7 @@ tabs:
           WHERE project_id='{{project_id}}'
             AND attributes___db___system___name IS NOT NULL
             AND status_code = 'ERROR'
-            {{#if var-database}}AND attributes___db___system___name = '{{var-database}}'{{/if}}
+            AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
             {{time_filter}}
           GROUP BY time, db_system
           ORDER BY time DESC
@@ -1001,7 +1142,7 @@ tabs:
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND name LIKE '%db.connection%'
-            {{#if var-database}}AND attributes___db___system___name = '{{var-database}}'{{/if}}
+            AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
             {{time_filter}}
           GROUP BY time, state
           ORDER BY time DESC
