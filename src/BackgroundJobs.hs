@@ -241,11 +241,10 @@ processBackgroundJob authCtx job bgJob =
       -- Handle regular daily jobs for each project
       projects <- dbtToEff $ query [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
       forM_ projects \p -> do
-        -- Schedule 15-minute log pattern extraction jobs (96 jobs per day = 24 hours * 4 per hour)
-
+        -- Schedule 10-minute log pattern extraction jobs (96 jobs per day = 24 hours * 6 per hour)
         liftIO $ withResource authCtx.jobsPool \conn -> do
-          forM_ [0 .. 95] \interval -> do
-            let scheduledTime1 = addUTCTime (fromIntegral $ interval * 900) currentTime
+          forM_ [0 .. 144] \interval -> do
+            let scheduledTime1 = addUTCTime (fromIntegral $ interval * 600) currentTime
             _ <- scheduleJob conn "background_jobs" (BackgroundJobs.FifteenMinutesLogsPatternProcessing scheduledTime1 p) scheduledTime1
             pass
           Relude.when (dayOfWeek currentDay == Monday)
