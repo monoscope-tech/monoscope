@@ -56,47 +56,6 @@ tabs:
   - name: Overview
     icon: grid
     widgets:
-      # Anomalies
-      - type: anomalies
-        title: 'Ongoing Issues'
-        layout: { w: 12, h: 3 }
-
-      # Services Table
-      - type: table
-        title: Services Overview
-        layout: { w: 12, h: 6 }
-        on_row_click:
-          set_variable: service
-          value: '{{row.service_name}}'
-          navigate_to_tab: 'Service Summary'
-        columns:
-          - field: service_name
-            title: Service
-          - field: throughput
-            title: Throughput
-            unit: req/min
-          - field: error_rate
-            title: Error Rate
-            unit: '%'
-          - field: p95_latency
-            title: P95 Latency
-            unit: ms
-        sql: |
-          SELECT 
-            resource___service___name as service_name,
-            ROUND((COUNT(*)::numeric / GREATEST(1, EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp))) / 60)), 2)::text as throughput,
-            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*))::numeric), 2)::text as error_rate,
-            ROUND((approx_percentile(0.95, percentile_agg(duration))::numeric / 1e6), 2)::text as p95_latency
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}' 
-            AND resource___service___name IS NOT NULL
-            AND kind = 'server'
-            AND duration IS NOT NULL
-            {{time_filter}}
-          GROUP BY resource___service___name
-          ORDER BY COUNT(*)::numeric / GREATEST(1, EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp))) / 60) DESC
-          LIMIT 50
-      #
       # System Metrics
       - type: group
         title: System Metrics
@@ -107,7 +66,7 @@ tabs:
             icon: list-tree
             sql: |
               SELECT 
-                extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+                extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
                 '' as series,
                 COUNT(*)::float as value
               FROM otel_logs_and_spans
@@ -160,23 +119,63 @@ tabs:
             eager: true
             layout: { w: 3, h: 2 }
 
-      # Request Volume by Service
-      - type: 'timeseries'
-        title: 'Request Volume by Service'
+      # Services Table and Issues side by side
+      - type: table
+        title: Services Overview
+        layout: { w: 6, h: 6 }
+        on_row_click:
+          set_variable: service
+          value: '{{row.service_name}}'
+          navigate_to_tab: 'Service Summary'
+        columns:
+          - field: service_name
+            title: Service
+          - field: throughput
+            title: Throughput
+            unit: req/min
+          - field: error_rate
+            title: Error Rate
+            unit: '%'
+          - field: p95_latency
+            title: P95 Latency
+            unit: ms
         sql: |
           SELECT 
-            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            resource___service___name as service_name,
+            ROUND((COUNT(*)::numeric / GREATEST(1, EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp))) / 60)), 2)::text as throughput,
+            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*))::numeric), 2)::text as error_rate,
+            ROUND((approx_percentile(0.95, percentile_agg(duration))::numeric / 1e6), 2)::text as p95_latency
+          FROM otel_logs_and_spans
+          WHERE project_id='{{project_id}}' 
+            AND resource___service___name IS NOT NULL
+            AND kind = 'server'
+            AND duration IS NOT NULL
+            {{time_filter}}
+          GROUP BY resource___service___name
+          ORDER BY COUNT(*)::numeric / GREATEST(1, EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp))) / 60) DESC
+          LIMIT 50
+
+      # Anomalies/Issues widget
+      - type: anomalies
+        title: 'Ongoing Issues'
+        layout: { w: 6, h: 6 }
+
+      # Events by Service
+      - type: 'timeseries'
+        title: 'Events by Service'
+        sql: |
+          SELECT 
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             resource___service___name as service,
             COUNT(*)::float as count
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND resource___service___name IS NOT NULL
-            AND kind = 'server'
             {{time_filter}}
           GROUP BY time, service
           ORDER BY time DESC
           LIMIT 1000
-        unit: reqs
+        unit: events
         layout: { w: 6, h: 4 }
 
       # Error Rates by Service
@@ -185,7 +184,7 @@ tabs:
         theme: 'roma'
         sql: |
           SELECT 
-            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             resource___service___name as service,
             COUNT(*)::float as count
           FROM otel_logs_and_spans
@@ -199,12 +198,31 @@ tabs:
         unit: errors
         layout: { w: 6, h: 4 }
 
+      # HTTP Request Volume by Service
+      - type: 'timeseries'
+        title: 'HTTP Request Volume by Service'
+        sql: |
+          SELECT 
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
+            resource___service___name as service,
+            COUNT(*)::float as count
+          FROM otel_logs_and_spans
+          WHERE project_id='{{project_id}}'
+            AND resource___service___name IS NOT NULL
+            AND kind = 'server'
+            {{time_filter}}
+          GROUP BY time, service
+          ORDER BY time DESC
+          LIMIT 1000
+        unit: reqs
+        layout: { w: 6, h: 4 }
+
       # HTTP Requests by Status Code
       - type: 'timeseries'
         title: 'HTTP Requests by Status Code'
         sql: |
           SELECT 
-            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             COALESCE(attributes___http___response___status_code::text, 'unknown') as status_code,
             COUNT(*)::float as count
           FROM otel_logs_and_spans
@@ -224,7 +242,7 @@ tabs:
         theme: 'roma'
         sql: |
           SELECT 
-            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             CASE 
               WHEN attributes___http___response___status_code BETWEEN 400 AND 499 THEN '4xx'
               WHEN attributes___http___response___status_code >= 500 THEN '5xx'
@@ -251,7 +269,7 @@ tabs:
         sql: |
           SELECT timeB, quantile, value
           FROM (
-            SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
+            SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS timeB,
                    ARRAY[
                      (approx_percentile(0.50, percentile_agg(duration)) / 1e6)::float,
                      (approx_percentile(0.75, percentile_agg(duration)) / 1e6)::float,
@@ -269,24 +287,6 @@ tabs:
           ) s,
           LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
         layout: { w: 6, h: 4 }
-
-      # Events by Service
-      - type: 'timeseries'
-        title: 'Events by Service'
-        sql: |
-          SELECT 
-            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
-            resource___service___name as service,
-            COUNT(*)::float as count
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND resource___service___name IS NOT NULL
-            {{time_filter}}
-          GROUP BY time, service
-          ORDER BY time DESC
-          LIMIT 1000
-        unit: events
-        layout: { w: 12, h: 4 }
 
       # Requests by Endpoint
       - type: 'timeseries'
@@ -307,7 +307,7 @@ tabs:
             LIMIT 10
           )
           SELECT 
-            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             attributes___http___request___method || ' ' || attributes___url___path as endpoint,
             COUNT(*)::float as count
           FROM otel_logs_and_spans o
@@ -369,7 +369,7 @@ tabs:
             icon: list-tree
             sql: |
               SELECT 
-                extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+                extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
                 '' as series,
                 COUNT(*)::float as value
               FROM otel_logs_and_spans
@@ -428,7 +428,7 @@ tabs:
         title: 'Service Request Volume'
         sql: |
           SELECT 
-            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             COALESCE(attributes___http___response___status_code::text, 'unknown') as status_code,
             COUNT(*)::float as count
           FROM otel_logs_and_spans
@@ -450,7 +450,7 @@ tabs:
         sql: |
           SELECT timeB, quantile, value
           FROM (
-            SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
+            SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS timeB,
                    ARRAY[
                      (approx_percentile(0.50, percentile_agg(duration)) / 1e6)::float,
                      (approx_percentile(0.75, percentile_agg(duration)) / 1e6)::float,
@@ -476,7 +476,7 @@ tabs:
         theme: 'roma'
         sql: |
           SELECT 
-            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             attributes___http___response___status_code::text as status_code,
             COUNT(*)::float as count
           FROM otel_logs_and_spans
@@ -509,7 +509,7 @@ tabs:
             LIMIT 10
           )
           SELECT 
-            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             o.name,
             AVG(o.duration)::float / 1e6 as value
           FROM otel_logs_and_spans o
@@ -537,7 +537,7 @@ tabs:
             icon: list-tree
             sql: |
               SELECT 
-                extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+                extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
                 '' as series,
                 COUNT(*)::float as value
               FROM otel_logs_and_spans
@@ -593,7 +593,7 @@ tabs:
         title: 'Resource Requests by Status Code'
         sql: |
           SELECT 
-            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             COALESCE(attributes___http___response___status_code::text, 'unknown') as status_code,
             COUNT(*)::float as count
           FROM otel_logs_and_spans
@@ -614,7 +614,7 @@ tabs:
         sql: |
           SELECT timeB, quantile, value
           FROM (
-            SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
+            SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS timeB,
                    ARRAY[
                      (approx_percentile(0.50, percentile_agg(duration)) / 1e6)::float,
                      (approx_percentile(0.75, percentile_agg(duration)) / 1e6)::float,
@@ -639,7 +639,7 @@ tabs:
         theme: 'roma'
         sql: |
           SELECT 
-            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             COALESCE(attributes___http___response___status_code::text, 'ERROR') as status_code,
             COUNT(*)::float as count
           FROM otel_logs_and_spans
@@ -692,7 +692,7 @@ tabs:
             icon: list-tree
             sql: |
               SELECT 
-                extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+                extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
                 '' as series,
                 COUNT(*)::float as value
               FROM otel_logs_and_spans
@@ -747,7 +747,7 @@ tabs:
         title: 'Span Rate by Service'
         sql: |
           SELECT 
-            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             resource___service___name as service_name,
             COUNT(*)::float / 5.0 as value
           FROM otel_logs_and_spans
@@ -780,7 +780,7 @@ tabs:
             LIMIT 10
           )
           SELECT 
-            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             o.name,
             AVG(o.duration) / 1e6 as value
           FROM otel_logs_and_spans o
@@ -835,7 +835,7 @@ tabs:
             icon: file-text
             sql: |
               SELECT 
-                extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+                extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
                 '' as series,
                 COUNT(*)::float as value
               FROM otel_logs_and_spans
@@ -889,7 +889,7 @@ tabs:
         title: 'Log Volume by Level'
         sql: |
           SELECT 
-            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             level,
             COUNT(*)::float as count
           FROM otel_logs_and_spans
@@ -921,7 +921,7 @@ tabs:
             LIMIT 10
           )
           SELECT 
-            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             o.resource___service___name as service_name,
             COUNT(*)::float as count
           FROM otel_logs_and_spans o
@@ -998,7 +998,7 @@ tabs:
             icon: database
             sql: |
               SELECT 
-                extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+                extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
                 '' as series,
                 COUNT(*)::float as value
               FROM otel_logs_and_spans
@@ -1057,7 +1057,7 @@ tabs:
         title: 'Query Performance by Operation'
         sql: |
           SELECT 
-            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             attributes___db___operation as operation,
             AVG(duration) / 1e6 as value
           FROM otel_logs_and_spans
@@ -1077,7 +1077,7 @@ tabs:
         title: 'Query Volume by Database'
         sql: |
           SELECT 
-            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             attributes___db___system___name as db_system,
             COALESCE(attributes___db___name, 'unknown') as db_name,
             COUNT(*)::float as count
@@ -1117,7 +1117,7 @@ tabs:
         theme: 'roma'
         sql: |
           SELECT 
-            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             attributes___db___system___name as db_system,
             COUNT(*)::float as count
           FROM otel_logs_and_spans
@@ -1136,7 +1136,7 @@ tabs:
         title: 'Database Connections'
         sql: |
           SELECT 
-            extract(epoch from time_bucket('5m', timestamp))::integer AS time,
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             attributes___state as state,
             AVG(value)::float as avg_value
           FROM otel_logs_and_spans

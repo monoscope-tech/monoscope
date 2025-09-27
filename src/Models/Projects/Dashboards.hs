@@ -162,9 +162,9 @@ readDashboardEndpoint uri = do
       pure
 
 
-replaceQueryVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> Variable -> Variable
-replaceQueryVariables pid mf mt allParams variable =
-  let mappng = DashboardUtils.variablePresets pid.toText mf mt allParams
+replaceQueryVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Variable -> Variable
+replaceQueryVariables pid mf mt allParams currentTime variable =
+  let mappng = DashboardUtils.variablePresets pid.toText mf mt allParams currentTime
    in variable
         & #sql . _Just %~ DashboardUtils.replacePlaceholders mappng
         & #query . _Just %~ DashboardUtils.replacePlaceholders mappng

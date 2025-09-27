@@ -328,7 +328,7 @@ processVariable :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, May
 processVariable pid now timeRange@(sinceStr, fromDStr, toDStr) allParams variableBase = do
   let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
       paramsMap = Map.fromList allParams
-      variable' = Dashboards.replaceQueryVariables pid fromD toD allParams variableBase
+      variable' = Dashboards.replaceQueryVariables pid fromD toD allParams now variableBase
       variable = variable'{Dashboards.value = join (Map.lookup ("var-" <> variable'.key) paramsMap) <|> variable'.value}
 
   case variable._vType of

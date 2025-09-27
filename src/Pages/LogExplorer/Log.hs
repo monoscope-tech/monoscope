@@ -726,7 +726,7 @@ apiLogsPage page = do
                                       ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
                                 FROM otel_logs_and_spans
                                 WHERE project_id='{{project_id}}'
-                                  {{time_filter}} {{query_ast_filters}}
+                                  ({{time_filter}} ({{query_ast_filters}}))
                                   AND duration IS NOT NULL
                                 GROUP BY timeB
                                 HAVING COUNT(*) > 0
@@ -1174,8 +1174,8 @@ alertConfigurationForm_ pid alertM = do
                                      })
                                    end|]
                             ]
-                          ++ [required_ "" | req]
-                          ++ [value_ (maybe "" (show) vM) | isJust vM]
+                            ++ [required_ "" | req]
+                            ++ [value_ (maybe "" (show) vM) | isJust vM]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)
