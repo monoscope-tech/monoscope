@@ -368,10 +368,9 @@ processFiveMinuteSpans scheduledTime = do
 logsPatternExtraction :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
 logsPatternExtraction scheduledTime pid = do
   Log.logInfo "Logs pattern extraction begin" ()
-  let fifteenMinutesAgo = addUTCTime (-900) scheduledTime
   -- use existing patterns for high accurancy
   logsWithPatterns <- dbtToEff $ query [sql| SELECT DISTINCT ON (log_pattern) id::text, log_pattern FROM otel_logs_and_spans WHERE project_id = ? AND timestamp > now() - interval '6 hour' AND kind = 'log' AND log_pattern IS NOT NULL|] (pid)
-  otelLogs <- dbtToEff $ query [sql|  SELECT id::text, body::text FROM otel_logs_and_spans  WHERE project_id = ? AND timestamp >= ? AND timestamp < ?  and kind = 'log' and log_pattern is null and body is not null |] (pid, fifteenMinutesAgo, scheduledTime)
+  otelLogs <- dbtToEff $ query [sql|  SELECT id::text, body::text FROM otel_logs_and_spans  WHERE project_id = ? AND timestamp > now() - interval '1 hour' and kind = 'log' and log_pattern is null and body is not null |] (pid)
   let finalVals = logsWithPatterns <> otelLogs
   Log.logInfo "Fetched OTEL logs for pattern extraction" ("log_count", AE.toJSON $ V.length finalVals)
   let drainTree = processBatch finalVals scheduledTime Telemetry.emptyDrainTree
