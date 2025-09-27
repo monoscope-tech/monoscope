@@ -194,9 +194,9 @@ logQueryBox_ config = do
         -- Results will be rendered by the virtual table component
 
         div_ [class_ "flex justify-end gap-2"] do
-          fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[#viz-logs:checked]/pg:block"] do
+          fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[.default-chart:checked]/pg:block"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "hide timeline"
-          fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1"] do
+          fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 group-has-[#viz-patterns:checked]/pg:hidden"] do
             input_
               $ [ type_ "checkbox"
                 , id_ "create-alert-toggle"
@@ -224,25 +224,36 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
   div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-fillWeak p-1 rounded-lg", id_ "visualizationTabs", role_ "tablist"] do
     let defaultVizType = if alert then "viz-timeseries" else fromMaybe "logs" vizTypeM
         containerSelector = fromMaybe "visualization-widget-container" widgetContainerId
-    forM_ visTypes $ \(icon, label, vizType, emoji) -> label_ [class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
-      input_
-        $ [ type_ "radio"
-          , name_ "visualization"
-          , id_ $ "viz-" <> vizType
-          , value_ vizType
-          , term "data-update-url" (if updateUrl then "true" else "false")
-          , term "data-container-id" containerSelector
-          , [__| on change
-                      if my.checked
-                        call updateVizTypeInUrl(my.value, @data-update-url === 'true')
-                        set widgetJSON.type to my.value
-                        send 'update-widget' to #{@data-container-id}
-                      end
-                   |]
-          ]
-        <> [checked_ | vizType == defaultVizType]
-      span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
-      span_ [] $ toHtml label
+
+    forM_ visTypes $ \(icon, label, vizType, emoji) -> do
+      label_
+        [ term "data-value" vizType
+        , term "data-reload" $ if vizTypeM == Just "patterns" || vizType == "patterns" then "patterns" else ""
+        , class_ "tab !shadow-none !border-strokeWeak flex gap-1"
+        , [__| on click 
+               if @data-reload == "patterns" then window.setParams({viz_type:@data-value}, true) end
+          |]
+        ]
+        do
+          input_
+            $ [ type_ "radio"
+              , name_ "visualization"
+              , id_ $ "viz-" <> vizType
+              , class_ $ if vizType == "logs" || vizType == "patterns" then "default-chart" else "no-chart"
+              , value_ vizType
+              , term "data-update-url" (if updateUrl then "true" else "false")
+              , term "data-container-id" containerSelector
+              , [__| on change
+                          if my.checked
+                            call updateVizTypeInUrl(my.value, @data-update-url === 'true')
+                            set widgetJSON.type to my.value
+                            send 'update-widget' to #{@data-container-id}
+                          end
+                       |]
+              ]
+            <> [checked_ | vizType == defaultVizType]
+          span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
+          span_ [] $ toHtml label
 
 
 -- | Query library component for saved and recent queries
@@ -292,6 +303,7 @@ visTypes =
   [ ("list-view", "Logs", "logs", "📋")
   , ("bar-chart", "Bar", "timeseries", "📊")
   , ("duo-line-chart", "Line", "timeseries_line", "📈")
+  , ("log-patterns", "Patterns", "patterns", "🔍")
   -- , ("duo-pie-chart", "Pie", "pie_chart", "🥧")
   -- , ("duo-scatter-chart", "Scatter", "distribution", "📉")
   -- , ("hashtag", "Number", "stat", "🔢")

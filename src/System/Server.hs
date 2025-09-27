@@ -72,17 +72,15 @@ runServer appLogger env tp = do
           . newOpenTelemetryWaiMiddleware' tp
           -- . loggingMiddleware
           $ server
-
   let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env tp
   let exceptionLogger = logException env.config.environment appLogger
-
   asyncs <-
     liftIO
       $ sequence
       $ concat
         [ [async $ runSettings warpSettings wrappedServer]
         , [async $ Safe.withException (Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages) exceptionLogger | env.config.enablePubsubService]
-        , [async $ Safe.withException bgJobWorker exceptionLogger | env.config.enableBackgroundJobs]
+        , [async $ Safe.withException bgJobWorker exceptionLogger]
         , [async $ Safe.withException (OtlpServer.runServer appLogger env tp) exceptionLogger]
         , [async $ Safe.withException (Queue.kafkaService appLogger env tp env.config.kafkaTopics OtlpServer.processList) exceptionLogger | env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics]
         , [async $ Safe.withException (Queue.kafkaService appLogger env tp env.config.rrwebTopics processReplayEvents) exceptionLogger | env.config.enableReplayService]

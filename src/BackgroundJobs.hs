@@ -60,6 +60,7 @@ import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
+import RequestMessages (replaceAllFormats)
 import RequestMessages qualified
 import System.Config qualified as Config
 import System.Logging qualified as Log
@@ -95,6 +96,7 @@ data BgJobs
   | SlackNotification Projects.ProjectId Text
   | EnhanceIssuesWithLLM Projects.ProjectId (V.Vector Issues.IssueId)
   | ProcessIssuesEnhancement UTCTime
+  | FifteenMinutesLogsPatternProcessing UTCTime Projects.ProjectId
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -239,7 +241,12 @@ processBackgroundJob authCtx job bgJob =
       -- Handle regular daily jobs for each project
       projects <- dbtToEff $ query [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
       forM_ projects \p -> do
+        -- Schedule 10-minute log pattern extraction jobs (96 jobs per day = 24 hours * 6 per hour)
         liftIO $ withResource authCtx.jobsPool \conn -> do
+          forM_ [0 .. 144] \interval -> do
+            let scheduledTime1 = addUTCTime (fromIntegral $ interval * 600) currentTime
+            _ <- scheduleJob conn "background_jobs" (BackgroundJobs.FifteenMinutesLogsPatternProcessing scheduledTime1 p) scheduledTime1
+            pass
           Relude.when (dayOfWeek currentDay == Monday)
             $ void
             $ createJob conn "background_jobs"
@@ -271,6 +278,7 @@ processBackgroundJob authCtx job bgJob =
     SlackNotification pid message -> sendSlackMessage pid message
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> processIssuesEnhancement scheduledTime
+    FifteenMinutesLogsPatternProcessing scheduledTime pid -> logsPatternExtraction scheduledTime pid
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -326,6 +334,7 @@ processFiveMinuteSpans :: UTCTime -> ATBackgroundCtx ()
 processFiveMinuteSpans scheduledTime = do
   ctx <- ask @Config.AuthContext
   let fiveMinutesAgo = addUTCTime (-300) scheduledTime
+
   Log.logInfo "Getting HTTP spans from 5-minute window" ()
   -- Get APIToolkit-specific HTTP spans (excludes generic telemetry)
   httpSpans <-
@@ -355,6 +364,40 @@ processFiveMinuteSpans scheduledTime = do
   Log.logInfo "Completed 5-minute span processing" ()
 
 
+logsPatternExtraction :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
+logsPatternExtraction scheduledTime pid = do
+  Log.logInfo "Logs pattern extraction begin" ()
+  -- use existing patterns for high accurancy
+  otelLogs <- dbtToEff $ query [sql|  SELECT id::text, body::text FROM otel_logs_and_spans  WHERE project_id = ? AND timestamp > now() - interval '1 hour' and kind = 'log' and log_pattern is null and body is not null |] (pid)
+  Relude.when (null otelLogs) $ do
+    Log.logInfo "No logs found for pattern extraction" ()
+  unless (null otelLogs) $ do
+    logsWithPatterns <- dbtToEff $ query [sql| SELECT DISTINCT ON (log_pattern) id::text, log_pattern FROM otel_logs_and_spans WHERE project_id = ? AND timestamp > now() - interval '6 hour' AND kind = 'log' AND log_pattern IS NOT NULL|] (pid)
+    Log.logInfo "Fetched logs for pattern extraction" ("log_count", AE.toJSON $ V.length otelLogs)
+    let finalVals = logsWithPatterns <> otelLogs
+    Log.logInfo "Fetched OTEL logs for pattern extraction" ("log_count", AE.toJSON $ V.length finalVals)
+    let drainTree = processBatch finalVals scheduledTime Telemetry.emptyDrainTree
+        patterns = Telemetry.getAllLogGroups drainTree
+    Log.logInfo "Extracted log patterns" ("pattern_count", AE.toJSON $ V.length patterns)
+    forM_ patterns \p -> do
+      _ <- dbtToEff $ execute [sql| UPDATE otel_logs_and_spans SET log_pattern = ? WHERE id::text=Any(?) |] p
+      pass
+    Log.logInfo "Completed log pattern extraction" ()
+    pass
+  where
+    processNewLog :: Text -> Text -> UTCTime -> Telemetry.DrainTree -> Telemetry.DrainTree
+    processNewLog logId logContent now tree = do
+      let tokensVec = V.fromList $ T.words $ replaceAllFormats $ logContent
+          tokenCount = V.length tokensVec
+          firstToken = if V.null tokensVec then "" else V.head tokensVec
+       in if tokenCount == 0
+            then tree -- Skip empty logs
+            else Telemetry.updateTreeWithLog tree tokenCount firstToken tokensVec logId logContent now
+    processBatch :: V.Vector (Text, Text) -> UTCTime -> Telemetry.DrainTree -> Telemetry.DrainTree
+    processBatch logBatch now initialTree = do
+      V.foldl (\tree (logId, logContent) -> processNewLog logId logContent now tree) initialTree logBatch
+
+
 -- | Process errors from OpenTelemetry spans to detect runtime exceptions
 -- This job runs every minute to extract errors from span data and create
 -- runtime exception issues for tracking and notification.
@@ -376,7 +419,6 @@ processOneMinuteErrors scheduledTime = do
   -- we can increase the window to account for time spent on kafka
   -- use two minutes for now before use a better solution
   let oneMinuteAgo = addUTCTime (-60 * 2) scheduledTime
-
   -- Get all spans with errors from time window
   -- Check for:
   -- 1. Spans with error status codes
