@@ -1236,18 +1236,16 @@ updateOrCreateLevelTwo :: V.Vector DrainLevelTwo -> Text -> V.Vector Text -> Tex
 updateOrCreateLevelTwo levelTwos targetToken tokensVec logId logContent now config =
   case V.findIndex (\level -> firstToken level == targetToken) levelTwos of
     Just index ->
-      -- Found existing level two node
       let existingLevel = levelTwos V.! index
           (updatedLogGroups, wasUpdated) = updateOrCreateLogGroup (logGroups existingLevel) tokensVec logId logContent now config
           updatedLevel = existingLevel{logGroups = updatedLogGroups}
           updatedLevelTwos = levelTwos V.// [(index, updatedLevel)]
        in (updatedLevelTwos, wasUpdated)
     Nothing ->
-      -- Create new level two node
       let newLogGroup = createLogGroup tokensVec (T.unwords $ V.toList tokensVec) logId now
           newLevelTwo = DrainLevelTwo{firstToken = targetToken, logGroups = V.singleton newLogGroup}
           updatedLevelTwos = V.cons newLevelTwo levelTwos
-       in (updatedLevelTwos, False) -- New pattern created
+       in (updatedLevelTwos, False)
 
 
 leastRecentlyUsedIndex :: V.Vector LogGroup -> Int
@@ -1263,7 +1261,7 @@ leastRecentlyUsedIndex logGroups =
     )
     Nothing
     logGroups
-    & maybe 0 fst -- fallback to 0 if somehow empty
+    & maybe 0 fst
 
 
 updateOrCreateLogGroup :: V.Vector LogGroup -> V.Vector Text -> Text -> Text -> UTCTime -> DrainConfig -> (V.Vector LogGroup, Bool)
@@ -1280,13 +1278,11 @@ updateOrCreateLogGroup logGroups tokensVec logId logContent now config =
     Nothing ->
       if V.length logGroups >= maxLogGroups config
         then
-          -- At capacity → evict least recently used
           let victimIdx = leastRecentlyUsedIndex logGroups
               newGroup = createLogGroup tokensVec (T.unwords $ V.toList tokensVec) logId now
               updatedGroups = logGroups V.// [(victimIdx, newGroup)]
            in (updatedGroups, False)
         else
-          -- Still space → just append
           let newGroup = createLogGroup tokensVec (T.unwords $ V.toList tokensVec) logId now
               updatedGroups = V.cons newGroup logGroups
            in (updatedGroups, False)
