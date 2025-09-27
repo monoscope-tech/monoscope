@@ -367,13 +367,17 @@ processFiveMinuteSpans scheduledTime = do
 
 logsPatternExtraction :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
 logsPatternExtraction scheduledTime pid = do
+  ctx <- ask @Config.AuthContext
   Log.logInfo "Logs pattern extraction begin" ()
   -- use existing patterns for high accurancy
   otelLogs <- dbtToEff $ query [sql|  SELECT id::text, body::text FROM otel_logs_and_spans  WHERE project_id = ? AND timestamp > now() - interval '1 hour' and kind = 'log' and log_pattern is null and body is not null |] (pid)
   Relude.when (null otelLogs) $ do
     Log.logInfo "No logs found for pattern extraction" ()
   unless (null otelLogs) $ do
-    logsWithPatterns <- dbtToEff $ query [sql| SELECT DISTINCT ON (log_pattern) id::text, log_pattern FROM otel_logs_and_spans WHERE project_id = ? AND timestamp > now() - interval '6 hour' AND kind = 'log' AND log_pattern IS NOT NULL|] (pid)
+    logsWithPatterns' <- liftIO $ Cache.fetchWithCache ctx.logsPatternCache pid \pid' -> do
+      patterns <- withPool ctx.jobsPool $ query [sql| SELECT DISTINCT log_pattern FROM otel_logs_and_spans WHERE project_id = ? AND timestamp > now() - interval '6 hour' AND kind = 'log' AND log_pattern IS NOT NULL|] (pid')
+      pure patterns
+    let logsWithPatterns = (\(p) -> ("", p)) <$> logsWithPatterns'
     Log.logInfo "Fetched logs for pattern extraction" ("log_count", AE.toJSON $ V.length otelLogs)
     let finalVals = logsWithPatterns <> otelLogs
     Log.logInfo "Fetched OTEL logs for pattern extraction" ("log_count", AE.toJSON $ V.length finalVals)
@@ -381,9 +385,9 @@ logsPatternExtraction scheduledTime pid = do
         patterns = Drain.getAllLogGroups drainTree
     Log.logInfo "Extracted log patterns" ("pattern_count", AE.toJSON $ V.length patterns)
     forM_ patterns \p -> do
-      _ <- dbtToEff $ execute [sql| UPDATE otel_logs_and_spans SET log_pattern = ? WHERE id::text=Any(?) |] p
+      _ <- dbtToEff $ execute [sql| UPDATE otel_logs_and_spans SET log_pattern = ? WHERE id::text=Any(?) |] (fst p, V.filter (\p' -> p' /= "") $ snd p)
       pass
-    Log.logInfo "Completed log pattern extraction" ()
+    Log.logInfo "Completed logs pattern extraction" ()
     pass
   where
     processNewLog :: Text -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree

@@ -9,6 +9,7 @@ import Data.Default.Instances ()
 import Data.Pool as Pool (Pool, defaultPoolConfig, newPool)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
+import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Connection)
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Migration qualified as Migrations
@@ -146,6 +147,7 @@ data AuthContext = AuthContext
   , jobsPool :: Pool.Pool Connection
   , timefusionPgPool :: Pool.Pool Connection
   , projectCache :: Cache Projects.ProjectId Projects.ProjectCache
+  , logsPatternCache :: Cache Projects.ProjectId (V.Vector Text)
   , projectKeyCache :: Cache Text (Maybe Projects.ProjectId)
   , config :: EnvConfig
   }
@@ -187,6 +189,7 @@ configToEnv config = do
   timefusionPgPool <- liftIO $ Pool.newPool $ Pool.defaultPoolConfig createTimefusionPgConnIO PG.close (60 * 2) 50
   projectCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0) -- :: m (Cache Projects.ProjectId Projects.ProjectCache) -- 30*60secs or 30 minutes TTL
   projectKeyCache <- liftIO $ newCache Nothing
+  logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0) -- Cache for log patterns, 30 minutes TTL
   pure
     AuthContext
       { pool
@@ -195,6 +198,7 @@ configToEnv config = do
       , env = config
       , projectCache
       , projectKeyCache
+      , logsPatternCache
       , config
       }
 
