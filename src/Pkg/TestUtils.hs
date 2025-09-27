@@ -436,6 +436,7 @@ withTestResources :: (TestResources -> IO ()) -> IO ()
 withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger -> do
   projectCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   projectKeyCache <- newCache (Just $ TimeSpec (60 * 60) 0)
+  logsPatternCache <- newCache (Just $ TimeSpec (30 * 60) 0) -- Cache for log patterns, 30 minutes TTL
   sessAndHeader <- testSessionHeader pool
   tp <- getGlobalTracerProvider
   let atAuthCtx =
@@ -445,6 +446,7 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
           pool
           pool
           projectCache
+          logsPatternCache
           projectKeyCache
           ( (def :: EnvConfig)
               { apiKeyEncryptionSecretKey = "apitoolkit123456123456apitoolkit"

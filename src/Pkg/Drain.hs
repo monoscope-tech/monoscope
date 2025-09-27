@@ -6,21 +6,19 @@ module Pkg.Drain (
   getAllLogGroups,
 ) where
 
-import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time.Clock (UTCTime)
 import Data.Vector qualified as V
-import GHC.Generics (Generic)
 import Relude
 
 
 data LogGroup = LogGroup
-  { template :: V.Vector Text -- Template with wildcards (e.g., ["GET", "<*>", "HTTP/1.1"])
-  , templateStr :: Text -- String representation for display
-  , logIds :: V.Vector Text -- References to actual logs
-  , frequency :: Int -- Number of logs matching this pattern
-  , firstSeen :: UTCTime -- When pattern was first created
-  , lastSeen :: UTCTime -- When pattern was last updated
+  { template :: V.Vector Text
+  , templateStr :: Text
+  , logIds :: V.Vector Text
+  , frequency :: Int
+  , firstSeen :: UTCTime
+  , lastSeen :: UTCTime
   }
   deriving (Generic, Show)
   deriving anyclass (NFData)
@@ -35,30 +33,28 @@ data DrainLevelTwo = DrainLevelTwo
 
 
 data DrainLevelOne = DrainLevelOne
-  { tokenCount :: Int -- Number of tokens (avoiding 'length' name conflict)
-  , nodes :: V.Vector DrainLevelTwo -- Second level nodes
+  { tokenCount :: Int
+  , nodes :: V.Vector DrainLevelTwo
   }
   deriving (Generic, Show)
   deriving anyclass (NFData)
 
 
--- deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DrainLevelOne
-
 -- Level 0: Root of the DRAIN tree
 data DrainTree = DrainTree
-  { children :: V.Vector DrainLevelOne -- First level nodes (grouped by length)
-  , totalLogs :: Int -- Total logs processed
-  , totalPatterns :: Int -- Total unique patterns found
-  , config :: DrainConfig -- Configuration parameters
+  { children :: V.Vector DrainLevelOne
+  , totalLogs :: Int
+  , totalPatterns :: Int
+  , config :: DrainConfig
   }
   deriving (Generic, Show)
   deriving anyclass (NFData)
 
 
 data DrainConfig = DrainConfig
-  { similarityThreshold :: Double -- Threshold for pattern matching (0.0-1.0)
-  , maxLogGroups :: Int -- Maximum clusters per leaf
-  , wildcardToken :: Text -- Token used for wildcards (usually "<*>")
+  { similarityThreshold :: Double
+  , maxLogGroups :: Int
+  , wildcardToken :: Text
   }
   deriving (Generic, Show)
   deriving anyclass (NFData)
