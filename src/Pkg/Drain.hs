@@ -64,7 +64,7 @@ defaultDrainConfig :: DrainConfig
 defaultDrainConfig =
   DrainConfig
     { similarityThreshold = 0.5
-    , maxLogGroups = 1000
+    , maxLogGroups = 50
     , wildcardToken = "<*>"
     }
 

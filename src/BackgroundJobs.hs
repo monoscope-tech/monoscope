@@ -374,9 +374,7 @@ logsPatternExtraction scheduledTime pid = do
   Relude.when (null otelLogs) $ do
     Log.logInfo "No logs found for pattern extraction" ("project_id", AE.toJSON pid.toText)
   unless (null otelLogs) $ do
-    logsWithPatterns' <- liftIO $ Cache.fetchWithCache ctx.logsPatternCache pid \pid' -> do
-      patterns <- withPool ctx.jobsPool $ query [sql| SELECT DISTINCT log_pattern FROM otel_logs_and_spans WHERE project_id = ? AND timestamp > now() - interval '6 hour' AND kind = 'log' AND log_pattern IS NOT NULL|] (pid')
-      pure patterns
+    logsWithPatterns' <- dbtToEff $ query [sql| SELECT DISTINCT log_pattern FROM otel_logs_and_spans WHERE project_id = ? AND timestamp > now() - interval '6 hour' AND kind = 'log' AND log_pattern IS NOT NULL limit 100|] (pid)
     let logsWithPatterns = (\(p) -> ("", p)) <$> logsWithPatterns'
     Log.logInfo "Fetched logs for pattern extraction" ("log_count", AE.toJSON $ V.length otelLogs)
     let finalVals = logsWithPatterns <> otelLogs
