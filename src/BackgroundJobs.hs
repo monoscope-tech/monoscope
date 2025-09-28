@@ -368,15 +368,13 @@ processFiveMinuteSpans scheduledTime = do
 logsPatternExtraction :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
 logsPatternExtraction scheduledTime pid = do
   ctx <- ask @Config.AuthContext
-  Log.logInfo "Logs pattern extraction begin" ()
-  -- use existing patterns for high accurancy
+  Log.logInfo "Logs pattern extraction begin for project" ("project_id", AE.toJSON pid.toText)
+  -- use existing patterns for high accuracy
   otelLogs <- dbtToEff $ query [sql|  SELECT id::text, body::text FROM otel_logs_and_spans  WHERE project_id = ? AND timestamp > now() - interval '1 hour' and kind = 'log' and log_pattern is null and body is not null |] (pid)
   Relude.when (null otelLogs) $ do
-    Log.logInfo "No logs found for pattern extraction" ()
+    Log.logInfo "No logs found for pattern extraction" ("project_id", AE.toJSON pid.toText)
   unless (null otelLogs) $ do
-    logsWithPatterns' <- liftIO $ Cache.fetchWithCache ctx.logsPatternCache pid \pid' -> do
-      patterns <- withPool ctx.jobsPool $ query [sql| SELECT DISTINCT log_pattern FROM otel_logs_and_spans WHERE project_id = ? AND timestamp > now() - interval '6 hour' AND kind = 'log' AND log_pattern IS NOT NULL|] (pid')
-      pure patterns
+    logsWithPatterns' <- dbtToEff $ query [sql| SELECT DISTINCT log_pattern FROM otel_logs_and_spans WHERE project_id = ? AND timestamp > now() - interval '6 hour' AND kind = 'log' AND log_pattern IS NOT NULL|] (pid)
     let logsWithPatterns = (\(p) -> ("", p)) <$> logsWithPatterns'
     Log.logInfo "Fetched logs for pattern extraction" ("log_count", AE.toJSON $ V.length otelLogs)
     let finalVals = logsWithPatterns <> otelLogs
@@ -387,7 +385,7 @@ logsPatternExtraction scheduledTime pid = do
     forM_ patterns \p -> do
       _ <- dbtToEff $ execute [sql| UPDATE otel_logs_and_spans SET log_pattern = ? WHERE id::text=Any(?) |] (fst p, V.filter (\p' -> p' /= "") $ snd p)
       pass
-    Log.logInfo "Completed logs pattern extraction" ()
+    Log.logInfo "Completed logs pattern extraction" ("project_id", AE.toJSON pid.toText)
     pass
   where
     processNewLog :: Text -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
@@ -577,6 +575,7 @@ processProjectSpans pid spans = do
     Left (e :: SomePostgreSqlException) -> Log.logAttention "Postgres Exception during span processing" (show e)
     Right _ -> do
       -- Update span records with computed hashes
+      Log.logInfo "Updating spans with computed hashes" ("span_count", AE.toJSON $ V.length spans)
       forM_ (V.zip spans spanUpdates) \(spn, hashes) -> do
         Relude.when (not $ V.null hashes) $ do
           _ <-
@@ -587,6 +586,7 @@ processProjectSpans pid spans = do
                   WHERE id = ? |]
                 (hashes, spn.id)
           pass
+      Log.logInfo "Completed span processing for project" ("project_id", AE.toJSON pid.toText)
   where
     projectCacheDefault :: Projects.ProjectCache
     projectCacheDefault =
