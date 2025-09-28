@@ -240,7 +240,7 @@ processBackgroundJob authCtx job bgJob =
           scheduleJob conn "background_jobs" (BackgroundJobs.ProcessIssuesEnhancement scheduledTime4) scheduledTime4
 
       -- Handle regular daily jobs for each project
-      projects <- dbtToEff $ query [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL and payment_plan != 'ONBOARDING'|] (Only True)
+      projects <- dbtToEff $ query [sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > now() - interval '24 hours'|] (Only True)
       forM_ projects \p -> do
         -- Schedule 10-minute log pattern extraction jobs (96 jobs per day = 24 hours * 6 per hour)
         liftIO $ withResource authCtx.jobsPool \conn -> do
