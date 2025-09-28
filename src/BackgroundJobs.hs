@@ -374,7 +374,9 @@ logsPatternExtraction scheduledTime pid = do
   Relude.when (null otelLogs) $ do
     Log.logInfo "No logs found for pattern extraction" ("project_id", AE.toJSON pid.toText)
   unless (null otelLogs) $ do
-    logsWithPatterns' <- dbtToEff $ query [sql| SELECT DISTINCT log_pattern FROM otel_logs_and_spans WHERE project_id = ? AND timestamp > now() - interval '6 hour' AND kind = 'log' AND log_pattern IS NOT NULL|] (pid)
+    logsWithPatterns' <- liftIO $ Cache.fetchWithCache ctx.logsPatternCache pid \pid' -> do
+      patterns <- withPool ctx.jobsPool $ query [sql| SELECT DISTINCT log_pattern FROM otel_logs_and_spans WHERE project_id = ? AND timestamp > now() - interval '6 hour' AND kind = 'log' AND log_pattern IS NOT NULL|] (pid')
+      pure patterns
     let logsWithPatterns = (\(p) -> ("", p)) <$> logsWithPatterns'
     Log.logInfo "Fetched logs for pattern extraction" ("log_count", AE.toJSON $ V.length otelLogs)
     let finalVals = logsWithPatterns <> otelLogs
@@ -385,7 +387,7 @@ logsPatternExtraction scheduledTime pid = do
     forM_ patterns \p -> do
       _ <- dbtToEff $ execute [sql| UPDATE otel_logs_and_spans SET log_pattern = ? WHERE id::text=Any(?) |] (fst p, V.filter (\p' -> p' /= "") $ snd p)
       pass
-    Log.logInfo "Completed logs pattern extraction" ("project_id", AE.toJSON pid.toText)
+    Log.logInfo "Completed logs pattern extraction for project" ("project_id", AE.toJSON pid.toText)
     pass
   where
     processNewLog :: Text -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
