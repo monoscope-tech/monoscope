@@ -530,7 +530,7 @@ fetchLogPatterns pid queryAST dateRange sourceM = do
   let (_, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now sourceM Nothing){dateRange}) queryAST
       pidTxt = pid.toText
       whereCondition = fromMaybe [text|project_id=${pidTxt}|] $ queryComponents.whereClause
-      q = [text|select log_pattern, count(*) as p_count from otel_logs_and_spans where ${whereCondition} and log_pattern is not null GROUP BY log_pattern HAVING COUNT(*) > 2 ORDER BY p_count desc;|]
+      q = [text|select log_pattern, count(*) as p_count from otel_logs_and_spans where project_id='${pidTxt}' and ${whereCondition} and log_pattern is not null GROUP BY log_pattern HAVING COUNT(*) > 2 ORDER BY p_count desc;|]
   v <- dbtToEff $ query (Query $ encodeUtf8 q) ()
   pure v
 
