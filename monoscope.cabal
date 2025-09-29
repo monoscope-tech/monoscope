@@ -37,6 +37,7 @@ extra-source-files:
     static/migrations/0010_requbild_ers_view.sql
     static/migrations/0011_host_request_stats.sql
     static/migrations/0012_drop_materialized_views.sql
+    static/migrations/0013_log_patterns.sql
 
 source-repository head
   type: git
@@ -122,9 +123,9 @@ library
       Pkg.DashboardUtils
       Pkg.DBUtils
       Pkg.DeriveUtils
+      Pkg.Drain
       Pkg.Google
       Pkg.Mail
-      Pkg.Drain
       Pkg.Parser
       Pkg.Parser.Core
       Pkg.Parser.Expr
@@ -506,9 +507,9 @@ test-suite unit-tests
   main-is: Main.hs
   other-modules:
       Data.Effectful.NotifySpec
+      Pkg.DrainSpec
       Pkg.Parser.ExprSpec
       Pkg.ParserSpec
-      Pkg.DrainSpec
       RequestMessagesSpec
       Spec
   hs-source-dirs:
@@ -557,6 +558,4 @@ test-suite unit-tests
     , neat-interpolation
     , relude >=1.2.0.0
     , uuid
-    , vector
-    , time
   default-language: GHC2021
