@@ -360,7 +360,7 @@ processFiveMinuteSpans scheduledTime = do
     Just (firstSpan, _) -> do
       let pid = Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText firstSpan.project_id
       Log.logInfo "Processing project spans" $ AE.object [("project_id", AE.toJSON pid.toText), ("span_count", AE.toJSON $ V.length projectSpans)]
-      processProjectSpans pid projectSpans
+      processProjectSpans pid projectSpans fiveMinutesAgo scheduledTime
 
   Log.logInfo "Completed 5-minute span processing" ()
 
@@ -368,13 +368,14 @@ processFiveMinuteSpans scheduledTime = do
 logsPatternExtraction :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
 logsPatternExtraction scheduledTime pid = do
   ctx <- ask @Config.AuthContext
+  oneHourAgo <- liftIO $ addUTCTime (-3600) <$> Time.currentTime
   Log.logInfo "Logs pattern extraction begin for project" ("project_id", AE.toJSON pid.toText)
-  -- use existing patterns for high accuracy
-  otelLogs <- dbtToEff $ query [sql|  SELECT id::text, body::text FROM otel_logs_and_spans  WHERE project_id = ? AND timestamp > now() - interval '1 hour' and kind = 'log' and log_pattern is null and body is not null |] (pid)
+  otelLogs <- dbtToEff $ query [sql|  SELECT id::text, body::text FROM otel_logs_and_spans  WHERE project_id = ? AND timestamp > ? and kind = 'log' and log_pattern is null and body is not null |] (pid, oneHourAgo)
   Relude.when (null otelLogs) $ do
     Log.logInfo "No logs found for pattern extraction" ("project_id", AE.toJSON pid.toText)
   unless (null otelLogs) $ do
-    logsWithPatterns' <- dbtToEff $ query [sql| SELECT DISTINCT log_pattern FROM otel_logs_and_spans WHERE project_id = ? AND timestamp > now() - interval '6 hour' AND kind = 'log' AND log_pattern IS NOT NULL limit 100|] (pid)
+    -- use existing patterns for higher accuracy
+    logsWithPatterns' <- dbtToEff $ query [sql| SELECT DISTINCT log_pattern FROM otel_logs_and_spans WHERE project_id = ? AND kind = 'log' AND log_pattern IS NOT NULL limit 200|] (pid)
     let logsWithPatterns = (\(p) -> ("", p)) <$> logsWithPatterns'
     Log.logInfo "Fetched logs for pattern extraction" ("log_count", AE.toJSON $ V.length otelLogs)
     let finalVals = logsWithPatterns <> otelLogs
@@ -383,7 +384,7 @@ logsPatternExtraction scheduledTime pid = do
         patterns = Drain.getAllLogGroups drainTree
     Log.logInfo "Extracted log patterns" ("pattern_count", AE.toJSON $ V.length patterns)
     forM_ patterns \p -> do
-      _ <- dbtToEff $ execute [sql| UPDATE otel_logs_and_spans SET log_pattern = ? WHERE id::text=Any(?) |] (fst p, V.filter (\p' -> p' /= "") $ snd p)
+      _ <- dbtToEff $ execute [sql| UPDATE otel_logs_and_spans SET log_pattern = ? WHERE project_id=? and timestamp > ? and id::text=Any(?) |] (fst p, pid, oneHourAgo, V.filter (\p' -> p' /= "") $ snd p)
       pass
     Log.logInfo "Completed logs pattern extraction for project" ("project_id", AE.toJSON pid.toText)
     pass
@@ -529,8 +530,8 @@ processProjectErrors pid errors = do
 --
 -- The bulk inserts use "ON CONFLICT DO NOTHING" which prevents duplicates
 -- but still triggers the database anomaly detection triggers for new entities.
-processProjectSpans :: Projects.ProjectId -> V.Vector Telemetry.OtelLogsAndSpans -> ATBackgroundCtx ()
-processProjectSpans pid spans = do
+processProjectSpans :: Projects.ProjectId -> V.Vector Telemetry.OtelLogsAndSpans -> UTCTime -> UTCTime -> ATBackgroundCtx ()
+processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
   ctx <- ask @Config.AuthContext
 
   -- Get project cache to filter out known entities
@@ -583,8 +584,8 @@ processProjectSpans pid spans = do
               $ execute
                 [sql| UPDATE otel_logs_and_spans 
                   SET hashes = ? 
-                  WHERE id = ? |]
-                (hashes, spn.id)
+                  WHERE project_id = ? and timestamp >= ? and timestamp < ? AND id = ? |]
+                (hashes, pid, fiveMinutesAgo, scheduledTime, spn.id)
           pass
       Log.logInfo "Completed span processing for project" ("project_id", AE.toJSON pid.toText)
   where
