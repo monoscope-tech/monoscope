@@ -344,7 +344,7 @@ processFiveMinuteSpans scheduledTime = do
         [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
                      hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
               FROM otel_logs_and_spans 
-          WHERE timestamp >= ? AND timestamp < ? AND name = 'monoscope.http'
+          WHERE project_id != '98fdd4f3-3544-4087-ad91-1e7ca95aba29' AND timestamp >= ? AND timestamp < ? AND name = 'monoscope.http'
           ORDER BY project_id |]
         (fiveMinutesAgo, scheduledTime)
 
