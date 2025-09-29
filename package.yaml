@@ -355,3 +355,5 @@ tests:
       - effectful-core
       - log-effectful
       - log-base
+      - vector
+      - time

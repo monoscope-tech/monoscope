@@ -557,5 +557,7 @@ test-suite unit-tests
     , monoscope
     , neat-interpolation
     , relude >=1.2.0.0
+    , time
     , uuid
+    , vector
   default-language: GHC2021
