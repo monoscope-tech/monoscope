@@ -307,15 +307,15 @@ tabs:
             LIMIT 10
           )
           SELECT 
-            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            attributes___http___request___method || ' ' || attributes___url___path as endpoint,
+            extract(epoch from time_bucket('{{rollup_interval}}', o.timestamp))::integer AS time,
+            o.attributes___http___request___method || ' ' || o.attributes___url___path as endpoint,
             COUNT(*)::float as count
           FROM otel_logs_and_spans o
           INNER JOIN top_endpoints t ON (o.attributes___http___request___method || ' ' || o.attributes___url___path) = t.endpoint
           WHERE o.project_id='{{project_id}}'
             AND (o.kind = 'server' OR o.name = 'apitoolkit-http-span' OR o.name = 'monoscope.http')
             {{time_filter}}
-          GROUP BY time, endpoint
+          GROUP BY time, o.attributes___http___request___method, o.attributes___url___path
           ORDER BY time DESC
         unit: reqs
         layout: { w: 12, h: 4 }
