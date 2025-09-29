@@ -128,9 +128,6 @@ data EndpointRequestStats = EndpointRequestStats
   , method :: Text
   , host :: Text
   , totalRequests :: Int
-  , acknowlegedAt :: Maybe UTCTime
-  , archivedAt :: Maybe UTCTime
-  , anomalyId :: UUID.UUID
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (Default, FromRow, NFData, ToRow)
@@ -148,8 +145,9 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
 
     isOutgoing = requestType == "Outgoing"
     offset = page * 30
-    ackdAt = if ackd && not archived then "AND ann.acknowledged_at IS NOT NULL AND ann.archived_at IS NULL " else "AND ann.acknowledged_at IS NULL "
-    archivedAt = if archived then "AND ann.archived_at IS NOT NULL " else "AND ann.archived_at IS NULL "
+    -- Todo: FIX anomaly trigger and enable anomaly joins
+    -- ackdAt = if ackd && not archived then "AND ann.acknowledged_at IS NOT NULL AND ann.archived_at IS NULL " else "AND ann.acknowledged_at IS NULL "
+    -- archivedAt = if archived then "AND ann.archived_at IS NOT NULL " else "AND ann.archived_at IS NULL "
     search = case searchM of Just s -> " AND enp.url_path LIKE '%" <> s <> "%'"; Nothing -> ""
     pHostQuery = case pHostM of Just h -> " AND enp.host = ?"; Nothing -> ""
     hostFilter = case pHostM of Just h -> " AND attributes->'net'->'host'->>'name' = ?"; Nothing -> ""
@@ -162,19 +160,13 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
            attributes->'http'->'request'->>'method' AS method,
            COUNT(*) AS eventsCount
     FROM otel_logs_and_spans
-    WHERE project_id = ?
-      AND (name = 'monoscope.http' OR name = 'apitoolkit-http-span')
-      $hostFilter
+    WHERE project_id = ? AND name = 'monoscope.http' $hostFilter
     GROUP BY url_path, method
 )
-      SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, enp.host, coalesce(fr.eventsCount, 0) as total_requests,
-        ann.acknowledged_at,
-        ann.archived_at,
-        ann.id
+      SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, enp.host, coalesce(fr.eventsCount, 0) as total_requests
      from apis.endpoints enp
      left join filtered_requests fr on (enp.url_path=fr.url_path and enp.method=fr.method)
-     left join apis.issues ann on ( ann.endpoint_hash=enp.hash)
-     where enp.project_id=? and enp.outgoing=? $ackdAt $archivedAt $pHostQuery $search
+     where enp.project_id=? and enp.outgoing=? $pHostQuery $search
      order by $orderBy , url_path ASC
      offset ? limit 30;
      

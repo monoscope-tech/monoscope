@@ -3,7 +3,6 @@ module Pages.Endpoints.ApiCatalog (apiCatalogH, HostEventsVM (..), endpointListG
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
@@ -259,7 +258,7 @@ renderEndpoint activePage currTime enp = do
   div_ [class_ "flex py-4 gap-8 items-center endpoint_item itemsListItem"] do
     div_ [class_ "h-4 flex space-x-3 w-8 justify-center items-center"] do
       a_ [class_ $ endpointAccentColor True {- isJust enp.acknowlegedAt -} True {- isJust enp.archivedAt -} <> " w-2 h-full"] ""
-      let anomalyId = UUID.toText enp.anomalyId
+      let anomalyId = ""
       input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "anomalyId", value_ anomalyId]
     div_ [class_ "space-y-3 grow"] do
       div_ [class_ "space-x-3"] do
