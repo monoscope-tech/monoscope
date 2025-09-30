@@ -240,7 +240,7 @@ expandedItemView pid item aptSp leftM rightM = do
           let svTxt = maybe "UNSET" (\x -> maybe "UNSET" show x.severity_text) item.severity
               cls = getSeverityColor svTxt
           span_ [class_ $ "rounded-lg border cbadge-sm text-sm px-2 py-1 shrink-0 " <> cls] $ toHtml $ T.toUpper svTxt
-          h4_ [class_ "text-textStrong"] $ toHtml $ case unAesonTextMaybe item.body of
+          h4_ [class_ "text-textStrong truncate "] $ toHtml $ case unAesonTextMaybe item.body of
             Just (AE.String x) -> x
             _ -> toStrict $ encodeToLazyText (unAesonTextMaybe item.body)
         else div_ [class_ "flex items-center gap-4 text-sm font-medium text-textStrong"] $ do
@@ -328,8 +328,10 @@ expandedItemView pid item aptSp leftM rightM = do
             _ -> False
           borderClass = "border-b-strokeWeak"
       div_ [class_ "flex", [__|on click halt|]] $ do
+        when (isLog && isJust item.body)
+          $ button_ [class_ $ "a-tab cursor-pointer  border-b-2 " <> borderClass <> " px-4 py-1.5 t-tab-active", onpointerdown_ $ "navigatable(this, '#body-content', '#" <> tabContainerId <> "', 't-tab-active', '.http')"] "Body"
         when (not isLog && isHttp) $ button_ [class_ $ "a-tab cursor-pointer  border-b-2 " <> borderClass <> " px-4 py-1.5 t-tab-active", onpointerdown_ $ "navigatable(this, '#request-content', '#" <> tabContainerId <> "', 't-tab-active','.http')"] "Request"
-        button_ [class_ $ "cursor-pointer a-tab border-b-2 " <> borderClass <> " px-4 py-1.5 " <> if isLog || not isHttp then "t-tab-active" else "", onpointerdown_ $ "navigatable(this, '#att-content', '#" <> tabContainerId <> "', 't-tab-active'" <> if isLog then ")" else ",'.http')"] "Attributes"
+        button_ [class_ $ "cursor-pointer a-tab border-b-2 " <> borderClass <> " px-4 py-1.5 " <> if (isLog && isNothing item.body) || (not isLog && not isHttp) then "t-tab-active" else "", onpointerdown_ $ "navigatable(this, '#att-content', '#" <> tabContainerId <> "', 't-tab-active'" <> if isLog then ")" else ",'.http')"] "Attributes"
         button_ [class_ $ "cursor-pointer a-tab border-b-2 " <> borderClass <> " px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#meta-content', '#" <> tabContainerId <> "', 't-tab-active'" <> if isLog then ")" else ", '.http')"] "Process"
         unless (isLog || null spanErrors) $ do
           button_ [class_ $ "a-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 nowrap px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#errors-content', '#" <> tabContainerId <> "', 't-tab-active', '.http')"] do
@@ -342,9 +344,12 @@ expandedItemView pid item aptSp leftM rightM = do
         div_ [class_ $ "w-full border-b-2 " <> borderClass] pass
 
       div_ [class_ "dmy-4 text-textWeak font"] $ do
+        when isLog $ whenJust item.body $ \b -> do
+          div_ [class_ "a-tab-content", id_ "body-content"] do
+            jsonValueToHtmlTree (AE.toJSON b) Nothing
         div_ [class_ "hidden a-tab-content", id_ "m-raw-content"] $ do
           jsonValueToHtmlTree (AE.toJSON item) Nothing
-        div_ [class_ $ "a-tab-content" <> if not isLog && isHttp then " hidden" else "", id_ "att-content"] $ do
+        div_ [class_ $ "a-tab-content " <> if (isLog && isNothing item.body) || (not isLog && not isHttp) then "" else "hidden", id_ "att-content"] $ do
           jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) (unAesonTextMaybe item.attributes)) $ Just "attributes"
         div_ [class_ "hidden a-tab-content", id_ "meta-content"] $ do
           jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) (unAesonTextMaybe item.resource)) $ Just "resource"
