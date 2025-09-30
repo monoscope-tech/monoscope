@@ -71,7 +71,6 @@ import Data.Char (isDigit)
 import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
-import Data.Maybe (listToMaybe)
 import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)

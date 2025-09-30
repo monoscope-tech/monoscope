@@ -521,16 +521,19 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           colIdxMap = listToIndexHashMap colNames
           reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
           reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
-          recentLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' reqFirstCreatedAtM sinceM fromM toM (Just "loadmore") sourceM True
           traceIds = V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
           (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
       childSpans <- RequestDumps.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD)
       let
         finalVecs = requestVecs <> childSpans
-        reqLast = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (finalVecs V.!? (V.length finalVecs - 1))
-        lastFM = reqLast >>= textToUTC >>= (\t -> Just $ toText . iso8601Show $ addUTCTime (-0.001) t)
+        lastFM = reqLastCreatedAtM >>= textToUTC >>= (\t -> Just $ toText . iso8601Show $ addUTCTime (-0.001) t)
+        recentM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (childSpans V.!? 0)
+        recentFM = recentM >>= textToUTC >>= (\t -> Just $ toText . iso8601Show $ addUTCTime (0.001) t)
+
         nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
         resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
+        recentLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' recentFM sinceM fromM toM (Just "loadmore") sourceM True
+
         serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
         colors = getServiceColors (V.catMaybes serviceNames)
         page =
@@ -565,6 +568,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
             , alert = alertDM
             , patterns = patterns
             }
+
       let jsonResponse = LogsGetJson finalVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap resultCount
       addRespHeaders $ case (layoutM, hxRequestM, jsonM, vizTypeM) of
         (_, Just "true", _, Just "patterns") -> LogsPatternList pid (fromMaybe V.empty patterns)
@@ -1184,8 +1188,8 @@ alertConfigurationForm_ pid alertM = do
                                      })
                                    end|]
                             ]
-                          ++ [required_ "" | req]
-                          ++ [value_ (maybe "" (show) vM) | isJust vM]
+                            ++ [required_ "" | req]
+                            ++ [value_ (maybe "" (show) vM) | isJust vM]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)
