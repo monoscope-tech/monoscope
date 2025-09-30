@@ -242,6 +242,9 @@ expandedItemView pid item aptSp leftM rightM = do
           span_ [class_ $ "rounded-lg border cbadge-sm text-sm px-2 py-1 shrink-0 " <> cls] $ toHtml $ T.toUpper svTxt
           h4_ [class_ "text-textStrong truncate "] $ toHtml $ case unAesonTextMaybe item.body of
             Just (AE.String x) -> x
+            Just (AE.Object v) -> case extractMessageFromLog (AE.Object v) of
+              Just v' -> v'
+              _ -> toStrict $ encodeToLazyText (unAesonTextMaybe item.body)
             _ -> toStrict $ encodeToLazyText (unAesonTextMaybe item.body)
         else div_ [class_ "flex items-center gap-4 text-sm font-medium text-textStrong"] $ do
           case reqDetails of

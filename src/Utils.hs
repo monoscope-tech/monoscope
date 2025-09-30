@@ -55,18 +55,23 @@ module Utils (
   getGrpcStatusColor,
   nestedJsonFromDotNotation,
   prettyPrintCount,
+  extractMessageFromLog,
 )
 where
 
+import Data.Aeson
 import Data.Aeson qualified as AE
 import Data.Aeson.Extra.Merge (lodashMerge)
+import Data.Aeson.Key (fromText)
 import Data.Aeson.Key qualified as AEK
+import Data.Aeson.KeyMap (lookup)
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.ByteString qualified as BS
 import Data.Char (isDigit)
 import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
+import Data.Maybe (listToMaybe)
 import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
@@ -641,3 +646,119 @@ prettyPrintCount n
   | n >= 1_000_000 = T.show (n `div` 1_000_000) <> "." <> T.show ((n `mod` 1_000_000) `div` 100_000) <> "M"
   | n >= 1_000 = T.show (n `div` 1_000) <> "." <> T.show ((n `mod` 1_000) `div` 100) <> "K"
   | otherwise = T.show n
+
+
+messageKeys :: [T.Text]
+messageKeys =
+  [ "msg"
+  , "message"
+  , "@message"
+  , "@m"
+  , "short_message"
+  , "full_message"
+  , "raw_message"
+  , "original_message"
+  , "event"
+  , "text"
+  , "data"
+  , "body"
+  , "log.message"
+  , "log"
+  , "logmessage"
+  , "log_message"
+  , "Message"
+  , "MSG"
+  , "Msg"
+  , "m"
+  , "@msg"
+  , "@text"
+  , "@event"
+  , "content"
+  , "description"
+  , "detail"
+  , "details"
+  , "info"
+  , "information"
+  , "payload"
+  , "value"
+  , "record"
+  , "entry"
+  , "log.entry"
+  , "log.text"
+  , "log.event"
+  , "log.body"
+  , "log_entry"
+  , "log_text"
+  , "log_event"
+  , "log_body"
+  , "logMessage"
+  , "logMsg"
+  , "logText"
+  , "logEvent"
+  , "log.msg"
+  , "@log"
+  , "@content"
+  , "@data"
+  , "@body"
+  , "@payload"
+  , "@detail"
+  , "@details"
+  , "@description"
+  , "@info"
+  , "event_message"
+  , "eventMessage"
+  , "event.message"
+  , "event_msg"
+  , "eventMsg"
+  , "event.msg"
+  , "message_text"
+  , "messageText"
+  , "message.text"
+  , "msg_text"
+  , "msgText"
+  , "msg.text"
+  , "text_message"
+  , "textMessage"
+  , "text.message"
+  , "note"
+  , "notes"
+  , "comment"
+  , "comments"
+  , "statement"
+  , "line"
+  , "logline"
+  , "log_line"
+  , "log.line"
+  , "@line"
+  , "@logline"
+  , "output"
+  , "log_output"
+  , "log.output"
+  , "@output"
+  , "string"
+  , "str"
+  , "s"
+  , "txt"
+  , "message_body"
+  , "messageBody"
+  , "message.body"
+  , "msg_body"
+  , "msgBody"
+  , "msg.body"
+  , "_message"
+  , "_msg"
+  , "__message"
+  , "__msg"
+  ]
+
+
+extractMessageFromLog :: Value -> Maybe T.Text
+extractMessageFromLog (Object obj) =
+  listToMaybe [v | key <- messageKeys, Just v <- [extractValue key obj]]
+  where
+    extractValue :: T.Text -> Object -> Maybe T.Text
+    extractValue key km = case Data.Aeson.KeyMap.lookup (fromText key) km of
+      Just (String s) -> Just s
+      Just val -> Just (T.pack $ show val)
+      Nothing -> Nothing
+extractMessageFromLog _ = Nothing
