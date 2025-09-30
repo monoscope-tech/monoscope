@@ -522,43 +522,47 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
           nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") sourceM False
           recentLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' reqFirstCreatedAtM sinceM fromM toM (Just "loadmore") sourceM True
-
-          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
-          serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") requestVecs
-          colors = getServiceColors (V.catMaybes serviceNames)
-      let page =
-            ApiLogsPageData
-              { pid
-              , resultCount
-              , requestVecs = requestVecs
-              , cols = curatedColNames
-              , colIdxMap
-              , nextLogsURL
-              , resetLogsURL
-              , recentLogsURL
-              , currentRange
-              , exceededFreeTier = freeTierExceeded
-              , query = queryM'
-              , cursor = reqLastCreatedAtM
-              , isTestLog = Nothing
-              , emptyStateUrl = Nothing
-              , source
-              , targetSpans = targetSpansM
-              , serviceColors = colors
-              , daysCountDown = Nothing
-              , queryLibRecent
-              , queryLibSaved
-              , fromD
-              , toD
-              , detailsWidth = detailWM
-              , targetEvent = targetEventM
-              , showTrace = showTraceM
-              , facets = facetSummary
-              , vizType = vizTypeM
-              , alert = alertDM
-              , patterns = patterns
-              }
-      let jsonResponse = LogsGetJson requestVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap resultCount
+          traceIds = V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
+          (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
+      childSpans <- RequestDumps.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD)
+      let finalVecs = requestVecs <> childSpans
+      let
+        resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
+        serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
+        colors = getServiceColors (V.catMaybes serviceNames)
+        page =
+          ApiLogsPageData
+            { pid
+            , resultCount
+            , requestVecs = finalVecs
+            , cols = curatedColNames
+            , colIdxMap
+            , nextLogsURL
+            , resetLogsURL
+            , recentLogsURL
+            , currentRange
+            , exceededFreeTier = freeTierExceeded
+            , query = queryM'
+            , cursor = reqLastCreatedAtM
+            , isTestLog = Nothing
+            , emptyStateUrl = Nothing
+            , source
+            , targetSpans = targetSpansM
+            , serviceColors = colors
+            , daysCountDown = Nothing
+            , queryLibRecent
+            , queryLibSaved
+            , fromD
+            , toD
+            , detailsWidth = detailWM
+            , targetEvent = targetEventM
+            , showTrace = showTraceM
+            , facets = facetSummary
+            , vizType = vizTypeM
+            , alert = alertDM
+            , patterns = patterns
+            }
+      let jsonResponse = LogsGetJson finalVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap resultCount
       addRespHeaders $ case (layoutM, hxRequestM, jsonM, vizTypeM) of
         (_, Just "true", _, Just "patterns") -> LogsPatternList pid (fromMaybe V.empty patterns)
         (Just "SaveQuery", _, _, _) -> LogsQueryLibrary pid queryLibSaved queryLibRecent

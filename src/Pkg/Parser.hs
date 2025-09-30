@@ -169,7 +169,7 @@ sqlFromQueryComponents sqlCfg qc =
           -- For summarize queries, don't apply a default limit to ensure we get complete data
           case qc.finalSummarizeQuery of
             Just _ -> "" -- No limit for summarize queries unless explicitly specified
-            Nothing -> "limit 150" -- Default limit for non-summarize queries
+            Nothing -> "limit 30" -- Default limit for non-summarize queries
 
       -- Create a properly formatted WHERE clause condition
       whereCondition =
@@ -217,7 +217,7 @@ sqlFromQueryComponents sqlCfg qc =
                    {limitClause} |]
             Nothing ->
               [fmt|SELECT {selectClause} FROM {fromTable}
-                 WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition})
+                 WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition}) and parent_id IS NULL
                  {groupByClause} {sortOrder} {limitClause} |]
       countQuery =
         case qc.finalSummarizeQuery of

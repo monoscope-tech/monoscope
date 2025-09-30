@@ -17,6 +17,7 @@ module Models.Apis.RequestDumps (
   getLastSevenDaysTotalRequest,
   parseSDKType,
   fetchLogPatterns,
+  selectChildSpansAndLogs,
 )
 where
 
@@ -26,7 +27,7 @@ import Data.Annotation (toAnnotation)
 import Data.Default
 import Data.Default.Instances ()
 import Data.Text qualified as T
-import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
+import Data.Time (CalendarDiffTime, UTCTime, ZonedTime, addUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -53,7 +54,7 @@ import Models.Apis.Fields.Query ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.Parser
-import Pkg.Parser.Stats (Section, Sources)
+import Pkg.Parser.Stats (Section, Sources (SSpans))
 import Relude hiding (many, some)
 import Web.HttpApiData (ToHttpApiData (..))
 
@@ -522,6 +523,31 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
   logItemsV <- checkpoint (toAnnotation ("selectLogTable", q)) $ executeArbitraryQuery q
   Only c <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
   pure $ Right (logItemsV, queryComponents.toColNames, c)
+
+
+selectChildSpansAndLogs :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Text] -> V.Vector Text -> (Maybe UTCTime, Maybe UTCTime) -> Eff es (V.Vector (V.Vector AE.Value))
+selectChildSpansAndLogs pid projectedColsByUser traceIds dateRange = do
+  now <- Time.currentTime
+  let fmtTime = toText . iso8601Show
+  let qConfig = defSqlQueryCfg pid now (Just SSpans) Nothing
+      (r, _) = getProcessedColumns projectedColsByUser qConfig.defaultSelect
+  let dateRangeStr = case dateRange of
+        (Nothing, Just b) -> "AND timestamp BETWEEN '" <> fmtTime b <> "' AND NOW() "
+        -- Include a 30 second buffer on either side to (assuming a first and last trace took 30s to catpure all spans/logs)
+        (Just a, Just b) -> "AND  timestamp BETWEEN '" <> fmtTime (addUTCTime (-30) a) <> "' AND '" <> fmtTime (addUTCTime 30 b) <> "'"
+        _ -> ""
+      q =
+        [text|SELECT json_build_array($r) FROM otel_logs_and_spans
+             WHERE project_id= ?  $dateRangeStr and  context___trace_id=Any(?) and parent_id IS NOT NULL
+           |]
+  results <- dbtToEff $ V.fromList <$> DBT.query (Query $ encodeUtf8 q) (pid, traceIds)
+  pure $ V.mapMaybe valueToVector results
+
+
+valueToVector :: Only AE.Value -> Maybe (V.Vector AE.Value)
+valueToVector (Only val) = case val of
+  AE.Array arr -> Just arr
+  _ -> Nothing
 
 
 fetchLogPatterns :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Eff es (V.Vector (Text, Int))

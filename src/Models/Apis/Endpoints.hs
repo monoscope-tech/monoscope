@@ -157,7 +157,7 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
       
    WITH filtered_requests AS (
     SELECT attributes->'http'->>'route' AS url_path,
-           attributes->'http'->'request'->>'method' AS method,
+           attributes___http___request___method AS method,
            COUNT(*) AS eventsCount
     FROM otel_logs_and_spans
     WHERE project_id = ? AND name = 'monoscope.http' $hostFilter
