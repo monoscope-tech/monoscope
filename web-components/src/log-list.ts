@@ -253,18 +253,11 @@ export class LogList extends LitElement {
     if (this.spanListTree.length === 0) {
       return this.buildJsonUrl();
     }
-
-    // Build URL dynamically based on the actual last item in the list
     const url = new URL(window.location.href);
     url.searchParams.set('json', 'true');
 
-    // Get the timestamp from the last item (oldest, since we order by timestamp desc)
-    const lastItem = this.spanListTree[this.spanListTree.length - 1];
-    const timestamp = lastItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
-
-    if (timestamp) {
-      // Set cursor to the last item's timestamp to fetch older data
-      url.searchParams.set('cursor', timestamp);
+    if (this.nextFetchUrl) {
+      return this.nextFetchUrl;
     }
 
     return url.toString();
@@ -484,7 +477,7 @@ export class LogList extends LitElement {
     if (this.lineChart) {
       this.lineChart.off('datazoom', this.handleChartZoom);
     }
-    
+
     // Note: Caches in renderSummaryElements closure will be garbage collected
     // when the component is destroyed
 
@@ -649,8 +642,7 @@ export class LogList extends LitElement {
               if (scrolledToBottom) this.shouldScrollToBottom = true;
 
               const shouldBuffer =
-                this.isLiveStreaming &&
-                ((scrollTop > 30 && !this.flipDirection) || (!scrolledToBottom && this.flipDirection));
+                this.isLiveStreaming && ((scrollTop > 30 && !this.flipDirection) || (!scrolledToBottom && this.flipDirection));
 
               if (shouldBuffer) {
                 this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
@@ -791,8 +783,8 @@ export class LogList extends LitElement {
         ? [...current, ...newData]
         : [...newData, ...current]
       : isRecentFetch
-        ? [...newData, ...current]
-        : [...current, ...newData];
+      ? [...newData, ...current]
+      : [...current, ...newData];
     return result;
   }
 
@@ -812,7 +804,7 @@ export class LogList extends LitElement {
     this.updateVisibleItems();
     this.batchRequestUpdate('recentConcatenation');
   }
-  
+
   handleVisibilityChange = (e: any) => {
     const first = e.first;
     const last = e.last;
@@ -820,20 +812,20 @@ export class LogList extends LitElement {
 
     // Store visibility range for deferred chart update
     this.lastVisibilityRange = { first, last };
-    
+
     // Mark as scrolling
     this.isScrolling = true;
-    
+
     // Clear existing timer
     if (this.scrollEndTimer) {
       clearTimeout(this.scrollEndTimer);
     }
-    
+
     // Set timer to detect scroll end
     this.scrollEndTimer = setTimeout(() => {
       this.isScrolling = false;
     }, 50);
-    
+
     // Debounced chart update (runs at most every 100ms)
     this.debouncedUpdateChartMarkArea();
   };
@@ -854,7 +846,7 @@ export class LogList extends LitElement {
       lTarget = lTarget.type === 'fetchRecent' || lTarget.type === 'loadMore' ? (this.virtualListItems[last - 1] as EventLine) : lTarget;
 
       if (!fTarget || !lTarget || !('data' in fTarget) || !('data' in lTarget)) return;
-      
+
       const endTime = lookupVecValue(fTarget.data, this.colIdxMap, 'timestamp');
       const startTimeRaw = lookupVecValue(lTarget.data, this.colIdxMap, 'timestamp');
 
@@ -867,7 +859,7 @@ export class LogList extends LitElement {
         startTime = end;
         end = v;
       }
-      
+
       // Get time range from chart to calculate appropriate bin width
       let MIN_RANGE = 30 * 1000; // Default 30s
       try {
@@ -908,7 +900,7 @@ export class LogList extends LitElement {
 
     // Skip chart updates during active scrolling
     if (this.isScrolling) return;
-    
+
     // Use requestIdleCallback for non-critical chart updates
     if ('requestIdleCallback' in window) {
       (window as any).requestIdleCallback(updateChart, { timeout: 500 });
@@ -958,23 +950,82 @@ export class LogList extends LitElement {
           will-change: transform;
           contain: strict;
         }
-        
+
         /* Column width styles using CSS custom properties */
-        .col-trace_id { width: var(--col-trace_id-width); min-width: var(--col-trace_id-width); max-width: var(--col-trace_id-width); }
-        .col-severity_text { width: var(--col-severity_text-width); min-width: var(--col-severity_text-width); max-width: var(--col-severity_text-width); }
-        .col-parent_span_id { width: var(--col-parent_span_id-width); min-width: var(--col-parent_span_id-width); max-width: var(--col-parent_span_id-width); }
-        .col-errors { width: var(--col-errors-width); min-width: var(--col-errors-width); max-width: var(--col-errors-width); }
-        .col-kind { width: var(--col-kind-width); min-width: var(--col-kind-width); max-width: var(--col-kind-width); }
-        .col-span_name { width: var(--col-span_name-width); min-width: var(--col-span_name-width); max-width: var(--col-span_name-width); }
-        .col-status { width: var(--col-status-width); min-width: var(--col-status-width); max-width: var(--col-status-width); }
-        .col-start_time { width: var(--col-start_time-width); min-width: var(--col-start_time-width); max-width: var(--col-start_time-width); }
-        .col-end_time { width: var(--col-end_time-width); min-width: var(--col-end_time-width); max-width: var(--col-end_time-width); }
-        .col-duration { width: var(--col-duration-width); min-width: var(--col-duration-width); max-width: var(--col-duration-width); }
-        .col-timestamp { width: var(--col-timestamp-width); min-width: var(--col-timestamp-width); max-width: var(--col-timestamp-width); }
-        .col-service { width: var(--col-service-width); min-width: var(--col-service-width); max-width: var(--col-service-width); }
-        .col-summary.break-all { width: var(--col-summary-width); min-width: var(--col-summary-width); }
-        .col-summary:not(.break-all) { width: var(--col-summary-width); min-width: var(--col-summary-width); max-width: var(--col-summary-width); }
-        .col-latency_breakdown { width: var(--col-latency_breakdown-width); min-width: var(--col-latency_breakdown-width); max-width: var(--col-latency_breakdown-width); }
+        .col-trace_id {
+          width: var(--col-trace_id-width);
+          min-width: var(--col-trace_id-width);
+          max-width: var(--col-trace_id-width);
+        }
+        .col-severity_text {
+          width: var(--col-severity_text-width);
+          min-width: var(--col-severity_text-width);
+          max-width: var(--col-severity_text-width);
+        }
+        .col-parent_span_id {
+          width: var(--col-parent_span_id-width);
+          min-width: var(--col-parent_span_id-width);
+          max-width: var(--col-parent_span_id-width);
+        }
+        .col-errors {
+          width: var(--col-errors-width);
+          min-width: var(--col-errors-width);
+          max-width: var(--col-errors-width);
+        }
+        .col-kind {
+          width: var(--col-kind-width);
+          min-width: var(--col-kind-width);
+          max-width: var(--col-kind-width);
+        }
+        .col-span_name {
+          width: var(--col-span_name-width);
+          min-width: var(--col-span_name-width);
+          max-width: var(--col-span_name-width);
+        }
+        .col-status {
+          width: var(--col-status-width);
+          min-width: var(--col-status-width);
+          max-width: var(--col-status-width);
+        }
+        .col-start_time {
+          width: var(--col-start_time-width);
+          min-width: var(--col-start_time-width);
+          max-width: var(--col-start_time-width);
+        }
+        .col-end_time {
+          width: var(--col-end_time-width);
+          min-width: var(--col-end_time-width);
+          max-width: var(--col-end_time-width);
+        }
+        .col-duration {
+          width: var(--col-duration-width);
+          min-width: var(--col-duration-width);
+          max-width: var(--col-duration-width);
+        }
+        .col-timestamp {
+          width: var(--col-timestamp-width);
+          min-width: var(--col-timestamp-width);
+          max-width: var(--col-timestamp-width);
+        }
+        .col-service {
+          width: var(--col-service-width);
+          min-width: var(--col-service-width);
+          max-width: var(--col-service-width);
+        }
+        .col-summary.break-all {
+          width: var(--col-summary-width);
+          min-width: var(--col-summary-width);
+        }
+        .col-summary:not(.break-all) {
+          width: var(--col-summary-width);
+          min-width: var(--col-summary-width);
+          max-width: var(--col-summary-width);
+        }
+        .col-latency_breakdown {
+          width: var(--col-latency_breakdown-width);
+          min-width: var(--col-latency_breakdown-width);
+          max-width: var(--col-latency_breakdown-width);
+        }
       </style>
       ${this.options()}
       <div
@@ -996,15 +1047,19 @@ export class LogList extends LitElement {
               </button>
             </div>`
           : nothing}
-        <table 
+        <table
           class="table-fixed ${this.wrapLines ? 'w-full' : 'w-max'} relative ctable table-pin-rows table-pin-cols text-sm"
-          style=${Object.entries(this.logsColumns.reduce((acc, column) => {
-            const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
-            if (width) {
-              acc[`--col-${column}-width`] = `${width}px`;
-            }
-            return acc;
-          }, {} as Record<string, string>)).map(([k, v]) => `${k}: ${v}`).join('; ')}
+          style=${Object.entries(
+            this.logsColumns.reduce((acc, column) => {
+              const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
+              if (width) {
+                acc[`--col-${column}-width`] = `${width}px`;
+              }
+              return acc;
+            }, {} as Record<string, string>)
+          )
+            .map(([k, v]) => `${k}: ${v}`)
+            .join('; ')}
         >
           <thead class="z-10 sticky top-0 isolate">
             <tr class="text-textStrong border-b flex min-w-0 relative font-medium isolate">
@@ -1084,14 +1139,14 @@ export class LogList extends LitElement {
   private parseSummaryData(dataArr: any[]): string[] {
     return lookupVecValue<string[]>(dataArr, this.colIdxMap, 'summary');
   }
-  
+
   // Ultra-optimized renderSummaryElements using closure for caching
   renderSummaryElements = (() => {
     // Private cache with fast hashing
     const cache = new Map<number, TemplateResult[]>();
     const parseCache = new WeakMap<string[], any[]>();
     const unescapeCache = new Map<string, string>();
-    
+
     // FNV-1a hash for ultra-fast cache keys
     const hashArray = (arr: string[], wrap: boolean): number => {
       let hash = 0x811c9dc5; // FNV offset basis
@@ -1104,7 +1159,7 @@ export class LogList extends LitElement {
       }
       return (hash >>> 0) | (wrap ? 0x80000000 : 0);
     };
-    
+
     // Cached unescaping with bounded cache
     const getCachedUnescape = (str: string): string => {
       let unescaped = unescapeCache.get(str);
@@ -1119,48 +1174,48 @@ export class LogList extends LitElement {
       }
       return unescaped;
     };
-    
+
     // Create cached icon renderer instance
     const renderIcon = createCachedIconRenderer();
-    
+
     // The main render function
-    return function(this: LogList, summaryArray: string[], wrapLines: boolean): TemplateResult[] {
+    return function (this: LogList, summaryArray: string[], wrapLines: boolean): TemplateResult[] {
       if (!summaryArray?.length) return [];
-      
+
       // Check main render cache first
       const cacheKey = hashArray(summaryArray, wrapLines);
       const cached = cache.get(cacheKey);
       if (cached) return cached;
-      
+
       // Get or parse elements
       let parsed = parseCache.get(summaryArray);
       if (!parsed) {
-        parsed = summaryArray.map(el => parseSummaryElement(el));
+        parsed = summaryArray.map((el) => parseSummaryElement(el));
         parseCache.set(summaryArray, parsed);
       }
-      
+
       const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
       const result: TemplateResult[] = [];
-      
+
       // Optimized single pass with early continues
       for (let i = 0; i < parsed.length; i++) {
         const p = parsed[i];
-        
+
         // Skip right-aligned elements
         if (p.type !== 'plain' && RIGHT_PREFIX_REGEX.test(p.style)) continue;
-        
+
         if (p.type === 'plain') {
           result.push(html`<span class=${`fill-textStrong ${wrapClass}`}>${unsafeHTML(getCachedUnescape(p.content))}</span>`);
           continue;
         }
-        
+
         const { field, style, value } = p;
-        
+
         // Skip rendering 'kind=database' as text since db.system icon will be shown
         if (field === 'kind' && value === 'database') {
           continue;
         }
-        
+
         // Check for icon fields first
         if (field === 'request_type' || field === 'kind' || field === 'db.system') {
           const icon = renderIcon(field, value);
@@ -1169,7 +1224,7 @@ export class LogList extends LitElement {
             continue;
           }
         }
-        
+
         // Direct style checks with early returns
         if (style === 'text-textStrong') {
           result.push(html`<span class="text-textStrong">${value}</span>`);
@@ -1179,14 +1234,14 @@ export class LogList extends LitElement {
           result.push(renderBadge(clsx('cbadge-sm', this.getStyleClass(style), wrapClass), value));
         }
       }
-      
+
       // Bounded main cache with bulk eviction
       if (cache.size >= 512) {
         // Remove oldest 256 entries
         const entries = Array.from(cache.keys()).slice(0, 256);
-        entries.forEach(k => cache.delete(k));
+        entries.forEach((k) => cache.delete(k));
       }
-      
+
       cache.set(cacheKey, result);
       return result;
     };
@@ -1241,17 +1296,17 @@ export class LogList extends LitElement {
             const element = summaryArr[i];
             const sepIdx = element.indexOf('⇒');
             if (sepIdx === -1) continue;
-            
+
             const semiIdx = element.indexOf(';');
             if (semiIdx === -1 || semiIdx > sepIdx) continue;
-            
+
             const style = element.substring(semiIdx + 1, sepIdx);
             if (!RIGHT_PREFIX_REGEX.test(style)) continue;
-            
+
             const field = element.substring(0, semiIdx);
             const value = element.substring(sepIdx + 1);
             const badgeStyle = this.getStyleClass(style);
-            
+
             rightAlignedBadges.push(
               field === 'session' ? this.createSessionButton(value) : renderBadge(`cbadge-sm ${badgeStyle} bg-opacity-100`, value)
             );
@@ -1273,7 +1328,7 @@ export class LogList extends LitElement {
               <span class="w-1"></span>
             </div>
           `;
-          
+
           rowData._latencyCache = {
             content: latencyHtml,
             width: currentWidth,
@@ -1293,8 +1348,8 @@ export class LogList extends LitElement {
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
-            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
+          ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         return html`<div class=${clsx('flex w-full gap-1', this.wrapLines ? 'items-start' : 'items-center')}>
           ${this.view === 'tree'
             ? html`
@@ -1328,8 +1383,8 @@ export class LogList extends LitElement {
                         ${children}
                       </button>`
                     : depth === 0
-                      ? nothing
-                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                    ? nothing
+                    : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
                 </div>
               `
             : nothing}
@@ -1419,8 +1474,8 @@ export class LogList extends LitElement {
       this.isLiveStreaming
         ? html`<p class="h-5 leading-5 m-0">Live streaming latest data...</p>`
         : this.isFetchingRecent
-          ? html`<div class="loading loading-dots loading-md h-5"></div>`
-          : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
+        ? html`<div class="loading loading-dots loading-md h-5"></div>`
+        : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
     );
   };
 
@@ -1469,7 +1524,7 @@ export class LogList extends LitElement {
       const s = rowData.type === 'log' ? 'logs' : 'spans';
       const targetInfo = requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s);
       const isNew = rowData.isNew;
-      
+
       // Pre-calculate CSS custom properties for widths
       const columnStyles = this.logsColumns.reduce((acc, column) => {
         const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
@@ -1478,7 +1533,7 @@ export class LogList extends LitElement {
         }
         return acc;
       }, {} as Record<string, string>);
-      
+
       const rowHtml = html`
         <tr
           class=${clsx(
@@ -1486,7 +1541,9 @@ export class LogList extends LitElement {
             !this.wrapLines && 'h-[28px]',
             isNew && 'animate-fadeBg'
           )}
-          style=${Object.entries(columnStyles).map(([k, v]) => `${k}: ${v}`).join('; ')}
+          style=${Object.entries(columnStyles)
+            .map(([k, v]) => `${k}: ${v}`)
+            .join('; ')}
           @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
         >
           ${this.logsColumns
@@ -1494,7 +1551,9 @@ export class LogList extends LitElement {
             .map((column) => {
               const hasWidth = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
               return html`<td
-                class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-bgBase relative pl-2 ${column === 'summary' ? 'flex-1' : 'flex-shrink-0'} ${hasWidth ? `col-${column}` : ''}`}
+                class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-bgBase relative pl-2 ${
+                  column === 'summary' ? 'flex-1' : 'flex-shrink-0'
+                } ${hasWidth ? `col-${column}` : ''}`}
               >
                 ${this.logItemCol(rowData, column)}
               </td>`;
@@ -1520,7 +1579,9 @@ export class LogList extends LitElement {
 
     return html`
       <td
-        class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${classes} ${finalWidth ? `col-${column}` : ''}`}
+        class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${classes} ${
+          finalWidth ? `col-${column}` : ''
+        }`}
       >
         <div class="dropdown font-medium text-base" data-tippy-content=${title}>
           <div tabindex="0" role="button" class="py-1">

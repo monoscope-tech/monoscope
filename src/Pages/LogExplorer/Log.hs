@@ -49,6 +49,7 @@ import System.Types
 import Text.Megaparsec (parseMaybe)
 import Utils (checkFreeTierExceeded, faSprite_, formatUTC, getServiceColors, listToIndexHashMap, lookupVecTextByKey, onpointerdown_, prettyPrintCount)
 
+import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
 import Models.Apis.Monitors qualified as Monitors
 import Pkg.AI (callOpenAIAPI, systemPrompt)
@@ -520,13 +521,15 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           colIdxMap = listToIndexHashMap colNames
           reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
           reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
-          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore") sourceM False
           recentLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' reqFirstCreatedAtM sinceM fromM toM (Just "loadmore") sourceM True
           traceIds = V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
           (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
       childSpans <- RequestDumps.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD)
-      let finalVecs = requestVecs <> childSpans
       let
+        finalVecs = requestVecs <> childSpans
+        reqLast = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (finalVecs V.!? (V.length finalVecs - 1))
+        lastFM = reqLast >>= textToUTC >>= (\t -> Just $ toText . iso8601Show $ addUTCTime (-0.001) t)
+        nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
         resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
         serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
         colors = getServiceColors (V.catMaybes serviceNames)
@@ -578,6 +581,10 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
         _ -> do
           addErrorToast "Something went wrong" Nothing
           addRespHeaders $ LogsGetError $ PageCtx bwconf "Something went wrong"
+
+
+textToUTC :: Text -> Maybe UTCTime
+textToUTC = iso8601ParseM . T.unpack
 
 
 data LogsGet

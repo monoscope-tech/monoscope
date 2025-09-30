@@ -539,6 +539,7 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds dateRange = do
       q =
         [text|SELECT json_build_array($r) FROM otel_logs_and_spans
              WHERE project_id= ?  $dateRangeStr and  context___trace_id=Any(?) and parent_id IS NOT NULL
+             ORDER BY timestamp DESC;
            |]
   results <- dbtToEff $ V.fromList <$> DBT.query (Query $ encodeUtf8 q) (pid, traceIds)
   pure $ V.mapMaybe valueToVector results

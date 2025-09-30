@@ -103,23 +103,23 @@ export const unescapeJsonString = (str: string): string => {
   if (!str.includes('\\') && !str.includes('\x1b') && !str.includes(':')) {
     return str;
   }
-  
+
   // Only unescape if needed
   let result = str;
   if (str.includes('\\"') || str.includes('\\\\')) {
     result = result.replace(ESCAPED_QUOTE_REGEX, '"').replace(ESCAPED_BACKSLASH_REGEX, '\\');
   }
-  
+
   // Only process ANSI if likely present
   if (result.includes('\x1b')) {
     result = ansi_up.ansi_to_text(result);
   }
-  
+
   // Only colorize if there are colons (JSON-like content)
   if (result.includes(':')) {
     result = colorizeJsonValues(result);
   }
-  
+
   return result;
 };
 
@@ -174,62 +174,61 @@ export const SUMMARY_ICON_CONFIGS = {
     tooltip: `${value} Request`,
     iconName: value === 'incoming' ? 'arrow-down-left' : 'arrow-up-right',
     iconType: 'solid' as const,
-    iconClass: value === 'incoming' ? 'h-3 fill-iconNeutral' : 'h-3 fill-iconBrand'
+    iconClass: value === 'incoming' ? 'h-3 fill-iconNeutral' : 'h-3 fill-iconBrand',
   }),
-  kind: (value: string) => value === 'internal' ? ({
-    className: 'w-4 ml-2',
-    tooltip: 'Internal span',
-    iconName: 'function',
-    iconType: 'regular' as const,
-    iconClass: 'h-3 w-3'
-  }) : null,
+  kind: (value: string) =>
+    value === 'internal'
+      ? {
+          className: 'w-4 ml-2',
+          tooltip: 'Internal span',
+          iconName: 'function',
+          iconType: 'regular' as const,
+          iconClass: 'h-3 w-3',
+        }
+      : null,
   'db.system': (value: string) => ({
     className: 'w-4 ml-2',
     tooltip: value,
     iconName: 'database',
     iconType: 'regular' as const,
-    iconClass: 'h-3 w-3 fill-iconNeutral'
-  })
+    iconClass: 'h-3 w-3 fill-iconNeutral',
+  }),
 } as const;
 
 // Optimized icon renderer with caching
 export const createCachedIconRenderer = () => {
   const cache = new Map<string, TemplateResult>();
-  
+
   return (field: string, value: string): TemplateResult | null => {
     const cacheKey = `${field}:${value}`;
-    
+
     // Check cache first
     if (cache.has(cacheKey)) {
       return cache.get(cacheKey)!;
     }
-    
+
     // Get configuration
     const configFn = SUMMARY_ICON_CONFIGS[field as keyof typeof SUMMARY_ICON_CONFIGS];
     if (!configFn) {
       cache.set(cacheKey, null as any);
       return null;
     }
-    
+
     const config = configFn(value);
     if (!config) {
       cache.set(cacheKey, null as any);
       return null;
     }
-    
+
     // Render icon
-    const result = renderIconWithTooltip(
-      config.className,
-      config.tooltip,
-      faSprite(config.iconName, config.iconType, config.iconClass)
-    );
-    
+    const result = renderIconWithTooltip(config.className, config.tooltip, faSprite(config.iconName, config.iconType, config.iconClass));
+
     // Bounded cache - prevent memory leaks
     if (cache.size >= 512) {
       const firstKey = cache.keys().next().value;
       cache.delete(firstKey);
     }
-    
+
     cache.set(cacheKey, result);
     return result;
   };
