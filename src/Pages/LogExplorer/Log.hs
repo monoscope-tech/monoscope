@@ -523,7 +523,12 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
           traceIds = V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
           (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
-      childSpans <- RequestDumps.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD)
+
+      childSpans <- case queryM' of
+        Nothing -> do
+          v <- RequestDumps.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD)
+          pure v
+        _ -> pure $ V.empty
       let
         finalVecs = requestVecs <> childSpans
         lastFM = reqLastCreatedAtM >>= textToUTC >>= (\t -> Just $ toText . iso8601Show $ addUTCTime (-0.001) t)

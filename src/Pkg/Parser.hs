@@ -169,7 +169,7 @@ sqlFromQueryComponents sqlCfg qc =
           -- For summarize queries, don't apply a default limit to ensure we get complete data
           case qc.finalSummarizeQuery of
             Just _ -> "" -- No limit for summarize queries unless explicitly specified
-            Nothing -> "limit 30" -- Default limit for non-summarize queries
+            Nothing -> if (T.null rawWhere) then "limit 150" else "limit 30" -- Default limit for non-summarize queries
 
       -- Create a properly formatted WHERE clause condition
       whereCondition =
@@ -187,6 +187,7 @@ sqlFromQueryComponents sqlCfg qc =
                   nonEmptyParts = filter (not . T.null) $ catMaybes [cursorPart, datePart, wherePart]
                  in
                   T.intercalate " AND " nonEmptyParts
+      noConditionClause = if (T.null rawWhere) then " and parent_id is null" else ""
 
       finalSqlQuery = case sqlCfg.targetSpansM of
         Just "service-entry-spans" ->
@@ -217,7 +218,7 @@ sqlFromQueryComponents sqlCfg qc =
                    {limitClause} |]
             Nothing ->
               [fmt|SELECT {selectClause} FROM {fromTable}
-                 WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition}) and parent_id IS NULL
+                 WHERE project_id='{sqlCfg.pid.toText}' and ({whereCondition}) {noConditionClause}
                  {groupByClause} {sortOrder} {limitClause} |]
       countQuery =
         case qc.finalSummarizeQuery of
