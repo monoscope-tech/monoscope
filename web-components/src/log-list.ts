@@ -2065,7 +2065,7 @@ function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<
           hasErrors: isLog ? false : span[idx.errors],
           duration: isLog ? 0 : span[idx.duration],
           children: [],
-          parent: isLog ? null : span[idx.parent_span_id],
+          parent: isLog ? span[idx.latency_breakdown] : span[idx.parent_span_id],
           data: span,
           type: isLog ? 'log' : 'span',
         },
@@ -2097,6 +2097,11 @@ function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<
       // Sort all children by startNs (execution order) instead of timestamp
       spanMap.forEach((span) => {
         if (span.children.length > 1) {
+          span.children.forEach((chl) => {
+            if (chl.type == 'log') {
+              console.log(chl);
+            }
+          });
           span.children.sort((a, b) => a.startNs - b.startNs);
         }
       });
@@ -2117,6 +2122,7 @@ function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<
       const bStart = b.startTime || 0;
       return flipDirection ? aStart - bStart : bStart - aStart;
     });
+  console.log(traces);
 
   return flattenSpanTree(traces, expandedTraces);
 }

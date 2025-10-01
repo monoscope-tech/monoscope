@@ -659,7 +659,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
               Just
                 $ Context
                   { trace_id = Just $ byteStringToHexText $ logRecord ^. PLF.traceId
-                  , span_id = Just $ byteStringToHexText $ logRecord ^. PLF.spanId
+                  , span_id = Nothing
                   , trace_state = Nothing
                   , trace_flags = Nothing
                   , is_remote = Nothing
@@ -684,7 +684,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
           , events = Nothing
           , links = Nothing
           , name = Nothing
-          , parent_id = Nothing
+          , parent_id = Just $ byteStringToHexText $ logRecord ^. PLF.spanId
           , summary = V.empty -- Will be populated after creation
           , date = validTimestamp
           , errors = Nothing
