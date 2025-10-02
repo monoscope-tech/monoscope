@@ -30,6 +30,10 @@ spec = aroundAll withTestResources do
               , emails = ["test@monoscope.tech"]
               , permissions = [ProjectMembers.PAdmin]
               , timeZone = ""
+              , weeklyNotifs = Nothing 
+              , dailyNotifs = Nothing 
+              , endpointAlerts = Nothing 
+              , errorAlerts = Nothing
               }
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger $ CreateProject.createProjectPostH testPid createPForm
@@ -56,6 +60,10 @@ spec = aroundAll withTestResources do
               , emails = ["test@monoscope.tech"]
               , permissions = [ProjectMembers.PAdmin]
               , timeZone = "Africa/Accra"
+              , weeklyNotifs = Nothing 
+              , dailyNotifs = Nothing 
+              , endpointAlerts = Nothing 
+              , errorAlerts = Nothing
               }
       pg <-
         toServantResponse trATCtx trSessAndHeader trLogger $ CreateProject.createProjectPostH testProjectPid createPForm
