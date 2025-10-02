@@ -2122,8 +2122,6 @@ function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<
       const bStart = b.startTime || 0;
       return flipDirection ? aStart - bStart : bStart - aStart;
     });
-  console.log(traces);
-
   return flattenSpanTree(traces, expandedTraces);
 }
 
