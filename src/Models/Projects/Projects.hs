@@ -127,6 +127,8 @@ data Project = Project
   , notifyEmails :: V.Vector Text
   , whatsappNumbers :: V.Vector Text
   , s3Bucket :: Maybe ProjectS3Bucket
+  , endpointAlerts :: Bool
+  , errorAlerts :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData)
@@ -166,6 +168,8 @@ data Project' = Project'
   , notifyEmails :: V.Vector Text
   , whatsappNumbers :: V.Vector Text
   , s3Bucket :: Maybe ProjectS3Bucket
+  , endpointAlerts :: Bool
+  , errorAlerts :: Bool
   , hasIntegrated :: Bool
   , usersDisplayImages :: V.Vector Text
   }
@@ -225,6 +229,10 @@ data CreateProject = CreateProject
   , subId :: Maybe Text
   , firstSubItemId :: Maybe Text
   , orderId :: Maybe Text
+  , dailyNotif :: Bool
+  , weeklyNotif :: Bool
+  , endpointAlerts :: Bool
+  , errorAlerts :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, ToRow)
@@ -313,10 +321,14 @@ userByProjectId pid user_id = query q (user_id, pid)
 
 updateProject :: CreateProject -> DBT IO Int64
 updateProject cp = do
-  execute q (cp.title, cp.description, cp.paymentPlan, cp.subId, cp.firstSubItemId, cp.orderId, cp.timeZone, cp.id)
+  execute q (cp.title, cp.description, cp.paymentPlan, cp.subId, cp.firstSubItemId, cp.orderId, cp.timeZone, cp.weeklyNotif, cp.dailyNotif, cp.endpointAlerts, cp.errorAlerts, cp.id)
   where
     q =
-      [sql| UPDATE projects.projects SET title=?,  description=?, payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=?, time_zone=? where id=?;|]
+      [sql|
+       UPDATE projects.projects SET title=?, description=?,
+        payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=?, 
+        time_zone=?, weekly_notif=?, daily_notif=?, endpoint_alerts=?, error_alerts=? where id=?;
+        |]
 
 
 updateProjectPricing :: ProjectId -> Text -> Text -> Text -> Text -> V.Vector Text -> DBT IO Int64

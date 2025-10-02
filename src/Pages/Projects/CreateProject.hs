@@ -70,6 +70,10 @@ data CreateProjectForm = CreateProjectForm
   , emails :: [Text]
   , permissions :: [ProjectMembers.Permissions]
   , timeZone :: Text
+  , errorAlerts :: Maybe Text
+  , endpointAlerts :: Maybe Text
+  , weeklyNotifs :: Maybe Text
+  , dailyNotifs :: Maybe Text
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (Default, FromForm)
@@ -91,6 +95,10 @@ createProjectFormToModel pid subId firstSubId orderId paymentPlan CreateProjectF
     , firstSubItemId = firstSubId
     , paymentPlan = paymentPlan
     , orderId = orderId
+    , weeklyNotif = isJust weeklyNotifs
+    , dailyNotif = isJust dailyNotifs
+    , endpointAlerts = isJust endpointAlerts
+    , errorAlerts = isJust errorAlerts
     , ..
     }
 
@@ -116,7 +124,7 @@ projectOnboarding = do
       pure $ addHeader h $ PageCtx bwconf ""
     _ -> do
       pid <- Projects.ProjectId <$> UUID.genUUID
-      let pr = Projects.CreateProject{id = pid, title = "Onboarding Project", description = "", paymentPlan = "ONBOARDING", timeZone = "", subId = Nothing, firstSubItemId = Nothing, orderId = Nothing}
+      let pr = Projects.CreateProject{id = pid, title = "Onboarding Project", description = "", paymentPlan = "ONBOARDING", timeZone = "", subId = Nothing, firstSubItemId = Nothing, orderId = Nothing, weeklyNotif = True, dailyNotif = True, endpointAlerts = True, errorAlerts = True}
       dbtToEff $ Projects.insertProject pr
       projectKeyUUID <- UUID.genUUID
       let encryptedKeyB64 = B64.extractBase64 $ B64.encodeBase64 $ ProjectApiKeys.encryptAPIKey (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
@@ -149,12 +157,13 @@ data CreateProjectResp = CreateProjectResp
   , paymentPlan :: Text
   , form :: CreateProjectForm
   , formError :: CreateProjectFormError
+  , pro :: Projects.Project
   }
   deriving stock (Generic, Show)
 
 
 data CreateProject
-  = CreateProject (PageCtx (Sessions.PersistentSession, Projects.ProjectId, EnvConfig, Text, Bool, CreateProjectForm, CreateProjectFormError))
+  = CreateProject (PageCtx (Sessions.PersistentSession, Projects.ProjectId, EnvConfig, Text, Bool, CreateProjectForm, CreateProjectFormError, Projects.Project))
   | PostNoContent Text
   | ProjectPost CreateProjectResp
   deriving stock (Generic, Show)
@@ -167,9 +176,9 @@ instance HasField "unwrapCreateProjectResp" CreateProject (Maybe CreateProjectRe
 
 
 instance ToHtml CreateProject where
-  toHtml (CreateProject (PageCtx bwconf (sess, pid, config, paymentPlan, isUpdate, prf, pref))) = toHtml $ PageCtx bwconf $ createProjectBody sess pid config paymentPlan prf pref
+  toHtml (CreateProject (PageCtx bwconf (sess, pid, config, paymentPlan, isUpdate, prf, pref, pro))) = toHtml $ PageCtx bwconf $ createProjectBody sess pid config paymentPlan prf pref pro
   toHtml (PostNoContent message) = span_ [class_ ""] $ toHtml message
-  toHtml (ProjectPost cpr) = toHtml $ createProjectBody cpr.sess cpr.pid cpr.env cpr.paymentPlan cpr.form cpr.formError
+  toHtml (ProjectPost cpr) = toHtml $ createProjectBody cpr.sess cpr.pid cpr.env cpr.paymentPlan cpr.form cpr.formError cpr.pro
   toHtmlRaw = toHtml
 
 
@@ -185,6 +194,10 @@ projectSettingsGetH pid = do
           , emails = []
           , permissions = []
           , timeZone = project.timeZone
+          , weeklyNotifs = if project.weeklyNotif then Just "on" else Nothing
+          , dailyNotifs = if project.dailyNotif then Just "on" else Nothing
+          , errorAlerts = if project.errorAlerts then Just "on" else Nothing
+          , endpointAlerts = if project.endpointAlerts then Just "on" else Nothing
           }
 
   let bwconf =
@@ -195,7 +208,7 @@ projectSettingsGetH pid = do
           , isSettingsPage = True
           , config = appCtx.config
           }
-  addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, project.paymentPlan, True, createProj, def @CreateProjectFormError)
+  addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, project.paymentPlan, True, createProj, def @CreateProjectFormError, project)
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -221,11 +234,11 @@ deleteProjectGetH pid = do
 -- It processes post requests and is expected to return a redirect header and a hyperscript event trigger header.
 createProjectPostH :: Projects.ProjectId -> CreateProjectForm -> ATAuthCtx (RespHeaders CreateProject)
 createProjectPostH pid createP = do
-  sess <- Sessions.getSession
+  (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   validationRes <- validateM createProjectFormV createP
   case validationRes of
-    Right cpe -> addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid appCtx.config "" createP cpe)
+    Right cpe -> addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid appCtx.config "" createP cpe project)
     Left cp -> processProjectPostForm cp pid
 
 
@@ -364,32 +377,25 @@ processProjectPostForm :: Valor.Valid CreateProjectForm -> Projects.ProjectId ->
 processProjectPostForm cpRaw pid = do
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
-  sess <- Sessions.getSession
+  (sess, project) <- Sessions.sessionAndProject pid
 
   let cp = Valor.unValid cpRaw
   if isDemoAndNotSudo pid sess.user.isSudo
     then do
       addErrorToast "Can't perform this action on the demo project" Nothing
-      addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError))
+      addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError) project)
     else do
-      project <- dbtToEff $ Projects.projectById pid
-      case project of
-        Just p -> do
-          _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid p.subId p.firstSubItemId p.orderId p.paymentPlan cp)
-          addSuccessToast "Updated Project Successfully" Nothing
-          addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError))
-        Nothing -> do
-          addErrorToast "Something went wrong. Please try again." Nothing
-          redirectCS ("/p/" <> pid.toText <> "/about_project")
-          addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError))
+      _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid project.subId project.firstSubItemId project.orderId project.paymentPlan cp)
+      addSuccessToast "Updated Project Successfully" Nothing
+      addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError) project)
 
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view
-createProjectBody :: Sessions.PersistentSession -> Projects.ProjectId -> EnvConfig -> Text -> CreateProjectForm -> CreateProjectFormError -> Html ()
-createProjectBody sess pid envCfg paymentPlan cp cpe = do
+createProjectBody :: Sessions.PersistentSession -> Projects.ProjectId -> EnvConfig -> Text -> CreateProjectForm -> CreateProjectFormError -> Projects.Project -> Html ()
+createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
   section_ [id_ "main-content", class_ "overflow-y-scroll h-full text-textWeak"] do
-    div_ [class_ "mx-auto px-2 pt-12 w-[606px]"] do
+    div_ [class_ "mx-auto px-2 pt-12 w-[800px]"] do
       h2_ [class_ "text-textStrong mb-3 text-xl font-semibold"] "Manage Project"
       p_ [class_ "text-textWeak text-sm leading-tight"] "Manage your project details and upgrade your plan"
       form_
@@ -429,13 +435,12 @@ createProjectBody sess pid envCfg paymentPlan cp cpe = do
               ]
               $ toHtml cp.description
 
+          alertConfiguration (isJust cp.endpointAlerts) (isJust cp.errorAlerts) (isJust cp.weeklyNotifs) (isJust cp.dailyNotifs)
+
           div_ [class_ "flex w-full justify-end items-center"] do
             -- a_ [href_ $ "/p/" <> pid.toText <> "/update_pricing", class_ "text-textBrand font-medium"] "Update pricing"
             button_
-              [ class_
-                  "btn btn-primary cursor-pointer"
-              , type_ "submit"
-              ]
+              [class_ "btn btn-primary cursor-pointer", type_ "submit"]
               do
                 span_ [id_ "createIndicator", class_ "htmx-indicator loading loading-dots loading-md"] ""
                 "Update project"
@@ -481,3 +486,27 @@ deleteProjectBody pid = do
         , hxConfirm_ "Are you sure you want to delete this project?"
         ]
         "Delete Project"
+
+
+alertConfiguration :: Bool -> Bool -> Bool -> Bool -> Html ()
+alertConfiguration newEndpointsAlerts errorAlerts weeklyReportsAlerts dailyReportsAlerts =
+  div_ [class_ "space-y-6"] $ do
+    div_ [class_ "flex items-center gap-3"] $ do
+      div_ $ do
+        h3_ [class_ "text-textStrong mb-3 text-lg font-semibold"] "Alert Configuration"
+        p_ [class_ "text-textWeak text-sm leading-tight"] "Manage your notification preferences"
+    div_ [class_ "space-y-4 rounded-lg border border-strokeWeak p-6"] $ do
+      let switchRow :: Text -> Text -> Text -> Bool -> Html ()
+          switchRow lbl forId descr checked =
+            div_ [class_ "flex items-center justify-between"] $ do
+              div_ [class_ "space-y-0.5"] $ do
+                label_ [Lucid.for_ forId, class_ "text-sm font-medium text-textStrong"] (toHtmlRaw lbl)
+                p_ [class_ "text-xs text-textWeak"] (toHtmlRaw descr)
+              input_ $ [type_ "checkbox", id_ forId, class_ "switch", name_ forId] ++ [checked_ | checked]
+      switchRow "Receive new endpoint alerts" "endpointAlerts" "Get notified when new API endpoints are detected" newEndpointsAlerts
+      hr_ [class_ "border-border my-2"]
+      switchRow "Receive runtime error alerts" "errorAlerts" "Receive immediate notifications for system errors" errorAlerts
+      hr_ [class_ "border-border my-2"]
+      switchRow "Receive weekly reports alerts" "weeklyNotifs" "Get a summary of your project activity every week" weeklyReportsAlerts
+      hr_ [class_ "border-border my-2"]
+      switchRow "Receive daily reports alerts" "dailyNotifs" "Receive daily summaries of your project metrics" dailyReportsAlerts

@@ -717,63 +717,64 @@ sendReportForProject pid rType = do
   let startTime = addUTCTime (negate prv) currentTime
   projectM <- dbtToEff $ Projects.projectById pid
   forM_ projectM \pr -> do
-    stats <- Telemetry.getProjectStatsForReport pid startTime currentTime
-    -- TODO: Replace with Issues.selectIssues when fully migrated
-    anomalies <- dbtToEff $ Issues.selectIssues pid Nothing Nothing Nothing 100 0
-    endpoint_rp <- dbtToEff $ RequestDumps.getRequestDumpForReports pid typTxt
-    total_anomalies <- dbtToEff $ Anomalies.countAnomalies pid typTxt
-    previous_week <- dbtToEff $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid typTxt
-    let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_week
-    timeZone <- liftIO getCurrentTimeZone
+    unless ((typTxt == "daily" && not pr.dailyNotif) || (typTxt == "weekly" && not pr.weeklyNotif)) $ do
+      stats <- Telemetry.getProjectStatsForReport pid startTime currentTime
+      -- TODO: Replace with Issues.selectIssues when fully migrated
+      anomalies <- dbtToEff $ Issues.selectIssues pid Nothing Nothing Nothing 100 0
+      endpoint_rp <- dbtToEff $ RequestDumps.getRequestDumpForReports pid typTxt
+      total_anomalies <- dbtToEff $ Anomalies.countAnomalies pid typTxt
+      previous_week <- dbtToEff $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid typTxt
+      let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_week
+      timeZone <- liftIO getCurrentTimeZone
 
-    reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
-    let report =
-          Reports.Report
-            { id = reportId
-            , reportJson = rep_json
-            , createdAt = utcToZonedTime timeZone currentTime
-            , updatedAt = utcToZonedTime timeZone currentTime
-            , projectId = pid
-            , reportType = typTxt
-            }
-    _ <- dbtToEff $ Reports.addReport report
+      reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
+      let report =
+            Reports.Report
+              { id = reportId
+              , reportJson = rep_json
+              , createdAt = utcToZonedTime timeZone currentTime
+              , updatedAt = utcToZonedTime timeZone currentTime
+              , projectId = pid
+              , reportType = typTxt
+              }
+      _ <- dbtToEff $ Reports.addReport report
 
-    let totalErrors = sum $ map (\(_, x, _) -> x) (V.toList stats)
-        totalEvents = sum $ map (\(_, _, x) -> x) (V.toList stats)
-        stmTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" startTime
-        currentTimeTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" currentTime
-        reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> show report.id.reportId
-        chartShotUrl = ctx.env.chartShotUrl <> "?t=bar&p=" <> pid.toText <> "&from=" <> stmTxt <> "&to=" <> currentTimeTxt
-        allQ = chartShotUrl <> "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 "summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
-        errQ = chartShotUrl <> "&theme=roma" <> "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 "status_code == \"ERROR\" | summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
-        alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents stats reportUrl allQ errQ
+      let totalErrors = sum $ map (\(_, x, _) -> x) (V.toList stats)
+          totalEvents = sum $ map (\(_, _, x) -> x) (V.toList stats)
+          stmTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" startTime
+          currentTimeTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" currentTime
+          reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> show report.id.reportId
+          chartShotUrl = ctx.env.chartShotUrl <> "?t=bar&p=" <> pid.toText <> "&from=" <> stmTxt <> "&to=" <> currentTimeTxt
+          allQ = chartShotUrl <> "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 "summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
+          errQ = chartShotUrl <> "&theme=roma" <> "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 "status_code == \"ERROR\" | summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
+          alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents stats reportUrl allQ errQ
 
-    Relude.when pr.weeklyNotif $ forM_ pr.notificationsChannel \case
-      Projects.NDiscord -> do
-        sendDiscordAlert alert pid pr.title
-      Projects.NSlack -> do
-        sendSlackAlert alert pid pr.title
-      Projects.NPhone -> do
-        sendWhatsAppAlert alert pid pr.title pr.whatsappNumbers
-      _ -> do
-        totalRequest <- dbtToEff $ RequestDumps.getLastSevenDaysTotalRequest pid
-        Relude.when (totalRequest > 0) do
-          forM_ users \user -> do
-            let firstName = user.firstName
-                projectTitle = pr.title
-                userEmail = CI.original user.email
-                anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
-                perf = RP.getPerformanceEmailTemplate endpoint_rp previous_week
-                perf_count = V.length perf
-                perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else V.take 10 perf
-                rp_url = "https://app.monoscope.tech/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
-                dayEnd = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone currentTime))
-                sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentTime
-                sevenDaysAgoZonedTime = utcToZonedTime timeZone sevenDaysAgoUTCTime
-                dayStart = show $ localDay (zonedTimeToLocalTime sevenDaysAgoZonedTime)
-                freeTierLimitExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
-                templateVars =
-                  [aesonQQ|{
+      Relude.when pr.weeklyNotif $ forM_ pr.notificationsChannel \case
+        Projects.NDiscord -> do
+          sendDiscordAlert alert pid pr.title
+        Projects.NSlack -> do
+          sendSlackAlert alert pid pr.title
+        Projects.NPhone -> do
+          sendWhatsAppAlert alert pid pr.title pr.whatsappNumbers
+        _ -> do
+          totalRequest <- dbtToEff $ RequestDumps.getLastSevenDaysTotalRequest pid
+          Relude.when (totalRequest > 0) do
+            forM_ users \user -> do
+              let firstName = user.firstName
+                  projectTitle = pr.title
+                  userEmail = CI.original user.email
+                  anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
+                  perf = RP.getPerformanceEmailTemplate endpoint_rp previous_week
+                  perf_count = V.length perf
+                  perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else V.take 10 perf
+                  rp_url = "https://app.monoscope.tech/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
+                  dayEnd = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone currentTime))
+                  sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentTime
+                  sevenDaysAgoZonedTime = utcToZonedTime timeZone sevenDaysAgoUTCTime
+                  dayStart = show $ localDay (zonedTimeToLocalTime sevenDaysAgoZonedTime)
+                  freeTierLimitExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
+                  templateVars =
+                    [aesonQQ|{
                    "user_name": #{firstName},
                    "project_name": #{projectTitle},
                    "anomalies_count": #{total_anomalies},
@@ -785,7 +786,7 @@ sendReportForProject pid rType = do
                    "end_date": #{dayEnd},
                    "free_exceeded": #{freeTierLimitExceeded}
             }|]
-            sendPostmarkEmail userEmail (Just ("weekly-report", templateVars)) Nothing
+              sendPostmarkEmail userEmail (Just ("weekly-report", templateVars)) Nothing
 
 
 emailQueryMonitorAlert :: Monitors.QueryMonitorEvaled -> CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()
@@ -829,8 +830,8 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
     -- Runtime exceptions get individual issues
     -- Each unique error pattern gets its own issue for tracking
     Anomalies.ATRuntimeException -> do
-      errors <- dbtToEff $ Anomalies.errorsByHashes pid targetHashes
       project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
+      errors <- dbtToEff $ Anomalies.errorsByHashes pid targetHashes
       users <- dbtToEff $ Projects.usersByProjectId pid
 
       -- Create one issue per error
@@ -844,41 +845,42 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
         pass
 
       -- Send notifications
-      forM_ project.notificationsChannel \case
-        Projects.NSlack ->
-          forM_ errors \err -> do sendSlackAlert (RuntimeErrorAlert err.errorData) pid project.title
-        Projects.NDiscord ->
-          forM_ errors \err -> do sendDiscordAlert (RuntimeErrorAlert err.errorData) pid project.title
-        Projects.NPhone ->
-          forM_ errors \err -> do
-            sendWhatsAppAlert (RuntimeErrorAlert err.errorData) pid project.title project.whatsappNumbers
-        Projects.NEmail ->
-          forM_ users \u -> do
-            let errosJ =
-                  ( \ee ->
-                      let e = ee.errorData
-                       in AE.object
-                            [ "root_error_message" AE..= e.rootErrorMessage
-                            , "error_type" AE..= e.errorType
-                            , "error_message" AE..= e.message
-                            , "stack_trace" AE..= e.stackTrace
-                            , "when" AE..= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
-                            , "hash" AE..= e.hash
-                            , "tech" AE..= e.technology
-                            , "request_info" AE..= (fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
-                            , "root_error_type" AE..= e.rootErrorType
-                            ]
-                  )
-                    <$> errors
-                title = project.title
-                errors_url = "https://app.monoscope.tech/p/" <> pid.toText <> "/issues/"
-                templateVars =
-                  [aesonQQ|{
+      Relude.when (project.errorAlerts) do
+        forM_ project.notificationsChannel \case
+          Projects.NSlack ->
+            forM_ errors \err -> do sendSlackAlert (RuntimeErrorAlert err.errorData) pid project.title
+          Projects.NDiscord ->
+            forM_ errors \err -> do sendDiscordAlert (RuntimeErrorAlert err.errorData) pid project.title
+          Projects.NPhone ->
+            forM_ errors \err -> do
+              sendWhatsAppAlert (RuntimeErrorAlert err.errorData) pid project.title project.whatsappNumbers
+          Projects.NEmail ->
+            forM_ users \u -> do
+              let errosJ =
+                    ( \ee ->
+                        let e = ee.errorData
+                         in AE.object
+                              [ "root_error_message" AE..= e.rootErrorMessage
+                              , "error_type" AE..= e.errorType
+                              , "error_message" AE..= e.message
+                              , "stack_trace" AE..= e.stackTrace
+                              , "when" AE..= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
+                              , "hash" AE..= e.hash
+                              , "tech" AE..= e.technology
+                              , "request_info" AE..= (fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
+                              , "root_error_type" AE..= e.rootErrorType
+                              ]
+                    )
+                      <$> errors
+                  title = project.title
+                  errors_url = "https://app.monoscope.tech/p/" <> pid.toText <> "/issues/"
+                  templateVars =
+                    [aesonQQ|{
                         "project_name": #{title},
                         "errors_url": #{errors_url},
                         "errors": #{errosJ}
                    }|]
-            sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
+              sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
     -- Ignore other anomaly types
     _ -> pass
 
@@ -936,30 +938,31 @@ processAPIChangeAnomalies pid targetHashes = do
   -- Send notifications
   projectM <- dbtToEff $ Projects.projectById pid
   whenJust projectM \project -> do
-    users <- dbtToEff $ Projects.usersByProjectId pid
-    let endpointInfo =
-          map
-            ( \(_, anoms) ->
-                let firstAnom = V.head anoms
-                 in fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath
-            )
-            anomaliesByEndpoint
-    let alert = EndpointAlert project.title (V.fromList endpointInfo) (fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes)
+    Relude.when project.endpointAlerts do
+      users <- dbtToEff $ Projects.usersByProjectId pid
+      let endpointInfo =
+            map
+              ( \(_, anoms) ->
+                  let firstAnom = V.head anoms
+                   in fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath
+              )
+              anomaliesByEndpoint
+      let alert = EndpointAlert project.title (V.fromList endpointInfo) (fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes)
 
-    forM_ project.notificationsChannel \case
-      Projects.NSlack -> sendSlackAlert alert pid project.title
-      Projects.NDiscord -> sendDiscordAlert alert pid project.title
-      Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
-      Projects.NEmail -> do
-        forM_ users \u -> do
-          let templateVars =
-                AE.object
-                  [ "user_name" AE..= u.firstName
-                  , "project_name" AE..= project.title
-                  , "anomaly_url" AE..= ("https://app.monoscope.tech/p/" <> pid.toText <> "/issues")
-                  , "endpoint_name" AE..= endpointInfo
-                  ]
-          sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing
+      forM_ project.notificationsChannel \case
+        Projects.NSlack -> sendSlackAlert alert pid project.title
+        Projects.NDiscord -> sendDiscordAlert alert pid project.title
+        Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
+        Projects.NEmail -> do
+          forM_ users \u -> do
+            let templateVars =
+                  AE.object
+                    [ "user_name" AE..= u.firstName
+                    , "project_name" AE..= project.title
+                    , "anomaly_url" AE..= ("https://app.monoscope.tech/p/" <> pid.toText <> "/issues")
+                    , "endpoint_name" AE..= endpointInfo
+                    ]
+            sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing
 
 
 -- | Group anomalies by endpoint hash
