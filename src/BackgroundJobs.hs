@@ -9,7 +9,7 @@ import Data.Effectful.UUID qualified as UUID
 import Data.List.Extra (chunksOf, groupBy)
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
+import Data.Time (DayOfWeek (Monday), UTCTime (UTCTime, utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime)
 import Data.UUID qualified as UUID
@@ -92,12 +92,12 @@ data BgJobs
   | QueryMonitorsTriggered (V.Vector Monitors.QueryMonitorId)
   | DeletedProject Projects.ProjectId
   | CleanupDemoProject
-  | FiveMinuteSpanProcessing UTCTime
-  | OneMinuteErrorProcessing UTCTime
+  | FiveMinuteSpanProcessing UTCTime Projects.ProjectId
+  | OneMinuteErrorProcessing UTCTime Projects.ProjectId
   | SlackNotification Projects.ProjectId Text
   | EnhanceIssuesWithLLM Projects.ProjectId (V.Vector Issues.IssueId)
   | ProcessIssuesEnhancement UTCTime
-  | FifteenMinutesLogsPatternProcessing UTCTime
+  | FifteenMinutesLogsPatternProcessing UTCTime Projects.ProjectId
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -212,14 +212,7 @@ processBackgroundJob authCtx job bgJob =
     DailyJob -> do
       currentDay <- utctDay <$> Time.currentTime
       currentTime <- Time.currentTime
-
-      -- Schedule all 24 hourly jobs in one batch
       liftIO $ withResource authCtx.jobsPool \conn -> do
-        forM_ [0 .. 287] \interval -> do
-          let scheduledTime = addUTCTime (fromIntegral $ interval * 600) currentTime
-          _ <- scheduleJob conn "background_jobs" (BackgroundJobs.FifteenMinutesLogsPatternProcessing scheduledTime) scheduledTime
-          pass
-
         -- background job to cleanup demo project
         Relude.when (dayOfWeek currentDay == Monday) do
           void $ createJob conn "background_jobs" $ BackgroundJobs.CleanupDemoProject
@@ -229,25 +222,26 @@ processBackgroundJob authCtx job bgJob =
           _ <- scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob scheduledTime hour) scheduledTime
           pass
 
-        -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
-        forM_ [0 .. 287] \interval -> do
-          let scheduledTime2 = addUTCTime (fromIntegral $ interval * 300) currentTime
-          scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteSpanProcessing scheduledTime2) scheduledTime2
-
-        -- Schedule 1-minute error processing jobs (1440 jobs per hour = 24 hours * 60 per hour)
-        forM_ [0 .. 1439] \interval -> do
-          let scheduledTime3 = addUTCTime (fromIntegral $ interval * 60) currentTime
-          scheduleJob conn "background_jobs" (BackgroundJobs.OneMinuteErrorProcessing scheduledTime3) scheduledTime3
-
-        -- Schedule issue enhancement processing every hour
-        forM_ [0 .. 23] \hr -> do
-          let scheduledTime4 = addUTCTime (fromIntegral $ hr * 3600) currentTime
-          scheduleJob conn "background_jobs" (BackgroundJobs.ProcessIssuesEnhancement scheduledTime4) scheduledTime4
-
-      -- Handle regular daily jobs for each project
       projects <- dbtToEff $ query [sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > now() - interval '24 hours'|] ()
       forM_ projects \p -> do
         liftIO $ withResource authCtx.jobsPool \conn -> do
+          -- Schedule 5-minute log pattern extraction
+          forM_ [0 .. 287] \interval -> do
+            let scheduledTime = addUTCTime (fromIntegral $ interval * 300) currentTime
+            _ <- scheduleJob conn "background_jobs" (BackgroundJobs.FifteenMinutesLogsPatternProcessing scheduledTime p) scheduledTime
+            pass
+          -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
+          forM_ [0 .. 287] \interval -> do
+            let scheduledTime2 = addUTCTime (fromIntegral $ interval * 300) currentTime
+            scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteSpanProcessing scheduledTime2 p) scheduledTime2
+          -- Schedule 1-minute error processing jobs (1440 jobs per hour = 24 hours * 60 per hour)
+          forM_ [0 .. 1439] \interval -> do
+            let scheduledTime3 = addUTCTime (fromIntegral $ interval * 60) currentTime
+            scheduleJob conn "background_jobs" (BackgroundJobs.OneMinuteErrorProcessing scheduledTime3 p) scheduledTime3
+          -- Schedule issue enhancement processing every hour
+          forM_ [0 .. 23] \hr -> do
+            let scheduledTime4 = addUTCTime (fromIntegral $ hr * 3600) currentTime
+            scheduleJob conn "background_jobs" (BackgroundJobs.ProcessIssuesEnhancement scheduledTime4) scheduledTime4
           Relude.when (dayOfWeek currentDay == Monday)
             $ void
             $ createJob conn "background_jobs"
@@ -274,12 +268,12 @@ processBackgroundJob authCtx job bgJob =
       -- DELETE API KEYS
       _ <- withPool authCtx.pool $ PTR.execute [sql| DELETE FROM projects.project_api_keys WHERE project_id = ? AND title != 'Default API Key' |] (Only pid)
       pass
-    FiveMinuteSpanProcessing scheduledTime -> processFiveMinuteSpans scheduledTime
-    OneMinuteErrorProcessing scheduledTime -> processOneMinuteErrors scheduledTime
+    FiveMinuteSpanProcessing scheduledTime pid -> processFiveMinuteSpans scheduledTime pid
+    OneMinuteErrorProcessing scheduledTime pid -> processOneMinuteErrors scheduledTime pid
     SlackNotification pid message -> sendSlackMessage pid message
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> processIssuesEnhancement scheduledTime
-    FifteenMinutesLogsPatternProcessing scheduledTime -> logsPatternExtraction scheduledTime
+    FifteenMinutesLogsPatternProcessing scheduledTime pid -> logsPatternExtraction scheduledTime pid
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -331,74 +325,64 @@ generateOtelFacetsBatch projectIds timestamp = do
 -- 3. Extract entities using processSpanToEntities
 -- 4. Bulk insert new entities (triggers anomaly detection)
 -- 5. Update spans with computed hashes for tracking
-processFiveMinuteSpans :: UTCTime -> ATBackgroundCtx ()
-processFiveMinuteSpans scheduledTime = do
+processFiveMinuteSpans :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
+processFiveMinuteSpans scheduledTime pid = do
   ctx <- ask @Config.AuthContext
   let fiveMinutesAgo = addUTCTime (-300) scheduledTime
-
-  Log.logInfo "Getting HTTP spans from 5-minute window" ()
-  -- Get APIToolkit-specific HTTP spans (excludes generic telemetry)
-  httpSpans <-
-    dbtToEff
-      $ query
-        [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                     hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
-              FROM otel_logs_and_spans 
-          WHERE project_id != '98fdd4f3-3544-4087-ad91-1e7ca95aba29' AND timestamp >= ? AND timestamp < ? AND name = 'monoscope.http'
-          ORDER BY project_id |]
-        (fiveMinutesAgo, scheduledTime)
-
-  Log.logInfo "Processing HTTP spans from 5-minute window" ("span_count", AE.toJSON $ V.length httpSpans)
-
-  -- Group spans by project
-  let spansByProject = V.groupBy (\a b -> a.project_id == b.project_id) httpSpans
-
-  Log.logInfo "Grouped spans by project" ("project_count", AE.toJSON $ length spansByProject)
-
-  forM_ spansByProject \projectSpans -> case V.uncons projectSpans of
-    Nothing -> pass
-    Just (firstSpan, _) -> do
-      let pid = Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText firstSpan.project_id
-      Log.logInfo "Processing project spans" $ AE.object [("project_id", AE.toJSON pid.toText), ("span_count", AE.toJSON $ V.length projectSpans)]
-      processProjectSpans pid projectSpans fiveMinutesAgo scheduledTime
-
+  processSpansWithPagination fiveMinutesAgo 0
   Log.logInfo "Completed 5-minute span processing" ()
+  where
+    processSpansWithPagination :: UTCTime -> Int -> ATBackgroundCtx ()
+    processSpansWithPagination fiveMinutesAgo skip = do
+      Log.logInfo "Getting HTTP spans from 5-minute window" ()
+      -- Get APIToolkit-specific HTTP spans (excludes generic telemetry)
+      httpSpans <-
+        dbtToEff
+          $ query
+            [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+                         hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
+                  FROM otel_logs_and_spans 
+              WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND name = 'monoscope.http'
+              ORDER BY timestamp DESC OFFSET ? LIMIT 70 |]
+            (pid, fiveMinutesAgo, scheduledTime, skip)
+      Log.logInfo "Processing HTTP spans from 5-minute window" ("span_count", AE.toJSON $ V.length httpSpans)
+      processProjectSpans pid httpSpans fiveMinutesAgo scheduledTime
+      Log.logInfo "Processing complete for page " ("skip", skip)
+      Relude.when (V.length httpSpans == 70) $ do
+        processSpansWithPagination fiveMinutesAgo (skip + 70)
 
 
-logsPatternExtraction :: UTCTime -> ATBackgroundCtx ()
-logsPatternExtraction scheduledTime = do
+logsPatternExtraction :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
+logsPatternExtraction scheduledTime pid = do
   ctx <- ask @Config.AuthContext
-  fiveMinutesAgo <- liftIO $ addUTCTime (-300) <$> Time.currentTime
-
-  Log.logInfo "Fetching logs for pattern extraction" ()
-  otelLogs <- dbtToEff $ query [sql| SELECT project_id, id::text, body::text FROM otel_logs_and_spans WHERE timestamp >= ? and timestamp < ?  and kind = 'log' and log_pattern is null and body is not null and body != 'null' |] (fiveMinutesAgo, scheduledTime)
-  Log.logInfo "Fetched OTEL logs for pattern extraction" ("log_count", AE.toJSON $ V.length otelLogs)
-
-  logsByProject <- pure $ V.groupBy (\(p, _, _) (bp, _, _) -> p == bp) otelLogs
-  Log.logInfo "Grouped logs by project for pattern extraction" ("project_count", AE.toJSON $ length logsByProject)
-
-  forM_ logsByProject \projectLogs -> case V.uncons projectLogs of
-    Nothing -> pass
-    Just ((pidTxt, _, _), _) -> do
-      let pid = Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText pidTxt
-      Log.logInfo "Processing project logs" $ AE.object [("project_id", AE.toJSON pid.toText), ("log_count", AE.toJSON $ V.length projectLogs)]
-      Relude.when (null projectLogs) $ do
+  tenMinutesAgo <- liftIO $ addUTCTime (-600) <$> Time.currentTime
+  processWithPagination 0 tenMinutesAgo
+  Log.logInfo "Completed logs pattern extraction for project" ("project_id", AE.toJSON pid.toText)
+  where
+    limitVal = 1000
+    processWithPagination :: Int -> UTCTime -> ATBackgroundCtx ()
+    processWithPagination skip tenMinutesAgo = do
+      Log.logInfo "Fetching logs for pattern extraction: " ("Skip", skip)
+      otelLogs <- dbtToEff $ query [sql| SELECT id::text, body::text FROM otel_logs_and_spans WHERE project_id = ? and timestamp >= ? and timestamp < ?  and kind = 'log' and log_pattern is null and body is not null and body != 'null' offset ? limit 1000|] (pid, tenMinutesAgo, scheduledTime, skip)
+      Log.logInfo "Fetched  logs for pattern extraction" ("log_count", AE.toJSON $ V.length otelLogs)
+      Relude.when (null otelLogs) $ do
         Log.logInfo "No logs found for pattern extraction" ("project_id", AE.toJSON pid.toText)
-      unless (null projectLogs) $ do
+      unless (null otelLogs) $ do
         Log.logInfo "Fetching existing log patterns for project" ("project_id", AE.toJSON pid.toText)
-        logsWithPatterns' <- dbtToEff $ query [sql| SELECT log_pattern FROM otel_logs_and_spans WHERE project_id = ? and timestamp >= now() - interval '2 hours' AND kind = 'log' AND log_pattern IS NOT NULL limit 3000|] (pid)
+        logsWithPatterns' <- dbtToEff $ query [sql| SELECT log_pattern FROM otel_logs_and_spans WHERE project_id = ? and timestamp >= now() - interval '1 hours' AND kind = 'log' AND log_pattern IS NOT NULL limit 300|] (pid)
         let logsWithPatterns = (\(p) -> ("", p)) <$> logsWithPatterns'
-        let fLogs = V.map (\(_, logId, logContent) -> (logId, logContent)) projectLogs
-        let finalVals = logsWithPatterns <> fLogs
+        let finalVals = logsWithPatterns <> otelLogs
         let drainTree = processBatch finalVals scheduledTime Drain.emptyDrainTree
             patterns = Drain.getAllLogGroups drainTree
         Log.logInfo "Extracted log patterns" ("pattern_count", AE.toJSON $ V.length patterns)
         forM_ patterns \p -> do
-          _ <- dbtToEff $ execute [sql| UPDATE otel_logs_and_spans SET log_pattern = ? WHERE project_id=? and timestamp > ? and id::text=Any(?) |] (fst p, pid, fiveMinutesAgo, V.filter (\p' -> p' /= "") $ snd p)
+          _ <- dbtToEff $ execute [sql| UPDATE otel_logs_and_spans SET log_pattern = ? WHERE project_id=? and timestamp > ? and id::text=Any(?) |] (fst p, pid, tenMinutesAgo, V.filter (\p' -> p' /= "") $ snd p)
           pass
-        Log.logInfo "Completed logs pattern extraction for project" ("project_id", AE.toJSON pid.toText)
+        Log.logInfo "Completed logs pattern extraction for page" ("skip", skip)
+      Relude.when (V.length otelLogs == limitVal) $ do
+        processWithPagination (skip + limitVal) tenMinutesAgo
         pass
-  where
+
     processNewLog :: Text -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
     processNewLog logId logContent now tree = do
       let tokensVec = V.fromList $ T.words $ replaceAllFormats $ logContent
@@ -424,8 +408,8 @@ logsPatternExtraction scheduledTime = do
 --
 -- Note: Uses 2-minute window instead of 1-minute to account for Kafka/PubSub
 -- processing delays and ensure no errors are missed.
-processOneMinuteErrors :: UTCTime -> ATBackgroundCtx ()
-processOneMinuteErrors scheduledTime = do
+processOneMinuteErrors :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
+processOneMinuteErrors scheduledTime pid = do
   ctx <- ask @Config.AuthContext
   -- This processing might happen before the spans within the timestamp are stored in db
   -- hence will be missed and never get processed
@@ -433,74 +417,63 @@ processOneMinuteErrors scheduledTime = do
   -- we can increase the window to account for time spent on kafka
   -- use two minutes for now before use a better solution
   let oneMinuteAgo = addUTCTime (-60 * 2) scheduledTime
-  -- Get all spans with errors from time window
-  -- Check for:
-  -- 1. Spans with error status codes
-  -- 2. Spans with exception events (OpenTelemetry standard)
-  -- 3. Spans with error attributes
-  spansWithErrors <-
-    dbtToEff
-      $ query
-        [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
-                     hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
-              FROM otel_logs_and_spans 
-          WHERE timestamp >= ? AND timestamp < ?
-          AND (
-            -- Check for error status
-            status_code = 'error' OR status_code = 'ERROR' OR status_code = '2'
-            -- Check for exception events
-            OR (
-              events IS NOT NULL
-              AND EXISTS (
-                SELECT 1 FROM jsonb_array_elements(events) AS event
-                WHERE event->>'event_name' = 'exception'
-                   OR event->>'event_name' ILIKE '%exception%' 
-                   OR event->>'event_name' ILIKE '%error%'
-              )
-            )
-            -- Check for error attributes
-            OR attributes->>'error' = 'true'
-            OR attributes->>'error.type' IS NOT NULL
-            OR attributes->>'exception.type' IS NOT NULL
-            OR attributes->>'exception.message' IS NOT NULL
-          )
-          ORDER BY project_id |]
-        (oneMinuteAgo, scheduledTime)
-  Log.logInfo "Processing spans with errors from 1-minute window" ("span_count", AE.toJSON $ V.length spansWithErrors)
-
-  -- Extract errors from all spans using the existing getAllATErrors function
-  let allErrors = Telemetry.getAllATErrors spansWithErrors
-
-  -- Log.logInfo "Found errors to process" ("error_count", AE.toJSON $ V.length allErrors)
-
-  -- Group errors by project
-  let errorsByProject = V.groupBy (\a b -> a.projectId == b.projectId) allErrors
-
-  -- Group errors by traceId within each project to avoid duplicate errors from same trace
-  -- (otel log and span, [errors])
-  let errorsByProjectAndTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.projectId == b.projectId && a.spanId == b.spanId) allErrors
-
-  forM_ errorsByProject \projectErrors -> case V.uncons projectErrors of
-    Nothing -> pass
-    Just (firstError, _) -> do
-      whenJust firstError.projectId \pid -> do
-        -- Process errors for this project
-        processProjectErrors pid projectErrors
-
-  forM_ errorsByProjectAndTrace \groupedErrors -> case V.uncons groupedErrors of
-    Nothing -> pass
-    Just (firstError, _) -> do
-      whenJust firstError.projectId \pid -> do
-        let mappedErrors = V.map (\x -> AE.object ["type" AE..= x.errorType, "message" AE..= x.message, "stack_trace" AE..= x.stackTrace]) groupedErrors
-        Relude.when (not $ V.null groupedErrors) $ do
-          _ <-
-            dbtToEff
-              $ execute
-                [sql| UPDATE otel_logs_and_spans 
-                  SET errors = ? 
-                  WHERE project_id = ? AND context___trace_id = ? AND context___span_id = ? |]
-                (AE.toJSON mappedErrors, pid, firstError.traceId, firstError.spanId)
-          pass
+  processErrorsPaginated oneMinuteAgo 0
+  pass
+  where
+    processErrorsPaginated :: UTCTime -> Int -> ATBackgroundCtx ()
+    processErrorsPaginated oneMinuteAgo skip = do
+      -- Get all spans with errors from time window
+      -- Check for:
+      -- 1. Spans with error status codes
+      -- 2. Spans with exception events (OpenTelemetry standard)
+      -- 3. Spans with error attributes
+      spansWithErrors <-
+        dbtToEff
+          $ query
+            [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+                             hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
+                      FROM otel_logs_and_spans 
+                  WHERE project_id = ? timestamp >= ? AND timestamp < ?
+                  AND (
+                    -- Check for error status
+                    status_code = 'error' OR status_code = 'ERROR' OR status_code = '2'
+                    -- Check for exception events
+                    OR (
+                      events IS NOT NULL
+                      AND EXISTS (
+                        SELECT 1 FROM jsonb_array_elements(events) AS event
+                        WHERE event->>'event_name' = 'exception'
+                           OR event->>'event_name' ILIKE '%exception%' 
+                           OR event->>'event_name' ILIKE '%error%'
+                      )
+                    )
+                    -- Check for error attributes
+                    OR attributes->>'error' = 'true'
+                    OR attributes->>'error.type' IS NOT NULL
+                    OR attributes->>'exception.type' IS NOT NULL
+                    OR attributes->>'exception.message' IS NOT NULL
+                  )
+                  OFFSET ? LIMIT 500 |]
+            (pid, oneMinuteAgo, scheduledTime)
+      Log.logInfo "Processing spans with errors from 1-minute window" ("span_count", AE.toJSON $ V.length spansWithErrors)
+      let allErrors = Telemetry.getAllATErrors spansWithErrors
+      -- Group errors by traceId within each project to avoid duplicate errors from same trace
+      -- (otel log and span, [errors])
+      let errorsByTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.spanId == b.spanId) allErrors
+      processProjectErrors pid allErrors
+      forM_ errorsByTrace \groupedErrors -> case V.uncons groupedErrors of
+        Nothing -> pass
+        Just (firstError, _) -> do
+          let mappedErrors = V.map (\x -> AE.object ["type" AE..= x.errorType, "message" AE..= x.message, "stack_trace" AE..= x.stackTrace]) groupedErrors
+          Relude.when (not $ V.null groupedErrors) $ do
+            _ <-
+              dbtToEff
+                $ execute
+                  [sql| UPDATE otel_logs_and_spans 
+                          SET errors = ? 
+                          WHERE project_id = ? AND context___trace_id = ? AND context___span_id = ? |]
+                  (AE.toJSON mappedErrors, pid, firstError.traceId, firstError.spanId)
+            pass
 
 
 -- Log.logInfo "Completed 1-minute error processing" ()
