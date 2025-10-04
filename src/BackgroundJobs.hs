@@ -9,7 +9,7 @@ import Data.Effectful.UUID qualified as UUID
 import Data.List.Extra (chunksOf, groupBy)
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (DayOfWeek (Monday), UTCTime (UTCTime, utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
+import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime)
 import Data.UUID qualified as UUID
@@ -342,8 +342,7 @@ processFiveMinuteSpans scheduledTime pid = do
             [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
                          hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
                   FROM otel_logs_and_spans 
-              WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND name = 'monoscope.http'
-              ORDER BY timestamp DESC OFFSET ? LIMIT 70 |]
+              WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND name = 'monoscope.http' OFFSET ? LIMIT 70 |]
             (pid, fiveMinutesAgo, scheduledTime, skip)
       Log.logInfo "Processing HTTP spans from 5-minute window" ("span_count", AE.toJSON $ V.length httpSpans)
       processProjectSpans pid httpSpans fiveMinutesAgo scheduledTime
@@ -433,7 +432,7 @@ processOneMinuteErrors scheduledTime pid = do
             [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
                              hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
                       FROM otel_logs_and_spans 
-                  WHERE project_id = ? timestamp >= ? AND timestamp < ?
+                  WHERE project_id = ? AND timestamp >= ? AND timestamp < ?
                   AND (
                     -- Check for error status
                     status_code = 'error' OR status_code = 'ERROR' OR status_code = '2'
@@ -454,7 +453,7 @@ processOneMinuteErrors scheduledTime pid = do
                     OR attributes->>'exception.message' IS NOT NULL
                   )
                   OFFSET ? LIMIT 500 |]
-            (pid, oneMinuteAgo, scheduledTime)
+            (pid, oneMinuteAgo, scheduledTime, skip)
       Log.logInfo "Processing spans with errors from 1-minute window" ("span_count", AE.toJSON $ V.length spansWithErrors)
       let allErrors = Telemetry.getAllATErrors spansWithErrors
       -- Group errors by traceId within each project to avoid duplicate errors from same trace
