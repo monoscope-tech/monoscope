@@ -1137,7 +1137,9 @@ export class LogList extends LitElement {
   }
 
   private parseSummaryData(dataArr: any[]): string[] {
-    return lookupVecValue<string[]>(dataArr, this.colIdxMap, 'summary');
+    const summary = lookupVecValue<string[] | string>(dataArr, this.colIdxMap, 'summary');
+    if (Array.isArray(summary)) return summary;
+    try { return typeof summary === 'string' ? JSON.parse(summary) : []; } catch { return []; }
   }
 
   // Ultra-optimized renderSummaryElements using closure for caching
