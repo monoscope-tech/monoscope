@@ -6,7 +6,7 @@ import Colourista.IO (blueMessage)
 import Data.Cache (Cache, newCache)
 import Data.Default (Default (..))
 import Data.Default.Instances ()
-import Data.Pool as Pool (Pool, defaultPoolConfig, newPool)
+import Data.Pool as Pool (Pool, defaultPoolConfig, newPool, setNumStripes)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
 import Data.Vector qualified as V
@@ -184,9 +184,9 @@ configToEnv config = do
     migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ Migrations.MigrationDirectory (toString config.migrationsDir :: FilePath)
     blueMessage ("migration result " <> show migrationRes)
     pass
-  pool <- liftIO $ Pool.newPool $ Pool.defaultPoolConfig createPgConnIO PG.close (60 * 2) 50
-  jobsPool <- liftIO $ Pool.newPool $ Pool.defaultPoolConfig createPgConnIO PG.close (60 * 2) 50
-  timefusionPgPool <- liftIO $ Pool.newPool $ Pool.defaultPoolConfig createTimefusionPgConnIO PG.close (60 * 2) 50
+  pool <- liftIO $ Pool.newPool $ (Pool.defaultPoolConfig createPgConnIO PG.close (60 * 2) 50 & setNumStripes (Just 5))
+  jobsPool <- liftIO $ Pool.newPool $ (Pool.defaultPoolConfig createPgConnIO PG.close (60 * 2) 50 & setNumStripes (Just 4))
+  timefusionPgPool <- liftIO $ Pool.newPool $ (Pool.defaultPoolConfig createTimefusionPgConnIO PG.close (60 * 2) 1 & setNumStripes (Just 4))
   projectCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0) -- :: m (Cache Projects.ProjectId Projects.ProjectCache) -- 30*60secs or 30 minutes TTL
   projectKeyCache <- liftIO $ newCache Nothing
   logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0) -- Cache for log patterns, 30 minutes TTL
