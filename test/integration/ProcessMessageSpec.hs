@@ -73,7 +73,7 @@ spec = aroundAll TestUtils.withSetup do
             ]
       authCtx <- testAuthContext pool
       _ <- TestUtils.runTestBackground authCtx $ processMessages msgs HashMap.empty
-      _ <- TestUtils.runTestBackground authCtx $ processFiveMinuteSpans currentTime
+      _ <- TestUtils.runTestBackground authCtx $ processFiveMinuteSpans currentTime pid
       _ <- TestUtils.runAllBackgroundJobs authCtx
       -- Now refresh the materialized view to see the results
       -- _ <- withPool pool $ TestUtils.refreshMaterializedView "apis.endpoint_request_stats"
