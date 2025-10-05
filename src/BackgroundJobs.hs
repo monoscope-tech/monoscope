@@ -222,6 +222,11 @@ processBackgroundJob authCtx job bgJob =
           _ <- scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob scheduledTime hour) scheduledTime
           pass
 
+        -- Schedule issue enhancement processing every hour
+        forM_ [0 .. 23] \hr -> do
+          let scheduledTime4 = addUTCTime (fromIntegral $ hr * 3600) currentTime
+          scheduleJob conn "background_jobs" (BackgroundJobs.ProcessIssuesEnhancement scheduledTime4) scheduledTime4
+
       projects <- dbtToEff $ query [sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > now() - interval '24 hours'|] ()
       forM_ projects \p -> do
         liftIO $ withResource authCtx.jobsPool \conn -> do
@@ -238,10 +243,6 @@ processBackgroundJob authCtx job bgJob =
           forM_ [0 .. 1439] \interval -> do
             let scheduledTime3 = addUTCTime (fromIntegral $ interval * 60) currentTime
             scheduleJob conn "background_jobs" (BackgroundJobs.OneMinuteErrorProcessing scheduledTime3 p) scheduledTime3
-          -- Schedule issue enhancement processing every hour
-          forM_ [0 .. 23] \hr -> do
-            let scheduledTime4 = addUTCTime (fromIntegral $ hr * 3600) currentTime
-            scheduleJob conn "background_jobs" (BackgroundJobs.ProcessIssuesEnhancement scheduledTime4) scheduledTime4
           Relude.when (dayOfWeek currentDay == Monday)
             $ void
             $ createJob conn "background_jobs"
