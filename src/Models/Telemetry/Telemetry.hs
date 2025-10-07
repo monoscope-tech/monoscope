@@ -802,24 +802,25 @@ instance ToRow OtelLogsAndSpans where
       parseSeverityNumber = fmap (show . severity_number)
 
 
-bulkInsertOtelLogsAndSpansTF :: (DB :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
+bulkInsertOtelLogsAndSpansTF :: (Concurrent :> es, DB :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
 bulkInsertOtelLogsAndSpansTF records = do
   updatedRecords <- V.mapM (\r -> genUUID >>= \uid -> pure (r & #id .~ UUID.toText uid)) records
   _ <- bulkInsertOtelLogsAndSpans updatedRecords
-  -- _ <- retryTimefusion 10 updatedRecords
+  when False $ do
+    _ <- retryTimefusion 10 updatedRecords
+    pass
   pass
   where
+    retryTimefusion 0 recs = labeled @"timefusion" @DB $ bulkInsertOtelLogsAndSpans recs
+    retryTimefusion n recs = do
+      tryAny (labeled @"timefusion" @DB $ bulkInsertOtelLogsAndSpans recs) >>= \case
+        Left e | "Connection refused" `T.isInfixOf` T.pack (show e) -> do
+          Log.logAttention "Retrying bulkInsertOtelLogsAndSpans" $ AE.object [("remaining_retries", show n), ("error", show e)]
+          threadDelay (1000000 * (4 - n))
+          retryTimefusion (n - 1) recs
+        Left e -> throwIO e
+        Right count -> pure count
 
-
--- retryTimefusion 0 recs = labeled @"timefusion" @DB $ bulkInsertOtelLogsAndSpans recs
--- retryTimefusion n recs = do
---   tryAny (labeled @"timefusion" @DB $ bulkInsertOtelLogsAndSpans recs) >>= \case
---     Left e | "Connection refused" `T.isInfixOf` T.pack (show e) -> do
---       Log.logAttention "Retrying bulkInsertOtelLogsAndSpans" $ AE.object [("remaining_retries", show n), ("error", show e)]
---       threadDelay (1000000 * (4 - n))
---       retryTimefusion (n - 1) recs
---     Left e -> throwIO e
---     Right count -> pure count
 
 -- Function to insert OtelLogsAndSpans records with all fields in flattened structure
 -- Using direct connection without transaction
