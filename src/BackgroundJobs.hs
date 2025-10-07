@@ -343,27 +343,27 @@ processFiveMinuteSpans scheduledTime pid = do
             [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
                          hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
                   FROM otel_logs_and_spans 
-              WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND name = 'monoscope.http' OFFSET ? LIMIT 70 |]
+              WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND name = 'monoscope.http' OFFSET ? LIMIT 50 |]
             (pid, fiveMinutesAgo, scheduledTime, skip)
       Log.logInfo "Processing HTTP spans from 5-minute window" ("span_count", AE.toJSON $ V.length httpSpans)
       processProjectSpans pid httpSpans fiveMinutesAgo scheduledTime
       Log.logInfo "Processing complete for page " ("skip", skip)
-      Relude.when (V.length httpSpans == 70) $ do
-        processSpansWithPagination fiveMinutesAgo (skip + 70)
+      Relude.when (V.length httpSpans == 50) $ do
+        processSpansWithPagination fiveMinutesAgo (skip + 50)
 
 
 logsPatternExtraction :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
 logsPatternExtraction scheduledTime pid = do
   ctx <- ask @Config.AuthContext
-  tenMinutesAgo <- liftIO $ addUTCTime (-600) <$> Time.currentTime
+  tenMinutesAgo <- liftIO $ addUTCTime (-300) <$> Time.currentTime
   processWithPagination 0 tenMinutesAgo
   Log.logInfo "Completed logs pattern extraction for project" ("project_id", AE.toJSON pid.toText)
   where
-    limitVal = 1000
+    limitVal = 500
     processWithPagination :: Int -> UTCTime -> ATBackgroundCtx ()
     processWithPagination skip tenMinutesAgo = do
       Log.logInfo "Fetching logs for pattern extraction: " ("Skip", skip)
-      otelLogs <- dbtToEff $ query [sql| SELECT id::text, body::text FROM otel_logs_and_spans WHERE project_id = ? and timestamp >= ? and timestamp < ?  and kind = 'log' and log_pattern is null and body is not null and body != 'null' offset ? limit 1000|] (pid, tenMinutesAgo, scheduledTime, skip)
+      otelLogs <- dbtToEff $ query [sql| SELECT id::text, body::text FROM otel_logs_and_spans WHERE project_id = ? and timestamp >= ? and timestamp < ?  and kind = 'log' and log_pattern is null and body is not null and body != 'null' offset ? limit 500|] (pid, tenMinutesAgo, scheduledTime, skip)
       Log.logInfo "Fetched  logs for pattern extraction" ("log_count", AE.toJSON $ V.length otelLogs)
       Relude.when (null otelLogs) $ do
         Log.logInfo "No logs found for pattern extraction" ("project_id", AE.toJSON pid.toText)
@@ -453,7 +453,7 @@ processOneMinuteErrors scheduledTime pid = do
                     OR attributes->>'exception.type' IS NOT NULL
                     OR attributes->>'exception.message' IS NOT NULL
                   )
-                  OFFSET ? LIMIT 500 |]
+                  OFFSET ? LIMIT 50 |]
             (pid, oneMinuteAgo, scheduledTime, skip)
       Log.logInfo "Processing spans with errors from 1-minute window" ("span_count", AE.toJSON $ V.length spansWithErrors)
       let allErrors = Telemetry.getAllATErrors spansWithErrors
@@ -474,6 +474,9 @@ processOneMinuteErrors scheduledTime pid = do
                           WHERE project_id = ? AND context___trace_id = ? AND context___span_id = ? |]
                   (AE.toJSON mappedErrors, pid, firstError.traceId, firstError.spanId)
             pass
+      Relude.when (V.length spansWithErrors == 50) $ do
+        processErrorsPaginated oneMinuteAgo (skip + 50)
+        pass
 
 
 -- Log.logInfo "Completed 1-minute error processing" ()
