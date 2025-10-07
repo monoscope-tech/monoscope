@@ -29,8 +29,6 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Effectful
-import Effectful.Concurrent (Concurrent)
-import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static qualified as Eff
@@ -128,7 +126,7 @@ defaultProjectCache =
 
 processMessages
   -- :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
-  :: (Concurrent :> es, DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es)
+  :: (DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Log :> es, UUIDEff :> es)
   => [(Text, ByteString)]
   -> HashMap Text Text
   -> Eff es [Text]
@@ -351,7 +349,7 @@ processSpanToEntities pjc otelSpan dumpId =
             [ Just endpointHash
             , if isJust shape then Just shapeHash else Nothing
             ]
-          <> V.toList fieldHashes
+            <> V.toList fieldHashes
    in (endpoint, shape, fields', formats', hashes)
   where
     -- Helper function to extract headers from nested attribute structure
@@ -460,7 +458,7 @@ createSpanAttributes rm =
         reqHeaders =
           fromMaybe (AE.object [])
             $ rm.requestHeaders
-            ^? _Object
+              ^? _Object
               >>= \obj ->
                 let pairs = [("http.request.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
                  in Just $ nestedJsonFromDotNotation pairs
@@ -469,7 +467,7 @@ createSpanAttributes rm =
         respHeaders =
           fromMaybe (AE.object [])
             $ rm.responseHeaders
-            ^? _Object
+              ^? _Object
               >>= \obj ->
                 let pairs = [("http.response.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
                  in Just $ nestedJsonFromDotNotation pairs
