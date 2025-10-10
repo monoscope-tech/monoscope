@@ -3,6 +3,7 @@
 
 module Opentelemetry.OtlpServer (processList, runServer) where
 
+import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception.Annotated (checkpoint)
 import Control.Parallel.Strategies (parList, rpar, using)
 import Data.Aeson qualified as AE
@@ -63,36 +64,42 @@ import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.IO.Unsafe (unsafePerformIO)
 import System.Types (runBackground)
 import Utils (b64ToJson, freeTierDailyMaxEvents, nestedJsonFromDotNotation)
 import "base64" Data.ByteString.Base64 qualified as B64
-import Control.Concurrent (forkIO, threadDelay)
-import System.IO.Unsafe (unsafePerformIO)
+
 
 -- | Global error counters for wire type errors
 wireTypeErrorsRef :: IORef (HashMap Text (Int, AE.Value))
 {-# NOINLINE wireTypeErrorsRef #-}
 wireTypeErrorsRef = unsafePerformIO $ IORef.newIORef HashMap.empty
 
+
 -- | Initialize periodic error logging
 initPeriodicErrorLogging :: Log.Logger -> IO ()
 initPeriodicErrorLogging logger = void $ forkIO $ forever $ do
-  threadDelay (60 * 1000000)  -- 60 seconds
+  threadDelay (60 * 1000000) -- 60 seconds
   errors <- IORef.atomicModifyIORef' wireTypeErrorsRef (\m -> (HashMap.empty, m))
   when (not $ HashMap.null errors) $ do
     let totalErrors = sum $ map fst $ HashMap.elems errors
-        errorDetails = AE.object
-          [ "period_seconds" AE..= (60 :: Int)
-          , "total_errors" AE..= totalErrors
-          , "error_types" AE..= AE.object
-              [ AEK.fromText k AE..= AE.object
-                  [ "count" AE..= count
-                  , "example" AE..= example
+        errorDetails =
+          AE.object
+            [ "period_seconds" AE..= (60 :: Int)
+            , "total_errors" AE..= totalErrors
+            , "error_types"
+                AE..= AE.object
+                  [ AEK.fromText k
+                      AE..= AE.object
+                        [ "count" AE..= count
+                        , "example" AE..= example
+                        ]
+                  | (k, (count, example)) <- HashMap.toList errors
                   ]
-              | (k, (count, example)) <- HashMap.toList errors ]
-          ]
-    Log.runLogT "monoscope" logger Log.LogAttention $
-      Log.logAttention "Wire type errors summary" errorDetails
+            ]
+    Log.runLogT "monoscope" logger Log.LogAttention
+      $ Log.logAttention "Wire type errors summary" errorDetails
+
 
 -- | Minimum valid timestamp in nanoseconds (Year 2000)
 -- We consider any timestamp before this as invalid/unset
@@ -269,10 +276,11 @@ processList msgs !attrs = checkpoint "processList" $ do
                   IORef.atomicModifyIORef' wireTypeErrorsRef $ \m ->
                     let updateFn Nothing = Just (1, errorInfo)
                         updateFn (Just (count, example)) = Just (count + 1, example)
-                    in (HashMap.alter updateFn errorKey m, ())
-                else Log.logAttention
-                  "processList:logs: unable to parse logs service request"
-                  (createProtoErrorInfo err (snd $ msgs L.!! idx))
+                     in (HashMap.alter updateFn errorKey m, ())
+                else
+                  Log.logAttention
+                    "processList:logs: unable to parse logs service request"
+                    (createProtoErrorInfo err (snd $ msgs L.!! idx))
             | (idx, (_, Left err)) <- zip [0 ..] decodedMsgs
             ]
 
@@ -369,10 +377,11 @@ processList msgs !attrs = checkpoint "processList" $ do
                   IORef.atomicModifyIORef' wireTypeErrorsRef $ \m ->
                     let updateFn Nothing = Just (1, errorInfo)
                         updateFn (Just (count, example)) = Just (count + 1, example)
-                    in (HashMap.alter updateFn errorKey m, ())
-                else Log.logAttention
-                  "processList:traces: unable to parse traces service request"
-                  (createProtoErrorInfo err (snd $ msgs L.!! idx))
+                     in (HashMap.alter updateFn errorKey m, ())
+                else
+                  Log.logAttention
+                    "processList:traces: unable to parse traces service request"
+                    (createProtoErrorInfo err (snd $ msgs L.!! idx))
             | (idx, (_, Left err)) <- zip [0 ..] decodedMsgs
             ]
 
@@ -407,7 +416,7 @@ processList msgs !attrs = checkpoint "processList" $ do
                         IORef.atomicModifyIORef' wireTypeErrorsRef $ \m ->
                           let updateFn Nothing = Just (1, errorInfo)
                               updateFn (Just (count, example)) = Just (count + 1, example)
-                          in (HashMap.alter updateFn errorKey m, ())
+                           in (HashMap.alter updateFn errorKey m, ())
                       else Log.logAttention "processList:metrics: unable to parse metrics service request" (createProtoErrorInfo err msg)
                     pure (ackId, V.empty)
                   Right metricReq -> checkpoint "processList:metrics:getProjectId" do
