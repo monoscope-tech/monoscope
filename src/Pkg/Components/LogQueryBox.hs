@@ -73,7 +73,7 @@ logQueryBox_ config = do
                   on keydown[key=='Space' and shiftKey] from document set #ai-search-chkbox.checked to true
                   |]
               ]
-            <> [checked_ | isJust config.targetWidgetPreview]
+              <> [checked_ | isJust config.targetWidgetPreview]
           script_
             [text|
             document.addEventListener('keydown', function(e) {
@@ -86,9 +86,7 @@ logQueryBox_ config = do
               }
             });
             window.handleVisualizationUpdate = function(vizType, widgetId) {
-              console.log("handleVisualizationUpdate => ", vizType);
               window.requestAnimationFrame(() => {
-                console.log("handleVisualizationUpdate => ", vizType);
                 updateVizTypeInUrl(vizType);
                 document.querySelector(`#visualizationTabs input[value='$${vizType}']`).checked = true;
                 window.widgetJSON.type = vizType;
@@ -211,7 +209,7 @@ logQueryBox_ config = do
                      end
                   |]
                 ]
-              <> [checked_ | config.alert]
+                <> [checked_ | config.alert]
             span_ "create alert"
 
   -- Include initialization code for the query editor
@@ -251,7 +249,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
                           end
                        |]
               ]
-            <> [checked_ | vizType == defaultVizType]
+              <> [checked_ | vizType == defaultVizType]
           span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
           span_ [] $ toHtml label
 
@@ -328,7 +326,7 @@ queryLibItem_ isRecent qli =
           whenJust qli.title (\title -> span_ [class_ "font-medium text-sm"] $ toHtml title <> " •")
           small_ [class_ "text-textWeak text-xs whitespace-nowrap"]
             $ toHtml (displayTimestamp $ formatUTC qli.createdAt)
-            >> when qli.byMe " • by me"
+              >> when qli.byMe " • by me"
         code_ [class_ "queryText text-xs block whitespace-pre-wrap break-words opacity-75"] $ toHtml qli.queryText
 
       -- Actions (simplified, shown on hover)

@@ -736,7 +736,7 @@ apiLogsPage page = do
             , Widget.sql =
                 Just
                   [text| SELECT timeB::integer, quantiles[idx] AS quantile, COALESCE(values[idx], 0)::float AS value
-                              FROM ( SELECT extract(epoch from time_bucket('1 hour', timestamp))::integer AS timeB,
+                              FROM ( SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS timeB,
                                       ARRAY[
                                         COALESCE(((approx_percentile(0.50, percentile_agg(duration))::float / 1000000.0)::float), 0)::float,
                                         COALESCE(((approx_percentile(0.75, percentile_agg(duration))::float / 1000000.0)::float), 0)::float,
@@ -1193,8 +1193,8 @@ alertConfigurationForm_ pid alertM = do
                                      })
                                    end|]
                             ]
-                          ++ [required_ "" | req]
-                          ++ [value_ (maybe "" (show) vM) | isJust vM]
+                            ++ [required_ "" | req]
+                            ++ [value_ (maybe "" (show) vM) | isJust vM]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)

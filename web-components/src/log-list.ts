@@ -1139,7 +1139,11 @@ export class LogList extends LitElement {
   private parseSummaryData(dataArr: any[]): string[] {
     const summary = lookupVecValue<string[] | string>(dataArr, this.colIdxMap, 'summary');
     if (Array.isArray(summary)) return summary;
-    try { return typeof summary === 'string' ? JSON.parse(summary) : []; } catch { return []; }
+    try {
+      return typeof summary === 'string' ? JSON.parse(summary) : [];
+    } catch {
+      return [];
+    }
   }
 
   // Ultra-optimized renderSummaryElements using closure for caching
@@ -2099,11 +2103,6 @@ function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<
       // Sort all children by startNs (execution order) instead of timestamp
       spanMap.forEach((span) => {
         if (span.children.length > 1) {
-          span.children.forEach((chl) => {
-            if (chl.type == 'log') {
-              console.log(chl);
-            }
-          });
           span.children.sort((a, b) => a.startNs - b.startNs);
         }
       });

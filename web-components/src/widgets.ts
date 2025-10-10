@@ -29,7 +29,7 @@ const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt
     barMinHeight: '1',
     encode: { x: 0, y: i + 1 },
   };
-  
+
   // For line charts in dark mode, override the symbol to avoid white centers
   if (widgetData.chartType === 'line' && isDarkMode) {
     seriesOpt.symbol = 'circle'; // Use filled circle instead of empty circle
@@ -46,17 +46,17 @@ const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt
 
 const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) => {
   if (!data) return opt;
-  
+
   // Avoid unnecessary updates if data structure hasn't changed
   const cols = data[0]?.slice(1);
   const currentLegendData = opt.legend?.data;
-  
+
   // Only update if legend data has actually changed
   if (JSON.stringify(cols) !== JSON.stringify(currentLegendData)) {
     opt.series = cols?.map((n: any, i: number) => createSeriesConfig(widgetData, n, i, opt));
     opt.legend.data = cols;
   }
-  
+
   return opt;
 };
 
@@ -64,12 +64,12 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   if (!shouldFetch) return;
 
   const { query, querySQL, pid, chartId, summarizeBy, summarizeByPrefix } = widgetData;
-  
+
   // Batch DOM updates before fetch
   requestAnimationFrame(() => {
     const loader = $(`${chartId}_loader`);
     const borderedItem = $(`${chartId}_bordered`);
-    
+
     if (loader) loader.classList.remove('hidden');
     if (borderedItem) borderedItem.classList.add('spotlight-border');
   });
@@ -139,7 +139,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     requestAnimationFrame(() => {
       const loader = $(`${chartId}_loader`);
       const borderedItem = $(`${chartId}_bordered`);
-      
+
       if (loader) loader.classList.add('hidden');
       if (borderedItem) borderedItem.classList.remove('spotlight-border');
     });
@@ -182,9 +182,9 @@ const processResizeQueue = () => {
     resizeFrameScheduled = false;
     return;
   }
-  
+
   // Process all queued resizes in a single frame
-  resizeQueue.forEach(chartId => {
+  resizeQueue.forEach((chartId) => {
     const chartEl = $(chartId);
     if (chartEl) {
       const chart = (window as any).echarts.getInstanceByDom(chartEl);
@@ -193,14 +193,14 @@ const processResizeQueue = () => {
       }
     }
   });
-  
+
   resizeQueue.clear();
   resizeFrameScheduled = false;
 };
 
 const queueChartResize = (chartId: string) => {
   resizeQueue.add(chartId);
-  
+
   if (!resizeFrameScheduled) {
     resizeFrameScheduled = true;
     requestAnimationFrame(processResizeQueue);
@@ -249,15 +249,15 @@ const chartWidget = (widgetData: WidGetData) => {
     textColor: computedStyle.getPropertyValue('--color-textWeak').trim(),
     tooltipBg: computedStyle.getPropertyValue('--color-bgRaised').trim(),
     tooltipTextColor: computedStyle.getPropertyValue('--color-textStrong').trim(),
-    tooltipBorderColor: computedStyle.getPropertyValue('--color-borderWeak').trim()
+    tooltipBorderColor: computedStyle.getPropertyValue('--color-borderWeak').trim(),
   };
-  
+
   if (styles.textColor) {
     opt.legend = opt.legend || {};
     opt.legend.textStyle = opt.legend.textStyle || {};
     opt.legend.textStyle.color = styles.textColor;
   }
-  
+
   // Configure tooltip styling
   opt.tooltip = opt.tooltip || {};
   opt.tooltip.backgroundColor = styles.tooltipBg || (isDarkMode ? 'rgba(50, 50, 50, 0.9)' : 'rgba(255, 255, 255, 0.9)');
@@ -265,12 +265,12 @@ const chartWidget = (widgetData: WidGetData) => {
   opt.tooltip.textStyle.color = styles.tooltipTextColor || (isDarkMode ? '#e0e0e0' : '#333');
   opt.tooltip.borderColor = styles.tooltipBorderColor || (isDarkMode ? '#555' : '#ccc');
   opt.tooltip.borderWidth = 1;
-  
+
   // Override server's background style with theme-appropriate one
   if (opt.series?.[0]?.backgroundStyle) {
     opt.series[0].backgroundStyle = isDarkMode ? DARK_BACKGROUND_STYLE : DEFAULT_BACKGROUND_STYLE;
   }
-  
+
   chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source));
 
   // Expose threshold functionality on chart element
@@ -300,7 +300,7 @@ const chartWidget = (widgetData: WidGetData) => {
       color: isDarkMode ? '#1A74A8' : '#1A74A8',
       textColor: isDarkMode ? '#e0e0e0' : '#333',
       maskColor: isDarkMode ? 'rgba(30, 30, 30, 0.8)' : 'rgba(255, 255, 255, 0.8)',
-      zlevel: 0
+      zlevel: 0,
     });
     new IntersectionObserver(
       (entries, observer) => entries[0]?.isIntersecting && (updateChartData(chart, opt, true, widgetData), observer.disconnect())
@@ -339,14 +339,14 @@ const chartWidget = (widgetData: WidGetData) => {
   // Listen for theme changes
   let themeChangeScheduled = false;
   const observer = new MutationObserver((mutations) => {
-    const themeChanged = mutations.some(m => m.type === 'attributes' && m.attributeName === 'data-theme');
-    
+    const themeChanged = mutations.some((m) => m.type === 'attributes' && m.attributeName === 'data-theme');
+
     if (themeChanged && !themeChangeScheduled) {
       themeChangeScheduled = true;
-      
+
       requestAnimationFrame(() => {
         const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
-        
+
         // Get CSS variable values from body (where theme is applied)
         // Cache all computed style reads to minimize reflows
         const computedStyle = getComputedStyle(document.body);
@@ -354,16 +354,16 @@ const chartWidget = (widgetData: WidGetData) => {
           textColor: computedStyle.getPropertyValue('--color-textWeak').trim(),
           tooltipBg: computedStyle.getPropertyValue('--color-bgRaised').trim(),
           tooltipTextColor: computedStyle.getPropertyValue('--color-textStrong').trim(),
-          tooltipBorderColor: computedStyle.getPropertyValue('--color-borderWeak').trim()
+          tooltipBorderColor: computedStyle.getPropertyValue('--color-borderWeak').trim(),
         };
-        
+
         // Update theme-related options
         if (styles.textColor) {
           opt.legend = opt.legend || {};
           opt.legend.textStyle = opt.legend.textStyle || {};
           opt.legend.textStyle.color = styles.textColor;
         }
-        
+
         // Configure tooltip styling
         opt.tooltip = opt.tooltip || {};
         opt.tooltip.backgroundColor = styles.tooltipBg || (isDarkMode ? 'rgba(50, 50, 50, 0.9)' : 'rgba(255, 255, 255, 0.9)');
@@ -371,7 +371,7 @@ const chartWidget = (widgetData: WidGetData) => {
         opt.tooltip.textStyle.color = styles.tooltipTextColor || (isDarkMode ? '#e0e0e0' : '#333');
         opt.tooltip.borderColor = styles.tooltipBorderColor || (isDarkMode ? '#555' : '#ccc');
         opt.tooltip.borderWidth = 1;
-        
+
         // Update background style for series
         if (opt.series?.[0]) {
           opt.series.forEach((s: any) => {
@@ -380,7 +380,7 @@ const chartWidget = (widgetData: WidGetData) => {
             }
           });
         }
-        
+
         // Apply updated options without recreating the chart
         chart.setOption(opt, false);
         themeChangeScheduled = false;
@@ -390,7 +390,7 @@ const chartWidget = (widgetData: WidGetData) => {
 
   observer.observe(document.body, {
     attributes: true,
-    attributeFilter: ['data-theme']
+    attributeFilter: ['data-theme'],
   });
 };
 
@@ -442,32 +442,32 @@ function buildWidgetOrder(container: HTMLElement) {
   // Use :scope to select only direct children.
   const items = container.querySelectorAll(':scope > .grid-stack-item') as NodeListOf<HTMLElement & { gridstackNode: Record<string, any> }>;
   const order: Record<string, any> = {};
-  
+
   // Batch read all layout properties first
-  const itemsData: Array<{el: HTMLElement, id: string, node: any, nestedGrid: HTMLElement | null}> = [];
-  
+  const itemsData: Array<{ el: HTMLElement; id: string; node: any; nestedGrid: HTMLElement | null }> = [];
+
   items.forEach((el) => {
     if (!el.id || !el.id.endsWith('_widgetEl')) return;
     const widgetId = el.id.slice(0, -'_widgetEl'.length);
     const nestedGrid = el.querySelector('.nested-grid') as HTMLElement | null;
-    
+
     itemsData.push({
       el,
       id: widgetId,
       node: el.gridstackNode,
-      nestedGrid
+      nestedGrid,
     });
   });
-  
+
   // Now process the collected data without further DOM reads
-  itemsData.forEach(({id, node, nestedGrid}) => {
+  itemsData.forEach(({ id, node, nestedGrid }) => {
     const reorderItem: any = {
       x: node.x,
       y: node.y,
       w: node.w,
       h: node.h,
     };
-    
+
     if (nestedGrid) {
       const childOrder = buildWidgetOrder(nestedGrid);
       if (Object.keys(childOrder).length > 0) {
@@ -476,7 +476,7 @@ function buildWidgetOrder(container: HTMLElement) {
     }
     order[id] = reorderItem;
   });
-  
+
   return order;
 }
 
@@ -538,7 +538,7 @@ window.bindFunctionsToObjects = bindFunctionsToObjects;
 // Threshold line configurations
 const THRESHOLDS = {
   alert: { color: '#dc2626', formatter: 'Alert: {c}' },
-  warning: { color: '#f59e0b', formatter: 'Warning: {c}' }
+  warning: { color: '#f59e0b', formatter: 'Warning: {c}' },
 } as const;
 
 // Create threshold markLines for ECharts
@@ -549,18 +549,18 @@ export const createThresholdMarkLines = (thresholds: Record<string, number>) =>
       yAxis: value,
       name: type,
       label: { formatter: THRESHOLDS[type as keyof typeof THRESHOLDS]?.formatter || `${type}: {c}`, position: 'end' },
-      lineStyle: { color: THRESHOLDS[type as keyof typeof THRESHOLDS]?.color || '#999', width: 2, type: 'dashed' }
+      lineStyle: { color: THRESHOLDS[type as keyof typeof THRESHOLDS]?.color || '#999', width: 2, type: 'dashed' },
     }));
 
 // Apply thresholds to a chart
 export const applyThresholds = (chart: any, thresholds: Record<string, number>) => {
   const option = chart?.getOption();
   if (!option?.series?.length) return;
-  
+
   chart.setOption({
     series: option.series.map((s: any) => ({
       ...s,
-      markLine: { silent: true, symbol: 'none', data: createThresholdMarkLines(thresholds) }
-    }))
+      markLine: { silent: true, symbol: 'none', data: createThresholdMarkLines(thresholds) },
+    })),
   });
 };
