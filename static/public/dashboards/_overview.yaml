@@ -133,12 +133,16 @@ tabs:
           - field: throughput
             title: Throughput
             unit: req/min
+            progress: column_percent
           - field: error_rate
             title: Error Rate
             unit: '%'
+            progress: value_percent
+            progress_variant: error
           - field: p95_latency
             title: P95 Latency
             unit: ms
+            progress: column_percent
         sql: |
           SELECT 
             resource___service___name as service_name,
@@ -509,15 +513,20 @@ tabs:
             title: Operation
           - field: count
             title: Count
+            progress: column_percent
           - field: error_rate
             title: Error Rate
             unit: '%'
+            progress: value_percent
+            progress_variant: error
           - field: avg_duration
             title: Avg Duration
             unit: ms
+            progress: column_percent
           - field: p95_duration
             title: P95 Duration
             unit: ms
+            progress: column_percent
         sql: |
           SELECT 
             name as operation_name,
@@ -654,16 +663,23 @@ tabs:
             title: Resource Name
           - field: requests
             title: Requests
+            progress: column_percent
           - field: total_time
             title: Total Time
             unit: s
+            progress: column_percent
           - field: p95_latency
             title: P95 Latency
             unit: ms
+            progress: column_percent
           - field: errors
             title: Errors
+            progress: column_percent
+            progress_variant: error
           - field: error_rate
             title: Error Rate (%)
+            progress: value_percent
+            progress_variant: error
         sql: |
           SELECT 
             name as resource_name,
@@ -967,15 +983,20 @@ tabs:
             title: Database Type
           - field: operations
             title: Operations
+            progress: column_percent
           - field: avg_duration
             title: Avg Duration
             unit: ms
+            progress: column_percent
           - field: error_rate
             title: Error Rate
             unit: '%'
+            progress: value_percent
+            progress_variant: error
           - field: throughput
             title: Throughput
             unit: ops/min
+            progress: column_percent
         sql: |
           SELECT
             attributes___db___system___name as db_system,

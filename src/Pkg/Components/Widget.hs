@@ -174,6 +174,8 @@ data TableColumn = TableColumn
   , link :: Maybe Text
   , width :: Maybe Text
   , align :: Maybe Text
+  , progress :: Maybe Text -- "column_percent" or "value_percent"
+  , progressVariant :: Maybe Text -- "default", "info", "error", etc.
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, NFData)
@@ -307,12 +309,12 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                  <> maybeToMonoid (widget._projectId <&> (.toText))
-                  <> "/dashboards/"
-                  <> maybeToMonoid widget._dashboardId
-                  <> "/widgets/"
-                  <> wId
-                  <> "/duplicate"
+                    <> maybeToMonoid (widget._projectId <&> (.toText))
+                    <> "/dashboards/"
+                    <> maybeToMonoid widget._dashboardId
+                    <> "/widgets/"
+                    <> wId
+                    <> "/duplicate"
               , hxTrigger_ "click"
               , [__| on click set (the closest <details/>).open to false
                      on htmx:beforeSwap
@@ -350,6 +352,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
 
 
 -- Table widget rendering
+-- class_ "progress-brand "
 renderTable :: Widget -> Html ()
 renderTable widget = do
   let tableId = maybeToMonoid widget.id
@@ -362,7 +365,7 @@ renderTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-            <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ tableId <> "_bordered"
         ]
         do
@@ -415,6 +418,19 @@ renderTable widget = do
               // Skip header row if present
               const startIdx = data.headers ? 1 : 0;
               
+              // Calculate max values for column percentages
+              const maxValues = {};
+              if (columns.some(col => col.progress === 'column_percent')) {
+                columns.forEach(col => {
+                  if (col.progress === 'column_percent') {
+                    maxValues[col.field] = Math.max(...data.data_text.slice(startIdx).map(row => {
+                      const val = parseFloat(row[col.field] || row[columns.indexOf(col)] || 0);
+                      return isNaN(val) ? 0 : val;
+                    }));
+                  }
+                });
+              }
+              
               data.data_text.slice(startIdx).forEach(row => {
                 const tr = document.createElement('tr');
                 tr.className = 'hover cursor-pointer';
@@ -423,8 +439,68 @@ renderTable widget = do
                   const td = document.createElement('td');
                   td.className = col.align || '';
                   const value = row[col.field] || row[idx] || '';
-                  td.textContent = value;
-                  if (col.unit) td.textContent += ' ' + col.unit;
+                  
+                  if (col.progress) {
+                    // Create progress container
+                    const container = document.createElement('div');
+                    container.className = 'flex items-center gap-2';
+                    
+                    // Format and pad the number value
+                    const numValue = parseFloat(value);
+                    let formattedValue = value;
+                    
+                    if (!isNaN(numValue)) {
+                      // Use the global formatNumber function if available
+                      if (typeof window.formatNumber === 'function') {
+                        formattedValue = window.formatNumber(numValue);
+                      } else {
+                        // Fallback to simple formatting
+                        formattedValue = numValue.toFixed(1);
+                      }
+                    }
+                    
+                    // Add text value with fixed width for perfect alignment
+                    const textSpan = document.createElement('span');
+                    textSpan.className = 'inline-block text-right';
+                    textSpan.style.width = '6rem'; // Fixed width to ensure all progress bars start at same position
+                    textSpan.textContent = formattedValue;
+                    if (col.unit) textSpan.textContent += ' ' + col.unit;
+                    container.appendChild(textSpan);
+                    
+                    // Calculate progress percentage
+                    let percentage = 0;
+                    if (!isNaN(numValue)) {
+                      if (col.progress === 'value_percent') {
+                        percentage = Math.min(100, Math.max(0, numValue));
+                      } else if (col.progress === 'column_percent' && maxValues[col.field] > 0) {
+                        percentage = (numValue / maxValues[col.field]) * 100;
+                      }
+                    }
+                    
+                    // Create progress bar
+                    const progress = document.createElement('progress');
+                    progress.className = 'progress w-12 ml-2';
+                    progress.value = percentage;
+                    progress.max = 100;
+                    
+                    // Add variant class - default is info
+                    if (col.progressVariant === 'error') {
+                      progress.className += ' progress-error';
+                    } else if (col.progressVariant === 'warning') {
+                      progress.className += ' progress-warning';
+                    } else if (col.progressVariant === 'success') {
+                      progress.className += ' progress-success';
+                    } else {
+                      progress.className += ' progress-brand';
+                    }
+                    
+                    container.appendChild(progress);
+                    td.appendChild(container);
+                  } else {
+                    td.textContent = value;
+                    if (col.unit) td.textContent += ' ' + col.unit;
+                  }
+                  
                   tr.appendChild(td);
                 });
                 
@@ -492,7 +568,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ chartId <> "_bordered"
         ]
         do
