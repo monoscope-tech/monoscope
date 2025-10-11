@@ -538,159 +538,149 @@ tabs:
 
   - name: Resources
     icon: routes
-    requires: resource
     widgets:
-      # Resource Stats
-      - type: group
-        title: Resource Performance
-        layout: { w: 12, h: 4 }
-        children:
-          - type: 'timeseries_stat'
-            title: 'Resource Requests'
-            icon: list-tree
-            sql: |
-              SELECT 
-                extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-                '' as series,
-                COUNT(*)::float as value
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND name = '{{var-resource}}'
-                {{time_filter}}
-              GROUP BY time
-              ORDER BY time DESC
-              LIMIT 200
-            unit: reqs
-            layout: { w: 3, h: 2 }
-
-          - type: 'stat'
-            title: 'Resource Error Rate'
-            icon: bug
-            sql: |
-              SELECT ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400) * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::float
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND name = '{{var-resource}}'
-                {{time_filter}}
-            unit: '%'
-            layout: { w: 3, h: 2 }
-
-          - type: 'stat'
-            title: 'Avg Latency'
-            icon: activity
-            sql: |
-              SELECT ROUND((AVG(duration) / 1e6)::numeric, 2)::float
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND name = '{{var-resource}}'
-                AND duration IS NOT NULL
-                {{time_filter}}
-            unit: ms
-            layout: { w: 3, h: 2 }
-
-          - type: 'stat'
-            title: 'P95 Latency'
-            icon: trending-up
-            sql: |
-              SELECT ROUND((approx_percentile(0.95, percentile_agg(duration))::numeric / 1e6), 2)::float
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND name = '{{var-resource}}'
-                AND duration IS NOT NULL
-                {{time_filter}}
-            unit: ms
-            layout: { w: 3, h: 2 }
-
-      # Resource Request Volume
+      # Three charts in one row
       - type: 'timeseries'
-        title: 'Resource Requests by Status Code'
+        title: 'Requests'
         sql: |
-          SELECT 
-            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            COALESCE(attributes___http___response___status_code::text, 'unknown') as status_code,
-            COUNT(*)::float as count
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND name = '{{var-resource}}'
-            {{time_filter}}
-          GROUP BY time, attributes___http___response___status_code
-          ORDER BY time DESC
-          LIMIT 1000
-        unit: reqs
-        layout: { w: 6, h: 4 }
-
-      # Resource Latency Distribution
-      - type: 'timeseries_line'
-        title: 'Resource Latency Percentiles (ms)'
-        hide_subtitle: true
-        summarize_by: max
-        sql: |
-          SELECT timeB, quantile, value
-          FROM (
-            SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS timeB,
-                   ARRAY[
-                     (approx_percentile(0.50, percentile_agg(duration)) / 1e6)::float,
-                     (approx_percentile(0.75, percentile_agg(duration)) / 1e6)::float,
-                     (approx_percentile(0.90, percentile_agg(duration)) / 1e6)::float,
-                     (approx_percentile(0.95, percentile_agg(duration)) / 1e6)::float,
-                     (approx_percentile(0.99, percentile_agg(duration)) / 1e6)::float
-                   ] AS values,
-                   ARRAY['p50', 'p75', 'p90', 'p95', 'p99'] AS quantiles
+          WITH top_resources AS (
+            SELECT name
             FROM otel_logs_and_spans
             WHERE project_id='{{project_id}}'
-              AND name = '{{var-resource}}'
-              AND duration IS NOT NULL
+              AND name IS NOT NULL
+              AND kind = 'server'
               {{time_filter}}
-            GROUP BY timeB
-          ) s,
-          LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
-        layout: { w: 6, h: 4 }
-
-      # Resource Errors
-      - type: 'timeseries'
-        title: 'Resource Errors'
-        theme: 'roma'
-        sql: |
+            GROUP BY name
+            ORDER BY COUNT(*) DESC
+            LIMIT 20
+          )
           SELECT 
             extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            COALESCE(attributes___http___response___status_code::text, 'ERROR') as status_code,
-            COUNT(*)::float as count
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND name = '{{var-resource}}'
-            AND (status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400)
+            CASE 
+              WHEN tr.name IS NOT NULL THEN o.name 
+              ELSE 'Others'
+            END as resource,
+            COUNT(*)::float as value
+          FROM otel_logs_and_spans o
+          LEFT JOIN top_resources tr ON o.name = tr.name
+          WHERE o.project_id='{{project_id}}'
+            AND o.name IS NOT NULL
+            AND o.kind = 'server'
             {{time_filter}}
-          GROUP BY time, attributes___http___response___status_code
+          GROUP BY time, CASE WHEN tr.name IS NOT NULL THEN o.name ELSE 'Others' END
           ORDER BY time DESC
-          LIMIT 1000
-        layout: { w: 6, h: 4 }
+          LIMIT 2000
+        unit: reqs
+        layout: { w: 4, h: 3 }
 
-      # Resource Traces Sample
-      - type: traces
-        title: 'Recent Traces'
-        layout: { w: 12, h: 6 }
+      - type: 'timeseries_line'
+        title: 'P95 Latency'
         sql: |
-          SELECT *
+          WITH top_resources AS (
+            SELECT name
+            FROM otel_logs_and_spans
+            WHERE project_id='{{project_id}}'
+              AND name IS NOT NULL
+              AND kind = 'server'
+              {{time_filter}}
+            GROUP BY name
+            ORDER BY COUNT(*) DESC
+            LIMIT 20
+          )
+          SELECT 
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
+            CASE 
+              WHEN tr.name IS NOT NULL THEN o.name 
+              ELSE 'Others'
+            END as resource,
+            (approx_percentile(0.95, percentile_agg(o.duration)) / 1e6)::float as value
+          FROM otel_logs_and_spans o
+          LEFT JOIN top_resources tr ON o.name = tr.name
+          WHERE o.project_id='{{project_id}}'
+            AND o.name IS NOT NULL
+            AND o.kind = 'server'
+            AND o.duration IS NOT NULL
+            {{time_filter}}
+          GROUP BY time, CASE WHEN tr.name IS NOT NULL THEN o.name ELSE 'Others' END
+          ORDER BY time DESC
+          LIMIT 2000
+        unit: ms
+        layout: { w: 4, h: 3 }
+
+      - type: 'timeseries'
+        title: 'Errors'
+        theme: 'roma'
+        sql: |
+          WITH top_resources AS (
+            SELECT name
+            FROM otel_logs_and_spans
+            WHERE project_id='{{project_id}}'
+              AND name IS NOT NULL
+              AND kind = 'server'
+              {{time_filter}}
+            GROUP BY name
+            ORDER BY COUNT(*) DESC
+            LIMIT 20
+          )
+          SELECT 
+            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
+            CASE 
+              WHEN tr.name IS NOT NULL THEN o.name 
+              ELSE 'Others'
+            END as resource,
+            COUNT(*)::float as value
+          FROM otel_logs_and_spans o
+          LEFT JOIN top_resources tr ON o.name = tr.name
+          WHERE o.project_id='{{project_id}}'
+            AND o.name IS NOT NULL
+            AND o.kind = 'server'
+            AND (o.status_code = 'ERROR' OR COALESCE(o.attributes___http___response___status_code, 0) >= 400)
+            {{time_filter}}
+          GROUP BY time, CASE WHEN tr.name IS NOT NULL THEN o.name ELSE 'Others' END
+          ORDER BY time DESC
+          LIMIT 2000
+        unit: errors
+        layout: { w: 4, h: 3 }
+
+      # Full width resource table
+      - type: table
+        title: 'Resources Overview'
+        layout: { w: 12, h: 8 }
+        on_row_click:
+          set_variable: resource
+          value: '{{row.resource_name}}'
+        columns:
+          - field: resource_name
+            title: Resource Name
+          - field: requests
+            title: Requests
+          - field: total_time
+            title: Total Time
+            unit: s
+          - field: p95_latency
+            title: P95 Latency
+            unit: ms
+          - field: errors
+            title: Errors
+          - field: error_rate
+            title: Error Rate (%)
+        sql: |
+          SELECT 
+            name as resource_name,
+            COUNT(*)::text as requests,
+            ROUND((SUM(duration) / 1e9)::numeric, 2)::text as total_time,
+            ROUND((approx_percentile(0.95, percentile_agg(duration))::numeric / 1e6), 2)::text as p95_latency,
+            COUNT(*) FILTER (WHERE status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400)::text as errors,
+            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400) * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::text as error_rate
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
-            AND name = '{{var-resource}}'
+            AND name IS NOT NULL
+            AND kind = 'server'
             {{time_filter}}
-          ORDER BY timestamp DESC
-          LIMIT 10
-
-      # Error Logs
-      - type: logs
-        title: 'Resource Error Logs'
-        layout: { w: 12, h: 6 }
-        sql: |
-          SELECT *
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND name = '{{var-resource}}'
-            AND level IN ('ERROR', 'WARN')
-            {{time_filter}}
-          ORDER BY timestamp DESC
+          GROUP BY name
+          ORDER BY COUNT(*) DESC
           LIMIT 100
+
 
   - name: Traces
     icon: activity
