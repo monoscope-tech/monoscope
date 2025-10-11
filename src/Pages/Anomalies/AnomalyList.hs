@@ -803,8 +803,13 @@ renderIssue hideByDefault currTime timeFilter issue isWidget = do
         Issues.RuntimeException -> do
           case AE.fromJSON (getAeson issue.issueData) of
             AE.Success (exceptionData :: Issues.RuntimeExceptionData) -> do
-              div_ [class_ "bg-fillError-weak border overflow-x-scroll border-strokeError-weak rounded-lg p-4 text-sm font-mono text-fillError-strong mb-4"] do
-                pre_ [class_ "whitespace-pre-wrap"] $ toHtml exceptionData.stackTrace
+              div_ [class_ "border border-strokeError-weak rounded-lg group/er mb-4"] do
+                label_ [class_ "text-sm text-textWeak font semibold rounded-lg p-2 flex gap-2 items-center"] do
+                  faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.err-input:checked]/er:rotate-90"
+                  "Stack trace"
+                  input_ [class_ "err-input w-0 h-0 opacity-0", type_ "checkbox"]
+                div_ [class_ "bg-fillError-weak p-4 overflow-x-scroll hidden group-has-[.err-input:checked]/er:block text-sm font-mono text-fillError-strong"] do
+                  pre_ [class_ "whitespace-pre-wrap "] $ toHtml exceptionData.stackTrace
             _ -> pass
         Issues.QueryAlert -> do
           case AE.fromJSON (getAeson issue.issueData) of
@@ -847,9 +852,9 @@ renderIssue hideByDefault currTime timeFilter issue isWidget = do
         button_
           [ class_
               $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
-              <> if isAcknowledged
-                then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80"
-                else "bg-fillPrimary text-textInverse-strong hover:bg-fillPrimary/90"
+                <> if isAcknowledged
+                  then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80"
+                  else "bg-fillPrimary text-textInverse-strong hover:bg-fillPrimary/90"
           , hxGet_ acknowledgeEndpoint
           , hxSwap_ "outerHTML"
           , hxTarget_ "closest .itemsListItem"
@@ -864,9 +869,9 @@ renderIssue hideByDefault currTime timeFilter issue isWidget = do
         button_
           [ class_
               $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
-              <> if isArchived
-                then "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak hover:bg-fillWarning-weak/80"
-                else "border border-strokeWeak text-textStrong hover:bg-fillWeak"
+                <> if isArchived
+                  then "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak hover:bg-fillWarning-weak/80"
+                  else "border border-strokeWeak text-textStrong hover:bg-fillWeak"
           , hxGet_ archiveEndpoint
           , hxSwap_ "outerHTML"
           , hxTarget_ "closest .itemsListItem"
@@ -1168,7 +1173,7 @@ anomalyAcknowlegeButton pid aid acked host = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
-        <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+          <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" "acknowlege issue"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -1184,7 +1189,7 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
-        <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+          <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"
