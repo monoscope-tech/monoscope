@@ -22,7 +22,7 @@ import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Text.Printf (printf)
 import Text.Slugify (slugify)
-import Utils (faSprite_, onpointerdown_, prettyPrintCount)
+import Utils (faSprite_, onpointerdown_, prettyPrintCount, prettyPrintDuration)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData, parseQueryParam)
 
@@ -191,6 +191,7 @@ data TableColumn = TableColumn
   , align :: Maybe Text
   , progress :: Maybe Text -- "column_percent" or "value_percent"
   , progressVariant :: Maybe Text -- "default", "info", "error", etc.
+  , columnType :: Maybe Text -- "number", "duration", "text" (default)
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
@@ -771,18 +772,21 @@ renderTableWithData widget dataRows = do
       -- Calculate max values for column percentages
       let maxValues = calculateMaxValues columns dataRows
 
+      -- Calculate max formatted width for each progress column
+      let valueWidths = M.fromList
+            [(col.field, foldr max 5 [T.length (formatColumnValue col (fromMaybe "" $ row V.!? idx)) | row <- V.toList dataRows])
+            | (col, idx) <- zip columns [0..], isJust col.progress]
+
       -- Render table rows
       forM_ (V.toList dataRows) \row -> do
         let rowData = AE.object [(K.fromText col.field, AE.String $ getRowValue col idx row) | (col, idx) <- zip columns [0 ..]]
         tr_ [class_ "hover cursor-pointer", data_ "row" (decodeUtf8 $ fromLazy $ AE.encode rowData)] do
           forM_ (zip columns [0 ..]) \(col, idx) -> do
             let value = getRowValue col idx row
-            td_ [class_ $ fromMaybe "" col.align] do
+            td_ [class_ $ fromMaybe "" col.align <> if col.columnType `elem` [Just ("number" :: Text), Just ("duration" :: Text)] then " monospace" else ""] do
               if isJust col.progress
-                then renderProgressCell col value maxValues
-                else do
-                  toHtml value
-                  whenJust col.unit \u -> toHtml $ " " <> u
+                then renderProgressCell col value maxValues valueWidths
+                else toHtml $ formatColumnValue col value
 
 
 -- Helper to get row value by column index or field name
@@ -803,18 +807,19 @@ calculateMaxValues columns dataRows =
 
 
 -- Render a progress bar cell
-renderProgressCell :: TableColumn -> Text -> M.Map Text Double -> Html ()
-renderProgressCell col value maxValues = do
+renderProgressCell :: TableColumn -> Text -> M.Map Text Double -> M.Map Text Int -> Html ()
+renderProgressCell col value maxValues valueWidths = do
   div_ [class_ "flex items-center gap-2"] do
-    -- Format and display the value
-    let numValue = fromMaybe 0 $ readMaybe (T.unpack value) :: Double
-    let formattedValue = T.pack $ printf "%.1f" numValue
+    -- Format and display the value using the same logic as formatColumnValue
+    let formattedValue = formatColumnValue col value
+    -- Use calculated max width for this column
+    let width = M.findWithDefault 8 col.field valueWidths
 
-    span_ [class_ "inline-block text-right", style_ "width: 5ch"] do
+    span_ [class_ "inline-block text-left monospace", style_ $ "width: " <> show width <> "ch"] do
       toHtml formattedValue
-      whenJust col.unit \u -> toHtml $ " " <> u
 
     -- Calculate progress percentage
+    let numValue = fromMaybe 0 $ readMaybe (T.unpack value) :: Double
     let percentage = case col.progress of
           Just "value_percent" -> min 100 (max 0 numValue)
           Just "column_percent" -> case M.lookup col.field maxValues of
@@ -834,3 +839,30 @@ getProgressVariantClass variant = case variant of
   Just "warning" -> "progress-warning"
   Just "success" -> "progress-success"
   _ -> "progress-brand"
+
+
+-- Format column value based on column type
+formatColumnValue :: TableColumn -> Text -> Text
+formatColumnValue col value = case col.columnType of
+  Just "number" -> 
+    case readMaybe (T.unpack value) :: Maybe Double of
+      Just n -> 
+        let formatted = if n < 100 && n /= fromIntegral (round n :: Int)
+              then T.pack $ printf "%.2g" n  -- Keep significant digits for small numbers
+              else prettyPrintCount (round n)  -- Use pretty print for larger numbers
+        in formatted <> foldMap (" " <>) col.unit
+      Nothing -> value <> foldMap (" " <>) col.unit
+  Just "duration" -> 
+    case readMaybe (T.unpack value) :: Maybe Double of
+      Just v ->
+        -- Convert to nanoseconds based on unit, then format
+        let nsValue = case col.unit of
+              Just "ms" -> v * 1_000_000      -- milliseconds to nanoseconds
+              Just "s" -> v * 1_000_000_000   -- seconds to nanoseconds
+              Just "μs" -> v * 1_000          -- microseconds to nanoseconds
+              Just "us" -> v * 1_000          -- microseconds to nanoseconds (alt)
+              Just "ns" -> v                  -- already nanoseconds
+              _ -> v                          -- assume nanoseconds if no unit
+        in prettyPrintDuration nsValue
+      Nothing -> value <> foldMap (" " <>) col.unit
+  _ -> value <> foldMap (" " <>) col.unit

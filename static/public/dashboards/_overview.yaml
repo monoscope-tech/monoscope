@@ -132,6 +132,7 @@ tabs:
             title: Service
           - field: throughput
             title: Throughput
+            columnType: number
             unit: req/min
             progress: column_percent
           - field: error_rate
@@ -141,6 +142,7 @@ tabs:
             progress_variant: error
           - field: p95_latency
             title: P95 Latency
+            columnType: duration
             unit: ms
             progress: column_percent
         sql: |
@@ -513,6 +515,7 @@ tabs:
             title: Operation
           - field: count
             title: Count
+            columnType: number
             progress: column_percent
           - field: error_rate
             title: Error Rate
@@ -521,10 +524,12 @@ tabs:
             progress_variant: error
           - field: avg_duration
             title: Avg Duration
+            columnType: duration
             unit: ms
             progress: column_percent
           - field: p95_duration
             title: P95 Duration
+            columnType: duration
             unit: ms
             progress: column_percent
         sql: |
@@ -663,17 +668,21 @@ tabs:
             title: Resource Name
           - field: requests
             title: Requests
+            columnType: number
             progress: column_percent
           - field: total_time
             title: Total Time
+            columnType: duration
             unit: s
             progress: column_percent
           - field: p95_latency
             title: P95 Latency
+            columnType: duration
             unit: ms
             progress: column_percent
           - field: errors
             title: Errors
+            columnType: number
             progress: column_percent
             progress_variant: error
           - field: error_rate
@@ -983,9 +992,11 @@ tabs:
             title: Database Type
           - field: operations
             title: Operations
+            columnType: number
             progress: column_percent
           - field: avg_duration
             title: Avg Duration
+            columnType: duration
             unit: ms
             progress: column_percent
           - field: error_rate
@@ -995,6 +1006,7 @@ tabs:
             progress_variant: error
           - field: throughput
             title: Throughput
+            columnType: number
             unit: ops/min
             progress: column_percent
         sql: |

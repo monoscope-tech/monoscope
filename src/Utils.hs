@@ -55,6 +55,7 @@ module Utils (
   getGrpcStatusColor,
   nestedJsonFromDotNotation,
   prettyPrintCount,
+  prettyPrintDuration,
   extractMessageFromLog,
 )
 where
@@ -645,6 +646,17 @@ prettyPrintCount n
   | n >= 1_000_000 = T.show (n `div` 1_000_000) <> "." <> T.show ((n `mod` 1_000_000) `div` 100_000) <> "M"
   | n >= 1_000 = T.show (n `div` 1_000) <> "." <> T.show ((n `mod` 1_000) `div` 100) <> "K"
   | otherwise = T.show n
+
+
+-- Pretty print duration from nanoseconds to human-readable format
+prettyPrintDuration :: Double -> Text
+prettyPrintDuration ns
+  | ns >= 3_600_000_000_000 = T.pack (printf "%.1fh" (ns / 3_600_000_000_000))    -- hours
+  | ns >= 60_000_000_000 = T.pack (printf "%.1fm" (ns / 60_000_000_000))         -- minutes
+  | ns >= 1_000_000_000 = T.pack (printf "%.1fs" (ns / 1_000_000_000))           -- seconds
+  | ns >= 1_000_000 = T.pack (printf "%.1fms" (ns / 1_000_000))                  -- milliseconds
+  | ns >= 1_000 = T.pack (printf "%.1fμs" (ns / 1_000))                          -- microseconds
+  | otherwise = T.pack (printf "%.0fns" ns)                                       -- nanoseconds
 
 
 messageKeys :: [T.Text]
