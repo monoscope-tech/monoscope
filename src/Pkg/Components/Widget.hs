@@ -15,6 +15,7 @@ import Language.Haskell.TH.Syntax qualified as THS
 import Lucid
 import Lucid.Htmx (hxExt_, hxGet_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
+import Lucid.Svg qualified as Svg
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
@@ -410,8 +411,15 @@ renderTable widget = do
                     -- Table header
                     thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
                       tr_ [] do
-                        forM_ (fromMaybe [] widget.columns) \col ->
-                          th_ [class_ $ "text-left bg-bgRaised sticky top-0 " <> fromMaybe "" col.align] $ toHtml col.title
+                        forM_ (zip (fromMaybe [] widget.columns) [0..]) \(col, idx) ->
+                          th_ 
+                            [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" col.align
+                            , onclick_ $ "window.sortTable('" <> tableId <> "', " <> T.pack (show idx) <> ", this)"
+                            , data_ "sort-direction" "none"
+                            ] do
+                            div_ [class_ "flex items-center justify-between"] do
+                              toHtml col.title
+                              span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
                     -- Table body with loading indicator
                     tbody_ []
                       $ tr_ []
@@ -764,8 +772,15 @@ renderTableWithData widget dataRows = do
     -- Table header
     thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
       tr_ [] do
-        forM_ columns \col -> do
-          th_ [class_ $ "text-left bg-bgRaised sticky top-0 " <> fromMaybe "" col.align] $ toHtml col.title
+        forM_ (zip columns [0..]) \(col, idx) -> do
+          th_ 
+            [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" col.align
+            , onclick_ $ "window.sortTable('" <> tableId <> "', " <> T.pack (show idx) <> ", this)"
+            , data_ "sort-direction" "none"
+            ] do
+            div_ [class_ "flex items-center justify-between"] do
+              toHtml col.title
+              span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
 
     -- Table body with data
     tbody_ [] do
