@@ -37,7 +37,7 @@
     "@types/jsonpath": "^0.2.4",
     "@types/node": "^20.12.12",
     "@vitest/browser": "^3.1.4",
-    "happy-dom": "^17.4.7",
+    "happy-dom": "^20.0.0",
     "jsdom": "^26.1.0",
     "typescript": "^5.4.5",
     "vite-plugin-monaco-editor": "^1.1.0",
