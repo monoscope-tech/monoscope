@@ -1,6 +1,7 @@
 module Web.Routes (server, genAuthServerContext) where
 
 -- Standard library imports
+import Control.Lens
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.Map qualified as Map
@@ -16,8 +17,10 @@ import Effectful.PostgreSQL.Transact (queryOne_)
 -- Effectful imports
 import Effectful (runPureEff)
 import Effectful.Error.Static (runErrorNoCallStack)
+import Effectful.Error.Static qualified as Error
 import Effectful.Reader.Static (runReader)
 import Effectful.State.Static.Local qualified as State
+import Effectful.Time qualified as Time
 
 -- Web and server imports
 import GitHash (giCommitDate, giHash, tGitInfoCwd)
@@ -185,7 +188,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders Api.ApiMut)
   , -- Charts and widgets
     chartsDataGet :: mode :- "chart_data" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
-  , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> ReqBody '[JSON] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
+  , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> ReqBody '[JSON, FormUrlEncoded] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
+  , widgetGet :: mode :- "p" :> ProjectId :> "widget" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> AllQueryParams :> Get '[HTML] (RespHeaders Widget.Widget)
   , -- Endpoints and fields
     endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> Get '[HTML] (RespHeaders ApiCatalog.EndpointRequestStatsVM)
   , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> QPI "skip" :> Get '[HTML] (RespHeaders ApiCatalog.CatalogList)
@@ -381,6 +385,7 @@ cookieProtectedServer =
     , -- Chart and widget handlers
       chartsDataGet = Charts.queryMetrics
     , widgetPost = Widget.widgetPostH
+    , widgetGet = widgetGetH
     , -- Slack/Discord handlers
       reportsGet = Reports.reportsGetH
     , reportsSingleGet = Reports.singleReportGetH
@@ -512,6 +517,29 @@ statusH = do
 
 pingH :: ATBaseCtx Text
 pingH = pure "pong"
+
+
+-- Widget GET handler that accepts dashboard parameters
+widgetGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders Widget.Widget)
+widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
+  -- Parse the widgetJSON parameter
+  widget <- case widgetJsonM >>= AE.decodeStrict . encodeUtf8 of
+    Just w -> pure w
+    Nothing -> Error.throwError $ err400{errBody = "Invalid or missing widgetJSON parameter"}
+  
+  -- Get the current time for processing
+  now <- Time.currentTime
+  
+  -- Process the widget with dashboard parameters (similar to how processWidget works in Dashboards)
+  let widgetWithPid = widget & #_projectId ?~ pid
+  
+  -- Process eager widgets (tables, stats, etc.) with dashboard parameters
+  processedWidget <- if widgetWithPid.eager == Just True || widgetWithPid.wType `elem` [Widget.WTTable, Widget.WTStat, Widget.WTAnomalies]
+    then Dashboards.processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetWithPid
+    else pure widgetWithPid
+  
+  -- Return the processed widget
+  addRespHeaders processedWidget
 
 
 -- =============================================================================

@@ -10,6 +10,30 @@
   },
 });
 
+// HTMX extension to forward current page query parameters to GET requests
+(window as any).htmx.defineExtension('forward-page-params', {
+  onEvent: function(name: string, evt: any) {
+    if (name === "htmx:configRequest") {
+      // Only process GET requests
+      if (evt.detail.verb === 'get') {
+        const url = new URL(evt.detail.path, window.location.origin);
+        const currentParams = new URLSearchParams(window.location.search);
+        
+        // Forward all current page params to the request URL
+        currentParams.forEach((value: string, key: string) => {
+          if (!url.searchParams.has(key)) {
+            url.searchParams.set(key, value);
+          }
+        });
+        
+        // Update the path with merged parameters
+        evt.detail.path = url.pathname + url.search;
+      }
+    }
+    return true;
+  }
+});
+
 // Attach functions to the window object
 window.buildCurlRequest = function (event: any) {
   const { request_headers, request_body, method, host, raw_url } = JSON.parse(event.currentTarget?.dataset.reqjson);

@@ -1,9 +1,11 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTableWithData) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as K
 import Data.Default
 import Data.Generics.Labels ()
+import Data.Map.Strict qualified as M
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
 import Data.Vector qualified as V
@@ -11,15 +13,28 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
 import Language.Haskell.TH.Syntax qualified as THS
 import Lucid
-import Lucid.Htmx (hxPost_, hxTrigger_)
+import Lucid.Htmx (hxExt_, hxGet_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
+import Text.Printf (printf)
 import Text.Slugify (slugify)
 import Utils (faSprite_, onpointerdown_, prettyPrintCount)
+import Web.FormUrlEncoded (FromForm)
+import Web.HttpApiData (FromHttpApiData, parseQueryParam)
+
+
+-- Generic instance for parsing JSON arrays from form data
+instance AE.FromJSON a => FromHttpApiData [a] where
+  parseQueryParam = first T.pack . AE.eitherDecodeStrict . encodeUtf8
+
+
+-- Generic instance for parsing JSON values from form data
+instance {-# OVERLAPPABLE #-} AE.FromJSON a => FromHttpApiData a where
+  parseQueryParam = first T.pack . AE.eitherDecodeStrict . encodeUtf8
 
 
 data Query = Query
@@ -27,7 +42,7 @@ data Query = Query
   , sql :: Maybe Text
   }
   deriving stock (Generic, Show, THS.Lift)
-  deriving anyclass (Default, NFData)
+  deriving anyclass (Default, FromForm, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Query
 
 
@@ -38,7 +53,7 @@ data Layout = Layout
   , h :: Maybe Int
   }
   deriving stock (Generic, Show, THS.Lift)
-  deriving anyclass (Default, NFData)
+  deriving anyclass (Default, FromForm, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Layout
 
 
@@ -133,7 +148,7 @@ data Widget = Widget
   , onRowClick :: Maybe RowClickAction -- Action when table row is clicked
   }
   deriving stock (Generic, Show, THS.Lift)
-  deriving anyclass (Default, NFData)
+  deriving anyclass (Default, FromForm, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] Widget
 
 
@@ -151,7 +166,7 @@ data WidgetDataset = WidgetDataset
   , stats :: Maybe Charts.MetricsStats
   }
   deriving stock (Generic, Show, THS.Lift)
-  deriving anyclass (Default, NFData)
+  deriving anyclass (Default, FromForm, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetDataset
 
 
@@ -162,7 +177,7 @@ data WidgetAxis = WidgetAxis
   , showOnlyMaxLabel :: Maybe Bool
   }
   deriving stock (Generic, Show, THS.Lift)
-  deriving anyclass (Default, NFData)
+  deriving anyclass (Default, FromForm, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetAxis
 
 
@@ -178,7 +193,7 @@ data TableColumn = TableColumn
   , progressVariant :: Maybe Text -- "default", "info", "error", etc.
   }
   deriving stock (Generic, Show, THS.Lift)
-  deriving anyclass (Default, NFData)
+  deriving anyclass (Default, FromForm, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] TableColumn
 
 
@@ -188,7 +203,7 @@ data RowClickAction = RowClickAction
   , navigateToTab :: Maybe Text
   }
   deriving stock (Generic, Show, THS.Lift)
-  deriving anyclass (Default, NFData)
+  deriving anyclass (Default, FromForm, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] RowClickAction
 
 
@@ -356,6 +371,9 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
 renderTable :: Widget -> Html ()
 renderTable widget = do
   let tableId = maybeToMonoid widget.id
+  -- Make table widget eager by default so it fetches data server-side
+  let eagerWidget = widget & #eager ?~ True
+  let widgetJson = decodeUtf8 $ fromLazy $ AE.encode eagerWidget
   div_ [class_ "gap-0.5 flex flex-col h-full"] do
     -- Widget header outside the card
     unless (widget.naked == Just True)
@@ -370,188 +388,77 @@ renderTable widget = do
         ]
         do
           -- Single scrollable table container
-          div_ [class_ "h-full overflow-auto p-3"] do
-            table_ [class_ "table table-zebra table-sm w-full relative", id_ tableId] do
-              -- Sticky table header
-              thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
-                tr_ [] do
-                  forM_ (fromMaybe [] widget.columns) \col -> do
-                    th_ [class_ $ "text-left bg-bgRaised sticky top-0 " <> fromMaybe "" col.align] $ toHtml col.title
-              -- Table body
-              tbody_ [id_ $ tableId <> "_body"] ""
+          div_ 
+            [ class_ "h-full overflow-auto p-3"
+            , hxGet_ $ "/p/" <> fromMaybe "" (widget._projectId <&> (.toText)) <> "/widget?widgetJSON=" <> widgetJson
+            , hxTrigger_ "load, update-query from:window"
+            , hxTarget_ $ "#" <> tableId
+            , hxSelect_ $ "#" <> tableId
+            , hxSwap_ "outerHTML"
+            , hxExt_ "forward-page-params"
+            ] do
+            case widget.html of
+              Just html -> toHtmlRaw html -- Use pre-rendered HTML if available
+              Nothing -> do
+                -- Otherwise render table structure with HTMX for updates
+                table_
+                  [ class_ "table table-zebra table-sm w-full relative"
+                  , id_ tableId
+                  ]
+                  do
+                    -- Table header
+                    thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
+                      tr_ [] do
+                        forM_ (fromMaybe [] widget.columns) \col ->
+                          th_ [class_ $ "text-left bg-bgRaised sticky top-0 " <> fromMaybe "" col.align] $ toHtml col.title
+                    -- Table body with loading indicator
+                    tbody_ []
+                      $ tr_ []
+                      $ td_ [colspan_ "100", class_ "text-center py-8"]
+                      $ span_ [class_ "loading loading-spinner loading-sm"] ""
 
-    -- JavaScript for table functionality
-    let query = decodeUtf8 $ AE.encode widget.query
-    let querySQL = maybeToMonoid widget.sql
-    let pid = decodeUtf8 $ AE.encode $ widget._projectId <&> (.toText)
-    let onRowClick = decodeUtf8 $ AE.encode widget.onRowClick
-    let columns = decodeUtf8 $ AE.encode widget.columns
-
-    script_
-      [type_ "text/javascript"]
-      [text|
-      (function() {
-        const tableId = '${tableId}';
-        const query = ${query};
-        const querySQL = `${querySQL}`;
-        const pid = ${pid};
-        const onRowClick = ${onRowClick};
-        const columns = ${columns};
-        
-        async function loadTableData() {
-          try {
-            const params = new URLSearchParams({
-              ...Object.fromEntries(new URLSearchParams(location.search)),
-              query: query || '',
-              query_sql: querySQL || '',
-              data_type: 'text',
-              pid: pid || ''
-            });
+    -- Add row click handler script if needed
+    whenJust widget.onRowClick \onRowClick ->
+      script_
+        [type_ "text/javascript"]
+        [text|
+        (function() {
+          const tableId = '${tableId}';
+          const onRowClick = ${decodeUtf8 $ AE.encode onRowClick};
+          const columns = ${decodeUtf8 $ AE.encode widget.columns};
+          
+          // Delegate click events to table rows
+          document.getElementById(tableId).addEventListener('click', function(e) {
+            const tr = e.target.closest('tr[data-row]');
+            if (!tr) return;
             
-            const response = await fetch(`/chart_data?$${params}`);
-            const data = await response.json();
+            const rowData = JSON.parse(tr.dataset.row);
             
-            if (data.data_text && data.data_text.length > 0) {
-              const tbody = document.getElementById(tableId + '_body');
-              tbody.innerHTML = '';
+            // Set variable
+            if (onRowClick.setVariable) {
+              const varName = onRowClick.setVariable;
+              const value = onRowClick.value ? 
+                onRowClick.value.replace(/\{\{row\.(\w+)\}\}/g, (_, field) => rowData[field]) :
+                rowData[columns[0].field];
               
-              // Skip header row if present
-              const startIdx = data.headers ? 1 : 0;
+              const url = new URL(window.location);
+              url.searchParams.set('var-' + varName, value);
+              history.pushState({}, '', url);
+              window.dispatchEvent(new Event('update-query'));
               
-              // Calculate max values for column percentages
-              const maxValues = {};
-              if (columns.some(col => col.progress === 'column_percent')) {
-                columns.forEach(col => {
-                  if (col.progress === 'column_percent') {
-                    maxValues[col.field] = Math.max(...data.data_text.slice(startIdx).map(row => {
-                      const val = parseFloat(row[col.field] || row[columns.indexOf(col)] || 0);
-                      return isNaN(val) ? 0 : val;
-                    }));
+              // Navigate to tab if specified
+              if (onRowClick.navigateToTab && window.switchDashboardTab) {
+                const tabs = document.querySelectorAll('[data-tab-index]');
+                tabs.forEach((tab, idx) => {
+                  if (tab.textContent.includes(onRowClick.navigateToTab)) {
+                    window.switchDashboardTab(idx);
                   }
                 });
               }
-              
-              data.data_text.slice(startIdx).forEach(row => {
-                const tr = document.createElement('tr');
-                tr.className = 'hover cursor-pointer';
-                
-                columns.forEach((col, idx) => {
-                  const td = document.createElement('td');
-                  td.className = col.align || '';
-                  const value = row[col.field] || row[idx] || '';
-                  
-                  if (col.progress) {
-                    // Create progress container
-                    const container = document.createElement('div');
-                    container.className = 'flex items-center gap-2';
-                    
-                    // Format and pad the number value
-                    const numValue = parseFloat(value);
-                    let formattedValue = value;
-                    
-                    if (!isNaN(numValue)) {
-                      // Use the global formatNumber function if available
-                      if (typeof window.formatNumber === 'function') {
-                        formattedValue = window.formatNumber(numValue);
-                      } else {
-                        // Fallback to simple formatting
-                        formattedValue = numValue.toFixed(1);
-                      }
-                    }
-                    
-                    // Add text value with fixed width for perfect alignment
-                    const textSpan = document.createElement('span');
-                    textSpan.className = 'inline-block text-right';
-                    textSpan.style.width = '6rem'; // Fixed width to ensure all progress bars start at same position
-                    textSpan.textContent = formattedValue;
-                    if (col.unit) textSpan.textContent += ' ' + col.unit;
-                    container.appendChild(textSpan);
-                    
-                    // Calculate progress percentage
-                    let percentage = 0;
-                    if (!isNaN(numValue)) {
-                      if (col.progress === 'value_percent') {
-                        percentage = Math.min(100, Math.max(0, numValue));
-                      } else if (col.progress === 'column_percent' && maxValues[col.field] > 0) {
-                        percentage = (numValue / maxValues[col.field]) * 100;
-                      }
-                    }
-                    
-                    // Create progress bar
-                    const progress = document.createElement('progress');
-                    progress.className = 'progress w-12 ml-2';
-                    progress.value = percentage;
-                    progress.max = 100;
-                    
-                    // Add variant class - default is info
-                    if (col.progressVariant === 'error') {
-                      progress.className += ' progress-error';
-                    } else if (col.progressVariant === 'warning') {
-                      progress.className += ' progress-warning';
-                    } else if (col.progressVariant === 'success') {
-                      progress.className += ' progress-success';
-                    } else {
-                      progress.className += ' progress-brand';
-                    }
-                    
-                    container.appendChild(progress);
-                    td.appendChild(container);
-                  } else {
-                    td.textContent = value;
-                    if (col.unit) td.textContent += ' ' + col.unit;
-                  }
-                  
-                  tr.appendChild(td);
-                });
-                
-                // Add row click handler
-                if (onRowClick && onRowClick.setVariable) {
-                  tr.onclick = () => {
-                    const rowData = {};
-                    columns.forEach((col, idx) => {
-                      rowData[col.field] = row[col.field] || row[idx] || '';
-                    });
-                    
-                    // Set variable
-                    if (onRowClick.setVariable) {
-                      const varName = onRowClick.setVariable;
-                      const value = onRowClick.value ? 
-                        onRowClick.value.replace(/\{\{row\.(\w+)\}\}/g, (_, field) => rowData[field]) :
-                        rowData[columns[0].field];
-                      
-                      const url = new URL(window.location);
-                      url.searchParams.set('var-' + varName, value);
-                      history.pushState({}, '', url);
-                      window.dispatchEvent(new Event('update-query'));
-                      
-                      // Navigate to tab if specified
-                      if (onRowClick.navigateToTab && window.switchDashboardTab) {
-                        const tabs = document.querySelectorAll('[data-tab-index]');
-                        tabs.forEach((tab, idx) => {
-                          if (tab.textContent.includes(onRowClick.navigateToTab)) {
-                            window.switchDashboardTab(idx);
-                          }
-                        });
-                      }
-                    }
-                  };
-                }
-                
-                tbody.appendChild(tr);
-              });
             }
-          } catch (error) {
-            console.error('Error loading table data:', error);
-          }
-        }
-        
-        // Load data on initialization
-        loadTableData();
-        
-        // Reload on variable changes
-        window.addEventListener('update-query', loadTableData);
-      })();
-      |]
+          });
+        })();
+        |]
 
 
 renderChart :: Widget -> Html ()
@@ -843,3 +750,87 @@ mapChatTypeToWidgetType :: Text -> WidgetType
 mapChatTypeToWidgetType "line" = WTTimeseriesLine
 mapChatTypeToWidgetType "timeseries_line" = WTTimeseriesLine
 mapChatTypeToWidgetType _ = WTTimeseries
+
+
+-- Server-side table data rendering
+renderTableWithData :: Widget -> V.Vector (V.Vector Text) -> Html ()
+renderTableWithData widget dataRows = do
+  let columns = fromMaybe [] widget.columns
+  let tableId = maybeToMonoid widget.id
+
+  -- Render complete table with data
+  table_ [class_ "table table-zebra table-sm w-full relative", id_ tableId] do
+    -- Table header
+    thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
+      tr_ [] do
+        forM_ columns \col -> do
+          th_ [class_ $ "text-left bg-bgRaised sticky top-0 " <> fromMaybe "" col.align] $ toHtml col.title
+
+    -- Table body with data
+    tbody_ [] do
+      -- Calculate max values for column percentages
+      let maxValues = calculateMaxValues columns dataRows
+
+      -- Render table rows
+      forM_ (V.toList dataRows) \row -> do
+        let rowData = AE.object [(K.fromText col.field, AE.String $ getRowValue col idx row) | (col, idx) <- zip columns [0 ..]]
+        tr_ [class_ "hover cursor-pointer", data_ "row" (decodeUtf8 $ fromLazy $ AE.encode rowData)] do
+          forM_ (zip columns [0 ..]) \(col, idx) -> do
+            let value = getRowValue col idx row
+            td_ [class_ $ fromMaybe "" col.align] do
+              if isJust col.progress
+                then renderProgressCell col value maxValues
+                else do
+                  toHtml value
+                  whenJust col.unit \u -> toHtml $ " " <> u
+
+
+-- Helper to get row value by column index or field name
+getRowValue :: TableColumn -> Int -> V.Vector Text -> Text
+getRowValue col idx row = fromMaybe "" $ row V.!? idx
+
+
+-- Calculate max values for column percentage progress bars
+calculateMaxValues :: [TableColumn] -> V.Vector (V.Vector Text) -> M.Map Text Double
+calculateMaxValues columns dataRows =
+  M.fromList
+    [ (col.field, maxVal)
+    | (col, idx) <- zip columns [0 ..]
+    , col.progress == Just "column_percent"
+    , let values = V.mapMaybe (\row -> row V.!? idx >>= readMaybe . T.unpack) dataRows
+    , let maxVal = if V.null values then 0 else V.maximum values
+    ]
+
+
+-- Render a progress bar cell
+renderProgressCell :: TableColumn -> Text -> M.Map Text Double -> Html ()
+renderProgressCell col value maxValues = do
+  div_ [class_ "flex items-center gap-2"] do
+    -- Format and display the value
+    let numValue = fromMaybe 0 $ readMaybe (T.unpack value) :: Double
+    let formattedValue = T.pack $ printf "%.1f" numValue
+
+    span_ [class_ "inline-block text-right", style_ "width: 5ch"] do
+      toHtml formattedValue
+      whenJust col.unit \u -> toHtml $ " " <> u
+
+    -- Calculate progress percentage
+    let percentage = case col.progress of
+          Just "value_percent" -> min 100 (max 0 numValue)
+          Just "column_percent" -> case M.lookup col.field maxValues of
+            Just maxVal | maxVal > 0 -> (numValue / maxVal) * 100
+            _ -> 0
+          _ -> 0
+
+    -- Render progress bar
+    let progressClass = "progress w-12 ml-2 " <> getProgressVariantClass col.progressVariant
+    progress_ [class_ progressClass, value_ (T.pack $ show percentage), max_ "100"] ""
+
+
+-- Get progress bar variant class
+getProgressVariantClass :: Maybe Text -> Text
+getProgressVariantClass variant = case variant of
+  Just "error" -> "progress-error"
+  Just "warning" -> "progress-warning"
+  Just "success" -> "progress-success"
+  _ -> "progress-brand"
