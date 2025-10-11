@@ -416,8 +416,8 @@ keepNonEmpty (Just "") = Nothing
 keepNonEmpty (Just a) = Just a
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
-apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM vizTypeM alertM = do
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders LogsGet)
+apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM vizTypeM alertM skipM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let source = fromMaybe "spans" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
@@ -479,7 +479,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
   patterns <- case vizTypeM of
     Just "patterns" -> do
-      patternsResult <- RequestDumps.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM)
+      patternsResult <- RequestDumps.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) (fromMaybe 0 skipM)
       return $ Just patternsResult
     _ -> return Nothing
 
@@ -541,6 +541,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
         serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
         colors = getServiceColors (V.catMaybes serviceNames)
+        patternsToSkip = (fromMaybe 0 skipM + (maybe 0 (V.length) patterns))
         page =
           ApiLogsPageData
             { pid
@@ -572,11 +573,12 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
             , vizType = vizTypeM
             , alert = alertDM
             , patterns = patterns
+            , patternsToSkip
             }
 
       let jsonResponse = LogsGetJson finalVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap resultCount
       addRespHeaders $ case (layoutM, hxRequestM, jsonM, vizTypeM) of
-        (_, Just "true", _, Just "patterns") -> LogsPatternList pid (fromMaybe V.empty patterns)
+        (_, Just "true", _, Just "patterns") -> LogsPatternList pid (fromMaybe V.empty patterns) patternsToSkip
         (Just "SaveQuery", _, _, _) -> LogsQueryLibrary pid queryLibSaved queryLibRecent
         (Just "resultTable", Just "true", _, _) -> jsonResponse
         (Just "all", Just "true", _, _) -> jsonResponse
@@ -602,14 +604,14 @@ data LogsGet
   | LogsGetErrorSimple Text
   | LogsGetJson (V.Vector (V.Vector AE.Value)) (HM.HashMap Text Text) Text Text Text [Text] (HM.HashMap Text Int) Int
   | LogsQueryLibrary Projects.ProjectId (V.Vector Projects.QueryLibItem) (V.Vector Projects.QueryLibItem)
-  | LogsPatternList Projects.ProjectId (V.Vector (Text, Int))
+  | LogsPatternList Projects.ProjectId (V.Vector (Text, Int)) Int
 
 
 instance ToHtml LogsGet where
   toHtml (LogPage (PageCtx conf pa_dat)) = toHtml $ PageCtx conf $ apiLogsPage pa_dat
   toHtml (LogsGetErrorSimple err) = span_ [class_ "text-textError"] $ toHtml err
   toHtml (LogsGetError (PageCtx conf err)) = toHtml $ PageCtx conf err
-  toHtml (LogsPatternList pid patterns) = toHtml $ patternList patterns pid
+  toHtml (LogsPatternList pid patterns skip) = toHtml $ patternList patterns pid skip (skip > 0)
   toHtml (LogsQueryLibrary pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent
   toHtml (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL cols colIdxMap count) =
     span_ [] $ toHtml (decodeUtf8 $ AE.encode $ AE.toJSON (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL cols colIdxMap count) :: Text)
@@ -655,6 +657,7 @@ data ApiLogsPageData = ApiLogsPageData
   , vizType :: Maybe Text
   , alert :: Maybe Monitors.QueryMonitor
   , patterns :: Maybe (V.Vector (Text, Int))
+  , patternsToSkip :: Int
   }
 
 
@@ -758,7 +761,7 @@ apiLogsPage page = do
             }
     whenJust page.patterns \patternsData ->
       div_ [class_ "overflow-y-auto max-h-96 border border-strokeWeak rounded mt-3"] do
-        patternList patternsData page.pid
+        patternList patternsData page.pid page.patternsToSkip False
     unless (page.vizType == Just "patterns")
       $ div_ [class_ "flex h-full gap-3.5 overflow-y-hidden", id_ "facets_and_loglist"] do
         -- FACETS
@@ -1193,8 +1196,8 @@ alertConfigurationForm_ pid alertM = do
                                      })
                                    end|]
                             ]
-                          ++ [required_ "" | req]
-                          ++ [value_ (maybe "" (show) vM) | isJust vM]
+                            ++ [required_ "" | req]
+                            ++ [value_ (maybe "" (show) vM) | isJust vM]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)
@@ -1311,32 +1314,41 @@ alertConfigurationForm_ pid alertM = do
                 if isJust alertM then "Update alert" else "Create Alert"
 
 
-patternList :: V.Vector (Text, Int) -> Projects.ProjectId -> Html ()
-patternList patterns pid = do
+patternList :: V.Vector (Text, Int) -> Projects.ProjectId -> Int -> Bool -> Html ()
+patternList patterns pid skip onlyRows = do
   let total = V.foldl' (\acc (_, c) -> acc + c) 0 patterns
-  if V.null patterns
-    then div_ [class_ "p-6 bg-bgBase rounded-lg text-center", id_ "pattern-list"] $ do
-      faSprite_ "magnifying-glass" "regular" "w-6 h-6 mx-auto text-iconNeutral"
-      h3_ [class_ "mt-3 text-sm font-medium text-textStrong"] "No patterns found"
-      p_ [class_ "mt-1 text-xs text-textWeak"] "Try expanding the time range or adjust your query to surface patterns."
-      div_ [class_ "mt-3"]
-        $ button_
-          [ class_ "btn btn-sm btn-ghost"
-          , onpointerdown_ "dispatchEvent(new Event('update-query'))"
-          ]
-          "Refresh"
-    else do
-      table_ [class_ "min-w-full table table-sm rounded-2xl text-sm", id_ "pattern-list"] $ do
-        thead_ [class_ "sticky top-0 bg-bgBase z-10 text-xs"]
-          $ tr_
-          $ do
-            th_ [class_ "px-4 py-2 text-left"] ""
-            th_ [class_ "px-4 py-2 text-left"] "Count"
-            th_ [class_ "px-4 py-2 text-left"] "%"
-            th_ [class_ "px-4 py-2 text-left"] "Pattern"
-        tbody_ [class_ "divide-y divide-border"]
-          $ forM_ patterns
-          $ \p -> renderPattern p total pid
+      url = "/p/" <> pid.toText <> "/log_explorer?viz_type=patterns&pattern_skip=" <> show skip
+  if onlyRows
+    then do
+      forM_ patterns $ \p -> renderPattern p total pid
+      when (V.length patterns > 14)
+        $ loadMore url
+    else
+      if V.null patterns
+        then div_ [class_ "p-6 bg-bgBase rounded-lg text-center", id_ "pattern-list"] $ do
+          faSprite_ "magnifying-glass" "regular" "w-6 h-6 mx-auto text-iconNeutral"
+          h3_ [class_ "mt-3 text-sm font-medium text-textStrong"] "No patterns found"
+          p_ [class_ "mt-1 text-xs text-textWeak"] "Try expanding the time range or adjust your query to surface patterns."
+          div_ [class_ "mt-3"]
+            $ button_
+              [ class_ "btn btn-sm btn-ghost"
+              , onpointerdown_ "dispatchEvent(new Event('update-query'))"
+              ]
+              "Refresh"
+        else do
+          table_ [class_ "min-w-full table table-sm rounded-2xl text-sm", id_ "pattern-list"] $ do
+            thead_ [class_ "sticky top-0 bg-bgBase z-10 text-xs"]
+              $ tr_
+              $ do
+                th_ [class_ "px-4 py-2 text-left"] ""
+                th_ [class_ "px-4 py-2 text-left"] "Count"
+                th_ [class_ "px-4 py-2 text-left"] "%"
+                th_ [class_ "px-4 py-2 text-left"] "Pattern"
+            tbody_ [class_ "divide-y divide-border"] do
+              forM_ patterns $ \p -> renderPattern p total pid
+              when (V.length patterns > 14)
+                $ loadMore url
+
   script_
     [text|
        ['submit', 'add-query', 'update-query'].forEach((ev) =>
@@ -1348,6 +1360,26 @@ patternList patterns pid = do
       })
     );
     |]
+
+
+loadMore :: Text -> Html ()
+loadMore url =
+  tr_
+    [ class_ ""
+    , hxTrigger_ "click, intersect once"
+    , hxSwap_ "outerHTML"
+    , hxGet_ url
+    , hxIndicator_ "#rowsIndicator"
+    ]
+    do
+      td_ ""
+      td_ ""
+      td_ ""
+      td_
+        [class_ "col-span-4 w-full relative w-full cursor-pointer flex items-center p-1 text-textBrand"]
+        do
+          "Load more"
+          span_ [id_ "rowsIndicator", class_ "ml-2 htmx-indicator loading loading-dots loading-md"] ""
 
 
 renderPattern :: (Text, Int) -> Int -> Projects.ProjectId -> Html ()
