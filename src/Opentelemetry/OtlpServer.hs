@@ -1,7 +1,14 @@
 {-# LANGUAGE PackageImports #-}
 {-# LANGUAGE StrictData #-}
 
-module Opentelemetry.OtlpServer (processList, runServer) where
+module Opentelemetry.OtlpServer (
+  processList,
+  runServer,
+  -- Exported for testing
+  migrateHttpSemanticConventions,
+  parseConnectionString,
+  migrateElasticsearchPathParts,
+) where
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception.Annotated (checkpoint)
@@ -19,6 +26,7 @@ import Data.IORef qualified as IORef
 import Data.List qualified as L
 import Data.List.Extra (chunksOf)
 import Data.Map qualified as Map
+import Data.Maybe (isJust)
 import Data.ProtoLens.Encoding (decodeMessage)
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
@@ -463,7 +471,121 @@ processList msgs !attrs = checkpoint "processList" $ do
 
 -- Helper functions
 
+-- | Parse a database connection string to extract server address and port
+--
+-- >>> import qualified Data.Aeson as AE
+--
+-- >>> parseConnectionString "Server=localhost:5432"
+-- [("server.address",String "localhost"),("server.port",String "5432")]
+--
+-- >>> parseConnectionString "Server=localhost,1433"
+-- [("server.address",String "localhost"),("server.port",String "1433")]
+--
+-- >>> parseConnectionString "Server=(localdb)\\v11.0;Integrated Security=true;"
+-- [("server.address",String "(localdb)\\v11.0")]
+--
+-- >>> parseConnectionString "Server=db.example.com"
+-- [("server.address",String "db.example.com")]
+--
+-- >>> parseConnectionString "Host=localhost"
+-- []
+--
+-- >>> parseConnectionString ""
+-- []
+parseConnectionString :: Text -> [(Text, AE.Value)]
+parseConnectionString connStr =
+  case T.breakOn "=" connStr of
+    (prefix, serverPart)
+      | not (T.null serverPart) && (T.toLower prefix == "server" || T.toLower prefix == "host") ->
+          let serverVal = T.drop 1 serverPart
+              -- Remove any trailing semicolons
+              cleanVal = T.takeWhile (/= ';') serverVal
+              -- Handle both colon and comma separators
+              (host, portPart) = case T.breakOn ":" cleanVal of
+                (h, p) | not (T.null p) -> (h, T.drop 1 p)
+                _ -> case T.breakOn "," cleanVal of
+                  (h, _) | not (T.null h) -> (h, "") -- For comma, don't extract port
+                  _ -> (cleanVal, "")
+           in if T.null host
+                then []
+                else
+                  [("server.address", AE.String host)]
+                    ++ [("server.port", AE.String portNum) | let portNum = T.takeWhile (\c -> c >= '0' && c <= '9') portPart, not (T.null portNum)]
+    _ -> []
+
+
+-- | Migrate Elasticsearch path parts to db.operation.parameter
+--
+-- >>> import qualified Data.Aeson as AE
+-- >>> migrateElasticsearchPathParts [("db.elasticsearch.path_parts.index", AE.String "users"), ("db.elasticsearch.path_parts.id", AE.String "123")]
+-- [("db.operation.parameter.index",String "users"),("db.operation.parameter.id",String "123")]
+--
+-- >>> migrateElasticsearchPathParts [("other.field", AE.String "value"), ("db.elasticsearch.path_parts.doc_type", AE.String "customer")]
+-- [("db.operation.parameter.doc_type",String "customer")]
+--
+-- >>> migrateElasticsearchPathParts []
+-- []
+--
+-- >>> migrateElasticsearchPathParts [("db.system", AE.String "elasticsearch")]
+-- []
+migrateElasticsearchPathParts :: [(Text, AE.Value)] -> [(Text, AE.Value)]
+migrateElasticsearchPathParts keyVals =
+  [ ("db.operation.parameter." <> T.drop (T.length "db.elasticsearch.path_parts.") k, v)
+  | (k, v) <- keyVals
+  , "db.elasticsearch.path_parts." `T.isPrefixOf` k
+  ]
+
+
 -- | Migrate HTTP semantic convention fields to their new paths/formats
+-- This function handles migration of deprecated OpenTelemetry semantic convention fields
+-- to their new standardized names according to the latest OTEL spec.
+--
+-- >>> import qualified Data.Aeson as AE
+--
+-- == HTTP field migrations
+-- >>> migrateHttpSemanticConventions [("http.method", AE.String "GET")]
+-- [("http.request.method",String "GET")]
+--
+-- >>> migrateHttpSemanticConventions [("http.status_code", AE.Number 200)]
+-- [("http.response.status_code",Number 200.0)]
+--
+-- >>> migrateHttpSemanticConventions [("http.url", AE.String "https://example.com"), ("http.client_ip", AE.String "192.168.1.1")]
+-- [("url.full",String "https://example.com"),("client.address",String "192.168.1.1")]
+--
+-- == Database field migrations
+-- >>> migrateHttpSemanticConventions [("db.system", AE.String "postgresql"), ("db.name", AE.String "users")]
+-- [("db.system.name",String "postgresql"),("db.namespace",String "users")]
+--
+-- >>> migrateHttpSemanticConventions [("db.statement", AE.String "SELECT * FROM users")]
+-- [("db.query.text",String "SELECT * FROM users")]
+--
+-- >>> migrateHttpSemanticConventions [("db.cassandra.table", AE.String "products"), ("db.cassandra.consistency_level", AE.String "quorum")]
+-- [("db.collection.name",String "products"),("cassandra.consistency.level",String "quorum")]
+--
+-- == Special migrations
+-- >>> migrateHttpSemanticConventions [("db.connection_string", AE.String "Server=db.example.com:5432")]
+-- [("server.address",String "db.example.com"),("server.port",String "5432")]
+--
+-- >>> migrateHttpSemanticConventions [("db.elasticsearch.path_parts.index", AE.String "logs-2024"), ("db.elasticsearch.path_parts.id", AE.String "abc123")]
+-- [("db.operation.parameter.index",String "logs-2024"),("db.operation.parameter.id",String "abc123")]
+--
+-- >>> migrateHttpSemanticConventions [("db.redis.database_index", AE.Number 3)]
+-- [("db.namespace",String "3")]
+--
+-- == Deprecated fields removal
+-- >>> migrateHttpSemanticConventions [("db.user", AE.String "admin"), ("db.jdbc.driver_classname", AE.String "org.postgresql.Driver")]
+-- []
+--
+-- == HTTP target migration
+-- >>> migrateHttpSemanticConventions [("http.target", AE.String "/api/users?page=1&limit=10")]
+-- [("url.path",String "/api/users"),("url.query",String "page=1&limit=10")]
+--
+-- >>> migrateHttpSemanticConventions [("http.target", AE.String "/api/users"), ("url.path", AE.String "/api/users")]
+-- [("url.path",String "/api/users")]
+--
+-- == HTTP method _OTHER migration
+-- >>> migrateHttpSemanticConventions [("http.method", AE.String "_OTHER"), ("http.request.method_original", AE.String "PROPFIND")]
+-- [("http.request.method",String "PROPFIND")]
 migrateHttpSemanticConventions :: [(Text, AE.Value)] -> [(Text, AE.Value)]
 migrateHttpSemanticConventions !keyVals =
   let
@@ -485,6 +607,32 @@ migrateHttpSemanticConventions !keyVals =
         , ("net.peer.port", "server.port")
         , ("http.scheme", "url.scheme")
         , ("http.client_ip", "client.address")
+        , -- Database field mappings
+          ("db.cassandra.consistency_level", "cassandra.consistency.level")
+        , ("db.cassandra.coordinator.dc", "cassandra.coordinator.dc")
+        , ("db.cassandra.coordinator.id", "cassandra.coordinator.id")
+        , ("db.cassandra.idempotence", "cassandra.query.idempotent")
+        , ("db.cassandra.page_size", "cassandra.page.size")
+        , ("db.cassandra.speculative_execution_count", "cassandra.speculative_execution.count")
+        , ("db.cassandra.table", "db.collection.name")
+        , ("db.cosmosdb.client_id", "azure.client.id")
+        , ("db.cosmosdb.connection_mode", "azure.cosmosdb.connection.mode")
+        , ("db.cosmosdb.consistency_level", "azure.cosmosdb.consistency.level")
+        , ("db.cosmosdb.container", "db.collection.name")
+        , ("db.cosmosdb.regions_contacted", "azure.cosmosdb.operation.contacted_regions")
+        , ("db.cosmosdb.request_charge", "azure.cosmosdb.operation.request_charge")
+        , ("db.cosmosdb.request_content_length", "azure.cosmosdb.request.body.size")
+        , ("db.cosmosdb.status_code", "db.response.status_code")
+        , ("db.cosmosdb.sub_status_code", "azure.cosmosdb.response.sub_status_code")
+        , ("db.elasticsearch.cluster.name", "db.namespace")
+        , ("db.elasticsearch.node.name", "elasticsearch.node.name")
+        , ("db.mongodb.collection", "db.collection.name")
+        , ("db.name", "db.namespace")
+        , ("db.operation", "db.operation.name")
+        , ("db.redis.database_index", "db.namespace")
+        , ("db.sql.table", "db.collection.name")
+        , ("db.statement", "db.query.text")
+        , ("db.system", "db.system.name")
         ]
 
     -- Pre-build lookups for efficiency
@@ -494,8 +642,41 @@ migrateHttpSemanticConventions !keyVals =
     httpTargetM = HashMap.lookup "http.target" kvMap
     methodOriginalM = HashMap.lookup "http.request.method_original" kvMap
 
-    -- Main migration
-    mgVals = map (\(k, v) -> (HashMap.lookupDefault k k fieldMappingsMap, v)) keyVals
+    -- Fields to remove (deprecated with no replacement)
+    fieldsToRemove = ["db.user", "db.instance.id", "db.jdbc.driver_classname", "db.mssql.instance_name", "db.cosmosdb.operation_type"]
+
+    -- Fields that require special handling and should be excluded from regular mapping
+    -- These fields need custom migration logic rather than simple field renames:
+    -- - db.connection_string: Gets parsed into server.address and server.port via parseConnectionString
+    -- - http.target: Gets split into url.path and url.query components
+    -- - db.redis.database_index: Converted from number to string for db.namespace
+    -- - db.elasticsearch.path_parts.*: Transformed to db.operation.parameter.* preserving key suffix
+    -- - http.method + http.request.method_original (when "_OTHER"): Special handling to use original method value
+    specialFields =
+      (if HashMap.member "db.connection_string" kvMap then ["db.connection_string"] else [])
+        ++ (if isJust httpTargetM && not hasUrlPath then ["http.target"] else [])
+        ++ (if HashMap.member "db.redis.database_index" kvMap then ["db.redis.database_index"] else [])
+        ++ filter ("db.elasticsearch.path_parts." `T.isPrefixOf`) (map fst keyVals)
+        ++ (if httpMethodM == Just (AE.String "_OTHER") && isJust methodOriginalM then ["http.method", "http.request.method_original"] else [])
+
+    -- Filter out deprecated fields and special fields, then apply migrations
+    filteredVals = filter (\(k, _) -> k `notElem` fieldsToRemove && k `notElem` specialFields) keyVals
+    mgVals = map (\(k, v) -> (HashMap.lookupDefault k k fieldMappingsMap, v)) filteredVals
+
+    -- Handle special migrations
+
+    -- Handle db.connection_string -> server.address, server.port
+    migrateConnectionString = case HashMap.lookup "db.connection_string" kvMap of
+      Just (AE.String connStr) -> parseConnectionString connStr
+      _ -> []
+
+    -- Handle db.elasticsearch.path_parts.<key> -> db.operation.parameter.<key>
+    migrateElasticsearchPaths = migrateElasticsearchPathParts keyVals
+
+    -- Handle db.redis.database_index special case (convert to string for db.namespace)
+    migrateRedisIndex = case HashMap.lookup "db.redis.database_index" kvMap of
+      Just (AE.Number n) -> [("db.namespace", AE.String (T.pack $ show (round n :: Int)))]
+      _ -> []
 
     -- Handle the special case of http.target -> url.path and url.query
     migrateHttpTarget = case httpTargetM of
@@ -517,7 +698,7 @@ migrateHttpSemanticConventions !keyVals =
             [("http.request.method", originalMethod)]
       _ -> []
    in
-    mgVals ++ migrateHttpTarget ++ migrateMethodOther
+    mgVals ++ migrateHttpTarget ++ migrateMethodOther ++ migrateConnectionString ++ migrateElasticsearchPaths ++ migrateRedisIndex
 
 
 -- Extract structured information from protobuf decoding errors

@@ -220,8 +220,8 @@ generateSpanSummary otel =
             -- RPC server/client spans
             (Just "server", _, _) | isJust (atMapText "rpc.method" (unAesonTextMaybe otel.attributes)) -> Just "request_type;neutral⇒incoming"
             (Just "client", _, _) | isJust (atMapText "rpc.method" (unAesonTextMaybe otel.attributes)) -> Just "request_type;neutral⇒outgoing"
-            -- Database spans
-            (_, _, _) | isJust (atMapText "db.system" (unAesonTextMaybe otel.attributes)) -> Just "kind;neutral⇒database"
+            -- Database spans (check both old and new field names)
+            (_, _, _) | isJust (atMapText "db.system.name" (unAesonTextMaybe otel.attributes) <|> atMapText "db.system" (unAesonTextMaybe otel.attributes)) -> Just "kind;neutral⇒database"
             -- Internal spans
             (Just "internal", _, _) -> Just "kind;neutral⇒internal"
             _ -> Nothing
@@ -247,15 +247,17 @@ generateSpanSummary otel =
         ]
         ++
         -- 5. Database attributes
-        [ -- Database type
-          case atMapText "db.system" (unAesonTextMaybe otel.attributes) of
-            Just system -> Just $ "db.system;neutral⇒" <> system
+        [ -- Database type (check both old and new field names)
+          case (atMapText "db.system.name" (unAesonTextMaybe otel.attributes), atMapText "db.system" (unAesonTextMaybe otel.attributes)) of
+            (Just system, _) -> Just $ "db.system;neutral⇒" <> system
+            (_, Just system) -> Just $ "db.system;neutral⇒" <> system
             _ -> Nothing
         , -- Query text (if db.query.text exists for db types)
-          case (atMapText "db.system" (unAesonTextMaybe otel.attributes), atMapText "db.query.text" (unAesonTextMaybe otel.attributes)) of
+          case (atMapText "db.system.name" (unAesonTextMaybe otel.attributes) <|> atMapText "db.system" (unAesonTextMaybe otel.attributes), 
+                atMapText "db.query.text" (unAesonTextMaybe otel.attributes)) of
             (Just _, Just queryText) -> Just $ "db.query.text;text-textStrong⇒" <> T.take 200 queryText
             _ -> Nothing
-        , -- Query statement
+        , -- Query statement (for backward compatibility, but db.query.text is preferred)
           case atMapText "db.statement" (unAesonTextMaybe otel.attributes) of
             Just stmt -> Just $ "db.statement;neutral⇒" <> T.take 200 stmt
             _ -> Nothing
@@ -323,14 +325,20 @@ generateSpanSummary otel =
           case otel.status_code of
             Just "ERROR" -> Just "status;right-badge-error⇒ERROR"
             _ -> Nothing
-        , -- Database system with brand colors
-          case atMapText "db.system" (unAesonTextMaybe otel.attributes) of
-            Just "postgresql" -> Just "db.system;right-badge-postgres⇒postgres"
-            Just "mysql" -> Just "db.system;right-badge-mysql⇒mysql"
-            Just "redis" -> Just "db.system;right-badge-redis⇒redis"
-            Just "mongodb" -> Just "db.system;right-badge-mongo⇒mongodb"
-            Just "elasticsearch" -> Just "db.system;right-badge-elastic⇒elastic"
-            Just system -> Just $ "db.system;right-badge-neutral⇒" <> system
+        , -- Database system with brand colors (check both old and new field names)
+          case (atMapText "db.system.name" (unAesonTextMaybe otel.attributes), atMapText "db.system" (unAesonTextMaybe otel.attributes)) of
+            (Just "postgresql", _) -> Just "db.system;right-badge-postgres⇒postgres"
+            (_, Just "postgresql") -> Just "db.system;right-badge-postgres⇒postgres"
+            (Just "mysql", _) -> Just "db.system;right-badge-mysql⇒mysql"
+            (_, Just "mysql") -> Just "db.system;right-badge-mysql⇒mysql"
+            (Just "redis", _) -> Just "db.system;right-badge-redis⇒redis"
+            (_, Just "redis") -> Just "db.system;right-badge-redis⇒redis"
+            (Just "mongodb", _) -> Just "db.system;right-badge-mongo⇒mongodb"
+            (_, Just "mongodb") -> Just "db.system;right-badge-mongo⇒mongodb"
+            (Just "elasticsearch", _) -> Just "db.system;right-badge-elastic⇒elastic"
+            (_, Just "elasticsearch") -> Just "db.system;right-badge-elastic⇒elastic"
+            (Just system, _) -> Just $ "db.system;right-badge-neutral⇒" <> system
+            (_, Just system) -> Just $ "db.system;right-badge-neutral⇒" <> system
             _ -> Nothing
         , -- HTTP indicator (if has HTTP attributes)
           if hasHttp then Just "protocol;right-badge-neutral⇒http" else Nothing
