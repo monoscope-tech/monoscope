@@ -1079,10 +1079,11 @@ tabs:
             title: 'DB Operations'
             icon: layers
             sql: |
-              SELECT COUNT(DISTINCT attributes___db___operation___name)::float
+              SELECT COUNT(DISTINCT COALESCE(attributes___db___operation___name, name))::float
               FROM otel_logs_and_spans
               WHERE project_id='{{project_id}}'
-                AND attributes___db___operation___name IS NOT NULL
+                AND attributes___db___system___name IS NOT NULL
+                AND COALESCE(attributes___db___operation___name, name) IS NOT NULL
                 AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
                 {{time_filter}}
             unit: types
@@ -1094,15 +1095,16 @@ tabs:
         sql: |
           SELECT 
             extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            attributes___db___operation___name as operation,
+            COALESCE(attributes___db___operation___name, name) as operation,
             AVG(duration) / 1e6 as value
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
-            AND attributes___db___operation___name IS NOT NULL
+            AND attributes___db___system___name IS NOT NULL
+            AND COALESCE(attributes___db___operation___name, name) IS NOT NULL
             AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
             AND duration IS NOT NULL
             {{time_filter}}
-          GROUP BY time, attributes___db___operation___name
+          GROUP BY time, COALESCE(attributes___db___operation___name, name)
           ORDER BY time DESC
           LIMIT 1000
         unit: ms
@@ -1115,16 +1117,16 @@ tabs:
           SELECT 
             extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             attributes___db___system___name as db_system,
-            COALESCE(attributes___db___namespace, 'default') as db_name,
             COUNT(*)::float as count
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND attributes___db___system___name IS NOT NULL
             AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
             {{time_filter}}
-          GROUP BY time, db_system, db_name
+          GROUP BY time, db_system
           ORDER BY time DESC
           LIMIT 1000
+        unit: queries
         layout: { w: 6, h: 4 }
 
       # Slow Queries
@@ -1134,7 +1136,7 @@ tabs:
         sql: |
           SELECT
             COALESCE(attributes___db___query___text, attributes___db___query___summary, name) as query,
-            attributes___db___operation___name as operation,
+            COALESCE(attributes___db___operation___name, name) as operation,
             attributes___db___system___name as database,
             ROUND((duration / 1e6)::numeric, 2) as duration_ms,
             resource___service___name as service,
