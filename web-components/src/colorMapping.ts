@@ -155,9 +155,14 @@ export function getLogLevelColor(text: string): string {
 
 // Main function to get deterministic color for any series
 export function getSeriesColor(value: string, context?: 'status' | 'percentile' | 'service' | 'log'): string {
-  // Handle empty values and null
-  if (!value || value.trim() === '' || value.toLowerCase() === 'null' || value.toLowerCase() === 'undefined' || value.toLowerCase() === 'unknown') {
+  // Handle null and undefined values with neutral gray
+  if (value && (value.toLowerCase() === 'null' || value.toLowerCase() === 'undefined' || value.toLowerCase() === 'unknown')) {
     return '#9ca3af'; // Gray-500 - neutral color for missing data
+  }
+  
+  // Handle empty values - use default color
+  if (!value || value.trim() === '') {
+    return THEME_COLORS[0];
   }
   
   // If context is provided, use specific color function
