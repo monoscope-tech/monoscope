@@ -233,8 +233,8 @@ processBackgroundJob authCtx job bgJob =
       forM_ projects \p -> do
         liftIO $ withResource authCtx.jobsPool \conn -> do
           -- Schedule 5-minute log pattern extraction
-          forM_ [0 .. 7000] \interval -> do
-            let scheduledTime = addUTCTime (fromIntegral $ interval * 5) currentTime
+          forM_ [0 .. 287] \interval -> do
+            let scheduledTime = addUTCTime (fromIntegral $ interval * 300) currentTime
             _ <- scheduleJob conn "background_jobs" (BackgroundJobs.FifteenMinutesLogsPatternProcessing scheduledTime p) scheduledTime
             pass
           -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
@@ -364,7 +364,7 @@ logsPatternExtraction scheduledTime pid = do
     limitVal = 250
     paginate :: Int -> UTCTime -> ATBackgroundCtx ()
     paginate offset startTime = do
-      Log.logInfo "Fetching logs for pattern extraction" ("offset", AE.toJSON offset)
+      Log.logInfo "Fetching events for pattern extraction" ("offset", AE.toJSON offset)
       otelEvents <- dbtToEff $ query [sql| SELECT kind, id::text, coalesce(body::text,''), coalesce(summary::text,'') FROM otel_logs_and_spans WHERE project_id = ?   AND timestamp >= ?   AND timestamp < ?   AND (summary_pattern IS NULL  OR log_pattern IS NULL) OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
       let count = V.length otelEvents
       Log.logInfo "Fetched events" ("count", AE.toJSON count)
@@ -375,16 +375,17 @@ logsPatternExtraction scheduledTime pid = do
         let summaryEvents = V.filter ((/= "log") . (\(k, _, _, _) -> k)) otelEvents
             summaryPairs = summaryEvents <&> (\(_, idTxt, _, summary) -> (idTxt, summary))
         processPatterns "summary" "summary_pattern" summaryPairs pid scheduledTime startTime
-        Log.logInfo "Completed logs pattern extraction for page" ("offset", AE.toJSON offset)
+        Log.logInfo "Completed events pattern extraction for page" ("offset", AE.toJSON offset)
       Relude.when (count == limitVal) $ paginate (offset + limitVal) startTime
 
 
 -- | Generic pattern extraction for logs or summaries
 processPatterns :: Text -> Text -> V.Vector (Text, Text) -> Projects.ProjectId -> UTCTime -> UTCTime -> ATBackgroundCtx ()
 processPatterns kind fieldName events pid scheduledTime since = do
-  Log.logInfo ("Extracting " <> kind <> " patterns") ("project_id", pid.toText)
+  Log.logInfo ("Fetching existing " <> kind <> " patterns") ("project_id", pid.toText)
   let qq = [text| select $fieldName from otel_logs_and_spans where project_id= ? AND timestamp >= now() - interval '1 hour' and $fieldName is not null GROUP BY $fieldName ORDER BY count(*) desc limit 20|]
-  existingPatterns <- dbtToEff $ query (Query $ encodeUtf8 qq) (pid, scheduledTime, kind)
+  existingPatterns <- dbtToEff $ query (Query $ encodeUtf8 qq) (pid)
+  Log.logInfo ("Extracting " <> kind <> " patterns") ()
   let known = fmap (\p -> ("", p)) existingPatterns
       combined = known <> events
       drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
