@@ -57,6 +57,7 @@ module Utils (
   prettyPrintCount,
   prettyPrintDuration,
   extractMessageFromLog,
+  getPercentileColors,
 )
 where
 
@@ -530,6 +531,52 @@ getServiceColors services = go services HM.empty []
               colorIdx = sum (map ord $ toString $ toXXHash service) `mod` length availableColors
               selectedColor = availableColors L.!! colorIdx
            in go (V.tail svcs) (HM.insert service selectedColor assignedColors) (selectedColor : usedColors)
+
+
+-- | Get colors for percentile metrics in latency distribution charts
+-- Returns a HashMap mapping percentile labels (p50, p75, p90, p95, p99) to tailwind color classes
+-- Colors progress from cool (green) for low percentiles to warm (red) for high percentiles
+getPercentileColors :: [Text] -> HashMap Text Text
+getPercentileColors percentiles = HM.fromList $ map assignColor percentiles
+  where
+    -- Define a color mapping for common percentiles
+    -- Using a progression from cool to warm colors to indicate severity
+    percentileColorMap :: HashMap Text Text
+    percentileColorMap = HM.fromList
+      [ ("p50", "bg-green-400")     -- Median - good performance
+      , ("p75", "bg-cyan-400")      -- 75th percentile - acceptable
+      , ("p90", "bg-yellow-400")    -- 90th percentile - warning
+      , ("p95", "bg-orange-400")    -- 95th percentile - concerning  
+      , ("p99", "bg-red-400")       -- 99th percentile - critical
+      , ("p100", "bg-red-600")      -- Maximum - most critical
+      -- Alternative naming conventions
+      , ("median", "bg-green-400")
+      , ("q1", "bg-emerald-400")    -- First quartile
+      , ("q3", "bg-amber-400")      -- Third quartile
+      , ("max", "bg-red-600")
+      , ("min", "bg-blue-400")
+      ]
+    
+    -- Fallback colors for non-standard percentiles
+    fallbackColors :: V.Vector Text
+    fallbackColors = V.fromList
+      [ "bg-indigo-400"
+      , "bg-purple-400"
+      , "bg-pink-400"
+      , "bg-teal-400"
+      , "bg-lime-400"
+      ]
+    
+    -- Assign color to a percentile label
+    assignColor :: Text -> (Text, Text)
+    assignColor percentile = 
+      case HM.lookup (T.toLower percentile) percentileColorMap of
+        Just color -> (percentile, color)
+        Nothing -> 
+          -- For unknown percentiles, use a deterministic fallback color
+          let colorIdx = sum (map ord $ toString percentile) `mod` V.length fallbackColors
+              fallbackColor = fallbackColors V.! colorIdx
+           in (percentile, fallbackColor)
 
 
 toXXHash :: Text -> Text

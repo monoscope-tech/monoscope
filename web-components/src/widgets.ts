@@ -1,5 +1,6 @@
 'use strict';
 import { params } from './main';
+import { getSeriesColor } from './colorMapping';
 const DEFAULT_BACKGROUND_STYLE = { color: 'rgba(240,248,255, 0.4)' };
 const DARK_BACKGROUND_STYLE = { color: 'rgba(40, 40, 40, 0.15)' };
 const INITIAL_FETCH_INTERVAL = 5000;
@@ -7,8 +8,8 @@ const $ = (id: string) => document.getElementById(id);
 const DEFAULT_PALETTE = ['#1A74A8', '#067A57CC', '#EE6666', '#FAC858', '#73C0DE', '#3BA272', '#FC8452', '#9A60B4', '#ea7ccc'];
 
 const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt: any) => {
-  const palette = opt.color || DEFAULT_PALETTE;
-  const paletteColor = palette[i % palette.length];
+  // Use deterministic color based on series name
+  const paletteColor = getSeriesColor(name);
 
   const gradientColor = new (window as any).echarts.graphic.LinearGradient(0, 0, 0, 1, [
     { offset: 0, color: (window as any).echarts.color.modifyAlpha(paletteColor, 1) },
@@ -28,12 +29,18 @@ const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt
     barMaxWidth: '10',
     barMinHeight: '1',
     encode: { x: 0, y: i + 1 },
+    // Set the color explicitly for all series types
+    itemStyle: { color: paletteColor },
   };
 
-  // For line charts in dark mode, override the symbol to avoid white centers
-  if (widgetData.chartType === 'line' && isDarkMode) {
-    seriesOpt.symbol = 'circle'; // Use filled circle instead of empty circle
-    seriesOpt.symbolSize = 4;
+  // For line charts, also set lineStyle color
+  if (widgetData.chartType === 'line') {
+    seriesOpt.lineStyle = { color: paletteColor };
+    // For line charts in dark mode, override the symbol to avoid white centers
+    if (isDarkMode) {
+      seriesOpt.symbol = 'circle'; // Use filled circle instead of empty circle
+      seriesOpt.symbolSize = 4;
+    }
   }
 
   if (widgetData.widgetType == 'timeseries_stat') {

@@ -1,3 +1,5 @@
+import { getSeriesColor, tailwindToHex } from './colorMapping';
+
 const SCROLL_BAR_WIDTH = 7;
 
 // Simple debounce utility
@@ -79,7 +81,9 @@ export function flameGraphChart(data: FlameGraphItem[], renderAt: string, colors
     const filteredJson = filterJson(structuredClone(jsonObj), id);
     const rootVal = filteredJson.sort((a, b) => b.value - a.value)[0]?.value || 1;
     const recur = (item: FlameGraphItem, start = 0, level = 0) => {
-      const color = colorsMap[item.serviceName] || 'bg-fillStrong';
+      // Use deterministic color based on service name
+      const tailwindColor = colorsMap[item.serviceName] || getSeriesColor(item.serviceName, 'service');
+      const color = tailwindColor.startsWith('#') ? tailwindColor : tailwindToHex(tailwindColor);
       const temp: ItemsWithStyle = {
         name: item.name,
         hasErrors: item.hasErrors,
@@ -368,7 +372,9 @@ function buildTree(span: WaterfallItem, serviceColors: Record<string, string>, s
     class: 'flex flex-col span-filterble',
   });
   const spanId = span.spanRecord.spanId;
-  const color = serviceColors[span.spanRecord.serviceName] || 'bg-fillStrong';
+  // Use deterministic color based on service name
+  const tailwindColor = serviceColors[span.spanRecord.serviceName] || getSeriesColor(span.spanRecord.serviceName, 'service');
+  const color = tailwindColor.startsWith('bg-') ? tailwindColor : `bg-[${tailwindColor}]`;
   const div = elt('div', {
     class:
       color +
