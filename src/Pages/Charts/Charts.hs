@@ -186,7 +186,7 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
       let (_, qc) = Parser.queryASTToComponents sqlQueryComponents queryAST
 
       let mappng' = mappng <> M.fromList [("query_ast_filters", maybe "" (" AND " <>) qc.whereClause)]
-      pure $ DashboardUtils.replacePlaceholders mappng' querySQL -- FIXME: risk of sql injection and many other attacks
+      pure $ DashboardUtils.replacePlaceholders mappng' querySQL
     _ -> do
       queryAST <-
         checkpoint (toAnnotation ("queryMetrics", queryM))

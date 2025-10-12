@@ -5,6 +5,7 @@ import Data.Time (UTCTime)
 import Pkg.Parser (calculateAutoBinWidth)
 import Relude
 import Text.Regex.TDFA ((=~))
+import Text.Regex.TDFA.Text ()
 import Utils qualified
 
 
@@ -17,7 +18,7 @@ replacePlaceholders mappng = go
       case toString txt =~ toString regex :: (String, String, String, [String]) of
         (before, match, after, [key])
           | not (null match) ->
-              let replacement = Map.findWithDefault (toText match) (toText key) mappng
+              let replacement = Map.findWithDefault "" (toText key) mappng
                in toText before <> replacement <> go (toText after)
         _ -> txt
 
@@ -41,4 +42,4 @@ variablePresets pid mf mt allParams currentTime =
           , ("time_filter_sql_created_at", clause "created_at")
           , ("rollup_interval", rollupInterval)
           ]
-        <> allParams'
+          <> allParams'
