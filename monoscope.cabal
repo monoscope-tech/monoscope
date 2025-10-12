@@ -39,6 +39,7 @@ extra-source-files:
     static/migrations/0012_drop_materialized_views.sql
     static/migrations/0013_log_patterns.sql
     static/migrations/0014_alerts_config.sql
+    static/migrations/0015_summary_pattern.sql
 
 source-repository head
   type: git
