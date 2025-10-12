@@ -160,6 +160,8 @@ declare global {
     dashboardRefreshTimer: NodeJS.Timeout | null;
     dashboardRefreshInterval: number;
     bindFunctionsToObjects: any;
+    setVariable: (key: string, value: string) => void;
+    getVariable: (key: string) => string;
   }
 }
 

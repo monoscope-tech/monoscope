@@ -377,7 +377,7 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
     pure
       $ widget
       & #html
-        ?~ renderText (Widget.renderTableWithData widget tableData.dataText)
+        ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
   _ -> do
     metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure

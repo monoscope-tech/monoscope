@@ -191,3 +191,27 @@ function updateUrlState(key: string, value: string, action: 'set' | 'delete' = '
   window.history.replaceState({}, '', `${window.location.pathname}?${params}`);
 }
 window.updateUrlState = updateUrlState;
+
+// Simple variable setter that updates the tablist element
+window.setVariable = (key: string, value: string) => {
+  // Find the variable tablist element by its data attribute or id
+  const varElement = document.querySelector(`[data-variable="${key}"], #var-${key}`) as HTMLInputElement | HTMLSelectElement;
+  
+  if (varElement) {
+    // Update the element's value
+    varElement.value = value;
+    
+    // Trigger change event to update URL and notify other components
+    varElement.dispatchEvent(new Event('change', { bubbles: true }));
+  } else {
+    // Fallback: directly update URL if element not found
+    updateUrlState(`var-${key}`, value);
+    window.dispatchEvent(new Event('update-query'));
+  }
+};
+
+// Helper to get current variable value
+window.getVariable = (key: string) => {
+  const params = new URLSearchParams(window.location.search);
+  return params.get(`var-${key}`) || '';
+};

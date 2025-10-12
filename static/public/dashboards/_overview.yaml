@@ -563,6 +563,7 @@ tabs:
             WHERE project_id='{{project_id}}'
               AND name IS NOT NULL
               AND kind = 'server'
+              AND ('{{var-resource}}' = '' OR name = '{{var-resource}}')
               {{time_filter}}
             GROUP BY name
             ORDER BY COUNT(*) DESC
@@ -580,6 +581,7 @@ tabs:
           WHERE o.project_id='{{project_id}}'
             AND o.name IS NOT NULL
             AND o.kind = 'server'
+            AND ('{{var-resource}}' = '' OR o.name = '{{var-resource}}')
             {{time_filter}}
           GROUP BY time, CASE WHEN tr.name IS NOT NULL THEN o.name ELSE 'Others' END
           ORDER BY time DESC
@@ -596,6 +598,7 @@ tabs:
             WHERE project_id='{{project_id}}'
               AND name IS NOT NULL
               AND kind = 'server'
+              AND ('{{var-resource}}' = '' OR name = '{{var-resource}}')
               {{time_filter}}
             GROUP BY name
             ORDER BY COUNT(*) DESC
@@ -614,6 +617,7 @@ tabs:
             AND o.name IS NOT NULL
             AND o.kind = 'server'
             AND o.duration IS NOT NULL
+            AND ('{{var-resource}}' = '' OR o.name = '{{var-resource}}')
             {{time_filter}}
           GROUP BY time, CASE WHEN tr.name IS NOT NULL THEN o.name ELSE 'Others' END
           ORDER BY time DESC
@@ -631,6 +635,7 @@ tabs:
             WHERE project_id='{{project_id}}'
               AND name IS NOT NULL
               AND kind = 'server'
+              AND ('{{var-resource}}' = '' OR name = '{{var-resource}}')
               {{time_filter}}
             GROUP BY name
             ORDER BY COUNT(*) DESC
@@ -649,6 +654,7 @@ tabs:
             AND o.name IS NOT NULL
             AND o.kind = 'server'
             AND (o.status_code = 'ERROR' OR COALESCE(o.attributes___http___response___status_code, 0) >= 400)
+            AND ('{{var-resource}}' = '' OR o.name = '{{var-resource}}')
             {{time_filter}}
           GROUP BY time, CASE WHEN tr.name IS NOT NULL THEN o.name ELSE 'Others' END
           ORDER BY time DESC

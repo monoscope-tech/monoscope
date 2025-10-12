@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTableWithData) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTableWithData, renderTableWithDataAndParams) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -450,9 +450,9 @@ renderTable widget = do
                 onRowClick.value.replace(/\{\{row\.(\w+)\}\}/g, (_, field) => rowData[field]) :
                 rowData[columns[0].field];
               
-              const url = new URL(window.location);
+              const url = new URL(window.location.href);
               url.searchParams.set('var-' + varName, value);
-              history.pushState({}, '', url);
+              history.pushState({}, '', url.toString());
               window.dispatchEvent(new Event('update-query'));
               
               // Navigate to tab if specified
@@ -763,9 +763,13 @@ mapChatTypeToWidgetType _ = WTTimeseries
 
 -- Server-side table data rendering
 renderTableWithData :: Widget -> V.Vector (V.Vector Text) -> Html ()
-renderTableWithData widget dataRows = do
+renderTableWithData widget dataRows = renderTableWithDataAndParams widget dataRows []
+
+renderTableWithDataAndParams :: Widget -> V.Vector (V.Vector Text) -> [(Text, Maybe Text)] -> Html ()
+renderTableWithDataAndParams widget dataRows params = do
   let columns = fromMaybe [] widget.columns
   let tableId = maybeToMonoid widget.id
+  let currentVar = widget.onRowClick >>= (.setVariable) >>= \var -> find ((== "var-" <> var) . fst) params >>= snd
 
   -- Render complete table with data
   table_ [class_ "table table-zebra table-sm w-full relative", id_ tableId] do
@@ -795,7 +799,15 @@ renderTableWithData widget dataRows = do
       -- Render table rows
       forM_ (V.toList dataRows) \row -> do
         let rowData = AE.object [(K.fromText col.field, AE.String $ getRowValue col idx row) | (col, idx) <- zip columns [0 ..]]
-        tr_ [class_ "hover cursor-pointer", data_ "row" (decodeUtf8 $ fromLazy $ AE.encode rowData)] do
+        let firstColValue = maybe "" (\c -> getRowValue c 0 row) (listToMaybe columns)
+        let rowValue = case widget.onRowClick >>= (.value) of
+              Just tmpl -> T.replace "{{row.resource_name}}" firstColValue tmpl
+              Nothing -> firstColValue
+        let isSelected = Just rowValue == currentVar
+        
+        tr_ [ class_ $ "hover cursor-pointer" <> if isSelected then " bg-fillBrand/20 border-l-4 border-borderBrand" else ""
+            , data_ "row" (decodeUtf8 $ fromLazy $ AE.encode rowData)
+            ] do
           forM_ (zip columns [0 ..]) \(col, idx) -> do
             let value = getRowValue col idx row
             td_ [class_ $ fromMaybe "" col.align <> if col.columnType `elem` [Just ("number" :: Text), Just ("duration" :: Text)] then " monospace" else ""] do
