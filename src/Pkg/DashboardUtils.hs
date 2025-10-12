@@ -42,4 +42,4 @@ variablePresets pid mf mt allParams currentTime =
           , ("time_filter_sql_created_at", clause "created_at")
           , ("rollup_interval", rollupInterval)
           ]
-          <> allParams'
+        <> allParams'

@@ -326,12 +326,12 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                    <> maybeToMonoid (widget._projectId <&> (.toText))
-                    <> "/dashboards/"
-                    <> maybeToMonoid widget._dashboardId
-                    <> "/widgets/"
-                    <> wId
-                    <> "/duplicate"
+                  <> maybeToMonoid (widget._projectId <&> (.toText))
+                  <> "/dashboards/"
+                  <> maybeToMonoid widget._dashboardId
+                  <> "/widgets/"
+                  <> wId
+                  <> "/duplicate"
               , hxTrigger_ "click"
               , [__| on click set (the closest <details/>).open to false
                      on htmx:beforeSwap
@@ -385,12 +385,12 @@ renderTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-              <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
+            <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ tableId <> "_bordered"
         ]
         do
           -- Single scrollable table container
-          div_ 
+          div_
             [ class_ "h-full overflow-auto p-3"
             , hxGet_ $ "/p/" <> fromMaybe "" (widget._projectId <&> (.toText)) <> "/widget?widgetJSON=" <> widgetJson
             , hxTrigger_ "load, update-query from:window"
@@ -398,33 +398,35 @@ renderTable widget = do
             , hxSelect_ $ "#" <> tableId
             , hxSwap_ "outerHTML"
             , hxExt_ "forward-page-params"
-            ] do
-            case widget.html of
-              Just html -> toHtmlRaw html -- Use pre-rendered HTML if available
-              Nothing -> do
-                -- Otherwise render table structure with HTMX for updates
-                table_
-                  [ class_ "table table-zebra table-sm w-full relative"
-                  , id_ tableId
-                  ]
-                  do
-                    -- Table header
-                    thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
-                      tr_ [] do
-                        forM_ (zip (fromMaybe [] widget.columns) [0..]) \(col, idx) ->
-                          th_ 
-                            [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" col.align
-                            , onclick_ $ "window.sortTable('" <> tableId <> "', " <> T.pack (show idx) <> ", this)"
-                            , data_ "sort-direction" "none"
-                            ] do
-                            div_ [class_ "flex items-center justify-between"] do
-                              toHtml col.title
-                              span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
-                    -- Table body with loading indicator
-                    tbody_ []
-                      $ tr_ []
-                      $ td_ [colspan_ "100", class_ "text-center py-8"]
-                      $ span_ [class_ "loading loading-spinner loading-sm"] ""
+            ]
+            do
+              case widget.html of
+                Just html -> toHtmlRaw html -- Use pre-rendered HTML if available
+                Nothing -> do
+                  -- Otherwise render table structure with HTMX for updates
+                  table_
+                    [ class_ "table table-zebra table-sm w-full relative"
+                    , id_ tableId
+                    ]
+                    do
+                      -- Table header
+                      thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
+                        tr_ [] do
+                          forM_ (zip (fromMaybe [] widget.columns) [0 ..]) \(col, idx) ->
+                            th_
+                              [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" col.align
+                              , onclick_ $ "window.sortTable('" <> tableId <> "', " <> T.pack (show idx) <> ", this)"
+                              , data_ "sort-direction" "none"
+                              ]
+                              do
+                                div_ [class_ "flex items-center justify-between"] do
+                                  toHtml col.title
+                                  span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
+                      -- Table body with loading indicator
+                      tbody_ []
+                        $ tr_ []
+                        $ td_ [colspan_ "100", class_ "text-center py-8"]
+                        $ span_ [class_ "loading loading-spinner loading-sm"] ""
 
     -- Add row click handler script if needed
     whenJust widget.onRowClick \onRowClick ->
@@ -484,7 +486,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ chartId <> "_bordered"
         ]
         do
@@ -765,6 +767,7 @@ mapChatTypeToWidgetType _ = WTTimeseries
 renderTableWithData :: Widget -> V.Vector (V.Vector Text) -> Html ()
 renderTableWithData widget dataRows = renderTableWithDataAndParams widget dataRows []
 
+
 renderTableWithDataAndParams :: Widget -> V.Vector (V.Vector Text) -> [(Text, Maybe Text)] -> Html ()
 renderTableWithDataAndParams widget dataRows params = do
   let columns = fromMaybe [] widget.columns
@@ -776,15 +779,16 @@ renderTableWithDataAndParams widget dataRows params = do
     -- Table header
     thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
       tr_ [] do
-        forM_ (zip columns [0..]) \(col, idx) -> do
-          th_ 
+        forM_ (zip columns [0 ..]) \(col, idx) -> do
+          th_
             [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" col.align
             , onclick_ $ "window.sortTable('" <> tableId <> "', " <> T.pack (show idx) <> ", this)"
             , data_ "sort-direction" "none"
-            ] do
-            div_ [class_ "flex items-center justify-between"] do
-              toHtml col.title
-              span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
+            ]
+            do
+              div_ [class_ "flex items-center justify-between"] do
+                toHtml col.title
+                span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
 
     -- Table body with data
     tbody_ [] do
@@ -792,9 +796,12 @@ renderTableWithDataAndParams widget dataRows params = do
       let maxValues = calculateMaxValues columns dataRows
 
       -- Calculate max formatted width for each progress column
-      let valueWidths = M.fromList
-            [(col.field, foldr max 5 [T.length (formatColumnValue col (fromMaybe "" $ row V.!? idx)) | row <- V.toList dataRows])
-            | (col, idx) <- zip columns [0..], isJust col.progress]
+      let valueWidths =
+            M.fromList
+              [ (col.field, foldr max 5 [T.length (formatColumnValue col (fromMaybe "" $ row V.!? idx)) | row <- V.toList dataRows])
+              | (col, idx) <- zip columns [0 ..]
+              , isJust col.progress
+              ]
 
       -- Render table rows
       forM_ (V.toList dataRows) \row -> do
@@ -804,16 +811,18 @@ renderTableWithDataAndParams widget dataRows params = do
               Just tmpl -> T.replace "{{row.resource_name}}" firstColValue tmpl
               Nothing -> firstColValue
         let isSelected = Just rowValue == currentVar
-        
-        tr_ [ class_ $ "hover cursor-pointer" <> if isSelected then " bg-fillBrand/20 border-l-4 border-borderBrand" else ""
-            , data_ "row" (decodeUtf8 $ fromLazy $ AE.encode rowData)
-            ] do
-          forM_ (zip columns [0 ..]) \(col, idx) -> do
-            let value = getRowValue col idx row
-            td_ [class_ $ fromMaybe "" col.align <> if col.columnType `elem` [Just ("number" :: Text), Just ("duration" :: Text)] then " monospace" else ""] do
-              if isJust col.progress
-                then renderProgressCell col value maxValues valueWidths
-                else toHtml $ formatColumnValue col value
+
+        tr_
+          [ class_ $ "hover cursor-pointer" <> if isSelected then " bg-fillBrand/20 border-l-4 border-borderBrand" else ""
+          , data_ "row" (decodeUtf8 $ fromLazy $ AE.encode rowData)
+          ]
+          do
+            forM_ (zip columns [0 ..]) \(col, idx) -> do
+              let value = getRowValue col idx row
+              td_ [class_ $ fromMaybe "" col.align <> if col.columnType `elem` [Just ("number" :: Text), Just ("duration" :: Text)] then " monospace" else ""] do
+                if isJust col.progress
+                  then renderProgressCell col value maxValues valueWidths
+                  else toHtml $ formatColumnValue col value
 
 
 -- Helper to get row value by column index or field name
@@ -871,25 +880,26 @@ getProgressVariantClass variant = case variant of
 -- Format column value based on column type
 formatColumnValue :: TableColumn -> Text -> Text
 formatColumnValue col value = case col.columnType of
-  Just "number" -> 
+  Just "number" ->
     case readMaybe (T.unpack value) :: Maybe Double of
-      Just n -> 
-        let formatted = if n < 100 && n /= fromIntegral (round n :: Int)
-              then T.pack $ printf "%.2g" n  -- Keep significant digits for small numbers
-              else prettyPrintCount (round n)  -- Use pretty print for larger numbers
-        in formatted <> foldMap (" " <>) col.unit
+      Just n ->
+        let formatted =
+              if n < 100 && n /= fromIntegral (round n :: Int)
+                then T.pack $ printf "%.2g" n -- Keep significant digits for small numbers
+                else prettyPrintCount (round n) -- Use pretty print for larger numbers
+         in formatted <> foldMap (" " <>) col.unit
       Nothing -> value <> foldMap (" " <>) col.unit
-  Just "duration" -> 
+  Just "duration" ->
     case readMaybe (T.unpack value) :: Maybe Double of
       Just v ->
         -- Convert to nanoseconds based on unit, then format
         let nsValue = case col.unit of
-              Just "ms" -> v * 1_000_000      -- milliseconds to nanoseconds
-              Just "s" -> v * 1_000_000_000   -- seconds to nanoseconds
-              Just "μs" -> v * 1_000          -- microseconds to nanoseconds
-              Just "us" -> v * 1_000          -- microseconds to nanoseconds (alt)
-              Just "ns" -> v                  -- already nanoseconds
-              _ -> v                          -- assume nanoseconds if no unit
-        in prettyPrintDuration nsValue
+              Just "ms" -> v * 1_000_000 -- milliseconds to nanoseconds
+              Just "s" -> v * 1_000_000_000 -- seconds to nanoseconds
+              Just "μs" -> v * 1_000 -- microseconds to nanoseconds
+              Just "us" -> v * 1_000 -- microseconds to nanoseconds (alt)
+              Just "ns" -> v -- already nanoseconds
+              _ -> v -- assume nanoseconds if no unit
+         in prettyPrintDuration nsValue
       Nothing -> value <> foldMap (" " <>) col.unit
   _ -> value <> foldMap (" " <>) col.unit

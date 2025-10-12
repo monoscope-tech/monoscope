@@ -542,37 +542,39 @@ getPercentileColors percentiles = HM.fromList $ map assignColor percentiles
     -- Define a color mapping for common percentiles
     -- Using a progression from cool to warm colors to indicate severity
     percentileColorMap :: HashMap Text Text
-    percentileColorMap = HM.fromList
-      [ ("p50", "bg-green-400")     -- Median - good performance
-      , ("p75", "bg-cyan-400")      -- 75th percentile - acceptable
-      , ("p90", "bg-yellow-400")    -- 90th percentile - warning
-      , ("p95", "bg-orange-400")    -- 95th percentile - concerning  
-      , ("p99", "bg-red-400")       -- 99th percentile - critical
-      , ("p100", "bg-red-600")      -- Maximum - most critical
-      -- Alternative naming conventions
-      , ("median", "bg-green-400")
-      , ("q1", "bg-emerald-400")    -- First quartile
-      , ("q3", "bg-amber-400")      -- Third quartile
-      , ("max", "bg-red-600")
-      , ("min", "bg-blue-400")
-      ]
-    
+    percentileColorMap =
+      HM.fromList
+        [ ("p50", "bg-green-400") -- Median - good performance
+        , ("p75", "bg-cyan-400") -- 75th percentile - acceptable
+        , ("p90", "bg-yellow-400") -- 90th percentile - warning
+        , ("p95", "bg-orange-400") -- 95th percentile - concerning
+        , ("p99", "bg-red-400") -- 99th percentile - critical
+        , ("p100", "bg-red-600") -- Maximum - most critical
+        -- Alternative naming conventions
+        , ("median", "bg-green-400")
+        , ("q1", "bg-emerald-400") -- First quartile
+        , ("q3", "bg-amber-400") -- Third quartile
+        , ("max", "bg-red-600")
+        , ("min", "bg-blue-400")
+        ]
+
     -- Fallback colors for non-standard percentiles
     fallbackColors :: V.Vector Text
-    fallbackColors = V.fromList
-      [ "bg-indigo-400"
-      , "bg-purple-400"
-      , "bg-pink-400"
-      , "bg-teal-400"
-      , "bg-lime-400"
-      ]
-    
+    fallbackColors =
+      V.fromList
+        [ "bg-indigo-400"
+        , "bg-purple-400"
+        , "bg-pink-400"
+        , "bg-teal-400"
+        , "bg-lime-400"
+        ]
+
     -- Assign color to a percentile label
     assignColor :: Text -> (Text, Text)
-    assignColor percentile = 
+    assignColor percentile =
       case HM.lookup (T.toLower percentile) percentileColorMap of
         Just color -> (percentile, color)
-        Nothing -> 
+        Nothing ->
           -- For unknown percentiles, use a deterministic fallback color
           let colorIdx = sum (map ord $ toString percentile) `mod` V.length fallbackColors
               fallbackColor = fallbackColors V.! colorIdx
@@ -698,12 +700,12 @@ prettyPrintCount n
 -- Pretty print duration from nanoseconds to human-readable format
 prettyPrintDuration :: Double -> Text
 prettyPrintDuration ns
-  | ns >= 3_600_000_000_000 = T.pack (printf "%.1fh" (ns / 3_600_000_000_000))    -- hours
-  | ns >= 60_000_000_000 = T.pack (printf "%.1fm" (ns / 60_000_000_000))         -- minutes
-  | ns >= 1_000_000_000 = T.pack (printf "%.1fs" (ns / 1_000_000_000))           -- seconds
-  | ns >= 1_000_000 = T.pack (printf "%.1fms" (ns / 1_000_000))                  -- milliseconds
-  | ns >= 1_000 = T.pack (printf "%.1fμs" (ns / 1_000))                          -- microseconds
-  | otherwise = T.pack (printf "%.0fns" ns)                                       -- nanoseconds
+  | ns >= 3_600_000_000_000 = T.pack (printf "%.1fh" (ns / 3_600_000_000_000)) -- hours
+  | ns >= 60_000_000_000 = T.pack (printf "%.1fm" (ns / 60_000_000_000)) -- minutes
+  | ns >= 1_000_000_000 = T.pack (printf "%.1fs" (ns / 1_000_000_000)) -- seconds
+  | ns >= 1_000_000 = T.pack (printf "%.1fms" (ns / 1_000_000)) -- milliseconds
+  | ns >= 1_000 = T.pack (printf "%.1fμs" (ns / 1_000)) -- microseconds
+  | otherwise = T.pack (printf "%.0fns" ns) -- nanoseconds
 
 
 messageKeys :: [T.Text]

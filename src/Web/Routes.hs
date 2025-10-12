@@ -526,18 +526,19 @@ widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
   widget <- case widgetJsonM >>= AE.decodeStrict . encodeUtf8 of
     Just w -> pure w
     Nothing -> Error.throwError $ err400{errBody = "Invalid or missing widgetJSON parameter"}
-  
+
   -- Get the current time for processing
   now <- Time.currentTime
-  
+
   -- Process the widget with dashboard parameters (similar to how processWidget works in Dashboards)
   let widgetWithPid = widget & #_projectId ?~ pid
-  
+
   -- Process eager widgets (tables, stats, etc.) with dashboard parameters
-  processedWidget <- if widgetWithPid.eager == Just True || widgetWithPid.wType `elem` [Widget.WTTable, Widget.WTStat, Widget.WTAnomalies]
-    then Dashboards.processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetWithPid
-    else pure widgetWithPid
-  
+  processedWidget <-
+    if widgetWithPid.eager == Just True || widgetWithPid.wType `elem` [Widget.WTTable, Widget.WTStat, Widget.WTAnomalies]
+      then Dashboards.processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetWithPid
+      else pure widgetWithPid
+
   -- Return the processed widget
   addRespHeaders processedWidget
 
