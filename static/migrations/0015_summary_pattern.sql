@@ -1,0 +1,4 @@
+BEGIN; 
+ALTER TABLE otel_logs_and_spans
+ADD COLUMN IF NOT EXISTS summary_pattern TEXT DEFAULT  NULL;
+COMMIT;

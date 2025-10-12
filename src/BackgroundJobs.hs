@@ -17,8 +17,9 @@ import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Data.Vector.Algorithms qualified as VAA
 import Database.PostgreSQL.Entity.DBT (execute, query, withPool)
-import Database.PostgreSQL.Simple (Only (Only), Query, SomePostgreSqlException)
+import Database.PostgreSQL.Simple (Only (Only), SomePostgreSqlException)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.Types
 import Database.PostgreSQL.Transact qualified as PTR
 import Effectful (Eff, IOE, (:>))
 import Effectful.Ki qualified as Ki
@@ -48,6 +49,7 @@ import Models.Projects.Projects (ProjectId (unProjectId))
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Users qualified as Users
+import NeatInterpolation (text)
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq (defaults, header, postWith)
 import OddJobs.ConfigBuilder (mkConfig)
@@ -231,8 +233,8 @@ processBackgroundJob authCtx job bgJob =
       forM_ projects \p -> do
         liftIO $ withResource authCtx.jobsPool \conn -> do
           -- Schedule 5-minute log pattern extraction
-          forM_ [0 .. 287] \interval -> do
-            let scheduledTime = addUTCTime (fromIntegral $ interval * 300) currentTime
+          forM_ [0 .. 7000] \interval -> do
+            let scheduledTime = addUTCTime (fromIntegral $ interval * 5) currentTime
             _ <- scheduleJob conn "background_jobs" (BackgroundJobs.FifteenMinutesLogsPatternProcessing scheduledTime p) scheduledTime
             pass
           -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
@@ -343,57 +345,75 @@ processFiveMinuteSpans scheduledTime pid = do
             [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
                          hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
                   FROM otel_logs_and_spans 
-              WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND name = 'monoscope.http' OFFSET ? LIMIT 50 |]
+              WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND name = 'monoscope.http' OFFSET ? LIMIT 25 |]
             (pid, fiveMinutesAgo, scheduledTime, skip)
       Log.logInfo "Processing HTTP spans from 5-minute window" ("span_count", AE.toJSON $ V.length httpSpans)
       processProjectSpans pid httpSpans fiveMinutesAgo scheduledTime
       Log.logInfo "Processing complete for page " ("skip", skip)
-      Relude.when (V.length httpSpans == 50) $ do
-        processSpansWithPagination fiveMinutesAgo (skip + 50)
+      Relude.when (V.length httpSpans == 25) $ do
+        processSpansWithPagination fiveMinutesAgo (skip + 25)
 
 
 logsPatternExtraction :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
 logsPatternExtraction scheduledTime pid = do
   ctx <- ask @Config.AuthContext
   tenMinutesAgo <- liftIO $ addUTCTime (-300) <$> Time.currentTime
-  processWithPagination 0 tenMinutesAgo
+  paginate 0 tenMinutesAgo
   Log.logInfo "Completed logs pattern extraction for project" ("project_id", AE.toJSON pid.toText)
   where
-    limitVal = 500
-    processWithPagination :: Int -> UTCTime -> ATBackgroundCtx ()
-    processWithPagination skip tenMinutesAgo = do
-      Log.logInfo "Fetching logs for pattern extraction: " ("Skip", skip)
-      otelLogs <- dbtToEff $ query [sql| SELECT id::text, body::text FROM otel_logs_and_spans WHERE project_id = ? and timestamp >= ? and timestamp < ?  and kind = 'log' and log_pattern is null and body is not null and body != 'null' offset ? limit 500|] (pid, tenMinutesAgo, scheduledTime, skip)
-      Log.logInfo "Fetched  logs for pattern extraction" ("log_count", AE.toJSON $ V.length otelLogs)
-      Relude.when (null otelLogs) $ do
-        Log.logInfo "No logs found for pattern extraction" ("project_id", AE.toJSON pid.toText)
-      unless (null otelLogs) $ do
-        Log.logInfo "Fetching existing log patterns for project" ("project_id", AE.toJSON pid.toText)
-        logsWithPatterns' <- dbtToEff $ query [sql| SELECT log_pattern FROM otel_logs_and_spans WHERE project_id = ? and timestamp >= now() - interval '1 hours' AND kind = 'log' AND log_pattern IS NOT NULL limit 300|] (pid)
-        let logsWithPatterns = (\(p) -> ("", p)) <$> logsWithPatterns'
-        let finalVals = logsWithPatterns <> otelLogs
-        let drainTree = processBatch finalVals scheduledTime Drain.emptyDrainTree
-            patterns = Drain.getAllLogGroups drainTree
-        Log.logInfo "Extracted log patterns" ("pattern_count", AE.toJSON $ V.length patterns)
-        forM_ patterns \p -> do
-          _ <- dbtToEff $ execute [sql| UPDATE otel_logs_and_spans SET log_pattern = ? WHERE project_id=? and timestamp > ? and id::text=Any(?) |] (fst p, pid, tenMinutesAgo, V.filter (\p' -> p' /= "") $ snd p)
-          pass
-        Log.logInfo "Completed logs pattern extraction for page" ("skip", skip)
-      Relude.when (V.length otelLogs == limitVal) $ do
-        processWithPagination (skip + limitVal) tenMinutesAgo
-        pass
+    limitVal = 250
+    paginate :: Int -> UTCTime -> ATBackgroundCtx ()
+    paginate offset startTime = do
+      Log.logInfo "Fetching logs for pattern extraction" ("offset", AE.toJSON offset)
+      otelEvents <- dbtToEff $ query [sql| SELECT kind, id::text, coalesce(body::text,''), coalesce(summary::text,'') FROM otel_logs_and_spans WHERE project_id = ?   AND timestamp >= ?   AND timestamp < ?   AND (summary_pattern IS NULL  OR log_pattern IS NULL) OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
+      let count = V.length otelEvents
+      Log.logInfo "Fetched events" ("count", AE.toJSON count)
+      unless (V.null otelEvents) $ do
+        let logEvents = V.filter ((== "log") . (\(k, _, _, _) -> k)) otelEvents
+            logPairs = logEvents <&> (\(_, idTxt, body, _) -> (idTxt, body))
+        processPatterns "log" "log_pattern" logPairs pid scheduledTime startTime
+        let summaryEvents = V.filter ((/= "log") . (\(k, _, _, _) -> k)) otelEvents
+            summaryPairs = summaryEvents <&> (\(_, idTxt, _, summary) -> (idTxt, summary))
+        processPatterns "summary" "summary_pattern" summaryPairs pid scheduledTime startTime
+        Log.logInfo "Completed logs pattern extraction for page" ("offset", AE.toJSON offset)
+      Relude.when (count == limitVal) $ paginate (offset + limitVal) startTime
 
-    processNewLog :: Text -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
-    processNewLog logId logContent now tree = do
-      let tokensVec = V.fromList $ T.words $ replaceAllFormats $ logContent
-          tokenCount = V.length tokensVec
-          firstToken = if V.null tokensVec then "" else V.head tokensVec
-       in if tokenCount == 0
-            then tree -- Skip empty logs
-            else Drain.updateTreeWithLog tree tokenCount firstToken tokensVec logId logContent now
-    processBatch :: V.Vector (Text, Text) -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
-    processBatch logBatch now initialTree = do
-      V.foldl (\tree (logId, logContent) -> processNewLog logId logContent now tree) initialTree logBatch
+
+-- | Generic pattern extraction for logs or summaries
+processPatterns :: Text -> Text -> V.Vector (Text, Text) -> Projects.ProjectId -> UTCTime -> UTCTime -> ATBackgroundCtx ()
+processPatterns kind fieldName events pid scheduledTime since = do
+  Log.logInfo ("Extracting " <> kind <> " patterns") ("project_id", pid.toText)
+  let qq = [text|  SELECT $fieldName  FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= now() - interval '1 hour' AND timestamp < ?AND kind = ? AND $fieldName IS NOT NULL LIMIT 300 |]
+  existingPatterns <- dbtToEff $ query (Query $ encodeUtf8 qq) (pid, scheduledTime, kind)
+  let known = fmap (\p -> ("", p)) existingPatterns
+      combined = known <> events
+      drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
+      newPatterns = Drain.getAllLogGroups drainTree
+  Log.logInfo ("Extracted " <> kind <> " patterns") ("count", AE.toJSON $ V.length newPatterns)
+
+  forM_ newPatterns \(patternTxt, ids) -> do
+    let q = [text|UPDATE otel_logs_and_spans SET $fieldName = ?  WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|]
+    unless (V.null ids)
+      $ void
+      $ dbtToEff
+      $ execute (Query $ encodeUtf8 q) (patternTxt, pid, since, V.filter (/= "") ids)
+
+
+-- | Process a batch of (id, content) pairs through Drain
+processBatch :: Bool -> V.Vector (Text, Text) -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
+processBatch isSummary batch now inTree =
+  V.foldl' (\tree (logId, content) -> processNewLog isSummary logId content now tree) inTree batch
+
+
+processNewLog :: Bool -> Text -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
+processNewLog isSummary logId content now tree =
+  let tokens = V.fromList . (if isSummary then T.splitOn "," else T.words) . replaceAllFormats $ content
+   in if V.null tokens
+        then tree
+        else
+          let tokenCount = V.length tokens
+              firstToken = V.head tokens
+           in Drain.updateTreeWithLog tree tokenCount firstToken tokens logId content now
 
 
 -- | Process errors from OpenTelemetry spans to detect runtime exceptions
@@ -453,7 +473,7 @@ processOneMinuteErrors scheduledTime pid = do
                     OR attributes->>'exception.type' IS NOT NULL
                     OR attributes->>'exception.message' IS NOT NULL
                   )
-                  OFFSET ? LIMIT 50 |]
+                  OFFSET ? LIMIT 30 |]
             (pid, oneMinuteAgo, scheduledTime, skip)
       Log.logInfo "Processing spans with errors from 1-minute window" ("span_count", AE.toJSON $ V.length spansWithErrors)
       let allErrors = Telemetry.getAllATErrors spansWithErrors
@@ -474,8 +494,8 @@ processOneMinuteErrors scheduledTime pid = do
                           WHERE project_id = ? AND context___trace_id = ? AND context___span_id = ? |]
                   (AE.toJSON mappedErrors, pid, firstError.traceId, firstError.spanId)
             pass
-      Relude.when (V.length spansWithErrors == 50) $ do
-        processErrorsPaginated oneMinuteAgo (skip + 50)
+      Relude.when (V.length spansWithErrors == 30) $ do
+        processErrorsPaginated oneMinuteAgo (skip + 30)
         pass
 
 
