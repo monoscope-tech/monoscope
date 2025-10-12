@@ -383,7 +383,7 @@ logsPatternExtraction scheduledTime pid = do
 processPatterns :: Text -> Text -> V.Vector (Text, Text) -> Projects.ProjectId -> UTCTime -> UTCTime -> ATBackgroundCtx ()
 processPatterns kind fieldName events pid scheduledTime since = do
   Log.logInfo ("Extracting " <> kind <> " patterns") ("project_id", pid.toText)
-  let qq = [text|  SELECT $fieldName  FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= now() - interval '1 hour' AND timestamp < ?AND kind = ? AND $fieldName IS NOT NULL LIMIT 300 |]
+  let qq = [text| select $fieldName from otel_logs_and_spans where project_id= ? AND timestamp >= now() - interval '1 hour' and $fieldName is not null GROUP BY $fieldName ORDER BY count(*) desc limit 20|]
   existingPatterns <- dbtToEff $ query (Query $ encodeUtf8 qq) (pid, scheduledTime, kind)
   let known = fmap (\p -> ("", p)) existingPatterns
       combined = known <> events
