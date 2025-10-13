@@ -50,6 +50,7 @@ data UnifiedMonitorItem = UnifiedMonitorItem
   , schedule :: Text
   , lastRun :: Maybe UTCTime
   , createdAt :: UTCTime
+  , now :: UTCTime
   , tags :: [Text]
   , hosts :: [Text]
   , details :: UnifiedMonitorDetails
@@ -175,6 +176,7 @@ toUnifiedMonitorItem pid currTime = alertToUnifiedItem pid
             , createdAt = alert.createdAt
             , tags = []
             , hosts = []
+            , now = currTime
             , details =
                 AlertDetails
                   { query = alert.logQuery
@@ -235,7 +237,7 @@ unifiedMonitorCard item = do
               faSprite_ "calendar" "regular" "h-6 w-6 fill-none"
               div_ [class_ "flex flex-col"] do
                 span_ [class_ "text-textWeak text-xs"] "Created"
-                span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ prettyTimeAuto item.createdAt item.createdAt
+                span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ prettyTimeAuto item.now item.createdAt
 
             -- Last run
             div_ [class_ "flex gap-1.5 items-center"] do
