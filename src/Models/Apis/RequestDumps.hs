@@ -551,13 +551,14 @@ valueToVector (Only val) = case val of
   _ -> Nothing
 
 
-fetchLogPatterns :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Int -> Eff es (V.Vector (Text, Int))
-fetchLogPatterns pid queryAST dateRange sourceM skip = do
+fetchLogPatterns :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Maybe Text -> Int -> Eff es (V.Vector (Text, Int))
+fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
   now <- Time.currentTime
   let (_, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now sourceM Nothing){dateRange}) queryAST
       pidTxt = pid.toText
       whereCondition = fromMaybe [text|project_id=${pidTxt}|] $ queryComponents.whereClause
-      q = [text|select log_pattern, count(*) as p_count from otel_logs_and_spans where project_id='${pidTxt}' and ${whereCondition} and log_pattern is not null GROUP BY log_pattern ORDER BY p_count desc offset ? limit 15;|]
+      target = fromMaybe "log_pattern" targetM
+      q = [text|select $target, count(*) as p_count from otel_logs_and_spans where project_id='${pidTxt}' and ${whereCondition} and $target is not null GROUP BY $target ORDER BY p_count desc offset ? limit 15;|]
   v <- dbtToEff $ query (Query $ encodeUtf8 q) (Only skip)
   pure v
 

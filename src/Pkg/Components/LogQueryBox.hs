@@ -29,6 +29,7 @@ data LogQueryBoxConfig = LogQueryBoxConfig
   , queryLibSaved :: V.Vector Projects.QueryLibItem
   , updateUrl :: Bool
   , alert :: Bool
+  , patternSelected :: Maybe Text
   -- ^ Whether to update the URL when the query changes
   , targetWidgetPreview :: Maybe Text
   -- ^ ID of the widget preview element to update when the query changes
@@ -73,7 +74,7 @@ logQueryBox_ config = do
                   on keydown[key=='Space' and shiftKey] from document set #ai-search-chkbox.checked to true
                   |]
               ]
-            <> [checked_ | isJust config.targetWidgetPreview]
+              <> [checked_ | isJust config.targetWidgetPreview]
           script_
             [text|
             document.addEventListener('keydown', function(e) {
@@ -186,6 +187,10 @@ logQueryBox_ config = do
       div_ [class_ "flex items-between justify-between"] do
         div_ [class_ "flex items-center gap-2"] do
           visualizationTabs_ config.vizType config.updateUrl config.targetWidgetPreview config.alert
+          div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:block"] do
+            select_ [class_ "select select-sm max-w-[100px]", value_ $ fromMaybe "" config.patternSelected, onchange_ "(function(event){window.setQueryParamAndReload('pattern_target', event.target.value)}(event))"] do
+              option_ ([value_ "log_pattern"] ++ [selected_ "" | config.patternSelected == Just "log_body" || isNothing config.patternSelected]) "Log body"
+              option_ ([value_ "summary_pattern"] ++ [selected_ "" | config.patternSelected == Just "summary_pattern"]) "Event summary"
           span_ [class_ "text-textDisabled mx-2 text-xs"] "|"
           termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
 
@@ -209,7 +214,7 @@ logQueryBox_ config = do
                      end
                   |]
                 ]
-              <> [checked_ | config.alert]
+                <> [checked_ | config.alert]
             span_ "create alert"
 
   -- Include initialization code for the query editor
@@ -249,7 +254,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
                           end
                        |]
               ]
-            <> [checked_ | vizType == defaultVizType]
+              <> [checked_ | vizType == defaultVizType]
           span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
           span_ [] $ toHtml label
 
@@ -326,7 +331,7 @@ queryLibItem_ isRecent qli =
           whenJust qli.title (\title -> span_ [class_ "font-medium text-sm"] $ toHtml title <> " •")
           small_ [class_ "text-textWeak text-xs whitespace-nowrap"]
             $ toHtml (displayTimestamp $ formatUTC qli.createdAt)
-            >> when qli.byMe " • by me"
+              >> when qli.byMe " • by me"
         code_ [class_ "queryText text-xs block whitespace-pre-wrap break-words opacity-75"] $ toHtml qli.queryText
 
       -- Actions (simplified, shown on hover)
