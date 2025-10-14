@@ -26,7 +26,6 @@ import Data.IORef qualified as IORef
 import Data.List qualified as L
 import Data.List.Extra (chunksOf)
 import Data.Map qualified as Map
-import Data.Maybe (isJust)
 import Data.ProtoLens.Encoding (decodeMessage)
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T

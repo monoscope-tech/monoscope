@@ -17,7 +17,7 @@ import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Data.Vector.Algorithms qualified as VAA
 import Database.PostgreSQL.Entity.DBT (execute, query, withPool)
-import Database.PostgreSQL.Simple (Only (Only), SomePostgreSqlException)
+import Database.PostgreSQL.Simple (SomePostgreSqlException)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
 import Database.PostgreSQL.Transact qualified as PTR
@@ -63,7 +63,6 @@ import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import RequestMessages (replaceAllFormats)
 import RequestMessages qualified
 import System.Config qualified as Config
 import System.Logging qualified as Log
