@@ -3,13 +3,16 @@ module Pkg.Drain (
   defaultDrainConfig,
   emptyDrainTree,
   updateTreeWithLog,
+  generateDrainTokens,
   getAllLogGroups,
 ) where
 
+import Data.Char (isSpace)
 import Data.Text qualified as T
 import Data.Time.Clock (UTCTime)
 import Data.Vector qualified as V
 import Relude
+import RequestMessages (replaceAllFormats)
 
 
 data LogGroup = LogGroup
@@ -227,3 +230,38 @@ getAllLogGroups tree =
       levelTwos = V.concatMap nodes levelOnes
       allLogGroups = V.concatMap logGroups levelTwos
    in V.map (\grp -> (templateStr grp, logIds grp)) allLogGroups
+
+
+looksLikeJson :: T.Text -> Bool
+looksLikeJson t =
+  ("{" `T.isInfixOf` t && "}" `T.isSuffixOf` t)
+    || ("[" `T.isInfixOf` t && "]" `T.isSuffixOf` t)
+
+
+tokenizeJsonLike :: T.Text -> [T.Text]
+tokenizeJsonLike txt
+  | T.null txt = []
+  | otherwise = go txt
+  where
+    go t
+      | T.null t = []
+      | T.head t `elem` ['{', '}', '[', ']', ',', ':'] =
+          let c = T.singleton (T.head t)
+           in c : go (T.tail t)
+      | T.head t == '"' =
+          let (quoted, rest) = T.breakOn "\"" (T.tail t)
+              token = "\"" <> quoted <> "\"" -- include the quotes
+           in token : go (T.drop 1 rest)
+      | isSpace (T.head t) =
+          go (T.dropWhile isSpace t)
+      | otherwise =
+          let (chunk, rest) = T.span (\c -> not (isSpace c) && notElem c ['{', '}', '[', ']', ',', ':']) t
+           in chunk : go rest
+
+
+generateDrainTokens :: T.Text -> V.Vector T.Text
+generateDrainTokens content =
+  let replaced = replaceAllFormats content
+   in if looksLikeJson replaced
+        then V.fromList (tokenizeJsonLike replaced)
+        else V.fromList $ T.words replaced

@@ -408,7 +408,7 @@ processBatch isSummary batch now inTree =
 
 processNewLog :: Bool -> Text -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
 processNewLog isSummary logId content now tree =
-  let tokens = V.fromList . (if isSummary then T.splitOn "," else T.words) . replaceAllFormats $ content
+  let tokens = Drain.generateDrainTokens content
    in if V.null tokens
         then tree
         else
