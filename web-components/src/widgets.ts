@@ -112,11 +112,17 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     }
 
     const { from, to, headers, dataset, rows_per_min, stats } = await fetch(`/chart_data?${params}`).then((res) => res.json());
-
+    const trmHeaders = headers?.map((h: string) => {
+      if (h === 'timestamp' || h === 'created_at') {
+        return h;
+      }
+      return h.substring(0, 75) + (h.length > 75 ? '...' : '');
+    });
+    console.log(headers);
     opt.xAxis = opt.xAxis || {};
     opt.xAxis.min = from * 1000;
     opt.xAxis.max = to * 1000;
-    opt.dataset.source = [headers, ...dataset.map((row: any) => [row[0] * 1000, ...row.slice(1)])];
+    opt.dataset.source = [trmHeaders || [], ...dataset.map((row: any) => [row[0] * 1000, ...row.slice(1)])];
     opt.yAxis.max = stats.max;
     if (widgetData.chartType != 'line') {
       opt.yAxis.max = stats.max_group_sum;
@@ -548,16 +554,16 @@ window.bindFunctionsToObjects = bindFunctionsToObjects;
 (window as any).sortTable = (tableId: string, col: number, th: HTMLElement) => {
   const table = document.getElementById(tableId) as HTMLTableElement;
   if (!table) return;
-  
+
   const tbody = table.querySelector('tbody');
   if (!tbody) return;
-  
+
   const rows = Array.from(tbody.rows);
   const currentDir = th.dataset.sortDirection;
   const dir = currentDir === 'asc' ? 'desc' : 'asc';
-  
+
   // Reset all headers to default state
-  table.querySelectorAll('th').forEach(header => {
+  table.querySelectorAll('th').forEach((header) => {
     const arrow = header.querySelector('.sort-arrow');
     if (arrow) {
       header.dataset.sortDirection = 'none';
@@ -568,7 +574,7 @@ window.bindFunctionsToObjects = bindFunctionsToObjects;
       arrow.classList.add('opacity-0');
     }
   });
-  
+
   // Update clicked header
   th.dataset.sortDirection = dir;
   const arrow = th.querySelector('.sort-arrow');
@@ -579,26 +585,24 @@ window.bindFunctionsToObjects = bindFunctionsToObjects;
     arrow.classList.remove('opacity-0');
     arrow.classList.add('opacity-100');
   }
-  
+
   // Sort rows
   rows.sort((a, b) => {
     const aVal = a.cells[col]?.textContent?.trim() || '';
     const bVal = b.cells[col]?.textContent?.trim() || '';
-    
+
     // Try numeric comparison first
     const aNum = parseFloat(aVal.replace(/[^\d.-]/g, ''));
     const bNum = parseFloat(bVal.replace(/[^\d.-]/g, ''));
-    
+
     if (!isNaN(aNum) && !isNaN(bNum)) {
       return dir === 'asc' ? aNum - bNum : bNum - aNum;
     }
-    
+
     // Fall back to string comparison
-    return dir === 'asc' 
-      ? aVal.localeCompare(bVal) 
-      : bVal.localeCompare(aVal);
+    return dir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
   });
-  
+
   tbody.append(...rows);
 };
 

@@ -806,9 +806,7 @@ bulkInsertOtelLogsAndSpansTF :: (Concurrent :> es, DB :> es, IOE :> es, Labeled 
 bulkInsertOtelLogsAndSpansTF records = do
   updatedRecords <- V.mapM (\r -> genUUID >>= \uid -> pure (r & #id .~ UUID.toText uid)) records
   _ <- bulkInsertOtelLogsAndSpans updatedRecords
-  when False $ do
-    _ <- retryTimefusion 10 updatedRecords
-    pass
+  _ <- retryTimefusion 10 updatedRecords
   pass
   where
     retryTimefusion 0 recs = labeled @"timefusion" @DB $ bulkInsertOtelLogsAndSpans recs
