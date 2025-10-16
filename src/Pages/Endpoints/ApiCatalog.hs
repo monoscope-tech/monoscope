@@ -128,7 +128,7 @@ renderapiCatalog pid host timeFilter requestType = div_ [class_ "flex py-4 gap-8
         , Widget.naked = Just True
         , Widget.xAxis = Just (def{Widget.showAxisLabel = Just False})
         , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
-        , Widget.query = Just $ "attributes.http.host==\"" <> host.host <> "\" | summarize count(*) by bin(timestamp, 1h)"
+        , Widget.query = Just $ "attributes.http.host==\"" <> host.host <> "\" | summarize count(*) by bin_auto(timestamp)"
         , Widget._projectId = Just pid
         , Widget.hideLegend = Just True
         }

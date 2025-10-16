@@ -15,7 +15,6 @@ import GHC.TypeLits
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Text.Casing
-import Type.Reflection (typeRep)
 
 
 newtype WrappedEnum (prefix :: Symbol) a = WrappedEnum a

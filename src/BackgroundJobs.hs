@@ -211,6 +211,7 @@ processBackgroundJob authCtx job bgJob =
            }|]
           sendPostmarkEmail userEmail (Just ("project-deleted", templateVars)) Nothing
     DailyJob -> do
+      Log.logInfo "Running daily job" ()
       currentDay <- utctDay <$> Time.currentTime
       currentTime <- Time.currentTime
       liftIO $ withResource authCtx.jobsPool \conn -> do
@@ -229,8 +230,11 @@ processBackgroundJob authCtx job bgJob =
           scheduleJob conn "background_jobs" (BackgroundJobs.ProcessIssuesEnhancement scheduledTime4) scheduledTime4
 
       projects <- dbtToEff $ query [sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > now() - interval '24 hours'|] ()
+      Log.logInfo "Scheduling jobs for projects" ("project_count", V.length projects)
       forM_ projects \p -> do
         liftIO $ withResource authCtx.jobsPool \conn -> do
+          -- Report usage to lemon squeezy
+          _ <- createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
           -- Schedule 5-minute log pattern extraction
           forM_ [0 .. 287] \interval -> do
             let scheduledTime = addUTCTime (fromIntegral $ interval * 300) currentTime
@@ -248,7 +252,6 @@ processBackgroundJob authCtx job bgJob =
             $ void
             $ createJob conn "background_jobs"
             $ BackgroundJobs.WeeklyReports p
-          createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
     HourlyJob scheduledTime hour -> runHourlyJob scheduledTime hour
     DailyReports pid -> sendReportForProject pid DailyReport
     WeeklyReports pid -> sendReportForProject pid WeeklyReport
