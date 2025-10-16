@@ -179,7 +179,7 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFr
 
     div_ [class_ "border-t mt-8 pt-8"] do
       div_ [class_ "self-stretch justify-start text-textStrong text-base font-semibold font-['Inter']"] "Upgrade plan"
-      p_ [class_ "text-textWeak text-sm max-w-[513px] mt-3"] "This is APItoolkit pricing, click on compare feature below to select the option that best suit your project."
+      p_ [class_ "text-textWeak text-sm max-w-[513px] mt-3"] "Monoscope pricing, click on compare feature below to select the option that best suit your project."
 
     div_ [class_ "border border-strokeWeak rounded-2xl h-32 flex items-center px-6 py-8 overflow-hidden mt-8 relative"] do
       div_ [class_ "w-full h-36 rotate-y-5 rotate-z-15 right-[-40px] top-[-95px] z-0 absolute bg-gradient-to-b from-slate-500/10 to-slate-500/0"] pass
