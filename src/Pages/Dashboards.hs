@@ -407,11 +407,11 @@ dashboardWidgetPutH pid dashId widgetIdM widget = do
                   else w
               updatedWidgets = map updateWidget (dash :: Dashboards.Dashboard).widgets
               updatedWidget = widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just normalizedWidgetId}
-          ((dash :: Dashboards.Dashboard){Dashboards.widgets = updatedWidgets}, updatedWidget)
+          ((dash :: Dashboards.Dashboard) & #widgets .~ updatedWidgets, updatedWidget)
         Nothing -> do
           -- When adding a new widget
           let widgetUpdated = widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just uid, Widget._centerTitle = Nothing}
-          ((dash :: Dashboards.Dashboard){Dashboards.widgets = (dash :: Dashboards.Dashboard).widgets <> [widgetUpdated]}, widgetUpdated)
+          ((dash :: Dashboards.Dashboard) & #widgets %~ (<> [widgetUpdated]), widgetUpdated)
 
   _ <- dbtToEff $ DBT.updateFieldsBy @Dashboards.DashboardVM [[DBT.field| schema |]] ([DBT.field| id |], dashId) (Only dash')
 
@@ -446,7 +446,7 @@ dashboardWidgetReorderPatchH pid dashId widgetOrder = do
   (_, dash) <- getDashAndVM dashId Nothing
 
   let sortedWidgets = reorderWidgets widgetOrder (dash :: Dashboards.Dashboard).widgets
-      newDash = (dash :: Dashboards.Dashboard){Dashboards.widgets = sortedWidgets}
+      newDash = (dash :: Dashboards.Dashboard) & #widgets .~ sortedWidgets
 
   _ <-
     dbtToEff
@@ -1102,7 +1102,7 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
               , Widget._dashboardId = Just dashId.toText
               }
 
-      let updatedDash = (dash :: Dashboards.Dashboard){Dashboards.widgets = (dash :: Dashboards.Dashboard).widgets <> [widgetCopy]}
+      let updatedDash = (dash :: Dashboards.Dashboard) & #widgets %~ (<> [widgetCopy])
       now <- Time.currentTime
       _ <-
         dbtToEff

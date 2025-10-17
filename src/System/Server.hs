@@ -16,7 +16,7 @@ import Effectful.Time (runTime)
 import Log qualified
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setOnException, setPort)
 import Network.Wai.Log qualified as WaiLog
-import Network.Wai.Middleware.Gzip (GzipFiles (..), GzipSettings (..), def, gzip)
+import Network.Wai.Middleware.Gzip (GzipFiles (..), GzipSettings (..), defaultGzipSettings, gzip)
 import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
 import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
 import OpenTelemetry.Trace (TracerProvider)
@@ -62,7 +62,7 @@ runServer appLogger env tp = do
               $ Log.logAttention "Unhandled exception"
               $ AE.object ["exception" AE..= show @String exception]
   let compressionSettings =
-        def
+        defaultGzipSettings
           { gzipFiles = GzipCompress
           , gzipSizeThreshold = 860 -- Compress responses larger than 860 bytes
           }
