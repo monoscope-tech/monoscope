@@ -528,6 +528,9 @@ processList msgs !attrs = checkpoint "processList" $ do
 -- >>> parseConnectionString "Server=localhost,1433"
 -- [("server.address",String "localhost"),("server.port",String "1433")]
 --
+-- >>> parseConnectionString "Server=localhost,1433;Database=mydb;User Id=myuser;Password=mypass;"
+-- [("server.address",String "localhost"),("server.port",String "1433")]
+--
 -- >>> parseConnectionString "Server=(localdb)\\v11.0;Integrated Security=true;"
 -- [("server.address",String "(localdb)\\v11.0")]
 --
@@ -535,7 +538,7 @@ processList msgs !attrs = checkpoint "processList" $ do
 -- [("server.address",String "db.example.com")]
 --
 -- >>> parseConnectionString "Host=localhost"
--- []
+-- [("server.address",String "localhost")]
 --
 -- >>> parseConnectionString ""
 -- []
@@ -551,7 +554,7 @@ parseConnectionString connStr =
               (host, portPart) = case T.breakOn ":" cleanVal of
                 (h, p) | not (T.null p) -> (h, T.drop 1 p)
                 _ -> case T.breakOn "," cleanVal of
-                  (h, _) | not (T.null h) -> (h, "") -- For comma, don't extract port
+                  (h, p) | not (T.null p) -> (h, T.drop 1 p) -- For comma, extract port
                   _ -> (cleanVal, "")
            in if T.null host
                 then []
@@ -701,7 +704,7 @@ migrateHttpSemanticConventions !keyVals =
     -- - http.method + http.request.method_original (when "_OTHER"): Special handling to use original method value
     specialFields =
       (if HashMap.member "db.connection_string" kvMap then ["db.connection_string"] else [])
-        ++ (if isJust httpTargetM && not hasUrlPath then ["http.target"] else [])
+        ++ (if isJust httpTargetM then ["http.target"] else []) -- Always exclude http.target when it exists
         ++ (if HashMap.member "db.redis.database_index" kvMap then ["db.redis.database_index"] else [])
         ++ filter ("db.elasticsearch.path_parts." `T.isPrefixOf`) (map fst keyVals)
         ++ (if httpMethodM == Just (AE.String "_OTHER") && isJust methodOriginalM then ["http.method", "http.request.method_original"] else [])

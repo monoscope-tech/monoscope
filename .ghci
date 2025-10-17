@@ -17,7 +17,7 @@
 :set +s
 :set +t
 
-:set -package pretty-simple
+-- :set -package pretty-simple
 
 :set -fprint-explicit-foralls
 -- :set -interactive-print=Text.Pretty.Simple.pPrint
@@ -26,6 +26,6 @@
 :set -fwarn-unused-binds -fwarn-unused-imports
 :set -isrc
 
-:set -optl-Wl,-rpath,/Users/tonyalaribe/Projects/apitoolkit/apitoolkit-server/.stack-work/dist/aarch64-osx/ghc-9.8.3/build/
+-- :set -optl-Wl,-rpath,/Users/tonyalaribe/Projects/apitoolkit/apitoolkit-server/.stack-work/dist/aarch64-osx/ghc-9.8.3/build/
 
 -- :load Main

@@ -58,6 +58,9 @@ test-integration:
 live-test-unit:
 	ghcid --test 'cabal test monoscope:unit-tests --ghc-options="-w -j4" --test-show-details=streaming'
 
+live-reload-doctests:
+	ghcid --command 'cabal repl lib:monoscope --ghc-options="-w -j4" --with-compiler=ghc-9.10.2' --test ':! cabal test monoscope:doctests --ghc-options="-O0 -j8" --test-show-details=streaming'
+
 fmt:
 	fourmolu --mode inplace $$(find ./src/ -name '*.hs')
 
@@ -97,4 +100,4 @@ show-ghc-version:
 	@echo "GHC Version: $(GHC_VERSION)"
 
 
-.PHONY: all test fmt lint fix-lint lice-reload
+.PHONY: all test fmt lint fix-lint live-reload live-reload-doctests

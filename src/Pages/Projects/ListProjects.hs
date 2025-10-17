@@ -68,7 +68,7 @@ listProjectsBody sessM projects demoProject = do
       -- User actions
       div_ [class_ "flex items-center gap-3"] do
         -- Dark mode toggle
-        label_ [class_ "swap swap-rotate"] $ do
+        label_ [class_ "swap swap-rotate"] do
           input_
             ( [ type_ "checkbox"
               , class_ "theme-controller"
@@ -88,22 +88,17 @@ listProjectsBody sessM projects demoProject = do
     -- Header
     div_ [class_ "flex justify-between items-center mb-8"] do
       h2_ [class_ "text-textStrong text-3xl font-semibold"] "Projects"
-      a_ [class_ "btn btn-primary btn-sm", href_ "/p/new"] do
-        faSprite_ "plus" "regular" "h-4 w-4 mr-2"
-        "New Project"
+      a_ [class_ "btn btn-primary btn-sm", href_ "/p/new"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Project")
 
     -- User Projects Grid
-    when (not $ V.null projects) do
-      div_ [class_ "mb-12"] do
-        h3_ [class_ "text-textWeak text-lg font-medium mb-4"] "Your Projects"
-        div_ [class_ "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"] do
-          mapM_ projectCard_ $ V.toList projects
+    when (not $ V.null projects) $ div_ [class_ "mb-12"] do
+      h3_ [class_ "text-textWeak text-lg font-medium mb-4"] "Your Projects"
+      div_ [class_ "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"] $ mapM_ projectCard_ $ V.toList projects
 
     -- Demo Project Section
     div_ [] do
       h3_ [class_ "text-textWeak text-lg font-medium mb-4"] "Demo Project"
-      div_ [class_ "grid grid-cols-1 max-w-md"] do
-        projectCard_ demoProject
+      div_ [class_ "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"] $ projectCard_ demoProject
 
 
 projectCard_ :: Projects.Project' -> Html ()

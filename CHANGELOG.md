@@ -1,5 +1,5 @@
-# Revision history for apitoolkit-server
+# Revision history for monoscope
 
 ## 0.1.0.0 -- YYYY-mm-dd
 
-* First version. Released on an unsuspecting world.
+- First version. Released on an unsuspecting world.
