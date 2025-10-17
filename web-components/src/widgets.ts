@@ -118,7 +118,6 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       }
       return h.substring(0, 75) + (h.length > 75 ? '...' : '');
     });
-    console.log(headers);
     opt.xAxis = opt.xAxis || {};
     opt.xAxis.min = from * 1000;
     opt.xAxis.max = to * 1000;

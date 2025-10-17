@@ -63,7 +63,8 @@ export class LogList extends LitElement {
   @state() private shouldScrollToBottom: boolean = false;
   @state() private logsColumns: string[] = [];
   @state() private wrapLines: boolean = false;
-  @state() private hasMore: boolean = false;
+  @state() private hasMore: boolean = true;
+  @state() private expandTimeRange: boolean = true;
   @state() private isLiveStreaming: boolean = false;
   @state() private isLoading: boolean = false;
   @state() private isFetchingRecent: boolean = false;
@@ -263,6 +264,42 @@ export class LogList extends LitElement {
     return url.toString();
   }
 
+  private expandTimeRangeUrl(): string {
+    const baseUrl = this.nextFetchUrl ? new URL(this.nextFetchUrl, window.location.origin) : new URL(window.location.href);
+
+    const url = new URL(baseUrl);
+    const since = url.searchParams.get('since');
+    const to = url.searchParams.get('to');
+
+    let target = '1H';
+
+    if (since) {
+      const nextMap: Record<string, string> = {
+        '1H': '3H',
+        '3H': '6H',
+        '6H': '12H',
+        '12H': '24H',
+        '24H': '3D',
+        '3D': '7D',
+      };
+      target = nextMap[since] ?? '14D';
+      url.searchParams.set('since', target);
+    } else if (to) {
+      const newTo = new Date(new Date(to).getTime() - 3 * 60 * 60 * 1000).toISOString();
+      url.searchParams.set('to', newTo);
+      target = `${url.searchParams.get('from')} - ${newTo}`;
+    } else {
+      target = '3H';
+      url.searchParams.set('since', target);
+    }
+    this.nextFetchUrl = url.pathname + url.search;
+    url.searchParams.delete('cursor');
+    url.searchParams.delete('json');
+    const newUrl = url.pathname + url.search;
+    this.updateUrlStateAndQuery(newUrl, url.searchParams.get('queryAST') || '', target);
+    return this.nextFetchUrl;
+  }
+
   async fetchInitialData() {
     this.fetchData(this.buildJsonUrl(), false);
   }
@@ -302,24 +339,29 @@ export class LogList extends LitElement {
     p.delete('since');
 
     const newUrl = `${window.location.pathname}?${p.toString()}${window.location.hash}`;
+    this.updateUrlStateAndQuery(newUrl, p.get('queryAST') || '', `${startValue} - ${endValue}`);
+
+    // Refetch logs with the new time range
+    this.debouncedRefetchLogs();
+  };
+
+  private updateUrlStateAndQuery(newUrl: string, q: string, timeRange: string) {
     window.history.replaceState({}, '', newUrl);
     const rangeBox = document.getElementById('currentRange');
+    console.log(rangeBox);
     if (rangeBox) {
-      rangeBox.innerText = `${startValue} - ${endValue}`;
+      rangeBox.innerText = timeRange;
     }
 
     this.dispatchEvent(
       new CustomEvent('update-query', {
         bubbles: true,
         detail: {
-          ast: p.get('queryAST') || '',
+          ast: q,
         },
       })
     );
-
-    // Refetch logs with the new time range
-    this.debouncedRefetchLogs();
-  };
+  }
 
   // updateTableData method is no longer needed as we fetch data directly
 
@@ -600,7 +642,11 @@ export class LogList extends LitElement {
           const { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, count } = data;
 
           if (!Array.isArray(logsData)) return this.showErrorToast('Invalid data format received');
-          if (logsData.length === 0) return (this.hasMore = false);
+          if (logsData.length === 0) {
+            this.hasMore = false;
+            this.expandTimeRange = true;
+            return;
+          }
 
           // Update state
           this.hasMore = true;
@@ -1419,11 +1465,26 @@ export class LogList extends LitElement {
     </tr>
   `;
 
+  renderExpandTimeRangeButton = () => {
+    return html` <tr class="w-full flex relative">
+      <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
+        <div class="h-8 flex items-center justify-center">
+          ${this.isLoading || this.isLoadingMore
+            ? html`<div class="loading loading-dots loading-md h-5"></div>`
+            : this.createLoadButton('Expand time range to see more events', () => {
+                this.fetchData(this.expandTimeRangeUrl(), false, false, true);
+                this.expandTimeRange = false;
+              })}
+        </div>
+      </td>
+    </tr>`;
+  };
+
   renderLoadMoreButton = () => {
     if (this.spanListTree.length === 0 && !this.isLoading && !this.hasMore && !this.flipDirection) {
       return emptyState(this.logsColumns.length);
     }
-
+    if (this.expandTimeRange && !this.hasMore && !!this.spanListTree.length) return this.renderExpandTimeRangeButton();
     if (!this.hasMore || !this.spanListTree.length) return html`<tr></tr>`;
 
     // Use a ref to observe when this element comes into view
