@@ -99,11 +99,7 @@ jobs:
           USE_EXTERNAL_DB: true
         run: |
           echo "::group::Running ${{ matrix.test }}"
-          if [ "${{ matrix.test }}" = "doctests" ]; then
-            cabal exec -- cabal test ${{ matrix.test }} --ghc-options="-O0 -j8" --test-show-details=direct
-          else
-            cabal test ${{ matrix.test }} --ghc-options="-O0 -j8" --test-show-details=direct
-          fi
+          cabal test ${{ matrix.test }} --ghc-options="-O0 -j8" --test-show-details=direct
           echo "::endgroup::"
 
   build-and-deploy:
