@@ -97,8 +97,8 @@ bodyWrapper bcfg child = do
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css")]
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/css/thirdparty/rrweb.css")]
 
-        link_ [rel_ "stylesheet", type_ "text/css", href_ "/public/assets/css/tailwind.min.css"]
-        link_ [rel_ "stylesheet", type_ "text/css", href_ "/public/assets/web-components/dist/css/index.css"]
+        link_ [rel_ "stylesheet", type_ "text/css", href_ $ (hashAssetFile "/public/assets/css/tailwind.min.css")]
+        link_ [rel_ "stylesheet", type_ "text/css", href_ $ (hashAssetFile "/public/assets/web-components/dist/css/index.css")]
 
         -- Include optional head content from the page
         whenJust bcfg.headContent id
