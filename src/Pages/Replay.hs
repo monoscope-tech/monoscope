@@ -64,12 +64,9 @@ publishReplayEvent replayData pid = do
           Right messageId -> pure $ Right messageId
 
 
-replayPostH :: Projects.ProjectId -> Text -> ATBaseCtx AE.Value
-replayPostH pid body = do
-  case AE.eitherDecode' (encodeUtf8 body) of
-    Left err -> pure $ AE.object ["status" AE..= ("error" :: Text), "message" AE..= ("Invalid JSON: " <> toString err)]
-    Right replayData@ReplayPost{..} -> do
-      pubResult <- publishReplayEvent replayData pid
+replayPostH :: Projects.ProjectId -> ReplayPost -> ATBaseCtx AE.Value
+replayPostH pid body@ReplayPost{..} = do
+      pubResult <- publishReplayEvent body pid
       case pubResult of
         Left errMsg -> pure $ AE.object ["status" AE..= ("warning" :: Text), "message" AE..= errMsg]
         Right messageId -> do pure $ AE.object ["status" AE..= ("ok" :: Text), "messageId" AE..= messageId, "sessionId" AE..= sessionId]

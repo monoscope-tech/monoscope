@@ -1077,7 +1077,7 @@ export class LogList extends LitElement {
       <div
         ${ref(this.containerRef)}
         class=${clsx(
-          'relative h-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll pb-12 overflow-y-auto will-change-scroll contain-strict',
+          'relative  group-hash-full shrink-1 min-w-0 p-0 m-0 bg-bgBase w-full c-scroll  overflow-y-auto will-change-scroll contain-strict',
           isInitialLoading && 'overflow-hidden'
         )}
         id="logs_list_container_inner"

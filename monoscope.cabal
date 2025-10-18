@@ -337,6 +337,7 @@ library
     , wreq
     , xxhash
     , yaml
+    , wai-cors
   default-language: GHC2021
 
 executable monoscope

@@ -817,7 +817,7 @@ apiLogsPage page = do
             div_ [class_ ""] $ span_ [class_ "text-textStrong", id_ "row-count-display"] (toHtml $ prettyPrintCount page.resultCount) >> span_ [class_ "text-textStrong"] (toHtml " rows")
 
           -- Visualization widget that shows when not in logs view
-          div_ [class_ "flex-1 min-h-0 group-has-[#viz-logs:checked]/pg:hidden"] do
+          div_ [class_ "flex-1 min-h-0 h-full group-has-[#viz-logs:checked]/pg:hidden"] do
             let pid = page.pid.toText
             let vizType = maybe "\"timeseries\"" show page.vizType
             script_
@@ -854,9 +854,9 @@ apiLogsPage page = do
               div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one", term "hx-sync" "this:replace"] pass
 
           -- Logs view section (also within the scrollable container)
-          div_ [class_ "flex-1 min-h-0 flex flex-col"] do
+          div_ [class_ "flex-1 min-h-0 h-full flex flex-col"] do
             -- Virtual table for logs
-            div_ [class_ "flex-1 min-h-0 hidden group-has-[#viz-logs:checked]/pg:block"] $ virtualTable page
+            div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block"] $ virtualTable page
 
         -- Alert configuration panel on the right
         div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block"] $ resizer_ "alert_container" "alert_width" False
@@ -1201,8 +1201,8 @@ alertConfigurationForm_ pid alertM = do
                                      })
                                    end|]
                             ]
-                          ++ [required_ "" | req]
-                          ++ [value_ (maybe "" (show) vM) | isJust vM]
+                            ++ [required_ "" | req]
+                            ++ [value_ (maybe "" (show) vM) | isJust vM]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)
