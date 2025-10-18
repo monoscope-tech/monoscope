@@ -599,7 +599,8 @@ processMessagesAndBackgroundJobs :: TestResources -> [(Text, ByteString)] -> IO 
 processMessagesAndBackgroundJobs TestResources{..} msgs = do
   currentTime <- getCurrentTime
   let futureTime = addUTCTime 1 currentTime
-  let testProjectId = Projects.ProjectId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
+  -- Use UUID.nil which is what the test messages use
+  let testProjectId = Projects.ProjectId UUID.nil
 
   _ <- runTestBackground trATCtx do
     _ <- ProcessMessage.processMessages msgs HashMap.empty

@@ -11,10 +11,10 @@ ON apis.issues(llm_enhanced_at)
 WHERE llm_enhanced_at IS NULL;
 
 -- Create an index to find recently created issues that need enhancement
-CREATE INDEX IF NOT EXISTS idx_apis_issues_created_at_unenhanced 
-ON apis.issues(created_at) 
-WHERE llm_enhanced_at IS NULL 
-  AND acknowleged_at IS NULL 
+CREATE INDEX IF NOT EXISTS idx_apis_issues_created_at_unenhanced
+ON apis.issues(created_at)
+WHERE llm_enhanced_at IS NULL
+  AND acknowledged_at IS NULL
   AND archived_at IS NULL;
 
 COMMIT;

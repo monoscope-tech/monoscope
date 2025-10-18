@@ -320,8 +320,8 @@ CREATE TABLE IF NOT EXISTS apis.anomalies
   created_at     TIMESTAMP           WITH       TIME        ZONE       NOT               NULL    DEFAULT current_timestamp,
   updated_at     TIMESTAMP           WITH       TIME        ZONE       NOT               NULL    DEFAULT current_timestamp,
   project_id     uuid                NOT        NULL        REFERENCES projects.projects (id)    ON      DELETE CASCADE,
-  acknowleged_at TIMESTAMP           WITH       TIME        ZONE,
-  acknowleged_by UUID                REFERENCES users.users (id),
+  acknowledged_at TIMESTAMP          WITH       TIME        ZONE,
+  acknowledged_by UUID               REFERENCES users.users (id),
   anomaly_type   apis.anomaly_type   NOT        NULL        DEFAULT    'unknown'::apis.anomaly_type,
   action         apis.anomaly_action NOT        NULL        DEFAULT    'unknown'::apis.anomaly_action,
   target_hash    text,
@@ -330,8 +330,8 @@ CREATE TABLE IF NOT EXISTS apis.anomalies
 SELECT manage_updated_at('apis.anomalies');
 CREATE INDEX IF NOT EXISTS idx_apis_anomalies_project_id ON apis.anomalies(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_anomalies_project_id_target_hash ON apis.anomalies(project_id, target_hash);
-ALTER TABLE apis.anomalies DROP CONSTRAINT IF EXISTS anomalies_acknowleged_by_fkey;
-ALTER TABLE apis.anomalies ADD CONSTRAINT anomalies_acknowleged_by_fkey FOREIGN KEY (acknowleged_by) REFERENCES users.users (id) ON DELETE CASCADE;
+ALTER TABLE apis.anomalies DROP CONSTRAINT IF EXISTS anomalies_acknowledged_by_fkey;
+ALTER TABLE apis.anomalies ADD CONSTRAINT anomalies_acknowledged_by_fkey FOREIGN KEY (acknowledged_by) REFERENCES users.users (id) ON DELETE CASCADE;
 
 CREATE OR REPLACE FUNCTION apis.new_anomaly_proc() RETURNS trigger AS $$
 DECLARE
@@ -525,12 +525,12 @@ CREATE TABLE IF NOT EXISTS apis.issues
   created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   project_id      UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
-  acknowleged_at  TIMESTAMP WITH TIME ZONE,
+  acknowledged_at  TIMESTAMP WITH TIME ZONE,
   anomaly_type    apis.anomaly_type NOT NULL,
   target_hash     TEXT,
   issue_data      JSONB NOT NULL DEFAULT '{}',
   endpoint_id     UUID,
-  acknowleged_by  UUID,
+  acknowledged_by  UUID,
   archived_at     TIMESTAMP WITH TIME ZONE,
   -- Enhanced UI fields from migration 0004
   title           TEXT DEFAULT '',
@@ -557,7 +557,7 @@ CREATE INDEX IF NOT EXISTS idx_issues_critical ON apis.issues (critical) WHERE c
 CREATE INDEX IF NOT EXISTS idx_issues_breaking_changes ON apis.issues (breaking_changes) WHERE breaking_changes > 0;
 CREATE INDEX IF NOT EXISTS idx_issues_service ON apis.issues (service);
 -- Indexes from migration 0005
-CREATE INDEX IF NOT EXISTS idx_issues_endpoint_hash_open ON apis.issues (project_id, endpoint_hash) WHERE acknowleged_at IS NULL AND archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_issues_endpoint_hash_open ON apis.issues (project_id, endpoint_hash) WHERE acknowledged_at IS NULL AND archived_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_issues_anomaly_hashes ON apis.issues USING GIN (anomaly_hashes);
 
 CREATE OR REPLACE PROCEDURE apis.refresh_request_dump_views_every_5mins(job_id int, config jsonb) LANGUAGE PLPGSQL AS
