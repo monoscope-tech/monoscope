@@ -66,10 +66,10 @@ publishReplayEvent replayData pid = do
 
 replayPostH :: Projects.ProjectId -> ReplayPost -> ATBaseCtx AE.Value
 replayPostH pid body@ReplayPost{..} = do
-      pubResult <- publishReplayEvent body pid
-      case pubResult of
-        Left errMsg -> pure $ AE.object ["status" AE..= ("warning" :: Text), "message" AE..= errMsg]
-        Right messageId -> do pure $ AE.object ["status" AE..= ("ok" :: Text), "messageId" AE..= messageId, "sessionId" AE..= sessionId]
+  pubResult <- publishReplayEvent body pid
+  case pubResult of
+    Left errMsg -> pure $ AE.object ["status" AE..= ("warning" :: Text), "message" AE..= errMsg]
+    Right messageId -> do pure $ AE.object ["status" AE..= ("ok" :: Text), "messageId" AE..= messageId, "sessionId" AE..= sessionId]
 
 
 processReplayEvents :: [(Text, ByteString)] -> HashMap Text Text -> ATBackgroundCtx [Text]

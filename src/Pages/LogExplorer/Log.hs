@@ -1201,8 +1201,8 @@ alertConfigurationForm_ pid alertM = do
                                      })
                                    end|]
                             ]
-                            ++ [required_ "" | req]
-                            ++ [value_ (maybe "" (show) vM) | isJust vM]
+                          ++ [required_ "" | req]
+                          ++ [value_ (maybe "" (show) vM) | isJust vM]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)

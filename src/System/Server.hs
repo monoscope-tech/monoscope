@@ -14,11 +14,11 @@ import Effectful.Concurrent (runConcurrent)
 import Effectful.Fail (runFailIO)
 import Effectful.Time (runTime)
 import Log qualified
+import Network.HTTP.Types (status200)
+import Network.Wai
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setOnException, setPort)
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Cors
-import Network.Wai
-import Network.HTTP.Types (status200)
 import Network.Wai.Middleware.Gzip (GzipFiles (..), GzipSettings (..), defaultGzipSettings, gzip)
 import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
 import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
@@ -57,8 +57,8 @@ optionsMiddleware :: Middleware
 optionsMiddleware app req respond =
   if requestMethod req == "OPTIONS"
     then
-      respond $
-        responseLBS
+      respond
+        $ responseLBS
           status200
           [ ("Access-Control-Allow-Origin", "*")
           , ("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS,PATCH,HEAD")
@@ -66,6 +66,7 @@ optionsMiddleware app req respond =
           ]
           ""
     else app req respond
+
 
 runServer :: IOE :> es => Log.Logger -> AuthContext -> TracerProvider -> Eff es ()
 runServer appLogger env tp = do
@@ -84,14 +85,16 @@ runServer appLogger env tp = do
           , gzipSizeThreshold = 860 -- Compress responses larger than 860 bytes
           }
 
-  let corsPolicy = simpleCorsResourcePolicy { corsOrigins = Nothing  -- allow all origins
-        , corsMethods = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"]
-        , corsRequestHeaders = ["*"]  -- allow all headers
-        , corsExposedHeaders = Nothing
-        , corsMaxAge = Just 86400
-        }
+  let corsPolicy =
+        simpleCorsResourcePolicy
+          { corsOrigins = Nothing -- allow all origins
+          , corsMethods = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"]
+          , corsRequestHeaders = ["*"] -- allow all headers
+          , corsExposedHeaders = Nothing
+          , corsMaxAge = Just 86400
+          }
   let wrappedServer =
-         optionsMiddleware
+        optionsMiddleware
           . cors (const $ Just corsPolicy)
           . heartbeatMiddleware
           . gzip compressionSettings
