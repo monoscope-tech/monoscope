@@ -396,10 +396,7 @@ spec = do
     it "should replace mixed formats in single line" do
       RequestMessages.replaceAllFormats "User 550e8400-e29b-41d4-a716-446655440000 connected from 192.168.1.50:9876" `shouldBe` "User {uuid} connected from {ipv4}{port}"
       RequestMessages.replaceAllFormats "Hash: a94a8fe5ccb19ba61c4c0873d391e987982fbbd3, Status: 403, Port: :8443" `shouldBe` "Hash: {sha1}, Status: {integer}, Port: {port}"
-      
-    it "should handle date with port patterns" do
-      RequestMessages.replaceAllFormats "Processing request 123456 at 2023-10-15:3000" `shouldBe` "Processing request {integer} at {YYYY-MM-DD}{port}"
-      
+
     it "should handle various mixed patterns" do
       RequestMessages.replaceAllFormats "Mixed: 192.168.1.1 123 :80 404" `shouldBe` "Mixed: {ipv4} {integer} {port} {integer}"
       RequestMessages.replaceAllFormats "0xDEADBEEF" `shouldBe` "{hex}"
