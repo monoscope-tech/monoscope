@@ -284,26 +284,28 @@ processList msgs !attrs = checkpoint "processList" $ do
                     let updateFn Nothing = Just (1, errorInfo)
                         updateFn (Just (count, example)) = Just (count + 1, example)
                      in (HashMap.alter updateFn errorKey m, ())
-                else if "Cannot decode byte" `L.isInfixOf` err && "Invalid UTF-8 stream" `L.isInfixOf` err
-                  then liftIO $ do
-                    let errorKey = "logs:utf8_decode_error"
-                        errorInfo = createProtoErrorInfo err (snd $ msgs L.!! idx)
-                    IORef.atomicModifyIORef' wireTypeErrorsRef $ \m ->
-                      let updateFn Nothing = Just (1, errorInfo)
-                          updateFn (Just (count, example)) = Just (count + 1, example)
-                       in (HashMap.alter updateFn errorKey m, ())
-                  else if "Unexpected end of input" `L.isInfixOf` err
+                else
+                  if "Cannot decode byte" `L.isInfixOf` err && "Invalid UTF-8 stream" `L.isInfixOf` err
                     then liftIO $ do
-                      let errorKey = "logs:unexpected_eof_error"
+                      let errorKey = "logs:utf8_decode_error"
                           errorInfo = createProtoErrorInfo err (snd $ msgs L.!! idx)
                       IORef.atomicModifyIORef' wireTypeErrorsRef $ \m ->
                         let updateFn Nothing = Just (1, errorInfo)
                             updateFn (Just (count, example)) = Just (count + 1, example)
                          in (HashMap.alter updateFn errorKey m, ())
                     else
-                      Log.logAttention
-                        "processList:logs: unable to parse logs service request"
-                        (createProtoErrorInfo err (snd $ msgs L.!! idx))
+                      if "Unexpected end of input" `L.isInfixOf` err
+                        then liftIO $ do
+                          let errorKey = "logs:unexpected_eof_error"
+                              errorInfo = createProtoErrorInfo err (snd $ msgs L.!! idx)
+                          IORef.atomicModifyIORef' wireTypeErrorsRef $ \m ->
+                            let updateFn Nothing = Just (1, errorInfo)
+                                updateFn (Just (count, example)) = Just (count + 1, example)
+                             in (HashMap.alter updateFn errorKey m, ())
+                        else
+                          Log.logAttention
+                            "processList:logs: unable to parse logs service request"
+                            (createProtoErrorInfo err (snd $ msgs L.!! idx))
             | (idx, (_, Left err)) <- zip [0 ..] decodedMsgs
             ]
 
@@ -401,26 +403,28 @@ processList msgs !attrs = checkpoint "processList" $ do
                     let updateFn Nothing = Just (1, errorInfo)
                         updateFn (Just (count, example)) = Just (count + 1, example)
                      in (HashMap.alter updateFn errorKey m, ())
-                else if "Cannot decode byte" `L.isInfixOf` err && "Invalid UTF-8 stream" `L.isInfixOf` err
-                  then liftIO $ do
-                    let errorKey = "traces:utf8_decode_error"
-                        errorInfo = createProtoErrorInfo err (snd $ msgs L.!! idx)
-                    IORef.atomicModifyIORef' wireTypeErrorsRef $ \m ->
-                      let updateFn Nothing = Just (1, errorInfo)
-                          updateFn (Just (count, example)) = Just (count + 1, example)
-                       in (HashMap.alter updateFn errorKey m, ())
-                  else if "Unexpected end of input" `L.isInfixOf` err
+                else
+                  if "Cannot decode byte" `L.isInfixOf` err && "Invalid UTF-8 stream" `L.isInfixOf` err
                     then liftIO $ do
-                      let errorKey = "traces:unexpected_eof_error"
+                      let errorKey = "traces:utf8_decode_error"
                           errorInfo = createProtoErrorInfo err (snd $ msgs L.!! idx)
                       IORef.atomicModifyIORef' wireTypeErrorsRef $ \m ->
                         let updateFn Nothing = Just (1, errorInfo)
                             updateFn (Just (count, example)) = Just (count + 1, example)
                          in (HashMap.alter updateFn errorKey m, ())
                     else
-                      Log.logAttention
-                        "processList:traces: unable to parse traces service request"
-                        (createProtoErrorInfo err (snd $ msgs L.!! idx))
+                      if "Unexpected end of input" `L.isInfixOf` err
+                        then liftIO $ do
+                          let errorKey = "traces:unexpected_eof_error"
+                              errorInfo = createProtoErrorInfo err (snd $ msgs L.!! idx)
+                          IORef.atomicModifyIORef' wireTypeErrorsRef $ \m ->
+                            let updateFn Nothing = Just (1, errorInfo)
+                                updateFn (Just (count, example)) = Just (count + 1, example)
+                             in (HashMap.alter updateFn errorKey m, ())
+                        else
+                          Log.logAttention
+                            "processList:traces: unable to parse traces service request"
+                            (createProtoErrorInfo err (snd $ msgs L.!! idx))
             | (idx, (_, Left err)) <- zip [0 ..] decodedMsgs
             ]
 
@@ -456,23 +460,25 @@ processList msgs !attrs = checkpoint "processList" $ do
                           let updateFn Nothing = Just (1, errorInfo)
                               updateFn (Just (count, example)) = Just (count + 1, example)
                            in (HashMap.alter updateFn errorKey m, ())
-                      else if "Cannot decode byte" `L.isInfixOf` err && "Invalid UTF-8 stream" `L.isInfixOf` err
-                        then liftIO $ do
-                          let errorKey = "metrics:utf8_decode_error"
-                              errorInfo = createProtoErrorInfo err msg
-                          IORef.atomicModifyIORef' wireTypeErrorsRef $ \m ->
-                            let updateFn Nothing = Just (1, errorInfo)
-                                updateFn (Just (count, example)) = Just (count + 1, example)
-                             in (HashMap.alter updateFn errorKey m, ())
-                        else if "Unexpected end of input" `L.isInfixOf` err
+                      else
+                        if "Cannot decode byte" `L.isInfixOf` err && "Invalid UTF-8 stream" `L.isInfixOf` err
                           then liftIO $ do
-                            let errorKey = "metrics:unexpected_eof_error"
+                            let errorKey = "metrics:utf8_decode_error"
                                 errorInfo = createProtoErrorInfo err msg
                             IORef.atomicModifyIORef' wireTypeErrorsRef $ \m ->
                               let updateFn Nothing = Just (1, errorInfo)
                                   updateFn (Just (count, example)) = Just (count + 1, example)
                                in (HashMap.alter updateFn errorKey m, ())
-                          else Log.logAttention "processList:metrics: unable to parse metrics service request" (createProtoErrorInfo err msg)
+                          else
+                            if "Unexpected end of input" `L.isInfixOf` err
+                              then liftIO $ do
+                                let errorKey = "metrics:unexpected_eof_error"
+                                    errorInfo = createProtoErrorInfo err msg
+                                IORef.atomicModifyIORef' wireTypeErrorsRef $ \m ->
+                                  let updateFn Nothing = Just (1, errorInfo)
+                                      updateFn (Just (count, example)) = Just (count + 1, example)
+                                   in (HashMap.alter updateFn errorKey m, ())
+                              else Log.logAttention "processList:metrics: unable to parse metrics service request" (createProtoErrorInfo err msg)
                     pure (ackId, V.empty)
                   Right metricReq -> checkpoint "processList:metrics:getProjectId" do
                     let !resourceMetrics = V.fromList $ metricReq ^. PMF.resourceMetrics

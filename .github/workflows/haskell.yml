@@ -94,6 +94,9 @@ jobs:
       - name: Build dependencies
         run: cabal build --only-dependencies all -j4
 
+      - name: Build library
+        run: cabal build monoscope -j4
+
       - name: Run ${{ matrix.test }}
         env:
           USE_EXTERNAL_DB: true

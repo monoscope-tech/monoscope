@@ -472,9 +472,9 @@ replaceAllFormats input = restorePlaceholders $ processPatterns input formatPatt
       , -- US date
         [ed|(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])-(19|20)[0-9][0-9]///{mm-dd-yyyy}|]
       , [ed|(0[1-9]|1[012])\.(0[1-9]|[12][0-9]|3[01])\.(19|20)[0-9][0-9]///{mm.dd.yyyy}|]
-      -- Note: Removed [0-9]{4}-[0-9]{2}-[0-9]{2} pattern to avoid matching dates followed by ports (e.g. 2023-10-15:3000)
-      -- The more specific datetime pattern [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} handles actual dates with times
-      , [ed|[0-9]{4}/[0-9]{2}/[0-9]{2}///{YYYY/MM/DD}|]
+      , -- Note: Removed [0-9]{4}-[0-9]{2}-[0-9]{2} pattern to avoid matching dates followed by ports (e.g. 2023-10-15:3000)
+        -- The more specific datetime pattern [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} handles actual dates with times
+        [ed|[0-9]{4}/[0-9]{2}/[0-9]{2}///{YYYY/MM/DD}|]
       , -- Compact date
         [ed|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{1,2}, [0-9]{4}///{Mon DD, YYYY}|]
       , -- Long month
