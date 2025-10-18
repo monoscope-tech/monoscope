@@ -97,8 +97,8 @@ bodyWrapper bcfg child = do
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css")]
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/css/thirdparty/rrweb.css")]
 
-        link_ [rel_ "stylesheet", type_ "text/css", href_ $ (hashAssetFile "/public/assets/css/tailwind.min.css")]
-        link_ [rel_ "stylesheet", type_ "text/css", href_ $ (hashAssetFile "/public/assets/web-components/dist/css/index.css")]
+        link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css")]
+        link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/web-components/dist/css/index.css")]
 
         -- Include optional head content from the page
         whenJust bcfg.headContent id
@@ -416,7 +416,7 @@ bodyWrapper bcfg child = do
       -- Initialize Monoscope only when telemetryProjectId is available
       when (bcfg.config.telemetryProjectId /= "")
         $ script_
-          [text| window.addEventListener("load", (event) => {
+          [text| 
             window.monoscope = new Monoscope({ 
               projectId: "${telemetryProjectId}", 
               serviceName: "${telemetryServiceName}", 
@@ -425,7 +425,6 @@ bodyWrapper bcfg child = do
                 name: "${name}"
               }
             });
-          });
         |]
 
 

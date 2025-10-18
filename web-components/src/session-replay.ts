@@ -436,7 +436,7 @@ export class SessionReplay extends LitElement {
 
   render() {
     return html`<div
-      class="flex overflow-x-hidden resize w-max"
+      class="flex overflow-x-hidden rr-block resize w-max"
       id="replayerOuterContainer"
       style="height:${this.containerHeight + 110}px; width:1024px"
     >
@@ -505,16 +505,16 @@ export class SessionReplay extends LitElement {
               ${this.isLoading
                 ? html`<div class="italic text-7xl font-medium text-gray-100">Loading...</div>`
                 : this.finished
-                  ? html`
-                      <button @click=${() => this.goTo(0)} class="cursor-pointer">
-                        ${faSprite_('replay', 'regular', 'w-14 h-14 text-gray-100')}
-                      </button>
-                    `
-                  : html`
-                      <button @click=${() => (this.paused = false)} class="cursor-pointer">
-                        ${faSprite_('p-play', 'regular', 'w-14 h-14 text-gray-100')}
-                      </button>
-                    `}
+                ? html`
+                    <button @click=${() => this.goTo(0)} class="cursor-pointer">
+                      ${faSprite_('replay', 'regular', 'w-14 h-14 text-gray-100')}
+                    </button>
+                  `
+                : html`
+                    <button @click=${() => (this.paused = false)} class="cursor-pointer">
+                      ${faSprite_('p-play', 'regular', 'w-14 h-14 text-gray-100')}
+                    </button>
+                  `}
             </div>
           </div>
           <div class="flex flex-col items-center w-full py-4 h-32">
