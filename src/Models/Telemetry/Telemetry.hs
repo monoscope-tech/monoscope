@@ -628,7 +628,7 @@ getTotalEventsToReport pid lastReported = do
     v -> return $ length v
   where
     q =
-      [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? AND created_at > ?|]
+      [sql| SELECT count(*) FROM otel_logs_and_spans WHERE project_id=? AND timestamp > ?|]
 
 
 getMetricChartListData :: DB :> es => Projects.ProjectId -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime) -> Int -> Eff es (V.Vector MetricChartListData)

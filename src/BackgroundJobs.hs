@@ -256,14 +256,17 @@ processBackgroundJob authCtx job bgJob =
     DailyReports pid -> sendReportForProject pid DailyReport
     WeeklyReports pid -> sendReportForProject pid WeeklyReport
     ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
+      Log.logInfo "Reporting usage for project" ("project_id", pid.toText)
       Relude.when (project.paymentPlan /= "Free" && project.paymentPlan /= "ONBOARDING") $ whenJust project.firstSubItemId \fSubId -> do
         currentTime <- liftIO getZonedTime
         totalToReport <- Telemetry.getTotalEventsToReport pid project.usageLastReported
+        Log.logInfo "Total events to report" ("events_count", totalToReport)
         Relude.when (totalToReport > 0) do
           liftIO $ reportUsageToLemonsqueezy fSubId totalToReport authCtx.config.lemonSqueezyApiKey
           _ <- dbtToEff $ LemonSqueezy.addDailyUsageReport pid totalToReport
           _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
           pass
+      Log.logInfo "Completed usage report for project" ("project_id", pid.toText)
     CleanupDemoProject -> do
       let pid = Projects.ProjectId{unProjectId = UUID.nil}
       -- DELETE PROJECT members
