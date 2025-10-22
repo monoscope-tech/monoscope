@@ -454,6 +454,7 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
               , convertkitApiSecret = ""
               , requestPubsubTopics = ["monoscope-prod-default"]
               , enableBackgroundJobs = True
+              , enableEventsTableUpdates = True
               }
           )
   f
