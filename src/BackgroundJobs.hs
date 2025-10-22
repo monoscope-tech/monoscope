@@ -260,9 +260,10 @@ processBackgroundJob authCtx job bgJob =
       Relude.when (project.paymentPlan /= "Free" && project.paymentPlan /= "ONBOARDING") $ whenJust project.firstSubItemId \fSubId -> do
         currentTime <- liftIO getZonedTime
         totalToReport <- Telemetry.getTotalEventsToReport pid project.usageLastReported
-        Log.logInfo "Total events to report" ("events_count", totalToReport)
+        totalMetricsCount <- Telemetry.getTotalMetricsCount pid project.usageLastReported
+        Log.logInfo "Total events to report" ("events_count", totalToReport + totalMetricsCount)
         Relude.when (totalToReport > 0) do
-          liftIO $ reportUsageToLemonsqueezy fSubId totalToReport authCtx.config.lemonSqueezyApiKey
+          liftIO $ reportUsageToLemonsqueezy fSubId (totalToReport + totalMetricsCount) authCtx.config.lemonSqueezyApiKey
           _ <- dbtToEff $ LemonSqueezy.addDailyUsageReport pid totalToReport
           _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
           pass
@@ -337,7 +338,8 @@ processFiveMinuteSpans :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
 processFiveMinuteSpans scheduledTime pid = do
   ctx <- ask @Config.AuthContext
   let fiveMinutesAgo = addUTCTime (-300) scheduledTime
-  processSpansWithPagination fiveMinutesAgo 0
+  Relude.when ctx.config.enableEventsTableUpdates $ do
+    processSpansWithPagination fiveMinutesAgo 0
   Log.logInfo "Completed 5-minute span processing" ()
   where
     processSpansWithPagination :: UTCTime -> Int -> ATBackgroundCtx ()
@@ -362,8 +364,9 @@ processFiveMinuteSpans scheduledTime pid = do
 logsPatternExtraction :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
 logsPatternExtraction scheduledTime pid = do
   ctx <- ask @Config.AuthContext
-  tenMinutesAgo <- liftIO $ addUTCTime (-300) <$> Time.currentTime
-  paginate 0 tenMinutesAgo
+  Relude.when ctx.config.enableEventsTableUpdates $ do
+    tenMinutesAgo <- liftIO $ addUTCTime (-300) <$> Time.currentTime
+    paginate 0 tenMinutesAgo
   Log.logInfo "Completed logs pattern extraction for project" ("project_id", AE.toJSON pid.toText)
   where
     limitVal = 250
@@ -442,9 +445,9 @@ processOneMinuteErrors scheduledTime pid = do
   -- since we use hashes of errors and don't insert same error twice
   -- we can increase the window to account for time spent on kafka
   -- use two minutes for now before use a better solution
-  let oneMinuteAgo = addUTCTime (-60 * 2) scheduledTime
-  processErrorsPaginated oneMinuteAgo 0
-  pass
+  Relude.when ctx.config.enableEventsTableUpdates $ do
+    let oneMinuteAgo = addUTCTime (-60 * 2) scheduledTime
+    processErrorsPaginated oneMinuteAgo 0
   where
     processErrorsPaginated :: UTCTime -> Int -> ATBackgroundCtx ()
     processErrorsPaginated oneMinuteAgo skip = do

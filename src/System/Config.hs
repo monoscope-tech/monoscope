@@ -116,6 +116,7 @@ data EnvConfig = EnvConfig
   , basicAuthPassword :: Text
   , telemetryProjectId :: Text
   , telemetryServiceName :: Text
+  , enableEventsTableUpdates :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)

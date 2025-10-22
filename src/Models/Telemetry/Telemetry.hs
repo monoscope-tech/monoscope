@@ -31,6 +31,7 @@ module Models.Telemetry.Telemetry (
   getDataPointsData,
   spanRecordByName,
   getTraceDetails,
+  getTotalMetricsCount,
   getMetricData,
   bulkInsertMetrics,
   bulkInsertOtelLogsAndSpansTF,
@@ -629,6 +630,17 @@ getTotalEventsToReport pid lastReported = do
   where
     q =
       [sql| SELECT count(*) FROM otel_logs_and_spans WHERE project_id=? AND timestamp > ?|]
+
+
+getTotalMetricsCount :: DB :> es => Projects.ProjectId -> UTCTime -> Eff es Int
+getTotalMetricsCount pid lastReported = do
+  result <- dbtToEff $ query q (pid, lastReported)
+  case result of
+    [Only c] -> return c
+    v -> return $ length v
+  where
+    q =
+      [sql| SELECT count(*) FROM telemetry.metrics WHERE project_id=? AND timestamp > ?|]
 
 
 getMetricChartListData :: DB :> es => Projects.ProjectId -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime) -> Int -> Eff es (V.Vector MetricChartListData)
