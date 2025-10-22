@@ -32,7 +32,7 @@ testAuthContext pool = do
   projectCache <- newCache (Just $ TimeSpec (60 * 60) 0) :: IO (Cache Projects.ProjectId Projects.ProjectCache) -- 60*60secs or 1 hour TTL
   projectKeyCache <- newCache Nothing
   logsPatternCache <- newCache Nothing
-  let config = (def :: Config.EnvConfig){Config.enableBackgroundJobs = True}
+  let config = (def :: Config.EnvConfig){Config.enableBackgroundJobs = True, Config.enableEventsTableUpdates = True}
   pure $ Config.AuthContext{env = def :: Config.EnvConfig, pool = pool, jobsPool = pool, timefusionPgPool = pool, projectCache = projectCache, projectKeyCache, logsPatternCache, config}
 
 spec :: Spec
