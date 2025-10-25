@@ -6,6 +6,9 @@ import { ref, createRef } from 'lit/directives/ref.js';
 import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, Trace, TraceDataMap } from './types/types';
 import debounce from 'lodash/debounce';
 import { includes, startsWith, map, forEach, compact, pick, chunk, chain, lt } from 'lodash';
+// Import worker as URL instead of worker instance
+import LogWorkerUrl from './log-worker?worker&url';
+import { groupSpans, flattenSpanTree } from './log-worker-functions';
 import clsx from 'clsx';
 import {
   formatTimestamp,
@@ -108,9 +111,18 @@ export class LogList extends LitElement {
   private lastVisibilityRange: { first: number; last: number } | null = null;
   private isScrolling = false;
   private scrollEndTimer: ReturnType<typeof setTimeout> | null = null;
+  private worker: Worker | null = null;
+  private workerReqId = 0;
+  private workerCallbacks = new Map<number, { resolve: Function; reject: Function }>();
 
   constructor() {
     super();
+
+    this.worker = new Worker(LogWorkerUrl, { type: 'module' });
+    this.worker.onmessage = (e) => this.handleWorkerMsg(e);
+    this.worker.onerror = (e: ErrorEvent) => {
+      console.error('[Worker] Error:', e.message, e.filename, e.lineno);
+    };
 
     this.debouncedFetchData = debounce(this.fetchData.bind(this), 300);
     this.debouncedUpdateChartMarkArea = debounce(this.updateChartMarkArea.bind(this), 100);
@@ -119,6 +131,41 @@ export class LogList extends LitElement {
 
     this.expandTrace = this.expandTrace.bind(this);
     this.setupEventListeners();
+  }
+
+  private handleWorkerMsg(e: MessageEvent) {
+    const { type, tree, meta, error, id } = e.data;
+    const cb = this.workerCallbacks.get(id);
+    if (!cb) {
+      console.warn('[Worker] No callback found for message id:', id);
+      return;
+    }
+    this.workerCallbacks.delete(id);
+    type === 'success' ? cb.resolve({ tree, meta }) : cb.reject(new Error(error));
+  }
+
+  private workerFetch(url: string): Promise<{ tree: any[]; meta: any }> {
+    if (!this.worker) throw new Error('Worker not initialized');
+
+    const id = ++this.workerReqId;
+    return new Promise((resolve, reject) => {
+      this.workerCallbacks.set(id, { resolve, reject });
+      this.worker!.postMessage({
+        type: 'fetch',
+        url,
+        colIdxMap: this.colIdxMap,
+        expandedTraces: this.expandedTraces,
+        flipDirection: this.flipDirection,
+        id,
+      });
+      setTimeout(() => {
+        if (this.workerCallbacks.has(id)) {
+          console.warn('[Worker] Request timeout:', id);
+          this.workerCallbacks.delete(id);
+          reject(new Error('Worker request timeout'));
+        }
+      }, 10000);
+    });
   }
 
   updateChartDataZoom(start: number, end: number) {
@@ -251,15 +298,52 @@ export class LogList extends LitElement {
   }
 
   private buildLoadMoreUrl(): string {
+    // If we have no data, use base URL
     if (this.spanListTree.length === 0) {
+      console.warn('[LoadMore] No data in spanListTree, using buildJsonUrl');
       return this.buildJsonUrl();
     }
-    const url = new URL(window.location.href);
+
+    // Get the actual oldest item from current data
+    // flipDirection=false (newest first): oldest is at END of array
+    // flipDirection=true (oldest first): oldest is at START of array
+    const lastItem = this.flipDirection ? this.spanListTree[0] : this.spanListTree[this.spanListTree.length - 1];
+
+    // Get timestamp column name (try timestamp first, then created_at)
+    const timestampCol = this.colIdxMap['timestamp'] !== undefined ? 'timestamp' : 'created_at';
+    const timestamp = lastItem?.data?.[this.colIdxMap[timestampCol]];
+
+    if (!timestamp) {
+      console.warn('[LoadMore] No timestamp found, falling back to nextFetchUrl or buildJsonUrl', {
+        flipDirection: this.flipDirection,
+        treeLength: this.spanListTree.length,
+        hasNextUrl: !!this.nextFetchUrl,
+      });
+      return this.nextFetchUrl || this.buildJsonUrl();
+    }
+
+    // Start with nextFetchUrl if available, otherwise current URL
+    const baseUrl = this.nextFetchUrl || window.location.href;
+    const url = new URL(baseUrl, window.location.origin + window.location.pathname);
     url.searchParams.set('json', 'true');
 
-    if (this.nextFetchUrl) {
-      return this.nextFetchUrl;
-    }
+    // Calculate cursor based on actual oldest timestamp
+    const date = new Date(timestamp);
+    date.setTime(date.getTime() - 10); // Subtract 10ms buffer to avoid missing items
+
+    // Server always uses cursor-based pagination for load more
+    url.searchParams.set('cursor', date.toISOString());
+
+    // Remove from/to params as they conflict with cursor-based pagination
+    url.searchParams.delete('from');
+    url.searchParams.delete('to');
+
+    console.log('[LoadMore] Built cursor URL', {
+      flipDirection: this.flipDirection,
+      treeLength: this.spanListTree.length,
+      oldestTimestamp: timestamp,
+      cursor: date.toISOString(),
+    });
 
     return url.toString();
   }
@@ -487,6 +571,11 @@ export class LogList extends LitElement {
   }
 
   disconnectedCallback() {
+    if (this.worker) {
+      this.worker.terminate();
+      this.worker = null;
+    }
+
     // Clean up all observers and timers
     if (this._loadMoreObserver) {
       this._loadMoreObserver.disconnect();
@@ -620,7 +709,7 @@ export class LogList extends LitElement {
     this.requestUpdate();
   };
 
-  fetchData = (url: string, isRefresh = false, isRecentFetch = false, isLoadMore = false) => {
+  fetchData = async (url: string, isRefresh = false, isRecentFetch = false, isLoadMore = false) => {
     if (isRecentFetch && this.isFetchingRecent) return;
     if (isLoadMore && this.isLoadingMore) return;
     if (!isRecentFetch && !isLoadMore && this.isLoading) return;
@@ -630,93 +719,77 @@ export class LogList extends LitElement {
     else this.isLoading = true;
 
     this.showLoadingSpinner(true);
-    fetch(url, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-      },
-    })
-      .then((response) => response.json())
-      .then((data) => {
-        if (!data.error) {
-          const { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, count } = data;
 
-          if (!Array.isArray(logsData)) return this.showErrorToast('Invalid data format received');
-          if (logsData.length === 0) {
-            this.hasMore = false;
-            this.expandTimeRange = true;
-            return;
-          }
+    try {
+      const { tree, meta } = await this.workerFetch(url);
 
-          // Update state
-          this.hasMore = true;
-          if (isLoadMore || isRefresh || !this.spanListTree.length) this.nextFetchUrl = nextUrl;
-          if (isRecentFetch || !this.spanListTree.length) this.recentFetchUrl = recentUrl;
-          if (count !== undefined) {
-            this.totalCount = count;
-            this.updateRowCountDisplay(count);
-          }
-          if (serviceColors) Object.assign(this.serviceColors, serviceColors);
-          this.logsColumns = cols;
-          this.colIdxMap = colIdxMap;
+      // Handle results
+      if (tree.length === 0) {
+        this.hasMore = meta.hasMore || false;
+        this.expandTimeRange = !meta.hasMore;
+        return;
+      }
 
-          const tree = this.buildSpanListTree(logsData);
+      this.hasMore = meta.hasMore !== false;
+      if (isLoadMore || isRefresh || !this.spanListTree.length) this.nextFetchUrl = meta.nextUrl;
+      if (isRecentFetch || !this.spanListTree.length) this.recentFetchUrl = meta.recentUrl;
+      if (meta.count !== undefined) {
+        this.totalCount = meta.count;
+        this.updateRowCountDisplay(meta.count);
+      }
+      if (meta.serviceColors) Object.assign(this.serviceColors, meta.serviceColors);
+      this.logsColumns = meta.cols;
+      this.colIdxMap = meta.colIdxMap;
 
-          if (isRefresh) {
-            this.spanListTree = tree;
-            this.updateVisibleItems();
-            if (tree.length > 0) {
-              requestAnimationFrame(() => {
-                const container = this.logsContainer || document.querySelector('#logs_list_container_inner');
-                if (container) container.scrollTop = this.flipDirection ? container.scrollHeight : 0;
-              });
-            }
-          } else if (isRecentFetch) {
-            this.fetchedNew = true;
-            tree.forEach((t) => (t.isNew = true));
-
-            const container = this.logsContainer;
-
-            if (container) {
-              // Batch DOM reads
-              const scrollTop = container.scrollTop;
-              const clientHeight = container.clientHeight;
-              const scrollHeight = container.scrollHeight;
-
-              const scrolledToBottom = scrollTop + clientHeight >= scrollHeight - 1;
-
-              if (scrolledToBottom) this.shouldScrollToBottom = true;
-
-              const shouldBuffer =
-                this.isLiveStreaming && ((scrollTop > 30 && !this.flipDirection) || (!scrolledToBottom && this.flipDirection));
-
-              if (shouldBuffer) {
-                this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
-              } else {
-                this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);
-                this.updateVisibleItems();
-              }
-            }
+      if (isRefresh) {
+        this.spanListTree = tree;
+        this.updateVisibleItems();
+        if (tree.length > 0) {
+          requestAnimationFrame(() => {
+            const container = this.logsContainer || document.querySelector('#logs_list_container_inner');
+            if (container) container.scrollTop = this.flipDirection ? container.scrollHeight : 0;
+          });
+        }
+      } else if (isRecentFetch) {
+        this.fetchedNew = true;
+        tree.forEach((t) => (t.isNew = true));
+        const container = this.logsContainer;
+        if (container) {
+          const scrollTop = container.scrollTop;
+          const clientHeight = container.clientHeight;
+          const scrollHeight = container.scrollHeight;
+          const scrolledToBottom = scrollTop + clientHeight >= scrollHeight - 1;
+          if (scrolledToBottom) this.shouldScrollToBottom = true;
+          const shouldBuffer = this.isLiveStreaming && ((scrollTop > 30 && !this.flipDirection) || (!scrolledToBottom && this.flipDirection));
+          if (shouldBuffer) {
+            this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
           } else {
             this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);
             this.updateVisibleItems();
           }
-
-          this.updateColumnMaxWidthMap(logsData);
-        } else {
-          this.showErrorToast(data.message || 'Failed to fetch logs');
         }
-      })
-      .catch((error) => {
-        this.showErrorToast('Network error: Unable to fetch logs');
-      })
-      .finally(() => {
-        this.isLoading = false;
-        this.isFetchingRecent = false;
-        this.isLoadingMore = false;
-        this.showLoadingSpinner(false);
-        this.requestUpdate();
-      });
+      } else {
+        this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);
+        this.updateVisibleItems();
+      }
+
+      // Defer column width calculation
+      if ('requestIdleCallback' in window) {
+        (window as any).requestIdleCallback(() => {
+          this.updateColumnMaxWidthMap(tree.map((t) => t.data).filter(Boolean));
+        }, { timeout: 2000 });
+      } else {
+        setTimeout(() => this.updateColumnMaxWidthMap(tree.map((t) => t.data).filter(Boolean)), 100);
+      }
+    } catch (error) {
+      this.showErrorToast(error instanceof Error ? error.message : 'Network error');
+    } finally {
+      this.isLoading = false;
+      this.isFetchingRecent = false;
+      this.isLoadingMore = false;
+      this.showLoadingSpinner(false);
+      this.requestUpdate();
+    }
   };
 
   private showErrorToast(message: string) {
@@ -2104,144 +2177,4 @@ function requestDumpLogItemUrlPath(rd: any[], colIdxMap: ColIdxMap, source: stri
   const rdId = lookupVecValue<string>(rd, colIdxMap, 'id');
   const rdCreatedAt = lookupVecValue<string>(rd, colIdxMap, 'created_at') || lookupVecValue<string>(rd, colIdxMap, 'timestamp');
   return [rdId, rdCreatedAt, source]; // Source parameter is preserved for future use
-}
-
-function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<string, boolean>, flipDirection: boolean) {
-  const idx = pick(colIdxMap, [
-    'trace_id',
-    'latency_breakdown',
-    'parent_span_id',
-    'timestamp',
-    'duration',
-    'start_time_ns',
-    'errors',
-    'kind',
-    'id',
-  ]);
-
-  const traces = chain(data)
-    .map((span) => {
-      span[idx.trace_id] ||= generateId();
-      span[idx.latency_breakdown] ||= generateId();
-      const isLog = span[idx.kind] === 'log';
-      return {
-        traceId: span[idx.trace_id],
-        span: {
-          id: isLog ? span[idx.id] : span[idx.latency_breakdown],
-          startNs: span[idx.start_time_ns],
-          hasErrors: isLog ? false : span[idx.errors],
-          duration: isLog ? 0 : span[idx.duration],
-          children: [],
-          parent: isLog ? span[idx.latency_breakdown] : span[idx.parent_span_id],
-          data: span,
-          type: isLog ? 'log' : 'span',
-        },
-        timestamp: new Date(span[idx.timestamp]),
-        startTime: span[idx.start_time_ns],
-        duration: span[idx.duration],
-      };
-    })
-    .groupBy('traceId')
-    .mapValues((traceSpans) => {
-      // Build spans and metadata
-      const spanMap = new Map(map(traceSpans, (s) => [s.span.id, s.span]));
-      const metadata = traceSpans.reduce(
-        (acc, s) => ({
-          minStart: Math.min(acc.minStart, s.startTime),
-          duration: Math.max(acc.duration, s.duration),
-          trace_start_time: !acc.trace_start_time || s.timestamp < acc.trace_start_time ? s.timestamp : acc.trace_start_time,
-        }),
-        { minStart: Infinity, duration: 0, trace_start_time: null }
-      );
-
-      // Build tree
-      const roots: APTEvent[] = [];
-      spanMap.forEach((span) => {
-        const parent = span.parent && spanMap.get(span.parent);
-        (parent ? parent.children : roots).push(span);
-      });
-
-      // Sort all children by startNs (execution order) instead of timestamp
-      spanMap.forEach((span) => {
-        if (span.children.length > 1) {
-          span.children.sort((a, b) => a.startNs - b.startNs);
-        }
-      });
-
-      // Don't sort - preserve server order
-      return {
-        traceId: traceSpans[0].traceId,
-        spans: roots,
-        startTime: metadata.minStart,
-        duration: metadata.duration,
-        trace_start_time: metadata.trace_start_time,
-      };
-    })
-    .values()
-    .value()
-    .sort((a, b) => {
-      const aStart = a.startTime || 0;
-      const bStart = b.startTime || 0;
-      return flipDirection ? aStart - bStart : bStart - aStart;
-    });
-  return flattenSpanTree(traces, expandedTraces);
-}
-
-function flattenSpanTree(traceArr: Trace[], expandedTraces: Record<string, boolean> = {}): EventLine[] {
-  const result: EventLine[] = [];
-
-  function traverse(
-    span: APTEvent,
-    traceId: string,
-    parentIds: string[],
-    traceStart: number,
-    traceEnd: number,
-    depth = 0,
-    isLastChild = false,
-    hasSiblingsArr: boolean[] = []
-  ): [number, boolean] {
-    let childrenCount = span.children.length;
-    let childErrors = false;
-
-    const spanInfo: EventLine = {
-      depth,
-      traceStart,
-      traceEnd,
-      traceId,
-      childErrors,
-      isNew: false,
-      parentIds: parentIds,
-      show: expandedTraces[traceId] || depth === 0,
-      expanded: expandedTraces[traceId],
-      isLastChild,
-      siblingsArr: hasSiblingsArr,
-      ...span,
-      children: childrenCount,
-      childrenTimeSpans: span.children.map((child) => ({
-        startNs: child.startNs,
-        duration: child.duration,
-        data: child.data,
-      })),
-    };
-    result.push(spanInfo);
-    const hasSiling = span.children.length > 1;
-    span.children.forEach((child, index) => {
-      childErrors = child.hasErrors || childErrors;
-      const lastChild = index === span.children.length - 1;
-      const newSiblingsArr = hasSiling && !lastChild ? [...hasSiblingsArr, true] : [...hasSiblingsArr, false];
-      const [count, errors] = traverse(child, traceId, [...parentIds, span.id], traceStart, traceEnd, depth + 1, lastChild, newSiblingsArr);
-      childrenCount += count;
-      childErrors = childErrors || errors;
-    });
-    spanInfo.children = childrenCount;
-    spanInfo.childErrors = childErrors;
-    return [childrenCount, childErrors];
-  }
-
-  traceArr.forEach((trace) => {
-    trace.spans.forEach((span) => {
-      traverse(span, trace.traceId, [], trace.startTime, trace.duration, 0);
-    });
-  });
-  return result;
 }
