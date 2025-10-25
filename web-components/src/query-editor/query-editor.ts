@@ -1400,7 +1400,9 @@ export class QueryEditorComponent extends LitElement {
             this.updateSuggestions(items, true);
           }
         });
-        if (dispose) this.suggestionListeners.push(dispose);
+        if (dispose && typeof dispose === 'function') {
+          this.suggestionListeners.push(dispose);
+        }
       }
     });
   }
