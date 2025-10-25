@@ -472,6 +472,9 @@ calculateAutoBinWidth (Just startTime, Just endTime) _ =
       days = hours / 24
    in case () of
         _
+          | minutes <= 2 -> "1 second"
+          | minutes <= 5 -> "5 seconds"
+          | minutes <= 15 -> "10 seconds"
           | hours <= 1 -> "30 seconds"
           | hours <= 6 -> "1 minutes"
           | hours <= 14 -> "5 minutes"

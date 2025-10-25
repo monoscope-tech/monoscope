@@ -231,6 +231,10 @@
   --tw-prose-body: var(--color-textStrong) !important;
 }
 
+.menu-title {
+  @apply font-normal;
+}
+
 :root,
 [data-theme] {
   --backgroundPrimary: rgb(255 255 255);
@@ -685,18 +689,6 @@ code, pre, .code, .monospace {
 }
 
 @layer custom {
-  .swagger_history_container {
-    width: 200px !important;
-  }
-
-  .swagger_history_container .options_container {
-    display: block;
-  }
-
-  .swagger_history_container .active {
-    @apply bg-fillWeak;
-  }
-
   .card-round {
     @apply bg-bgBase border border-strokeWeak rounded-2xl;
     /*overflow-hidden;*/
@@ -766,14 +758,6 @@ code, pre, .code, .monospace {
 
   .subpaths-container > div:hover {
     @apply bg-fillHover;
-  }
-
-  .save_swagger_btn_active {
-    @apply bg-fillSuccess-strong text-textInverse-strong;
-  }
-
-  .selected_swagger {
-    @apply bg-fillBrand-strong text-textInverse-strong;
   }
 
   .font_toggle_active {

@@ -125,7 +125,7 @@ timepicker_ submitForm currentRange = do
   -- DaisyUI popover contentd
   div_ [class_ "relative w-max bg-red-500"] do
     div_
-      [ class_ "dropdown dropdown-end menu w-96 rounded-box bg-bgOverlay shadow-lg"
+      [ class_ "border dropdown dropdown-end menu w-96 rounded-box bg-bgOverlay shadow-lg"
       , term "popover" ""
       , id_ "timepicker-popover"
       , term "style" "position-anchor:--timepicker-anchor"
@@ -143,7 +143,8 @@ timepicker_ submitForm currentRange = do
                 [text|on click set #custom_range_input's value to my @data-value
                     then set #currentRange's innerText to my @data-title
                     then call window.setParams({since:@data-value, from:'', to:''})
-                    then ${action} |]
+                    then ${action}
+                    then call #timepicker-popover.hidePopover() |]
               timePickerLink val title =
                 li_ $ a_
                   [ class_ "flex items-center justify-between hover:bg-base-200 rounded-lg px-3 py-2"
@@ -165,8 +166,8 @@ timepicker_ submitForm currentRange = do
         -- Custom date range picker (hidden by default)
         let submitAction =
               maybe
-                "window.setParams({from: formatDate(start), to: formatDate(end), since: ''}, true);"
-                (\fm -> [text|window.setParams({from: formatDate(start), to: formatDate(end), since: ''}); htmx.trigger("#${fm}", "submit");|])
+                "window.setParams({from: formatDate(start), to: formatDate(end), since: ''}, true); document.getElementById('timepicker-popover').hidePopover();"
+                (\fm -> [text|window.setParams({from: formatDate(start), to: formatDate(end), since: ''}); htmx.trigger("#${fm}", "submit"); document.getElementById('timepicker-popover').hidePopover();|])
                 submitForm
         script_
           [text|
@@ -256,15 +257,16 @@ refreshButton_ = do
         faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral "
 
       -- Dropdown menu
-      ul_ [class_ "dropdown-content menu p-2 shadow-lg bg-base-100 rounded-box z-[1] mt-2", tabindex_ "0"] do
+      ul_ [class_ "dropdown-content menu p-2 shadow-lg bg-base-100 rounded-box z-[1] mt-2 min-w-40", tabindex_ "0"] do
         forM_ refreshOptions \(label, title, ms) ->
           li_
             $ a_
               [ data_ "value" ms
               , data_ "tippy-content" title
-              , [__| on click 
+              , [__| on click
                   set .auto-refresh-span.innerText to my.textContent then
                   send setRefreshInterval(interval: parseInt(@data-value)) to window then
+                  call document.activeElement.blur() then
                   focus(document.body)
               |]
               ]
