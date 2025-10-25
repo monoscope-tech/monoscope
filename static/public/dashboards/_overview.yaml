@@ -180,7 +180,7 @@ tabs:
             {{time_filter}}
           GROUP BY time, service
           ORDER BY time DESC
-          LIMIT 1000
+          LIMIT 10000
         unit: events
         layout: { w: 6, h: 4 }
 
@@ -200,7 +200,7 @@ tabs:
             {{time_filter}}
           GROUP BY time, service
           ORDER BY time DESC
-          LIMIT 1000
+          LIMIT 10000
         unit: errors
         layout: { w: 6, h: 4 }
 
@@ -219,7 +219,7 @@ tabs:
             {{time_filter}}
           GROUP BY time, service
           ORDER BY time DESC
-          LIMIT 1000
+          LIMIT 10000
         unit: reqs
         layout: { w: 6, h: 4 }
 
@@ -238,7 +238,7 @@ tabs:
             {{time_filter}}
           GROUP BY time, attributes___http___response___status_code
           ORDER BY time DESC
-          LIMIT 1000
+          LIMIT 10000
         unit: reqs
         layout: { w: 6, h: 4 }
 
@@ -263,7 +263,7 @@ tabs:
             {{time_filter}}
           GROUP BY time, error_category
           ORDER BY time DESC
-          LIMIT 1000
+          LIMIT 10000
         unit: errors
         layout: { w: 6, h: 4 }
 
@@ -410,7 +410,7 @@ tabs:
             {{time_filter}}
           GROUP BY time, attributes___http___response___status_code
           ORDER BY time DESC
-          LIMIT 1000
+          LIMIT 10000
         unit: reqs
         layout: { w: 6, h: 4 }
 
@@ -464,7 +464,7 @@ tabs:
             {{time_filter}}
           GROUP BY time, error_type
           ORDER BY time DESC
-          LIMIT 1000
+          LIMIT 10000
         unit: errors
         layout: { w: 6, h: 4 }
 
@@ -502,7 +502,7 @@ tabs:
             duration_ms as value
           FROM downstream_time
           ORDER BY time DESC
-          LIMIT 1000
+          LIMIT 10000
         unit: ms
         layout: { w: 6, h: 4 }
 
@@ -548,7 +548,6 @@ tabs:
           GROUP BY name
           ORDER BY COUNT(*) DESC
           LIMIT 100
-
 
   - name: Resources
     icon: routes
@@ -712,7 +711,6 @@ tabs:
           ORDER BY COUNT(*) DESC
           LIMIT 100
 
-
   - name: Traces
     icon: activity
     widgets:
@@ -791,7 +789,7 @@ tabs:
             {{time_filter}}
           GROUP BY time, service_name
           ORDER BY time DESC
-          LIMIT 1000
+          LIMIT 10000
         unit: spans/min
         layout: { w: 6, h: 4 }
 
@@ -933,7 +931,7 @@ tabs:
             {{time_filter}}
           GROUP BY time, level
           ORDER BY time DESC
-          LIMIT 1000
+          LIMIT 10000
         layout: { w: 6, h: 4 }
 
       # Error Pattern Analysis
@@ -1112,7 +1110,7 @@ tabs:
             {{time_filter}}
           GROUP BY time, COALESCE(attributes___db___operation___name, name)
           ORDER BY time DESC
-          LIMIT 1000
+          LIMIT 10000
         unit: ms
         layout: { w: 6, h: 4 }
 
@@ -1131,7 +1129,7 @@ tabs:
             {{time_filter}}
           GROUP BY time, db_system
           ORDER BY time DESC
-          LIMIT 1000
+          LIMIT 10000
         unit: queries
         layout: { w: 6, h: 4 }
 
@@ -1172,7 +1170,7 @@ tabs:
             {{time_filter}}
           GROUP BY time, db_system
           ORDER BY time DESC
-          LIMIT 1000
+          LIMIT 10000
         layout: { w: 6, h: 4 }
 
       # Connection Pool Status
@@ -1191,5 +1189,5 @@ tabs:
             {{time_filter}}
           GROUP BY time, state
           ORDER BY time DESC
-          LIMIT 1000
+          LIMIT 10000
         layout: { w: 6, h: 4 }
