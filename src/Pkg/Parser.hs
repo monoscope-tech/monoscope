@@ -187,7 +187,6 @@ sqlFromQueryComponents sqlCfg qc =
                   nonEmptyParts = filter (not . T.null) $ catMaybes [cursorPart, wherePart]
                  in
                   if null nonEmptyParts then "TRUE" else T.intercalate " AND " nonEmptyParts
-      noConditionClause = if (T.null rawWhere) then " and parent_id is null" else ""
 
       finalSqlQuery = case sqlCfg.targetSpansM of
         Just "service-entry-spans" ->
@@ -218,7 +217,7 @@ sqlFromQueryComponents sqlCfg qc =
                    {limitClause} |]
             Nothing ->
               [fmt|SELECT {selectClause} FROM {fromTable}
-                 WHERE project_id='{sqlCfg.pid.toText}' and {dateRangeStr} and ({whereCondition}) {noConditionClause}
+                 WHERE project_id='{sqlCfg.pid.toText}' and {dateRangeStr} and ({whereCondition})
                  {groupByClause} {sortOrder} {limitClause} |]
       countQuery =
         case qc.finalSummarizeQuery of

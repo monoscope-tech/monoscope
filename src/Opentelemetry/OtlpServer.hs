@@ -946,6 +946,15 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
           then nanosecondsToUTC observedTimeNano
           else fallbackTime
 
+      -- Convert parent span ID, ensuring empty strings become Nothing
+      !parentSpanIdBS = logRecord ^. PLF.spanId
+      !parentId =
+        if BS.null parentSpanIdBS
+          then Nothing
+          else
+            let hexText = byteStringToHexText parentSpanIdBS
+             in if T.null hexText then Nothing else Just hexText
+
       otelLog =
         OtelLogsAndSpans
           { project_id = pid.toText
@@ -981,7 +990,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
           , events = Nothing
           , links = Nothing
           , name = Nothing
-          , parent_id = Just $ byteStringToHexText $ logRecord ^. PLF.spanId
+          , parent_id = parentId
           , summary = V.empty -- Will be populated after creation
           , date = validTimestamp
           , errors = Nothing
@@ -1074,7 +1083,9 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
       parentId =
         if BS.null parentSpanId
           then Nothing
-          else Just $ byteStringToHexText parentSpanId
+          else
+            let hexText = byteStringToHexText parentSpanId
+             in if T.null hexText then Nothing else Just hexText
 
       -- Convert events only if non-empty
       eventsJson =

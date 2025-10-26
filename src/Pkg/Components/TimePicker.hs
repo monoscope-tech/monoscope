@@ -65,12 +65,18 @@ parseSince now since =
     timeParser = (,) <$> decimal <*> (space *> some letterChar)
 
 
-parseTimeRange :: UTCTime -> TimePicker -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
-parseTimeRange now (TimePicker Nothing Nothing Nothing) = parseSince now "1H"
-parseTimeRange now (TimePicker (Just "") Nothing Nothing) = parseSince now "1H"
-parseTimeRange now (TimePicker Nothing fromM toM) = parseFromAndTo now fromM toM
-parseTimeRange now (TimePicker (Just "") fromM toM) = parseFromAndTo now fromM toM
-parseTimeRange now (TimePicker sinceM _ _) = parseSince now (maybeToMonoid sinceM)
+-- | Parse time range from TimePicker, using cursor as reference time when present (for pagination)
+-- When cursor is provided, it becomes the upper bound instead of 'now', ensuring proper "Load More" pagination
+parseTimeRange :: UTCTime -> Maybe UTCTime -> TimePicker -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
+parseTimeRange now cursorM tp = case cursorM of
+  Just cursor -> parseTimeRangeWithRef cursor tp
+  Nothing -> parseTimeRangeWithRef now tp
+  where
+    parseTimeRangeWithRef ref (TimePicker Nothing Nothing Nothing) = parseSince ref "1H"
+    parseTimeRangeWithRef ref (TimePicker (Just "") Nothing Nothing) = parseSince ref "1H"
+    parseTimeRangeWithRef ref (TimePicker Nothing fromM toM) = parseFromAndTo ref fromM toM
+    parseTimeRangeWithRef ref (TimePicker (Just "") fromM toM) = parseFromAndTo ref fromM toM
+    parseTimeRangeWithRef ref (TimePicker sinceM _ _) = parseSince ref (maybeToMonoid sinceM)
 
 
 parseFromAndTo :: UTCTime -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))

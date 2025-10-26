@@ -326,7 +326,7 @@ loadDashboardFromVM dashVM = case dashVM.schema of
 -- Process a single dashboard variable recursively.
 processVariable :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Variable -> ATAuthCtx Dashboards.Variable
 processVariable pid now timeRange@(sinceStr, fromDStr, toDStr) allParams variableBase = do
-  let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
+  let (fromD, toD, _) = TimePicker.parseTimeRange now Nothing (TimePicker.TimePicker sinceStr fromDStr toDStr)
       paramsMap = Map.fromList allParams
       variable' = Dashboards.replaceQueryVariables pid fromD toD allParams now variableBase
       variable = variable'{Dashboards.value = join (Map.lookup ("var-" <> variable'.key) paramsMap) <|> variable'.value}
@@ -504,7 +504,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   now <- Time.currentTime
-  let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
+  let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now Nothing (TimePicker.TimePicker sinceStr fromDStr toDStr)
 
   (dashVM, dash) <- getDashAndVM dashId fileM
   dash' <- forOf (#variables . traverse . traverse) dash (processVariable pid now (sinceStr, fromDStr, toDStr) allParams)

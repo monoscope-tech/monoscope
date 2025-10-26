@@ -367,12 +367,18 @@ processSpanToEntities pjc otelSpan dumpId =
 
 convertRequestMessageToSpan :: RequestMessages.RequestMessage -> (UUID.UUID, Text) -> Telemetry.OtelLogsAndSpans
 convertRequestMessageToSpan rm (spanId, trId) =
-  let otelSpan =
+  let
+      -- Convert parent_id, ensuring empty strings become Nothing
+      !parentId = case (Just . UUID.toText) =<< rm.parentId of
+        Just txt | T.null txt -> Nothing
+        other -> other
+
+      otelSpan =
         Telemetry.OtelLogsAndSpans
           { id = UUID.toText UUID.nil
           , project_id = UUID.toText rm.projectId
           , timestamp = zonedTimeToUTC rm.timestamp
-          , parent_id = (Just . UUID.toText) =<< rm.parentId
+          , parent_id = parentId
           , context = Just $ Telemetry.Context{trace_id = Just trId, span_id = Just $ UUID.toText spanId, trace_state = Nothing, trace_flags = Nothing, is_remote = Nothing}
           , name = Just "monoscope.http"
           , start_time = zonedTimeToUTC rm.timestamp

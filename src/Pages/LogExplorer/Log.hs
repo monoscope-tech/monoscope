@@ -442,18 +442,15 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
     addSuccessToast "Deleted from Query Library successfully" Nothing
 
   now <- Time.currentTime
-  let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
+  let (fromD, toD, currentRange) = Components.parseTimeRange now cursorM' (Components.TimePicker sinceM fromM toM)
   authCtx <- Effectful.Reader.Static.ask @AuthContext
 
   -- If an alert ID is provided, fetch the alert and pre-fill the query box
   alertDM <- case alertM of
     Nothing -> return Nothing
-    Just alertIdText -> do
-      case UUID.fromText alertIdText of
-        Just alertId -> do
-          mAlert <- dbtToEff $ Monitors.queryMonitorById (Monitors.QueryMonitorId alertId)
-          return mAlert
-        Nothing -> return Nothing
+    Just alertIdText -> case UUID.fromText alertIdText of
+      Just alertId -> dbtToEff $ Monitors.queryMonitorById (Monitors.QueryMonitorId alertId)
+      Nothing -> return Nothing
 
   -- Skip table load on initial page load unless it's a JSON request
   let shouldSkipLoad = layoutM == Nothing && hxRequestM == Nothing && jsonM /= Just "true" || vizTypeM == Just "patterns"
@@ -522,13 +519,21 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
           reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
           traceIds = V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
-          (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
+          -- Extract IDs of spans that already have a parent_id (these are already child spans in our results)
+          alreadyLoadedChildSpanIds =
+            V.mapMaybe
+              ( \v -> case lookupVecTextByKey v colIdxMap "parent_id" of
+                  Just parentId | not (T.null parentId) -> lookupVecTextByKey v colIdxMap "id"
+                  _ -> Nothing
+              )
+              requestVecs
+          (fromDD, toDD, _) = Components.parseTimeRange now Nothing (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
 
       childSpans <- case queryM' of
         Nothing -> do
-          v <- RequestDumps.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD)
+          v <- RequestDumps.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD) alreadyLoadedChildSpanIds
           pure v
-        _ -> pure $ V.empty
+        _ -> pure V.empty
       let
         finalVecs = requestVecs <> childSpans
         lastFM = reqLastCreatedAtM >>= textToUTC >>= (\t -> Just $ toText . iso8601Show $ addUTCTime (-0.001) t)
@@ -1199,8 +1204,8 @@ alertConfigurationForm_ pid alertM = do
                                      })
                                    end|]
                             ]
-                          ++ [required_ "" | req]
-                          ++ [value_ (maybe "" (show) vM) | isJust vM]
+                            ++ [required_ "" | req]
+                            ++ [value_ (maybe "" (show) vM) | isJust vM]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)

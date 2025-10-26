@@ -525,8 +525,8 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
   pure $ Right (logItemsV, queryComponents.toColNames, c)
 
 
-selectChildSpansAndLogs :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Text] -> V.Vector Text -> (Maybe UTCTime, Maybe UTCTime) -> Eff es (V.Vector (V.Vector AE.Value))
-selectChildSpansAndLogs pid projectedColsByUser traceIds dateRange = do
+selectChildSpansAndLogs :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Text] -> V.Vector Text -> (Maybe UTCTime, Maybe UTCTime) -> V.Vector Text -> Eff es (V.Vector (V.Vector AE.Value))
+selectChildSpansAndLogs pid projectedColsByUser traceIds dateRange excludedSpanIds = do
   now <- Time.currentTime
   let fmtTime = toText . iso8601Show
   let qConfig = defSqlQueryCfg pid now (Just SSpans) Nothing
@@ -538,10 +538,10 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds dateRange = do
         _ -> ""
       q =
         [text|SELECT json_build_array($r) FROM otel_logs_and_spans
-             WHERE project_id= ?  $dateRangeStr and  context___trace_id=Any(?) and parent_id IS NOT NULL
+             WHERE project_id= ?  $dateRangeStr and  context___trace_id=Any(?) and parent_id IS NOT NULL AND id != ALL(?)
              ORDER BY timestamp DESC;
            |]
-  results <- dbtToEff $ V.fromList <$> DBT.query (Query $ encodeUtf8 q) (pid, traceIds)
+  results <- dbtToEff $ V.fromList <$> DBT.query (Query $ encodeUtf8 q) (pid, traceIds, excludedSpanIds)
   pure $ V.mapMaybe valueToVector results
 
 
