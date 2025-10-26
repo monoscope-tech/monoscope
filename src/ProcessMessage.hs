@@ -368,50 +368,51 @@ processSpanToEntities pjc otelSpan dumpId =
 convertRequestMessageToSpan :: RequestMessages.RequestMessage -> (UUID.UUID, Text) -> Telemetry.OtelLogsAndSpans
 convertRequestMessageToSpan rm (spanId, trId) =
   let
-      -- Convert parent_id, ensuring empty strings become Nothing
-      !parentId = case (Just . UUID.toText) =<< rm.parentId of
-        Just txt | T.null txt -> Nothing
-        other -> other
+    -- Convert parent_id, ensuring empty strings become Nothing
+    !parentId = case (Just . UUID.toText) =<< rm.parentId of
+      Just txt | T.null txt -> Nothing
+      other -> other
 
-      otelSpan =
-        Telemetry.OtelLogsAndSpans
-          { id = UUID.toText UUID.nil
-          , project_id = UUID.toText rm.projectId
-          , timestamp = zonedTimeToUTC rm.timestamp
-          , parent_id = parentId
-          , context = Just $ Telemetry.Context{trace_id = Just trId, span_id = Just $ UUID.toText spanId, trace_state = Nothing, trace_flags = Nothing, is_remote = Nothing}
-          , name = Just "monoscope.http"
-          , start_time = zonedTimeToUTC rm.timestamp
-          , end_time = Just $ addUTCTime (realToFrac (fromIntegral rm.duration / 1000000000)) (zonedTimeToUTC rm.timestamp)
-          , kind = Just $ if T.isSuffixOf "Outgoing" (show rm.sdkType) then "client" else "server"
-          , level = Nothing
-          , body = Just $ AesonText $ AE.object ["request_body" AE..= b64ToJson rm.requestBody, "response_body" AE..= b64ToJson rm.responseBody]
-          , severity = Nothing
-          , status_message = Just $ case rm.statusCode of
-              sc
-                | sc >= 400 -> "Error"
-                | otherwise -> "OK"
-          , status_code = Just $ show rm.statusCode
-          , hashes = []
-          , observed_timestamp = Just $ zonedTimeToUTC rm.timestamp
-          , attributes = fmap AesonText $ jsonToMap $ createSpanAttributes rm
-          , events = Just $ AesonText $ AE.Array V.empty
-          , links = Just ""
-          , resource =
-              fmap AesonText
-                $ jsonToMap
-                $ nestedJsonFromDotNotation
-                  [ ("service.name", AE.String $ fromMaybe "unknown" rm.host)
-                  , ("service.version", maybe (AE.String "") AE.String rm.serviceVersion)
-                  , ("telemetry.sdk.language", AE.String "apitoolkit")
-                  , ("telemetry.sdk.name", AE.String $ show rm.sdkType)
-                  ]
-          , duration = Just $ fromIntegral rm.duration
-          , summary = V.empty -- Will be populated below
-          , date = zonedTimeToUTC rm.timestamp
-          , errors = Nothing
-          }
-   in otelSpan{summary = generateSummary otelSpan}
+    otelSpan =
+      Telemetry.OtelLogsAndSpans
+        { id = UUID.toText UUID.nil
+        , project_id = UUID.toText rm.projectId
+        , timestamp = zonedTimeToUTC rm.timestamp
+        , parent_id = parentId
+        , context = Just $ Telemetry.Context{trace_id = Just trId, span_id = Just $ UUID.toText spanId, trace_state = Nothing, trace_flags = Nothing, is_remote = Nothing}
+        , name = Just "monoscope.http"
+        , start_time = zonedTimeToUTC rm.timestamp
+        , end_time = Just $ addUTCTime (realToFrac (fromIntegral rm.duration / 1000000000)) (zonedTimeToUTC rm.timestamp)
+        , kind = Just $ if T.isSuffixOf "Outgoing" (show rm.sdkType) then "client" else "server"
+        , level = Nothing
+        , body = Just $ AesonText $ AE.object ["request_body" AE..= b64ToJson rm.requestBody, "response_body" AE..= b64ToJson rm.responseBody]
+        , severity = Nothing
+        , status_message = Just $ case rm.statusCode of
+            sc
+              | sc >= 400 -> "Error"
+              | otherwise -> "OK"
+        , status_code = Just $ show rm.statusCode
+        , hashes = []
+        , observed_timestamp = Just $ zonedTimeToUTC rm.timestamp
+        , attributes = fmap AesonText $ jsonToMap $ createSpanAttributes rm
+        , events = Just $ AesonText $ AE.Array V.empty
+        , links = Just ""
+        , resource =
+            fmap AesonText
+              $ jsonToMap
+              $ nestedJsonFromDotNotation
+                [ ("service.name", AE.String $ fromMaybe "unknown" rm.host)
+                , ("service.version", maybe (AE.String "") AE.String rm.serviceVersion)
+                , ("telemetry.sdk.language", AE.String "apitoolkit")
+                , ("telemetry.sdk.name", AE.String $ show rm.sdkType)
+                ]
+        , duration = Just $ fromIntegral rm.duration
+        , summary = V.empty -- Will be populated below
+        , date = zonedTimeToUTC rm.timestamp
+        , errors = Nothing
+        }
+   in
+    otelSpan{summary = generateSummary otelSpan}
 
 
 -- Using nestedJsonFromDotNotation from Utils module

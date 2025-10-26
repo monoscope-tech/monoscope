@@ -88,8 +88,6 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static qualified as Eff
 import Log qualified
-import System.Config qualified as SysConfig
-import System.Config (AuthContext)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects (ProjectId (unProjectId))
 import Models.Projects.Projects qualified as Projects
@@ -98,6 +96,8 @@ import Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..))
 import Pkg.DeriveUtils (AesonText (..), unAesonTextMaybe)
 import Relude hiding (ask)
 import RequestMessages (replaceAllFormats)
+import System.Config (AuthContext)
+import System.Config qualified as SysConfig
 import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
 import Utils (lookupValueText, toXXHash)
@@ -817,7 +817,7 @@ instance ToRow OtelLogsAndSpans where
       parseSeverityNumber = fmap (show . severity_number)
 
 
-bulkInsertOtelLogsAndSpansTF :: (Concurrent :> es, DB :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es, Eff.Reader AuthContext :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
+bulkInsertOtelLogsAndSpansTF :: (Concurrent :> es, DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
 bulkInsertOtelLogsAndSpansTF records = do
   appCtx <- Eff.ask @AuthContext
   updatedRecords <- V.mapM (\r -> genUUID >>= \uid -> pure (r & #id .~ UUID.toText uid)) records
