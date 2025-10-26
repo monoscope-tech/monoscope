@@ -69,7 +69,7 @@ spec = aroundAll withTestResources do
       case pg of
         Log.LogsGetJson requestVecs serviceColors nextUrl resetUrl recentUrl cols colIdxMap resultCount -> do
           -- Verify we got results
-          V.length requestVecs `shouldBe` 150  -- API limits to 150 results per page
+          V.length requestVecs `shouldBe` 202  -- Should return all 202 test messages (under the 500 limit)
           resultCount `shouldSatisfy` (>= 202)  -- At least our 202 test messages (might include data from other tests)
           
           -- Verify column structure
@@ -128,9 +128,9 @@ spec = aroundAll withTestResources do
 
       case pg1 of
         Log.LogsGetJson requestVecs1 _ nextUrl1 _ _ _ _ resultCount1 -> do
-          V.length requestVecs1 `shouldBe` 150  -- API limits to 150 per page
+          V.length requestVecs1 `shouldSatisfy` (>= 200)  -- Should return at least all 200 test messages (under the 500 limit)
           resultCount1 `shouldSatisfy` (>= 200)  -- At least our 200 test messages
-          nextUrl1 `shouldNotBe` ""
+          -- With 500 limit, might not need pagination for 200 items
         _ -> error "Expected JSON response but got something else"
 
   describe "Column Selection" do
@@ -197,22 +197,22 @@ spec = aroundAll withTestResources do
       let frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
       let reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
-      
-      -- Create 300 messages to ensure multiple pages (limit is 150)
-      let msgs = take 300 $ zip (map (\i -> "m" <> show i) [1..]) (repeat $ BL.toStrict $ AE.encode reqMsg)
+
+      -- Create 1000 messages to ensure multiple pages (limit is 500)
+      let msgs = take 1000 $ zip (map (\i -> "m" <> show i) [1..]) (repeat $ BL.toStrict $ AE.encode reqMsg)
       _ <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
-      
+
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
-      
+
       -- First page
-      pg1 <- toServantResponse trATCtx trSessAndHeader trLogger $ 
+      pg1 <- toServantResponse trATCtx trSessAndHeader trLogger $
         Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
-      
+
       case pg1 of
         Log.LogsGetJson requestVecs1 _ nextUrl1 _ _ _ colIdxMap1 resultCount1 -> do
-          V.length requestVecs1 `shouldBe` 150
-          resultCount1 `shouldSatisfy` (>= 300)
+          V.length requestVecs1 `shouldBe` 500  -- API limits to 500 per page
+          resultCount1 `shouldSatisfy` (>= 1000)  -- At least our 1000 test messages
           
           -- Extract cursor timestamp from last item
           let lastItemM = requestVecs1 V.!? (V.length requestVecs1 - 1)

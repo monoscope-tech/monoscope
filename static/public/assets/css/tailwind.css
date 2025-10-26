@@ -164,7 +164,7 @@
   default: true;
   prefersdark: false;
   color-scheme: 'light';
-  --color-base-100: rgba(0 21 128 / 0.02);
+  --color-base-100: var(--color-bgBase);
   --color-base-200: rgba(0 21 128 / 0.04);
   --color-base-300: rgba(0 21 128 / 0.04);
   --color-base-content: rgba(0 6 38 / 0.9);
@@ -200,7 +200,7 @@
   default: false;
   prefersdark: true;
   color-scheme: 'dark';
-  --color-base-100: rgba(255 255 255 / 0.03);
+  --color-base-100: var(--color-bgBase);
   --color-base-200: rgba(255 255 255 / 0.06);
   --color-base-300: rgba(255 255 255 / 0.06);
   --color-base-content: rgb(255 255 255);
