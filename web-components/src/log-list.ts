@@ -193,7 +193,7 @@ export class LogList extends LitElement {
     }
 
     // Global event listeners
-    ['submit', 'add-query', 'update-query'].forEach((ev) =>
+    ['submit', 'add-query'].forEach((ev) =>
       window.addEventListener(ev, () => {
         this.debouncedRefetchLogs();
       })
@@ -208,10 +208,21 @@ export class LogList extends LitElement {
     });
 
     // Filter element update listener
-    document.addEventListener('update-query', (e) => {
-      if ((e.target as HTMLElement)?.id === 'filterElement') {
-        this.debouncedRefetchLogs();
+    document.addEventListener('update-query', (e: Event) => {
+      const customEvent = e as CustomEvent;
+      const source = customEvent.detail?.source || 'default';
+
+      console.log('update-query event received', { source, detail: customEvent.detail });
+
+      // Handle expand-timerange specially - don't clear existing data
+      if (source === 'expand-timerange') {
+        // Fetch more data without clearing - the expandTimeRangeUrl button handler will call fetchData
+        console.log('Expand time range - data will be fetched by button handler');
+        return;
       }
+
+      // For all other sources (timepicker, chart-zoom, query changes, etc.) - full reload
+      this.debouncedRefetchLogs();
     });
 
     // Window lifecycle events
@@ -331,18 +342,21 @@ export class LogList extends LitElement {
     const date = new Date(timestamp);
     date.setTime(date.getTime() - 10); // Subtract 10ms buffer to avoid missing items
 
-    // Server always uses cursor-based pagination for load more
+    // Update cursor for pagination while preserving time range filters (from/to/since)
+    // The cursor tells the server where to start pagination
+    // The from/to/since tell the server what time range to query within
     url.searchParams.set('cursor', date.toISOString());
-
-    // Remove from/to params as they conflict with cursor-based pagination
-    url.searchParams.delete('from');
-    url.searchParams.delete('to');
 
     console.log('[LoadMore] Built cursor URL', {
       flipDirection: this.flipDirection,
       treeLength: this.spanListTree.length,
       oldestTimestamp: timestamp,
       cursor: date.toISOString(),
+      timeRange: {
+        from: url.searchParams.get('from'),
+        to: url.searchParams.get('to'),
+        since: url.searchParams.get('since'),
+      },
     });
 
     return url.toString();
@@ -359,12 +373,16 @@ export class LogList extends LitElement {
 
     if (since) {
       const nextMap: Record<string, string> = {
+        '5M': '15M',
+        '15M': '30M',
+        '30M': '1H',
         '1H': '3H',
         '3H': '6H',
         '6H': '12H',
         '12H': '24H',
         '24H': '3D',
         '3D': '7D',
+        '7D': '14D',
       };
       target = nextMap[since] ?? '14D';
       url.searchParams.set('since', target);
@@ -376,11 +394,31 @@ export class LogList extends LitElement {
       target = '3H';
       url.searchParams.set('since', target);
     }
+
+    // Use the timestamp of the oldest log currently in the list as the cursor
+    // This ensures we fetch older logs when expanding the time range
+    if (this.spanListTree.length > 0) {
+      const oldestItem = this.flipDirection ? this.spanListTree[0] : this.spanListTree[this.spanListTree.length - 1];
+      const oldestTimestamp = oldestItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
+
+      if (oldestTimestamp) {
+        url.searchParams.set('cursor', String(oldestTimestamp));
+      }
+    }
+
+    // Ensure json=true and layout=loadmore for the API request
+    url.searchParams.set('json', 'true');
+    url.searchParams.set('layout', 'loadmore');
+
+    // Save URL with cursor, json, and layout for the fetch
     this.nextFetchUrl = url.pathname + url.search;
+
+    // Remove cursor, json, and layout from browser URL (cleaner for user)
     url.searchParams.delete('cursor');
     url.searchParams.delete('json');
+    url.searchParams.delete('layout');
     const newUrl = url.pathname + url.search;
-    this.updateUrlStateAndQuery(newUrl, url.searchParams.get('queryAST') || '', target);
+    this.updateUrlStateAndQuery(newUrl, url.searchParams.get('queryAST') || '', target, 'expand-timerange');
     return this.nextFetchUrl;
   }
 
@@ -389,6 +427,7 @@ export class LogList extends LitElement {
   }
 
   async refetchLogs() {
+    console.log('refetchLogs called - stack trace:', new Error().stack);
     this.fetchData(this.buildJsonUrl(), true);
   }
 
@@ -423,13 +462,13 @@ export class LogList extends LitElement {
     p.delete('since');
 
     const newUrl = `${window.location.pathname}?${p.toString()}${window.location.hash}`;
-    this.updateUrlStateAndQuery(newUrl, p.get('queryAST') || '', `${startValue} - ${endValue}`);
+    this.updateUrlStateAndQuery(newUrl, p.get('queryAST') || '', `${startValue} - ${endValue}`, 'chart-zoom');
 
     // Refetch logs with the new time range
     this.debouncedRefetchLogs();
   };
 
-  private updateUrlStateAndQuery(newUrl: string, q: string, timeRange: string) {
+  private updateUrlStateAndQuery(newUrl: string, q: string, timeRange: string, source: string = 'default') {
     window.history.replaceState({}, '', newUrl);
     const rangeBox = document.getElementById('currentRange');
     console.log(rangeBox);
@@ -442,6 +481,8 @@ export class LogList extends LitElement {
         bubbles: true,
         detail: {
           ast: q,
+          source: source,
+          timeRange: timeRange,
         },
       })
     );
@@ -599,7 +640,7 @@ export class LogList extends LitElement {
     if (this.handleMouseUp) {
       window.removeEventListener('mouseup', this.handleMouseUp);
     }
-    ['submit', 'add-query', 'update-query'].forEach((ev) => window.removeEventListener(ev, this.debouncedRefetchLogs));
+    ['submit', 'add-query'].forEach((ev) => window.removeEventListener(ev, this.debouncedRefetchLogs));
 
     // Clean up chart event handlers
     if (this.barChart) {
@@ -710,6 +751,8 @@ export class LogList extends LitElement {
   };
 
   fetchData = async (url: string, isRefresh = false, isRecentFetch = false, isLoadMore = false) => {
+    console.log('fetchData called', { url, isRefresh, isRecentFetch, isLoadMore, currentTreeLength: this.spanListTree.length });
+
     if (isRecentFetch && this.isFetchingRecent) return;
     if (isLoadMore && this.isLoadingMore) return;
     if (!isRecentFetch && !isLoadMore && this.isLoading) return;

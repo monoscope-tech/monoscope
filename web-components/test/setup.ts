@@ -1,5 +1,30 @@
 // This file will be executed before running tests
-import { beforeAll } from 'vitest';
+import { beforeAll, vi } from 'vitest';
+
+// Mock window.matchMedia for Monaco theme detection (must be set early, before Monaco loads)
+Object.defineProperty(window, 'matchMedia', {
+  writable: true,
+  value: vi.fn().mockImplementation((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })),
+});
+
+// Mock ResizeObserver for Monaco editor size detection
+(global as any).ResizeObserver = class ResizeObserver {
+  constructor(callback: ResizeObserverCallback) {
+    // Mock implementation
+  }
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
 
 // Mock Worker for Monaco Editor since we don't need actual workers in tests
 globalThis.Worker = class Worker {
@@ -19,44 +44,80 @@ globalThis.MonacoEnvironment = {
   }
 };
 
-// Override createElement to return mocked canvas for Monaco Editor
-const originalCreateElement = document.createElement.bind(document);
-document.createElement = function(tagName: string, options?: any) {
-  const element = originalCreateElement(tagName, options);
-
-  if (tagName.toLowerCase() === 'canvas') {
-    const originalGetContext = element.getContext.bind(element);
-    element.getContext = function(contextType: any, contextOptions?: any) {
-      if (contextType === '2d') {
-        const ctx = originalGetContext(contextType, contextOptions) || ({} as any);
-        // Mock the properties Monaco Editor needs
-        ctx.webkitBackingStorePixelRatio = 1;
-        ctx.mozBackingStorePixelRatio = 1;
-        ctx.msBackingStorePixelRatio = 1;
-        ctx.oBackingStorePixelRatio = 1;
-        ctx.backingStorePixelRatio = 1;
-        ctx.measureText = ctx.measureText || function() { return { width: 0 }; };
-        ctx.fillRect = ctx.fillRect || function() {};
-        ctx.clearRect = ctx.clearRect || function() {};
-        ctx.fillText = ctx.fillText || function() {};
-        ctx.save = ctx.save || function() {};
-        ctx.restore = ctx.restore || function() {};
-        ctx.beginPath = ctx.beginPath || function() {};
-        ctx.closePath = ctx.closePath || function() {};
-        ctx.moveTo = ctx.moveTo || function() {};
-        ctx.lineTo = ctx.lineTo || function() {};
-        ctx.stroke = ctx.stroke || function() {};
-        ctx.fill = ctx.fill || function() {};
-        return ctx;
-      }
-      return originalGetContext(contextType, contextOptions);
-    };
-  }
-
-  return element;
-} as any;
-
-// Add any additional global setup for happy-dom environment
+// Canvas mock for Monaco Editor compatibility with jsdom
 beforeAll(() => {
-  console.log('Test setup complete with happy-dom');
+
+  // Mock HTMLCanvasElement methods that Monaco Editor uses
+  const mockContext = {
+    fillStyle: '',
+    strokeStyle: '',
+    lineWidth: 1,
+    lineCap: 'butt',
+    lineJoin: 'miter',
+    miterLimit: 10,
+    font: '10px sans-serif',
+    textAlign: 'start',
+    textBaseline: 'alphabetic',
+    direction: 'ltr',
+    globalAlpha: 1,
+    globalCompositeOperation: 'source-over',
+    imageSmoothingEnabled: true,
+    shadowBlur: 0,
+    shadowColor: 'rgba(0, 0, 0, 0)',
+    shadowOffsetX: 0,
+    shadowOffsetY: 0,
+    fillRect: vi.fn(),
+    strokeRect: vi.fn(),
+    clearRect: vi.fn(),
+    beginPath: vi.fn(),
+    closePath: vi.fn(),
+    moveTo: vi.fn(),
+    lineTo: vi.fn(),
+    bezierCurveTo: vi.fn(),
+    quadraticCurveTo: vi.fn(),
+    arc: vi.fn(),
+    arcTo: vi.fn(),
+    ellipse: vi.fn(),
+    rect: vi.fn(),
+    fill: vi.fn(),
+    stroke: vi.fn(),
+    clip: vi.fn(),
+    isPointInPath: vi.fn(),
+    isPointInStroke: vi.fn(),
+    measureText: vi.fn(() => ({ width: 0, actualBoundingBoxAscent: 0, actualBoundingBoxDescent: 0 })),
+    fillText: vi.fn(),
+    strokeText: vi.fn(),
+    drawImage: vi.fn(),
+    createImageData: vi.fn(),
+    getImageData: vi.fn(() => ({ data: [], width: 0, height: 0 })),
+    putImageData: vi.fn(),
+    save: vi.fn(),
+    restore: vi.fn(),
+    scale: vi.fn(),
+    rotate: vi.fn(),
+    translate: vi.fn(),
+    transform: vi.fn(),
+    setTransform: vi.fn(),
+    resetTransform: vi.fn(),
+    createLinearGradient: vi.fn(),
+    createRadialGradient: vi.fn(),
+    createPattern: vi.fn(),
+    getContextAttributes: vi.fn(() => ({})),
+    canvas: null as any,
+  };
+
+  HTMLCanvasElement.prototype.getContext = vi.fn((contextType: string) => {
+    if (contextType === '2d') {
+      mockContext.canvas = this;
+      return mockContext as any;
+    }
+    return null;
+  });
+
+  HTMLCanvasElement.prototype.toDataURL = vi.fn(() => 'data:image/png;base64,');
+  HTMLCanvasElement.prototype.toBlob = vi.fn((callback: any) => {
+    callback(new Blob());
+  });
+
+  console.log('Test setup complete with jsdom and canvas mocking');
 });

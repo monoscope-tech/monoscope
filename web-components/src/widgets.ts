@@ -323,7 +323,9 @@ const chartWidget = (widgetData: WidGetData) => {
 
   ['submit', 'add-query', 'update-query'].forEach((event) => {
     const selector = event === 'submit' ? '#log_explorer_form' : '#filterElement';
-    document.querySelector(selector)?.addEventListener(event, (e) => {
+    document.querySelector(selector)?.addEventListener(event, (e: any) => {
+      console.log('widgets.ts listener fired', { event, source: e.detail?.source, selector });
+
       const userQuery = params().query;
       if (userQuery && userQuery !== 'null') {
         widgetData.query = baseQuery ? userQuery + ' | ' + baseQuery : userQuery;
@@ -331,14 +333,19 @@ const chartWidget = (widgetData: WidGetData) => {
         widgetData.query = baseQuery;
       }
 
-      if (window.logListTable) {
+      // Don't reload logs when expanding time range - they handle it themselves
+      if (window.logListTable && e.detail?.source !== 'expand-timerange') {
+        console.log('widgets.ts calling refetchLogs');
         (window.logListTable as any).refetchLogs();
+      } else {
+        console.log('widgets.ts skipping refetchLogs, source:', e.detail?.source);
       }
 
       updateChartData(chart, opt, true, widgetData);
     });
   });
   window.addEventListener('update-query', (e: any) => {
+    console.log('widgets.ts window listener fired', { source: e.detail?.source, ast: e.detail?.ast });
     if (e.detail?.ast) {
       widgetData.queryAST = e.detail.ast;
     }

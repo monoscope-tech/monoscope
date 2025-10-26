@@ -330,6 +330,7 @@ library
     , vector
     , vector-algorithms
     , wai
+    , wai-cors
     , wai-extra
     , wai-log
     , wai-middleware-static
@@ -337,7 +338,6 @@ library
     , wreq
     , xxhash
     , yaml
-    , wai-cors
   default-language: GHC2021
 
 executable monoscope

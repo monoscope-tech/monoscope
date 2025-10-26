@@ -235,6 +235,7 @@ library:
     - valor >= 1.0.0.0
     - vector
     - wai
+    - wai-cors
     - wai-extra
     - warp
     - wreq

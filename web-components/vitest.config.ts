@@ -2,8 +2,8 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    // Happy-DOM is faster than jsdom and works better with Monaco
-    environment: 'happy-dom',
+    // jsdom has better compatibility with Monaco Editor
+    environment: 'jsdom',
     globals: true,
     // Use existing setup file
     setupFiles: './test/setup.ts',
@@ -20,7 +20,7 @@ export default defineConfig({
     include: [
       'monaco-editor',
       'monaco-editor/esm/vs/language/json/json.worker',
-      'monaco-editor/esm/vs/language/css/css.worker', 
+      'monaco-editor/esm/vs/language/css/css.worker',
       'monaco-editor/esm/vs/language/html/html.worker',
       'monaco-editor/esm/vs/language/typescript/ts.worker',
       'monaco-editor/esm/vs/editor/editor.worker',

@@ -532,12 +532,10 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
       let
         finalVecs = requestVecs <> childSpans
         lastFM = reqLastCreatedAtM >>= textToUTC >>= (\t -> Just $ toText . iso8601Show $ addUTCTime (-0.001) t)
-        recentM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (childSpans V.!? 0)
-        recentFM = recentM >>= textToUTC >>= (\t -> Just $ toText . iso8601Show $ addUTCTime (0.001) t)
 
         nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
         resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
-        recentLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' recentFM sinceM fromM toM (Just "loadmore") sourceM True
+        recentLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
 
         serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
         colors = getServiceColors (V.catMaybes serviceNames)
