@@ -169,10 +169,7 @@ sqlFromQueryComponents sqlCfg qc =
           -- For summarize queries, don't apply a default limit to ensure we get complete data
           case qc.finalSummarizeQuery of
             Just _ -> "" -- No limit for summarize queries unless explicitly specified
-            Nothing ->
-              -- If there's a where clause OR a date range, use limit 150, otherwise limit 30
-              let hasDateRange = sqlCfg.dateRange /= (Nothing, Nothing)
-               in if T.null rawWhere && not hasDateRange then "limit 30" else "limit 150"
+            Nothing -> "limit 300"
 
       -- Create WHERE clause with cursor and user query only (timestamp range handled separately)
       whereCondition =
