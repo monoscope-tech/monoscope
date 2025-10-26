@@ -147,44 +147,69 @@ kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
   let clientId = "apitoolkit-" <> T.take 8 instanceUuid
   -- Include dead letter topic in the list of topics to consume
   let allTopics = kafkaTopics <> [appCtx.config.kafkaDeadLetterTopic]
+
+  Log.runLogT "kafka-service" appLogger Log.LogInfo
+    $ Log.logInfo "Starting Kafka consumer service"
+    $ AE.object
+      [ "client_id" AE..= clientId
+      , "topics" AE..= kafkaTopics
+      , "all_topics" AE..= allTopics
+      , "brokers" AE..= appCtx.config.kafkaBrokers
+      , "group_id" AE..= appCtx.config.kafkaGroupId
+      ]
+
   let consumerSub = K.topics (map K.TopicName allTopics) <> K.offsetReset K.Earliest
   bracket
     (either throwIO pure =<< K.newConsumer (consumerProps appCtx.config clientId) consumerSub)
     K.closeConsumer
-    $ \consumer -> forever do
-      pollResult@(leftRecords, rightRecords) <- partitionEithers <$> K.pollMessageBatch consumer (K.Timeout 100) (K.BatchSize appCtx.config.messagesPerPubsubPullBatch) -- timeout in milliseconds
-      case rightRecords of
-        [] -> pass
-        (recc : _) -> do
-          let topic = recc.crTopic.unTopicName
-              headers = consumerRecordHeadersToHashMap recc
-              -- For dead letter queue messages, get ce-type from headers or derive from original-topic
-              ceType =
-                if topic == appCtx.config.kafkaDeadLetterTopic
-                  then case HM.lookup "ce-type" headers of
-                    Just existingCeType -> existingCeType -- PubSub messages have ce-type
-                    Nothing -> maybe "" topicToCeType (HM.lookup "original-topic" headers) -- Kafka messages need derivation
-                  else topicToCeType topic
-              attributes = HM.insert "ce-type" ceType headers
-              allRecords = consumerRecordToTuple <$> rightRecords
+    $ \consumer -> do
+      Log.runLogT "kafka-service" appLogger Log.LogInfo
+        $ Log.logInfo "Kafka consumer connected successfully, starting message polling loop"
+        $ AE.object ["client_id" AE..= clientId]
+      forever do
+        pollResult@(leftRecords, rightRecords) <- partitionEithers <$> K.pollMessageBatch consumer (K.Timeout 100) (K.BatchSize appCtx.config.messagesPerPubsubPullBatch) -- timeout in milliseconds
 
-          msgIds <-
-            tryAny (runBackground appLogger appCtx tp $ fn allRecords attributes) >>= \case
-              Left e -> do
-                Log.runLogT "apitoolkit" appLogger Log.LogAttention
-                  $ Log.logAttention "kafkaService: CAUGHT EXCEPTION - Error processing Kafka messages" (AE.object ["error" AE..= show e, "topic" AE..= topic, "ce-type" AE..= ceType, "record_count" AE..= length allRecords, "attributes" AE..= attributes, "checkpoint" AE..= ("kafkaService:exception" :: String)])
+        -- Log polling errors if any
+        unless (null leftRecords) $ do
+          Log.runLogT "kafka-service" appLogger Log.LogAttention
+            $ Log.logAttention "Kafka poll returned errors"
+            $ AE.object
+              [ "error_count" AE..= length leftRecords
+              , "errors" AE..= map show leftRecords
+              ]
 
-                -- Send to dead letter queue unless it's an unrecoverable error
-                unless (isUnrecoverableError e)
-                  $ liftIO
-                  $ publishToDeadLetterQueue appCtx allRecords attributes (toText $ show e)
+        case rightRecords of
+          [] -> pass
+          (recc : _) -> do
+            let topic = recc.crTopic.unTopicName
+                headers = consumerRecordHeadersToHashMap recc
+                -- For dead letter queue messages, get ce-type from headers or derive from original-topic
+                ceType =
+                  if topic == appCtx.config.kafkaDeadLetterTopic
+                    then case HM.lookup "ce-type" headers of
+                      Just existingCeType -> existingCeType -- PubSub messages have ce-type
+                      Nothing -> maybe "" topicToCeType (HM.lookup "original-topic" headers) -- Kafka messages need derivation
+                    else topicToCeType topic
+                attributes = HM.insert "ce-type" ceType headers
+                allRecords = consumerRecordToTuple <$> rightRecords
 
-                -- Always return all message IDs so they're acknowledged
-                pure $ map fst allRecords
-              Right ids -> pure ids
+            msgIds <-
+              tryAny (runBackground appLogger appCtx tp $ fn allRecords attributes) >>= \case
+                Left e -> do
+                  Log.runLogT "apitoolkit" appLogger Log.LogAttention
+                    $ Log.logAttention "kafkaService: CAUGHT EXCEPTION - Error processing Kafka messages" (AE.object ["error" AE..= show e, "topic" AE..= topic, "ce-type" AE..= ceType, "record_count" AE..= length allRecords, "attributes" AE..= attributes, "checkpoint" AE..= ("kafkaService:exception" :: String)])
 
-          whenJustM (K.commitAllOffsets K.OffsetCommitAsync consumer) throwIO
-      pass
+                  -- Send to dead letter queue unless it's an unrecoverable error
+                  unless (isUnrecoverableError e)
+                    $ liftIO
+                    $ publishToDeadLetterQueue appCtx allRecords attributes (toText $ show e)
+
+                  -- Always return all message IDs so they're acknowledged
+                  pure $ map fst allRecords
+                Right ids -> pure ids
+
+            whenJustM (K.commitAllOffsets K.OffsetCommitAsync consumer) throwIO
+        pass
   where
     -- TODO: How should errors and retries be handled and implemented?
 
