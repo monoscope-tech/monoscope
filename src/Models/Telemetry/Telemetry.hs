@@ -86,7 +86,10 @@ import Effectful.Concurrent (Concurrent, threadDelay)
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.Reader.Static qualified as Eff
 import Log qualified
+import System.Config qualified as SysConfig
+import System.Config (AuthContext)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects (ProjectId (unProjectId))
 import Models.Projects.Projects qualified as Projects
@@ -814,12 +817,12 @@ instance ToRow OtelLogsAndSpans where
       parseSeverityNumber = fmap (show . severity_number)
 
 
-bulkInsertOtelLogsAndSpansTF :: (Concurrent :> es, DB :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
+bulkInsertOtelLogsAndSpansTF :: (Concurrent :> es, DB :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es, Eff.Reader AuthContext :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
 bulkInsertOtelLogsAndSpansTF records = do
+  appCtx <- Eff.ask @AuthContext
   updatedRecords <- V.mapM (\r -> genUUID >>= \uid -> pure (r & #id .~ UUID.toText uid)) records
   _ <- bulkInsertOtelLogsAndSpans updatedRecords
-  _ <- retryTimefusion 10 updatedRecords
-  pass
+  when appCtx.config.enableTimefusionWrites $ void $ retryTimefusion 10 updatedRecords
   where
     retryTimefusion 0 recs = labeled @"timefusion" @DB $ bulkInsertOtelLogsAndSpans recs
     retryTimefusion n recs = do

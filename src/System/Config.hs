@@ -99,6 +99,7 @@ data EnvConfig = EnvConfig
   , s3Region :: Text
   , enableReplayService :: Bool
   , enableTimefusionReads :: Bool
+  , enableTimefusionWrites :: Bool
   , kafkaDeadLetterTopic :: Text
   , enableFreetier :: Bool
   , enableBrowserMonitoring :: Bool
