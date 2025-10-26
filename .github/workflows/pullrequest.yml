@@ -117,3 +117,18 @@ jobs:
         env:
           USE_EXTERNAL_DB: true
         run: stack test :${{ matrix.test-suite }}
+
+  ui-tests:
+    name: UI Tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup node env
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      - name: Run UI tests
+        run: |
+          cd web-components
+          npm install
+          npm test
