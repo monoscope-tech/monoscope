@@ -131,8 +131,16 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     subtitle && (subtitle.innerHTML = `${window.formatNumber(rows_per_min)} rows/min`);
 
     const value = $(`${chartId}Value`);
-    value &&
-      ((value.innerHTML = `${summarizeByPrefix} ${window.formatNumber(Number(stats[summarizeBy]))}`), value.classList.remove('hidden'));
+    if (value) {
+      const durationUnits = ['ns', 'μs', 'us', 'ms', 's', 'm', 'h'];
+      const unit = widgetData.unit || '';
+      const isDuration = durationUnits.includes(unit);
+      const formattedValue = isDuration
+        ? window.formatDuration(window.convertToNanoseconds(Number(stats[summarizeBy]), unit))
+        : window.formatNumber(Number(stats[summarizeBy]));
+      value.innerHTML = `${summarizeByPrefix} ${formattedValue}`;
+      value.classList.remove('hidden');
+    }
 
     chart.hideLoading();
     chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source), true);
@@ -161,6 +169,8 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
 declare global {
   interface Window {
     formatNumber: (num: number) => string;
+    convertToNanoseconds: (value: number, unit: string) => number;
+    formatDuration: (ns: number) => string;
     logListTable?: any;
     dashboardRefreshTimer: NodeJS.Timeout | null;
     dashboardRefreshInterval: number;
@@ -185,6 +195,7 @@ type WidGetData = {
   widgetType: string;
   queryAST: string;
   legendPosition?: string;
+  unit?: string;
 };
 
 // Global resize queue to batch chart resize operations
@@ -434,6 +445,53 @@ window.formatNumber = (n: number): string => {
   }
 
   return n.toString();
+};
+
+/**
+ * Convert a value from a specified time unit to nanoseconds
+ * @param value - The numeric value to convert
+ * @param unit - The unit of the input value (h, m, s, ms, μs, us, ns)
+ * @returns Value converted to nanoseconds
+ */
+window.convertToNanoseconds = (value: number, unit: string): number => {
+  const conversionFactors: Record<string, number> = {
+    h: 3_600_000_000_000, // hours to nanoseconds
+    m: 60_000_000_000, // minutes to nanoseconds
+    s: 1_000_000_000, // seconds to nanoseconds
+    ms: 1_000_000, // milliseconds to nanoseconds
+    μs: 1_000, // microseconds to nanoseconds
+    us: 1_000, // microseconds to nanoseconds (alt)
+    ns: 1, // already nanoseconds
+  };
+  return value * (conversionFactors[unit] || 1);
+};
+
+/**
+ * Format duration values from nanoseconds into human-readable time units
+ * Matches the backend's prettyPrintDuration function in Utils.hs
+ * @param ns - Duration in nanoseconds
+ * @returns Formatted duration string with appropriate unit
+ */
+window.formatDuration = (ns: number): string => {
+  if (ns >= 3_600_000_000_000) {
+    // >= 1 hour
+    return `${(ns / 3_600_000_000_000).toFixed(1)}h`;
+  } else if (ns >= 60_000_000_000) {
+    // >= 1 minute
+    return `${(ns / 60_000_000_000).toFixed(1)}m`;
+  } else if (ns >= 1_000_000_000) {
+    // >= 1 second
+    return `${(ns / 1_000_000_000).toFixed(1)}s`;
+  } else if (ns >= 1_000_000) {
+    // >= 1 millisecond
+    return `${(ns / 1_000_000).toFixed(1)}ms`;
+  } else if (ns >= 1_000) {
+    // >= 1 microsecond
+    return `${(ns / 1_000).toFixed(1)}μs`;
+  } else {
+    // nanoseconds
+    return `${ns.toFixed(0)}ns`;
+  }
 };
 
 // Update the widget order on the server.

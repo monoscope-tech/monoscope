@@ -510,6 +510,7 @@ renderChart widget = do
             let summarizeByPfx = summarizeByPrefix $ fromMaybe SBSum widget.summarizeBy
             let wType = decodeUtf8 $ AE.encode widget.wType
             let legendPos = fromMaybe "bottom" widget.legendPosition
+            let widgetUnit = maybeToMonoid widget.unit
             script_
               [type_ "text/javascript"]
               [text|
@@ -529,7 +530,8 @@ renderChart widget = do
                   pid: ${pid},
                   summarizeBy: '${summarizeBy}',
                   summarizeByPrefix: '${summarizeByPfx}',
-                  legendPosition: "${legendPos}"
+                  legendPosition: "${legendPos}",
+                  unit: "${widgetUnit}"
                 };
 
                 // Function to initialize this specific widget
@@ -576,7 +578,8 @@ renderChart widget = do
                     pid: config.pid,
                     summarizeBy: config.summarizeBy,
                     summarizeByPrefix: config.summarizeByPrefix,
-                    legendPosition: config.legendPosition
+                    legendPosition: config.legendPosition,
+                    unit: config.unit
                   });
                 }
 
@@ -624,6 +627,13 @@ widgetToECharts widget =
               , "axisPointer"
                   AE..= AE.object
                     ["type" AE..= ("shadow" :: Text)]
+              , "valueFormatter"
+                  AE..= let durationUnits = [Just "ns", Just "μs", Just "us", Just "ms", Just "s", Just "m", Just "h"] :: [Maybe Text]
+                            isDuration = widget.unit `elem` durationUnits
+                            unit = fromMaybe "" widget.unit
+                         in if isDuration
+                              then "function(value) { return formatDuration(convertToNanoseconds(value, '" <> unit <> "')); }"
+                              else "function(value) { return formatNumber(value); }"
               ]
         , "legend"
             AE..= AE.object
@@ -683,9 +693,14 @@ widgetToECharts widget =
                     [ "show" AE..= (axisVisibility && fromMaybe True (widget ^? #yAxis . _Just . #showAxisLabel . _Just))
                     , "inside" AE..= False
                     , "formatter"
-                        AE..= if fromMaybe False $ widget ^? #yAxis . _Just . #showOnlyMaxLabel . _Just
-                          then "function(value, index) { return (value === this.yAxis.max || value == 0) ? formatNumber(value) : ''; }"
-                          else "function(value, index) { return formatNumber(value); }"
+                        AE..= let durationUnits = [Just "ns", Just "μs", Just "us", Just "ms", Just "s", Just "m", Just "h"] :: [Maybe Text]
+                                  isDuration = widget.unit `elem` durationUnits
+                                  unit = fromMaybe "" widget.unit
+                                  fmt = if isDuration then "formatDuration(convertToNanoseconds(value, '" <> unit <> "'))" else "formatNumber(value)"
+                                  showOnlyMax = fromMaybe False $ widget ^? #yAxis . _Just . #showOnlyMaxLabel . _Just
+                               in if showOnlyMax
+                                    then "function(value, index) { return (value === this.yAxis.max || value == 0) ? " <> fmt <> " : ''; }"
+                                    else "function(value, index) { return " <> fmt <> "; }"
                     ]
               , "show" AE..= axisVisibility
               ]

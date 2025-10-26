@@ -739,7 +739,7 @@ apiLogsPage page = do
           $ (def :: Widget.Widget)
             { Widget.wType = WTTimeseriesLine
             , Widget.standalone = Just True
-            , Widget.title = Just "Latency percentiles (ms)"
+            , Widget.title = Just "Latency percentiles"
             , Widget.hideSubtitle = Just True
             , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
             , Widget.summarizeBy = Just Widget.SBMax
@@ -749,21 +749,21 @@ apiLogsPage page = do
                   [text| SELECT timeB::integer, quantiles[idx] AS quantile, COALESCE(values[idx], 0)::float AS value
                               FROM ( SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS timeB,
                                       ARRAY[
-                                        COALESCE(((approx_percentile(0.50, percentile_agg(duration))::float / 1000000.0)::float), 0)::float,
-                                        COALESCE(((approx_percentile(0.75, percentile_agg(duration))::float / 1000000.0)::float), 0)::float,
-                                        COALESCE(((approx_percentile(0.90, percentile_agg(duration))::float / 1000000.0)::float), 0)::float,
-                                        COALESCE(((approx_percentile(0.95, percentile_agg(duration))::float / 1000000.0)::float), 0)::float
+                                        COALESCE(approx_percentile(0.50, percentile_agg(duration))::float, 0)::float,
+                                        COALESCE(approx_percentile(0.75, percentile_agg(duration))::float, 0)::float,
+                                        COALESCE(approx_percentile(0.90, percentile_agg(duration))::float, 0)::float,
+                                        COALESCE(approx_percentile(0.95, percentile_agg(duration))::float, 0)::float
                                       ] AS values,
                                       ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
                                 FROM otel_logs_and_spans
-                                WHERE project_id='{{project_id}}' AND duration IS NOT NULL 
+                                WHERE project_id='{{project_id}}' AND duration IS NOT NULL
                                   {{time_filter}} {{query_ast_filters}}
                                 GROUP BY timeB
                                 HAVING COUNT(*) > 0
                               ) s
                               CROSS JOIN (VALUES (1), (2), (3), (4)) AS t(idx)
                               WHERE values[idx] IS NOT NULL; |]
-            , Widget.unit = Just "ms"
+            , Widget.unit = Just "ns"
             , Widget.hideLegend = Just True
             , Widget._projectId = Just page.pid
             }

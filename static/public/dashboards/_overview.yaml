@@ -269,7 +269,7 @@ tabs:
 
       # Request Latency Percentiles
       - type: 'timeseries_line'
-        title: 'Request Latency Percentiles (ms)'
+        title: 'Request Latency Percentiles'
         hide_subtitle: true
         summarize_by: max
         sql: |
@@ -277,11 +277,11 @@ tabs:
           FROM (
             SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS timeB,
                    ARRAY[
-                     (approx_percentile(0.50, percentile_agg(duration)) / 1e6)::float,
-                     (approx_percentile(0.75, percentile_agg(duration)) / 1e6)::float,
-                     (approx_percentile(0.90, percentile_agg(duration)) / 1e6)::float,
-                     (approx_percentile(0.95, percentile_agg(duration)) / 1e6)::float,
-                     (approx_percentile(0.99, percentile_agg(duration)) / 1e6)::float
+                     COALESCE(approx_percentile(0.50, percentile_agg(duration))::float, 0)::float,
+                     COALESCE(approx_percentile(0.75, percentile_agg(duration))::float, 0)::float,
+                     COALESCE(approx_percentile(0.90, percentile_agg(duration))::float, 0)::float,
+                     COALESCE(approx_percentile(0.95, percentile_agg(duration))::float, 0)::float,
+                     COALESCE(approx_percentile(0.99, percentile_agg(duration))::float, 0)::float
                    ] AS values,
                    ARRAY['p50', 'p75', 'p90', 'p95', 'p99'] AS quantiles
             FROM otel_logs_and_spans
@@ -292,6 +292,7 @@ tabs:
             GROUP BY timeB
           ) s,
           LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
+        unit: ns
         layout: { w: 6, h: 4 }
 
       # Requests by Endpoint
@@ -416,7 +417,7 @@ tabs:
 
       # Service Latency Percentiles
       - type: 'timeseries_line'
-        title: 'Service Latency Percentiles (ms)'
+        title: 'Service Latency Percentiles'
         hide_subtitle: true
         summarize_by: max
         sql: |
@@ -424,11 +425,11 @@ tabs:
           FROM (
             SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS timeB,
                    ARRAY[
-                     (approx_percentile(0.50, percentile_agg(duration)) / 1e6)::float,
-                     (approx_percentile(0.75, percentile_agg(duration)) / 1e6)::float,
-                     (approx_percentile(0.90, percentile_agg(duration)) / 1e6)::float,
-                     (approx_percentile(0.95, percentile_agg(duration)) / 1e6)::float,
-                     (approx_percentile(0.99, percentile_agg(duration)) / 1e6)::float
+                     COALESCE(approx_percentile(0.50, percentile_agg(duration))::float, 0)::float,
+                     COALESCE(approx_percentile(0.75, percentile_agg(duration))::float, 0)::float,
+                     COALESCE(approx_percentile(0.90, percentile_agg(duration))::float, 0)::float,
+                     COALESCE(approx_percentile(0.95, percentile_agg(duration))::float, 0)::float,
+                     COALESCE(approx_percentile(0.99, percentile_agg(duration))::float, 0)::float
                    ] AS values,
                    ARRAY['p50', 'p75', 'p90', 'p95', 'p99'] AS quantiles
             FROM otel_logs_and_spans
@@ -440,6 +441,7 @@ tabs:
             GROUP BY timeB
           ) s,
           LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
+        unit: ns
         layout: { w: 6, h: 4 }
 
       # Service Errors (non-OK status codes)
@@ -473,7 +475,7 @@ tabs:
         title: 'Time Spent by Downstream Operations'
         sql: |
           WITH service_spans AS (
-            SELECT 
+            SELECT
               extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
               context___span_id as span_id,
               context___trace_id as trace_id
@@ -484,10 +486,10 @@ tabs:
               {{time_filter}}
           ),
           downstream_time AS (
-            SELECT 
+            SELECT
               ss.time,
               o.name as operation,
-              SUM(o.duration)::float / 1e6 as duration_ms
+              SUM(o.duration)::float as duration_ns
             FROM otel_logs_and_spans o
             INNER JOIN service_spans ss ON o.context___trace_id = ss.trace_id AND o.parent_id = ss.span_id
             WHERE o.project_id='{{project_id}}'
@@ -496,14 +498,14 @@ tabs:
               {{time_filter}}
             GROUP BY ss.time, o.name
           )
-          SELECT 
+          SELECT
             time,
             operation,
-            duration_ms as value
+            duration_ns as value
           FROM downstream_time
           ORDER BY time DESC
           LIMIT 10000
-        unit: ms
+        unit: ns
         layout: { w: 6, h: 4 }
 
       # Operations Table
@@ -603,13 +605,13 @@ tabs:
             ORDER BY COUNT(*) DESC
             LIMIT 20
           )
-          SELECT 
+          SELECT
             extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            CASE 
-              WHEN tr.name IS NOT NULL THEN o.name 
+            CASE
+              WHEN tr.name IS NOT NULL THEN o.name
               ELSE 'Others'
             END as resource,
-            (approx_percentile(0.95, percentile_agg(o.duration)) / 1e6)::float as value
+            COALESCE(approx_percentile(0.95, percentile_agg(o.duration))::float, 0)::float as value
           FROM otel_logs_and_spans o
           LEFT JOIN top_resources tr ON o.name = tr.name
           WHERE o.project_id='{{project_id}}'
@@ -621,7 +623,7 @@ tabs:
           GROUP BY time, CASE WHEN tr.name IS NOT NULL THEN o.name ELSE 'Others' END
           ORDER BY time DESC
           LIMIT 2000
-        unit: ms
+        unit: ns
         layout: { w: 4, h: 3 }
 
       - type: 'timeseries'
@@ -798,9 +800,9 @@ tabs:
         title: 'Span Duration by Operation'
         sql: |
           WITH operation_stats AS (
-            SELECT 
+            SELECT
               name,
-              AVG(duration) / 1e6 as avg_duration_ms
+              AVG(duration) as avg_duration_ns
             FROM otel_logs_and_spans
             WHERE project_id='{{project_id}}'
               AND name IS NOT NULL
@@ -808,13 +810,13 @@ tabs:
               AND duration IS NOT NULL
               {{time_filter}}
             GROUP BY name
-            ORDER BY avg_duration_ms DESC
+            ORDER BY avg_duration_ns DESC
             LIMIT 10
           )
-          SELECT 
+          SELECT
             extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             o.name,
-            (AVG(o.duration) / 1e6)::float as value
+            AVG(o.duration)::float as value
           FROM otel_logs_and_spans o
           INNER JOIN operation_stats s ON o.name = s.name
           WHERE o.project_id='{{project_id}}'
@@ -823,7 +825,7 @@ tabs:
             {{time_filter}}
           GROUP BY time, o.name
           ORDER BY time DESC
-        unit: ms
+        unit: ns
         layout: { w: 6, h: 4 }
 
       # Trace Waterfall/Flamegraph
@@ -1097,10 +1099,10 @@ tabs:
       - type: 'timeseries'
         title: 'Query Performance by Operation'
         sql: |
-          SELECT 
+          SELECT
             extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             COALESCE(attributes___db___operation___name, name) as operation,
-            AVG(duration) / 1e6 as value
+            AVG(duration)::float as value
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND attributes___db___system___name IS NOT NULL
@@ -1111,7 +1113,7 @@ tabs:
           GROUP BY time, COALESCE(attributes___db___operation___name, name)
           ORDER BY time DESC
           LIMIT 10000
-        unit: ms
+        unit: ns
         layout: { w: 6, h: 4 }
 
       # Query Volume
