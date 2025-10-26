@@ -169,7 +169,7 @@ sqlFromQueryComponents sqlCfg qc =
           -- For summarize queries, don't apply a default limit to ensure we get complete data
           case qc.finalSummarizeQuery of
             Just _ -> "" -- No limit for summarize queries unless explicitly specified
-            Nothing -> "limit 300"
+            Nothing -> "limit 900"
 
       -- Create WHERE clause with cursor and user query only (timestamp range handled separately)
       whereCondition =
