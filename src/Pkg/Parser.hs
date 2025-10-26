@@ -146,7 +146,7 @@ sqlFromQueryComponents sqlCfg qc =
       dateRangeStr = case sqlCfg.dateRange of
         (Nothing, Just b) -> timestampCol <> " BETWEEN '" <> fmtTime b <> "' AND NOW() "
         (Just a, Just b) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
-        _ -> "TRUE"
+        _ -> ""
 
       -- Time-based calculations removed with timechart/stats support
 
@@ -185,11 +185,14 @@ sqlFromQueryComponents sqlCfg qc =
                  in
                   if null nonEmptyParts then "TRUE" else T.intercalate " AND " nonEmptyParts
 
+      -- Build complete WHERE clause, omitting empty dateRangeStr
+      buildWhere = T.intercalate " and " $ filter (not . T.null) ["project_id='" <> sqlCfg.pid.toText <> "'", dateRangeStr, "(" <> whereCondition <> ")"]
+
       finalSqlQuery = case sqlCfg.targetSpansM of
         Just "service-entry-spans" ->
           [fmt|WITH ranked_spans AS (SELECT *, resource->'service'->>'name' AS service_name,
                 ROW_NUMBER() OVER (PARTITION BY trace_id, resource->'service'->>'name' ORDER BY start_time) AS rn
-                FROM otel_logs_and_spans where project_id='{sqlCfg.pid.toText}' and {dateRangeStr} and ({whereCondition})
+                FROM otel_logs_and_spans where {buildWhere}
                 {groupByClause}
                 )
                SELECT {selectClause} FROM ranked_spans
@@ -208,13 +211,13 @@ sqlFromQueryComponents sqlCfg qc =
                        extract(epoch from {timeBucketExpr})::integer,
                        {selectCols}
                    FROM {fromTable}
-                   WHERE project_id='{sqlCfg.pid.toText}' and {dateRangeStr} and ({whereCondition})
+                   WHERE {buildWhere}
                    GROUP BY {timeBucketExpr}
                    ORDER BY {timeBucketExpr} DESC
                    {limitClause} |]
             Nothing ->
               [fmt|SELECT {selectClause} FROM {fromTable}
-                 WHERE project_id='{sqlCfg.pid.toText}' and {dateRangeStr} and ({whereCondition})
+                 WHERE {buildWhere}
                  {groupByClause} {sortOrder} {limitClause} |]
       countQuery =
         case qc.finalSummarizeQuery of
@@ -243,12 +246,12 @@ sqlFromQueryComponents sqlCfg qc =
               [fmt|SELECT count(*) FROM
                   (SELECT {subqueryCols}
                    FROM {fromTable}
-                   WHERE project_id='{sqlCfg.pid.toText}' and {dateRangeStr} and ({whereCondition})
+                   WHERE {buildWhere}
                    GROUP BY {groupByPart}) as subq|]
           Nothing ->
             -- For regular summarize queries
             [fmt|SELECT count(*) FROM {fromTable}
-              WHERE project_id='{sqlCfg.pid.toText}' and {dateRangeStr} and ({whereCondition})
+              WHERE {buildWhere}
               {groupByClause} limit 1|]
 
       -- Generate the summarize query depending on bin functions and data type
@@ -288,7 +291,7 @@ sqlFromQueryComponents sqlCfg qc =
                   {groupCol},
                   ({aggCol})::float
                 FROM {fromTable}
-                WHERE project_id='{sqlCfg.pid.toText}' and {dateRangeStr} and ({whereCondition})
+                WHERE {buildWhere}
                 GROUP BY {groupByPart}
                 ORDER BY {timeBucketExpr} DESC
                 {limitClause}
@@ -298,7 +301,7 @@ sqlFromQueryComponents sqlCfg qc =
             [fmt|
               SELECT {T.intercalate "," qc.select}
               FROM {fromTable}
-              WHERE project_id='{sqlCfg.pid.toText}' and {dateRangeStr} and ({whereCondition})
+              WHERE {buildWhere}
               {groupByClause}
               ORDER BY {timestampCol} DESC
               {limitClause}
