@@ -265,46 +265,25 @@ export class LogList extends LitElement {
   }
 
   private buildRecentFetchUrl(): string {
-    // If recentFetchUrl is not set, build from current URL
-    if (!this.recentFetchUrl) {
-      // Build URL from current location with json=true
-      const url = new URL(window.location.href);
-      url.searchParams.set('json', 'true');
+    // Always build from current browser URL to ensure we have latest query params
+    const url = new URL(window.location.href);
+    url.searchParams.set('json', 'true');
 
-      // If we have data, update the 'to' parameter to fetch newer data
-      if (this.spanListTree.length > 0) {
-        const firstItem = this.flipDirection ? this.spanListTree[this.spanListTree.length - 1] : this.spanListTree[0];
-        const timestamp = firstItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
+    // If we have data, update the 'to' parameter to fetch newer data
+    if (this.spanListTree.length > 0) {
+      const firstItem = this.flipDirection ? this.spanListTree[this.spanListTree.length - 1] : this.spanListTree[0];
+      const timestamp = firstItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
 
-        if (timestamp) {
-          const date = new Date(timestamp);
-          date.setTime(date.getTime() + 10); // Add 10ms
-          url.searchParams.set('to', date.toISOString());
-          // Remove cursor and since params for recent fetch
-          url.searchParams.delete('cursor');
-          url.searchParams.delete('since');
-        }
+      if (timestamp) {
+        const date = new Date(timestamp);
+        date.setTime(date.getTime() + 10); // Add 10ms
+        url.searchParams.set('to', date.toISOString());
+        // Remove cursor and since params for recent fetch
+        url.searchParams.delete('cursor');
+        url.searchParams.delete('since');
       }
-
-      return url.toString();
     }
 
-    // If we have no data yet, just return the recentFetchUrl as is
-    if (this.spanListTree.length === 0) {
-      return this.recentFetchUrl;
-    }
-
-    const firstItem = this.flipDirection ? this.spanListTree[this.spanListTree.length - 1] : this.spanListTree[0];
-    const timestamp = firstItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
-
-    if (!timestamp) return this.recentFetchUrl;
-
-    const date = new Date(timestamp);
-    date.setTime(date.getTime() + 10); // Add 10ms
-
-    // Replace just the 'to' parameter in the existing recentFetchUrl
-    const url = new URL(this.recentFetchUrl, window.location.origin + window.location.pathname);
-    url.searchParams.set('to', date.toISOString());
     return url.toString();
   }
 
