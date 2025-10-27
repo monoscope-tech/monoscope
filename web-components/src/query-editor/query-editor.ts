@@ -708,7 +708,7 @@ export class QueryEditorComponent extends LitElement {
     }
 
     // Update URL if needed
-  }, 300);
+  }, 150);
 
   async firstUpdated(): Promise<void> {
     if (!this._editorContainer) return;
@@ -1126,20 +1126,30 @@ export class QueryEditorComponent extends LitElement {
           const position = this.editor?.getPosition();
           if (!model || !position) return;
 
-          this.currentQuery = model.getLineContent(position.lineNumber);
+          const newQuery = model.getLineContent(position.lineNumber);
+          const queryChanged = this.currentQuery !== newQuery;
+
+          this.currentQuery = newQuery;
           this.showSuggestions = true;
           this.updatePlaceholder();
 
           this.debouncedUpdateQuery(model.getValue());
           this.debouncedTriggerSuggestions();
-          this.requestUpdate(); // Trigger re-render to update dropdown position
+
+          // Only trigger re-render if query actually changed (not just cursor position)
+          if (queryChanged) {
+            this.requestUpdate();
+          } else {
+            // Just update dropdown position without full re-render
+            this.updateDropdownPosition();
+          }
         }
       }),
 
       this.editor.onDidChangeCursorPosition(() => {
         if (this.showSuggestions) {
-          // Update dropdown position when cursor changes
-          this.requestUpdate();
+          // Update dropdown position without triggering full component re-render
+          this.updateDropdownPosition();
         }
       }),
 
@@ -1213,6 +1223,22 @@ export class QueryEditorComponent extends LitElement {
       const item = this.querySelector(`[data-index="${this.selectedIndex}"]`) as HTMLElement;
       item?.scrollIntoView({ block: 'nearest' });
     });
+  }
+
+  private updateDropdownPosition(): void {
+    if (!this.editor || !this.showSuggestions) return;
+
+    const dropdown = this.querySelector('.suggestions-dropdown') as HTMLElement;
+    if (!dropdown) return;
+
+    const position = this.editor.getPosition();
+    const coords = position ? this.editor.getScrolledVisiblePosition(position) : null;
+
+    if (coords) {
+      dropdown.style.top = `${coords.top + 24}px`;
+      dropdown.style.left = '10px';
+      dropdown.style.right = '10px';
+    }
   }
 
   private adjustEditorHeight(): void {
