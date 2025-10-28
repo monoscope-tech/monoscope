@@ -97,7 +97,7 @@ bodyWrapper bcfg child = do
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css")]
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/css/thirdparty/rrweb.css")]
 
-        link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css")]
+        link_ [rel_ "stylesheet", type_ "text/css", href_ "/public/assets/css/tailwind.min.css"]
         link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/web-components/dist/css/index.css")]
 
         -- Include optional head content from the page
@@ -253,6 +253,50 @@ bodyWrapper bcfg child = do
           document.body.addEventListener("successToast", (e)=> {e.detail.value.map(v=>notyf.success(v));});
           document.body.addEventListener("errorToast", (e)=> {e.detail.value.map(v=>notyf.error(v));});
         });
+        
+    function filterByField(event, operation) {
+        const pathsToRemap = [
+          ["request_headers", "attributes.http.request.header"],
+          ["response_headers", "attributes.http.response.header"],
+          ["response_body", "body.response_body"],
+          ["request_body", "body.request_body"],
+          ["method", "attributes.http.request.method"],
+          ["query_params", "attributes.http.request.query_params"],
+          ["path_params", "attributes.http.request.path_params"],
+          ["host", "attributes.net.host.name"],
+          ["urlPath", "attributes.http.route"],
+          ["raw_url", "attributes.http.target"],
+          ["status_code", "attributes.http.response.status_code"],
+        ]
+        let { fieldPath: path, fieldValue: value } = event.target.closest('[data-field-path]').dataset;
+
+        pathsToRemap.forEach(([from, to]) => {
+          if (path.startsWith(from)) {
+            path = path.replace(from, to)
+          }
+        })
+
+        const operator = operation === 'Eq' ? '==' : operation === 'NotEq' ? '!=' : '==';
+        document.getElementById("filterElement").handleAddQuery(path + ' ' + operator + ' ' + value);
+    }
+
+    var toggleColumnToSummary = (e)=>{
+      const cols = (params().cols||"").split(",").filter(x=>x!="");
+      const subject = (e.target.closest('[data-field-path]')?.dataset.fieldPath || e.target.closest('[data-field]').dataset.field);
+      const finalCols =  subject ? 
+        [...new Set(cols.includes(subject) ? 
+          cols.filter(x=>x!=subject) : 
+          [...cols, subject])].join(",") : 
+        cols.join(",");
+      return finalCols;
+    }
+
+
+    var removeNamedColumnToSummary = (namedCol) => {
+      const cols = (params().cols ?? '').split(',').filter((x) => x != '')
+      return [...new Set(cols.filter((x) => namedCol.toLowerCase() != x.replaceAll('.', '•').replaceAll('[', '❲').replaceAll(']', '❳').toLowerCase()))].join(',')
+    }
+
       |]
         script_
           [type_ "text/hyperscript"]
@@ -526,7 +570,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , href_ $ "/p/" <> project.id.toText <> "/settings"
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-textBrand leading-none "] (faSprite_ "gear" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
     a_
       [ class_ "hover:bg-fillBrand-weak "
       , target_ "blank"
@@ -535,7 +579,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , href_ "https://apitoolkit.io/docs/"
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-textBrand leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
 
     -- Dark mode toggle
     div_
@@ -575,7 +619,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , [__| on click js posthog.reset(); end |]
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center  rounded-full bg-fillError-weak text-textError leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
+        >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 
 -- mapM_ renderNavBottomItem $ navBottomList project.id.toText

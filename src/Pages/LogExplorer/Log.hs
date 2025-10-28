@@ -6,7 +6,6 @@ module Pages.LogExplorer.Log (
   virtualTable,
   curateCols,
   logQueryBox_,
-  jsonTreeAuxillaryCode,
 )
 where
 
@@ -890,7 +889,6 @@ apiLogsPage page = do
             let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
             div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
 
-  jsonTreeAuxillaryCode page.pid page.query
   queryEditorInitializationCode page.queryLibRecent page.queryLibSaved page.vizType
 
 
@@ -962,119 +960,6 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
       | a == "latency_breakdown" = GT
       | b == "latency_breakdown" = LT
       | otherwise = comparing (`L.elemIndex` filteredCols) a b
-
-
--- TODO:
-jsonTreeAuxillaryCode :: Projects.ProjectId -> Maybe Text -> Html ()
-jsonTreeAuxillaryCode pid query = do
-  template_ [id_ "log-item-context-menu-tmpl"] do
-    ul_ [id_ "log-item-context-menu", class_ "log-item-context-menu origin-top-right absolute left-0 dropdown-content z-10 menu p-2 shadow bg-base-100 rounded-box w-52", tabindex_ "0"] do
-      li_
-        $ a_
-          [ class_ "flex gap-2 items-center"
-          , [__|
-              init set fp to (closest @data-field-path) then
-                  set cols to params().cols or '' then 
-                  set colsX to cols.split(',') then
-                  if colsX contains fp 
-                    set innerHTML of first <span/> in me to 'Remove column'
-                  end
-              on click
-                  set fp to (closest @data-field-path)
-                  call #resultTable.toggleColumnOnTable(fp) then
-                  set cols to params().cols or '' then
-                  set colsX to cols.split(',')
-                  if colsX contains fp
-                    set innerHTML of first <span/> in me to 'Remove column'
-                  else
-                    set innerHTML of first <span/> in me to 'Add as table column'
-                  end
-            |]
-          ]
-          do
-            faSprite_ "table-column" "regular" "w-4 h-4 text-iconNeutral"
-            span_ [] "Add as table column"
-      li_
-        $ a_
-          [ class_ "flex gap-2 items-center"
-          , [__|on click if 'clipboard' in window.navigator then
-                call navigator.clipboard.writeText((previous <.log-item-field-value/>)'s innerText)
-                send successToast(value:['Value has been added to the Clipboard']) to <body/>
-                halt
-              end|]
-          ]
-          do
-            faSprite_ "copy" "regular" "w-4 h-4 text-iconNeutral"
-            span_ [] "Copy field value"
-      li_ $ a_ [class_ "flex gap-2 items-center", onpointerdown_ "filterByField(event, 'Eq')"] do
-        faSprite_ "filter-enhanced" "regular" "w-4 h-4 text-iconNeutral"
-        span_ [] "Filter by field"
-      li_ $ a_ [class_ "flex gap-2 items-center", onpointerdown_ "filterByField(event, 'NotEq')"] do
-        faSprite_ "not-equal" "regular" "w-4 h-4 text-iconNeutral"
-        span_ [] "Exclude field"
-      li_
-        $ a_
-          [ class_ "flex gap-2 items-center"
-          , [__|
-              init call window.updateGroupByButtonText(event, me) end
-              on refreshItem call window.updateGroupByButtonText(event, me) end
-
-              on click
-                call document.querySelector('query-builder').toggleGroupByField(closest @data-field-path) then
-                trigger refreshItem on me
-              end
-          |]
-          ]
-          do
-            faSprite_ "copy" "regular" "w-4 h-4 text-iconNeutral"
-            span_ [] "Group by field"
-
-  script_
-    [text|
-    function filterByField(event, operation) {
-        const pathsToRemap = [
-          ["request_headers", "attributes.http.request.header"],
-          ["response_headers", "attributes.http.response.header"],
-          ["response_body", "body.response_body"],
-          ["request_body", "body.request_body"],
-          ["method", "attributes.http.request.method"],
-          ["query_params", "attributes.http.request.query_params"],
-          ["path_params", "attributes.http.request.path_params"],
-          ["host", "attributes.net.host.name"],
-          ["urlPath", "attributes.http.route"],
-          ["raw_url", "attributes.http.target"],
-          ["status_code", "attributes.http.response.status_code"],
-        ]
-        let { fieldPath: path, fieldValue: value } = event.target.closest('[data-field-path]').dataset;
-
-        pathsToRemap.forEach(([from, to]) => {
-          if (path.startsWith(from)) {
-            path = path.replace(from, to)
-          }
-        })
-
-        const operator = operation === 'Eq' ? '==' : operation === 'NotEq' ? '!=' : '==';
-        document.getElementById("filterElement").handleAddQuery(path + ' ' + operator + ' ' + value);
-    }
-
-    var toggleColumnToSummary = (e)=>{
-      const cols = (params().cols||"").split(",").filter(x=>x!="");
-      const subject = (e.target.closest('[data-field-path]')?.dataset.fieldPath || e.target.closest('[data-field]').dataset.field);
-      const finalCols =  subject ? 
-        [...new Set(cols.includes(subject) ? 
-          cols.filter(x=>x!=subject) : 
-          [...cols, subject])].join(",") : 
-        cols.join(",");
-      return finalCols;
-    }
-
-
-    var removeNamedColumnToSummary = (namedCol) => {
-      const cols = (params().cols ?? '').split(',').filter((x) => x != '')
-      return [...new Set(cols.filter((x) => namedCol.toLowerCase() != x.replaceAll('.', '•').replaceAll('[', '❲').replaceAll(']', '❳').toLowerCase()))].join(',')
-    }
-
-|]
 
 
 -- | Render alert configuration form for creating log-based alerts
@@ -1204,8 +1089,8 @@ alertConfigurationForm_ pid alertM = do
                                      })
                                    end|]
                             ]
-                          ++ [required_ "" | req]
-                          ++ [value_ (maybe "" (show) vM) | isJust vM]
+                            ++ [required_ "" | req]
+                            ++ [value_ (maybe "" (show) vM) | isJust vM]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)

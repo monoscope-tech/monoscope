@@ -258,7 +258,7 @@ b64ToJson b64Text =
 
 jsonValueToHtmlTree :: AE.Value -> Maybe Text -> Html ()
 jsonValueToHtmlTree val pathM = do
-  div_ [class_ "p-2 rounded-lg bg-fillWeaker border w-full overflow-x-auto json-tree-container"] do
+  div_ [class_ "p-2 rounded-lg bg-fillWeaker border w-full json-tree-container"] do
     div_ [class_ "w-full flex items-center gap-4 text-xs mb-2"] do
       button_
         [ class_ "flex hidden items-center gap-1 cursor-pointer"
@@ -322,16 +322,78 @@ jsonValueToHtmlTree val pathM = do
       let fullFieldPath = if T.isSuffixOf "[*]" path then path else path <> "." <> key
       let fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
       div_
-        [ class_ "relative log-item-field-parent"
+        [ class_ "log-item-field-parent block dropdown"
         , term "data-field-path" $ replaceNumbers $ if isJust pathM then T.replace ".." "." fullFieldPath' else fullFieldPath'
         , term "data-field-value" $ unwrapJsonPrimValue False value
         ]
-        $ a_
-          [class_ "block hover:bg-fillBrandWeak cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
-          do
-            span_ $ toHtml key
-            span_ [class_ "text-textBrand"] ":"
-            span_ [class_ "text-textBrand ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue False value
+        do
+          a_
+            [tabindex_ "0", role_ "button", class_ "block hover:bg-fillBrandWeak cursor-pointer pl-6 log-item-field-anchor"]
+            do
+              span_ $ toHtml key
+              span_ [class_ "text-textBrand"] ":"
+              span_ [class_ "text-textBrand ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue False value
+
+          ul_ [tabindex_ "-1", id_ "log-item-context-menu", class_ "log-item-context-menu dropdown-content z-50 menu p-2 shadow bg-base-100 rounded-box w-52", tabindex_ "0"] do
+            li_
+              $ a_
+                [ class_ "flex gap-2 items-center"
+                , [__|
+                    init set fp to (closest @data-field-path) then
+                        set cols to params().cols or '' then 
+                        set colsX to cols.split(',') then
+                        if colsX contains fp 
+                          set innerHTML of first <span/> in me to 'Remove column'
+                        end
+                    on click
+                        set fp to (closest @data-field-path)
+                        call #resultTable.toggleColumnOnTable(fp) then
+                        set cols to params().cols or '' then
+                        set colsX to cols.split(',')
+                        if colsX contains fp
+                          set innerHTML of first <span/> in me to 'Remove column'
+                        else
+                          set innerHTML of first <span/> in me to 'Add as table column'
+                        end
+                  |]
+                ]
+                do
+                  faSprite_ "table-column" "regular" "w-4 h-4 text-iconNeutral"
+                  span_ [] "Add as table column"
+            li_
+              $ a_
+                [ class_ "flex gap-2 items-center"
+                , [__|on click if 'clipboard' in window.navigator then
+                      call navigator.clipboard.writeText((previous <.log-item-field-value/>)'s innerText)
+                      send successToast(value:['Value has been added to the Clipboard']) to <body/>
+                      halt
+                    end|]
+                ]
+                do
+                  faSprite_ "copy" "regular" "w-4 h-4 text-iconNeutral"
+                  span_ [] "Copy field value"
+            li_ $ a_ [class_ "flex gap-2 items-center", onpointerdown_ "filterByField(event, 'Eq')"] do
+              faSprite_ "filter-enhanced" "regular" "w-4 h-4 text-iconNeutral"
+              span_ [] "Filter by field"
+            li_ $ a_ [class_ "flex gap-2 items-center", onpointerdown_ "filterByField(event, 'NotEq')"] do
+              faSprite_ "not-equal" "regular" "w-4 h-4 text-iconNeutral"
+              span_ [] "Exclude field"
+            li_
+              $ a_
+                [ class_ "flex gap-2 items-center"
+                , [__|
+                    init call window.updateGroupByButtonText(event, me) end
+                    on refreshItem call window.updateGroupByButtonText(event, me) end
+      
+                    on click
+                      call document.querySelector('query-builder').toggleGroupByField(closest @data-field-path) then
+                      trigger refreshItem on me
+                    end
+                |]
+                ]
+                do
+                  faSprite_ "copy" "regular" "w-4 h-4 text-iconNeutral"
+                  span_ [] "Group by field"
 
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
     renderParentType opening closing key count child = div_ [class_ $ "log-item-with-children" <> if count == 0 then " collapsed" else ""] do

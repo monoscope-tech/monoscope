@@ -34,7 +34,6 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.Components (dateTime)
-import Pages.LogExplorer.Log (jsonTreeAuxillaryCode)
 import Pkg.DeriveUtils (unAesonTextMaybe)
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -207,7 +206,6 @@ expandedItemView pid item aptSp leftM rightM = do
   let isLog = item.kind == Just "log"
       reqDetails = if isLog then Nothing else getRequestDetails (unAesonTextMaybe item.attributes)
   div_ [class_ $ "w-full pl-2 pb-2 relative" <> if isLog then " flex flex-col gap-2" else " pb-[50px]"] $ do
-    jsonTreeAuxillaryCode pid Nothing
     div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
     unless isLog $ span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "loading-span-list"] ""
     span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
@@ -346,7 +344,7 @@ expandedItemView pid item aptSp leftM rightM = do
         button_ [class_ $ "a-tab cursor-pointer border-b-2 whitespace-nowrap " <> borderClass <> " px-4 py-1.5", onpointerdown_ $ "navigatable(this, '#m-raw-content', '#" <> tabContainerId <> "', 't-tab-active','.http')"] "Raw data"
         div_ [class_ $ "w-full border-b-2 " <> borderClass] pass
 
-      div_ [class_ "dmy-4 text-textWeak font"] $ do
+      div_ [class_ "my-4 py-2 text-textWeak"] $ do
         when isLog $ whenJust item.body $ \b -> do
           div_ [class_ "a-tab-content", id_ "body-content"] do
             jsonValueToHtmlTree (AE.toJSON b) Nothing
