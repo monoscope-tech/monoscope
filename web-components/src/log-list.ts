@@ -8,7 +8,7 @@ import debounce from 'lodash/debounce';
 import { includes, startsWith, map, forEach, compact, pick, chunk, chain, lt } from 'lodash';
 // Import worker as URL instead of worker instance
 import LogWorkerUrl from './log-worker?worker&url';
-import { groupSpans, flattenSpanTree } from './log-worker-functions';
+import { groupSpans } from './log-worker-functions';
 import clsx from 'clsx';
 import {
   formatTimestamp,
@@ -17,14 +17,10 @@ import {
   faSprite,
   renderBadge,
   renderIconWithTooltip,
-  generateId,
-  getColumnWidth,
   getSkeletonColumnWidth,
   getStyleClass,
-  COLUMN_DEFAULTS,
   CHAR_WIDTHS,
   MIN_COLUMN_WIDTH,
-  calculateColumnWidth,
   parseSummaryElement,
   unescapeJsonString,
   calculateAutoBinWidth,
@@ -450,7 +446,6 @@ export class LogList extends LitElement {
   private updateUrlStateAndQuery(newUrl: string, q: string, timeRange: string, source: string = 'default') {
     window.history.replaceState({}, '', newUrl);
     const rangeBox = document.getElementById('currentRange');
-    console.log(rangeBox);
     if (rangeBox) {
       rangeBox.innerText = timeRange;
     }
@@ -782,7 +777,8 @@ export class LogList extends LitElement {
           const scrollHeight = container.scrollHeight;
           const scrolledToBottom = scrollTop + clientHeight >= scrollHeight - 1;
           if (scrolledToBottom) this.shouldScrollToBottom = true;
-          const shouldBuffer = this.isLiveStreaming && ((scrollTop > 30 && !this.flipDirection) || (!scrolledToBottom && this.flipDirection));
+          const shouldBuffer =
+            this.isLiveStreaming && ((scrollTop > 30 && !this.flipDirection) || (!scrolledToBottom && this.flipDirection));
           if (shouldBuffer) {
             this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
           } else {
@@ -797,9 +793,12 @@ export class LogList extends LitElement {
 
       // Defer column width calculation
       if ('requestIdleCallback' in window) {
-        (window as any).requestIdleCallback(() => {
-          this.updateColumnMaxWidthMap(tree.map((t) => t.data).filter(Boolean));
-        }, { timeout: 2000 });
+        (window as any).requestIdleCallback(
+          () => {
+            this.updateColumnMaxWidthMap(tree.map((t) => t.data).filter(Boolean));
+          },
+          { timeout: 2000 }
+        );
       } else {
         setTimeout(() => this.updateColumnMaxWidthMap(tree.map((t) => t.data).filter(Boolean)), 100);
       }

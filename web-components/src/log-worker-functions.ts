@@ -11,7 +11,18 @@ export function generateId() {
 
 export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<string, boolean>, flipDirection: boolean) {
   // Inline pick
-  const keys = ['trace_id', 'latency_breakdown', 'parent_span_id', 'timestamp', 'duration', 'start_time_ns', 'errors', 'kind', 'id'];
+  const keys = [
+    'trace_id',
+    'latency_breakdown',
+    'parent_span_id',
+    'timestamp',
+    'duration',
+    'start_time_ns',
+    'errors',
+    'summary',
+    'kind',
+    'id',
+  ];
   const idx: ColIdxMap = {};
   keys.forEach((key) => {
     if (colIdxMap[key] !== undefined) idx[key] = colIdxMap[key];
@@ -27,7 +38,7 @@ export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: 
       span: {
         id: isLog ? span[idx.id] : span[idx.latency_breakdown],
         startNs: span[idx.start_time_ns],
-        hasErrors: isLog ? false : span[idx.errors],
+        hasErrors: isLog ? false : span[idx.errors] || span[idx.summary].some((el: string) => el.includes('ERROR')),
         duration: isLog ? 0 : span[idx.duration],
         children: [],
         parent: isLog ? span[idx.latency_breakdown] : span[idx.parent_span_id],
@@ -128,11 +139,11 @@ export function flattenSpanTree(traceArr: Trace[], expandedTraces: Record<string
       })),
     };
     result.push(spanInfo);
-    const hasSiling = span.children.length > 1;
+    const hasSibling = span.children.length > 1;
     span.children.forEach((child, index) => {
       childErrors = child.hasErrors || childErrors;
       const lastChild = index === span.children.length - 1;
-      const newSiblingsArr = hasSiling && !lastChild ? [...hasSiblingsArr, true] : [...hasSiblingsArr, false];
+      const newSiblingsArr = hasSibling && !lastChild ? [...hasSiblingsArr, true] : [...hasSiblingsArr, false];
       const [count, errors] = traverse(child, traceId, [...parentIds, span.id], traceStart, traceEnd, depth + 1, lastChild, newSiblingsArr);
       childrenCount += count;
       childErrors = childErrors || errors;
