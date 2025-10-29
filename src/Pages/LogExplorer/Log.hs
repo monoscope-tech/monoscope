@@ -77,18 +77,18 @@ renderFacets facetSummary = do
         "5" -> "bg-fillError-strong"
         _ -> "bg-fillStrong"
 
-      methodColorFn val = case val of
+      methodColorFn val = case T.toUpper val of
         "GET" -> "bg-fillBrand-strong"
         "POST" -> "bg-fillSuccess-strong"
         "PUT" -> "bg-fillWarning-strong"
         "DELETE" -> "bg-fillError-strong"
         _ -> "bg-fillBrand-strong"
 
-      levelColorFn val = case val of
-        "ERROR" -> "bg-fillError-strong"
-        "WARN" -> "bg-fillWarning-strong"
-        "INFO" -> "bg-fillBrand-strong"
-        "DEBUG" -> "bg-fillStrong"
+      levelColorFn val = case T.toLower val of
+        v | "error" `T.isInfixOf` v -> "bg-fillError-strong"
+        v | "warn" `T.isInfixOf` v -> "bg-fillWarning-strong"
+        v | "info" `T.isInfixOf` v -> "bg-fillBrand-strong"
+        v | "debug" `T.isInfixOf` v -> "bg-fillStrong"
         _ -> "bg-fillWeak"
 
       -- Group facet fields by category
@@ -103,7 +103,7 @@ renderFacets facetSummary = do
         ,
           ( "status_code"
           , "Status Code"
-          , \val -> case val of
+          , \val -> case T.toUpper val of
               "OK" -> "bg-fillSuccess-strong"
               "ERROR" -> "bg-fillError-strong"
               "UNSET" -> "bg-fillWeak"
