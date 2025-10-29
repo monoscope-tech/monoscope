@@ -74,7 +74,7 @@ logQueryBox_ config = do
                   on keydown[key=='Space' and shiftKey] from document set #ai-search-chkbox.checked to true
                   |]
               ]
-            <> [checked_ | isJust config.targetWidgetPreview]
+              <> [checked_ | isJust config.targetWidgetPreview]
           script_
             [text|
             document.addEventListener('keydown', function(e) {
@@ -196,15 +196,28 @@ logQueryBox_ config = do
 
         -- Results will be rendered by the virtual table component
 
-        div_ [class_ "flex justify-end gap-2"] do
-          fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[.default-chart:checked]/pg:block"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "hide timeline"
-          fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 group-has-[#viz-patterns:checked]/pg:hidden"] do
-            input_
-              $ [ type_ "checkbox"
-                , id_ "create-alert-toggle"
-                , class_ "checkbox checkbox-sm rounded-sm"
-                , [__|on change 
+        div_
+          [ class_ "flex justify-end gap-2"
+          , [__|init 
+            if window.location.hash.includes('create-alert-toggle')
+                set #create-alert-toggle.checked to true
+                set #viz-timeseries.checked to true
+                call updateVizTypeInUrl('timeseries', true)
+                set widgetJSON.type to 'timeseries'
+                send 'update-widget' to #visualization-widget-container
+              end 
+          
+          |]
+          ]
+          do
+            fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[.default-chart:checked]/pg:block"] do
+              input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "hide timeline"
+            fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 group-has-[#viz-patterns:checked]/pg:hidden"] do
+              input_
+                $ [ type_ "checkbox"
+                  , id_ "create-alert-toggle"
+                  , class_ "checkbox checkbox-sm rounded-sm"
+                  , [__|on change 
                      if me.checked
                        -- Force switch to chart visualization when creating alert
                        set #viz-timeseries.checked to true
@@ -213,9 +226,9 @@ logQueryBox_ config = do
                        send 'update-widget' to #visualization-widget-container
                      end
                   |]
-                ]
-              <> [checked_ | config.alert]
-            span_ "create alert"
+                  ]
+                  <> [checked_ | config.alert]
+              span_ "create alert"
 
   -- Include initialization code for the query editor
   queryEditorInitializationCode config.queryLibRecent config.queryLibSaved config.vizType
@@ -254,7 +267,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
                           end
                        |]
               ]
-            <> [checked_ | vizType == defaultVizType]
+              <> [checked_ | vizType == defaultVizType]
           span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
           span_ [] $ toHtml label
 
@@ -331,7 +344,7 @@ queryLibItem_ isRecent qli =
           whenJust qli.title (\title -> span_ [class_ "font-medium text-sm"] $ toHtml title <> " •")
           small_ [class_ "text-textWeak text-xs whitespace-nowrap"]
             $ toHtml (displayTimestamp $ formatUTC qli.createdAt)
-            >> when qli.byMe " • by me"
+              >> when qli.byMe " • by me"
         code_ [class_ "queryText text-xs block whitespace-pre-wrap break-words opacity-75"] $ toHtml qli.queryText
 
       -- Actions (simplified, shown on hover)

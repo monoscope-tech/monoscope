@@ -697,7 +697,6 @@ navBottomList pidTxt =
   , ("user-plus", "bg-fillWarning-weak", "text-textWarning", "Manage members", "/p/" <> pidTxt <> "/manage_members", Nothing, Nothing, Nothing)
   , ("dollar", "bg-fillWarning-weak", "text-textWarning", "Manage billing", "/p/" <> pidTxt <> "/manage_billing", Nothing, Nothing, Nothing)
   , ("arrows-turn-right", "bg-fillBrand-weak", "text-textBrand", "Integrations", "/p/" <> pidTxt <> "/integrations", Nothing, Nothing, Nothing)
-  , ("bell", "", "", "Notification Alerts", "/p/" <> pidTxt <> "/notifications_config", Nothing, Nothing, Nothing)
   , ("bucket", "", "", "Your S3 bucket", "/p/" <> pidTxt <> "/byob_s3", Nothing, Nothing, Nothing)
   , ("trash", "bg-fillError-weak", "text-textError", "Delete project", "/p/" <> pidTxt <> "/settings/delete", Nothing, Nothing, Nothing)
   ]

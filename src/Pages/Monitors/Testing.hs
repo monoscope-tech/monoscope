@@ -118,12 +118,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
                   , description = "Create alerts"
                   , actionText = "Create alert"
                   , destination =
-                      Left
-                        $ fromLazy
-                        $ Lucid.renderText
-                          ( div_ [class_ "flex gap-2"] do
-                              a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle", class_ "btn btn-sm btn-primary"] "Create Alert"
-                          )
+                      Left $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"
                   }
           , elemID = "monitorsListForm"
           }
