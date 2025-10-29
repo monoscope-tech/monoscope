@@ -23,7 +23,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
-import "base64" Data.ByteString.Base64 qualified as B64
+import "base64" Data.ByteString.Base64.URL qualified as B64
 
 
 data GenerateAPIKeyForm = GenerateAPIKeyForm
