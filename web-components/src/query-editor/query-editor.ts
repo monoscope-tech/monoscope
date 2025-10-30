@@ -2,7 +2,7 @@ import { LitElement, html, css, TemplateResult } from 'lit';
 import { customElement, state, query } from 'lit/decorators.js';
 import 'monaco-editor/esm/vs/editor/contrib/suggest/browser/suggestController.js';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
-import { debounce, groupBy, pick } from 'lodash';
+import { groupBy, pick } from 'lodash';
 
 // Make monaco available globally for tests
 globalThis.monaco = monaco;
@@ -660,6 +660,9 @@ export class QueryEditorComponent extends LitElement {
   private resizeObserver: ResizeObserver | null = null;
   private themeObserver: MutationObserver | null = null;
 
+  // Memoization cache for getMatches
+  private _matchesCache: { query: string; result: any } | null = null;
+
   private readonly KIND_ICONS = ['📄', '🔢', '🔍', '#', '📊', '📋', '#', '🔢', '✅', '❓'];
 
   public setPopularSearches(items: { query: string; description?: string }[]): void {
@@ -669,6 +672,7 @@ export class QueryEditorComponent extends LitElement {
       query: item.query,
       description: item.description || '',
     }));
+    this._matchesCache = null; // Invalidate cache
   }
 
   // Public method to refresh editor layout
@@ -678,9 +682,22 @@ export class QueryEditorComponent extends LitElement {
     }
   }
 
-  private debouncedTriggerSuggestions = debounce(() => this.editor?.trigger('auto', 'editor.action.triggerSuggest', {}), 50);
-  private debouncedLayoutRefresh = debounce(() => this.refreshLayout(), 100);
-  private debouncedUpdateQuery = debounce((queryValue: string) => {
+  private layoutRefreshPending = false;
+  private refreshLayoutThrottled = () => {
+    if (!this.layoutRefreshPending) {
+      this.layoutRefreshPending = true;
+      requestAnimationFrame(() => {
+        this.refreshLayout();
+        this.layoutRefreshPending = false;
+      });
+    }
+  };
+
+  private triggerSuggestions = () => {
+    this.editor?.trigger('auto', 'editor.action.triggerSuggest', {});
+  };
+
+  private updateQuery = (queryValue: string) => {
     if (this.updateURLParams) {
       const url = new URL(window.location.href);
       if (queryValue.trim()) {
@@ -706,9 +723,7 @@ export class QueryEditorComponent extends LitElement {
         })
       );
     }
-
-    // Update URL if needed
-  }, 150);
+  };
 
   async firstUpdated(): Promise<void> {
     if (!this._editorContainer) return;
@@ -726,13 +741,13 @@ export class QueryEditorComponent extends LitElement {
 
     window.addEventListener('resize', () => {
       this.adjustEditorHeight();
-      this.debouncedLayoutRefresh();
+      this.refreshLayoutThrottled();
     });
 
     // Set up ResizeObserver to handle container size changes
     if (this._editorContainer && window.ResizeObserver) {
       this.resizeObserver = new ResizeObserver(() => {
-        this.debouncedLayoutRefresh();
+        this.refreshLayoutThrottled();
       });
       this.resizeObserver.observe(this._editorContainer);
     }
@@ -804,6 +819,8 @@ export class QueryEditorComponent extends LitElement {
       query: stripPrefix(item.queryText),
       owner: { name: item.byMe ? 'You' : 'Other', icon: item.byMe ? '👤' : '👥' },
     }));
+
+    this._matchesCache = null; // Invalidate cache
   }
 
   // Toggle a subquery - add if not present, remove if present
@@ -953,7 +970,7 @@ export class QueryEditorComponent extends LitElement {
       this.showSuggestions = false;
       this.selectedIndex = -1;
 
-      this.debouncedUpdateQuery(newValue);
+      this.updateQuery(newValue);
 
       // Update placeholder immediately
       this.updatePlaceholder();
@@ -1093,7 +1110,7 @@ export class QueryEditorComponent extends LitElement {
           this.updatePlaceholder();
           setTimeout(() => {
             if (!this.isProgrammaticUpdate) {
-              this.editor?.trigger('focus', 'editor.action.triggerSuggest', {});
+              this.triggerSuggestions();
             }
           }, 10);
         }
@@ -1133,8 +1150,9 @@ export class QueryEditorComponent extends LitElement {
           this.showSuggestions = true;
           this.updatePlaceholder();
 
-          this.debouncedUpdateQuery(model.getValue());
-          this.debouncedTriggerSuggestions();
+          // Immediate update - no debounce for instant feedback
+          this.updateQuery(model.getValue());
+          this.triggerSuggestions();
 
           // Only trigger re-render if query actually changed (not just cursor position)
           if (queryChanged) {
@@ -1204,7 +1222,7 @@ export class QueryEditorComponent extends LitElement {
           this.selectedIndex = -1;
           const model = this.editor?.getModel();
           if (model) {
-            this.debouncedUpdateQuery(model.getValue());
+            this.updateQuery(model.getValue());
           }
         }
       },
@@ -1301,6 +1319,12 @@ export class QueryEditorComponent extends LitElement {
 
   private getMatches() {
     const query = this.currentQuery?.toLowerCase() || '';
+
+    // Check cache - avoid recomputing if query hasn't changed
+    if (this._matchesCache && this._matchesCache.query === query) {
+      return this._matchesCache.result;
+    }
+
     const searchTerm = query.split('|').pop()?.trim() || '';
 
     const filterAndSlice = (items: any[], prop: string = 'query') =>
@@ -1314,11 +1338,16 @@ export class QueryEditorComponent extends LitElement {
             .slice(0, 5)
         : items.slice(0, 5);
 
-    return {
+    const result = {
       saved: filterAndSlice(this.savedViews, 'name'),
       recent: filterAndSlice(this.recentSearches),
       popular: filterAndSlice(this.popularSearches),
     };
+
+    // Cache the result
+    this._matchesCache = { query, result };
+
+    return result;
   }
 
   private handleSuggestionClick(item: SuggestionItem, e: MouseEvent): void {
@@ -1403,15 +1432,13 @@ export class QueryEditorComponent extends LitElement {
     }
 
     const triggerDelay = textToInsert.endsWith('.') ? 0 : 100;
-    setTimeout(() => this.editor?.trigger('keyboard', 'editor.action.triggerSuggest', {}), triggerDelay);
+    setTimeout(() => this.triggerSuggestions(), triggerDelay);
   }
 
   private setupSuggestions(): void {
     if (!this.editor) return;
 
-    this.editor.addCommand(monaco.KeyCode.Space | monaco.KeyMod.CtrlCmd, () =>
-      this.editor?.trigger('keyboard', 'editor.action.triggerSuggest', {})
-    );
+    this.editor.addCommand(monaco.KeyCode.Space | monaco.KeyMod.CtrlCmd, () => this.triggerSuggestions());
 
     const suggestController = this.editor.getContribution('editor.contrib.suggestController') as SuggestController;
     const model = suggestController?.model || suggestController?._model;
