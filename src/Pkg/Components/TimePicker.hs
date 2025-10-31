@@ -24,6 +24,10 @@ import Text.Megaparsec.Char.Lexer (decimal)
 import Utils (faSprite_)
 
 
+-- $setup
+-- >>> import Relude.Unsafe qualified as Unsafe
+
+
 type Parser = Parsec Void Text
 
 
@@ -49,8 +53,15 @@ unitToSeconds unit =
     ]
 
 
----- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") "2H"
--- (Just 2024-10-31 10:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just "Last 2 Hours")
+-- Test parseSince with different time units
+-- >>> parseSince (Unsafe.read "2024-10-31 12:00:00 UTC") "2H"
+-- (Just 2024-10-31 10:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("Last 2 Hours",""))
+--
+-- >>> parseSince (Unsafe.read "2024-10-31 12:00:00 UTC") "30M"
+-- (Just 2024-10-31 11:30:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("Last 30 Minutes",""))
+--
+-- >>> parseSince (Unsafe.read "2024-10-31 12:00:00 UTC") "7D"
+-- (Just 2024-10-24 12:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("Last 7 Days",""))
 --
 parseSince :: UTCTime -> Text -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
 parseSince now since =
@@ -67,16 +78,29 @@ parseSince now since =
 
 -- | Parse time range from TimePicker, using cursor as reference time when present (for pagination)
 -- When cursor is provided, it becomes the upper bound instead of 'now', ensuring proper "Load More" pagination
+-- For 'since' queries: from = now - since, to = cursor (or now if no cursor)
+--
+-- Test with since value and no cursor (uses current time as end)
+-- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") Nothing (TimePicker (Just "2H") Nothing Nothing)
+-- (Just 2024-10-31 10:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("Last 2 Hours",""))
+--
+-- Test with since value and cursor (from = now - 2H, to = cursor)
+-- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") (Just (Unsafe.read "2024-10-31 10:00:00 UTC")) (TimePicker (Just "2H") Nothing Nothing)
+-- (Just 2024-10-31 10:00:00 UTC,Just 2024-10-31 10:00:00 UTC,Just ("Last 2 Hours",""))
+--
+-- Test with from/to values (cursor is ignored for explicit ranges)
+-- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") Nothing (TimePicker Nothing (Just "2024-10-31T08:00:00Z") (Just "2024-10-31T10:00:00Z"))
+-- (Just 2024-10-31 08:00:00 UTC,Just 2024-10-31 10:00:00 UTC,Just ("2024-10-31 08:00:00","2024-10-31 10:00:00"))
 parseTimeRange :: UTCTime -> Maybe UTCTime -> TimePicker -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
-parseTimeRange now cursorM tp = case cursorM of
-  Just cursor -> parseTimeRangeWithRef cursor tp
-  Nothing -> parseTimeRangeWithRef now tp
-  where
-    parseTimeRangeWithRef ref (TimePicker Nothing Nothing Nothing) = parseSince ref "1H"
-    parseTimeRangeWithRef ref (TimePicker (Just "") Nothing Nothing) = parseSince ref "1H"
-    parseTimeRangeWithRef ref (TimePicker Nothing fromM toM) = parseFromAndTo ref fromM toM
-    parseTimeRangeWithRef ref (TimePicker (Just "") fromM toM) = parseFromAndTo ref fromM toM
-    parseTimeRangeWithRef ref (TimePicker sinceM _ _) = parseSince ref (maybeToMonoid sinceM)
+parseTimeRange now cursorM tp = case tp of
+  TimePicker Nothing Nothing Nothing -> parseSince (fromMaybe now cursorM) "1H"
+  TimePicker (Just "") Nothing Nothing -> parseSince (fromMaybe now cursorM) "1H"
+  TimePicker Nothing fromM toM -> parseFromAndTo now fromM toM
+  TimePicker (Just "") fromM toM -> parseFromAndTo now fromM toM
+  TimePicker sinceM _ _ ->
+    let (fromTime, _, label) = parseSince now (maybeToMonoid sinceM)
+        toTime = fromMaybe now cursorM
+     in (fromTime, Just toTime, label)
 
 
 parseFromAndTo :: UTCTime -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
