@@ -441,7 +441,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
     addSuccessToast "Deleted from Query Library successfully" Nothing
 
   now <- Time.currentTime
-  let (fromD, toD, currentRange) = Components.parseTimeRange now cursorM' (Components.TimePicker sinceM fromM toM)
+  let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   authCtx <- Effectful.Reader.Static.ask @AuthContext
 
   -- If an alert ID is provided, fetch the alert and pre-fill the query box
@@ -526,7 +526,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
                   _ -> Nothing
               )
               requestVecs
-          (fromDD, toDD, _) = Components.parseTimeRange now Nothing (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
+          (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
 
       childSpans <- case queryM' of
         Nothing -> do

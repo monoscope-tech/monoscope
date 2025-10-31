@@ -76,31 +76,23 @@ parseSince now since =
     timeParser = (,) <$> decimal <*> (space *> some letterChar)
 
 
--- | Parse time range from TimePicker, using cursor as reference time when present (for pagination)
--- When cursor is provided, it becomes the upper bound instead of 'now', ensuring proper "Load More" pagination
--- For 'since' queries: from = now - since, to = cursor (or now if no cursor)
+-- | Parse time range from TimePicker
+-- Converts user input (since/from/to) into start and end times
 --
--- Test with since value and no cursor (uses current time as end)
--- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") Nothing (TimePicker (Just "2H") Nothing Nothing)
+-- Test with since value (uses current time as end)
+-- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") (TimePicker (Just "2H") Nothing Nothing)
 -- (Just 2024-10-31 10:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("Last 2 Hours",""))
 --
--- Test with since value and cursor (from = now - 2H, to = cursor)
--- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") (Just (Unsafe.read "2024-10-31 10:00:00 UTC")) (TimePicker (Just "2H") Nothing Nothing)
--- (Just 2024-10-31 10:00:00 UTC,Just 2024-10-31 10:00:00 UTC,Just ("Last 2 Hours",""))
---
--- Test with from/to values (cursor is ignored for explicit ranges)
--- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") Nothing (TimePicker Nothing (Just "2024-10-31T08:00:00Z") (Just "2024-10-31T10:00:00Z"))
+-- Test with from/to values
+-- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") (TimePicker Nothing (Just "2024-10-31T08:00:00Z") (Just "2024-10-31T10:00:00Z"))
 -- (Just 2024-10-31 08:00:00 UTC,Just 2024-10-31 10:00:00 UTC,Just ("2024-10-31 08:00:00","2024-10-31 10:00:00"))
-parseTimeRange :: UTCTime -> Maybe UTCTime -> TimePicker -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
-parseTimeRange now cursorM tp = case tp of
-  TimePicker Nothing Nothing Nothing -> parseSince (fromMaybe now cursorM) "1H"
-  TimePicker (Just "") Nothing Nothing -> parseSince (fromMaybe now cursorM) "1H"
+parseTimeRange :: UTCTime -> TimePicker -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
+parseTimeRange now tp = case tp of
+  TimePicker Nothing Nothing Nothing -> parseSince now "1H"
+  TimePicker (Just "") Nothing Nothing -> parseSince now "1H"
   TimePicker Nothing fromM toM -> parseFromAndTo now fromM toM
   TimePicker (Just "") fromM toM -> parseFromAndTo now fromM toM
-  TimePicker sinceM _ _ ->
-    let (fromTime, _, label) = parseSince now (maybeToMonoid sinceM)
-        toTime = fromMaybe now cursorM
-     in (fromTime, Just toTime, label)
+  TimePicker sinceM _ _ -> parseSince now (maybeToMonoid sinceM)
 
 
 parseFromAndTo :: UTCTime -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))

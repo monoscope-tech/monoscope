@@ -1224,3 +1224,26 @@ code, pre, .code, .monospace {
 /* @property --deg { */
 /**/
 /* } */
+
+
+/* Monaco Editor optimizations - prevent re-rendering styles on every keystroke */
+.monaco-editor .suggest-widget {
+  display: none !important;
+  visibility: hidden !important;
+}
+
+.monaco-editor {
+  border-radius: 0;
+  outline: none !important;
+  border: none !important;
+}
+
+.monaco-editor .overflow-guard {
+  border: none !important;
+  outline: none !important;
+}
+
+#editor-container {
+  max-width: 100%;
+  overflow: hidden;
+}

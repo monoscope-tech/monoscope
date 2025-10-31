@@ -332,7 +332,8 @@ const chartWidget = (widgetData: WidGetData) => {
     ).observe(chartEl);
   }
 
-  ['submit', 'add-query', 'update-query'].forEach((event) => {
+  // Listen for submit and add-query on specific elements
+  ['submit', 'add-query'].forEach((event) => {
     const selector = event === 'submit' ? '#log_explorer_form' : '#filterElement';
     document.querySelector(selector)?.addEventListener(event, (e: any) => {
       console.log('widgets.ts listener fired', { event, source: e.detail?.source, selector });
@@ -355,11 +356,30 @@ const chartWidget = (widgetData: WidGetData) => {
       updateChartData(chart, opt, true, widgetData);
     });
   });
+
+  // Listen for update-query only on window to avoid duplicate handling
   window.addEventListener('update-query', (e: any) => {
     console.log('widgets.ts window listener fired', { source: e.detail?.source, ast: e.detail?.ast });
+
+    const userQuery = params().query;
+    if (userQuery && userQuery !== 'null') {
+      widgetData.query = baseQuery ? userQuery + ' | ' + baseQuery : userQuery;
+    } else {
+      widgetData.query = baseQuery;
+    }
+
     if (e.detail?.ast) {
       widgetData.queryAST = e.detail.ast;
     }
+
+    // Don't reload logs when expanding time range - they handle it themselves
+    if (window.logListTable && e.detail?.source !== 'expand-timerange') {
+      console.log('widgets.ts calling refetchLogs');
+      (window.logListTable as any).refetchLogs();
+    } else {
+      console.log('widgets.ts skipping refetchLogs, source:', e.detail?.source);
+    }
+
     updateChartData(chart, opt, true, widgetData);
   });
 

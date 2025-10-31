@@ -142,9 +142,25 @@ sqlFromQueryComponents sqlCfg qc =
           then ""
           else "(" <> rawWhere <> ")"
       groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
-      -- Only generate date range conditions if they exist, otherwise return empty string
-      dateRangeStr = case sqlCfg.dateRange of
-        (Nothing, Just b) -> timestampCol <> " BETWEEN '" <> fmtTime b <> "' AND NOW() "
+
+      -- Date range for data queries (with cursor for pagination)
+      -- When cursor is present, use it as the upper bound for data queries
+      dateRangeStr = case (sqlCfg.dateRange, sqlCfg.cursorM) of
+        -- Cursor modifies the end time for pagination
+        ((Nothing, Just b), Just cursor) -> timestampCol <> " <= '" <> fmtTime cursor <> "'"
+        ((Just a, Just b), Just cursor) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime cursor <> "'"
+        ((Just a, Nothing), Just cursor) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime cursor <> "'"
+        -- No cursor - use the original date range
+        ((Nothing, Just b), Nothing) -> timestampCol <> " <= '" <> fmtTime b <> "'"
+        ((Just a, Nothing), Nothing) -> timestampCol <> " >= '" <> fmtTime a <> "'"
+        ((Just a, Just b), Nothing) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
+        _ -> ""
+
+      -- Date range for count queries (never uses cursor)
+      -- Count should always reflect the full user-selected time range
+      dateRangeStrForCount = case sqlCfg.dateRange of
+        (Nothing, Just b) -> timestampCol <> " <= '" <> fmtTime b <> "'"
+        (Just a, Nothing) -> timestampCol <> " >= '" <> fmtTime a <> "'"
         (Just a, Just b) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
         _ -> ""
 
@@ -171,22 +187,16 @@ sqlFromQueryComponents sqlCfg qc =
             Just _ -> "" -- No limit for summarize queries unless explicitly specified
             Nothing -> "limit 500"
 
-      -- Create WHERE clause with cursor and user query only (timestamp range handled separately)
+      -- Create WHERE clause with user query only (cursor and timestamp range handled in dateRangeStr)
       whereCondition =
-        let cursorStr = maybe "" (\c -> timestampCol <> "<'" <> fmtTime c <> "'") sqlCfg.cursorM
-            whereEmpty = T.null rawWhere
-         in if T.null cursorStr && whereEmpty
-              then "TRUE"
-              else
-                let
-                  cursorPart = if not (T.null cursorStr) then Just cursorStr else Nothing
-                  wherePart = if not whereEmpty then Just whereClause else Nothing
-                  nonEmptyParts = filter (not . T.null) $ catMaybes [cursorPart, wherePart]
-                 in
-                  if null nonEmptyParts then "TRUE" else T.intercalate " AND " nonEmptyParts
+        let whereEmpty = T.null rawWhere
+         in if whereEmpty then "TRUE" else whereClause
 
-      -- Build complete WHERE clause, omitting empty dateRangeStr
+      -- Build complete WHERE clause for data queries (with cursor)
       buildWhere = T.intercalate " and " $ filter (not . T.null) ["project_id='" <> sqlCfg.pid.toText <> "'", dateRangeStr, "(" <> whereCondition <> ")"]
+
+      -- Build complete WHERE clause for count queries (without cursor)
+      buildWhereForCount = T.intercalate " and " $ filter (not . T.null) ["project_id='" <> sqlCfg.pid.toText <> "'", dateRangeStrForCount, "(" <> whereCondition <> ")"]
 
       finalSqlQuery = case sqlCfg.targetSpansM of
         Just "service-entry-spans" ->
@@ -246,12 +256,12 @@ sqlFromQueryComponents sqlCfg qc =
               [fmt|SELECT count(*) FROM
                   (SELECT {subqueryCols}
                    FROM {fromTable}
-                   WHERE {buildWhere}
+                   WHERE {buildWhereForCount}
                    GROUP BY {groupByPart}) as subq|]
           Nothing ->
             -- For regular summarize queries
             [fmt|SELECT count(*) FROM {fromTable}
-              WHERE {buildWhere}
+              WHERE {buildWhereForCount}
               {groupByClause} limit 1|]
 
       -- Generate the summarize query depending on bin functions and data type

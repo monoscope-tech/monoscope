@@ -663,6 +663,41 @@ export class QueryEditorComponent extends LitElement {
   // Memoization cache for getMatches
   private _matchesCache: { query: string; result: any } | null = null;
 
+  // Track last render state to prevent unnecessary re-renders
+  private _lastRenderState: {
+    showSuggestions: boolean;
+    currentQuery: string;
+    selectedIndex: number;
+  } | null = null;
+
+  // Performance monitoring
+  private perfEnabled = true; // Set to false to disable logging
+  private perfLog(label: string, duration: number) {
+    if (this.perfEnabled && duration > 5) { // Only log if > 5ms
+      console.log(`[PERF] ${label}: ${duration.toFixed(2)}ms`);
+    }
+  }
+
+  // Prevent unnecessary re-renders by checking if suggestion-related state actually changed
+  shouldUpdate(changedProperties: Map<string, any>): boolean {
+    // Check if any of the properties that affect the suggestions dropdown changed
+    const suggestionStateChanged =
+      changedProperties.has('showSuggestions') ||
+      changedProperties.has('currentQuery') ||
+      changedProperties.has('selectedIndex') ||
+      changedProperties.has('completionItems') ||
+      changedProperties.has('recentSearches') ||
+      changedProperties.has('savedViews') ||
+      changedProperties.has('popularSearches');
+
+    // If suggestion state didn't change, skip render
+    if (!suggestionStateChanged) {
+      return false;
+    }
+
+    return true;
+  }
+
   private readonly KIND_ICONS = ['📄', '🔢', '🔍', '#', '📊', '📋', '#', '🔢', '✅', '❓'];
 
   public setPopularSearches(items: { query: string; description?: string }[]): void {
@@ -697,8 +732,41 @@ export class QueryEditorComponent extends LitElement {
     this.editor?.trigger('auto', 'editor.action.triggerSuggest', {});
   };
 
+  // Debounced version - waits 300ms after user stops typing before firing
+  private updateQueryTimeout: number | null = null;
+  private lastQueryValue = '';
+  private updateQueryDebounced = (queryValue: string) => {
+    this.lastQueryValue = queryValue;
+
+    // Clear existing timeout
+    if (this.updateQueryTimeout !== null) {
+      clearTimeout(this.updateQueryTimeout);
+    }
+
+    // Set new timeout - only fires after user stops typing for 300ms
+    this.updateQueryTimeout = window.setTimeout(() => {
+      this.updateQuery(this.lastQueryValue);
+      this.updateQueryTimeout = null;
+    }, 300);
+  };
+
+  // Throttled dropdown position update
+  private dropdownPositionPending = false;
+  private updateDropdownPositionThrottled = () => {
+    if (!this.dropdownPositionPending) {
+      this.dropdownPositionPending = true;
+      requestAnimationFrame(() => {
+        this.updateDropdownPosition();
+        this.dropdownPositionPending = false;
+      });
+    }
+  };
+
   private updateQuery = (queryValue: string) => {
+    const perfStart = performance.now();
+
     if (this.updateURLParams) {
+      const t1 = performance.now();
       const url = new URL(window.location.href);
       if (queryValue.trim()) {
         url.searchParams.set('query', queryValue);
@@ -706,8 +774,10 @@ export class QueryEditorComponent extends LitElement {
         url.searchParams.delete('query');
       }
       window.history.replaceState({}, '', url.toString());
+      this.perfLog('URL update', performance.now() - t1);
     }
 
+    const t2 = performance.now();
     const widgetPreviewId = this.getAttribute('target-widget-preview');
     if (widgetPreviewId) {
       document.getElementById(widgetPreviewId)?.dispatchEvent(
@@ -723,6 +793,9 @@ export class QueryEditorComponent extends LitElement {
         })
       );
     }
+    this.perfLog('Event dispatch', performance.now() - t2);
+
+    this.perfLog('updateQuery TOTAL', performance.now() - perfStart);
   };
 
   async firstUpdated(): Promise<void> {
@@ -789,6 +862,11 @@ export class QueryEditorComponent extends LitElement {
     this.resizeObserver = null;
     this.themeObserver?.disconnect();
     this.themeObserver = null;
+    // Clear any pending debounced update
+    if (this.updateQueryTimeout !== null) {
+      clearTimeout(this.updateQueryTimeout);
+      this.updateQueryTimeout = null;
+    }
     this.editor?.dispose();
     super.disconnectedCallback();
   }
@@ -1027,18 +1105,18 @@ export class QueryEditorComponent extends LitElement {
       value: this.defaultValue,
       language: 'aql',
       theme: theme,
-      automaticLayout: true,
+      automaticLayout: false, // Disable automatic layout - we handle it manually (keeps performance)
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
       lineNumbers: 'off',
       roundedSelection: false,
       readOnly: false,
       cursorStyle: 'line',
-      fontLigatures: true,
+      fontLigatures: true, // Re-enable for better appearance
       fontSize: 14,
-      'semanticHighlighting.enabled': true,
+      'semanticHighlighting.enabled': true, // Re-enable for syntax highlighting
       quickSuggestions: {
-        other: true,
+        other: true, // Re-enable for better UX
         comments: false,
         strings: false,
       },
@@ -1046,12 +1124,12 @@ export class QueryEditorComponent extends LitElement {
       suggest: {
         showIcons: false,
         snippetsPreventQuickSuggestions: false,
-        filterGraceful: true,
+        filterGraceful: true, // Re-enable for better matching
         showWords: false,
       } as any,
       wordWrap: 'on',
-      wrappingStrategy: 'advanced',
-      wrappingIndent: 'indent',
+      wrappingStrategy: 'advanced', // Back to advanced for better wrapping
+      wrappingIndent: 'indent', // Re-enable for readability
       wordWrapOverride1: 'on',
       wordWrapOverride2: 'on',
       glyphMargin: false,
@@ -1139,6 +1217,8 @@ export class QueryEditorComponent extends LitElement {
 
       this.editor.onDidChangeModelContent(() => {
         if (!this.isProgrammaticUpdate) {
+          const perfStart = performance.now();
+
           const model = this.editor?.getModel();
           const position = this.editor?.getPosition();
           if (!model || !position) return;
@@ -1148,26 +1228,37 @@ export class QueryEditorComponent extends LitElement {
 
           this.currentQuery = newQuery;
           this.showSuggestions = true;
+
+          const t1 = performance.now();
           this.updatePlaceholder();
+          this.perfLog('updatePlaceholder', performance.now() - t1);
 
-          // Immediate update - no debounce for instant feedback
-          this.updateQuery(model.getValue());
-          this.triggerSuggestions();
+          // Debounced update - only fires 300ms after user stops typing
+          const t2 = performance.now();
+          this.updateQueryDebounced(model.getValue());
+          this.perfLog('updateQueryDebounced (schedule)', performance.now() - t2);
 
-          // Only trigger re-render if query actually changed (not just cursor position)
-          if (queryChanged) {
-            this.requestUpdate();
-          } else {
-            // Just update dropdown position without full re-render
-            this.updateDropdownPosition();
+          // Required for KQL-specific suggestions - run async to not block input
+          const t3 = performance.now();
+          setTimeout(() => this.triggerSuggestions(), 0);
+          this.perfLog('triggerSuggestions (schedule)', performance.now() - t3);
+
+          // Async re-render for custom dropdown - don't block Monaco
+          // Only re-render if query changed in a way that affects suggestions
+          if (queryChanged && this.showSuggestions) {
+            const t4 = performance.now();
+            requestAnimationFrame(() => this.requestUpdate());
+            this.perfLog('requestUpdate (schedule)', performance.now() - t4);
           }
+
+          this.perfLog('onDidChangeModelContent TOTAL', performance.now() - perfStart);
         }
       }),
 
       this.editor.onDidChangeCursorPosition(() => {
         if (this.showSuggestions) {
-          // Update dropdown position without triggering full component re-render
-          this.updateDropdownPosition();
+          // Throttled dropdown position update - don't block cursor movement
+          this.updateDropdownPositionThrottled();
         }
       }),
 
@@ -1318,10 +1409,12 @@ export class QueryEditorComponent extends LitElement {
   }
 
   private getMatches() {
+    const perfStart = performance.now();
     const query = this.currentQuery?.toLowerCase() || '';
 
     // Check cache - avoid recomputing if query hasn't changed
     if (this._matchesCache && this._matchesCache.query === query) {
+      this.perfLog('getMatches (cached)', performance.now() - perfStart);
       return this._matchesCache.result;
     }
 
@@ -1347,6 +1440,7 @@ export class QueryEditorComponent extends LitElement {
     // Cache the result
     this._matchesCache = { query, result };
 
+    this.perfLog('getMatches (computed)', performance.now() - perfStart);
     return result;
   }
 
@@ -1544,7 +1638,9 @@ export class QueryEditorComponent extends LitElement {
   private renderSuggestionDropdown(): TemplateResult {
     if (!this.showSuggestions || !this.editor) return html``;
 
+    const t1 = performance.now();
     const matches = this.getMatches();
+    this.perfLog('renderSuggestionDropdown - getMatches', performance.now() - t1);
     const groups = {
       completion: this.completionItems,
       saved: matches.saved,
@@ -1622,27 +1718,14 @@ export class QueryEditorComponent extends LitElement {
   }
 
   render(): TemplateResult {
-    return html`
-      <style>
-        .monaco-editor .suggest-widget {
-          display: none !important;
-          visibility: hidden !important;
-        }
-        .monaco-editor {
-          border-radius: 0;
-          outline: none !important;
-          border: none !important;
-        }
-        .monaco-editor .overflow-guard {
-          border: none !important;
-          outline: none !important;
-        }
-        /* Ensure editor doesn't overflow container */
-        #editor-container {
-          max-width: 100%;
-          overflow: hidden;
-        }
-      </style>
+    const perfStart = performance.now();
+
+    const t1 = performance.now();
+    const dropdownTemplate = this.renderSuggestionDropdown();
+    const dropdownTime = performance.now() - t1;
+
+    const t2 = performance.now();
+    const result = html`
       <div
         class="relative w-full h-full pl-2 flex border rounded-md border-strokeStrong focus-within:border-strokeBrand-strong focus:outline-2 "
       >
@@ -1668,9 +1751,16 @@ export class QueryEditorComponent extends LitElement {
             ask
           </label>
         </div>
-        ${this.renderSuggestionDropdown()}
+        ${dropdownTemplate}
       </div>
     `;
+    const templateTime = performance.now() - t2;
+
+    const totalTime = performance.now() - perfStart;
+    if (totalTime > 5) {
+      console.log(`[PERF] render() breakdown - dropdown: ${dropdownTime.toFixed(2)}ms, template: ${templateTime.toFixed(2)}ms, TOTAL: ${totalTime.toFixed(2)}ms`);
+    }
+    return result;
   }
 }
 
