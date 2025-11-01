@@ -119,6 +119,37 @@ const STATS_FUNCTIONS = ['count', 'sum', 'avg', 'min', 'max', 'median', 'stdev',
 // Combine all keywords
 const KEYWORDS = [...DATA_SOURCES, ...AGGREGATION_COMMANDS, ...AGGREGATION_MODIFIERS, ...LOGICAL_OPERATORS, ...STATS_FUNCTIONS];
 
+// Precompiled regexes for performance - created once, reused many times
+const REGEX_PATTERNS = {
+  // Field dot notation patterns
+  dotMatchEnd: /([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.$/,
+  dotMatchPartial: /([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.([a-zA-Z0-9_]*)$/,
+
+  // Operator patterns
+  operatorMatch: /([\w\.]+)\s*(==|!=|>=|<=|>|<|=~|in|!in|has|!has|has_any|has_all|contains|!contains|startswith|!startswith|endswith|!endswith|matches)\s*$/,
+
+  // Value patterns
+  afterQuotedValue: /".*"\s*$/,
+  afterNumericValue: /\d+\s*$/,
+
+  // Field space patterns
+  fieldSpace: /([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s+$/,
+
+  // Logical operators (precompiled from filtered list)
+  logicalOperator: new RegExp(`\\b(and|or|not)\\s+$`, 'i'),
+
+  // Stats/aggregation patterns
+  statsOrTimechart: /stats\s|timechart\s/i,
+  byKeyword: /\bby\s*$/i,
+  timechartKeyword: /timechart/i,
+
+  // Visualization patterns
+  hasSummarize: /summarize\s+/i,
+  hasBinFunction: /summarize.*by\s+.*bin(_auto)?\s*\(\s*\w+\s*[,)].*$/i,
+  summarizeClause: /\|\s*summarize\s+[^|]+/i,
+  summarizeByClause: /(\s*summarize\s+[^|]*?by\s+)([^|]*?)(?=\||$)/i,
+};
+
 // Schema Manager class for better encapsulation
 class SchemaManager {
   private schemas: string[] = DATA_SOURCES;
@@ -343,9 +374,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
     const lineText = currentLine.substring(0, position.column - 1);
 
     // First priority: Check for nested fields after dot
-    const dotMatch =
-      lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.$/) ||
-      lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.[a-zA-Z0-9_]*$/);
+    const dotMatch = lineText.match(REGEX_PATTERNS.dotMatchEnd) || lineText.match(REGEX_PATTERNS.dotMatchPartial);
 
     if (dotMatch) {
       const fieldPrefix = dotMatch[1];
@@ -366,9 +395,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
     }
 
     // Check for operator pattern - show value suggestions
-    const operatorMatch = lineText.match(
-      /([\w\.]+)\s*(==|!=|>=|<=|>|<|=~|in|!in|has|!has|has_any|has_all|contains|!contains|startswith|!startswith|endswith|!endswith|matches)\s*$/
-    );
+    const operatorMatch = lineText.match(REGEX_PATTERNS.operatorMatch);
     if (operatorMatch) {
       const fieldName = operatorMatch[1];
       const operator = operatorMatch[2];
@@ -396,7 +423,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
     }
 
     // Fourth priority: Check for complete field-operator-value pattern - suggest logical operators
-    const afterValue = /".*"\s*$/.test(lineText) || /\d+\s*$/.test(lineText);
+    const afterValue = REGEX_PATTERNS.afterQuotedValue.test(lineText) || REGEX_PATTERNS.afterNumericValue.test(lineText);
     if (afterValue) {
       [...LOGICAL_OPERATORS.filter((op) => op === 'and' || op === 'or'), PIPE_OPERATOR[0]].forEach((op) =>
         suggestions.push({
@@ -410,11 +437,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
     }
 
     // Fifth priority: Check for logical operators followed by space - suggest fields
-    const logicalOperatorPattern = new RegExp(
-      `\\b(${LOGICAL_OPERATORS.filter((op) => ['and', 'or', 'not'].includes(op)).join('|')})\\s+$`,
-      'i'
-    );
-    const logicalOperatorMatch = lineText.match(logicalOperatorPattern);
+    const logicalOperatorMatch = lineText.match(REGEX_PATTERNS.logicalOperator);
     if (logicalOperatorMatch) {
       const fields = await schemaManager.resolveNested(currentSchema, '');
       fields.forEach((f) =>
@@ -431,7 +454,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
     }
 
     // Check for field name followed by space
-    const fieldSpaceMatch = lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s+$/);
+    const fieldSpaceMatch = lineText.match(REGEX_PATTERNS.fieldSpace);
     if (fieldSpaceMatch && !logicalOperatorMatch) {
       [
         '==',
@@ -539,7 +562,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
     }
 
     // Search segment
-    if (!/stats|timechart/i.test(last)) {
+    if (!REGEX_PATTERNS.statsOrTimechart.test(last)) {
       [
         '==',
         '!=',
@@ -589,7 +612,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
     }
 
     // Stats/timechart segment
-    if (/stats\s|timechart\s/i.test(last)) {
+    if (REGEX_PATTERNS.statsOrTimechart.test(last)) {
       // Use the STATS_FUNCTIONS constant directly
       STATS_FUNCTIONS.forEach((fn) =>
         suggestions.push({
@@ -600,7 +623,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
         })
       );
 
-      if (/\bby\s*$/i.test(last)) {
+      if (REGEX_PATTERNS.byKeyword.test(last)) {
         const fields = await schemaManager.resolveNested(currentSchema, '');
         fields.forEach((f) =>
           suggestions.push({
@@ -619,7 +642,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
         });
       }
 
-      if (/timechart/i.test(last)) {
+      if (REGEX_PATTERNS.timechartKeyword.test(last)) {
         ['[5m]', '[1h]'].forEach((iv) =>
           suggestions.push({
             label: iv,
@@ -937,10 +960,10 @@ export class QueryEditorComponent extends LitElement {
     const currentQuery = this.editor.getValue().trim();
 
     // Check if the query contains a summarize clause
-    const hasSummarize = /summarize\s+/i.test(currentQuery);
+    const hasSummarize = REGEX_PATTERNS.hasSummarize.test(currentQuery);
 
     // Check if summarize includes bin_auto or bin with any field
-    const hasBinFunction = /summarize.*by\s+.*bin(_auto)?\s*\(\s*\w+\s*[,)].*$/i.test(currentQuery);
+    const hasBinFunction = REGEX_PATTERNS.hasBinFunction.test(currentQuery);
 
     let newQuery = '';
     switch (visualizationType) {
@@ -954,7 +977,7 @@ export class QueryEditorComponent extends LitElement {
 
         if (hasSummarize && !hasBinFunction) {
           // Query has summarize but no bin_auto for timestamp, add bin_auto(timestamp) to the by clause
-          newQuery = currentQuery.replace(/(\s*summarize\s+[^|]*?by\s+)([^|]*?)(?=\||$)/i, (match, summarizePrefix, byClause) => {
+          newQuery = currentQuery.replace(REGEX_PATTERNS.summarizeByClause, (match, summarizePrefix, byClause) => {
             // Add bin_auto(timestamp) to the beginning of the by clause
             const updatedBy = byClause.trim()
               ? `${summarizePrefix}bin_auto(timestamp), ${byClause.trim()}`
@@ -976,7 +999,7 @@ export class QueryEditorComponent extends LitElement {
       default:
         // For logs or default case (which is interpreted as logs), remove any summarize part
         if (hasSummarize) {
-          newQuery = currentQuery.replace(/\|\s*summarize\s+[^|]*?(?=\||$)/i, '');
+          newQuery = currentQuery.replace(REGEX_PATTERNS.summarizeClause, '');
         } else {
           return; // No summarize to remove
         }
@@ -1372,9 +1395,7 @@ export class QueryEditorComponent extends LitElement {
 
     if (position && model) {
       const lineText = model.getLineContent(position.lineNumber).substring(0, position.column - 1);
-      const dotMatch =
-        lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.$/) ||
-        lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.[a-zA-Z0-9_]*$/);
+      const dotMatch = lineText.match(REGEX_PATTERNS.dotMatchEnd) || lineText.match(REGEX_PATTERNS.dotMatchPartial);
       if (dotMatch) {
         parentPath = dotMatch[1];
       }
@@ -1477,9 +1498,7 @@ export class QueryEditorComponent extends LitElement {
       const wordEndPos = position.column - 1;
       let wordStartPos = wordEndPos;
 
-      const dotMatch =
-        lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.$/) ||
-        lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.[a-zA-Z0-9_]*$/);
+      const dotMatch = lineText.match(REGEX_PATTERNS.dotMatchEnd) || lineText.match(REGEX_PATTERNS.dotMatchPartial);
 
       if (dotMatch) {
         const lastDotIndex = lineText.lastIndexOf('.');
