@@ -569,7 +569,7 @@ export class LogList extends LitElement {
         });
         this.fetchedNew = false;
         this.requestUpdate();
-      }, 500); // Give time for the animation to show
+      }, 4000); // Match the animation duration
     }
   }
 
@@ -1067,7 +1067,21 @@ export class LogList extends LitElement {
         }
 
         .animate-fadeBg {
-          animation: fadeBg 2s ease-out;
+          animation: fadeBg 1.5s ease-out;
+          will-change: background-color;
+        }
+
+        @keyframes pulseIndicator {
+          0%, 90% {
+            background-color: rgb(0, 104, 255);
+          }
+          100% {
+            background-color: transparent;
+          }
+        }
+
+        .animate-fadeBg .status-indicator {
+          animation: pulseIndicator 4s ease-out forwards;
           will-change: background-color;
         }
 
