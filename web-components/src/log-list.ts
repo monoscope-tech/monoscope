@@ -1438,7 +1438,7 @@ export class LogList extends LitElement {
         </div>`;
       case 'latency_breakdown':
         // Cache rendered latency breakdown
-        const currentWidth = this.columnMaxWidthMap['latency_breakdown'] || 200;
+        const currentWidth = this.columnMaxWidthMap['latency_breakdown'] || this.fixedColumnWidths['latency_breakdown'] || 120;
         if (!rowData._latencyCache || rowData._latencyCache.width !== currentWidth || rowData._latencyCache.expanded !== expanded) {
           const { traceStart, traceEnd, startNs, duration, childrenTimeSpans } = rowData;
           const color = this.serviceColors[lookupVecValue<string>(dataArr, this.colIdxMap, 'span_name')] || 'bg-black';
