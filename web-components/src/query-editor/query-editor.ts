@@ -770,6 +770,19 @@ export class QueryEditorComponent extends LitElement {
     }, 500); // wait 300ms after last keypress
   };
 
+  // Debounced suggestion trigger - waits 100ms after user stops typing
+  private triggerSuggestionsTimeout: number | null = null;
+  private triggerSuggestionsDebounced = () => {
+    if (this.triggerSuggestionsTimeout !== null) {
+      clearTimeout(this.triggerSuggestionsTimeout);
+    }
+
+    this.triggerSuggestionsTimeout = window.setTimeout(() => {
+      this.triggerSuggestions();
+      this.triggerSuggestionsTimeout = null;
+    }, 100); // 100ms feels instant but prevents lag
+  };
+
   private updateQuery = (queryValue: string) => {
     if (this.updateURLParams) {
       const url = new URL(window.location.href);
@@ -866,6 +879,11 @@ export class QueryEditorComponent extends LitElement {
     if (this.updateQueryTimeout !== null) {
       clearTimeout(this.updateQueryTimeout);
       this.updateQueryTimeout = null;
+    }
+    // Clear any pending debounced suggestion trigger
+    if (this.triggerSuggestionsTimeout !== null) {
+      clearTimeout(this.triggerSuggestionsTimeout);
+      this.triggerSuggestionsTimeout = null;
     }
     // Reset tracking variables
     this.lastEmittedQueryValue = '';
@@ -1242,8 +1260,10 @@ export class QueryEditorComponent extends LitElement {
           // Debounced update - only fires after user stops typing
           this.updateQueryDebounced(newValue);
 
-          // CRITICAL: Don't trigger suggestions on every keystroke - only when user explicitly requests
-          // This removes significant lag from typing. User can manually trigger with Ctrl+Space or by typing trigger characters
+          // Trigger suggestions to refresh based on new content (debounced)
+          // This ensures that when content is deleted (backspaced), suggestions update correctly
+          // Uses 100ms debounce to prevent lag while still feeling instant
+          this.triggerSuggestionsDebounced();
 
           // OPTIMIZATION: Skip re-render entirely - dropdown updates are handled by shouldUpdate
           // The dropdown doesn't need to update on every keystroke
