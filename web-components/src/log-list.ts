@@ -265,7 +265,7 @@ export class LogList extends LitElement {
     const url = new URL(window.location.href);
     url.searchParams.set('json', 'true');
 
-    // If we have data, update the 'to' parameter to fetch newer data
+    // If we have data, update the 'from' parameter to fetch newer data
     if (this.spanListTree.length > 0) {
       const firstItem = this.flipDirection ? this.spanListTree[this.spanListTree.length - 1] : this.spanListTree[0];
       const timestamp = firstItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
@@ -273,10 +273,11 @@ export class LogList extends LitElement {
       if (timestamp) {
         const date = new Date(timestamp);
         date.setTime(date.getTime() + 10); // Add 10ms
-        url.searchParams.set('to', date.toISOString());
-        // Remove cursor and since params for recent fetch
+        url.searchParams.set('from', date.toISOString());
+        // Remove cursor, since, and to params for recent fetch
         url.searchParams.delete('cursor');
         url.searchParams.delete('since');
+        url.searchParams.delete('to');
       }
     }
 
