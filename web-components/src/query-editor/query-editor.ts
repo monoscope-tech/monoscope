@@ -695,15 +695,6 @@ export class QueryEditorComponent extends LitElement {
     selectedIndex: number;
   } | null = null;
 
-  // Performance monitoring
-  private perfEnabled = false; // DISABLED by default - console.log adds overhead
-  private perfLog(label: string, duration: number) {
-    if (this.perfEnabled && duration > 5) {
-      // Only log if > 5ms
-      console.log(`[PERF] ${label}: ${duration.toFixed(2)}ms`);
-    }
-  }
-
   // Prevent unnecessary re-renders by checking if suggestion-related state actually changed
   shouldUpdate(changedProperties: Map<string, any>): boolean {
     // Check if any of the properties that affect the suggestions dropdown changed
@@ -766,9 +757,7 @@ export class QueryEditorComponent extends LitElement {
     this.lastQueryValue = queryValue;
 
     // Clear existing timeout
-    if (this.updateQueryTimeout !== null) {
-      clearTimeout(this.updateQueryTimeout);
-    }
+    if (this.updateQueryTimeout !== null) clearTimeout(this.updateQueryTimeout);
 
     // Set new timeout - only fires after user stops typing for 300ms
     this.updateQueryTimeout = window.setTimeout(() => {
@@ -779,18 +768,6 @@ export class QueryEditorComponent extends LitElement {
       }
       this.updateQueryTimeout = null;
     }, 500); // wait 300ms after last keypress
-  };
-
-  // Throttled dropdown position update
-  private dropdownPositionPending = false;
-  private updateDropdownPositionThrottled = () => {
-    if (!this.dropdownPositionPending) {
-      this.dropdownPositionPending = true;
-      requestAnimationFrame(() => {
-        this.updateDropdownPosition();
-        this.dropdownPositionPending = false;
-      });
-    }
   };
 
   private updateQuery = (queryValue: string) => {
@@ -1248,38 +1225,34 @@ export class QueryEditorComponent extends LitElement {
       this.editor.onDidChangeModelContent(() => {
         if (!this.isProgrammaticUpdate) {
           const model = this.editor?.getModel();
-          const position = this.editor?.getPosition();
-          if (!model || !position) return;
+          if (!model) return;
 
-          const newQuery = model.getLineContent(position.lineNumber);
-          const queryChanged = this.currentQuery !== newQuery;
+          const newValue = model.getValue();
 
-          this.currentQuery = newQuery;
+          // OPTIMIZATION: Only update placeholder on empty/non-empty transitions
+          const isEmpty = newValue.trim() === '';
+          const wasEmpty = !this.currentQuery || this.currentQuery.trim() === '';
+          if (isEmpty !== wasEmpty) {
+            this.updatePlaceholder();
+          }
+
+          this.currentQuery = newValue;
           this.showSuggestions = true;
 
-          // Update placeholder inline - no perf logging to avoid overhead
-          this.updatePlaceholder();
-
           // Debounced update - only fires after user stops typing
-          this.updateQueryDebounced(model.getValue());
+          this.updateQueryDebounced(newValue);
 
           // CRITICAL: Don't trigger suggestions on every keystroke - only when user explicitly requests
           // This removes significant lag from typing. User can manually trigger with Ctrl+Space or by typing trigger characters
 
-          // Async re-render for custom dropdown - don't block Monaco
-          // Only re-render if query changed in a way that affects suggestions
-          if (queryChanged && this.showSuggestions) {
-            requestAnimationFrame(() => this.requestUpdate());
-          }
+          // OPTIMIZATION: Skip re-render entirely - dropdown updates are handled by shouldUpdate
+          // The dropdown doesn't need to update on every keystroke
         }
       }),
 
-      this.editor.onDidChangeCursorPosition(() => {
-        if (this.showSuggestions) {
-          // Throttled dropdown position update - don't block cursor movement
-          this.updateDropdownPositionThrottled();
-        }
-      }),
+      // OPTIMIZATION: Removed cursor position handler - dropdown position is already correct
+      // The dropdown position is calculated in render() based on editor position
+      // No need to update on every cursor movement - it just adds overhead
 
       this.editor.onDidContentSizeChange(() => this.adjustEditorHeight()),
     ];
@@ -1347,8 +1320,16 @@ export class QueryEditorComponent extends LitElement {
   };
 
   private scrollSelectedIntoView(): void {
+    // OPTIMIZATION: Use requestAnimationFrame but skip if not needed
+    // Only scroll if the dropdown is actually visible
+    if (!this.showSuggestions) return;
+
     requestAnimationFrame(() => {
-      const item = this.querySelector(`[data-index="${this.selectedIndex}"]`) as HTMLElement;
+      // OPTIMIZATION: Cache the dropdown element instead of querying for each item
+      const dropdown = this.querySelector('.suggestions-dropdown');
+      if (!dropdown) return;
+
+      const item = dropdown.querySelector(`[data-index="${this.selectedIndex}"]`) as HTMLElement;
       item?.scrollIntoView({ block: 'nearest' });
     });
   }
@@ -1373,6 +1354,10 @@ export class QueryEditorComponent extends LitElement {
     if (!this.editor) return;
     const minHeight = 34; // Minimum height in pixels (single line + padding)
     const height = Math.max(this.editor.getContentHeight(), minHeight);
+
+    // OPTIMIZATION: Only update if height actually changed
+    if (this._editorContainer.style.height === `${height}px`) return;
+
     this._editorContainer.style.height = `${height}px`;
     this.editor.layout();
   }
