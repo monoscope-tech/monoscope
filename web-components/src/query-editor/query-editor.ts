@@ -126,7 +126,8 @@ const REGEX_PATTERNS = {
   dotMatchPartial: /([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.([a-zA-Z0-9_]*)$/,
 
   // Operator patterns
-  operatorMatch: /([\w\.]+)\s*(==|!=|>=|<=|>|<|=~|in|!in|has|!has|has_any|has_all|contains|!contains|startswith|!startswith|endswith|!endswith|matches)\s*$/,
+  operatorMatch:
+    /([\w\.]+)\s*(==|!=|>=|<=|>|<|=~|in|!in|has|!has|has_any|has_all|contains|!contains|startswith|!startswith|endswith|!endswith|matches)\s*$/,
 
   // Value patterns
   afterQuotedValue: /".*"\s*$/,
@@ -696,7 +697,8 @@ export class QueryEditorComponent extends LitElement {
   // Performance monitoring
   private perfEnabled = true; // Set to false to disable logging
   private perfLog(label: string, duration: number) {
-    if (this.perfEnabled && duration > 5) { // Only log if > 5ms
+    if (this.perfEnabled && duration > 5) {
+      // Only log if > 5ms
       console.log(`[PERF] ${label}: ${duration.toFixed(2)}ms`);
     }
   }
@@ -758,6 +760,7 @@ export class QueryEditorComponent extends LitElement {
   // Debounced version - waits 300ms after user stops typing before firing
   private updateQueryTimeout: number | null = null;
   private lastQueryValue = '';
+  private lastEmittedQueryValue = ''; // Track the last value we actually emitted
   private updateQueryDebounced = (queryValue: string) => {
     this.lastQueryValue = queryValue;
 
@@ -768,9 +771,13 @@ export class QueryEditorComponent extends LitElement {
 
     // Set new timeout - only fires after user stops typing for 300ms
     this.updateQueryTimeout = window.setTimeout(() => {
-      this.updateQuery(this.lastQueryValue);
+      // Only call updateQuery if the value actually changed
+      if (this.lastQueryValue !== this.lastEmittedQueryValue) {
+        this.updateQuery(this.lastQueryValue);
+        this.lastEmittedQueryValue = this.lastQueryValue;
+      }
       this.updateQueryTimeout = null;
-    }, 300);
+    }, 500); // wait 300ms after last keypress
   };
 
   // Throttled dropdown position update
@@ -869,10 +876,10 @@ export class QueryEditorComponent extends LitElement {
         }
       });
     });
-    
+
     this.themeObserver.observe(document.body, {
       attributes: true,
-      attributeFilter: ['data-theme']
+      attributeFilter: ['data-theme'],
     });
   }
 
@@ -890,6 +897,9 @@ export class QueryEditorComponent extends LitElement {
       clearTimeout(this.updateQueryTimeout);
       this.updateQueryTimeout = null;
     }
+    // Reset tracking variables
+    this.lastEmittedQueryValue = '';
+    this.lastQueryValue = '';
     this.editor?.dispose();
     super.disconnectedCallback();
   }
@@ -1123,7 +1133,7 @@ export class QueryEditorComponent extends LitElement {
   private createMonacoEditor(): void {
     const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
     const theme = isDarkMode ? 'transparent-theme-dark' : 'transparent-theme-light';
-    
+
     this.editor = monaco.editor.create(this._editorContainer, {
       value: this.defaultValue,
       language: 'aql',
@@ -1723,7 +1733,9 @@ export class QueryEditorComponent extends LitElement {
           ${sections.map(
             (section) => html`
               ${section.title
-                ? html`<div class="text-xs font-semibold text-textWeak px-4 py-2 uppercase border-t border-b border-strokeWeak bg-fillWeaker">
+                ? html`<div
+                    class="text-xs font-semibold text-textWeak px-4 py-2 uppercase border-t border-b border-strokeWeak bg-fillWeaker"
+                  >
                     ${section.title}
                   </div>`
                 : ''}
@@ -1777,7 +1789,9 @@ export class QueryEditorComponent extends LitElement {
 
     const totalTime = performance.now() - perfStart;
     if (totalTime > 5) {
-      console.log(`[PERF] render() breakdown - dropdown: ${dropdownTime.toFixed(2)}ms, template: ${templateTime.toFixed(2)}ms, TOTAL: ${totalTime.toFixed(2)}ms`);
+      console.log(
+        `[PERF] render() breakdown - dropdown: ${dropdownTime.toFixed(2)}ms, template: ${templateTime.toFixed(2)}ms, TOTAL: ${totalTime.toFixed(2)}ms`
+      );
     }
     return result;
   }
