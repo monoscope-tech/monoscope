@@ -138,12 +138,12 @@ export class QueryBuilderComponent extends LitElement {
 
         // Cache button position to avoid repeated getBoundingClientRect calls
         let cachedButtonRect: DOMRect | null = null;
-        
+
         // Update cached position when needed
         const updateButtonPosition = () => {
           cachedButtonRect = sortByButton.getBoundingClientRect();
         };
-        
+
         // Position the sort popover relative to the button
         const positionSortPopover = () => {
           if (!cachedButtonRect) {
@@ -155,12 +155,12 @@ export class QueryBuilderComponent extends LitElement {
             sortByPopover.style.top = `${cachedButtonRect.top}px`;
           }
         };
-        
+
         // Update position on scroll/resize
         const debouncedUpdate = debounce(() => {
           cachedButtonRect = null;
         }, 100);
-        
+
         window.addEventListener('scroll', debouncedUpdate, true);
         window.addEventListener('resize', debouncedUpdate);
 
@@ -672,14 +672,14 @@ export class QueryBuilderComponent extends LitElement {
   public updateBinInQuery(fieldName: string, binValue: string): void {
     const queryEditor = document.querySelector(this.queryEditorSelector) as any;
     if (!queryEditor?.editor) return;
-    
+
     let query = queryEditor.editor.getValue();
     const binPattern = new RegExp(`bin(_auto)?\\(\\s*${fieldName}\\s*(?:,\\s*[^)]+)?\\)`, 'gi');
-    
+
     query = query.replace(binPattern, `bin(${fieldName}, ${binValue})`);
     queryEditor.handleAddQuery(query, true);
     queryEditor.dispatchEvent(new CustomEvent('update-query'));
-    
+
     // Extract query parts to update UI
     setTimeout(() => this.extractQueryParts(), 0);
   }
@@ -780,25 +780,6 @@ export class QueryBuilderComponent extends LitElement {
   }
 
   /**
-   * Show the fields selection for group by
-   */
-  private showGroupByFieldsSelector(): void {
-    this.showGroupByFieldsColumn = true;
-    this.groupBySearchTerm = ''; // Clear search term
-    this.filteredGroupByFields = []; // Reset filtered fields
-
-    // Make sure we have fields loaded
-    if (this.fieldsOptions.length === 0) {
-      this.initializeFields().then(() => {
-        console.log(`Fields loaded for group by, count:`, this.fieldsOptions.length);
-        this.requestUpdate();
-      });
-    }
-
-    this.requestUpdate();
-  }
-
-  /**
    * Reset the aggregation state
    */
   private resetAggregationState(): void {
@@ -882,26 +863,6 @@ export class QueryBuilderComponent extends LitElement {
   }
 
   /**
-   * Handle Enter key in the aggregation search
-   */
-  private handleAggregationEnter(): void {
-    if (!this.showFieldsColumn) {
-      // If we're still selecting an aggregation function
-      if (this.filteredAggFunctions.length === 1) {
-        // If there's only one matching function, select it
-        this.handleAggFunctionClick(this.filteredAggFunctions[0]);
-      }
-    } else {
-      // If we're selecting a field
-      if (this.filteredFields.length === 1) {
-        // If there's only one matching field, select it and complete
-        this.newAggField = this.filteredFields[0].value;
-        this.completeAggregation();
-      }
-    }
-  }
-
-  /**
    * Get an icon for a field based on its type and name
    */
   private getFieldIcon(fieldType: string, fieldValue: string): string {
@@ -949,16 +910,10 @@ export class QueryBuilderComponent extends LitElement {
       return;
     }
 
-    // Reset form fields
     this.resetAggregationState();
 
-    // Close the popover if open
     const popover = document.getElementById('agg-popover');
-    if (popover) {
-      (popover as any).hidePopover?.();
-    }
-
-    // Update the query in the editor
+    if (popover) (popover as any).hidePopover?.();
     this.updateQuery();
   }
 
@@ -966,9 +921,6 @@ export class QueryBuilderComponent extends LitElement {
    * Add a new aggregation (for backward compatibility)
    */
   public addAggregation(): void {
-    // Debug logging
-    console.log('Adding aggregation:', this.newAggFunction, this.newAggField);
-
     if (this.newAggFunction && this.newAggField?.trim()) {
       // Add to aggregations array
       this.aggregations = [
@@ -1044,41 +996,16 @@ export class QueryBuilderComponent extends LitElement {
     this.updateQuery();
   }
 
-  /**
-   * Update the limit value
-   */
   private updateLimit(): void {
     this.updateQuery();
   }
 
-  /**
-   * Toggle a popover
-   */
-  private togglePopover(id: string): void {
-    const popover = document.getElementById(id);
-    if (popover) {
-      if ((popover as any).matches?.(':popover-open')) {
-        (popover as any).hidePopover?.();
-      } else {
-        (popover as any).showPopover?.();
-      }
-    }
-  }
-
-  /**
-   * Render the component
-   */
-  // Removed updated method to avoid rendering issues
-
   connectedCallback(): void {
     super.connectedCallback();
-
-    // Add direct click handler for the whole component
     this.addEventListener('pointerdown', this.handleComponentClick);
   }
 
   disconnectedCallback(): void {
-    // Clean up event listeners
     this.removeEventListener('pointerdown', this.handleComponentClick);
     super.disconnectedCallback();
   }
@@ -1089,17 +1016,14 @@ export class QueryBuilderComponent extends LitElement {
 
     // Check which button was clicked
     if (target.closest('#add-group-by-btn')) {
-      console.log('Add group by button clicked via direct listener');
       e.preventDefault();
       e.stopPropagation();
       this.addGroupByField();
     } else if (target.closest('#add-agg-btn')) {
-      console.log('Add aggregation button clicked via direct listener');
       e.preventDefault();
       e.stopPropagation();
       this.completeAggregation();
     } else if (target.closest('#add-sort-btn')) {
-      console.log('Add sort button clicked via direct listener');
       e.preventDefault();
       e.stopPropagation();
       this.addSortField();
@@ -1108,17 +1032,6 @@ export class QueryBuilderComponent extends LitElement {
       e.stopPropagation();
     }
   };
-
-  /**
-   * Toggle between sort directions
-   */
-  private toggleSortDirection(index: number): void {
-    // Toggle between 'asc' and 'desc'
-    this.sortFields[index].direction = this.sortFields[index].direction === 'asc' ? 'desc' : 'asc';
-
-    // Update query
-    this.updateQuery();
-  }
 
   render() {
     return html`

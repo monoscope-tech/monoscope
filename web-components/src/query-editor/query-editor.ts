@@ -1,5 +1,6 @@
 import { LitElement, html, css, TemplateResult } from 'lit';
 import { customElement, state, query } from 'lit/decorators.js';
+import { repeat } from 'lit/directives/repeat.js';
 import 'monaco-editor/esm/vs/editor/contrib/suggest/browser/suggestController.js';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
 import { groupBy, pick } from 'lodash';
@@ -1588,6 +1589,22 @@ export class QueryEditorComponent extends LitElement {
     return this.KIND_ICONS[idx];
   }
 
+  // Generate unique key for suggestion items (for repeat directive performance)
+  private getSuggestionKey(item: SuggestionItem): string {
+    switch (item.kind) {
+      case 'completion':
+        return `completion-${item.label}-${item.parentPath || ''}`;
+      case 'recentSearch':
+        return `recent-${item.query}`;
+      case 'savedView':
+        return `saved-${item.name}`;
+      case 'popularSearch':
+        return `popular-${item.query}`;
+      default:
+        return `unknown-${Math.random()}`;
+    }
+  }
+
   private getSuggestionUIData(item: SuggestionItem): {
     icon: string;
     primaryText: string | TemplateResult;
@@ -1739,7 +1756,11 @@ export class QueryEditorComponent extends LitElement {
                     ${section.title}
                   </div>`
                 : ''}
-              ${section.items.map((item) => this.renderSuggestionItem(item, currentIndex++))}
+              ${repeat(
+                section.items,
+                (item) => this.getSuggestionKey(item),
+                (item) => this.renderSuggestionItem(item, currentIndex++)
+              )}
             `
           )}
         </div>
