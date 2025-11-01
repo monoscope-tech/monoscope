@@ -63,8 +63,9 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
       warningThresholdInt = readMaybe . toString =<< alertForm.warningThreshold
 
       -- Parse frequency from "Xm" format (e.g., "5m" -> 5)
+      -- Ensure minimum interval is 1 minute
       checkInterval = case alertForm.frequency of
-        Just freq -> fromMaybe 5 $ readMaybe $ toString $ T.dropEnd 1 freq -- Remove 'm' suffix
+        Just freq -> max 1 $ fromMaybe 5 $ readMaybe $ toString $ T.dropEnd 1 freq -- Remove 'm' suffix, enforce min 1
         Nothing -> 5 -- Default to 5 minutes
 
       -- Determine if this is a threshold-based alert

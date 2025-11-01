@@ -577,6 +577,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
             , patterns = patterns
             , patternsToSkip
             , targetPattern = pTargetM
+            , project = project
             }
 
       let jsonResponse = LogsGetJson finalVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap resultCount
@@ -662,6 +663,7 @@ data ApiLogsPageData = ApiLogsPageData
   , patterns :: Maybe (V.Vector (Text, Int))
   , patternsToSkip :: Int
   , targetPattern :: Maybe Text
+  , project :: Projects.Project
   }
 
 
@@ -864,7 +866,7 @@ apiLogsPage page = do
         div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block"] $ resizer_ "alert_container" "alert_width" False
 
         div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block", id_ "alert_container", style_ "width: 500px;"] do
-          alertConfigurationForm_ page.pid page.alert
+          alertConfigurationForm_ page.project page.alert
 
         div_ [class_ $ "transition-opacity duration-200 hidden group-has-[#viz-logs:checked]/pg:block " <> if isJust page.targetEvent then "" else "opacity-0 pointer-events-none hidden", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
 
@@ -963,8 +965,10 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
 
 
 -- | Render alert configuration form for creating log-based alerts
-alertConfigurationForm_ :: Projects.ProjectId -> Maybe Monitors.QueryMonitor -> Html ()
-alertConfigurationForm_ pid alertM = do
+alertConfigurationForm_ :: Projects.Project -> Maybe Monitors.QueryMonitor -> Html ()
+alertConfigurationForm_ project alertM = do
+  let pid = project.id
+      isByos = project.paymentPlan == "Bring your own storage"
   div_ [class_ "bg-fillWeaker h-full flex flex-col group/alt"] do
     -- Header section (more compact)
     div_ [class_ "flex items-center justify-between px-4 py-2.5"] do
@@ -988,7 +992,14 @@ alertConfigurationForm_ pid alertM = do
         [ id_ "alert-form"
         , hxPost_ $ "/p/" <> pid.toText <> "/alerts"
         , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans'}"
+        , hxSwap_ "none"
         , class_ "flex flex-col gap-3"
+        , [__|on htmx:afterRequest
+             if event.detail.successful
+               set my value to ''
+               call me.reset()
+             end
+          |]
         ]
         do
           -- Alert name field (more compact)
@@ -1015,12 +1026,19 @@ alertConfigurationForm_ pid alertM = do
 
             div_ [class_ "gap-3 p-3 pt-0 peer-has-[:checked]:flex hidden"] do
               let timeOpts = [(1, "minute"), (2, "2 minutes"), (5, "5 minutes"), (10, "10 minutes"), (15, "15 minutes"), (30, "30 minutes"), (60, "hour"), (360, "6 hours"), (720, "12 hours"), (1440, "day")]
-                  mkOpt (m, l) = option_ ([value_ (show m <> "m")] <> [selected_ "" | Just m == fmap (.checkIntervalMins) alertM]) ("every " <> l)
+                  defaultInterval = maybe 5 (.checkIntervalMins) alertM
+                  mkOpt (m, l) =
+                    let isDisabled = not isByos && m < 5
+                        attrs = [value_ (show m <> "m")]
+                             <> [disabled_ "" | isDisabled]
+                             <> [selected_ "" | m == defaultInterval]
+                             <> [term "data-tippy-content" "Upgrade to a higher plan to access this frequency" | isDisabled]
+                    in option_ attrs ("every " <> l)
 
               -- Frequency
               fieldset_ [class_ "fieldset flex-1"] do
                 label_ [class_ "label text-xs"] "Execute the query"
-                select_ [name_ "frequency", class_ "select select-sm", value_ $ maybe "" (\x -> show x.checkIntervalMins <> "m") alertM] $ forM_ timeOpts mkOpt
+                select_ [name_ "frequency", class_ "select select-sm"] $ forM_ timeOpts mkOpt
 
               -- Time window
               fieldset_ [class_ "fieldset flex-1"] do
