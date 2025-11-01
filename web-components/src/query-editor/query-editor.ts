@@ -696,7 +696,7 @@ export class QueryEditorComponent extends LitElement {
   } | null = null;
 
   // Performance monitoring
-  private perfEnabled = true; // Set to false to disable logging
+  private perfEnabled = false; // DISABLED by default - console.log adds overhead
   private perfLog(label: string, duration: number) {
     if (this.perfEnabled && duration > 5) {
       // Only log if > 5ms
@@ -794,10 +794,7 @@ export class QueryEditorComponent extends LitElement {
   };
 
   private updateQuery = (queryValue: string) => {
-    const perfStart = performance.now();
-
     if (this.updateURLParams) {
-      const t1 = performance.now();
       const url = new URL(window.location.href);
       if (queryValue.trim()) {
         url.searchParams.set('query', queryValue);
@@ -805,10 +802,8 @@ export class QueryEditorComponent extends LitElement {
         url.searchParams.delete('query');
       }
       window.history.replaceState({}, '', url.toString());
-      this.perfLog('URL update', performance.now() - t1);
     }
 
-    const t2 = performance.now();
     const widgetPreviewId = this.getAttribute('target-widget-preview');
     if (widgetPreviewId) {
       document.getElementById(widgetPreviewId)?.dispatchEvent(
@@ -824,9 +819,6 @@ export class QueryEditorComponent extends LitElement {
         })
       );
     }
-    this.perfLog('Event dispatch', performance.now() - t2);
-
-    this.perfLog('updateQuery TOTAL', performance.now() - perfStart);
   };
 
   async firstUpdated(): Promise<void> {
@@ -1255,8 +1247,6 @@ export class QueryEditorComponent extends LitElement {
 
       this.editor.onDidChangeModelContent(() => {
         if (!this.isProgrammaticUpdate) {
-          const perfStart = performance.now();
-
           const model = this.editor?.getModel();
           const position = this.editor?.getPosition();
           if (!model || !position) return;
@@ -1267,29 +1257,20 @@ export class QueryEditorComponent extends LitElement {
           this.currentQuery = newQuery;
           this.showSuggestions = true;
 
-          const t1 = performance.now();
+          // Update placeholder inline - no perf logging to avoid overhead
           this.updatePlaceholder();
-          this.perfLog('updatePlaceholder', performance.now() - t1);
 
-          // Debounced update - only fires 300ms after user stops typing
-          const t2 = performance.now();
+          // Debounced update - only fires after user stops typing
           this.updateQueryDebounced(model.getValue());
-          this.perfLog('updateQueryDebounced (schedule)', performance.now() - t2);
 
-          // Required for KQL-specific suggestions - run async to not block input
-          const t3 = performance.now();
-          setTimeout(() => this.triggerSuggestions(), 0);
-          this.perfLog('triggerSuggestions (schedule)', performance.now() - t3);
+          // CRITICAL: Don't trigger suggestions on every keystroke - only when user explicitly requests
+          // This removes significant lag from typing. User can manually trigger with Ctrl+Space or by typing trigger characters
 
           // Async re-render for custom dropdown - don't block Monaco
           // Only re-render if query changed in a way that affects suggestions
           if (queryChanged && this.showSuggestions) {
-            const t4 = performance.now();
             requestAnimationFrame(() => this.requestUpdate());
-            this.perfLog('requestUpdate (schedule)', performance.now() - t4);
           }
-
-          this.perfLog('onDidChangeModelContent TOTAL', performance.now() - perfStart);
         }
       }),
 
@@ -1445,12 +1426,10 @@ export class QueryEditorComponent extends LitElement {
   }
 
   private getMatches() {
-    const perfStart = performance.now();
     const query = this.currentQuery?.toLowerCase() || '';
 
     // Check cache - avoid recomputing if query hasn't changed
     if (this._matchesCache && this._matchesCache.query === query) {
-      this.perfLog('getMatches (cached)', performance.now() - perfStart);
       return this._matchesCache.result;
     }
 
@@ -1476,7 +1455,6 @@ export class QueryEditorComponent extends LitElement {
     // Cache the result
     this._matchesCache = { query, result };
 
-    this.perfLog('getMatches (computed)', performance.now() - perfStart);
     return result;
   }
 
@@ -1688,9 +1666,7 @@ export class QueryEditorComponent extends LitElement {
   private renderSuggestionDropdown(): TemplateResult {
     if (!this.showSuggestions || !this.editor) return html``;
 
-    const t1 = performance.now();
     const matches = this.getMatches();
-    this.perfLog('renderSuggestionDropdown - getMatches', performance.now() - t1);
     const groups = {
       completion: this.completionItems,
       saved: matches.saved,
@@ -1774,14 +1750,9 @@ export class QueryEditorComponent extends LitElement {
   }
 
   render(): TemplateResult {
-    const perfStart = performance.now();
-
-    const t1 = performance.now();
     const dropdownTemplate = this.renderSuggestionDropdown();
-    const dropdownTime = performance.now() - t1;
 
-    const t2 = performance.now();
-    const result = html`
+    return html`
       <div
         class="relative w-full h-full pl-2 flex border rounded-md border-strokeStrong focus-within:border-strokeBrand-strong focus:outline-2 "
       >
@@ -1810,15 +1781,6 @@ export class QueryEditorComponent extends LitElement {
         ${dropdownTemplate}
       </div>
     `;
-    const templateTime = performance.now() - t2;
-
-    const totalTime = performance.now() - perfStart;
-    if (totalTime > 5) {
-      console.log(
-        `[PERF] render() breakdown - dropdown: ${dropdownTime.toFixed(2)}ms, template: ${templateTime.toFixed(2)}ms, TOTAL: ${totalTime.toFixed(2)}ms`
-      );
-    }
-    return result;
   }
 }
 
