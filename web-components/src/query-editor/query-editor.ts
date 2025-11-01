@@ -1146,24 +1146,20 @@ export class QueryEditorComponent extends LitElement {
       roundedSelection: false,
       readOnly: false,
       cursorStyle: 'line',
-      fontLigatures: true, // Re-enable for better appearance
+      fontLigatures: false, // DISABLE for instant typing - ligatures add latency
       fontSize: 14,
-      'semanticHighlighting.enabled': true, // Re-enable for syntax highlighting
-      quickSuggestions: {
-        other: true, // Re-enable for better UX
-        comments: false,
-        strings: false,
-      },
-      suggestOnTriggerCharacters: true,
+      'semanticHighlighting.enabled': false, // DISABLE - causes typing lag
+      quickSuggestions: false, // DISABLE - triggers on every keystroke, causing lag
+      suggestOnTriggerCharacters: true, // Keep manual triggering
       suggest: {
         showIcons: false,
-        snippetsPreventQuickSuggestions: false,
-        filterGraceful: true, // Re-enable for better matching
+        snippetsPreventQuickSuggestions: true,
+        filterGraceful: false, // DISABLE - adds latency
         showWords: false,
       } as any,
       wordWrap: 'on',
-      wrappingStrategy: 'advanced', // Back to advanced for better wrapping
-      wrappingIndent: 'indent', // Re-enable for readability
+      wrappingStrategy: 'simple', // SIMPLE is much faster than advanced
+      wrappingIndent: 'none', // DISABLE - adds latency on wrapped lines
       wordWrapOverride1: 'on',
       wordWrapOverride2: 'on',
       glyphMargin: false,
@@ -1180,6 +1176,14 @@ export class QueryEditorComponent extends LitElement {
       },
       lineDecorationsWidth: 0,
       lineNumbersMinChars: 0,
+      // CRITICAL for instant typing - disable validation during typing
+      validate: false as any,
+      // Render whitespace minimally
+      renderWhitespace: 'none',
+      // Disable cursor blinking animations for better performance
+      cursorBlinking: 'solid',
+      // Disable smooth scrolling
+      smoothScrolling: false,
     });
 
     this.setupEditorEvents();
