@@ -65,7 +65,7 @@ logQueryBox_ config = do
     ]
     do
       div_ [class_ "flex flex-col gap-2 items-stretch justify-center group/fltr"] do
-        div_ [class_ "p-1 flex-1 flex flex-col gap-2  bg-fillWeaker rounded-lg border border-strokeWeak group-has-[.ai-search:checked]/fltr:border-2 group-has-[.ai-search:checked]/fltr:border-iconBrand group-has-[.ai-search:checked]/fltr:shadow-xs shadow-strokeBrand-weak"] do
+        div_ [class_ "px-1 py-0.5 flex-1 flex flex-col gap-2  bg-fillWeaker rounded-lg border border-strokeWeak group-has-[.ai-search:checked]/fltr:border-2 group-has-[.ai-search:checked]/fltr:border-iconBrand group-has-[.ai-search:checked]/fltr:shadow-xs shadow-strokeBrand-weak"] do
           input_
             $ [ class_ "hidden ai-search"
               , type_ "checkbox"
@@ -99,7 +99,7 @@ logQueryBox_ config = do
           div_ [class_ "w-full gap-2 items-center px-2 hidden group-has-[.ai-search:checked]/fltr:flex"] do
             faSprite_ "sparkles" "regular" "h-4 w-4 inline-block text-iconBrand"
             input_
-              [ class_ "border-0 w-full flex-1 p-2 outline-none peer"
+              [ class_ "border-0 w-full flex-1 p-1 outline-none peer"
               , placeholder_ "Ask. Eg: Logs with errors. Hit Enter to submit"
               , id_ "ai-search-input"
               , autofocus_
@@ -174,12 +174,12 @@ logQueryBox_ config = do
                     option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
 
               div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-end"] do
-                div_ [class_ "rounded-lg px-3 py-2 text-textStrong inline-flex items-center border border-strokeStrong h-full", tabindex_ "0", role_ "button"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5 text-iconNeutral"
+                div_ [class_ "rounded-lg px-3 py-1 text-textStrong inline-flex items-center border border-strokeStrong h-full", tabindex_ "0", role_ "button"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5 text-iconNeutral"
                 ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-1 w-60 p-2 shadow-lg"] do
                   li_ $ label_ [Lucid.for_ "saveQueryMdl", onclick_ "document.getElementById('saveQueryMdl').dataset.pendingQuery = null;"] "Save query to Query Library"
             button_
               [ type_ "submit"
-              , class_ "leading-none rounded-lg px-3 py-2 cursor-pointer !h-auto btn btn-primary"
+              , class_ "leading-none rounded-lg px-3 py-1 cursor-pointer !h-auto btn btn-primary"
               , onpointerdown_ "this.form.dispatchEvent(new Event('submit', {bubbles: true}))"
               ]
               do

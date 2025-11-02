@@ -257,7 +257,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
       unless (widget.standalone == Just True) $ span_ [class_ "hidden group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
       whenJust widget.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
       toHtml $ maybeToMonoid title
-    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl " <> if isJust valueM then "" else "hidden", id_ $ wId <> "Value"]
+    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none " <> if isJust valueM then "" else "hidden", id_ $ wId <> "Value"]
       $ whenJust valueM toHtml
     span_ [class_ $ "text-textWeak widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
@@ -325,12 +325,12 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                  <> maybeToMonoid (widget._projectId <&> (.toText))
-                  <> "/dashboards/"
-                  <> maybeToMonoid widget._dashboardId
-                  <> "/widgets/"
-                  <> wId
-                  <> "/duplicate"
+                    <> maybeToMonoid (widget._projectId <&> (.toText))
+                    <> "/dashboards/"
+                    <> maybeToMonoid widget._dashboardId
+                    <> "/widgets/"
+                    <> wId
+                    <> "/duplicate"
               , hxTrigger_ "click"
               , [__| on click set (the closest <details/>).open to false
                      on htmx:beforeSwap
@@ -384,7 +384,7 @@ renderTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-            <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ tableId <> "_bordered"
         ]
         do
@@ -485,7 +485,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ chartId <> "_bordered"
         ]
         do
