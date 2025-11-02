@@ -699,6 +699,16 @@ export class LogList extends LitElement {
     }
 
     this.virtualListItems = virtualItems;
+
+    // Trigger initial chart mark area update after virtual items are set
+    if (items.length > 0 && !this.lastVisibilityRange) {
+      // Set initial visibility range to show first items
+      const startIdx = this.flipDirection ? Math.max(0, virtualItems.length - 20) : 0;
+      const endIdx = this.flipDirection ? virtualItems.length - 1 : Math.min(19, virtualItems.length - 1);
+      this.lastVisibilityRange = { first: startIdx, last: endIdx };
+      // Defer chart update to allow chart to be ready
+      setTimeout(() => this.debouncedUpdateChartMarkArea(), 500);
+    }
   }
 
   expandTrace = (tracId: string, spanId: string) => {
