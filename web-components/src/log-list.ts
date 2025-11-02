@@ -1024,7 +1024,7 @@ export class LogList extends LitElement {
             {
               markArea: {
                 itemStyle: {
-                  color: 'rgba(0, 104, 255, .5)',
+                  color: 'rgba(0, 104, 255, .2)',
                   borderColor: 'rgb(0 104 255)',
                   borderWidth: 1,
                   borderType: 'dashed',
