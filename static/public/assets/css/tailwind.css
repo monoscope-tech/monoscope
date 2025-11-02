@@ -244,7 +244,8 @@
 }
 
 html,
-body {
+body, :host {
+  line-height: 1;
   @apply overscroll-none bg-bgBase;
   --brand-color: var(--color-fillBrand-strong);
   --brand-color-light: var(--color-fillBrand-strong);
@@ -254,9 +255,6 @@ body {
 }
 
 @layer custom {
-  .tab {
-    --tab-bg: var(--color-bgOverlay);
-  }
   .tab-not-active {
     --tab-color: var(--fallback-bc, oklch(var(--bc) / 0.5));
     --tab-bg: transparent;
@@ -380,8 +378,15 @@ body {
   }
 }
 
+@utility tabs-box {
+  height: fit-content;
+  min-height: auto;
+}
+
 @utility tab {
-  @apply h-auto! leading-none py-2;
+  --tab-bg: var(--color-bgOverlay);
+  @apply h-auto! leading-none;
+  padding-block: calc(var(--spacing) * 1.5);
 
   /*
   .tabs-outline .tab {
