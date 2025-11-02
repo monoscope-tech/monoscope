@@ -73,9 +73,9 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
           , currProject = Just project
           , pageTitle = "API Catalog"
           , freeTierExceeded = freeTierExceeded
-          , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline p-0  bg-fillWeak  text-textWeak border items-center border"] do
-              a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Incoming", role_ "tab", class_ $ "tab " <> if requestType == "Incoming" then "tab-active text-textStrong border border-strokeStrong" else ""] "Incoming"
-              a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Outgoing", role_ "tab", class_ $ "tab " <> if requestType == "Outgoing" then "tab-active text-textStrong border border-strokeStrong" else ""] "Outgoing"
+          , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
+              a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Incoming", role_ "tab", class_ $ "tab h-auto! " <> if requestType == "Incoming" then "tab-active text-textStrong" else ""] "Incoming"
+              a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Outgoing", role_ "tab", class_ $ "tab h-auto! " <> if requestType == "Outgoing" then "tab-active text-textStrong" else ""] "Outgoing"
           }
   case skipM of
     Just _ -> addRespHeaders $ CatalogListRows $ ItemsList.ItemsRows nextFetchUrl $ V.map (\host -> HostEventsVM pid host filterV requestType) hostsAndEvents

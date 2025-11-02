@@ -51,7 +51,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
           , prePageTitle = Just "Explorer"
           , pageTitle = "Metrics"
           , config = appCtx.env
-          , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-md p-0 tabs-outline items-center border"] do
+          , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
               a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! "] "Events"
               a_ [href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! tab-active text-textStrong"] "Metrics"
           , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/metrics/"

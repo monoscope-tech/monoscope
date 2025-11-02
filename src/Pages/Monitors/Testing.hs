@@ -355,9 +355,9 @@ monitorOverviewTabs pid monitorId monitorType = do
       editUrl = case monitorType of
         "alert" -> "/p/" <> pid.toText <> "/alerts/" <> monitorId
         _ -> "/p/" <> pid.toText <> "/monitors/collection?col_id=" <> monitorId
-  div_ [class_ "tabs tabs-box tabs-outline items-center border p-0 bg-fillWeak text-textWeak"] do
-    a_ [href_ overviewUrl, role_ "tab", class_ "tab tab-active border border-strokeStrong text-textStrong"] "Overview"
-    a_ [href_ editUrl, role_ "tab", class_ "tab"] "Configuration"
+  div_ [class_ "tabs tabs-box tabs-outline items-center"] do
+    a_ [href_ overviewUrl, role_ "tab", class_ "tab h-auto! tab-active text-textStrong"] "Overview"
+    a_ [href_ editUrl, role_ "tab", class_ "tab h-auto! "] "Configuration"
 
 
 -- | Unified overview page that handles both monitor types

@@ -503,7 +503,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
                 span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex  py-1 px-3 items-center", data_ "tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4 text-iconNeutral"
               Components.timepicker_ (Just "log_explorer_form") currentRange
               Components.refreshButton_
-          , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-md p-0 tabs-outline items-center border"] do
+          , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
               a_
                 [href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ $ "tab h-auto! tab-active text-textStrong"]
                 "Events"
@@ -1029,11 +1029,12 @@ alertConfigurationForm_ project alertM = do
                   defaultInterval = maybe 5 (.checkIntervalMins) alertM
                   mkOpt (m, l) =
                     let isDisabled = not isByos && m < 5
-                        attrs = [value_ (show m <> "m")]
-                             <> [disabled_ "" | isDisabled]
-                             <> [selected_ "" | m == defaultInterval]
-                             <> [term "data-tippy-content" "Upgrade to a higher plan to access this frequency" | isDisabled]
-                    in option_ attrs ("every " <> l)
+                        attrs =
+                          [value_ (show m <> "m")]
+                            <> [disabled_ "" | isDisabled]
+                            <> [selected_ "" | m == defaultInterval]
+                            <> [term "data-tippy-content" "Upgrade to a higher plan to access this frequency" | isDisabled]
+                     in option_ attrs ("every " <> l)
 
               -- Frequency
               fieldset_ [class_ "fieldset flex-1"] do
@@ -1107,8 +1108,8 @@ alertConfigurationForm_ project alertM = do
                                      })
                                    end|]
                             ]
-                          ++ [required_ "" | req]
-                          ++ [value_ (maybe "" (show) vM) | isJust vM]
+                            ++ [required_ "" | req]
+                            ++ [value_ (maybe "" (show) vM) | isJust vM]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)
