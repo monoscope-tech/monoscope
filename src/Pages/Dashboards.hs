@@ -136,7 +136,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
               , value_ $ maybeToMonoid var.value
               ]
-              <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
+            <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
   const tagifyInstances = new Map();
@@ -352,7 +352,7 @@ processWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widgetBas
   forOf (#children . _Just . traverse) widget' $ \child ->
     processWidget pid now timeRange allParams
       $ child
-        & #_dashboardId %~ (<|> widget'._dashboardId)
+      & #_dashboardId %~ (<|> widget'._dashboardId)
 
 
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
@@ -362,11 +362,11 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
     let issuesVM = V.map (AnomalyList.IssueVM False True now "24h") issues
     pure
       $ widget
-        & #html
-          ?~ renderText
-            ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-                $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml)
-            )
+      & #html
+        ?~ renderText
+          ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
+              $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml)
+          )
   Widget.WTStat -> do
     stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure $ widget & #dataset ?~ def{Widget.source = AE.Null, Widget.value = stat.dataFloat}
@@ -376,27 +376,27 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
     -- Render the table with data server-side
     pure
       $ widget
-        & #html
-          ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
+      & #html
+        ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
   Widget.WTTraces -> do
     tracesD <- Charts.queryMetrics (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure
       $ widget
-        & #html
-          ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText)
+      & #html
+        ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText)
   _ -> do
     metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure
       $ widget
-        & #dataset
-          ?~ Widget.WidgetDataset
-            { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
-            , rowsPerMin = metricsD.rowsPerMin
-            , value = Just metricsD.rowsCount
-            , from = metricsD.from
-            , to = metricsD.to
-            , stats = metricsD.stats
-            }
+      & #dataset
+        ?~ Widget.WidgetDataset
+          { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
+          , rowsPerMin = metricsD.rowsPerMin
+          , value = Just metricsD.rowsCount
+          , from = metricsD.from
+          , to = metricsD.to
+          , stats = metricsD.stats
+          }
 
 
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
@@ -476,10 +476,10 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
       let newLayout =
             Just
               $ maybe def Relude.id orig.layout
-                & #x %~ (<|> item.x)
-                & #y %~ (<|> item.y)
-                & #w %~ (<|> item.w)
-                & #h %~ (<|> item.h)
+              & #x %~ (<|> item.x)
+              & #y %~ (<|> item.y)
+              & #w %~ (<|> item.w)
+              & #h %~ (<|> item.h)
       pure
         orig
           { Widget.layout = newLayout
@@ -652,7 +652,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
                     , class_ $ "hidden page-drawer-tab-" <> T.toLower tabName
                     , name_ $ wid <> "-drawer-tab"
                     ]
-                    <> [checked_ | isActive]
+                  <> [checked_ | isActive]
                 toHtml tabName
           mkTab "Overview" (effectiveActiveTab /= "edit")
           mkTab "Edit" (effectiveActiveTab == "edit")
