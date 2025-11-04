@@ -55,6 +55,12 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 
 -- Page imports
+
+import Data.HashMap.Lazy qualified as HM
+import Data.Text qualified as T
+import Data.Vector qualified as V
+import Lucid.Html5
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.Api qualified as Api
 import Pages.BodyWrapper (PageCtx (..))
@@ -83,6 +89,7 @@ import Pages.Telemetry.Metrics qualified as Metrics
 import Pages.Telemetry.Trace qualified as Trace
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget qualified as Widget
+import Utils (getServiceColors)
 
 
 -- =============================================================================
@@ -190,6 +197,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
     chartsDataGet :: mode :- "chart_data" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> ReqBody '[JSON, FormUrlEncoded] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
   , widgetGet :: mode :- "p" :> ProjectId :> "widget" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> AllQueryParams :> Get '[HTML] (RespHeaders Widget.Widget)
+  , breakdownGet :: mode :- "p" :> ProjectId :> "latency_breakdown" :> Capture "trace_id" Text :> Capture "resource" Text :> Get '[HTML] (RespHeaders (Html ()))
   , -- Endpoints and fields
     endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> Get '[HTML] (RespHeaders ApiCatalog.EndpointRequestStatsVM)
   , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> QPI "skip" :> Get '[HTML] (RespHeaders ApiCatalog.CatalogList)
@@ -386,6 +394,7 @@ cookieProtectedServer =
       chartsDataGet = Charts.queryMetrics
     , widgetPost = Widget.widgetPostH
     , widgetGet = widgetGetH
+    , breakdownGet = latencyBreakdownGetH
     , -- Slack/Discord handlers
       reportsGet = Reports.reportsGetH
     , reportsSingleGet = Reports.singleReportGetH
@@ -523,9 +532,11 @@ pingH = pure "pong"
 widgetGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders Widget.Widget)
 widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
   -- Parse the widgetJSON parameter
-  widget <- case widgetJsonM >>= AE.decodeStrict . encodeUtf8 of
-    Just w -> pure w
-    Nothing -> Error.throwError $ err400{errBody = "Invalid or missing widgetJSON parameter"}
+  let v = fromMaybe "" widgetJsonM
+  widget <- case AE.eitherDecode (encodeUtf8 v) of
+    Right w -> pure w
+    Left err -> do
+      Error.throwError $ err400{errBody = "Invalid or missing widgetJSON parameter"}
 
   -- Get the current time for processing
   now <- Time.currentTime
@@ -535,12 +546,39 @@ widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
 
   -- Process eager widgets (tables, stats, etc.) with dashboard parameters
   processedWidget <-
-    if widgetWithPid.eager == Just True || widgetWithPid.wType `elem` [Widget.WTTable, Widget.WTStat, Widget.WTAnomalies]
+    if widgetWithPid.eager == Just True || widgetWithPid.wType `elem` [Widget.WTTable, Widget.WTTraces, Widget.WTStat, Widget.WTAnomalies]
       then Dashboards.processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetWithPid
       else pure widgetWithPid
 
   -- Return the processed widget
   addRespHeaders processedWidget
+
+
+latencyBreakdownGetH :: Projects.ProjectId -> Text -> Text -> ATAuthCtx (RespHeaders (Html ()))
+latencyBreakdownGetH pid trId resource = do
+  shapeWithDuration <- Telemetry.getTraceShape pid trId resource
+  let html = renderLatencyBreakdown $ V.toList shapeWithDuration
+  addRespHeaders html
+
+
+renderLatencyBreakdown :: [(Text, Int)] -> Html ()
+renderLatencyBreakdown groups = do
+  div_ [class_ "flex h-5 relative bg-fillWeak rounded-md", style_ $ "width:200px"] do
+    let totalDur = sum (map (fromIntegral . snd) groups) :: Double
+    let colors = getServiceColors $ V.fromList (fst <$> groups)
+    mapM_ (renderGroup totalDur colors) (zip [0 ..] groups)
+  where
+    renderGroup :: Double -> HM.HashMap Text Text -> (Int, (Text, Int)) -> Html ()
+    renderGroup totalDur colors (i, (name, dur)) = do
+      let barWidth = 300.0
+          width = (fromIntegral dur / totalDur) * barWidth
+          left =
+            if i == 0
+              then 0.0
+              else (sum (map (fromIntegral . snd) (take i groups)) / totalDur) * barWidth
+          color = fromMaybe "bg-black" $ HM.lookup name colors
+          tooltip = name <> ": " <> T.pack (show (dur `div` 1000000)) <> " ms"
+      div_ [class_ ("h-full absolute top-0 border  " <> color), title_ tooltip, style_ $ "width:" <> show width <> "px;" <> "left:" <> show left <> "px;"] pass
 
 
 -- =============================================================================

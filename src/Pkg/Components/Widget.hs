@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTableWithData, renderTableWithDataAndParams) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTableWithData, renderTraceDataTable, renderTableWithDataAndParams) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -17,6 +17,7 @@ import Lucid.Htmx (hxExt_, hxGet_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTri
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
+import Network.HTTP.Types (urlEncode)
 import Pages.Charts.Charts qualified as Charts
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
@@ -232,7 +233,7 @@ widgetHelper_ w' = case w.wType of
     div_ [class_ "grid-stack nested-grid  h-full -mx-2"] $ forM_ (fromMaybe [] w.children) (\wChild -> widgetHelper_ (wChild{_isNested = Just True}))
   WTTable -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ renderTable w
   WTLogs -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ div_ [class_ "p-3"] "Logs widget coming soon"
-  WTTraces -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ div_ [class_ "p-3"] "Traces widget coming soon"
+  WTTraces -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ renderTraceTable w
   WTFlamegraph -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
   _ -> gridItem_ $ div_ [class_ $ " w-full h-full group/wgt " <> paddingBtm] $ renderChart w
   where
@@ -325,12 +326,12 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                  <> maybeToMonoid (widget._projectId <&> (.toText))
-                  <> "/dashboards/"
-                  <> maybeToMonoid widget._dashboardId
-                  <> "/widgets/"
-                  <> wId
-                  <> "/duplicate"
+                    <> maybeToMonoid (widget._projectId <&> (.toText))
+                    <> "/dashboards/"
+                    <> maybeToMonoid widget._dashboardId
+                    <> "/widgets/"
+                    <> wId
+                    <> "/duplicate"
               , hxTrigger_ "click"
               , [__| on click set (the closest <details/>).open to false
                      on htmx:beforeSwap
@@ -367,6 +368,70 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               "Delete widget"
 
 
+renderTraceTable :: Widget -> Html ()
+renderTraceTable widget = do
+  let tableId = maybeToMonoid widget.id
+  let eagerWidget = widget & #eager ?~ True
+  let widgetJson = fromLazy $ AE.encode eagerWidget
+  div_ [class_ "gap-0.5 flex flex-col h-full"] do
+    -- Widget header outside the card
+    unless (widget.naked == Just True)
+      $ renderWidgetHeader widget tableId widget.title Nothing Nothing Nothing Nothing (widget.hideSubtitle == Just True)
+    -- Card container that takes remaining space
+    div_ [class_ "flex-1 flex min-h-0"] do
+      div_
+        [ class_
+            $ "h-full w-full flex flex-col "
+              <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
+        , id_ $ tableId <> "_bordered"
+        ]
+        do
+          -- Single scrollable table container
+          div_
+            [ class_ "h-full overflow-auto p-3"
+            , hxGet_ $ "/p/" <> fromMaybe "" (widget._projectId <&> (.toText)) <> "/widget?widgetJSON=" <> decodeUtf8 (urlEncode True widgetJson)
+            , hxTrigger_ "load, update-query from:window"
+            , hxTarget_ $ "#" <> tableId
+            , hxSelect_ $ "#" <> tableId
+            , hxSwap_ "outerHTML"
+            , hxExt_ "forward-page-params"
+            ]
+            do
+              case widget.html of
+                Just html -> toHtmlRaw html -- Use pre-rendered HTML if available
+                Nothing -> do
+                  table_
+                    [ class_ "table table-zebra table-sm w-full relative"
+                    , id_ tableId
+                    ]
+                    do
+                      -- Table header
+                      thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
+                        tr_ [] do
+                          forM_ (zip (["Resource", "Span name", "Duration", "Latency breakdown"]) [0 ..]) \(col, idx) ->
+                            th_
+                              [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group "
+                              , onclick_ $ "window.sortTable('" <> tableId <> "', " <> T.pack (show idx) <> ", this)"
+                              , data_ "sort-direction" "none"
+                              ]
+                              do
+                                div_ [class_ "flex items-center justify-between"] do
+                                  toHtml col
+                                  span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
+                      -- Table body with loading indicator
+                      tbody_ []
+                        $ tr_ []
+                        $ td_ [colspan_ "100", class_ "text-center py-8"]
+                        $ span_ [class_ "loading loading-spinner loading-sm"] ""
+      script_
+        [type_ "text/javascript"]
+        [text|
+        (function() {
+          htmx.process("#$tableId")
+        })();
+        |]
+
+
 -- Table widget rendering
 -- class_ "progress-brand "
 renderTable :: Widget -> Html ()
@@ -384,7 +449,7 @@ renderTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-            <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ tableId <> "_bordered"
         ]
         do
@@ -485,7 +550,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ chartId <> "_bordered"
         ]
         do
@@ -837,6 +902,55 @@ renderTableWithDataAndParams widget dataRows params = do
                 if isJust col.progress
                   then renderProgressCell col value maxValues valueWidths
                   else toHtml $ formatColumnValue col value
+
+
+renderTraceDataTable :: Widget -> V.Vector (V.Vector Text) -> Html ()
+renderTraceDataTable widget dataRows = do
+  let columns = fromMaybe [] widget.columns
+  let tableId = maybeToMonoid widget.id
+
+  -- Render complete table with data
+  table_ [class_ "table table-sm w-full relative", id_ tableId] do
+    thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
+      tr_ [] do
+        forM_ (zip columns [0 ..]) \(col, idx) -> do
+          th_
+            [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" col.align
+            , onclick_ $ "window.sortTable('" <> tableId <> "', " <> T.pack (show idx) <> ", this)"
+            , data_ "sort-direction" "none"
+            ]
+            do
+              div_ [class_ "flex items-center justify-between"] do
+                toHtml col.title
+                span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
+    tbody_ [] do
+      forM_ (V.toList dataRows) \row -> do
+        let val = V.last row
+        -- let clickFnc = "on click toggle .hidden on the next <tr/> then call htmx.trigger('#b-" <> val <> "')"
+        tr_ [[__|on click toggle .hidden on the next <tr/>|], class_ "cursor-pointer"] do
+          forM_ (zip columns [0 ..]) \(col, idx) -> do
+            let value = getRowValue col idx row
+            if col.field == "latency_breakdown"
+              then td_ [class_ "h-6 py-1", id_ $ "a-" <> value] do
+                a_
+                  [ hxTrigger_ "intersect once"
+                  , hxSwap_ "innerHTML"
+                  , hxTarget_ $ "#a-" <> value
+                  , hxGet_ $ "/p/" <> maybe "" (\x -> x.toText) widget._projectId <> "/latency_breakdown/" <> value <> "/" <> V.head row
+                  ]
+                  pass
+              else td_ [class_ $ fromMaybe "" col.align <> if col.columnType `elem` [Just ("number" :: Text), Just ("duration" :: Text)] then " monospace" else ""] do
+                toHtml $ formatColumnValue col value
+        tr_ [class_ "hidden"] do
+          td_ [colspan_ "100%"] do
+            div_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", id_ $ "b-" <> val, hxTarget_ $ "#b-" <> val, hxGet_ $ "/p/" <> maybe "" (\x -> x.toText) widget._projectId <> "/latency_breakdown/" <> val <> "/" <> V.head row] ""
+    script_
+      [type_ "text/javascript"]
+      [text|
+             (function() {
+          htmx.process("#$tableId")
+        })();
+    |]
 
 
 -- Helper to get row value by column index or field name

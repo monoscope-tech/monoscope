@@ -836,7 +836,7 @@ tabs:
           SELECT *
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
-            AND parent_span_id = ''
+            AND parent_id = ''
             AND ('{{var-service}}' = '' OR resource___service___name = '{{var-service}}')
             {{time_filter}}
           ORDER BY timestamp DESC
@@ -846,14 +846,38 @@ tabs:
       - type: traces
         title: 'Recent Traces'
         layout: { w: 12, h: 6 }
+        columns:
+          - field: resource_name
+            title: Resource
+          - field: span_name
+            title: Span
+            columnType: number
+          - field: total_time
+            title: Avg Duration
+            columnType: duration
+            unit: ms
+          - field: span_count
+            title: Span Count
+            columnType: number
+          - field: latency_breakdown
+            title: Latency breakdown
+            columnType: duration
         sql: |
-          SELECT *
+          SELECT
+            resource___service___name,
+            name,
+            ROUND(AVG(duration/1000000), 2)::text AS avg_duration,
+            COUNT(*)::text AS span_count,
+            MIN(context___trace_id) AS trace_id
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
-            AND parent_span_id = ''
+            AND (parent_id = '' OR parent_id IS NULL) 
+            AND name IS NOT NULL
+            AND duration IS NOT NULL
             AND ('{{var-service}}' = '' OR resource___service___name = '{{var-service}}')
             {{time_filter}}
-          ORDER BY timestamp DESC
+          GROUP BY  resource___service___name, name
+          ORDER BY avg_duration DESC
           LIMIT 20
 
   - name: Logs
