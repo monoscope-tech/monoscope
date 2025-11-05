@@ -62,6 +62,7 @@ import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.Time (UTCTime, formatTime)
+import Data.Time.Clock (addUTCTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -469,9 +470,11 @@ data MetricChartListData = MetricChartListData
   deriving anyclass (FromRow, NFData, ToRow)
 
 
-getTraceDetails :: DB :> es => Projects.ProjectId -> Text -> Eff es (Maybe Trace)
-getTraceDetails pid trId = dbtToEff $ queryOne q (pid.toText, trId)
+getTraceDetails :: DB :> es => Projects.ProjectId -> Text -> UTCTime -> Eff es (Maybe Trace)
+getTraceDetails pid trId tme = dbtToEff $ queryOne q (pid.toText, startTime, endTime, trId)
   where
+    startTime = addUTCTime (-60 * 5) tme
+    endTime = addUTCTime (60 * 5) tme
     q =
       [sql| SELECT
               context___trace_id,
@@ -481,7 +484,7 @@ getTraceDetails pid trId = dbtToEff $ queryOne q (pid.toText, trId)
               COUNT(context->>'span_id') AS total_spans,
               ARRAY_REMOVE(ARRAY_AGG(DISTINCT jsonb_extract_path_text(resource, 'service.name')), NULL) AS service_names
             FROM otel_logs_and_spans
-            WHERE  project_id = ? AND context___trace_id = ?
+            WHERE  project_id = ? AND timestamp BETWEEN ? AND ? AND context___trace_id = ?
             GROUP BY context___trace_id;
         |]
 
@@ -495,14 +498,16 @@ logRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne q (createdAt, p
              FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
-getSpandRecordsByTraceId :: DB :> es => Projects.ProjectId -> Text -> Eff es (V.Vector OtelLogsAndSpans)
-getSpandRecordsByTraceId pid trId = dbtToEff $ query q (pid.toText, trId)
+getSpandRecordsByTraceId :: DB :> es => Projects.ProjectId -> Text -> UTCTime -> Eff es (V.Vector OtelLogsAndSpans)
+getSpandRecordsByTraceId pid trId tme = dbtToEff $ query q (pid.toText, startTime, endTime, trId)
   where
+    startTime = addUTCTime (-60 * 5) tme
+    endTime = addUTCTime (60 * 5) tme
     q =
       [sql|
       SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
                   hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date::timestamptz
-              FROM otel_logs_and_spans where project_id=? and context___trace_id=? ORDER BY start_time ASC;
+              FROM otel_logs_and_spans where project_id=? and timestamp BETWEEN ? AND ? and context___trace_id=? ORDER BY start_time ASC;
     |]
 
 

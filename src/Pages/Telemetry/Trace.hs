@@ -5,12 +5,13 @@ import Data.Aeson.Key qualified as AEKey
 import Data.HashMap.Internal.Strict qualified as HM
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (defaultTimeLocale)
+import Data.Time (addUTCTime, defaultTimeLocale)
 import Data.Time.Clock (UTCTime)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (formatShow, iso8601Format)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx (hxGet_, hxIndicator_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
@@ -26,11 +27,15 @@ import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_, getDurationNSMS, getServiceColors, onpointerdown_, utcTimeToNanoseconds)
 
 
-traceH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)
-traceH pid trId spanIdM nav = do
+traceH :: Projects.ProjectId -> Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)
+traceH pid trId timestamp spanIdM nav = do
+  now <- Time.currentTime
+  let tme = case timestamp of
+        Just ts -> ts
+        Nothing -> addUTCTime (-60 * 60 * 24 * 7) now
   if isJust nav
     then do
-      spanRecords' <- Telemetry.getSpandRecordsByTraceId pid trId
+      spanRecords' <- Telemetry.getSpandRecordsByTraceId pid trId tme
       let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
       let sid = fromMaybe "" spanIdM
           targetSpan = fromMaybe (V.head spanRecords') (V.find (\x -> maybe False (\s -> s.span_id == Just sid) x.context) spanRecords')
@@ -46,10 +51,10 @@ traceH pid trId spanIdM nav = do
       let atpSpan = V.find (\x -> x.name == Just "monoscope.http") spanRecords'
       addRespHeaders $ SpanDetails pid targetSpan atpSpan (prevSpan >>= \s -> Just s.spanId) (nextSpan >>= \s -> Just s.spanId)
     else do
-      traceItemM <- Telemetry.getTraceDetails pid trId
+      traceItemM <- Telemetry.getTraceDetails pid trId tme
       case traceItemM of
         Just traceItem -> do
-          spanRecords' <- Telemetry.getSpandRecordsByTraceId pid trId
+          spanRecords' <- Telemetry.getSpandRecordsByTraceId pid trId tme
           let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
               pageProps = PageProps pid traceItem spanRecords
           addRespHeaders $ TraceDetails pageProps

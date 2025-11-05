@@ -290,9 +290,10 @@ expandedItemView pid item aptSp leftM rightM = do
                 "Copy request as curl"
                 faSprite_ "copy" "regular" "w-3 h-3"
           _ -> pass
+        let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" item.timestamp
         whenJust item.context $ \ctx -> do
           whenJust ctx.trace_id $ \trId -> do
-            let tracePath = "/p/" <> pid.toText <> "/traces/" <> trId <> "/"
+            let tracePath = "/p/" <> pid.toText <> "/traces/" <> trId <> "/?timestamp=" <> createdAt
             button_
               [ class_ $ "cursor-pointer flex items-end gap-1" <> if isLog then " cursor-pointer" else ""
               , term
@@ -309,7 +310,6 @@ expandedItemView pid item aptSp leftM rightM = do
                 "View parent trace"
                 faSprite_ "cross-hair" "regular" "w-4 h-4"
         let item_id = item.id
-        let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" item.timestamp
         let eventType = if isLog then "log" else "span"
         button_
           [ class_ $ "cursor-pointer flex items-center gap-2"
