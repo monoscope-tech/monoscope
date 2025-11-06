@@ -29,13 +29,9 @@ import Utils (faSprite_, getDurationNSMS, getServiceColors, onpointerdown_, utcT
 
 traceH :: Projects.ProjectId -> Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)
 traceH pid trId timestamp spanIdM nav = do
-  now <- Time.currentTime
-  let tme = case timestamp of
-        Just ts -> ts
-        Nothing -> addUTCTime (-60 * 60 * 24 * 7) now
   if isJust nav
     then do
-      spanRecords' <- Telemetry.getSpandRecordsByTraceId pid trId tme
+      spanRecords' <- Telemetry.getSpandRecordsByTraceId pid trId timestamp
       let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
       let sid = fromMaybe "" spanIdM
           targetSpan = fromMaybe (V.head spanRecords') (V.find (\x -> maybe False (\s -> s.span_id == Just sid) x.context) spanRecords')
@@ -51,10 +47,10 @@ traceH pid trId timestamp spanIdM nav = do
       let atpSpan = V.find (\x -> x.name == Just "monoscope.http") spanRecords'
       addRespHeaders $ SpanDetails pid targetSpan atpSpan (prevSpan >>= \s -> Just s.spanId) (nextSpan >>= \s -> Just s.spanId)
     else do
-      traceItemM <- Telemetry.getTraceDetails pid trId tme
+      traceItemM <- Telemetry.getTraceDetails pid trId timestamp
       case traceItemM of
         Just traceItem -> do
-          spanRecords' <- Telemetry.getSpandRecordsByTraceId pid trId tme
+          spanRecords' <- Telemetry.getSpandRecordsByTraceId pid trId timestamp
           let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
               pageProps = PageProps pid traceItem spanRecords
           addRespHeaders $ TraceDetails pageProps

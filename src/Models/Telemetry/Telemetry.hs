@@ -64,6 +64,7 @@ import Data.Text.Display (Display)
 import Data.Time (UTCTime, formatTime)
 import Data.Time.Clock (addUTCTime)
 import Data.Time.Format (defaultTimeLocale)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (executeMany, query, queryOne)
@@ -470,12 +471,13 @@ data MetricChartListData = MetricChartListData
   deriving anyclass (FromRow, NFData, ToRow)
 
 
-getTraceDetails :: DB :> es => Projects.ProjectId -> Text -> UTCTime -> Eff es (Maybe Trace)
+getTraceDetails :: DB :> es => Projects.ProjectId -> Text -> Maybe UTCTime -> Eff es (Maybe Trace)
 getTraceDetails pid trId tme = dbtToEff $ queryOne q (pid.toText, startTime, endTime, trId)
   where
-    startTime = addUTCTime (-60 * 5) tme
-    endTime = addUTCTime (60 * 5) tme
-    q =
+    (startTime, endTime) = case tme of
+      Nothing -> ("now() - interval '1 day'", "now()")
+      Just ts -> ((toText . iso8601Show) $ addUTCTime (-60 * 5) ts, (toText . iso8601Show) $ addUTCTime (60 * 5) ts)
+    q = do
       [sql| SELECT
               context___trace_id,
               MIN(start_time) AS trace_start_time,
@@ -498,16 +500,17 @@ logRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne q (createdAt, p
              FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
-getSpandRecordsByTraceId :: DB :> es => Projects.ProjectId -> Text -> UTCTime -> Eff es (V.Vector OtelLogsAndSpans)
-getSpandRecordsByTraceId pid trId tme = dbtToEff $ query q (pid.toText, startTime, endTime, trId)
+getSpandRecordsByTraceId :: DB :> es => Projects.ProjectId -> Text -> Maybe UTCTime -> Eff es (V.Vector OtelLogsAndSpans)
+getSpandRecordsByTraceId pid trId tme = dbtToEff $ query q (pid.toText, start, end, trId)
   where
-    startTime = addUTCTime (-60 * 5) tme
-    endTime = addUTCTime (60 * 5) tme
+    (start, end) = case tme of
+      Nothing -> ("now() - interval '1 day'", "now()")
+      Just ts -> ((toText . iso8601Show) $ addUTCTime (-60 * 5) ts, (toText . iso8601Show) $ addUTCTime (60 * 5) ts)
     q =
       [sql|
       SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
                   hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date::timestamptz
-              FROM otel_logs_and_spans where project_id=? and timestamp BETWEEN ? AND ? and context___trace_id=? ORDER BY start_time ASC;
+              FROM otel_logs_and_spans where project_id=? and timestamp >=  ? AND timestamp <= ? and context___trace_id=? ORDER BY start_time ASC;
     |]
 
 
