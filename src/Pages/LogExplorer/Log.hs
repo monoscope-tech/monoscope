@@ -415,8 +415,8 @@ keepNonEmpty (Just "") = Nothing
 keepNonEmpty (Just a) = Just a
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe UTCTime -> ATAuthCtx (RespHeaders LogsGet)
-apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM vizTypeM alertM skipM pTargetM traceTimeStampM = do
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
+apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM vizTypeM alertM skipM pTargetM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let source = fromMaybe "spans" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
@@ -571,7 +571,6 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
             , detailsWidth = detailWM
             , targetEvent = targetEventM
             , showTrace = showTraceM
-            , traceTimeStamp = traceTimeStampM
             , facets = facetSummary
             , vizType = vizTypeM
             , alert = alertDM
@@ -658,7 +657,6 @@ data ApiLogsPageData = ApiLogsPageData
   , detailsWidth :: Maybe Text
   , targetEvent :: Maybe Text
   , showTrace :: Maybe Text
-  , traceTimeStamp :: Maybe UTCTime
   , facets :: Maybe Models.Apis.Fields.Types.FacetSummary
   , vizType :: Maybe Text
   , alert :: Maybe Monitors.QueryMonitor
@@ -854,12 +852,10 @@ apiLogsPage page = do
 
           -- Trace view container
           div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-bgBase transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
-            case (page.showTrace, page.traceTimeStamp) of
-              (Just trId, Just ts) -> do
-                let url = "/p/" <> page.pid.toText <> "/traces/" <> trId <> "?timestamp=" <> (toText . iso8601Show) ts
-                span_ [class_ "loading loading-dots loading-md"] ""
-                div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one", term "hx-sync" "this:replace"] pass
-              _ -> pass
+            whenJust page.showTrace \trIdAndTimestamp -> do
+              let url = "/p/" <> page.pid.toText <> "/traces/" <> trIdAndTimestamp
+              span_ [class_ "loading loading-dots loading-md"] ""
+              div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one", term "hx-sync" "this:replace"] pass
 
           -- Logs view section (also within the scrollable container)
           div_ [class_ "flex-1 min-h-0 h-full flex flex-col"] do

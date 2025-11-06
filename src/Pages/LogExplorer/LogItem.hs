@@ -299,8 +299,7 @@ expandedItemView pid item aptSp leftM rightM = do
               , term
                   "_"
                   [text|on click remove .hidden from #trace_expanded_view
-                            then call updateUrlState('showTrace', "$trId")
-                            then call updateUrlState('trace_timestamp', "$createdAt")
+                            then call updateUrlState('showTrace', "$trId/?timestamp=$createdAt")
                             then set #trace_expanded_view.innerHTML to #loader-tmp.innerHTML
                             then fetch $tracePath
                             then set #trace_expanded_view.innerHTML to it
