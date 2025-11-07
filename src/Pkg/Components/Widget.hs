@@ -326,12 +326,12 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                  <> maybeToMonoid (widget._projectId <&> (.toText))
-                  <> "/dashboards/"
-                  <> maybeToMonoid widget._dashboardId
-                  <> "/widgets/"
-                  <> wId
-                  <> "/duplicate"
+                    <> maybeToMonoid (widget._projectId <&> (.toText))
+                    <> "/dashboards/"
+                    <> maybeToMonoid widget._dashboardId
+                    <> "/widgets/"
+                    <> wId
+                    <> "/duplicate"
               , hxTrigger_ "click"
               , [__| on click set (the closest <details/>).open to false
                      on htmx:beforeSwap
@@ -382,7 +382,7 @@ renderTraceTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-            <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ tableId <> "_bordered"
         ]
         do
@@ -425,11 +425,7 @@ renderTraceTable widget = do
                         $ span_ [class_ "loading loading-spinner loading-sm"] ""
       script_
         [type_ "text/javascript"]
-        [text|
-        (function() {
-          htmx.process("#$tableId")
-        })();
-        |]
+        [text| htmx.process("#$tableId") |]
 
 
 -- Table widget rendering
@@ -449,7 +445,7 @@ renderTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-            <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ tableId <> "_bordered"
         ]
         do
@@ -550,7 +546,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ chartId <> "_bordered"
         ]
         do
@@ -931,26 +927,23 @@ renderTraceDataTable widget dataRows = do
           forM_ (zip columns [0 ..]) \(col, idx) -> do
             let value = getRowValue col idx row
             if col.field == "latency_breakdown"
-              then td_ [class_ "h-6 py-1", id_ $ "a-" <> value] do
-                a_
-                  [ hxTrigger_ "intersect once"
-                  , hxSwap_ "innerHTML"
-                  , hxTarget_ $ "#a-" <> value
-                  , hxGet_ $ "/p/" <> maybe "" (\x -> x.toText) widget._projectId <> "/latency_breakdown/" <> value <> "/" <> V.head row
-                  ]
-                  pass
+              then td_ [class_ "h-6 py-1"] do
+                div_ [id_ $ "a-" <> value] do
+                  div_
+                    [ hxTrigger_ "intersect once"
+                    , hxSwap_ "innerHTML"
+                    , hxTarget_ $ "#a-" <> value
+                    , hxGet_ $ "/p/" <> maybe "" (\x -> x.toText) widget._projectId <> "/latency_breakdown/" <> value <> "/" <> V.head row
+                    ]
+                    pass
               else td_ [class_ $ fromMaybe "" col.align <> if col.columnType `elem` [Just ("number" :: Text), Just ("duration" :: Text)] then " monospace" else ""] do
                 toHtml $ formatColumnValue col value
         tr_ [class_ "hidden"] do
           td_ [colspan_ "100%"] do
-            div_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", id_ $ "b-" <> val, hxTarget_ $ "#b-" <> val, hxGet_ $ "/p/" <> maybe "" (\x -> x.toText) widget._projectId <> "/latency_breakdown/" <> val <> "/" <> V.head row] ""
+            div_ [hxTrigger_ "intersect once", hxSwap_ "innerHTML", id_ $ "b-" <> val, hxTarget_ $ "#b-" <> val, hxGet_ $ "/p/" <> maybe "" (\x -> x.toText) widget._projectId <> "/latency_breakdown/" <> val <> "/" <> V.head row <> "?listView=true"] ""
     script_
       [type_ "text/javascript"]
-      [text|
-             (function() {
-          htmx.process("#$tableId")
-        })();
-    |]
+      [text| htmx.process("#$tableId") |]
 
 
 -- Helper to get row value by column index or field name
