@@ -5,6 +5,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as K
 import Data.Default
 import Data.Generics.Labels ()
+import Data.HashMap.Lazy qualified as HM
 import Data.Map.Strict qualified as M
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
@@ -23,7 +24,7 @@ import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Text.Printf (printf)
 import Text.Slugify (slugify)
-import Utils (faSprite_, onpointerdown_, prettyPrintCount, prettyPrintDuration)
+import Utils (faSprite_, getDurationNSMS, getServiceColors, onpointerdown_, prettyPrintCount, prettyPrintDuration)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData, parseQueryParam)
 
@@ -900,8 +901,8 @@ renderTableWithDataAndParams widget dataRows params = do
                   else toHtml $ formatColumnValue col value
 
 
-renderTraceDataTable :: Widget -> V.Vector (V.Vector Text) -> Html ()
-renderTraceDataTable widget dataRows = do
+renderTraceDataTable :: Widget -> V.Vector (V.Vector Text) -> HashMap Text [(Text, Int)] -> Html ()
+renderTraceDataTable widget dataRows spGroup = do
   let columns = fromMaybe [] widget.columns
   let tableId = maybeToMonoid widget.id
 
@@ -922,28 +923,59 @@ renderTraceDataTable widget dataRows = do
     tbody_ [] do
       forM_ (V.toList dataRows) \row -> do
         let val = V.last row
+        let cdrn = (fromMaybe [] $ HM.lookup val spGroup)
         -- let clickFnc = "on click toggle .hidden on the next <tr/> then call htmx.trigger('#b-" <> val <> "')"
         tr_ [[__|on click toggle .hidden on the next <tr/>|], class_ "cursor-pointer"] do
           forM_ (zip columns [0 ..]) \(col, idx) -> do
             let value = getRowValue col idx row
+
             if col.field == "latency_breakdown"
-              then td_ [class_ "h-6 py-1"] do
-                div_ [id_ $ "a-" <> value] do
-                  div_
-                    [ hxTrigger_ "intersect once"
-                    , hxSwap_ "innerHTML"
-                    , hxTarget_ $ "#a-" <> value
-                    , hxGet_ $ "/p/" <> maybe "" (\x -> x.toText) widget._projectId <> "/latency_breakdown/" <> value <> "/" <> V.head row
-                    ]
-                    pass
+              then td_ [class_ "py-2"] do
+                renderLatencyBreakdown cdrn
               else td_ [class_ $ fromMaybe "" col.align <> if col.columnType `elem` [Just ("number" :: Text), Just ("duration" :: Text)] then " monospace" else ""] do
                 toHtml $ formatColumnValue col value
         tr_ [class_ "hidden"] do
           td_ [colspan_ "100%"] do
-            div_ [hxTrigger_ "intersect once", hxSwap_ "innerHTML", id_ $ "b-" <> val, hxTarget_ $ "#b-" <> val, hxGet_ $ "/p/" <> maybe "" (\x -> x.toText) widget._projectId <> "/latency_breakdown/" <> val <> "/" <> V.head row <> "?listView=true"] ""
-    script_
-      [type_ "text/javascript"]
-      [text| htmx.process("#$tableId") |]
+            renderSpanListView $ V.fromList cdrn
+
+
+renderSpanListView :: V.Vector (Text, Int) -> Html ()
+renderSpanListView shapeWithDuration = do
+  div_ [class_ "space-y-4 w-full p-2"] $ do
+    let totalDur = V.sum (V.map (fromIntegral . snd) shapeWithDuration) :: Double
+    let colors = getServiceColors (fst <$> shapeWithDuration)
+    forM_ (V.toList shapeWithDuration) $ \(name, dur) -> do
+      let durMs = dur `div` 1000000
+      div_ [class_ "flex  gap-12 items-center"] do
+        div_ [class_ "flex justify-between gap-4 items-center"] $ do
+          div_ [class_ "font-medium w-64 truncate ellipsis text-sm"] $ toHtml name
+          div_ [class_ "font-medium w-24 text-sm "] $ toHtml $ getDurationNSMS $ fromIntegral dur
+        div_ [class_ "h-4 relative overflow-hidden bg-fillWeak rounded-md", style_ $ "width:150px"] $ do
+          let barWidth = 150.0
+              width = (fromIntegral dur / totalDur) * barWidth
+              color = fromMaybe "bg-black" $ HM.lookup name colors
+              tooltip = name <> ": " <> T.pack (show durMs) <> " ms"
+          div_ [class_ ("h-full absolute top-0 border  " <> color), title_ tooltip, style_ $ "width:" <> show width <> "px;"] pass
+
+
+renderLatencyBreakdown :: [(Text, Int)] -> Html ()
+renderLatencyBreakdown groups = do
+  div_ [class_ "flex h-4 overflow-hidden relative bg-fillWeak rounded-md", style_ $ "width:150px"] $ do
+    let totalDur = sum (map (fromIntegral . snd) groups) :: Double
+    let colors = getServiceColors $ V.fromList (fst <$> groups)
+    mapM_ (renderGroup totalDur colors) (zip [0 ..] groups)
+  where
+    renderGroup :: Double -> HM.HashMap Text Text -> (Int, (Text, Int)) -> Html ()
+    renderGroup totalDur colors (i, (name, dur)) = do
+      let barWidth = 150.0
+          width = (fromIntegral dur / totalDur) * barWidth
+          left =
+            if i == 0
+              then 0.0
+              else (sum (map (fromIntegral . snd) (take i groups)) / totalDur) * barWidth
+          color = fromMaybe "bg-black" $ HM.lookup name colors
+          tooltip = name <> ": " <> T.pack (show (dur `div` 1000000)) <> " ms"
+      div_ [class_ ("h-full absolute top-0 border  " <> color), title_ tooltip, style_ $ "width:" <> show width <> "px;" <> "left:" <> show left <> "px;"] pass
 
 
 -- Helper to get row value by column index or field name

@@ -38,7 +38,7 @@ module Models.Telemetry.Telemetry (
   getMetricChartListData,
   getLogsByTraceIds,
   getMetricLabelValues,
-  getTraceShape,
+  getTraceShapes,
   getValsWithPrefix,
   getSpanAttribute,
   getMetricServiceNames,
@@ -1120,40 +1120,60 @@ getProjectStatsForReport projectId start end = dbtToEff $ query q (projectId, st
         |]
 
 
-getTraceShape :: DB :> es => Projects.ProjectId -> Text -> Text -> Eff es (V.Vector (Text, Int))
-getTraceShape pid trId resource = dbtToEff $ query q (pid, trId, resource, pid, pid)
+getTraceShapes
+  :: DB :> es
+  => Projects.ProjectId
+  -> V.Vector Text
+  -- ^ multiple trace IDs
+  -- ^ resource name
+  -> Eff es (V.Vector (Text, Text, Int)) -- (target_trace_id, name, avg_duration)
+getTraceShapes pid trIds =
+  dbtToEff $ query q (pid, trIds, pid, pid, pid)
   where
     q =
-      [sql| 
+      [sql|
       WITH target_trace_spans AS (
-  SELECT DISTINCT name
-  FROM otel_logs_and_spans
-  WHERE project_id = ? AND timestamp > now() - interval '1 hour' AND context___trace_id = ? AND resource___service___name = ?
-),
-trace_shapes AS (
-  SELECT
-    context___trace_id AS trace_id,
-    ARRAY_AGG(DISTINCT name ORDER BY name) AS span_names
-  FROM otel_logs_and_spans 
-  WHERE project_id = ? AND timestamp > now() - interval '1 hour' AND context___trace_id IS NOT NULL
-  GROUP BY context___trace_id
-),
-target_shape AS (
-  SELECT ARRAY_AGG(DISTINCT name ORDER BY name) AS span_names
-  FROM target_trace_spans
-),
-matching_traces AS (
-  SELECT t.trace_id
-  FROM trace_shapes t
-  CROSS JOIN target_shape ts
-  WHERE t.span_names = ts.span_names
-)
-SELECT
-  name,
-  AVG(duration)::BIGINT AS avg_duration
-FROM otel_logs_and_spans
-WHERE project_id = ? AND timestamp > now() - interval '1 hour' AND context___trace_id IN (SELECT trace_id FROM matching_traces)
-GROUP BY name
-ORDER BY name;
-      
-       |]
+        SELECT DISTINCT context___trace_id, name
+        FROM otel_logs_and_spans
+        WHERE project_id = ?
+          AND timestamp > now() - interval '1 hour'
+          AND context___trace_id = ANY(?)
+      ),
+      target_shapes AS (
+        SELECT
+          context___trace_id AS target_trace_id,
+          ARRAY_AGG(DISTINCT name ORDER BY name) AS span_names
+        FROM target_trace_spans
+        where project_id = ? and timestamp > now() - interval '1 hour'
+        GROUP BY context___trace_id
+      ),
+      trace_shapes AS (
+        SELECT
+          context___trace_id AS trace_id,
+          ARRAY_AGG(DISTINCT name ORDER BY name) AS span_names
+        FROM otel_logs_and_spans
+        WHERE project_id = ?
+          AND timestamp > now() - interval '1 hour'
+          AND context___trace_id IS NOT NULL
+        GROUP BY context___trace_id
+      ),
+      matching_traces AS (
+        SELECT
+          ts.target_trace_id,
+          t.trace_id
+        FROM trace_shapes t
+        JOIN target_shapes ts
+          ON t.span_names = ts.span_names
+      )
+      SELECT
+        m.target_trace_id,
+        s.name,
+        AVG(s.duration)::BIGINT AS avg_duration
+      FROM otel_logs_and_spans s
+      JOIN matching_traces m
+        ON s.context___trace_id = m.trace_id
+      WHERE s.project_id = ?
+        AND s.timestamp > now() - interval '1 hour'
+      GROUP BY m.target_trace_id, s.name
+      ORDER BY m.target_trace_id, s.name;
+      |]

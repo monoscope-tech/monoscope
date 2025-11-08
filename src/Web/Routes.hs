@@ -198,7 +198,6 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
     chartsDataGet :: mode :- "chart_data" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> ReqBody '[JSON, FormUrlEncoded] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
   , widgetGet :: mode :- "p" :> ProjectId :> "widget" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> AllQueryParams :> Get '[HTML] (RespHeaders Widget.Widget)
-  , breakdownGet :: mode :- "p" :> ProjectId :> "latency_breakdown" :> Capture "trace_id" Text :> Capture "resource" Text :> QPT "listView" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Endpoints and fields
     endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> Get '[HTML] (RespHeaders ApiCatalog.EndpointRequestStatsVM)
   , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> QPI "skip" :> Get '[HTML] (RespHeaders ApiCatalog.CatalogList)
@@ -395,7 +394,6 @@ cookieProtectedServer =
       chartsDataGet = Charts.queryMetrics
     , widgetPost = Widget.widgetPostH
     , widgetGet = widgetGetH
-    , breakdownGet = latencyBreakdownGetH
     , -- Slack/Discord handlers
       reportsGet = Reports.reportsGetH
     , reportsSingleGet = Reports.singleReportGetH
@@ -553,53 +551,6 @@ widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
 
   -- Return the processed widget
   addRespHeaders processedWidget
-
-
-latencyBreakdownGetH :: Projects.ProjectId -> Text -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-latencyBreakdownGetH pid trId resource listViewM = do
-  shapeWithDuration <- Telemetry.getTraceShape pid trId resource
-  let html = case listViewM of
-        Just _ -> renderSpanListView shapeWithDuration
-        Nothing -> renderLatencyBreakdown $ V.toList shapeWithDuration
-  addRespHeaders html
-
-
-renderSpanListView :: V.Vector (Text, Int) -> Html ()
-renderSpanListView shapeWithDuration = do
-  div_ [class_ "space-y-4"] $ do
-    let totalDur = V.sum (V.map (fromIntegral . snd) shapeWithDuration) :: Double
-    let colors = getServiceColors (fst <$> shapeWithDuration)
-    forM_ (V.toList shapeWithDuration) $ \(name, dur) -> do
-      let durMs = dur `div` 1000000
-      div_ [class_ "flex justify-between items-center"] $ do
-        div_ [class_ "font-mono text-sm text-fgMuted"] $ toHtml name
-        div_ [class_ "font-mono text-sm text-fgMuted"] (show durMs <> " ms")
-      div_ [class_ "h-5 relative bg-fillWeak rounded-md", style_ $ "width:300px"] $ do
-        let barWidth = 300.0
-            width = (fromIntegral dur / totalDur) * barWidth
-            color = fromMaybe "bg-black" $ HM.lookup name colors
-            tooltip = name <> ": " <> T.pack (show durMs) <> " ms"
-        div_ [class_ ("h-full absolute top-0 border  " <> color), title_ tooltip, style_ $ "width:" <> show width <> "px;"] pass
-
-
-renderLatencyBreakdown :: [(Text, Int)] -> Html ()
-renderLatencyBreakdown groups = do
-  div_ [class_ "flex h-5 relative bg-fillWeak rounded-md", style_ $ "width:200px"] $ do
-    let totalDur = sum (map (fromIntegral . snd) groups) :: Double
-    let colors = getServiceColors $ V.fromList (fst <$> groups)
-    mapM_ (renderGroup totalDur colors) (zip [0 ..] groups)
-  where
-    renderGroup :: Double -> HM.HashMap Text Text -> (Int, (Text, Int)) -> Html ()
-    renderGroup totalDur colors (i, (name, dur)) = do
-      let barWidth = 300.0
-          width = (fromIntegral dur / totalDur) * barWidth
-          left =
-            if i == 0
-              then 0.0
-              else (sum (map (fromIntegral . snd) (take i groups)) / totalDur) * barWidth
-          color = fromMaybe "bg-black" $ HM.lookup name colors
-          tooltip = name <> ": " <> T.pack (show (dur `div` 1000000)) <> " ms"
-      div_ [class_ ("h-full absolute top-0 border  " <> color), title_ tooltip, style_ $ "width:" <> show width <> "px;" <> "left:" <> show left <> "px;"] pass
 
 
 -- =============================================================================
