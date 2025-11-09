@@ -1172,7 +1172,7 @@ getTraceShapes pid trIds =
       JOIN matching_traces m
         ON s.context___trace_id = m.trace_id
       WHERE s.project_id = ?
-        AND s.timestamp > now() - interval '1 hour'
+        AND s.timestamp > now() - interval '1 hour' and s.name IS NOT NULL
       GROUP BY m.target_trace_id, s.name
       ORDER BY m.target_trace_id, s.name;
       |]
