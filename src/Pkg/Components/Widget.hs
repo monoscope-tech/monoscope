@@ -901,7 +901,7 @@ renderTableWithDataAndParams widget dataRows params = do
                   else toHtml $ formatColumnValue col value
 
 
-renderTraceDataTable :: Widget -> V.Vector (V.Vector Text) -> HashMap Text [(Text, Int)] -> Html ()
+renderTraceDataTable :: Widget -> V.Vector (V.Vector Text) -> HashMap Text [(Text, Int, Int)] -> Html ()
 renderTraceDataTable widget dataRows spGroup = do
   let columns = fromMaybe [] widget.columns
   let tableId = maybeToMonoid widget.id
@@ -939,18 +939,19 @@ renderTraceDataTable widget dataRows spGroup = do
             renderSpanListView $ V.fromList cdrn
 
 
-renderSpanListView :: V.Vector (Text, Int) -> Html ()
+renderSpanListView :: V.Vector (Text, Int, Int) -> Html ()
 renderSpanListView shapeWithDuration = do
   div_ [class_ "space-y-4 w-full p-2"] $ do
-    let totalDur = V.sum (V.map (fromIntegral . snd) shapeWithDuration) :: Double
-    let colors = getServiceColors (fst <$> shapeWithDuration)
-    forM_ (V.toList shapeWithDuration) $ \(name, dur) -> do
+    let totalDur = V.sum (V.map (\(_, d, _) -> fromIntegral d) shapeWithDuration) :: Double
+    let colors = getServiceColors (fmap (\(n, _, _) -> n) shapeWithDuration)
+    forM_ (V.toList shapeWithDuration) $ \(name, dur, events) -> do
       let durMs = dur `div` 1000000
-      div_ [class_ "flex  gap-12 items-center"] do
-        div_ [class_ "flex justify-between gap-4 items-center"] $ do
-          div_ [class_ "font-medium w-64 truncate ellipsis text-sm"] $ toHtml name
-          div_ [class_ "font-medium w-24 text-sm "] $ toHtml $ getDurationNSMS $ fromIntegral dur
-        div_ [class_ "h-4 relative overflow-hidden bg-fillWeak rounded-md", style_ $ "width:150px"] $ do
+      div_ [class_ "flex gap-12 w-full items-center hover:bg-fillWeak"] do
+        div_ [class_ "flex w-2/3 gap-4 items-center"] $ do
+          div_ [class_ "w-2/3 truncate ellipsis text-sm"] $ toHtml name
+          div_ [class_ "text-sm w-24"] $ toHtml $ show events
+          div_ [class_ "text-sm w-24"] $ toHtml $ getDurationNSMS $ fromIntegral dur
+        div_ [class_ "h-5 relative overflow-hidden bg-fillWeak rounded", style_ $ "width:150px"] $ do
           let barWidth = 150.0
               width = (fromIntegral dur / totalDur) * barWidth
               color = fromMaybe "bg-black" $ HM.lookup name colors
@@ -958,21 +959,21 @@ renderSpanListView shapeWithDuration = do
           div_ [class_ ("h-full absolute top-0 border  " <> color), title_ tooltip, style_ $ "width:" <> show width <> "px;"] pass
 
 
-renderLatencyBreakdown :: [(Text, Int)] -> Html ()
+renderLatencyBreakdown :: [(Text, Int, Int)] -> Html ()
 renderLatencyBreakdown groups = do
-  div_ [class_ "flex h-4 overflow-hidden relative bg-fillWeak rounded-md", style_ $ "width:150px"] $ do
-    let totalDur = sum (map (fromIntegral . snd) groups) :: Double
-    let colors = getServiceColors $ V.fromList (fst <$> groups)
+  div_ [class_ "flex h-5 overflow-hidden relative bg-fillWeak rounded", style_ $ "width:150px"] $ do
+    let totalDur = sum (map (\(_, d, _) -> fromIntegral d) groups) :: Double
+    let colors = getServiceColors $ V.fromList (fmap (\(n, _, _) -> n) groups)
     mapM_ (renderGroup totalDur colors) (zip [0 ..] groups)
   where
-    renderGroup :: Double -> HM.HashMap Text Text -> (Int, (Text, Int)) -> Html ()
-    renderGroup totalDur colors (i, (name, dur)) = do
+    renderGroup :: Double -> HM.HashMap Text Text -> (Int, (Text, Int, Int)) -> Html ()
+    renderGroup totalDur colors (i, (name, dur, _)) = do
       let barWidth = 150.0
           width = (fromIntegral dur / totalDur) * barWidth
           left =
             if i == 0
               then 0.0
-              else (sum (map (fromIntegral . snd) (take i groups)) / totalDur) * barWidth
+              else (sum (map (\(_, d, _) -> fromIntegral d) (take i groups)) / totalDur) * barWidth
           color = fromMaybe "bg-black" $ HM.lookup name colors
           tooltip = name <> ": " <> T.pack (show (dur `div` 1000000)) <> " ms"
       div_ [class_ ("h-full absolute top-0 border  " <> color), title_ tooltip, style_ $ "width:" <> show width <> "px;" <> "left:" <> show left <> "px;"] pass

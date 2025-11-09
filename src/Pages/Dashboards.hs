@@ -385,7 +385,7 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
     let trIds = V.map V.last tracesD.dataText
     shapeWithDuration <- Telemetry.getTraceShapes pid trIds
     -- group shapes by trace id (convert Vector to list and bind the result)
-    let grouped = M.fromListWith (++) [(trId, [(spanName, duration)]) | (trId, spanName, duration) <- V.toList shapeWithDuration]
+    let grouped = M.fromListWith (++) [(trId, [(spanName, duration, events)]) | (trId, spanName, duration, events) <- V.toList shapeWithDuration]
 
     pure
       $ widget

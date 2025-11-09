@@ -1120,13 +1120,7 @@ getProjectStatsForReport projectId start end = dbtToEff $ query q (projectId, st
         |]
 
 
-getTraceShapes
-  :: DB :> es
-  => Projects.ProjectId
-  -> V.Vector Text
-  -- ^ multiple trace IDs
-  -- ^ resource name
-  -> Eff es (V.Vector (Text, Text, Int)) -- (target_trace_id, name, avg_duration)
+getTraceShapes :: DB :> es => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector (Text, Text, Int, Int))
 getTraceShapes pid trIds =
   dbtToEff $ query q (pid, trIds, pid, pid)
   where
@@ -1167,7 +1161,8 @@ getTraceShapes pid trIds =
       SELECT
         m.target_trace_id,
         s.name,
-        AVG(s.duration)::BIGINT AS avg_duration
+        AVG(s.duration)::BIGINT AS avg_duration,
+        COUNT(*) AS span_count
       FROM otel_logs_and_spans s
       JOIN matching_traces m
         ON s.context___trace_id = m.trace_id
