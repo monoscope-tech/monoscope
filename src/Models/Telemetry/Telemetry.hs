@@ -1128,7 +1128,7 @@ getTraceShapes
   -- ^ resource name
   -> Eff es (V.Vector (Text, Text, Int)) -- (target_trace_id, name, avg_duration)
 getTraceShapes pid trIds =
-  dbtToEff $ query q (pid, trIds, pid, pid, pid)
+  dbtToEff $ query q (pid, trIds, pid, pid)
   where
     q =
       [sql|
@@ -1144,7 +1144,6 @@ getTraceShapes pid trIds =
           context___trace_id AS target_trace_id,
           ARRAY_AGG(DISTINCT name ORDER BY name) AS span_names
         FROM target_trace_spans
-        where project_id = ? and timestamp > now() - interval '1 hour'
         GROUP BY context___trace_id
       ),
       trace_shapes AS (

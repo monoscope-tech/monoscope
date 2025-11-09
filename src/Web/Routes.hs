@@ -55,13 +55,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 
 -- Page imports
-
-import Data.HashMap.Lazy qualified as HM
-import Data.Text qualified as T
-import Data.Vector qualified as V
-import Lucid.Base
-import Lucid.Html5
-import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.Api qualified as Api
 import Pages.BodyWrapper (PageCtx (..))
@@ -90,7 +83,6 @@ import Pages.Telemetry.Metrics qualified as Metrics
 import Pages.Telemetry.Trace qualified as Trace
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget qualified as Widget
-import Utils (getServiceColors)
 
 
 -- =============================================================================

@@ -5,13 +5,12 @@ import Data.Aeson.Key qualified as AEKey
 import Data.HashMap.Internal.Strict qualified as HM
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (addUTCTime, defaultTimeLocale)
+import Data.Time (defaultTimeLocale)
 import Data.Time.Clock (UTCTime)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (formatShow, iso8601Format)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx (hxGet_, hxIndicator_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
