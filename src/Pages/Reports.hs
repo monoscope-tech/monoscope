@@ -11,7 +11,7 @@ module Pages.Reports (
   getPerformanceEmailTemplate,
   getAnomaliesEmailTemplate,
   reportsPostH,
-  reportEmail,
+  buildReportJson',
   ReportAnomalyType (..),
   PerformanceReport (..),
   ReportsGet (..),
@@ -22,6 +22,7 @@ where
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AEP
 import Data.Default (def)
+import Data.List (nub)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
@@ -40,7 +41,11 @@ import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pkg.Components.Widget (WidgetAxis (..), WidgetType (..))
+import Pkg.Components.Widget qualified as Widget
+import Pkg.Components.Widget qualified as Widgets
 import Relude hiding (ask)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
@@ -51,9 +56,8 @@ import Utils (checkFreeTierExceeded, faSprite_)
 data PerformanceReport = PerformanceReport
   { urlPath :: Text
   , method :: Text
+  , host :: Text
   , averageDuration :: Integer
-  , durationDiff :: Integer
-  , durationDiffType :: Text
   , durationDiffPct :: Integer
   }
   deriving stock (Generic, Show)
@@ -102,55 +106,81 @@ instance AE.FromJSON ReportAnomalyType where
           Just "ATEndpoint" ->
             ATEndpoint
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
               <*> o
-              AE..: "endpointMethod"
+                AE..: "endpointMethod"
               <*> o
-              AE..: "eventsCount"
+                AE..: "eventsCount"
           Just "ATShape" ->
             ATShape
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
               <*> o
-              AE..: "endpointMethod"
+                AE..: "endpointMethod"
               <*> o
-              AE..: "targetHash"
+                AE..: "targetHash"
               <*> o
-              AE..: "newUniqueFields"
+                AE..: "newUniqueFields"
               <*> o
-              AE..: "updatedFieldFormats"
+                AE..: "updatedFieldFormats"
               <*> o
-              AE..: "deletedFields"
+                AE..: "deletedFields"
               <*> o
-              AE..: "eventsCount"
+                AE..: "eventsCount"
           Just "ATFormat" ->
             ATFormat
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
               <*> o
-              AE..: "keyPath"
+                AE..: "keyPath"
               <*> o
-              AE..: "endpointMethod"
+                AE..: "endpointMethod"
               <*> o
-              AE..: "formatType"
+                AE..: "formatType"
               <*> o
-              AE..: "formatExamples"
+                AE..: "formatExamples"
               <*> o
-              AE..: "eventsCount"
+                AE..: "eventsCount"
           Just "ATRuntimeException" ->
             ATRuntimeException
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
           _ -> pure UnknownAnomaly
+
+
+data StatData = StatData
+  { total :: Integer
+  , change :: Double
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON)
+
+
+data SpanTypeStats = SpanTypeStats
+  { spanType :: Text
+  , count :: Integer
+  , changeCount :: Double
+  , averageDuration :: Double
+  , changeDuration :: Double
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON)
 
 
 data ReportData = ReportData
   { endpoints :: [PerformanceReport]
-  , anomalies :: [ReportAnomalyType]
-  , anomaliesCount :: Int
+  , errors :: StatData
+  , events :: StatData
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
+
+
+buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int, Double) -> AE.Value
+buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStatsDiff' endpointsPerformance =
+  let spanStatsDiff = (\(t, e, chang, dur, durChange) -> AE.object ["spanType" AE..= t, "eventCount" AE..= e, "eventChange" AE..= chang, "averageDuration" AE..= dur, "durationChange" AE..= durChange]) <$> spanTypeStatsDiff'
+      perf = (\(u, m, p, d, dc) -> AE.object ["host" AE..= u, "urlPath" AE..= m, "method" AE..= p, "averageDuration" AE..= d, "durationDiffPct" AE..= dc]) <$> endpointsPerformance
+   in AE.object ["endpoints" AE..= perf, "events" AE..= AE.object ["total" AE..= totalEvents, "change" AE..= errorsChange], "errors" AE..= AE.object ["total" AE..= totalErrors, "change" AE..= eventsChange], "spanTypeStats" AE..= spanStatsDiff]
 
 
 reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders ReportsPost)
@@ -231,67 +261,73 @@ instance ToHtml ReportsGet where
 singleReportPage :: Projects.ProjectId -> Maybe Reports.Report -> Html ()
 singleReportPage pid report =
   div_ [class_ "mx-auto w-full flex flex-col overflow-y-scroll h-full"] do
-    h3_ [class_ "px-6 text-lg text-textStrong flex place-items-center font-medium pb-4 border-b"] "Anomaly and Performance Report"
     case report of
       Just report' -> do
-        div_ [class_ "mt-4 space-y-4"] do
-          div_ [class_ "mx-auto rounded-lg border max-w-[1000px]"] do
-            div_ [class_ "bg-fillWeak px-4 py-3 flex justify-between"] do
-              h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report'.reportType <> " report"
-              span_ [] $ show $ localDay (zonedTimeToLocalTime report'.createdAt)
+        div_ [class_ "flex w-full justify-between items-center border-b p-4"] do
+          h3_ [class_ "text-textStrong font-medium capitalize"] $ toHtml report'.reportType <> " report"
+          span_ [] $ show $ localDay (zonedTimeToLocalTime report'.createdAt)
+        div_ [class_ "space-y-4"] do
+          div_ [class_ "mx-auto max-w-[1000px]"] do
             div_ [class_ "px-4 py-3 space-y-8"] do
               let rep_json = AE.decode (AE.encode report'.reportJson) :: Maybe ReportData
               case rep_json of
                 Just v -> do
-                  div_ [class_ "anomalies"] do
-                    div_ [class_ "pb-3 border-b flex justify-between"] do
-                      h5_ [class_ "font-bold"] "Anomalies"
-                      div_ [class_ "flex gap-2"] do
-                        span_ [class_ "text-textError font-medium"] $ show v.anomaliesCount
-                        span_ [] "New anomalies"
-                    div_ [class_ "mt-2 space-y-2"] do
-                      forM_ v.anomalies $ \anomaly -> do
-                        case anomaly of
-                          ATEndpoint{endpointUrlPath, endpointMethod, eventsCount} -> do
-                            div_ [class_ "space-x-3 border-b pb-1 flex gap-4 items-center justify-between"] do
-                              div_ [class_ "flex items-center space-x-3 "] do
-                                div_ [class_ "inline-block font-bold text-textBrand space-x-2"] do
-                                  img_ [class_ "inline w-4 h-4", src_ "/public/assets/svgs/anomalies/endpoint.svg"]
-                                  span_ [] "New Endpoint"
-                                small_ [] $ toHtml $ endpointMethod <> " " <> endpointUrlPath <> " "
-                              small_ [] $ show eventsCount <> " requests"
-                          ATShape{endpointUrlPath, endpointMethod, newUniqueFields, updatedFieldFormats, deletedFields, targetHash, eventsCount} -> do
-                            div_ [class_ "border-b pb-1 flex items-center justify-between"] do
-                              div_ [class_ "flex items-center space-x-3 "] do
-                                div_ [class_ "inline-block font-bold text-textBrand space-x-2 flex items-center"] do
-                                  img_ [class_ "inline w-4 h-4", src_ "/public/assets/svgs/anomalies/fields.svg"]
-                                  span_ [] "New Request Shape"
-                                div_ [class_ "flex flex-col"] do
-                                  small_ [] $ toHtml $ endpointMethod <> "  " <> endpointUrlPath
-                                  small_ [] $ toHtml $ "Signature: " <> targetHash
-                                shapeParameterStats_ (length newUniqueFields) (length updatedFieldFormats) (length deletedFields)
-                              small_ [] $ show eventsCount <> " requests"
-                          ATFormat{endpointUrlPath, endpointMethod, keyPath, formatType, formatExamples, eventsCount} -> do
-                            div_ [class_ "space-x-3 border-b pb-1 flex items-center justify-between"] do
-                              div_ [class_ "flex items-center gap-2"] do
-                                div_ [class_ "inline-block font-bold text-textBrand space-x-2 shrink-0"] do
-                                  img_ [class_ "inline w-4 h-4", src_ "/public/assets/svgs/anomalies/fields.svg"]
-                                  span_ [class_ "inline-block"] "Modified field"
-                                small_ [] $ toHtml $ keyPath <> " in " <> endpointMethod <> "  " <> endpointUrlPath
-                                div_ [class_ ""] do
-                                  div_ [] do
-                                    small_ "current format: "
-                                    span_ $ toHtml $ textFieldTypeToText formatType
-                                  div_ do
-                                    small_ "previous formats: "
-                                    span_ "" -- TODO: Should be comma separated list of formats for that field.
-                                  div_ do
-                                    small_ "examples: "
-                                    small_ $ toHtml $ T.intercalate ", " formatExamples
-                              small_ [] $ show eventsCount <> " requests"
-                          _ -> do
-                            pass
-
+                  div_ [class_ "flex gap-2 h-48 items-center"] do
+                    div_ [class_ "h-full w-1/2 border rounded-lg p-3"] do
+                      div_ [class_ "flex w-full items-center justify-between"] do
+                        div_ [class_ "flex text-sm items-center gap-3"] do
+                          span_ [class_ "text-textWeak"] "Total events"
+                          span_ [class_ "font-semibold"] $ show v.events.total
+                        span_ [class_ "text-xs"] $ show v.events.change <> "% from last week"
+                      div_ [class_ "h-[90%]"] do
+                        Widget.widget_
+                          $ (def :: Widget.Widget)
+                            { Widget.wType = WTTimeseries
+                            , -- , Widget.query = Just "summarize count(*) by bin_auto(timestamp)"
+                              Widget.unit = Just "rows"
+                            , Widget.naked = Just True
+                            , Widget.sql =
+                                Just
+                                  $ [text|SELECT extract(epoch from time_bucket('1 day', timestamp))::integer AS bucket
+                                        , kind
+                                        , count(*)::float
+                                        FROM otel_logs_and_spans
+                                        WHERE project_id = '{{project_id}}'
+                                        AND timestamp >= NOW() - INTERVAL '7 days'
+                                        GROUP BY bucket, kind
+                                        ORDER BY bucket |]
+                            , Widget.title = Just "Events trend"
+                            , Widget.hideLegend = Just True
+                            , Widget._projectId = Just pid
+                            , Widget.standalone = Just True
+                            , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
+                            , Widget.allowZoom = Just True
+                            , Widget.showMarkArea = Just True
+                            , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
+                            }
+                    div_ [class_ "h-full w-1/2 border rounded-lg p-3"] do
+                      div_ [class_ "flex w-full items-center justify-between"] do
+                        div_ [class_ "flex text-sm items-center gap-3"] do
+                          span_ [class_ "text-textWeak"] "Total events"
+                          span_ [class_ "font-semibold"] $ show v.errors.total
+                        span_ [class_ "text-xs"] $ show v.errors.change <> "% from last week"
+                      div_ [class_ "h-[90%]"] do
+                        Widget.widget_
+                          $ (def :: Widget.Widget)
+                            { Widget.wType = WTTimeseries
+                            , Widget.query = Just "status_message == \"ERROR\" | summarize count(*) by bin_auto(timestamp)"
+                            , Widget.unit = Just "rows"
+                            , Widget.naked = Just True
+                            , Widget.title = Just "Errors trend"
+                            , Widget.theme = Just "roma"
+                            , Widget.hideLegend = Just True
+                            , Widget._projectId = Just pid
+                            , Widget.standalone = Just True
+                            , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
+                            , Widget.allowZoom = Just True
+                            , Widget.showMarkArea = Just True
+                            , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
+                            }
                   div_ [] do
                     div_ [class_ "pb-3 border-b flex justify-between"] do
                       h5_ [class_ "font-bold"] "Performance"
@@ -320,12 +356,11 @@ shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
 
 reportsPage :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Text -> Bool -> Bool -> Html ()
 reportsPage pid reports nextUrl daily weekly =
-  div_ [class_ "flex flex-row h-screen bg-bgRaised"] do
-    div_ [class_ "w-1/3 border-r border-strokeMedium p-4 overflow-y-auto"] do
+  div_ [class_ "flex flex-row h-full border-t"] do
+    div_ [class_ "w-1/3 border-r border-strokeWeak p-4 overflow-y-auto"] do
       div_ [class_ "mt-4"] do
         reportListItems pid reports nextUrl
-
-    div_ [class_ "w-2/3 p-4 overflow-y-auto"] do
+    div_ [class_ "w-2/3 overflow-y-auto"] do
       div_ [class_ "flex items-center justify-center h-full", id_ "detailSidebar"] do
         div_ [class_ "text-center"] do
           faSprite_ "clapperboard" "light" "w-36 h-36 mx-auto"
@@ -339,30 +374,25 @@ reportsPage pid reports nextUrl daily weekly =
 
 reportListItems :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Text -> Html ()
 reportListItems pid reports nextUrl =
-  div_ [class_ "space-y-1 w-full"] do
+  div_ [class_ "space-y-4 w-full"] do
     forM_ reports $ \report -> do
       let isWeeklyData = report.reportType == "weekly"
-
-      div_ [class_ "w-full flex flex-col"] do
-        div_ [class_ $ if isWeeklyData then "w-full bg-fillWeak" else "w-11/12 self-end "] do
+      div_ [class_ "w-full flex flex-col border border-strokeWeak rounded-lg cursor-pointer hover:bg-fillWeaker"] do
+        div_ [class_ $ "w-full"] do
           a_
-            [ class_ "w-full px-4 py-3 flex justify-between hover:bg-fillHover cursor-pointer"
+            [ class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"
             , hxGet_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId
             , hxTarget_ "#detailSidebar"
             , hxSwap_ "innerHTML"
             ]
             do
-              div_ [class_ "flex flex-col grow"] do
-                h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " Report"
-                span_ [class_ " text-textWeak"] $ toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
-
-              div_ [class_ "ml-4 flex items-center"] do
-                i_ [class_ "fa fa-arrow-right text-textWeak"] mempty
-
-    when (length reports < 20) $ do
-      div_ [class_ "w-full h-16 center-item my-200"] do
-        p_ [class_ "text-center text-textBrand"] "The End: No more report to display"
-
+              div_ [class_ "flex flex-col grow gap-4"] do
+                div_ [class_ "flex items-center w-full justify-between gap-2"] do
+                  div_ [class_ $ (if isWeeklyData then "bg-fillBrand-weak" else "bg-fillWeak") <> " text-xs font-medium px-2.5 py-1 rounded-full capitalize"] $ toHtml report.reportType <> " report"
+                  faSprite_ "chevron-right" "regular" "w-3 h-3"
+                h4_ [class_ "font-medium flex items-center gap-2"] do
+                  faSprite_ "calendar" "regular" "w-4 h-4"
+                  toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
     unless (length reports < 20) $ do
       a_ [class_ "w-full cursor-pointer block p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center mb-4", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextUrl] "LOAD MORE"
 
@@ -374,10 +404,8 @@ renderEndpointRow endpoint = tr_ do
           then ("text-textError" :: Text, "+" <> show (durationDiffPct endpoint) <> "%" :: Text)
           else ("text-textSuccess", show (durationDiffPct endpoint) <> "%")
   let avg_dur_ms = (fromInteger (round $ ((fromInteger endpoint.averageDuration :: Double) / 1000000.0) * 100) :: Double) / 100
-  let dur_diff_ms = (fromInteger (round $ ((fromInteger endpoint.durationDiff :: Double) / 1000000.0) * 100) :: Double) / 100
   td_ [class_ "px-6 py-2 border-b text-textWeak "] $ toHtml $ method endpoint <> " " <> urlPath endpoint
   td_ [class_ "px-6 py-2 border-b text-textWeak "] $ show avg_dur_ms <> "ms"
-  td_ [class_ "px-6 py-2 border-b text-textWeak "] $ show dur_diff_ms <> "ms"
   td_ [class_ $ "px-6 py-2 border-b " <> pcls] $ toHtml prc
 
 
@@ -389,6 +417,20 @@ renderEndpointsTable endpoints = table_ [class_ "table-auto w-full"] do
     th_ [class_ "px-6 py-3"] "Change compared to prev."
     th_ [class_ "px-6 py-3"] "latency change %"
   tbody_ $ mapM_ renderEndpointRow endpoints
+
+
+summaryCard :: Text -> Text -> Text -> Text -> Html ()
+summaryCard title value subtitle change = do
+  div_ [class_ "rounded-lg flex p-3 flex-col gap-3 border w-max"] $ do
+    div_ [class_ "flex flex-col"] $ do
+      h3_ [class_ "text-sm font-medium text-textWeak"] $ toHtml title
+    div_ [class_ "flex flex-col gap-2"] $ do
+      div_ $ do
+        div_ [class_ "text-lg font-bold text-textStrong"] $ toHtml value
+        p_ [class_ "text-xs text-textWeak"] $ toHtml subtitle
+      div_ [class_ "flex items-center gap-2 text-sm font-medium text-chart-1"] $ do
+        faSprite_ (if T.isPrefixOf "-" change then "arrow-down" else "arrow-up") "regular" "w-3 h-3"
+        span_ [] $ toHtml $ change <> " from last week"
 
 
 buildReportJSON :: V.Vector Issues.IssueL -> V.Vector RequestForReport -> V.Vector EndpointPerf -> AE.Value
@@ -458,23 +500,23 @@ getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
                 AE.Success (apiData :: Issues.APIChangeData) ->
                   AE.object
                     $ baseObject
-                    <> [ "tag" AE..= "ATShape"
-                       , "deletedFields" AE..= length apiData.deletedFields
-                       , "endpointMethod" AE..= apiData.endpointMethod
-                       , "endpointUrlPath" AE..= apiData.endpointPath
-                       , "newUniqueFields" AE..= length apiData.newFields
-                       , "updatedFields" AE..= length apiData.modifiedFields
-                       ]
+                      <> [ "tag" AE..= "ATShape"
+                         , "deletedFields" AE..= length apiData.deletedFields
+                         , "endpointMethod" AE..= apiData.endpointMethod
+                         , "endpointUrlPath" AE..= apiData.endpointPath
+                         , "newUniqueFields" AE..= length apiData.newFields
+                         , "updatedFields" AE..= length apiData.modifiedFields
+                         ]
                 _ -> AE.object baseObject
             Issues.RuntimeException ->
               case AE.fromJSON (getAeson issue.issueData) of
                 AE.Success (errorData :: Issues.RuntimeExceptionData) ->
                   AE.object
                     $ baseObject
-                    <> [ "tag" AE..= "ATRuntimeException"
-                       , "endpointMethod" AE..= fromMaybe "UNKNOWN" errorData.requestMethod
-                       , "endpointUrlPath" AE..= fromMaybe "/" errorData.requestPath
-                       ]
+                      <> [ "tag" AE..= "ATRuntimeException"
+                         , "endpointMethod" AE..= fromMaybe "UNKNOWN" errorData.requestMethod
+                         , "endpointUrlPath" AE..= fromMaybe "/" errorData.requestPath
+                         ]
                 _ -> AE.object baseObject
             _ -> AE.object baseObject
 
@@ -498,7 +540,7 @@ getPerformanceEmailTemplate pr previous_p =
         [ "endpointUrlPath" AE..= p.urlPath
         , "endpointMethod" AE..= p.method
         , "averageLatency" AE..= getMs p.averageDuration
-        , "latencyChange" AE..= ((if p.durationDiff > 0 then "+" else "") <> getMs p.durationDiff <> " (" <> getDesc p.durationDiffPct <> ")")
+        , "latencyChange" AE..= 0
         ]
   )
     <$> getPerformanceInsight pr previous_p
@@ -508,8 +550,6 @@ getPerformanceEmailTemplate pr previous_p =
       where
         dbo = divideIntegers val 1000000
         msText = printf "%.2fms" dbo
-    getDesc :: Integer -> String
-    getDesc x = if x > 0 then show x <> "% slower" else show (x * (-1)) <> "% faster"
 
 
 mapFunc :: Map.Map Text Integer -> RequestDumps.RequestForReport -> PerformanceReport
@@ -518,120 +558,22 @@ mapFunc prMap rd =
     Just prevDuration ->
       let diff = rd.averageDuration - prevDuration
           diffPct = round $ divideIntegers diff prevDuration * 100
-          diffType = if diff >= 0 then "up" else "down"
        in PerformanceReport
             { urlPath = rd.urlPath
             , method = rd.method
+            , host = ""
             , averageDuration = rd.averageDuration
-            , durationDiff = diff
             , durationDiffPct = diffPct
-            , durationDiffType = diffType
             }
     Nothing ->
       PerformanceReport
         { urlPath = rd.urlPath
         , method = rd.method
+        , host = ""
         , averageDuration = rd.averageDuration
-        , durationDiff = 0
         , durationDiffPct = 0
-        , durationDiffType = "up"
         }
 
 
 divideIntegers :: Integer -> Integer -> Double
 divideIntegers a b = fromIntegral a / fromIntegral b
-
-
--- createEndpointMap [] mp = mp
--- createEndpointMap (x : xs) mp =
---   case x.anomalyType of
---     Anomalies.ATEndpoint ->
---       let ep_url = fromMaybe "" x.endpointUrlPath
---           method = fromMaybe "" x.endpointMethod
---           endpoint = method <> ep_url
---        in createEndpointMap xs (Map.insert endpoint True mp)
---     _ -> createEndpointMap xs mp
-
-reportEmail :: Projects.ProjectId -> Reports.Report -> Html ()
-reportEmail pid report' =
-  div_ [style_ "margin-top: 1rem; color: black"] do
-    div_ [style_ "margin: 0 auto; border-radius: 0.375rem; border: 1px solid #e5e7eb; max-width: 800px;"] do
-      div_ [style_ "background-color: #f3f4f6; padding: 8px 10px;"] do
-        h4_ [style_ "font-size: 1.5rem; font-weight: bold; text-transform: capitalize; margin-bottom: 5px"] $ toHtml report'.reportType <> " report"
-        p_ [style_ ""] $ show $ localDay (zonedTimeToLocalTime report'.createdAt)
-        a_
-          [ href_ $ "https://app.monoscope.tech/p/" <> show pid.unProjectId <> "/reports/" <> show report'.id.reportId
-          , style_ "background-color:#3b82f6; margin-top:20px; text-decoration: none; padding: .5em 1em; color: #FCFDFF; display:inline-block; border-radius:.4em; mso-padding-alt:0;text-underline-color:#005959"
-          ]
-          "View in browser"
-      div_ [style_ "padding: 1rem 1rem 2rem; gap: 2rem;"] do
-        let rep_json = AE.decode (AE.encode report'.reportJson) :: Maybe ReportData
-        case rep_json of
-          Just v -> do
-            div_ [style_ "margin-bottom: 2rem;"] do
-              div_ [style_ "width:100%;border-bottom: 1px solid #e5e7eb; padding-bottom: 0.5rem;"] do
-                h5_ [style_ "font-weight: bold; font-size: 18px"] "Anomalies"
-                div_ [style_ "display: inline;"] do
-                  span_ [style_ "color: #FF0000; font-weight: medium; margin-right: 0.5rem"] do
-                    if v.anomaliesCount < 11 then show v.anomaliesCount else "10+"
-                  span_ [style_ ""] "New anomalies"
-              div_ [style_ "margin-top: 1rem;"] do
-                forM_ v.anomalies $ \anomaly -> do
-                  case anomaly of
-                    ATEndpoint{endpointUrlPath, endpointMethod, eventsCount} -> do
-                      div_ [style_ "border-bottom: 1px solid #e5e7eb; margin-bottom: 1rem; padding-bottom: 0.25rem;"] do
-                        div_ [style_ "display: inline;"] do
-                          span_ [style_ "display: inline; font-weight: bold; color: #3b82f6; margin-right:10px"] "New Endpoint"
-                          p_ [style_ ""] $ toHtml $ endpointMethod <> " " <> endpointUrlPath <> " "
-                        p_ [style_ ""] $ show eventsCount <> " requests"
-                    ATShape{endpointUrlPath, endpointMethod, newUniqueFields, updatedFieldFormats, deletedFields, targetHash, eventsCount} -> do
-                      div_ [style_ "border-bottom: 1px solid #e5e7eb; margin-bottom: 1rem; padding-bottom: 0.25rem;"] do
-                        div_ [] do
-                          span_ [style_ "display: inline; font-weight: bold; color: #3b82f6; margin-right:5px"] "New Request Shape"
-                          div_ [style_ "display: flex; flex-direction: column; margin-right:5px"] do
-                            small_ [style_ ""] $ toHtml $ endpointMethod <> "  " <> endpointUrlPath
-                          -- Assuming shapeParameterStats_ is a custom function for displaying stats.
-                          p_ [style_ "display:block"] $ show (length newUniqueFields) <> " new fields"
-                          if not (null updatedFieldFormats)
-                            then do
-                              p_ [style_ "display:block"] $ show (length updatedFieldFormats) <> " updated fields"
-                            else pass
-                          if not (null updatedFieldFormats)
-                            then do
-                              p_ [style_ "display:block"] $ show (length deletedFields) <> " deleted fields"
-                            else pass
-                          p_ [style_ ""] $ show eventsCount <> " requests"
-                    ATFormat{endpointUrlPath, endpointMethod, keyPath, formatType, formatExamples, eventsCount} -> do
-                      div_ [style_ "border-bottom: 1px solid #e5e7eb;  margin-bottom: 1rem; padding-bottom: 0.25rem; display: flex; gap: 0.75rem; align-items: center; justify-content: space-between;"] do
-                        div_ [style_ "display: flex; align-items: center;"] do
-                          span_ [style_ "display: inline; font-weight: bold; color: #3b82f6;"] "Modified field"
-                          small_ [style_ ""] $ toHtml $ keyPath <> " in " <> endpointMethod <> "  " <> endpointUrlPath
-                        div_ [style_ "font-size: 0.875rem;"] do
-                          small_ [style_ ""] "current format: "
-                          span_ [style_ "display: inline;"] $ toHtml $ textFieldTypeToText formatType
-                        -- div_ [style_ ""] do
-                        --   small_ [style_ ""] "previous formats: "
-                        --   span_ [style_ "display: inline;"] ""  TODO: Should be a comma-separated list of formats for that field.
-                        div_ [style_ ""] do
-                          small_ [style_ ""] "examples: "
-                          small_ [style_ ""] $ toHtml $ T.intercalate ", " formatExamples
-                        p_ [style_ ""] $ show eventsCount <> " requests"
-                    _ -> pass
-
-            div_ [style_ "width: 100%"] do
-              div_ [style_ "width:100%; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.5rem; display:inline"] do
-                h5_ [style_ "font-weight: bold; font-size:18px; margin-bottom: 1rem"] "Performance"
-                renderEmailEndpointsTable v.endpoints
-          Nothing -> pass
-      a_ [href_ $ "https://app.monoscope.tech/p/" <> show pid.unProjectId <> "/reports", style_ "width: 100%; text-align: center; color:#3b82f6; margin: 20px; padding-bottom:20px"] "Turn off email alerts"
-      div_ [style_ "margin-top: 20px"] pass
-
-
-renderEmailEndpointsTable :: [PerformanceReport] -> Html ()
-renderEmailEndpointsTable endpoints = table_ [style_ "width: 100%; border-collapse: collapse;"] do
-  thead_ [style_ "text-align: left; text-transform: uppercase; font-size:12px; background-color: #f3f4f6;"] $ tr_ do
-    th_ [style_ "padding: 0.75rem 1.5rem;"] "Endpoint"
-    th_ [style_ "padding: 0.75rem 1.5rem;"] "Average latency"
-    th_ [style_ "padding: 0.75rem 1.5rem;"] "Change compared to prev."
-    th_ [style_ "padding: 0.75rem 1.5rem;"] "Latency change %"
-  tbody_ $ mapM_ renderEndpointRow endpoints

@@ -46,6 +46,8 @@ module Models.Telemetry.Telemetry (
   SpanLink (..),
   atMapText,
   atMapInt,
+  getProjectStatsBySpanType,
+  getEndpointStats,
 )
 where
 
@@ -1118,6 +1120,56 @@ getProjectStatsForReport projectId start end = dbtToEff $ query q (projectId, st
            GROUP BY resource___service___name 
            ORDER BY total_events DESC;
         |]
+
+
+getProjectStatsBySpanType :: DB :> es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es (V.Vector (Text, Int, Int))
+getProjectStatsBySpanType projectId start end = dbtToEff $ query q (projectId, start, end)
+  where
+    q =
+      [sql|
+        SELECT
+          CASE
+            WHEN attributes___http___request___method IS NOT NULL THEN 'http'
+            WHEN attributes___db___system___name IS NOT NULL THEN 'db'
+            WHEN attributes ->>'rpc' IS NOT NULL THEN 'rpc'
+            WHEN attributes ->>'messaging' IS NOT NULL THEN 'messaging'
+            WHEN kind = 'internal' THEN 'internal'
+            ELSE 'other'
+          END AS span_type,
+          COUNT(*) AS total_events,
+          AVG(duration)::BIGINT AS avg_duration
+        FROM otel_logs_and_spans
+        WHERE project_id = ?
+          AND timestamp >= ?
+          AND timestamp <= ?
+        GROUP BY span_type
+        ORDER BY total_events DESC;
+      |]
+
+
+getEndpointStats :: DB :> es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es (V.Vector (Text, Text, Text, Int))
+getEndpointStats projectId start end = dbtToEff $ query q (projectId, start, end)
+  where
+    q =
+      [sql|
+SELECT
+    COALESCE(attributes___server___address, attributes___network___peer___address, '') AS host,
+    COALESCE(attributes___http___request___method, 'GET') AS method,
+    COALESCE(attributes___url___path, '') AS url_path,
+    CAST(ROUND(AVG(COALESCE(duration, 0))) AS BIGINT) AS average_duration
+FROM otel_logs_and_spans
+WHERE
+    project_id = ?::text
+    AND timestamp > ? AND timestamp < ?
+    AND name = 'monoscope.http'
+    AND kind = 'SERVER'
+    AND status_code IS NOT NULL
+    AND cardinality(hashes) > 0
+GROUP BY
+    host, method, url_path
+ORDER BY
+    average_duration DESC;
+    |]
 
 
 getTraceShapes :: DB :> es => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector (Text, Text, Int, Int))
