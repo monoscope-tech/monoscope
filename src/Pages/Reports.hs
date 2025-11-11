@@ -50,7 +50,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Text.Printf (printf)
-import Utils (checkFreeTierExceeded, faSprite_)
+import Utils (checkFreeTierExceeded, faSprite_, getDurationNSMS, prettyPrintCount)
 
 
 data PerformanceReport = PerformanceReport
@@ -158,10 +158,10 @@ data StatData = StatData
 
 data SpanTypeStats = SpanTypeStats
   { spanType :: Text
-  , count :: Integer
-  , changeCount :: Double
+  , eventCount :: Integer
+  , eventChange :: Double
   , averageDuration :: Double
-  , changeDuration :: Double
+  , durationChange :: Double
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
@@ -171,6 +171,7 @@ data ReportData = ReportData
   { endpoints :: [PerformanceReport]
   , errors :: StatData
   , events :: StatData
+  , spanTypeStats :: [SpanTypeStats]
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
@@ -178,7 +179,7 @@ data ReportData = ReportData
 
 buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int, Double) -> AE.Value
 buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStatsDiff' endpointsPerformance =
-  let spanStatsDiff = (\(t, e, chang, dur, durChange) -> AE.object ["spanType" AE..= t, "eventCount" AE..= e, "eventChange" AE..= chang, "averageDuration" AE..= dur, "durationChange" AE..= durChange]) <$> spanTypeStatsDiff'
+  let spanStatsDiff = (\(t, e, chang, dur, durChange) -> AE.object ["type" AE..= t, "eventCount" AE..= e, "eventChange" AE..= chang, "averageDuration" AE..= dur, "durationChange" AE..= durChange]) <$> spanTypeStatsDiff'
       perf = (\(u, m, p, d, dc) -> AE.object ["host" AE..= u, "urlPath" AE..= m, "method" AE..= p, "averageDuration" AE..= d, "durationDiffPct" AE..= dc]) <$> endpointsPerformance
    in AE.object ["endpoints" AE..= perf, "events" AE..= AE.object ["total" AE..= totalEvents, "change" AE..= errorsChange], "errors" AE..= AE.object ["total" AE..= totalErrors, "change" AE..= eventsChange], "spanTypeStats" AE..= spanStatsDiff]
 
@@ -328,6 +329,13 @@ singleReportPage pid report =
                             , Widget.showMarkArea = Just True
                             , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
                             }
+                  div_ [class_ "space-y-6"] do
+                    div_ [class_ "pb-3 border-b flex justify-between"] do
+                      h5_ [class_ "text-sm font-medium"] "Span types overview"
+                    let cats = v.spanTypeStats
+                    div_ [class_ "flex items-center w-full overflow-x-auto gap-3"] do
+                      forM_ cats $ \cat -> do
+                        categoryCard cat.spanType cat.eventCount cat.averageDuration cat.durationChange cat.eventChange
                   div_ [] do
                     div_ [class_ "pb-3 border-b flex justify-between"] do
                       h5_ [class_ "font-bold"] "Performance"
@@ -431,6 +439,41 @@ summaryCard title value subtitle change = do
       div_ [class_ "flex items-center gap-2 text-sm font-medium text-chart-1"] $ do
         faSprite_ (if T.isPrefixOf "-" change then "arrow-down" else "arrow-up") "regular" "w-3 h-3"
         span_ [] $ toHtml $ change <> " from last week"
+
+
+categoryCard :: Text -> Integer -> Double -> Double -> Double -> Html ()
+categoryCard category total avDur changeDur changeCount = do
+  div_ [class_ "flex text-sm flex-col items-center"] $ do
+    div_ [class_ "flex items-center gap-1"] $ do
+      faSprite_ (getFaSprite category) "regular" "w-3 h-3"
+      h3_ [class_ "text-sm text-textStrong "] $ toHtml category
+    span_ [class_ "h-4 w-[3px] bg-fillWeak"] $ pass
+    div_ [class_ "flex w-full items-center"] $ do
+      div_ [class_ "flex w-24 flex-col items-center"] $ do
+        span_ [class_ "w-12 border-t border-t-strokeWeak self-end"] $ pass
+        span_ [class_ "h-4 w-[3px] bg-fillWeak"] $ pass
+        div_ [class_ "text-sm text-textStrong"] $ toHtml (prettyPrintCount (fromIntegral total))
+        div_ [class_ "flex items-center gap-1 text-xs mt-1"] $ do
+          faSprite_ (if changeCount < 0 then "arrow-down" else "arrow-up-right") "regular" "w-3 h-3"
+          span_ [] $ toHtml $ (show changeCount) <> "%"
+      div_ [class_ "flex w-24 flex-col items-center"] $ do
+        span_ [class_ "w-12 border-t border-t-strokeWeak self-start"] $ pass
+        span_ [class_ "h-4 w-[3px] bg-fillWeak"] $ pass
+        div_ [class_ "text-sm text-textStrong"] $ toHtml (getDurationNSMS $ round avDur)
+        div_ [class_ "flex items-center gap-1 text-xs mt-1"] $ do
+          faSprite_ (if changeCount < 0 then "arrow-down" else "arrow-up-right") "regular" "w-3 h-3"
+          span_ [] $ toHtml $ (show changeDur) <> "%"
+
+
+getFaSprite :: Text -> Text
+getFaSprite category =
+  case T.toLower category of
+    "http" -> "web"
+    "db" -> "database"
+    "cache" -> "memory"
+    "external" -> "globe"
+    "internal" -> "function"
+    _ -> "cube"
 
 
 buildReportJSON :: V.Vector Issues.IssueL -> V.Vector RequestForReport -> V.Vector EndpointPerf -> AE.Value
