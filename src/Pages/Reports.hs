@@ -58,7 +58,9 @@ data PerformanceReport = PerformanceReport
   , method :: Text
   , host :: Text
   , averageDuration :: Integer
-  , durationDiffPct :: Integer
+  , durationDiffPct :: Double
+  , requestCount :: Int
+  , requestDiffPct :: Double
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -167,21 +169,30 @@ data SpanTypeStats = SpanTypeStats
   deriving anyclass (AE.FromJSON)
 
 
+data DBQueryStat = DBQueryStat
+  { query :: Text
+  , averageDuration :: Double
+  , totalEvents :: Integer
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON)
 data ReportData = ReportData
   { endpoints :: [PerformanceReport]
   , errors :: StatData
   , events :: StatData
   , spanTypeStats :: [SpanTypeStats]
+  , slowDbQueries :: [DBQueryStat]
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
 
 
-buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int, Double) -> AE.Value
-buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStatsDiff' endpointsPerformance =
-  let spanStatsDiff = (\(t, e, chang, dur, durChange) -> AE.object ["type" AE..= t, "eventCount" AE..= e, "eventChange" AE..= chang, "averageDuration" AE..= dur, "durationChange" AE..= durChange]) <$> spanTypeStatsDiff'
-      perf = (\(u, m, p, d, dc) -> AE.object ["host" AE..= u, "urlPath" AE..= m, "method" AE..= p, "averageDuration" AE..= d, "durationDiffPct" AE..= dc]) <$> endpointsPerformance
-   in AE.object ["endpoints" AE..= perf, "events" AE..= AE.object ["total" AE..= totalEvents, "change" AE..= errorsChange], "errors" AE..= AE.object ["total" AE..= totalErrors, "change" AE..= eventsChange], "spanTypeStats" AE..= spanStatsDiff]
+buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> AE.Value
+buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStatsDiff' endpointsPerformance slowDbQueries =
+  let spanStatsDiff = (\(t, e, chang, dur, durChange) -> AE.object ["spanType" AE..= t, "eventCount" AE..= e, "eventChange" AE..= chang, "averageDuration" AE..= dur, "durationChange" AE..= durChange]) <$> spanTypeStatsDiff'
+      perf = (\(u, m, p, d, dc, req, cc) -> AE.object ["host" AE..= u, "urlPath" AE..= p, "method" AE..= m, "averageDuration" AE..= d, "durationDiffPct" AE..= dc, "requestCount" AE..= req, "requestDiffPct" AE..= cc]) <$> endpointsPerformance
+      slowDbQueries' = (\(q, d, c) -> AE.object ["query" AE..= q, "averageDuration" AE..= d, "totalEvents" AE..= c]) <$> slowDbQueries
+   in AE.object ["endpoints" AE..= perf, "events" AE..= AE.object ["total" AE..= totalEvents, "change" AE..= errorsChange], "errors" AE..= AE.object ["total" AE..= totalErrors, "change" AE..= eventsChange], "spanTypeStats" AE..= spanStatsDiff, "slowDbQueries" AE..= slowDbQueries']
 
 
 reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders ReportsPost)
@@ -271,6 +282,11 @@ singleReportPage pid report =
           div_ [class_ "mx-auto max-w-[1000px]"] do
             div_ [class_ "px-4 py-3 space-y-8"] do
               let rep_json = AE.decode (AE.encode report'.reportJson) :: Maybe ReportData
+              let r = AE.eitherDecode (AE.encode report'.reportJson) :: Either String ReportData
+              case r of
+                Left err -> do
+                  pre_ [class_ "text-textError"] $ toHtml $ "Error parsing report data: " <> T.pack err
+                Right _ -> pass
               case rep_json of
                 Just v -> do
                   div_ [class_ "flex gap-2 h-48 items-center"] do
@@ -278,14 +294,13 @@ singleReportPage pid report =
                       div_ [class_ "flex w-full items-center justify-between"] do
                         div_ [class_ "flex text-sm items-center gap-3"] do
                           span_ [class_ "text-textWeak"] "Total events"
-                          span_ [class_ "font-semibold"] $ show v.events.total
-                        span_ [class_ "text-xs"] $ show v.events.change <> "% from last week"
+                          span_ [class_ "font-semibold"] $ toHtml $ prettyPrintCount (fromIntegral v.events.total)
+                        span_ [class_ $ "text-xs" <> (if v.events.change < 0 then " text-textError" else " text-textSuccess")] $ show v.events.change <> "% from last period"
                       div_ [class_ "h-[90%]"] do
                         Widget.widget_
                           $ (def :: Widget.Widget)
                             { Widget.wType = WTTimeseries
-                            , -- , Widget.query = Just "summarize count(*) by bin_auto(timestamp)"
-                              Widget.unit = Just "rows"
+                            , Widget.unit = Just "rows"
                             , Widget.naked = Just True
                             , Widget.sql =
                                 Just
@@ -309,9 +324,9 @@ singleReportPage pid report =
                     div_ [class_ "h-full w-1/2 border rounded-lg p-3"] do
                       div_ [class_ "flex w-full items-center justify-between"] do
                         div_ [class_ "flex text-sm items-center gap-3"] do
-                          span_ [class_ "text-textWeak"] "Total events"
-                          span_ [class_ "font-semibold"] $ show v.errors.total
-                        span_ [class_ "text-xs"] $ show v.errors.change <> "% from last week"
+                          span_ [class_ "text-textWeak"] "Error trend"
+                          span_ [class_ "font-semibold"] $ toHtml $ prettyPrintCount (fromIntegral v.errors.total)
+                        span_ [class_ $ "text-xs" <> (if v.errors.change >= 0 then " text-textError" else " text-textSuccess ")] $ show v.errors.change <> "% from last week"
                       div_ [class_ "h-[90%]"] do
                         Widget.widget_
                           $ (def :: Widget.Widget)
@@ -330,19 +345,31 @@ singleReportPage pid report =
                             , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
                             }
                   div_ [class_ "space-y-6"] do
-                    div_ [class_ "pb-3 border-b flex justify-between"] do
+                    div_ [class_ "pt-3 border-t flex justify-between"] do
                       h5_ [class_ "text-sm font-medium"] "Span types overview"
                     let cats = v.spanTypeStats
                     div_ [class_ "flex items-center w-full overflow-x-auto gap-3"] do
                       forM_ cats $ \cat -> do
                         categoryCard cat.spanType cat.eventCount cat.averageDuration cat.durationChange cat.eventChange
-                  div_ [] do
-                    div_ [class_ "pb-3 border-b flex justify-between"] do
-                      h5_ [class_ "font-bold"] "Performance"
-                      div_ [class_ "flex gap-2"] do
-                        span_ [class_ "font-medium"] $ show (length v.endpoints)
-                        span_ [] "affected endpoints"
+                  div_ [class_ "space-y-6 pt-4"] do
+                    div_ [class_ "pt-3 border-t flex justify-between"] do
+                      h5_ [class_ "text-sm font-medium"] "HTTP endpoints"
                     renderEndpointsTable v.endpoints
+                  unless (null v.slowDbQueries) $ do
+                    div_ [class_ "space-y-3 pt-4 w-full"] do
+                      div_ [class_ "pt-3 border-t flex justify-between"] do
+                        h5_ [class_ "text-sm font-medium"] "Slow queries"
+                      div_ [class_ "w-full border rounded-lg"] do
+                        table_ [class_ "table-auto w-full"] do
+                          thead_ [class_ "text-xs text-left text-textStrong font-medium capitalize border-b"] $ tr_ do
+                            th_ [class_ "p-2 "] "Query"
+                            th_ [class_ "p-2 "] "Avg. duration"
+                            th_ [class_ "p-2 "] "Total events"
+                          tbody_ [class_ "text-sm"] $ forM_ v.slowDbQueries $ \queryStat -> do
+                            tr_ [class_ "p"] do
+                              td_ [class_ "p-2 text-textStrong max-w-96 truncate ellipsis"] $ toHtml queryStat.query
+                              td_ [class_ "p-2"] $ toHtml $ getDurationNSMS (round queryStat.averageDuration)
+                              td_ [class_ "p-2"] $ toHtml $ prettyPrintCount (fromIntegral queryStat.totalEvents)
                 Nothing -> pass
       Nothing -> do
         h3_ [] "Report Not Found"
@@ -406,25 +433,29 @@ reportListItems pid reports nextUrl =
 
 
 renderEndpointRow :: PerformanceReport -> Html ()
-renderEndpointRow endpoint = tr_ do
+renderEndpointRow endpoint = tr_ [class_ ""] do
   let (pcls, prc) =
         if endpoint.durationDiffPct > 0
           then ("text-textError" :: Text, "+" <> show (durationDiffPct endpoint) <> "%" :: Text)
           else ("text-textSuccess", show (durationDiffPct endpoint) <> "%")
-  let avg_dur_ms = (fromInteger (round $ ((fromInteger endpoint.averageDuration :: Double) / 1000000.0) * 100) :: Double) / 100
-  td_ [class_ "px-6 py-2 border-b text-textWeak "] $ toHtml $ method endpoint <> " " <> urlPath endpoint
-  td_ [class_ "px-6 py-2 border-b text-textWeak "] $ show avg_dur_ms <> "ms"
-  td_ [class_ $ "px-6 py-2 border-b " <> pcls] $ toHtml prc
+  td_ [class_ "p-2 text-textWeak w-96 flex gap-4 items-center "] do
+    span_ [class_ $ "cbadge-sm badge-" <> endpoint.method] $ toHtml $ endpoint.method
+    span_ [class_ "flex-shrink-0 text-textStrong"] $ toHtml endpoint.urlPath
+  td_ [class_ "p-2"] $ toHtml $ prettyPrintCount endpoint.requestCount
+  td_ [class_ $ "p-2 " <> pcls] $ toHtml $ show endpoint.requestDiffPct <> "%"
+  td_ [class_ "p-2"] $ toHtml $ getDurationNSMS endpoint.averageDuration
+  td_ [class_ $ "p-2 " <> pcls] $ toHtml prc
 
 
 renderEndpointsTable :: [PerformanceReport] -> Html ()
-renderEndpointsTable endpoints = table_ [class_ "table-auto w-full"] do
-  thead_ [class_ "text-xs text-left text-textStrong uppercase bg-fillWeak"] $ tr_ do
-    th_ [class_ "px-6 py-3"] "Endpoint"
-    th_ [class_ "px-6 py-3"] "Average latency"
-    th_ [class_ "px-6 py-3"] "Change compared to prev."
-    th_ [class_ "px-6 py-3"] "latency change %"
-  tbody_ $ mapM_ renderEndpointRow endpoints
+renderEndpointsTable endpoints = div_ [class_ "w-full border rounded-lg overflow-hidden"] $ table_ [class_ "table-auto w-full"] do
+  thead_ [class_ "text-xs text-left text-textStrong font-medium capitalize border-b"] $ tr_ do
+    th_ [class_ "p-2"] "Endpoint"
+    th_ [class_ "p-2"] "Requests"
+    th_ [class_ "p-2"] "Request %"
+    th_ [class_ "p-2"] "Avg. latency"
+    th_ [class_ "p-2"] "Latency %"
+  tbody_ [class_ "text-sm"] $ mapM_ renderEndpointRow endpoints
 
 
 summaryCard :: Text -> Text -> Text -> Text -> Html ()
@@ -438,7 +469,7 @@ summaryCard title value subtitle change = do
         p_ [class_ "text-xs text-textWeak"] $ toHtml subtitle
       div_ [class_ "flex items-center gap-2 text-sm font-medium text-chart-1"] $ do
         faSprite_ (if T.isPrefixOf "-" change then "arrow-down" else "arrow-up") "regular" "w-3 h-3"
-        span_ [] $ toHtml $ change <> " from last week"
+        span_ [] $ toHtml $ change <> " from last period"
 
 
 categoryCard :: Text -> Integer -> Double -> Double -> Double -> Html ()
@@ -447,21 +478,21 @@ categoryCard category total avDur changeDur changeCount = do
     div_ [class_ "flex items-center gap-1"] $ do
       faSprite_ (getFaSprite category) "regular" "w-3 h-3"
       h3_ [class_ "text-sm text-textStrong "] $ toHtml category
-    span_ [class_ "h-4 w-[3px] bg-fillWeak"] $ pass
+    span_ [class_ "h-4 w-[2px] bg-fillWeak"] $ pass
     div_ [class_ "flex w-full items-center"] $ do
-      div_ [class_ "flex w-24 flex-col items-center"] $ do
+      div_ [class_ "flex w-24 flex-col items-center", term "data-tippy-content" "Total events"] $ do
         span_ [class_ "w-12 border-t border-t-strokeWeak self-end"] $ pass
-        span_ [class_ "h-4 w-[3px] bg-fillWeak"] $ pass
+        span_ [class_ "h-4 w-[2px] bg-fillWeak"] $ pass
         div_ [class_ "text-sm text-textStrong"] $ toHtml (prettyPrintCount (fromIntegral total))
-        div_ [class_ "flex items-center gap-1 text-xs mt-1"] $ do
-          faSprite_ (if changeCount < 0 then "arrow-down" else "arrow-up-right") "regular" "w-3 h-3"
+        div_ [class_ $ "flex items-center gap-1 text-xs mt-1" <> (if changeCount < 0 then " text-textError" else " text-textSuccess")] $ do
+          faSprite_ (if changeCount < 0 then "trending-down" else "trending-up") "regular" "w-3 h-3"
           span_ [] $ toHtml $ (show changeCount) <> "%"
-      div_ [class_ "flex w-24 flex-col items-center"] $ do
+      div_ [class_ "flex w-24 flex-col items-center", term "data-tippy-content" "Average duration"] $ do
         span_ [class_ "w-12 border-t border-t-strokeWeak self-start"] $ pass
-        span_ [class_ "h-4 w-[3px] bg-fillWeak"] $ pass
+        span_ [class_ "h-4 w-[2px] bg-fillWeak"] $ pass
         div_ [class_ "text-sm text-textStrong"] $ toHtml (getDurationNSMS $ round avDur)
-        div_ [class_ "flex items-center gap-1 text-xs mt-1"] $ do
-          faSprite_ (if changeCount < 0 then "arrow-down" else "arrow-up-right") "regular" "w-3 h-3"
+        div_ [class_ $ "flex items-center gap-1 text-xs mt-1" <> (if changeDur < 0 then " text-textSuccess" else " text-textError")] $ do
+          faSprite_ (if changeDur < 0 then "trending-down" else "trending-up") "regular" "w-3 h-3"
           span_ [] $ toHtml $ (show changeDur) <> "%"
 
 
@@ -600,13 +631,15 @@ mapFunc prMap rd =
   case Map.lookup rd.endpointHash prMap of
     Just prevDuration ->
       let diff = rd.averageDuration - prevDuration
-          diffPct = round $ divideIntegers diff prevDuration * 100
+          diffPct = divideIntegers diff prevDuration * 100
        in PerformanceReport
             { urlPath = rd.urlPath
             , method = rd.method
             , host = ""
             , averageDuration = rd.averageDuration
             , durationDiffPct = diffPct
+            , requestCount = 0
+            , requestDiffPct = 0
             }
     Nothing ->
       PerformanceReport
@@ -615,6 +648,8 @@ mapFunc prMap rd =
         , host = ""
         , averageDuration = rd.averageDuration
         , durationDiffPct = 0
+        , requestCount = 0
+        , requestDiffPct = 0
         }
 
 

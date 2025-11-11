@@ -48,6 +48,7 @@ module Models.Telemetry.Telemetry (
   atMapInt,
   getProjectStatsBySpanType,
   getEndpointStats,
+  getDBQueryStats,
 )
 where
 
@@ -1147,7 +1148,7 @@ getProjectStatsBySpanType projectId start end = dbtToEff $ query q (projectId, s
       |]
 
 
-getEndpointStats :: DB :> es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es (V.Vector (Text, Text, Text, Int))
+getEndpointStats :: DB :> es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es (V.Vector (Text, Text, Text, Int, Int))
 getEndpointStats projectId start end = dbtToEff $ query q (projectId, start, end)
   where
     q =
@@ -1156,20 +1157,39 @@ SELECT
     COALESCE(attributes___server___address, attributes___network___peer___address, '') AS host,
     COALESCE(attributes___http___request___method, 'GET') AS method,
     COALESCE(attributes___url___path, '') AS url_path,
-    CAST(ROUND(AVG(COALESCE(duration, 0))) AS BIGINT) AS average_duration
+    CAST(ROUND(AVG(COALESCE(duration, 0))) AS BIGINT) AS average_duration,
+    COUNT(*) AS request_count
 FROM otel_logs_and_spans
-WHERE
+WHERE 
     project_id = ?::text
     AND timestamp > ? AND timestamp < ?
     AND name = 'monoscope.http'
-    AND kind = 'SERVER'
-    AND status_code IS NOT NULL
-    AND cardinality(hashes) > 0
 GROUP BY
     host, method, url_path
 ORDER BY
+    request_count DESC,
     average_duration DESC;
     |]
+
+
+getDBQueryStats :: DB :> es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es (V.Vector (Text, Int, Int))
+getDBQueryStats projectId start end = dbtToEff $ query q (projectId, start, end)
+  where
+    q =
+      [sql| SELECT
+  attributes___db___query___text AS query,
+  ROUND(AVG(duration))::BIGINT AS avg_duration,
+  COUNT(*) AS count
+FROM otel_logs_and_spans
+WHERE
+  project_id = ?
+  AND timestamp >= ?
+  AND timestamp <= ?
+  AND attributes___db___query___text IS NOT NULL
+GROUP BY attributes___db___query___text
+HAVING ROUND(AVG(duration)/1000000) > 500
+ORDER BY avg_duration DESC LIMIT 10;
+      |]
 
 
 getTraceShapes :: DB :> es => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector (Text, Text, Int, Int))
