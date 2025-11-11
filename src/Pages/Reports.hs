@@ -190,7 +190,7 @@ data ReportData = ReportData
 buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> AE.Value
 buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStatsDiff' endpointsPerformance slowDbQueries =
   let spanStatsDiff = (\(t, e, chang, dur, durChange) -> AE.object ["spanType" AE..= t, "eventCount" AE..= e, "eventChange" AE..= chang, "averageDuration" AE..= dur, "durationChange" AE..= durChange]) <$> spanTypeStatsDiff'
-      perf = (\(u, m, p, d, dc, req, cc) -> AE.object ["host" AE..= u, "urlPath" AE..= p, "method" AE..= m, "averageDuration" AE..= d, "durationDiffPct" AE..= dc, "requestCount" AE..= req, "requestDiffPct" AE..= cc]) <$> endpointsPerformance
+      perf = (\(u, m, p, d, dc, req, cc) -> AE.object ["host" AE..= u, "urlPath" AE..= p, "method" AE..= m, "averageDuration" AE..= d, "durationDiffPct" AE..= dc, "requestCount" AE..= req, "requestDiffPct" AE..= cc]) <$> V.take 10 endpointsPerformance
       slowDbQueries' = (\(q, d, c) -> AE.object ["query" AE..= q, "averageDuration" AE..= d, "totalEvents" AE..= c]) <$> slowDbQueries
    in AE.object ["endpoints" AE..= perf, "events" AE..= AE.object ["total" AE..= totalEvents, "change" AE..= errorsChange], "errors" AE..= AE.object ["total" AE..= totalErrors, "change" AE..= eventsChange], "spanTypeStats" AE..= spanStatsDiff, "slowDbQueries" AE..= slowDbQueries']
 
@@ -392,17 +392,24 @@ shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
 reportsPage :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Text -> Bool -> Bool -> Html ()
 reportsPage pid reports nextUrl daily weekly =
   div_ [class_ "flex flex-row h-full border-t"] do
-    div_ [class_ "w-1/3 border-r border-strokeWeak p-4 overflow-y-auto"] do
-      div_ [class_ "mt-4"] do
-        reportListItems pid reports nextUrl
-    div_ [class_ "w-2/3 overflow-y-auto"] do
-      div_ [class_ "flex items-center justify-center h-full", id_ "detailSidebar"] do
-        div_ [class_ "text-center"] do
-          faSprite_ "clapperboard" "light" "w-36 h-36 mx-auto"
-          h3_ [class_ "text-xl font-bold mb-4 text-textStrong"] "View Each Report Details here"
-          h3_ [class_ "mt-2 text-lg font-medium text-textStrong"] "But nothing is selected yet"
-          p_ [class_ "mt-1  text-textWeak"] "Select a field or similar item on the left"
-          p_ [class_ "mt-1  text-textWeak"] "to view more details about it here."
+    when (V.null reports) do
+      div_ [class_ "m-auto"] do
+        div_ [class_ "flex flex-col items-center justify-center py-16 px-4"] $ do
+          div_ [class_ "rounded-full flex items-center justify-center mb-3"] $ do
+            faSprite_ "empty" "regular" "h-12 w-12"
+          h3_ [class_ "text-xl text-textStrong mb-2"] "No reports generated for this project yet."
+    unless (V.null reports) do
+      div_ [class_ "w-1/3 border-r border-strokeWeak p-4 overflow-y-auto"] do
+        div_ [class_ "mt-4"] do
+          reportListItems pid reports nextUrl
+      div_ [class_ "w-2/3 overflow-y-auto"] do
+        div_ [class_ "flex items-center justify-center h-full", id_ "detailSidebar"] do
+          div_ [class_ "text-center"] do
+            faSprite_ "clapperboard" "light" "w-36 h-36 mx-auto"
+            h3_ [class_ "text-xl font-bold mb-4 text-textStrong"] "View Each Report Details here"
+            h3_ [class_ "mt-2 text-lg font-medium text-textStrong"] "But nothing is selected yet"
+            p_ [class_ "mt-1  text-textWeak"] "Select a field or similar item on the left"
+            p_ [class_ "mt-1  text-textWeak"] "to view more details about it here."
 
 
 -- div_ [class_ "w-5 bg-gray-200"] ""
