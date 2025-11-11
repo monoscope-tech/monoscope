@@ -403,13 +403,18 @@ reportsPage pid reports nextUrl daily weekly =
         div_ [class_ "mt-4"] do
           reportListItems pid reports nextUrl
       div_ [class_ "w-2/3 overflow-y-auto"] do
-        div_ [class_ "flex items-center justify-center h-full", id_ "detailSidebar"] do
-          div_ [class_ "text-center"] do
-            faSprite_ "clapperboard" "light" "w-36 h-36 mx-auto"
-            h3_ [class_ "text-xl font-bold mb-4 text-textStrong"] "View Each Report Details here"
-            h3_ [class_ "mt-2 text-lg font-medium text-textStrong"] "But nothing is selected yet"
-            p_ [class_ "mt-1  text-textWeak"] "Select a field or similar item on the left"
-            p_ [class_ "mt-1  text-textWeak"] "to view more details about it here."
+        div_ [class_ "flex h-full", id_ "detailSidebar"] do
+          let h = V.head reports
+          a_
+            [ class_ "w-full text-center  cursor-pointer"
+            , hxGet_ $ "/p/" <> pid.toText <> "/reports/" <> (show h.id.reportId)
+            , hxTarget_ "#detailSidebar"
+            , hxSwap_ "innerHTML"
+            , hxTrigger_ "intersect once"
+            ]
+            do
+              div_ [class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"] do
+                span_ [class_ "loading loading-dots text-sm text-textWeak"] pass
 
 
 -- div_ [class_ "w-5 bg-gray-200"] ""
