@@ -22,7 +22,7 @@ where
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AEP
 import Data.Default (def)
-import Data.List (nub)
+import Data.List (foldl, nub)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
@@ -34,6 +34,7 @@ import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.Issues qualified as Issue
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
@@ -175,6 +176,16 @@ data DBQueryStat = DBQueryStat
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
+data IssueStat = IssueStat
+  { title :: Text
+  , critical :: Bool
+  , severity :: Text
+  , issueType :: Issue.IssueType
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
 data ReportData = ReportData
   { endpoints :: [PerformanceReport]
   , errors :: StatData
@@ -183,6 +194,7 @@ data ReportData = ReportData
   , slowDbQueries :: [DBQueryStat]
   , errorDataset :: Widgets.WidgetDataset
   , eventsDataset :: Widgets.WidgetDataset
+  , issues :: [IssueStat]
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
@@ -200,8 +212,8 @@ getDataset chartEv =
     }
 
 
-buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> Charts.MetricsData -> Charts.MetricsData -> AE.Value
-buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStatsDiff' endpointsPerformance slowDbQueries chartEv chartErr =
+buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> Charts.MetricsData -> Charts.MetricsData -> V.Vector (Text, Bool, Text, Issues.IssueType) -> AE.Value
+buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStatsDiff' endpointsPerformance slowDbQueries chartEv chartErr issues =
   let spanStatsDiff = (\(t, e, chang, dur, durChange) -> AE.object ["spanType" AE..= t, "eventCount" AE..= e, "eventChange" AE..= chang, "averageDuration" AE..= dur, "durationChange" AE..= durChange]) <$> spanTypeStatsDiff'
       perf = (\(u, m, p, d, dc, req, cc) -> AE.object ["host" AE..= u, "urlPath" AE..= p, "method" AE..= m, "averageDuration" AE..= d, "durationDiffPct" AE..= dc, "requestCount" AE..= req, "requestDiffPct" AE..= cc]) <$> V.take 10 endpointsPerformance
       slowDbQueries' = (\(q, d, c) -> AE.object ["query" AE..= q, "averageDuration" AE..= d, "totalEvents" AE..= c]) <$> slowDbQueries
@@ -213,6 +225,7 @@ buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStats
         , "slowDbQueries" AE..= slowDbQueries'
         , "errorDataset" AE..= (getDataset chartErr)
         , "eventsDataset" AE..= (getDataset chartEv)
+        , "issues" AE..= ((\(t, c, s, tp) -> IssueStat t c s tp) <$> issues)
         ]
 
 
@@ -319,20 +332,7 @@ singleReportPage pid report =
                         span_ [class_ $ "text-xs" <> (if v.events.change < 0 then " text-textError" else " text-textSuccess")] $ show v.events.change <> "% from last period"
                       div_ [class_ "h-[90%]"] do
                         Widget.widget_
-                          $ (def :: Widget.Widget)
-                            { Widget.wType = WTTimeseries
-                            , Widget.unit = Just "rows"
-                            , Widget.naked = Just True
-                            , Widget.dataset = Just v.eventsDataset
-                            , Widget.title = Just "Events trend"
-                            , Widget.hideLegend = Just True
-                            , Widget._projectId = Just pid
-                            , Widget.standalone = Just True
-                            , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
-                            , Widget.allowZoom = Just True
-                            , Widget.showMarkArea = Just True
-                            , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
-                            }
+                          $ (def :: Widget.Widget){Widget.wType = WTTimeseries, Widget.unit = Just "rows", Widget.naked = Just True, Widget.dataset = Just v.eventsDataset, Widget.title = Just "Events trend", Widget.hideLegend = Just True, Widget._projectId = Just pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True, Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
                     div_ [class_ "h-full w-1/2 border rounded-lg p-3"] do
                       div_ [class_ "flex w-full items-center justify-between"] do
                         div_ [class_ "flex text-sm items-center gap-3"] do
@@ -341,21 +341,7 @@ singleReportPage pid report =
                         span_ [class_ $ "text-xs" <> (if v.errors.change >= 0 then " text-textError" else " text-textSuccess ")] $ show v.errors.change <> "% from last week"
                       div_ [class_ "h-[90%]"] do
                         Widget.widget_
-                          $ (def :: Widget.Widget)
-                            { Widget.wType = WTTimeseries
-                            , Widget.dataset = Just v.errorDataset
-                            , Widget.unit = Just "rows"
-                            , Widget.naked = Just True
-                            , Widget.title = Just "Errors trend"
-                            , Widget.theme = Just "roma"
-                            , Widget.hideLegend = Just True
-                            , Widget._projectId = Just pid
-                            , Widget.standalone = Just True
-                            , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
-                            , Widget.allowZoom = Just True
-                            , Widget.showMarkArea = Just True
-                            , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
-                            }
+                          $ (def :: Widget.Widget){Widget.wType = WTTimeseries, Widget.dataset = Just v.errorDataset, Widget.unit = Just "rows", Widget.naked = Just True, Widget.title = Just "Errors trend", Widget.theme = Just "roma", Widget.hideLegend = Just True, Widget._projectId = Just pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True, Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
                   div_ [class_ "space-y-6"] do
                     div_ [class_ "pt-3 border-t flex justify-between"] do
                       h5_ [class_ "text-sm font-medium"] "Span types overview"
@@ -363,6 +349,37 @@ singleReportPage pid report =
                     div_ [class_ "flex items-center w-full overflow-x-auto gap-3"] do
                       forM_ cats $ \cat -> do
                         categoryCard cat.spanType cat.eventCount cat.averageDuration cat.durationChange cat.eventChange
+
+                  div_ [class_ "space-y-6 pt-4"] do
+                    div_ [class_ "pt-3 border-t flex  items-center justify-between"] do
+                      h5_ [class_ "text-sm font-medium"] "Issues breakdown"
+                      div_ [class_ "flex flex-col gap-2"] do
+                        div_ [class_ "flex items-center gap-4 "] do
+                          div_ [class_ "flex items-center gap-1"] do
+                            span_ [class_ "h-3 w-3 rounded bg-fillError-strong"] pass
+                            span_ [class_ "text-xs"] "Runtime errors"
+                          div_ [class_ "flex items-center gap-1"] do
+                            span_ [class_ "h-3 rounded w-3 bg-blue-500"] pass
+                            span_ [class_ "text-xs"] "Api changes"
+                          div_ [class_ "flex items-center gap-1"] do
+                            span_ [class_ "h-3 w-3 rounded bg-yellow-500"] pass
+                            span_ [class_ "text-xs"] "Monitor alerts"
+                        let totalAnomalies = length v.issues
+                            (errTotal, apiTotal, qTotal) = foldl (\(e, a, m) x -> (e + if x.issueType == Issues.RuntimeException then 1 else 0, a + if x.issueType == Issues.APIChange then 1 else 0, m + if x.issueType == Issues.QueryAlert then 1 else 0)) (0, 0, 0) v.issues
+                        div_ [class_ "w-full h-3 rounded overflow-x-hidden bg-fillWeak"] do
+                          div_ [class_ "h-full bg-fillError-strong", style_ $ "width: " <> show (errTotal `div` totalAnomalies * 100) <> "%"] pass
+                          div_ [class_ "h-full bg-blue-500", style_ $ "width: " <> show (apiTotal `div` totalAnomalies * 100) <> "%"] pass
+                          div_ [class_ "h-full bg-yellow-500", style_ $ "width: " <> show (qTotal `div` totalAnomalies * 100) <> "%"] pass
+                    div_ [class_ "flex flex-col gap-2 mt-4"] do
+                      forM_ v.issues $ \iss -> do
+                        div_ [class_ "flex items-center justify-between"] do
+                          let titleCls = case iss.issueType of
+                                Issues.RuntimeException -> "text-textError"
+                                Issues.QueryAlert -> "text-yellow-500"
+                                _ -> "text-textBrand-strong"
+                          span_ [class_ $ "text-sm font-medium " <> titleCls] $ toHtml iss.title
+                  -- span_ [] $ toHtml iss.severity
+
                   div_ [class_ "space-y-6 pt-4"] do
                     div_ [class_ "pt-3 border-t flex justify-between"] do
                       h5_ [class_ "text-sm font-medium"] "HTTP endpoints"

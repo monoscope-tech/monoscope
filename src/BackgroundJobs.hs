@@ -813,14 +813,17 @@ sendReportForProject pid rType = do
     chartDataEvents <- liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "| summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx
     chartDataErrors <- liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx
 
-    anomalies <- dbtToEff $ Issues.selectIssues pid Nothing Nothing Nothing 100 0
+    anomalies <- dbtToEff $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just $ (startTime, currentTime))
+
+    let anomalies' = (\x -> (x.title, x.critical, x.severity, x.issueType)) <$> anomalies
+
     endpointStats <- Telemetry.getEndpointStats pid startTime currentTime
     endpointStatsPrev <- Telemetry.getEndpointStats pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
     endpoint_rp <- dbtToEff $ RequestDumps.getRequestDumpForReports pid typTxt
     let endpointPerformance = computeDurationChanges endpointStats endpointStatsPrev
     total_anomalies <- dbtToEff $ Anomalies.countAnomalies pid typTxt
     previous_week <- dbtToEff $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid typTxt
-    let rp_json = RP.buildReportJson' totalEvents totalErrors eventsChange errorsChange spanStatsDiff endpointPerformance slowDbQueries chartDataEvents chartDataErrors
+    let rp_json = RP.buildReportJson' totalEvents totalErrors eventsChange errorsChange spanStatsDiff endpointPerformance slowDbQueries chartDataEvents chartDataErrors anomalies'
     timeZone <- liftIO getCurrentTimeZone
     reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
     let report =

@@ -82,7 +82,7 @@ unAcknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCt
 unAcknowlegeAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
-  let qI = [sql| update apis.issues set acknowleged_by=null, acknowleged_at=null where id=? |]
+  let qI = [sql| update apis.issues set acknowledged_by=null, acknowledged_at=null where id=? |]
   _ <- dbtToEff $ execute qI (Only aid)
   _ <- dbtToEff $ execute q (Only aid)
   addRespHeaders $ Acknowlege pid (Issues.IssueId aid.unAnomalyId) False
@@ -553,7 +553,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
             mockIssue2' = mockIssue2{Issues.responsePayloads = Aeson mockPayloadChanges2}
         pure $ V.fromList [mockIssue1', mockIssue2', mockIssue3, mockIssue4]
       else -- Fetch real data from database
-        dbtToEff $ Issues.selectIssues pid Nothing (Just ackd) (Just archived) fLimit (pageInt * fLimit)
+        dbtToEff $ Issues.selectIssues pid Nothing (Just ackd) (Just archived) fLimit (pageInt * fLimit) Nothing
 
   let currentURL = mconcat ["/p/", pid.toText, "/anomalies?layout=", fromMaybe "false" layoutM, "&ackd=", show ackd, "&archived=", show archived]
       nextFetchUrl = case layoutM of
@@ -852,9 +852,9 @@ renderIssue hideByDefault currTime timeFilter issue isWidget = do
         button_
           [ class_
               $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
-              <> if isAcknowledged
-                then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80"
-                else "bg-fillPrimary text-textInverse-strong hover:bg-fillPrimary/90"
+                <> if isAcknowledged
+                  then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80"
+                  else "bg-fillPrimary text-textInverse-strong hover:bg-fillPrimary/90"
           , hxGet_ acknowledgeEndpoint
           , hxSwap_ "outerHTML"
           , hxTarget_ "closest .itemsListItem"
@@ -869,9 +869,9 @@ renderIssue hideByDefault currTime timeFilter issue isWidget = do
         button_
           [ class_
               $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
-              <> if isArchived
-                then "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak hover:bg-fillWarning-weak/80"
-                else "border border-strokeWeak text-textStrong hover:bg-fillWeak"
+                <> if isArchived
+                  then "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak hover:bg-fillWarning-weak/80"
+                  else "border border-strokeWeak text-textStrong hover:bg-fillWeak"
           , hxGet_ archiveEndpoint
           , hxSwap_ "outerHTML"
           , hxTarget_ "closest .itemsListItem"
@@ -1173,7 +1173,7 @@ anomalyAcknowlegeButton pid aid acked host = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
-        <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+          <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" "acknowlege issue"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -1189,7 +1189,7 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
-        <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+          <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"

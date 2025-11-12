@@ -63,6 +63,7 @@ import Database.PostgreSQL.Simple.FromField (FromField, ResultError (..), fromFi
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
+import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Anomalies (PayloadChange)
@@ -70,8 +71,10 @@ import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
+import NeatInterpolation (text)
 import Relude hiding (id)
 import Servant (FromHttpApiData (..))
+import Utils (formatUTC)
 
 
 -- | Issue ID type
@@ -326,12 +329,20 @@ selectIssueById = selectOneByField [field| id |] . Only
 
 
 -- | Select issues with filters
-selectIssues :: Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> DBT IO (V.Vector IssueL)
-selectIssues pid typeM isAcknowledged isArchived limit offset = query q params
+selectIssues :: Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> DBT IO (V.Vector IssueL)
+selectIssues pid typeM isAcknowledged isArchived limit offset timeRangeM = query (Query $ encodeUtf8 q) params
   where
     -- Query must return columns in the exact order of IssueL fields
+
+    timefilter = case timeRangeM of
+      Just (st, end) -> " AND created_at >= '" <> formatUTC st <> "' AND created_at <= '" <> formatUTC end <> "'"
+      _ -> ""
+    ackF = case isAcknowledged of
+      Just True -> " AND acknowledged_at is not null"
+      Just False -> "AND acknowledged_at is null"
+      _ -> ""
     q =
-      [sql|
+      [text|
       SELECT 
         id,                                               -- 1. id
         created_at,                                       -- 2. createdAt
@@ -359,7 +370,7 @@ selectIssues pid typeM isAcknowledged isArchived limit offset = query q params
         0::bigint,                                       -- 24. eventCount
         updated_at                                       -- 25. lastSeen
       FROM apis.issues
-      WHERE project_id = ?
+      WHERE project_id = ?  $timefilter $ackF
       ORDER BY critical DESC, created_at DESC
       LIMIT ? OFFSET ?
     |]

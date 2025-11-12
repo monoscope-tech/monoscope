@@ -348,7 +348,7 @@ selectIssues pid endpointM isAcknowleged isArchived sortM limitM skipM = query (
     q =
       [text|
 SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
-    endpoint_id, acknowleged_by, archived_at,
+    endpoint_id, acknowledged_by, archived_at,
     CASE
       WHEN anomaly_type='shape' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND shape_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
       -- Format requires a CONTAINS query which is not covered by the regular indexes. GIN index can't have created_at compound indexes, so its a slow query
@@ -442,7 +442,7 @@ acknowledgeAnomalies uid aids
       query q (uid, aids)
   where
     qGetHashes = [sql| SELECT anomaly_hashes FROM apis.issues WHERE id=ANY(?::uuid[]) |]
-    qIssues = [sql| update apis.issues set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
+    qIssues = [sql| update apis.issues set acknowledged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
     q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
     qAnomaliesByHash = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where target_hash=ANY(?) |]
 
@@ -455,7 +455,7 @@ acknowlegeCascade uid targets
       execute q (uid, hashes)
   where
     hashes = (<> "%") <$> targets
-    qIssues = [sql| UPDATE apis.issues SET acknowleged_by = ?, acknowleged_at = NOW() WHERE target_hash=ANY (?); |]
+    qIssues = [sql| UPDATE apis.issues SET acknowledged_by = ?, acknowleged_at = NOW() WHERE target_hash=ANY (?); |]
     q = [sql| UPDATE apis.anomalies SET acknowleged_by = ?, acknowleged_at = NOW() WHERE target_hash LIKE ANY (?); |]
 
 
@@ -1039,7 +1039,7 @@ insertIssues issues = executeMany q (V.toList issues)
   where
     q =
       [sql|insert into apis.issues (id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash,
-                      issue_data, endpoint_id, acknowleged_by, archived_at, title, service, critical, breaking_changes,
+                      issue_data, endpoint_id, acknowledged_by, archived_at, title, service, critical, breaking_changes,
                       incremental_changes, affected_requests, affected_clients, estimated_requests, migration_complexity,
                       recommended_action, request_payloads, response_payloads, anomaly_hashes, endpoint_hash) 
                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1054,7 +1054,7 @@ findOpenIssueForEndpoint pid endpointHash = queryOne q (pid, endpointHash)
     q =
       [sql|
       SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
-        endpoint_id, acknowleged_by, archived_at, title, service, critical, breaking_changes, incremental_changes,
+        endpoint_id, acknowledged_by, archived_at, title, service, critical, breaking_changes, incremental_changes,
         affected_requests, affected_clients, estimated_requests, migration_complexity, recommended_action,
         request_payloads, response_payloads, COALESCE(anomaly_hashes, '{}'), COALESCE(endpoint_hash, '')
       FROM apis.issues 
@@ -1144,7 +1144,7 @@ selectIssueById aid = queryOne q (Only aid)
     q =
       [sql|
       SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
-        endpoint_id, acknowleged_by, archived_at, title, service, critical, breaking_changes, incremental_changes,
+        endpoint_id, acknowledged_by, archived_at, title, service, critical, breaking_changes, incremental_changes,
         affected_requests, affected_clients, estimated_requests, migration_complexity, recommended_action,
         request_payloads, response_payloads, COALESCE(anomaly_hashes, '{}'), COALESCE(endpoint_hash, '')
       FROM apis.issues 
