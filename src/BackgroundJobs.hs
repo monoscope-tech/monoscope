@@ -6,6 +6,7 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.UUID qualified as UUID
+import Data.Either qualified as Unsafe
 import Data.List (nub)
 import Data.List.Extra (chunksOf, groupBy)
 import Data.Map.Lazy qualified as HM
@@ -58,9 +59,11 @@ import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
+import Pages.Charts.Charts qualified as Charts
 import Pages.Reports qualified as RP
 import Pkg.Drain qualified as Drain
 import Pkg.Mail (NotificationAlerts (EndpointAlert, ReportAlert, RuntimeErrorAlert), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
+import Pkg.Parser
 import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask)
@@ -70,6 +73,7 @@ import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, runBackground)
+import Text.Megaparsec (parseMaybe)
 import UnliftIO.Exception (try)
 import Utils (DBField)
 
@@ -797,6 +801,18 @@ sendReportForProject pid rType = do
 
     slowDbQueries <- Telemetry.getDBQueryStats pid startTime currentTime
 
+    let parseQ q =
+          let qAST = Unsafe.fromRight [] (parseQueryToAST q)
+              sqlQueryComponents =
+                (defSqlQueryCfg (pid) currentTime (parseMaybe pSource =<< Nothing) Nothing)
+                  { dateRange = (Just startTime, Just currentTime)
+                  }
+              (_, qc) = queryASTToComponents sqlQueryComponents qAST
+           in maybeToMonoid qc.finalSummarizeQuery
+
+    chartDataEvents <- liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "| summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx
+    chartDataErrors <- liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx
+
     anomalies <- dbtToEff $ Issues.selectIssues pid Nothing Nothing Nothing 100 0
     endpointStats <- Telemetry.getEndpointStats pid startTime currentTime
     endpointStatsPrev <- Telemetry.getEndpointStats pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
@@ -804,7 +820,7 @@ sendReportForProject pid rType = do
     let endpointPerformance = computeDurationChanges endpointStats endpointStatsPrev
     total_anomalies <- dbtToEff $ Anomalies.countAnomalies pid typTxt
     previous_week <- dbtToEff $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid typTxt
-    let rp_json = RP.buildReportJson' totalEvents totalErrors eventsChange errorsChange spanStatsDiff endpointPerformance slowDbQueries
+    let rp_json = RP.buildReportJson' totalEvents totalErrors eventsChange errorsChange spanStatsDiff endpointPerformance slowDbQueries chartDataEvents chartDataErrors
     timeZone <- liftIO getCurrentTimeZone
     reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
     let report =

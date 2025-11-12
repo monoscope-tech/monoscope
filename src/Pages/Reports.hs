@@ -34,15 +34,14 @@ import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Apis.Anomalies qualified as Anomalies
-import Models.Apis.Fields.Types (textFieldTypeToText)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.Charts.Charts qualified as Charts
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (..))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Components.Widget qualified as Widgets
@@ -108,45 +107,45 @@ instance AE.FromJSON ReportAnomalyType where
           Just "ATEndpoint" ->
             ATEndpoint
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
               <*> o
-              AE..: "endpointMethod"
+                AE..: "endpointMethod"
               <*> o
-              AE..: "eventsCount"
+                AE..: "eventsCount"
           Just "ATShape" ->
             ATShape
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
               <*> o
-              AE..: "endpointMethod"
+                AE..: "endpointMethod"
               <*> o
-              AE..: "targetHash"
+                AE..: "targetHash"
               <*> o
-              AE..: "newUniqueFields"
+                AE..: "newUniqueFields"
               <*> o
-              AE..: "updatedFieldFormats"
+                AE..: "updatedFieldFormats"
               <*> o
-              AE..: "deletedFields"
+                AE..: "deletedFields"
               <*> o
-              AE..: "eventsCount"
+                AE..: "eventsCount"
           Just "ATFormat" ->
             ATFormat
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
               <*> o
-              AE..: "keyPath"
+                AE..: "keyPath"
               <*> o
-              AE..: "endpointMethod"
+                AE..: "endpointMethod"
               <*> o
-              AE..: "formatType"
+                AE..: "formatType"
               <*> o
-              AE..: "formatExamples"
+                AE..: "formatExamples"
               <*> o
-              AE..: "eventsCount"
+                AE..: "eventsCount"
           Just "ATRuntimeException" ->
             ATRuntimeException
               <$> o
-              AE..: "endpointUrlPath"
+                AE..: "endpointUrlPath"
           _ -> pure UnknownAnomaly
 
 
@@ -182,17 +181,39 @@ data ReportData = ReportData
   , events :: StatData
   , spanTypeStats :: [SpanTypeStats]
   , slowDbQueries :: [DBQueryStat]
+  , errorDataset :: Widgets.WidgetDataset
+  , eventsDataset :: Widgets.WidgetDataset
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
 
 
-buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> AE.Value
-buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStatsDiff' endpointsPerformance slowDbQueries =
+getDataset :: Charts.MetricsData -> Widgets.WidgetDataset
+getDataset chartEv =
+  Widget.WidgetDataset
+    { source = AE.toJSON $ V.cons (AE.toJSON <$> chartEv.headers) (AE.toJSON <<$>> chartEv.dataset)
+    , rowsPerMin = chartEv.rowsPerMin
+    , value = Just chartEv.rowsCount
+    , from = chartEv.from
+    , to = chartEv.to
+    , stats = chartEv.stats
+    }
+
+
+buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> Charts.MetricsData -> Charts.MetricsData -> AE.Value
+buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStatsDiff' endpointsPerformance slowDbQueries chartEv chartErr =
   let spanStatsDiff = (\(t, e, chang, dur, durChange) -> AE.object ["spanType" AE..= t, "eventCount" AE..= e, "eventChange" AE..= chang, "averageDuration" AE..= dur, "durationChange" AE..= durChange]) <$> spanTypeStatsDiff'
       perf = (\(u, m, p, d, dc, req, cc) -> AE.object ["host" AE..= u, "urlPath" AE..= p, "method" AE..= m, "averageDuration" AE..= d, "durationDiffPct" AE..= dc, "requestCount" AE..= req, "requestDiffPct" AE..= cc]) <$> V.take 10 endpointsPerformance
       slowDbQueries' = (\(q, d, c) -> AE.object ["query" AE..= q, "averageDuration" AE..= d, "totalEvents" AE..= c]) <$> slowDbQueries
-   in AE.object ["endpoints" AE..= perf, "events" AE..= AE.object ["total" AE..= totalEvents, "change" AE..= errorsChange], "errors" AE..= AE.object ["total" AE..= totalErrors, "change" AE..= eventsChange], "spanTypeStats" AE..= spanStatsDiff, "slowDbQueries" AE..= slowDbQueries']
+   in AE.object
+        [ "endpoints" AE..= perf
+        , "events" AE..= AE.object ["total" AE..= totalEvents, "change" AE..= errorsChange]
+        , "errors" AE..= AE.object ["total" AE..= totalErrors, "change" AE..= eventsChange]
+        , "spanTypeStats" AE..= spanStatsDiff
+        , "slowDbQueries" AE..= slowDbQueries'
+        , "errorDataset" AE..= (getDataset chartErr)
+        , "eventsDataset" AE..= (getDataset chartEv)
+        ]
 
 
 reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders ReportsPost)
@@ -302,16 +323,7 @@ singleReportPage pid report =
                             { Widget.wType = WTTimeseries
                             , Widget.unit = Just "rows"
                             , Widget.naked = Just True
-                            , Widget.sql =
-                                Just
-                                  $ [text|SELECT extract(epoch from time_bucket('1 day', timestamp))::integer AS bucket
-                                        , kind
-                                        , count(*)::float
-                                        FROM otel_logs_and_spans
-                                        WHERE project_id = '{{project_id}}'
-                                        AND timestamp >= NOW() - INTERVAL '7 days'
-                                        GROUP BY bucket, kind
-                                        ORDER BY bucket |]
+                            , Widget.dataset = Just v.eventsDataset
                             , Widget.title = Just "Events trend"
                             , Widget.hideLegend = Just True
                             , Widget._projectId = Just pid
@@ -331,7 +343,7 @@ singleReportPage pid report =
                         Widget.widget_
                           $ (def :: Widget.Widget)
                             { Widget.wType = WTTimeseries
-                            , Widget.query = Just "status_message == \"ERROR\" | summarize count(*) by bin_auto(timestamp)"
+                            , Widget.dataset = Just v.errorDataset
                             , Widget.unit = Just "rows"
                             , Widget.naked = Just True
                             , Widget.title = Just "Errors trend"
@@ -373,20 +385,6 @@ singleReportPage pid report =
                 Nothing -> pass
       Nothing -> do
         h3_ [] "Report Not Found"
-
-
-shapeParameterStats_ :: Int -> Int -> Int -> Html ()
-shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
-  div_ [class_ "grid grid-cols-3 gap-2 text-center text-xs"] do
-    div_ [class_ "p-2 py-1 bg-fillSuccess-weak text-textSuccess border border-strokeSuccess-strong"] do
-      div_ [class_ "text-base"] $ toHtml @String $ show newF
-      small_ [class_ "block"] "new fields"
-    div_ [class_ " p-2 py-1 bg-fillWeaker text-textStrong border border-strokeMedium"] do
-      div_ [class_ "text-base"] $ toHtml @String $ show updatedFF
-      small_ [class_ "block"] "updated fields"
-    div_ [class_ "p-2  py-1  bg-fillError-weak text-textError border border-strokeError-strong"] do
-      div_ [class_ "text-base"] $ toHtml @String $ show deletedF
-      small_ [class_ "block"] "deleted fields"
 
 
 reportsPage :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Text -> Bool -> Bool -> Html ()
@@ -468,20 +466,6 @@ renderEndpointsTable endpoints = div_ [class_ "w-full border rounded-lg overflow
     th_ [class_ "p-2"] "Avg. latency"
     th_ [class_ "p-2"] "Latency %"
   tbody_ [class_ "text-sm"] $ mapM_ renderEndpointRow endpoints
-
-
-summaryCard :: Text -> Text -> Text -> Text -> Html ()
-summaryCard title value subtitle change = do
-  div_ [class_ "rounded-lg flex p-3 flex-col gap-3 border w-max"] $ do
-    div_ [class_ "flex flex-col"] $ do
-      h3_ [class_ "text-sm font-medium text-textWeak"] $ toHtml title
-    div_ [class_ "flex flex-col gap-2"] $ do
-      div_ $ do
-        div_ [class_ "text-lg font-bold text-textStrong"] $ toHtml value
-        p_ [class_ "text-xs text-textWeak"] $ toHtml subtitle
-      div_ [class_ "flex items-center gap-2 text-sm font-medium text-chart-1"] $ do
-        faSprite_ (if T.isPrefixOf "-" change then "arrow-down" else "arrow-up") "regular" "w-3 h-3"
-        span_ [] $ toHtml $ change <> " from last period"
 
 
 categoryCard :: Text -> Integer -> Double -> Double -> Double -> Html ()
@@ -586,23 +570,23 @@ getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
                 AE.Success (apiData :: Issues.APIChangeData) ->
                   AE.object
                     $ baseObject
-                    <> [ "tag" AE..= "ATShape"
-                       , "deletedFields" AE..= length apiData.deletedFields
-                       , "endpointMethod" AE..= apiData.endpointMethod
-                       , "endpointUrlPath" AE..= apiData.endpointPath
-                       , "newUniqueFields" AE..= length apiData.newFields
-                       , "updatedFields" AE..= length apiData.modifiedFields
-                       ]
+                      <> [ "tag" AE..= "ATShape"
+                         , "deletedFields" AE..= length apiData.deletedFields
+                         , "endpointMethod" AE..= apiData.endpointMethod
+                         , "endpointUrlPath" AE..= apiData.endpointPath
+                         , "newUniqueFields" AE..= length apiData.newFields
+                         , "updatedFields" AE..= length apiData.modifiedFields
+                         ]
                 _ -> AE.object baseObject
             Issues.RuntimeException ->
               case AE.fromJSON (getAeson issue.issueData) of
                 AE.Success (errorData :: Issues.RuntimeExceptionData) ->
                   AE.object
                     $ baseObject
-                    <> [ "tag" AE..= "ATRuntimeException"
-                       , "endpointMethod" AE..= fromMaybe "UNKNOWN" errorData.requestMethod
-                       , "endpointUrlPath" AE..= fromMaybe "/" errorData.requestPath
-                       ]
+                      <> [ "tag" AE..= "ATRuntimeException"
+                         , "endpointMethod" AE..= fromMaybe "UNKNOWN" errorData.requestMethod
+                         , "endpointUrlPath" AE..= fromMaybe "/" errorData.requestPath
+                         ]
                 _ -> AE.object baseObject
             _ -> AE.object baseObject
 
