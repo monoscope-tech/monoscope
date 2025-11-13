@@ -177,7 +177,8 @@ data DBQueryStat = DBQueryStat
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
 data IssueStat = IssueStat
-  { title :: Text
+  { id :: Issue.IssueId
+  , title :: Text
   , critical :: Bool
   , severity :: Text
   , issueType :: Issue.IssueType
@@ -212,7 +213,7 @@ getDataset chartEv =
     }
 
 
-buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> Charts.MetricsData -> Charts.MetricsData -> V.Vector (Text, Bool, Text, Issues.IssueType) -> AE.Value
+buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> Charts.MetricsData -> Charts.MetricsData -> V.Vector (Issues.IssueId, Text, Bool, Text, Issues.IssueType) -> AE.Value
 buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStatsDiff' endpointsPerformance slowDbQueries chartEv chartErr issues =
   let spanStatsDiff = (\(t, e, chang, dur, durChange) -> AE.object ["spanType" AE..= t, "eventCount" AE..= e, "eventChange" AE..= chang, "averageDuration" AE..= dur, "durationChange" AE..= durChange]) <$> spanTypeStatsDiff'
       perf = (\(u, m, p, d, dc, req, cc) -> AE.object ["host" AE..= u, "urlPath" AE..= p, "method" AE..= m, "averageDuration" AE..= d, "durationDiffPct" AE..= dc, "requestCount" AE..= req, "requestDiffPct" AE..= cc]) <$> V.take 10 endpointsPerformance
@@ -225,7 +226,7 @@ buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStats
         , "slowDbQueries" AE..= slowDbQueries'
         , "errorDataset" AE..= (getDataset chartErr)
         , "eventsDataset" AE..= (getDataset chartEv)
-        , "issues" AE..= ((\(t, c, s, tp) -> IssueStat t c s tp) <$> issues)
+        , "issues" AE..= ((\(i, t, c, s, tp) -> IssueStat i t c s tp) <$> issues)
         ]
 
 

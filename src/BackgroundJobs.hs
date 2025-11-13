@@ -815,7 +815,7 @@ sendReportForProject pid rType = do
 
     anomalies <- dbtToEff $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just $ (startTime, currentTime))
 
-    let anomalies' = (\x -> (x.title, x.critical, x.severity, x.issueType)) <$> anomalies
+    let anomalies' = (\x -> (x.id, x.title, x.critical, x.severity, x.issueType)) <$> anomalies
 
     endpointStats <- Telemetry.getEndpointStats pid startTime currentTime
     endpointStatsPrev <- Telemetry.getEndpointStats pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
