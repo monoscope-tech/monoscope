@@ -461,17 +461,13 @@ reportListItems pid reports nextUrl =
 
 renderEndpointRow :: PerformanceReport -> Html ()
 renderEndpointRow endpoint = tr_ [class_ ""] do
-  let (pcls, prc) =
-        if endpoint.durationDiffPct > 0
-          then ("text-textError" :: Text, "+" <> show (durationDiffPct endpoint) <> "%" :: Text)
-          else ("text-textSuccess", show (durationDiffPct endpoint) <> "%")
   td_ [class_ "p-2 text-textWeak w-96 flex gap-4 items-center "] do
     span_ [class_ $ "cbadge-sm badge-" <> endpoint.method] $ toHtml $ endpoint.method
     span_ [class_ "flex-shrink-0 text-textStrong"] $ toHtml endpoint.urlPath
   td_ [class_ "p-2"] $ toHtml $ prettyPrintCount endpoint.requestCount
-  td_ [class_ $ "p-2 " <> pcls] $ toHtml $ show endpoint.requestDiffPct <> "%"
+  td_ [class_ $ "p-2 " <> if endpoint.requestDiffPct < 0 then "text-textError" else "text-textSuccess"] $ toHtml $ show endpoint.requestDiffPct <> "%"
   td_ [class_ "p-2"] $ toHtml $ getDurationNSMS endpoint.averageDuration
-  td_ [class_ $ "p-2 " <> pcls] $ toHtml prc
+  td_ [class_ $ "p-2 " <> if endpoint.durationDiffPct <= 0 then "text-textSuccess" else "text-textError"] $ toHtml $ show (durationDiffPct endpoint) <> "%"
 
 
 renderEndpointsTable :: [PerformanceReport] -> Html ()
@@ -479,9 +475,9 @@ renderEndpointsTable endpoints = div_ [class_ "w-full border rounded-lg overflow
   thead_ [class_ "text-xs text-left text-textStrong font-medium capitalize border-b"] $ tr_ do
     th_ [class_ "p-2"] "Endpoint"
     th_ [class_ "p-2"] "Requests"
-    th_ [class_ "p-2"] "Request %"
+    th_ [class_ "p-2"] "Request change %"
     th_ [class_ "p-2"] "Avg. latency"
-    th_ [class_ "p-2"] "Latency %"
+    th_ [class_ "p-2"] "Latency change %"
   tbody_ [class_ "text-sm"] $ mapM_ renderEndpointRow endpoints
 
 
