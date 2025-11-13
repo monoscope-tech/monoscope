@@ -6,7 +6,10 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.UUID qualified as UUID
+import Data.Either qualified as Unsafe
+import Data.List (nub)
 import Data.List.Extra (chunksOf, groupBy)
+import Data.Map.Lazy qualified as HM
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
@@ -56,9 +59,11 @@ import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
+import Pages.Charts.Charts qualified as Charts
 import Pages.Reports qualified as RP
 import Pkg.Drain qualified as Drain
 import Pkg.Mail (NotificationAlerts (EndpointAlert, ReportAlert, RuntimeErrorAlert), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
+import Pkg.Parser
 import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask)
@@ -68,6 +73,7 @@ import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, runBackground)
+import Text.Megaparsec (parseMaybe)
 import UnliftIO.Exception (try)
 import Utils (DBField)
 
@@ -710,6 +716,62 @@ data ReportType = DailyReport | WeeklyReport
   deriving (Show)
 
 
+getSpanTypeStats :: V.Vector (Text, Int, Int) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int, Double, Int, Double)
+getSpanTypeStats current prev =
+  let
+    spanTypes =
+      nub $ V.toList (V.map (\(t, _, _) -> t) current <> V.map (\(t, _, _) -> t) prev)
+    getStats t =
+      let
+        evtCount = fromMaybe 0 $ V.find (\(st, _, _) -> st == t) current <&> (\(_, c, _) -> c)
+        prevEvtCount = fromMaybe 0 $ V.find (\(st, _, _) -> st == t) prev <&> (\(_, c, _) -> c)
+        evtChange' = if prevEvtCount == 0 then 0.00 :: Double else fromIntegral (evtCount - prevEvtCount) / fromIntegral prevEvtCount * 100
+        evtChange = fromIntegral (round (evtChange' * 100)) / 100
+        -- average duration
+        avgDuration = fromMaybe 0 $ V.find (\(st, _, _) -> st == t) current <&> (\(_, _, d) -> d)
+        prevAvgDuration = fromMaybe 0 $ V.find (\(st, _, _) -> st == t) prev <&> (\(_, _, d) -> d)
+        durationChange' = if prevAvgDuration == 0 then 0.00 :: Double else fromIntegral (avgDuration - prevAvgDuration) / fromIntegral prevAvgDuration * 100
+        durationChange = fromIntegral (round (durationChange' * 100)) / 100
+       in
+        (t, evtCount, evtChange, avgDuration, durationChange)
+   in
+    V.fromList (map getStats spanTypes)
+
+
+type EndpointStatsTuple = (Text, Text, Text, Int, Int)
+
+
+computeDurationChanges :: V.Vector EndpointStatsTuple -> V.Vector EndpointStatsTuple -> V.Vector (Text, Text, Text, Int, Double, Int, Double)
+computeDurationChanges current prev =
+  let
+    prevMap :: HM.Map (Text, Text, Text) Int
+    prevMap =
+      HM.fromList
+        [ ((h, m, u), dur)
+        | (h, m, u, dur, req) <- V.toList prev
+        ]
+    prevMapReq :: HM.Map (Text, Text, Text) Int
+    prevMapReq =
+      HM.fromList
+        [ ((h, m, u), req)
+        | (h, m, u, dur, req) <- V.toList prev
+        ]
+    compute (h, m, u, dur, req) =
+      let change = case HM.lookup (h, m, u) prevMap of
+            Just prevDur
+              | prevDur > 0 ->
+                  Just $ (fromIntegral (dur - prevDur) / fromIntegral prevDur) * 100
+            _ -> Nothing
+          reqChange = case HM.lookup (h, m, u) prevMapReq of
+            Just prevDur
+              | prevDur > 0 ->
+                  Just $ (fromIntegral (req - prevDur) / fromIntegral prevDur) * 100
+            _ -> Nothing
+       in (h, m, u, dur, maybe 100.00 (\x -> fromIntegral (round (x * 100)) / 100) change, req, maybe 100.00 (\x -> fromIntegral (round (x * 100)) / 100) reqChange)
+   in
+    V.map compute current
+
+
 sendReportForProject :: Projects.ProjectId -> ReportType -> ATBackgroundCtx ()
 sendReportForProject pid rType = do
   ctx <- ask @Config.AuthContext
@@ -722,31 +784,62 @@ sendReportForProject pid rType = do
   let startTime = addUTCTime (negate prv) currentTime
   projectM <- dbtToEff $ Projects.projectById pid
   forM_ projectM \pr -> do
+    stats <- Telemetry.getProjectStatsForReport pid startTime currentTime
+    statsPrev <- Telemetry.getProjectStatsForReport pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
+    statsBySpanType <- Telemetry.getProjectStatsBySpanType pid startTime currentTime
+    statsBySpanTypePrev <- Telemetry.getProjectStatsBySpanType pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
+    let totalErrors = sum $ map (\(_, x, _) -> x) (V.toList stats)
+        totalEvents = sum $ map (\(_, _, x) -> x) (V.toList stats)
+        totalErrorsPrev = sum $ map (\(_, x, _) -> x) (V.toList statsPrev)
+        totalEventsPrev = sum $ map (\(_, _, x) -> x) (V.toList statsPrev)
+        -- roundto two decimal places
+        errorsChange' = if totalErrorsPrev == 0 then 0.00 else fromIntegral (totalErrors - totalErrorsPrev) / fromIntegral totalErrorsPrev * 100
+        eventsChange' = if totalEventsPrev == 0 then 0.00 else fromIntegral (totalEvents - totalEventsPrev) / fromIntegral totalEventsPrev * 100
+        errorsChange = fromIntegral (round (errorsChange' * 100)) / 100
+        eventsChange = fromIntegral (round (eventsChange' * 100)) / 100
+        spanStatsDiff = getSpanTypeStats statsBySpanType statsBySpanTypePrev
+
+    slowDbQueries <- Telemetry.getDBQueryStats pid startTime currentTime
+
+    let parseQ q =
+          let qAST = Unsafe.fromRight [] (parseQueryToAST q)
+              sqlQueryComponents =
+                (defSqlQueryCfg (pid) currentTime (parseMaybe pSource =<< Nothing) Nothing)
+                  { dateRange = (Just startTime, Just currentTime)
+                  }
+              (_, qc) = queryASTToComponents sqlQueryComponents qAST
+           in maybeToMonoid qc.finalSummarizeQuery
+
+    chartDataEvents <- liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "| summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx
+    chartDataErrors <- liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx
+
+    anomalies <- dbtToEff $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just $ (startTime, currentTime))
+
+    let anomalies' = (\x -> (x.id, x.title, x.critical, x.severity, x.issueType)) <$> anomalies
+
+    endpointStats <- Telemetry.getEndpointStats pid startTime currentTime
+    endpointStatsPrev <- Telemetry.getEndpointStats pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
+    endpoint_rp <- dbtToEff $ RequestDumps.getRequestDumpForReports pid typTxt
+    let endpointPerformance = computeDurationChanges endpointStats endpointStatsPrev
+    total_anomalies <- dbtToEff $ Anomalies.countAnomalies pid typTxt
+    previous_week <- dbtToEff $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid typTxt
+    let rp_json = RP.buildReportJson' totalEvents totalErrors eventsChange errorsChange spanStatsDiff endpointPerformance slowDbQueries chartDataEvents chartDataErrors anomalies'
+    timeZone <- liftIO getCurrentTimeZone
+    reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
+    let report =
+          Reports.Report
+            { id = reportId
+            , reportJson = rp_json
+            , createdAt = utcToZonedTime timeZone currentTime
+            , updatedAt = utcToZonedTime timeZone currentTime
+            , projectId = pid
+            , startTime = startTime
+            , endTime = currentTime
+            , reportType = typTxt
+            }
+    res <- dbtToEff $ Reports.addReport report
     unless ((typTxt == "daily" && not pr.dailyNotif) || (typTxt == "weekly" && not pr.weeklyNotif)) $ do
-      stats <- Telemetry.getProjectStatsForReport pid startTime currentTime
-      -- TODO: Replace with Issues.selectIssues when fully migrated
-      anomalies <- dbtToEff $ Issues.selectIssues pid Nothing Nothing Nothing 100 0
-      endpoint_rp <- dbtToEff $ RequestDumps.getRequestDumpForReports pid typTxt
-      total_anomalies <- dbtToEff $ Anomalies.countAnomalies pid typTxt
-      previous_week <- dbtToEff $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid typTxt
-      let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_week
-      timeZone <- liftIO getCurrentTimeZone
-
-      reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
-      let report =
-            Reports.Report
-              { id = reportId
-              , reportJson = rep_json
-              , createdAt = utcToZonedTime timeZone currentTime
-              , updatedAt = utcToZonedTime timeZone currentTime
-              , projectId = pid
-              , reportType = typTxt
-              }
-      _ <- dbtToEff $ Reports.addReport report
-
-      let totalErrors = sum $ map (\(_, x, _) -> x) (V.toList stats)
-          totalEvents = sum $ map (\(_, _, x) -> x) (V.toList stats)
-          stmTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" startTime
+      let stmTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" startTime
           currentTimeTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" currentTime
           reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> show report.id.reportId
           chartShotUrl = ctx.env.chartShotUrl <> "?t=bar&p=" <> pid.toText <> "&from=" <> stmTxt <> "&to=" <> currentTimeTxt
@@ -780,17 +873,17 @@ sendReportForProject pid rType = do
                   freeTierLimitExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
                   templateVars =
                     [aesonQQ|{
-                   "user_name": #{firstName},
-                   "project_name": #{projectTitle},
-                   "anomalies_count": #{total_anomalies},
-                   "anomalies":  #{anmls},
-                   "report_url": #{rp_url},
-                   "performance_count": #{perf_count},
-                   "performance": #{perf_shrt},
-                   "start_date": #{dayStart},
-                   "end_date": #{dayEnd},
-                   "free_exceeded": #{freeTierLimitExceeded}
-            }|]
+                     "user_name": #{firstName},
+                     "project_name": #{projectTitle},
+                     "anomalies_count": #{total_anomalies},
+                     "anomalies":  #{anmls},
+                     "report_url": #{rp_url},
+                     "performance_count": #{perf_count},
+                     "performance": #{perf_shrt},
+                     "start_date": #{dayStart},
+                     "end_date": #{dayEnd},
+                     "free_exceeded": #{freeTierLimitExceeded}
+              }|]
               sendPostmarkEmail userEmail (Just ("weekly-report", templateVars)) Nothing
 
 

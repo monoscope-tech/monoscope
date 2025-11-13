@@ -82,7 +82,7 @@ unAcknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCt
 unAcknowlegeAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
-  let qI = [sql| update apis.issues set acknowleged_by=null, acknowleged_at=null where id=? |]
+  let qI = [sql| update apis.issues set acknowledged_by=null, acknowledged_at=null where id=? |]
   _ <- dbtToEff $ execute qI (Only aid)
   _ <- dbtToEff $ execute q (Only aid)
   addRespHeaders $ Acknowlege pid (Issues.IssueId aid.unAnomalyId) False
@@ -553,7 +553,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
             mockIssue2' = mockIssue2{Issues.responsePayloads = Aeson mockPayloadChanges2}
         pure $ V.fromList [mockIssue1', mockIssue2', mockIssue3, mockIssue4]
       else -- Fetch real data from database
-        dbtToEff $ Issues.selectIssues pid Nothing (Just ackd) (Just archived) fLimit (pageInt * fLimit)
+        dbtToEff $ Issues.selectIssues pid Nothing (Just ackd) (Just archived) fLimit (pageInt * fLimit) Nothing
 
   let currentURL = mconcat ["/p/", pid.toText, "/anomalies?layout=", fromMaybe "false" layoutM, "&ackd=", show ackd, "&archived=", show archived]
       nextFetchUrl = case layoutM of

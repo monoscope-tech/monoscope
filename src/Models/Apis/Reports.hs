@@ -10,7 +10,7 @@ module Models.Apis.Reports (
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Default.Instances ()
-import Data.Time (ZonedTime)
+import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (insert, selectById)
@@ -43,6 +43,8 @@ data Report = Report
   , projectId :: Projects.ProjectId
   , reportType :: Text
   , reportJson :: AE.Value
+  , startTime :: UTCTime
+  , endTime :: UTCTime
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
