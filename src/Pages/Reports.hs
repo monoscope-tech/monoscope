@@ -108,45 +108,45 @@ instance AE.FromJSON ReportAnomalyType where
           Just "ATEndpoint" ->
             ATEndpoint
               <$> o
-                AE..: "endpointUrlPath"
+              AE..: "endpointUrlPath"
               <*> o
-                AE..: "endpointMethod"
+              AE..: "endpointMethod"
               <*> o
-                AE..: "eventsCount"
+              AE..: "eventsCount"
           Just "ATShape" ->
             ATShape
               <$> o
-                AE..: "endpointUrlPath"
+              AE..: "endpointUrlPath"
               <*> o
-                AE..: "endpointMethod"
+              AE..: "endpointMethod"
               <*> o
-                AE..: "targetHash"
+              AE..: "targetHash"
               <*> o
-                AE..: "newUniqueFields"
+              AE..: "newUniqueFields"
               <*> o
-                AE..: "updatedFieldFormats"
+              AE..: "updatedFieldFormats"
               <*> o
-                AE..: "deletedFields"
+              AE..: "deletedFields"
               <*> o
-                AE..: "eventsCount"
+              AE..: "eventsCount"
           Just "ATFormat" ->
             ATFormat
               <$> o
-                AE..: "endpointUrlPath"
+              AE..: "endpointUrlPath"
               <*> o
-                AE..: "keyPath"
+              AE..: "keyPath"
               <*> o
-                AE..: "endpointMethod"
+              AE..: "endpointMethod"
               <*> o
-                AE..: "formatType"
+              AE..: "formatType"
               <*> o
-                AE..: "formatExamples"
+              AE..: "formatExamples"
               <*> o
-                AE..: "eventsCount"
+              AE..: "eventsCount"
           Just "ATRuntimeException" ->
             ATRuntimeException
               <$> o
-                AE..: "endpointUrlPath"
+              AE..: "endpointUrlPath"
           _ -> pure UnknownAnomaly
 
 
@@ -453,7 +453,7 @@ reportListItems pid reports nextUrl =
                 div_ [class_ "flex items-center w-full justify-between gap-2"] do
                   div_ [class_ $ (if isWeeklyData then "bg-fillBrand-weak" else "bg-fillWeak") <> " text-xs font-medium px-2.5 py-1 rounded-full capitalize"] $ toHtml report.reportType <> " report"
                   faSprite_ "chevron-right" "regular" "w-3 h-3"
-                h4_ [class_ "font-medium flex items-center gap-2"] do
+                h4_ [class_ "font-medium text-sm flex items-center gap-2"] do
                   faSprite_ "calendar" "regular" "w-4 h-4"
                   toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
     unless (length reports < 20) $ do
@@ -584,23 +584,23 @@ getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
                 AE.Success (apiData :: Issues.APIChangeData) ->
                   AE.object
                     $ baseObject
-                      <> [ "tag" AE..= "ATShape"
-                         , "deletedFields" AE..= length apiData.deletedFields
-                         , "endpointMethod" AE..= apiData.endpointMethod
-                         , "endpointUrlPath" AE..= apiData.endpointPath
-                         , "newUniqueFields" AE..= length apiData.newFields
-                         , "updatedFields" AE..= length apiData.modifiedFields
-                         ]
+                    <> [ "tag" AE..= "ATShape"
+                       , "deletedFields" AE..= length apiData.deletedFields
+                       , "endpointMethod" AE..= apiData.endpointMethod
+                       , "endpointUrlPath" AE..= apiData.endpointPath
+                       , "newUniqueFields" AE..= length apiData.newFields
+                       , "updatedFields" AE..= length apiData.modifiedFields
+                       ]
                 _ -> AE.object baseObject
             Issues.RuntimeException ->
               case AE.fromJSON (getAeson issue.issueData) of
                 AE.Success (errorData :: Issues.RuntimeExceptionData) ->
                   AE.object
                     $ baseObject
-                      <> [ "tag" AE..= "ATRuntimeException"
-                         , "endpointMethod" AE..= fromMaybe "UNKNOWN" errorData.requestMethod
-                         , "endpointUrlPath" AE..= fromMaybe "/" errorData.requestPath
-                         ]
+                    <> [ "tag" AE..= "ATRuntimeException"
+                       , "endpointMethod" AE..= fromMaybe "UNKNOWN" errorData.requestMethod
+                       , "endpointUrlPath" AE..= fromMaybe "/" errorData.requestPath
+                       ]
                 _ -> AE.object baseObject
             _ -> AE.object baseObject
 
