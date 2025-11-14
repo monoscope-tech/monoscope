@@ -1117,7 +1117,7 @@ getProjectStatsForReport projectId start end = dbtToEff $ query q (projectId, st
     q =
       [sql| SELECT resource___service___name AS service_name,  COUNT(*) FILTER ( WHERE status_code = 'ERROR' OR attributes___exception___type IS NOT NULL) AS total_error_events, COUNT(*) AS total_events
            FROM otel_logs_and_spans
-           WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
+           WHERE project_id = ? AND timestamp >= ? AND timestamp <= ? AND resource___service___name is not null
            GROUP BY resource___service___name 
            ORDER BY total_events DESC;
         |]

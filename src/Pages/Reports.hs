@@ -368,10 +368,13 @@ singleReportPage pid report =
                         let totalAnomalies = length v.issues
                             (errTotal, apiTotal, qTotal) = foldl (\(e, a, m) x -> (e + if x.issueType == Issues.RuntimeException then 1 else 0, a + if x.issueType == Issues.APIChange then 1 else 0, m + if x.issueType == Issues.QueryAlert then 1 else 0)) (0, 0, 0) v.issues
                         div_ [class_ "w-full h-3 rounded overflow-x-hidden bg-fillWeak"] do
-                          div_ [class_ "h-full bg-fillError-strong", style_ $ "width: " <> show (errTotal `div` totalAnomalies * 100) <> "%"] pass
-                          div_ [class_ "h-full bg-blue-500", style_ $ "width: " <> show (apiTotal `div` totalAnomalies * 100) <> "%"] pass
-                          div_ [class_ "h-full bg-yellow-500", style_ $ "width: " <> show (qTotal `div` totalAnomalies * 100) <> "%"] pass
+                          when (totalAnomalies > 0) do
+                            div_ [class_ "h-full bg-fillError-strong", style_ $ "width: " <> show (errTotal `div` totalAnomalies * 100) <> "%"] pass
+                            div_ [class_ "h-full bg-blue-500", style_ $ "width: " <> show (apiTotal `div` totalAnomalies * 100) <> "%"] pass
+                            div_ [class_ "h-full bg-yellow-500", style_ $ "width: " <> show (qTotal `div` totalAnomalies * 100) <> "%"] pass
                     div_ [class_ "flex flex-col gap-2 mt-4"] do
+                      when (null v.issues) do
+                        span_ [class_ "text-sm font-semibold text-textStrong"] "No new issues found for this period"
                       forM_ v.issues $ \iss -> do
                         div_ [class_ "flex items-center justify-between"] do
                           let titleCls = case iss.issueType of

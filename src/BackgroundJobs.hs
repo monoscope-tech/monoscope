@@ -774,6 +774,7 @@ computeDurationChanges current prev =
 
 sendReportForProject :: Projects.ProjectId -> ReportType -> ATBackgroundCtx ()
 sendReportForProject pid rType = do
+  Log.logInfo "Generating report for project" pid
   ctx <- ask @Config.AuthContext
   users <- dbtToEff $ Projects.usersByProjectId pid
   currentTime <- Time.currentTime
@@ -838,7 +839,9 @@ sendReportForProject pid rType = do
             , reportType = typTxt
             }
     res <- dbtToEff $ Reports.addReport report
+    Log.logInfo "Completed report generation for" pid
     unless ((typTxt == "daily" && not pr.dailyNotif) || (typTxt == "weekly" && not pr.weeklyNotif)) $ do
+      Log.logInfo "Sending report notifications for" pid
       let stmTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" startTime
           currentTimeTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" currentTime
           reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> show report.id.reportId
@@ -885,6 +888,7 @@ sendReportForProject pid rType = do
                      "free_exceeded": #{freeTierLimitExceeded}
               }|]
               sendPostmarkEmail userEmail (Just ("weekly-report", templateVars)) Nothing
+      Log.logInfo "Completed sending report notifications for" pid
 
 
 emailQueryMonitorAlert :: Monitors.QueryMonitorEvaled -> CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()
