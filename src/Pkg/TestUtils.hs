@@ -252,7 +252,9 @@ ensureTemplateDatabase masterConnStr templateDbName = do
           masterConn
           ( Query
               $ encodeUtf8
-              $ "DO $$ BEGIN  PERFORM pg_terminate_backend(pid) FROM pg_stat_activity  WHERE datname = '" <> templateDbName <> "' AND pid <> pg_backend_pid(); END $$;"
+              $ "DO $$ BEGIN  PERFORM pg_terminate_backend(pid) FROM pg_stat_activity  WHERE datname = '"
+              <> templateDbName
+              <> "' AND pid <> pg_backend_pid(); END $$;"
           )
           ()
 
