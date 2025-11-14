@@ -42,3 +42,5 @@ build*.log
 .ghc.environment.*
 cabal.project.local
 stack-work
+tests.log
+tests_optimized.log
