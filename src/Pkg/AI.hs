@@ -1,8 +1,10 @@
-module Pkg.AI (callOpenAIAPI, systemPrompt, getNormalTupleReponse, getAskLLMResponse, ChatLLMResponse (..)) where
+module Pkg.AI (callOpenAIAPI, callOpenAIAPIEff, systemPrompt, getNormalTupleReponse, getAskLLMResponse, ChatLLMResponse (..)) where
 
 import Data.Aeson qualified as AE
+import Data.Effectful.LLM qualified as ELLM
 import Data.List qualified as L
 import Data.Text qualified as T
+import Effectful (Eff, (:>))
 import Langchain.LLM.Core qualified as LLM
 import Langchain.LLM.OpenAI
 import Models.Telemetry.Schema qualified as Schema
@@ -18,6 +20,12 @@ data ChatLLMResponse = ChatLLMResponse
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
+-- | Effectful version that uses the LLM effect (supports caching)
+callOpenAIAPIEff :: ELLM.LLM :> es => Text -> Text -> Eff es (Either Text Text)
+callOpenAIAPIEff fullPrompt apiKey = ELLM.callLLM fullPrompt apiKey
+
+
+-- | Original IO version for backward compatibility
 callOpenAIAPI :: Text -> Text -> IO (Either Text Text)
 callOpenAIAPI fullPrompt apiKey = do
   let openAI =

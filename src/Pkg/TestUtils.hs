@@ -10,6 +10,7 @@ module Pkg.TestUtils (
   TestRequestMessages (..),
   convert,
   runTestBackground,
+  runTestBg,
   runAllBackgroundJobs,
   getPendingBackgroundJobs,
   logBackgroundJobsInfo,
@@ -35,6 +36,7 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types (KeyValue (..))
 import Data.Cache (Cache (..), newCache)
 import Data.Default (Default (..))
+import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
 import Data.Effectful.UUID (runStaticUUID, runUUID)
 import Data.Effectful.Wreq (runHTTPGolden, runHTTPWreq)
@@ -419,15 +421,33 @@ runTestBackgroundWithLogger logger appCtx process = do
       & Tracing.runTracing tp
       & runUUID
       & runHTTPWreq
+      & ELLM.runLLMGolden "./tests/golden/"
       & runConcurrent
       & Ki.runStructuredConcurrency
       & Effectful.runEff
   -- Log the notifications that would have been sent
-  forM_ notifications $ \notification ->
-    Log.logInfo "Test: Notification captured" notification
+  forM_ notifications \notification -> do
+    let notifInfo = case notification of
+          Data.Effectful.Notify.EmailNotification emailData ->
+            ("Email" :: Text, Data.Effectful.Notify.receiver emailData, fmap fst (Data.Effectful.Notify.templateOptions emailData))
+          Data.Effectful.Notify.SlackNotification slackData ->
+            ("Slack" :: Text, Data.Effectful.Notify.webhookUrl slackData, Nothing :: Maybe Text)
+          Data.Effectful.Notify.DiscordNotification discordData ->
+            ("Discord" :: Text, Data.Effectful.Notify.channelId discordData, Nothing :: Maybe Text)
+          Data.Effectful.Notify.WhatsAppNotification whatsappData ->
+            ("WhatsApp" :: Text, Data.Effectful.Notify.to whatsappData, Just (Data.Effectful.Notify.template whatsappData))
+    Log.logInfo "Notification" notifInfo
+      & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
+      & Effectful.runEff
+    Log.logTrace "Notification payload" notification
       & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
       & Effectful.runEff
   pure result
+
+
+-- | Run a background job action using TestResources
+runTestBg :: TestResources -> ATBackgroundCtx a -> IO a
+runTestBg TestResources{..} = runTestBackgroundWithLogger trLogger trATCtx
 
 
 -- New type to hold all our resources
@@ -449,6 +469,10 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
   logsPatternCache <- newCache (Just $ TimeSpec (30 * 60) 0) -- Cache for log patterns, 30 minutes TTL
   sessAndHeader <- testSessionHeader pool
   tp <- getGlobalTracerProvider
+
+  -- Load OpenAI API key from environment for tests
+  openaiKey <- fromMaybe "" <$> lookupEnv "OPENAI_API_KEY"
+
   let atAuthCtx =
         AuthContext
           (def @EnvConfig)
@@ -466,6 +490,7 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
               , enableBackgroundJobs = True
               , enableEventsTableUpdates = True
               , enableDailyJobScheduling = False
+              , openaiApiKey = toText openaiKey
               }
           )
   f
@@ -649,20 +674,17 @@ refreshMaterializedView name = PgT.execute (Query $ encodeUtf8 q) ()
 
 -- Helper function to process messages and run background jobs
 processMessagesAndBackgroundJobs :: TestResources -> [(Text, ByteString)] -> IO ()
-processMessagesAndBackgroundJobs TestResources{..} msgs = do
+processMessagesAndBackgroundJobs tr@TestResources{..} msgs = do
   currentTime <- getCurrentTime
   let futureTime = addUTCTime 1 currentTime
-  -- Use UUID.nil which is what the test messages use
   let testProjectId = Projects.ProjectId UUID.nil
 
-  _ <- runTestBackground trATCtx do
+  _ <- runTestBg tr do
     _ <- ProcessMessage.processMessages msgs HashMap.empty
     _ <- BackgroundJobs.processOneMinuteErrors futureTime testProjectId
     BackgroundJobs.processFiveMinuteSpans futureTime testProjectId
 
-  _ <- runAllBackgroundJobs trATCtx
-  -- _ <- withPool trPool $ refreshMaterializedView "apis.endpoint_request_stats"
-  pure ()
+  void $ runAllBackgroundJobs trATCtx
 
 
 -- Helper function to create request dumps for endpoints
@@ -764,14 +786,9 @@ createRequestDumps TestResources{..} projectId numRequestsPerEndpoint = do
 processEndpointAnomalyJobs :: TestResources -> IO ()
 processEndpointAnomalyJobs tr@TestResources{..} = do
   bgJobs <- runAllBackgroundJobs trATCtx
-  let endpointAnomalyJob = V.find isEndpointAnomalyJob bgJobs
-
-  case endpointAnomalyJob of
-    Just job -> do
-      bgJob <- liftIO $ BackgroundJobs.throwParsePayload job
-      _ <- runTestBackground trATCtx $ BackgroundJobs.processBackgroundJob trATCtx job bgJob
-      pass
-    Nothing -> pass
+  whenJust (V.find isEndpointAnomalyJob bgJobs) \job -> do
+    bgJob <- BackgroundJobs.throwParsePayload job
+    void $ runTestBg tr $ BackgroundJobs.processBackgroundJob trATCtx job bgJob
   where
     isEndpointAnomalyJob (Job{jobPayload}) = case jobPayload of
       AE.Object obj ->
@@ -781,13 +798,15 @@ processEndpointAnomalyJobs tr@TestResources{..} = do
       _ -> False
 
 
--- Helper function to process all background jobs multiple times
+-- Helper function to process all background jobs until none remain
+-- Some background jobs spawn other jobs, so we run iteratively
 processAllBackgroundJobsMultipleTimes :: TestResources -> IO ()
-processAllBackgroundJobsMultipleTimes TestResources{..} = do
-  _ <- runAllBackgroundJobs trATCtx
-  _ <- runAllBackgroundJobs trATCtx
-  _ <- runAllBackgroundJobs trATCtx
-  pure ()
+processAllBackgroundJobsMultipleTimes TestResources{..} = go 10 -- max 10 iterations to prevent infinite loops
+  where
+    go 0 = pass -- Safety limit reached
+    go n = do
+      jobs <- runAllBackgroundJobs trATCtx
+      unless (V.null jobs) $ go (n - 1)
 
 
 -- Helper function to process shape and field anomaly jobs
@@ -795,11 +814,9 @@ processShapeAndFieldAnomalyJobs :: TestResources -> IO ()
 processShapeAndFieldAnomalyJobs tr@TestResources{..} = do
   bgJobs <- runAllBackgroundJobs trATCtx
   let anomalyJobs = V.filter isShapeOrFieldAnomalyJob bgJobs
-
-  forM_ anomalyJobs $ \job -> do
-    bgJob <- liftIO $ BackgroundJobs.throwParsePayload job
-    _ <- runTestBackground trATCtx $ BackgroundJobs.processBackgroundJob trATCtx job bgJob
-    pass
+  forM_ anomalyJobs \job -> do
+    bgJob <- BackgroundJobs.throwParsePayload job
+    void $ runTestBg tr $ BackgroundJobs.processBackgroundJob trATCtx job bgJob
   where
     isShapeOrFieldAnomalyJob (Job{jobPayload}) = case jobPayload of
       AE.Object obj ->
@@ -815,11 +832,9 @@ processFormatAnomalyJobs :: TestResources -> IO ()
 processFormatAnomalyJobs tr@TestResources{..} = do
   bgJobs <- runAllBackgroundJobs trATCtx
   let formatJobs = V.filter isFormatAnomalyJob bgJobs
-
-  forM_ formatJobs $ \job -> do
-    bgJob <- liftIO $ BackgroundJobs.throwParsePayload job
-    _ <- runTestBackground trATCtx $ BackgroundJobs.processBackgroundJob trATCtx job bgJob
-    pass
+  forM_ formatJobs \job -> do
+    bgJob <- BackgroundJobs.throwParsePayload job
+    void $ runTestBg tr $ BackgroundJobs.processBackgroundJob trATCtx job bgJob
   where
     isFormatAnomalyJob (Job{jobPayload}) = case jobPayload of
       AE.Object obj ->

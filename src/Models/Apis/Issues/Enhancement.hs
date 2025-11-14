@@ -8,10 +8,12 @@ module Models.Apis.Issues.Enhancement (
 ) where
 
 import Data.Aeson qualified as AE
+import Data.Effectful.LLM qualified as ELLM
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Transact qualified as PTR
+import Effectful (Eff, (:>))
 import Models.Apis.Issues qualified as Issues
 import Pkg.AI qualified as AI
 import Relude hiding (id)
@@ -30,7 +32,7 @@ data IssueEnhancement = IssueEnhancement
 
 
 -- | Enhance a single issue with LLM-generated title and description
-enhanceIssueWithLLM :: AuthContext -> Issues.Issue -> IO (Either Text IssueEnhancement)
+enhanceIssueWithLLM :: (ELLM.LLM :> es) => AuthContext -> Issues.Issue -> Eff es (Either Text IssueEnhancement)
 enhanceIssueWithLLM authCtx issue = do
   -- Generate enhanced title
   titleResult <- generateEnhancedTitle authCtx issue
@@ -54,10 +56,10 @@ enhanceIssueWithLLM authCtx issue = do
 
 
 -- | Generate an enhanced title using LLM
-generateEnhancedTitle :: AuthContext -> Issues.Issue -> IO (Either Text Text)
+generateEnhancedTitle :: (ELLM.LLM :> es) => AuthContext -> Issues.Issue -> Eff es (Either Text Text)
 generateEnhancedTitle authCtx issue = do
   let prompt = buildTitlePrompt issue
-  result <- AI.callOpenAIAPI prompt authCtx.config.openaiApiKey
+  result <- AI.callOpenAIAPIEff prompt authCtx.config.openaiApiKey
   case result of
     Left err -> pure $ Left err
     Right r -> do
@@ -68,10 +70,10 @@ generateEnhancedTitle authCtx issue = do
 
 
 -- | Generate enhanced description with recommended actions
-generateEnhancedDescription :: AuthContext -> Issues.Issue -> IO (Either Text (Text, Text, Text))
+generateEnhancedDescription :: (ELLM.LLM :> es) => AuthContext -> Issues.Issue -> Eff es (Either Text (Text, Text, Text))
 generateEnhancedDescription authCtx issue = do
   let prompt = buildDescriptionPrompt issue
-  result <- AI.callOpenAIAPI prompt authCtx.config.openaiApiKey
+  result <- AI.callOpenAIAPIEff prompt authCtx.config.openaiApiKey
   case result of
     Left err -> pure $ Left err
     Right r -> do
@@ -83,13 +85,8 @@ generateEnhancedDescription authCtx issue = do
               description = fromMaybe "" $ viaNonEmpty head lines'
               recommendedAction = fromMaybe "Review the changes and update your integration accordingly." $ lines' !!? 1
               complexity = fromMaybe "medium" $ lines' !!? 2
-          -- Also classify critical/safe
-          criticalityResult <- classifyIssueCriticality authCtx issue
-          case criticalityResult of
-            Left _ -> pure $ Right (description, recommendedAction, complexity)
-            Right (isCritical, breakingCount, incrementalCount) -> do
-              -- Note: Classification update happens in the background job
-              pure $ Right (description, recommendedAction, complexity)
+          -- Note: Classification happens separately in the background job
+          pure $ Right (description, recommendedAction, complexity)
 
 
 -- | Build prompt for title generation
@@ -260,10 +257,10 @@ buildDescriptionPrompt issue =
 
 
 -- | Classify issue as critical/safe and count breaking/incremental changes
-classifyIssueCriticality :: AuthContext -> Issues.Issue -> IO (Either Text (Bool, Int, Int))
+classifyIssueCriticality :: (ELLM.LLM :> es) => AuthContext -> Issues.Issue -> Eff es (Either Text (Bool, Int, Int))
 classifyIssueCriticality authCtx issue = do
   let prompt = buildCriticalityPrompt issue
-  result' <- AI.callOpenAIAPI prompt authCtx.config.openaiApiKey
+  result' <- AI.callOpenAIAPIEff prompt authCtx.config.openaiApiKey
   case result' of
     Left err -> pure $ Left err
     Right res -> do

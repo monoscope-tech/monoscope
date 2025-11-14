@@ -1250,7 +1250,7 @@ enhanceIssuesWithLLM pid issueIds = do
           Nothing -> Log.logAttention "Issue not found for enhancement" issueId
           Just issue -> do
             -- Call LLM to enhance the issue based on type
-            enhancementResult <- liftIO $ Enhancement.enhanceIssueWithLLM ctx issue
+            enhancementResult <- Enhancement.enhanceIssueWithLLM ctx issue
             case enhancementResult of
               Left err -> Log.logAttention "Failed to enhance issue with LLM" (issueId, err)
               Right enhancement -> do
@@ -1264,7 +1264,7 @@ enhanceIssuesWithLLM pid issueIds = do
                       enhancement.migrationComplexity
 
                 -- Also classify and update criticality
-                criticalityResult <- liftIO $ Enhancement.classifyIssueCriticality ctx issue
+                criticalityResult <- Enhancement.classifyIssueCriticality ctx issue
                 case criticalityResult of
                   Left err -> Log.logAttention "Failed to classify issue criticality" (issueId, err)
                   Right (isCritical, breakingCount, incrementalCount) -> do

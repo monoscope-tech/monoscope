@@ -28,6 +28,7 @@ where
 
 import Control.Monad.Except qualified as Except
 import Data.Aeson qualified as AE
+import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
 import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
 import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPWreq)
@@ -170,6 +171,7 @@ type ATBackgroundCtx =
      , Tracing
      , UUIDEff
      , HTTP
+     , ELLM.LLM
      , Concurrent
      , Ki.StructuredConcurrency
      , Effectful.IOE
@@ -188,6 +190,7 @@ runBackground logger appCtx tp process =
     & Tracing.runTracing tp
     & runUUID
     & runHTTPWreq
+    & ELLM.runLLMReal
     & runConcurrent
     & Ki.runStructuredConcurrency
     & Effectful.runEff

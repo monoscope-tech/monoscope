@@ -40,6 +40,7 @@ extra-source-files:
     static/migrations/0013_log_patterns.sql
     static/migrations/0014_alerts_config.sql
     static/migrations/0015_summary_pattern.sql
+    static/migrations/0016_drop_overly_restrictive_issues_constraint.sql
 
 source-repository head
   type: git
@@ -55,6 +56,7 @@ library
   exposed-modules:
       BackgroundJobs
       Data.Default.Instances
+      Data.Effectful.LLM
       Data.Effectful.Notify
       Data.Effectful.UUID
       Data.Effectful.Wreq
