@@ -281,6 +281,8 @@ data IssueL = IssueL
 
 
 -- | Insert a single issue
+-- Note: ON CONFLICT only applies to api_change issues that are open (not acknowledged/archived)
+-- Other issue types will fail on duplicate inserts as intended
 insertIssue :: Issue -> DBT IO ()
 insertIssue issue = void $ execute q issue
   where
@@ -295,7 +297,11 @@ INSERT INTO apis.issues (
   issue_data, request_payloads, response_payloads,
   llm_enhanced_at, llm_enhancement_version
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT ON CONSTRAINT unique_open_api_change_per_endpoint
+ON CONFLICT (project_id, endpoint_hash)
+  WHERE issue_type = 'api_change'
+    AND acknowledged_at IS NULL
+    AND archived_at IS NULL
+    AND endpoint_hash != ''
 DO UPDATE SET
   updated_at = EXCLUDED.updated_at,
   affected_requests = issues.affected_requests + EXCLUDED.affected_requests,
