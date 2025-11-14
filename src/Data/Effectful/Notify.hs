@@ -20,6 +20,7 @@ module Data.Effectful.Notify (
   EmailData (..),
   SlackData (..),
   DiscordData (..),
+  WhatsAppData (..),
 
   -- * Interpreters
   runNotifyProduction,
@@ -191,7 +192,17 @@ runNotifyTest eff = do
     interpret
       ( \_ -> \case
           SendNotification notification -> do
-            Log.logInfo "Test notification sent" notification
+            let notifInfo = case notification of
+                  EmailNotification emailData ->
+                    ("Email" :: Text, emailData.receiver, fmap fst emailData.templateOptions)
+                  SlackNotification slackData ->
+                    ("Slack" :: Text, slackData.webhookUrl, Nothing :: Maybe Text)
+                  DiscordNotification discordData ->
+                    ("Discord" :: Text, discordData.channelId, Nothing :: Maybe Text)
+                  WhatsAppNotification whatsappData ->
+                    ("WhatsApp" :: Text, whatsappData.to, Just whatsappData.template)
+            Log.logInfo "Notification" notifInfo
+            Log.logTrace "Notification payload" notification
             liftIO $ modifyIORef ref (notification :)
           GetNotifications -> do
             notifications <- liftIO $ readIORef ref
