@@ -247,15 +247,21 @@ ensureTemplateDatabase masterConnStr templateDbName = do
     -- Drop existing template if it exists
     when exists $ do
       -- First, terminate any connections to the template database
+      void
+        $ execute
+          masterConn
+          ( Query
+              $ encodeUtf8
+              $ "DO $$ BEGIN  PERFORM pg_terminate_backend(pid) FROM pg_stat_activity  WHERE datname = '" <> templateDbName <> "' AND pid <> pg_backend_pid(); END $$;"
+          )
+          ()
+
+      -- Mark database as template
       _ <-
         execute
           masterConn
-          [sql| SELECT pg_terminate_backend(pg_stat_activity.pid)
-              FROM pg_stat_activity
-              WHERE pg_stat_activity.datname = ?
-                AND pid <> pg_backend_pid() |]
-          (Only templateDbName)
-
+          (Query $ encodeUtf8 $ "ALTER DATABASE " <> templateDbName <> " is_template = false")
+          ()
       _ <-
         execute
           masterConn

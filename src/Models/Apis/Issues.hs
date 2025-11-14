@@ -337,10 +337,7 @@ selectIssues pid typeM isAcknowledged isArchived limit offset timeRangeM = query
     timefilter = case timeRangeM of
       Just (st, end) -> " AND created_at >= '" <> formatUTC st <> "' AND created_at <= '" <> formatUTC end <> "'"
       _ -> ""
-    ackF = case isAcknowledged of
-      Just True -> " AND acknowledged_at is not null"
-      Just False -> "AND acknowledged_at is null"
-      _ -> ""
+    ackF = ""
     q =
       [text|
       SELECT 
