@@ -74,7 +74,7 @@ import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, runBackground)
 import Text.Megaparsec (parseMaybe)
-import UnliftIO.Exception (try)
+import UnliftIO.Exception (finally, try)
 import Utils (DBField)
 
 
@@ -216,88 +216,93 @@ processBackgroundJob authCtx job bgJob =
              "project_name": #{projectTitle}
            }|]
           sendPostmarkEmail userEmail (Just ("project-deleted", templateVars)) Nothing
-    DailyJob -> do
-      -- Check if daily job scheduling is enabled
-      unless authCtx.config.enableDailyJobScheduling $ do
-        Log.logInfo "Daily job scheduling is disabled, skipping" ()
+    DailyJob -> unless authCtx.config.enableDailyJobScheduling (Log.logInfo "Daily job scheduling is disabled, skipping" ())
+      >> Relude.when authCtx.config.enableDailyJobScheduling (withAdvisoryLock "daily_job_scheduling" runDailyJobScheduling)
+      where
+        withAdvisoryLock :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
+        withAdvisoryLock lockName action = do
+          lockAcquired <- dbtToEff $ query [sql|SELECT pg_try_advisory_lock(hashtext(?))|] (Only lockName)
+          case V.headM lockAcquired of
+            Just (Only True) ->
+              action `finally` void (dbtToEff $ execute [sql|SELECT pg_advisory_unlock(hashtext(?))|] (Only lockName))
+            _ -> Log.logInfo "Daily job already running in another pod, skipping" ()
 
-      Relude.when authCtx.config.enableDailyJobScheduling $ do
-        Log.logInfo "Running daily job" ()
-        currentDay <- utctDay <$> Time.currentTime
-        currentTime <- Time.currentTime
-
-        -- Check if app-wide jobs already scheduled for today (idempotent check)
-        existingHourlyJobs <- dbtToEff $ query
-          [sql|SELECT COUNT(*) FROM background_jobs
-               WHERE payload->>'tag' = 'HourlyJob'
-                 AND run_at >= date_trunc('day', now())
-                 AND run_at < date_trunc('day', now()) + interval '1 day'
-                 AND status IN ('queued', 'locked')|] ()
-
-        let hourlyJobsExist = case V.headM existingHourlyJobs of
-              Just (Only (count :: Int)) -> count >= 24
-              _ -> False
-
-        unless hourlyJobsExist $ do
-          Log.logInfo "Scheduling hourly jobs for today" ()
-          liftIO $ withResource authCtx.jobsPool \conn -> do
-            -- background job to cleanup demo project
-            Relude.when (dayOfWeek currentDay == Monday) do
-              void $ createJob conn "background_jobs" $ BackgroundJobs.CleanupDemoProject
-            forM_ [0 .. 23] \hour -> do
-              -- Schedule each hourly job to run at the appropriate hour
-              let scheduledTime = addUTCTime (fromIntegral $ hour * 3600) currentTime
-              _ <- scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob scheduledTime hour) scheduledTime
-              pass
-
-            -- Schedule issue enhancement processing every hour
-            forM_ [0 .. 23] \hr -> do
-              let scheduledTime4 = addUTCTime (fromIntegral $ hr * 3600) currentTime
-              scheduleJob conn "background_jobs" (BackgroundJobs.ProcessIssuesEnhancement scheduledTime4) scheduledTime4
-
-        Relude.when hourlyJobsExist $
-          Log.logInfo "Hourly jobs already scheduled for today, skipping" ()
-
-        projects <- dbtToEff $ query [sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > now() - interval '24 hours'|] ()
-        Log.logInfo "Scheduling jobs for projects" ("project_count", V.length projects)
-        forM_ projects \p -> do
-          -- Check if this project's jobs already scheduled for today (per-project idempotent check)
-          existingProjectJobs <- dbtToEff $ query
+        runDailyJobScheduling = do
+          Log.logInfo "Running daily job" ()
+          currentDay <- utctDay <$> Time.currentTime
+          currentTime <- Time.currentTime
+          -- Check if app-wide jobs already scheduled for today (idempotent check)
+          existingHourlyJobs <- dbtToEff $ query
             [sql|SELECT COUNT(*) FROM background_jobs
-                 WHERE payload->>'tag' = 'FiveMinuteSpanProcessing'
-                   AND payload->>'projectId' = ?
+                 WHERE payload->>'tag' = 'HourlyJob'
                    AND run_at >= date_trunc('day', now())
                    AND run_at < date_trunc('day', now()) + interval '1 day'
-                   AND status IN ('queued', 'locked')|] (Only p)
+                   AND status IN ('queued', 'locked')|] ()
 
-          let projectJobsExist = case V.headM existingProjectJobs of
-                Just (Only (count :: Int)) -> count >= 288
+          let hourlyJobsExist = case V.headM existingHourlyJobs of
+                Just (Only (count :: Int)) -> count >= 24
                 _ -> False
 
-          unless projectJobsExist $ do
+          unless hourlyJobsExist $ do
+            Log.logInfo "Scheduling hourly jobs for today" ()
             liftIO $ withResource authCtx.jobsPool \conn -> do
-              -- Report usage to lemon squeezy
-              _ <- createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
-              -- Schedule 5-minute log pattern extraction
-              forM_ [0 .. 287] \interval -> do
-                let scheduledTime = addUTCTime (fromIntegral $ interval * 300) currentTime
-                _ <- scheduleJob conn "background_jobs" (BackgroundJobs.FifteenMinutesLogsPatternProcessing scheduledTime p) scheduledTime
+              -- background job to cleanup demo project
+              Relude.when (dayOfWeek currentDay == Monday) do
+                void $ createJob conn "background_jobs" $ BackgroundJobs.CleanupDemoProject
+              forM_ [0 .. 23] \hour -> do
+                -- Schedule each hourly job to run at the appropriate hour
+                let scheduledTime = addUTCTime (fromIntegral $ hour * 3600) currentTime
+                _ <- scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob scheduledTime hour) scheduledTime
                 pass
-              -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
-              forM_ [0 .. 287] \interval -> do
-                let scheduledTime2 = addUTCTime (fromIntegral $ interval * 300) currentTime
-                scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteSpanProcessing scheduledTime2 p) scheduledTime2
-              -- Schedule 1-minute error processing jobs (1440 jobs per hour = 24 hours * 60 per hour)
-              forM_ [0 .. 1439] \interval -> do
-                let scheduledTime3 = addUTCTime (fromIntegral $ interval * 60) currentTime
-                scheduleJob conn "background_jobs" (BackgroundJobs.OneMinuteErrorProcessing scheduledTime3 p) scheduledTime3
-              Relude.when (dayOfWeek currentDay == Monday)
-                $ void
-                $ createJob conn "background_jobs"
-                $ BackgroundJobs.WeeklyReports p
 
-          Relude.when projectJobsExist $
-            Log.logInfo "Jobs already scheduled for project today, skipping" ("project_id", p.toText)
+              -- Schedule issue enhancement processing every hour
+              forM_ [0 .. 23] \hr -> do
+                let scheduledTime4 = addUTCTime (fromIntegral $ hr * 3600) currentTime
+                scheduleJob conn "background_jobs" (BackgroundJobs.ProcessIssuesEnhancement scheduledTime4) scheduledTime4
+
+          Relude.when hourlyJobsExist $
+            Log.logInfo "Hourly jobs already scheduled for today, skipping" ()
+
+          projects <- dbtToEff $ query [sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > now() - interval '24 hours'|] ()
+          Log.logInfo "Scheduling jobs for projects" ("project_count", V.length projects)
+          forM_ projects \p -> do
+            -- Check if this project's jobs already scheduled for today (per-project idempotent check)
+            existingProjectJobs <- dbtToEff $ query
+              [sql|SELECT COUNT(*) FROM background_jobs
+                   WHERE payload->>'tag' = 'FiveMinuteSpanProcessing'
+                     AND payload->>'projectId' = ?
+                     AND run_at >= date_trunc('day', now())
+                     AND run_at < date_trunc('day', now()) + interval '1 day'
+                     AND status IN ('queued', 'locked')|] (Only p)
+
+            let projectJobsExist = case V.headM existingProjectJobs of
+                  Just (Only (count :: Int)) -> count >= 288
+                  _ -> False
+
+            unless projectJobsExist $ do
+              liftIO $ withResource authCtx.jobsPool \conn -> do
+                -- Report usage to lemon squeezy
+                _ <- createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
+                -- Schedule 5-minute log pattern extraction
+                forM_ [0 .. 287] \interval -> do
+                  let scheduledTime = addUTCTime (fromIntegral $ interval * 300) currentTime
+                  _ <- scheduleJob conn "background_jobs" (BackgroundJobs.FifteenMinutesLogsPatternProcessing scheduledTime p) scheduledTime
+                  pass
+                -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
+                forM_ [0 .. 287] \interval -> do
+                  let scheduledTime2 = addUTCTime (fromIntegral $ interval * 300) currentTime
+                  scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteSpanProcessing scheduledTime2 p) scheduledTime2
+                -- Schedule 1-minute error processing jobs (1440 jobs per hour = 24 hours * 60 per hour)
+                forM_ [0 .. 1439] \interval -> do
+                  let scheduledTime3 = addUTCTime (fromIntegral $ interval * 60) currentTime
+                  scheduleJob conn "background_jobs" (BackgroundJobs.OneMinuteErrorProcessing scheduledTime3 p) scheduledTime3
+                Relude.when (dayOfWeek currentDay == Monday)
+                  $ void
+                  $ createJob conn "background_jobs"
+                  $ BackgroundJobs.WeeklyReports p
+
+            Relude.when projectJobsExist $
+              Log.logInfo "Jobs already scheduled for project today, skipping" ("project_id", p.toText)
     HourlyJob scheduledTime hour -> runHourlyJob scheduledTime hour
     DailyReports pid -> sendReportForProject pid DailyReport
     WeeklyReports pid -> sendReportForProject pid WeeklyReport
@@ -363,7 +368,7 @@ runHourlyJob scheduledTime hour = do
 
 -- | Batch process facets generation for multiple projects using 24-hour window
 -- Processes projects concurrently with individual error handling to prevent batch failures
-generateOtelFacetsBatch :: (DB :> es, Effectful.Reader.Static.Reader Config.AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUID.UUIDEff :> es, Time.Time :> es, Ki.StructuredConcurrency :> es, Tracing :> es) => V.Vector Text -> UTCTime -> Eff es ()
+generateOtelFacetsBatch :: (DB :> es, Effectful.Reader.Static.Reader Config.AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUID.UUIDEff :> es, Ki.StructuredConcurrency :> es, Tracing :> es) => V.Vector Text -> UTCTime -> Eff es ()
 generateOtelFacetsBatch projectIds timestamp = do
   Log.logInfo "Starting batch OTLP facets generation" ("project_count", AE.toJSON $ V.length projectIds)
 
@@ -691,8 +696,11 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
           dbtToEff
             $ execute
               [sql| UPDATE otel_logs_and_spans
-                    SET hashes = updates.hashes::jsonb
-                    FROM (SELECT unnest(?::uuid[]) as id, unnest(?::jsonb[]) as hashes) as updates
+                    SET hashes = converted.arr
+                    FROM (SELECT unnest(?::uuid[]) as id, unnest(?::jsonb[]) as hashes_json) updates
+                    CROSS JOIN LATERAL (
+                      SELECT ARRAY(SELECT jsonb_array_elements_text(updates.hashes_json)) as arr
+                    ) converted
                     WHERE otel_logs_and_spans.id = updates.id
                       AND otel_logs_and_spans.project_id = ?
                       AND otel_logs_and_spans.timestamp >= ?
@@ -1130,15 +1138,16 @@ processAPIChangeAnomalies pid targetHashes = do
   -- Send notifications
   projectM <- dbtToEff $ Projects.projectById pid
   whenJust projectM \project -> do
-    Relude.when project.endpointAlerts do
-      users <- dbtToEff $ Projects.usersByProjectId pid
-      let endpointInfo =
-            map
-              ( \(_, anoms) ->
-                  let firstAnom = V.head anoms
-                   in fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath
-              )
-              anomaliesByEndpoint
+    users <- dbtToEff $ Projects.usersByProjectId pid
+    let endpointInfo =
+          map
+            ( \(_, anoms) ->
+                let firstAnom = V.head anoms
+                 in fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath
+            )
+            anomaliesByEndpoint
+    -- Only send notifications if we have valid endpoint info
+    Relude.when (project.endpointAlerts && not (null endpointInfo)) do
       let alert = EndpointAlert project.title (V.fromList endpointInfo) (fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes)
 
       forM_ project.notificationsChannel \case
