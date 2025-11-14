@@ -292,16 +292,15 @@ INSERT INTO apis.issues (
   title, service, critical, severity,
   affected_requests, affected_clients, error_rate,
   recommended_action, migration_complexity,
-  issue_data, request_payloads, response_payloads, 
+  issue_data, request_payloads, response_payloads,
   llm_enhanced_at, llm_enhancement_version
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (project_id, issue_type, endpoint_hash) 
+ON CONFLICT ON CONSTRAINT unique_open_api_change_per_endpoint
 DO UPDATE SET
   updated_at = EXCLUDED.updated_at,
   affected_requests = issues.affected_requests + EXCLUDED.affected_requests,
   affected_clients = GREATEST(issues.affected_clients, EXCLUDED.affected_clients),
   issue_data = issues.issue_data || EXCLUDED.issue_data
-WHERE issues.acknowledged_at IS NULL AND issues.archived_at IS NULL
     |]
 
 

@@ -819,7 +819,7 @@ handleQueryMonitorThreshold monitorE isAlert = do
 jobsWorkerInit :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 jobsWorkerInit logger appCtx tp =
   startJobRunner
-    $ mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs 1) (jobsRunner logger appCtx tp) id
+    $ mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs appCtx.config.maxConcurrentJobs) (jobsRunner logger appCtx tp) id
   where
     jobLogger :: OddJobs.Job.LogLevel -> LogEvent -> IO ()
     jobLogger logLevel logEvent = runLogT "OddJobs" logger LogAttention $ LogLegacy.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)

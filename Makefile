@@ -5,6 +5,9 @@ ARCH := $(shell uname -m | sed 's/arm64/aarch64/' | tr '[:upper:]' '[:lower:]')
 OS := $(shell uname -s | sed 's/Darwin/osx/' | tr '[:upper:]' '[:lower:]')
 OS_ARCH := $(ARCH)-$(OS)
 
+# Detect number of CPU cores (works on macOS and Linux)
+NCPUS := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+
 css-start:
 	./node_modules/.bin/tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --watch
 post-css:
@@ -44,16 +47,16 @@ live-test-reload-cabal:
 	ghcid --test 'cabal test --ghc-options="-w -j4" --test-show-details=streaming'
 
 test:
-	USE_EXTERNAL_DB=true  cabal test -j --ghc-options="-O0 -j8"  --test-show-details=direct --test-options='--color '
+	USE_EXTERNAL_DB=true  cabal test -j --ghc-options="-O0 -j$(NCPUS)"  --test-show-details=direct --test-options='--color --jobs=$(NCPUS)'
 
 test-unit:
-	cabal test unit-tests -j --ghc-options="-O0 -j8"  --test-show-details=direct --test-options='--color '
+	cabal test unit-tests -j --ghc-options="-O0 -j$(NCPUS)"  --test-show-details=direct --test-options='--color --jobs=$(NCPUS)'
 
 test-doctests:
-	cabal test doctests -j --ghc-options="-O0 -j8" --test-show-details=direct 
+	cabal test doctests -j --ghc-options="-O0 -j$(NCPUS)" --test-show-details=direct 
 
 test-integration:
-	USE_EXTERNAL_DB=true cabal test integration-tests -j --ghc-options="-O0 -j8" --test-show-details=direct --test-options='--color '
+	USE_EXTERNAL_DB=true cabal test integration-tests -j --ghc-options="-O0 -j$(NCPUS)" --test-show-details=direct --test-options='--color --jobs=$(NCPUS)'
 
 live-test-unit:
 	ghcid --test 'cabal test monoscope:unit-tests --ghc-options="-w -j4" --test-show-details=streaming'

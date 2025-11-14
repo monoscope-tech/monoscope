@@ -598,7 +598,10 @@ runAllBackgroundJobs :: AuthContext -> IO (V.Vector Job)
 runAllBackgroundJobs authCtx = do
   jobs <- withPool authCtx.pool getBackgroundJobs
   LogBulk.withBulkStdOutLogger \logger ->
-    V.forM_ jobs $ testJobsRunner logger authCtx
+    -- Run jobs concurrently using Ki structured concurrency
+    runEff $ runConcurrent $ Ki.runStructuredConcurrency $ Ki.scoped \scope -> do
+      threads <- V.forM jobs $ \job -> Ki.fork scope $ liftIO $ testJobsRunner logger authCtx job
+      V.forM_ threads $ Ki.atomically . Ki.await
   pure jobs
 
 
@@ -612,7 +615,10 @@ runBackgroundJobsWhere authCtx predicate = do
     pure (job, bgJob)
   let filteredJobs = V.filter (\(_, bgJob) -> predicate bgJob) jobsWithParsed
   LogBulk.withBulkStdOutLogger \logger ->
-    V.forM_ filteredJobs $ \(job, _) -> testJobsRunner logger authCtx job
+    -- Run filtered jobs concurrently using Ki structured concurrency
+    runEff $ runConcurrent $ Ki.runStructuredConcurrency $ Ki.scoped \scope -> do
+      threads <- V.forM filteredJobs $ \(job, _) -> Ki.fork scope $ liftIO $ testJobsRunner logger authCtx job
+      V.forM_ threads $ Ki.atomically . Ki.await
   pure $ V.map fst filteredJobs
 
 

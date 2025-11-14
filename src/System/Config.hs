@@ -119,6 +119,7 @@ data EnvConfig = EnvConfig
   , telemetryServiceName :: Text
   , enableEventsTableUpdates :: Bool
   , enableDailyJobScheduling :: Bool
+  , maxConcurrentJobs :: Int
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)
@@ -134,6 +135,7 @@ instance DefConfig EnvConfig where
       , rrwebTopics = ["rrweb-client"]
       , loggingDestination = Logging.StdOut
       , smtpPort = 465
+      , maxConcurrentJobs = 4 -- Sane default, can be increased based on CPU cores
       }
 
 
