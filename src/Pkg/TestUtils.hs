@@ -28,7 +28,6 @@ module Pkg.TestUtils (
 where
 
 import BackgroundJobs qualified
-import Control.Concurrent (threadDelay)
 import Control.Exception (bracket_, finally, mask, throwIO)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
@@ -652,7 +651,6 @@ processMessagesAndBackgroundJobs TestResources{..} msgs = do
 
   _ <- runTestBackground trATCtx do
     _ <- ProcessMessage.processMessages msgs HashMap.empty
-    liftIO $ threadDelay 100000 -- 100ms
     _ <- BackgroundJobs.processOneMinuteErrors futureTime testProjectId
     BackgroundJobs.processFiveMinuteSpans futureTime testProjectId
 

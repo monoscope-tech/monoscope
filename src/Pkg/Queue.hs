@@ -23,12 +23,14 @@ import Gogol.PubSub qualified as PubSub
 import Kafka.Consumer qualified as K
 import Kafka.Producer qualified as KP
 import Log qualified
+import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Relude
 import System.Config
+import System.Tracing (SpanStatus (..), addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, runBackground)
 import UnliftIO (throwIO)
-import UnliftIO.Exception (bracket, tryAny)
+import UnliftIO.Exception (bracket, try, tryAny)
 
 
 -- pubsubService connects to the pubsub service and listens for  messages,
@@ -61,22 +63,46 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
                 b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
                 Just (ackId, b64Msg)
         let firstAttrs = messages ^? L.folded . field @"message" . _Just . field @"attributes" . _Just . field @"additional"
+        let ceType = HM.lookup "ce-type" (maybeToMonoid firstAttrs)
 
         msgIds <-
-          tryAny (liftIO $ runBackground appLogger appCtx tp $ fn (catMaybes msgsB64) (maybeToMonoid firstAttrs)) >>= \case
-            Left e -> do
-              liftIO
-                $ Log.runLogT "apitoolkit" appLogger Log.LogAttention
-                $ Log.logAttention "pubsubService: CAUGHT EXCEPTION - Error processing messages" (AE.object ["error" AE..= show e, "message_count" AE..= length (catMaybes msgsB64), "first_attrs" AE..= firstAttrs, "checkpoint" AE..= ("pubsubService:exception" :: String)])
+          tryAny
+            ( liftIO
+                $ runBackground appLogger appCtx tp
+                $ withSpan
+                  "pubsub.process_batch"
+                  [ ("topic", OA.toAttribute topic)
+                  , ("message_count", OA.toAttribute (length (catMaybes msgsB64)))
+                  , ("subscription", OA.toAttribute subscription)
+                  , ("ce-type", OA.toAttribute (fromMaybe "" ceType))
+                  ]
+                $ \sp -> do
+                  addEvent sp "batch.started" []
+                  result <- try $ fn (catMaybes msgsB64) (maybeToMonoid firstAttrs)
+                  case result of
+                    Left (e :: SomeException) -> do
+                      addEvent sp "batch.failed" [("error", OA.toAttribute $ T.pack (show e))]
+                      setStatus sp (Error $ T.pack $ show e)
+                      throwIO e -- Re-throw so outer tryAny catches it
+                    Right ids -> do
+                      addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids))]
+                      setStatus sp Ok
+                      pure ids
+            )
+            >>= \case
+              Left e -> do
+                liftIO
+                  $ Log.runLogT "apitoolkit" appLogger Log.LogAttention
+                  $ Log.logAttention "pubsubService: CAUGHT EXCEPTION - Error processing messages" (AE.object ["error" AE..= show e, "message_count" AE..= length (catMaybes msgsB64), "first_attrs" AE..= firstAttrs, "checkpoint" AE..= ("pubsubService:exception" :: String)])
 
-              -- Send to dead letter queue unless it's an unrecoverable error
-              unless (isUnrecoverableError e)
-                $ liftIO
-                $ publishToDeadLetterQueue appCtx (catMaybes msgsB64) (maybeToMonoid firstAttrs) (toText $ show e)
+                -- Send to dead letter queue unless it's an unrecoverable error
+                unless (isUnrecoverableError e)
+                  $ liftIO
+                  $ publishToDeadLetterQueue appCtx (catMaybes msgsB64) (maybeToMonoid firstAttrs) (toText $ show e)
 
-              -- Always return all message IDs so they're acknowledged
-              pure $ map fst $ catMaybes msgsB64
-            Right ids -> pure ids
+                -- Always return all message IDs so they're acknowledged
+                pure $ map fst $ catMaybes msgsB64
+              Right ids -> pure ids
 
         let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
         unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
@@ -194,19 +220,41 @@ kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
                 allRecords = consumerRecordToTuple <$> rightRecords
 
             msgIds <-
-              tryAny (runBackground appLogger appCtx tp $ fn allRecords attributes) >>= \case
-                Left e -> do
-                  Log.runLogT "apitoolkit" appLogger Log.LogAttention
-                    $ Log.logAttention "kafkaService: CAUGHT EXCEPTION - Error processing Kafka messages" (AE.object ["error" AE..= show e, "topic" AE..= topic, "ce-type" AE..= ceType, "record_count" AE..= length allRecords, "attributes" AE..= attributes, "checkpoint" AE..= ("kafkaService:exception" :: String)])
+              tryAny
+                ( runBackground appLogger appCtx tp
+                    $ withSpan
+                      "kafka.process_batch"
+                      [ ("topic", OA.toAttribute topic)
+                      , ("message_count", OA.toAttribute (length allRecords))
+                      , ("ce-type", OA.toAttribute ceType)
+                      , ("client_id", OA.toAttribute clientId)
+                      ]
+                    $ \sp -> do
+                      addEvent sp "batch.started" []
+                      result <- try $ fn allRecords attributes
+                      case result of
+                        Left (e :: SomeException) -> do
+                          addEvent sp "batch.failed" [("error", OA.toAttribute $ T.pack (show e))]
+                          setStatus sp (Error $ T.pack $ show e)
+                          throwIO e -- Re-throw so outer tryAny catches it
+                        Right ids -> do
+                          addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids))]
+                          setStatus sp Ok
+                          pure ids
+                )
+                >>= \case
+                  Left e -> do
+                    Log.runLogT "apitoolkit" appLogger Log.LogAttention
+                      $ Log.logAttention "kafkaService: CAUGHT EXCEPTION - Error processing Kafka messages" (AE.object ["error" AE..= show e, "topic" AE..= topic, "ce-type" AE..= ceType, "record_count" AE..= length allRecords, "attributes" AE..= attributes, "checkpoint" AE..= ("kafkaService:exception" :: String)])
 
-                  -- Send to dead letter queue unless it's an unrecoverable error
-                  unless (isUnrecoverableError e)
-                    $ liftIO
-                    $ publishToDeadLetterQueue appCtx allRecords attributes (toText $ show e)
+                    -- Send to dead letter queue unless it's an unrecoverable error
+                    unless (isUnrecoverableError e)
+                      $ liftIO
+                      $ publishToDeadLetterQueue appCtx allRecords attributes (toText $ show e)
 
-                  -- Always return all message IDs so they're acknowledged
-                  pure $ map fst allRecords
-                Right ids -> pure ids
+                    -- Always return all message IDs so they're acknowledged
+                    pure $ map fst allRecords
+                  Right ids -> pure ids
 
             whenJustM (K.commitAllOffsets K.OffsetCommitAsync consumer) throwIO
         pass

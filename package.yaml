@@ -198,6 +198,7 @@ library:
     - gogol-core
     - gogol-pubsub
     - hw-kafka-client
+    - hashable
     - hashtables
     - http-api-data
     - lens

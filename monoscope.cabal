@@ -262,6 +262,7 @@ library
     , gogol-core
     , gogol-pubsub
     , grapesy
+    , hashable
     , hashtables
     , hs-opentelemetry-api
     , hs-opentelemetry-instrumentation-auto

@@ -7,9 +7,10 @@ import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.UUID qualified as UUID
 import Data.Either qualified as Unsafe
+import Data.HashMap.Strict qualified as HM
 import Data.List (nub)
 import Data.List.Extra (chunksOf, groupBy)
-import Data.Map.Lazy qualified as HM
+import Data.Map.Lazy qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
@@ -18,7 +19,6 @@ import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTim
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Data.Vector.Algorithms qualified as VAA
 import Database.PostgreSQL.Entity.DBT (execute, query, withPool)
 import Database.PostgreSQL.Simple (SomePostgreSqlException)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -216,8 +216,9 @@ processBackgroundJob authCtx job bgJob =
              "project_name": #{projectTitle}
            }|]
           sendPostmarkEmail userEmail (Just ("project-deleted", templateVars)) Nothing
-    DailyJob -> unless authCtx.config.enableDailyJobScheduling (Log.logInfo "Daily job scheduling is disabled, skipping" ())
-      >> Relude.when authCtx.config.enableDailyJobScheduling (withAdvisoryLock "daily_job_scheduling" runDailyJobScheduling)
+    DailyJob ->
+      unless authCtx.config.enableDailyJobScheduling (Log.logInfo "Daily job scheduling is disabled, skipping" ())
+        >> Relude.when authCtx.config.enableDailyJobScheduling (withAdvisoryLock "daily_job_scheduling" runDailyJobScheduling)
       where
         withAdvisoryLock :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
         withAdvisoryLock lockName action = do
@@ -232,12 +233,15 @@ processBackgroundJob authCtx job bgJob =
           currentDay <- utctDay <$> Time.currentTime
           currentTime <- Time.currentTime
           -- Check if app-wide jobs already scheduled for today (idempotent check)
-          existingHourlyJobs <- dbtToEff $ query
-            [sql|SELECT COUNT(*) FROM background_jobs
+          existingHourlyJobs <-
+            dbtToEff
+              $ query
+                [sql|SELECT COUNT(*) FROM background_jobs
                  WHERE payload->>'tag' = 'HourlyJob'
                    AND run_at >= date_trunc('day', now())
                    AND run_at < date_trunc('day', now()) + interval '1 day'
-                   AND status IN ('queued', 'locked')|] ()
+                   AND status IN ('queued', 'locked')|]
+                ()
 
           let hourlyJobsExist = case V.headM existingHourlyJobs of
                 Just (Only (count :: Int)) -> count >= 24
@@ -260,20 +264,23 @@ processBackgroundJob authCtx job bgJob =
                 let scheduledTime4 = addUTCTime (fromIntegral $ hr * 3600) currentTime
                 scheduleJob conn "background_jobs" (BackgroundJobs.ProcessIssuesEnhancement scheduledTime4) scheduledTime4
 
-          Relude.when hourlyJobsExist $
-            Log.logInfo "Hourly jobs already scheduled for today, skipping" ()
+          Relude.when hourlyJobsExist
+            $ Log.logInfo "Hourly jobs already scheduled for today, skipping" ()
 
           projects <- dbtToEff $ query [sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > now() - interval '24 hours'|] ()
           Log.logInfo "Scheduling jobs for projects" ("project_count", V.length projects)
           forM_ projects \p -> do
             -- Check if this project's jobs already scheduled for today (per-project idempotent check)
-            existingProjectJobs <- dbtToEff $ query
-              [sql|SELECT COUNT(*) FROM background_jobs
+            existingProjectJobs <-
+              dbtToEff
+                $ query
+                  [sql|SELECT COUNT(*) FROM background_jobs
                    WHERE payload->>'tag' = 'FiveMinuteSpanProcessing'
                      AND payload->>'projectId' = ?
                      AND run_at >= date_trunc('day', now())
                      AND run_at < date_trunc('day', now()) + interval '1 day'
-                     AND status IN ('queued', 'locked')|] (Only p)
+                     AND status IN ('queued', 'locked')|]
+                  (Only p)
 
             let projectJobsExist = case V.headM existingProjectJobs of
                   Just (Only (count :: Int)) -> count >= 288
@@ -301,8 +308,8 @@ processBackgroundJob authCtx job bgJob =
                   $ createJob conn "background_jobs"
                   $ BackgroundJobs.WeeklyReports p
 
-            Relude.when projectJobsExist $
-              Log.logInfo "Jobs already scheduled for project today, skipping" ("project_id", p.toText)
+            Relude.when projectJobsExist
+              $ Log.logInfo "Jobs already scheduled for project today, skipping" ("project_id", p.toText)
     HourlyJob scheduledTime hour -> runHourlyJob scheduledTime hour
     DailyReports pid -> sendReportForProject pid DailyReport
     WeeklyReports pid -> sendReportForProject pid WeeklyReport
@@ -368,7 +375,7 @@ runHourlyJob scheduledTime hour = do
 
 -- | Batch process facets generation for multiple projects using 24-hour window
 -- Processes projects concurrently with individual error handling to prevent batch failures
-generateOtelFacetsBatch :: (DB :> es, Effectful.Reader.Static.Reader Config.AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUID.UUIDEff :> es, Ki.StructuredConcurrency :> es, Tracing :> es) => V.Vector Text -> UTCTime -> Eff es ()
+generateOtelFacetsBatch :: (DB :> es, Effectful.Reader.Static.Reader Config.AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" DB :> es, Log :> es, Tracing :> es, UUID.UUIDEff :> es) => V.Vector Text -> UTCTime -> Eff es ()
 generateOtelFacetsBatch projectIds timestamp = do
   Log.logInfo "Starting batch OTLP facets generation" ("project_count", AE.toJSON $ V.length projectIds)
 
@@ -486,8 +493,8 @@ processPatterns kind fieldName events pid scheduledTime since = do
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
         newPatterns = Drain.getAllLogGroups drainTree
     -- Only log if patterns were extracted
-    Relude.when (V.length newPatterns > 0) $
-      Log.logInfo ("Extracted " <> kind <> " patterns") ("count", AE.toJSON $ V.length newPatterns)
+    Relude.when (V.length newPatterns > 0)
+      $ Log.logInfo ("Extracted " <> kind <> " patterns") ("count", AE.toJSON $ V.length newPatterns)
 
     forM_ newPatterns \(patternTxt, ids) -> do
       let q = [text|UPDATE otel_logs_and_spans SET $fieldName = ?  WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|]
@@ -629,6 +636,13 @@ processProjectErrors pid errors = do
     processError err = RequestMessages.processErrors pid Nothing Nothing Nothing err
 
 
+-- | Deduplicate a vector of items by their hash field using HashMap for O(n) performance
+-- This is much faster than nubBy which is O(n²)
+deduplicateByHash :: (a -> Text) -> V.Vector a -> V.Vector a
+deduplicateByHash getHash = V.fromList . HM.elems . V.foldl' (\acc item -> HM.insert (getHash item) item acc) HM.empty
+{-# INLINE deduplicateByHash #-}
+
+
 -- | Process spans for a specific project to extract API entities
 -- This is where the core anomaly detection logic happens:
 -- 1. Load project cache (contains known entities to skip)
@@ -648,22 +662,24 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
     mpjCache <- withPool ctx.jobsPool $ Projects.projectCacheById pid'
     pure $ fromMaybe projectCacheDefault mpjCache
 
-  -- Process each span to extract entities
-  results <- forM spans \spn -> do
-    spanId <- liftIO UUIDV4.nextRandom
-    let result = processSpanToEntities projectCacheVal spn spanId
-    pure result
+  -- Batch generate all UUIDs upfront to avoid repeated IO
+  !spanIds <- V.replicateM (V.length spans) UUID.genUUID
 
-  -- Unzip and deduplicate extracted entities
-  let (endpoints, shapes, fields, formats, spanUpdates) = V.unzip5 results
-  let endpointsFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes $ V.toList endpoints
-  let shapesFinal = VAA.nubBy (comparing (.hash)) $ V.fromList $ catMaybes $ V.toList shapes
-  let fieldsFinal = VAA.nubBy (comparing (.hash)) $ V.concat $ V.toList fields
-  let formatsFinal = VAA.nubBy (comparing (.hash)) $ V.concat $ V.toList formats
+  -- Process each span to extract entities (pure computation)
+  let !results = V.zipWith (\spn spanId -> processSpanToEntities projectCacheVal spn spanId) spans spanIds
+
+  -- Unzip and deduplicate extracted entities using HashMap for O(n) performance
+  let !(endpoints, shapes, fields, formats, spanUpdates) = V.unzip5 results
+
+  -- Deduplicate using HashMap instead of O(n²) nubBy
+  let !endpointsFinal = deduplicateByHash (.hash) $ V.mapMaybe id endpoints
+  let !shapesFinal = deduplicateByHash (.hash) $ V.mapMaybe id shapes
+  let !fieldsFinal = deduplicateByHash (.hash) $ V.concat $ V.toList fields
+  let !formatsFinal = deduplicateByHash (.hash) $ V.concat $ V.toList formats
 
   -- Only log if there are actually entities to process (reduces noise in tests)
-  Relude.when (V.length endpointsFinal > 0 || V.length shapesFinal > 0 || V.length fieldsFinal > 0 || V.length formatsFinal > 0) $
-    Log.logInfo
+  Relude.when (V.length endpointsFinal > 0 || V.length shapesFinal > 0 || V.length fieldsFinal > 0 || V.length formatsFinal > 0)
+    $ Log.logInfo
       "Entities extracted"
       ( object
           [ "project_id" AE..= pid.toText
@@ -690,7 +706,7 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
       let spansWithHashes = V.filter (\(_, hashes) -> not $ V.null hashes) $ V.zip spans spanUpdates
       Relude.when (V.length spansWithHashes > 0) $ do
         Log.logInfo "Updating spans with computed hashes" ("span_count", AE.toJSON $ V.length spansWithHashes)
-        let spanIds = PGArray $ V.toList $ V.map ((.id) . fst) spansWithHashes
+        let dbSpanIds = PGArray $ V.toList $ V.map ((.id) . fst) spansWithHashes
             hashValues = PGArray $ V.toList $ V.map (AE.toJSON . snd) spansWithHashes
         _ <-
           dbtToEff
@@ -705,7 +721,7 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
                       AND otel_logs_and_spans.project_id = ?
                       AND otel_logs_and_spans.timestamp >= ?
                       AND otel_logs_and_spans.timestamp < ? |]
-              (spanIds, hashValues, pid, fiveMinutesAgo, scheduledTime)
+              (dbSpanIds, hashValues, pid, fiveMinutesAgo, scheduledTime)
         Log.logInfo "Completed span processing for project" ("project_id", AE.toJSON pid.toText)
   where
     projectCacheDefault :: Projects.ProjectCache
@@ -842,25 +858,25 @@ type EndpointStatsTuple = (Text, Text, Text, Int, Int)
 computeDurationChanges :: V.Vector EndpointStatsTuple -> V.Vector EndpointStatsTuple -> V.Vector (Text, Text, Text, Int, Double, Int, Double)
 computeDurationChanges current prev =
   let
-    prevMap :: HM.Map (Text, Text, Text) Int
+    prevMap :: Map.Map (Text, Text, Text) Int
     prevMap =
-      HM.fromList
+      Map.fromList
         [ ((h, m, u), dur)
         | (h, m, u, dur, req) <- V.toList prev
         ]
-    prevMapReq :: HM.Map (Text, Text, Text) Int
+    prevMapReq :: Map.Map (Text, Text, Text) Int
     prevMapReq =
-      HM.fromList
+      Map.fromList
         [ ((h, m, u), req)
         | (h, m, u, dur, req) <- V.toList prev
         ]
     compute (h, m, u, dur, req) =
-      let change = case HM.lookup (h, m, u) prevMap of
+      let change = case Map.lookup (h, m, u) prevMap of
             Just prevDur
               | prevDur > 0 ->
                   Just $ (fromIntegral (dur - prevDur) / fromIntegral prevDur) * 100
             _ -> Nothing
-          reqChange = case HM.lookup (h, m, u) prevMapReq of
+          reqChange = case Map.lookup (h, m, u) prevMapReq of
             Just prevDur
               | prevDur > 0 ->
                   Just $ (fromIntegral (req - prevDur) / fromIntegral prevDur) * 100
