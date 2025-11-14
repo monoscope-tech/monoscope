@@ -71,7 +71,7 @@ import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
 import System.Config qualified as Config
 import System.Logging qualified as Log
-import System.Tracing (SpanStatus (..), addEvent, setStatus, withSpan)
+import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, runBackground)
 import Text.Megaparsec (parseMaybe)
 import UnliftIO.Exception (try)
@@ -348,8 +348,8 @@ runHourlyJob scheduledTime hour = do
   -- Log count of projects to process
   Log.logInfo "Projects with new data in the last hour window" ("count", AE.toJSON $ length activeProjects)
 
-  -- Batch projects in groups of 100
-  let batchSize = 100
+  -- Batch projects in groups of 10 (reduced from 100 to prevent timeouts)
+  let batchSize = 10
       projectBatches = chunksOf batchSize $ V.toList activeProjects
 
   -- For each batch, create a single job with multiple project IDs
@@ -362,10 +362,43 @@ runHourlyJob scheduledTime hour = do
 
 
 -- | Batch process facets generation for multiple projects using 24-hour window
-generateOtelFacetsBatch :: (DB :> es, Effectful.Reader.Static.Reader Config.AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUID.UUIDEff :> es) => V.Vector Text -> UTCTime -> Eff es ()
+-- Processes projects concurrently with individual error handling to prevent batch failures
+generateOtelFacetsBatch :: (DB :> es, Effectful.Reader.Static.Reader Config.AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUID.UUIDEff :> es, Time.Time :> es, Ki.StructuredConcurrency :> es, Tracing :> es) => V.Vector Text -> UTCTime -> Eff es ()
 generateOtelFacetsBatch projectIds timestamp = do
-  forM_ projectIds \pid -> void $ Facets.generateAndSaveFacets (Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText pid) "otel_logs_and_spans" Facets.facetColumns 50 timestamp
-  Log.logInfo "Completed batch OTLP facets generation for projects" ("project_count", AE.toJSON $ V.length projectIds)
+  Log.logInfo "Starting batch OTLP facets generation" ("project_count", AE.toJSON $ V.length projectIds)
+
+  -- Process projects concurrently with individual error handling
+  results <- Ki.scoped \scope -> do
+    threads <- forM projectIds \pid -> Ki.fork scope $ do
+      -- Wrap each project's facet generation in a span
+      withSpan
+        "facet_generation.project"
+        [ ("project_id", OA.toAttribute pid)
+        , ("batch_size", OA.toAttribute $ V.length projectIds)
+        ]
+        $ \sp -> do
+          addEvent sp "facet_generation.started" []
+          result <- try $ Facets.generateAndSaveFacets (Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText pid) "otel_logs_and_spans" Facets.facetColumns 50 timestamp
+          case result of
+            Left (e :: SomeException) -> do
+              addEvent sp "facet_generation.failed" [("error", OA.toAttribute $ T.pack (show e))]
+              setStatus sp (Error $ T.pack $ show e)
+              pure $ Left (pid, show e)
+            Right _ -> do
+              addEvent sp "facet_generation.completed" []
+              setStatus sp Ok
+              pure $ Right pid
+    traverse (Ki.atomically . Ki.await) threads
+
+  let successes = V.length $ V.filter isRight results
+      failures = V.length $ V.filter isLeft results
+
+  Log.logInfo "Completed batch OTLP facets generation"
+    $ AE.object
+      [ "total_projects" AE..= V.length projectIds
+      , "successes" AE..= successes
+      , "failures" AE..= failures
+      ]
 
 
 -- | Process HTTP spans to extract API entities and detect changes
@@ -648,19 +681,23 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
   case result of
     Left (e :: SomePostgreSqlException) -> Log.logAttention "Postgres Exception during span processing" (show e)
     Right _ -> do
-      -- Only log if there are actually spans to update (reduces noise in tests)
-      Relude.when (V.length spans > 0) $ do
-        Log.logInfo "Updating spans with computed hashes" ("span_count", AE.toJSON $ V.length spans)
-        forM_ (V.zip spans spanUpdates) \(spn, hashes) -> do
-          Relude.when (not $ V.null hashes) $ do
-            _ <-
-              dbtToEff
-                $ execute
-                  [sql| UPDATE otel_logs_and_spans
-                    SET hashes = ?
-                    WHERE project_id = ? and timestamp >= ? and timestamp < ? AND id = ? |]
-                  (hashes, pid, fiveMinutesAgo, scheduledTime, spn.id)
-            pass
+      -- Batch update spans with computed hashes using a single query
+      let spansWithHashes = V.filter (\(_, hashes) -> not $ V.null hashes) $ V.zip spans spanUpdates
+      Relude.when (V.length spansWithHashes > 0) $ do
+        Log.logInfo "Updating spans with computed hashes" ("span_count", AE.toJSON $ V.length spansWithHashes)
+        let spanIds = PGArray $ V.toList $ V.map ((.id) . fst) spansWithHashes
+            hashValues = PGArray $ V.toList $ V.map (AE.toJSON . snd) spansWithHashes
+        _ <-
+          dbtToEff
+            $ execute
+              [sql| UPDATE otel_logs_and_spans
+                    SET hashes = updates.hashes::jsonb
+                    FROM (SELECT unnest(?::uuid[]) as id, unnest(?::jsonb[]) as hashes) as updates
+                    WHERE otel_logs_and_spans.id = updates.id
+                      AND otel_logs_and_spans.project_id = ?
+                      AND otel_logs_and_spans.timestamp >= ?
+                      AND otel_logs_and_spans.timestamp < ? |]
+              (spanIds, hashValues, pid, fiveMinutesAgo, scheduledTime)
         Log.logInfo "Completed span processing for project" ("project_id", AE.toJSON pid.toText)
   where
     projectCacheDefault :: Projects.ProjectCache
