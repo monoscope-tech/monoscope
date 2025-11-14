@@ -1,22 +1,20 @@
 module Opentelemetry.OtlpServerSpec where
 
-import Pkg.TestUtils qualified as TestUtils
-import ProcessMessageSpec (testAuthContext)
+import Pkg.TestUtils
 import Relude
 import Test.Hspec
 
 
 -- Mock data generators
 spec :: Spec
-spec = aroundAll TestUtils.withSetup do
+spec = aroundAll withTestResources do
   describe "processList" do
-    it "should process a request" \pool -> do
+    it "should process a request" $ \_ ->
       -- let otlpTraceB64A' = B64.decodeBase64 $ B64.assertBase64 @'B64.StdPadded $ encodeUtf8 otlpTraceB64A
-      authCtx <- testAuthContext pool
       -- resp <-
-      --   TestUtils.runTestBackground authCtx
+      --   runTestBg tr
       --     $ OtlpServer.processList [("A", otlpTraceB64A')] (HashMap.fromList [("ce-type", "org.opentelemetry.otlp.traces.v1")])
-      pass
+      pending
 
 --   it "processes trace messages correctly" $ do
 --     let input = [("ack1", protoToByteString mockTraceRequest)]
