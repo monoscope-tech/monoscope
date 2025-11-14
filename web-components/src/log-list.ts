@@ -160,7 +160,7 @@ export class LogList extends LitElement {
           this.workerCallbacks.delete(id);
           reject(new Error('Worker request timeout'));
         }
-      }, 10000);
+      }, 120000);
     });
   }
 
