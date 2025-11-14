@@ -82,17 +82,21 @@ spec = aroundAll withTestResources do
             ]
       
       processMessagesAndBackgroundJobs tr msgs
-      processAllBackgroundJobsMultipleTimes tr
-      
+
       -- Check that endpoint was created in database
       endpoints <- withPool trPool $ DBT.query [sql|
         SELECT hash FROM apis.endpoints WHERE project_id = ?
       |] (Only testPid) :: IO (V.Vector (Only Text))
       V.length endpoints `shouldBe` 1
-      
-      -- Process endpoint anomaly jobs to create issues
-      processEndpointAnomalyJobs tr
-      _ <- runAllBackgroundJobs trATCtx
+
+      -- Check what background jobs were created and run only NewAnomaly jobs
+      pendingJobs <- getPendingBackgroundJobs trATCtx
+      logBackgroundJobsInfo pendingJobs
+
+      -- Run only NewAnomaly jobs (which create issues from anomalies)
+      _ <- runBackgroundJobsWhere trATCtx $ \case
+        BackgroundJobs.NewAnomaly{} -> True
+        _ -> False
       createRequestDumps tr testPid 10
       
       -- Check that API change issue was created for the endpoint
@@ -113,10 +117,15 @@ spec = aroundAll withTestResources do
       |] (Only testPid) :: IO (V.Vector (Only Issues.IssueId))
       V.length apiChangeIssues `shouldBe` 1
       let issueId = apiChangeIssues V.! 0 & (\(Only iid) -> iid)
-      
-      -- Process shape and field anomaly jobs to create issues
-      processShapeAndFieldAnomalyJobs tr
-      
+
+      -- Get and run shape/field anomaly jobs
+      pendingJobs2 <- getPendingBackgroundJobs trATCtx
+      logBackgroundJobsInfo pendingJobs2
+
+      _ <- runBackgroundJobsWhere trATCtx $ \case
+        BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
+        _ -> False
+
       -- Acknowledge the endpoint anomaly directly using Issues module
       -- This avoids the old acknowledgeAnomalies function that queries non-existent columns
       let sess = Servant.getResponse trSessAndHeader
@@ -151,10 +160,14 @@ spec = aroundAll withTestResources do
 
       processMessagesAndBackgroundJobs tr msgs
       createRequestDumps tr testPid 10
-      processAllBackgroundJobsMultipleTimes tr
-      
-      -- Process shape and field anomaly jobs to create issues
-      processShapeAndFieldAnomalyJobs tr
+
+      -- Get pending jobs and run only NewAnomaly jobs for shapes and fields
+      pendingJobs3 <- getPendingBackgroundJobs trATCtx
+      logBackgroundJobsInfo pendingJobs3
+
+      _ <- runBackgroundJobsWhere trATCtx $ \case
+        BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
+        _ -> False
       
       -- Acknowledge API change issues first
       apiChangeIssues <- withPool trPool $ DBT.query [sql|
@@ -177,9 +190,14 @@ spec = aroundAll withTestResources do
     it "should detect new format anomaly" \tr@TestResources{..} -> do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
-      
-      -- First, process shape anomaly job to create shape issue
-      processShapeAndFieldAnomalyJobs tr
+
+      -- Get and run shape/field anomaly jobs
+      pendingJobs4 <- getPendingBackgroundJobs trATCtx
+      logBackgroundJobsInfo pendingJobs4
+
+      _ <- runBackgroundJobsWhere trATCtx $ \case
+        BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
+        _ -> False
       
       -- Find and acknowledge the API change issues
       apiChangeIssuesForAck <- withPool trPool $ DBT.query [sql|
@@ -200,10 +218,14 @@ spec = aroundAll withTestResources do
       let reqMsg4 = Unsafe.fromJust $ convert $ msg4 nowTxt
       let msgs = [("m4", BL.toStrict $ AE.encode reqMsg4)]
       processMessagesAndBackgroundJobs tr msgs
-      processAllBackgroundJobsMultipleTimes tr
-      
-      -- Process format anomaly jobs
-      processFormatAnomalyJobs tr
+
+      -- Get and run format anomaly jobs
+      pendingJobs5 <- getPendingBackgroundJobs trATCtx
+      logBackgroundJobsInfo pendingJobs5
+
+      _ <- runBackgroundJobsWhere trATCtx $ \case
+        BackgroundJobs.NewAnomaly{anomalyType = "format"} -> True
+        _ -> False
 
       -- Get updated anomaly list
       anomalies <- getAnomalies tr

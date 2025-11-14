@@ -118,6 +118,7 @@ data EnvConfig = EnvConfig
   , telemetryProjectId :: Text
   , telemetryServiceName :: Text
   , enableEventsTableUpdates :: Bool
+  , enableDailyJobScheduling :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)

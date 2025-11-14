@@ -11,6 +11,9 @@ module Pkg.TestUtils (
   convert,
   runTestBackground,
   runAllBackgroundJobs,
+  getPendingBackgroundJobs,
+  logBackgroundJobsInfo,
+  runBackgroundJobsWhere,
   refreshMaterializedView,
   setBjRunAtInThePast,
   toServantResponse,
@@ -463,6 +466,7 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
               , requestPubsubTopics = ["monoscope-prod-default"]
               , enableBackgroundJobs = True
               , enableEventsTableUpdates = True
+              , enableDailyJobScheduling = False
               }
           )
   f
@@ -570,12 +574,47 @@ convert val = case AE.fromJSON val of
   AE.Error _ -> Nothing
 
 
+-- | Get all pending background jobs without executing them
+-- This is useful for assertions and debugging in tests
+getPendingBackgroundJobs :: AuthContext -> IO (V.Vector (Job, BackgroundJobs.BgJobs))
+getPendingBackgroundJobs authCtx = do
+  jobs <- withPool authCtx.pool getBackgroundJobs
+  jobsWithParsed <- V.forM jobs \job -> do
+    bgJob <- BackgroundJobs.throwParsePayload job
+    pure (job, bgJob)
+  pure jobsWithParsed
+
+
+-- | Log background jobs info for debugging
+logBackgroundJobsInfo :: V.Vector (Job, BackgroundJobs.BgJobs) -> IO ()
+logBackgroundJobsInfo jobs = do
+  putTextLn $ "\n=== Background Jobs Queue (Count: " <> show (V.length jobs) <> ") ==="
+  V.forM_ jobs \(job, bgJob) -> do
+    let jobType = BackgroundJobs.jobTypeName bgJob
+    putTextLn $ "  - " <> jobType <> " (ID: " <> show job.jobId <> ")"
+  putTextLn "=================================\n"
+
+
 runAllBackgroundJobs :: AuthContext -> IO (V.Vector Job)
 runAllBackgroundJobs authCtx = do
   jobs <- withPool authCtx.pool getBackgroundJobs
   LogBulk.withBulkStdOutLogger \logger ->
     V.forM_ jobs $ testJobsRunner logger authCtx
   pure jobs
+
+
+-- | Run background jobs matching a predicate
+-- Useful for running only specific job types in tests
+runBackgroundJobsWhere :: AuthContext -> (BackgroundJobs.BgJobs -> Bool) -> IO (V.Vector Job)
+runBackgroundJobsWhere authCtx predicate = do
+  jobs <- withPool authCtx.pool getBackgroundJobs
+  jobsWithParsed <- V.forM jobs \job -> do
+    bgJob <- BackgroundJobs.throwParsePayload job
+    pure (job, bgJob)
+  let filteredJobs = V.filter (\(_, bgJob) -> predicate bgJob) jobsWithParsed
+  LogBulk.withBulkStdOutLogger \logger ->
+    V.forM_ filteredJobs $ \(job, _) -> testJobsRunner logger authCtx job
+  pure $ V.map fst filteredJobs
 
 
 -- Test version of jobsRunner that uses the test notification runner

@@ -159,17 +159,22 @@ spec = aroundAll withTestResources do
         _ -> error "Unexpected anomalies count result"
 
     it "processes anomaly background jobs to create issues" \tr@TestResources{..} -> do
-      -- Process anomaly jobs
-      processEndpointAnomalyJobs tr
-      _ <- runAllBackgroundJobs trATCtx
-      
+      -- Get pending jobs and log them
+      pendingJobs <- getPendingBackgroundJobs trATCtx
+      logBackgroundJobsInfo pendingJobs
+
+      -- Run only NewAnomaly jobs to create issues from anomalies
+      _ <- runBackgroundJobsWhere trATCtx $ \case
+        BackgroundJobs.NewAnomaly{} -> True
+        _ -> False
+
       -- Verify issues were created
       issuesCount <- withPool trPool $ DBT.query [sql|
         SELECT COUNT(*)
         FROM apis.issues
         WHERE project_id = ? AND issue_type = 'api_change'
       |] (Only testPid) :: IO (V.Vector (Only Int))
-      
+
       case issuesCount of
         [(Only count)] -> count `shouldBe` 2
         _ -> error "Unexpected issues count result"

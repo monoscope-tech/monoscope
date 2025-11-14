@@ -64,6 +64,11 @@ spec = aroundAll TestUtils.withSetup do
       r `shouldBe` ["m1", "m2", "m4", "m5", "m5"]
       -- Call the procedure directly
       _ <- withPool pool $ PGT.execute [sql|CALL monitors.check_triggered_query_monitors(0, '{}'::jsonb)|] ()
+
+      -- Check what background jobs were created (for monitor alerts)
+      pendingJobs <- TestUtils.getPendingBackgroundJobs authCtx
+      TestUtils.logBackgroundJobsInfo pendingJobs
+
       _ <- TestUtils.runAllBackgroundJobs authCtx
       -- TODO:
       -- Introduce a .env.test
