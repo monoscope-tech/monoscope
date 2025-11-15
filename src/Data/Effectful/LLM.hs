@@ -13,10 +13,13 @@ module Data.Effectful.LLM (
 
 import Data.Aeson qualified as AE
 import Data.Text qualified as T
+import Data.Vector qualified as V
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Langchain.LLM.Core qualified as LLMCore
 import Langchain.LLM.OpenAI qualified as OpenAI
+import OpenAI.V1.Chat.Completions qualified as OpenAIV1
+import OpenAI.V1.Models qualified as Models
 import Relude
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
@@ -98,12 +101,22 @@ callOpenAIAPI fullPrompt apiKey = do
   let openAI =
         OpenAI.OpenAI
           { OpenAI.apiKey = apiKey
-          , OpenAI.openAIModelName = "gpt-4o-mini"
           , OpenAI.callbacks = []
           , OpenAI.baseUrl = Nothing
           }
+      -- Create chat completion parameters with model name
+      userMessage =
+        OpenAIV1.User
+          { OpenAIV1.content = V.fromList [OpenAIV1.Text{OpenAIV1.text = fullPrompt}]
+          , OpenAIV1.name = Nothing
+          }
+      params =
+        OpenAIV1._CreateChatCompletion
+          { OpenAIV1.model = "gpt-4o-mini"
+          , OpenAIV1.messages = V.fromList [userMessage]
+          }
   -- Use langchain-hs to generate response
-  result <- liftIO $ LLMCore.generate openAI fullPrompt Nothing
+  result <- liftIO $ LLMCore.generate openAI fullPrompt (Just params)
   case result of
-    Left err -> pure $ Left $ "LLM Error: " <> toText err
+    Left err -> pure $ Left $ "LLM Error: " <> show err
     Right response -> pure $ Right response

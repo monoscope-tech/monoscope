@@ -4,10 +4,14 @@ import Data.Aeson qualified as AE
 import Data.Effectful.LLM qualified as ELLM
 import Data.List qualified as L
 import Data.Text qualified as T
+import Data.Vector qualified as V
 import Effectful (Eff, (:>))
 import Langchain.LLM.Core qualified as LLM
+import Langchain.LLM.Huggingface (Huggingface (modelName))
 import Langchain.LLM.OpenAI
 import Models.Telemetry.Schema qualified as Schema
+import OpenAI.V1.Chat.Completions qualified as OpenAIV1
+import OpenAI.V1.Models qualified as Models
 import Relude
 
 
@@ -31,14 +35,24 @@ callOpenAIAPI fullPrompt apiKey = do
   let openAI =
         OpenAI
           { apiKey = apiKey
-          , openAIModelName = "gpt-4o-mini"
           , callbacks = []
           , baseUrl = Nothing
           }
+      -- Create chat completion parameters with model name
+      userMessage =
+        OpenAIV1.User
+          { OpenAIV1.content = V.fromList [OpenAIV1.Text{OpenAIV1.text = fullPrompt}]
+          , OpenAIV1.name = Nothing
+          }
+      params =
+        OpenAIV1._CreateChatCompletion
+          { OpenAIV1.model = "gpt-4o-mini"
+          , OpenAIV1.messages = V.fromList [userMessage]
+          }
   -- Use langchain-hs to generate response
-  result <- liftIO $ LLM.generate openAI fullPrompt Nothing
+  result <- liftIO $ LLM.generate openAI fullPrompt (Just params)
   case result of
-    Left err -> pure $ Left $ "LLM Error: " <> toText err
+    Left err -> pure $ Left $ "LLM Error: " <> show err
     Right response -> pure $ Right response
 
 
@@ -66,11 +80,11 @@ getNormalTupleReponse response =
       if "Please provide a query"
         `T.isInfixOf` cleanedQuery
         || "I need more"
-        `T.isInfixOf` cleanedQuery
+          `T.isInfixOf` cleanedQuery
         || "Could you please"
-        `T.isInfixOf` cleanedQuery
+          `T.isInfixOf` cleanedQuery
         || T.length cleanedQuery
-        < 3
+          < 3
         then Left "INVALID_QUERY_ERROR"
         else Right (cleanedQuery, vizTypeM)
 

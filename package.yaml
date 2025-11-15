@@ -264,6 +264,7 @@ library:
     - ki-effectful
     - grapesy
     - langchain-hs
+    - openai
     - bytestring
     - base16-bytestring
     - minio-hs

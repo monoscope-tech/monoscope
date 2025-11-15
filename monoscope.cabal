@@ -41,6 +41,7 @@ extra-source-files:
     static/migrations/0014_alerts_config.sql
     static/migrations/0015_summary_pattern.sql
     static/migrations/0016_drop_overly_restrictive_issues_constraint.sql
+    static/migrations/0016_reports_start_and_end_time.sql
 
 source-repository head
   type: git
@@ -294,6 +295,7 @@ library
     , neat-interpolation
     , network-uri
     , odd-jobs
+    , openai
     , parallel
     , parser-combinators
     , pg-entity
