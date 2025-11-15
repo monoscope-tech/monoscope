@@ -17,6 +17,7 @@ module Opentelemetry.OtlpServer (
 ) where
 
 import Control.Concurrent (forkIO, threadDelay)
+import Control.Exception (throwIO)
 import Control.Exception.Annotated (checkpoint)
 import Control.Parallel.Strategies (parList, rpar, using)
 import Data.Aeson qualified as AE
@@ -25,7 +26,9 @@ import Data.Aeson.KeyMap qualified as KEM
 import Data.Base64.Types qualified as B64
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
+import Data.ByteString.Char8 qualified as C8
 import Data.Cache qualified as Cache
+import Data.CaseInsensitive qualified as CI
 import Data.Effectful.UUID (UUIDEff)
 import Data.HashMap.Strict qualified as HashMap
 import Data.IORef qualified as IORef
@@ -56,11 +59,9 @@ import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), Severity
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common
 import Network.GRPC.Common.Protobuf
-import Network.GRPC.Server (RpcHandler, SomeRpcHandler, mkRpcHandler, getRequestMetadata, recvFinalInput, sendFinalOutput)
+import Network.GRPC.Server (RpcHandler, SomeRpcHandler, getRequestMetadata, mkRpcHandler, recvFinalInput, sendFinalOutput)
 import Network.GRPC.Server.Run hiding (runServer)
 import Network.GRPC.Server.StreamType (Methods (..), fromMethods)
-import qualified Data.CaseInsensitive as CI
-import qualified Data.ByteString.Char8 as C8
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (AesonText (..))
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
@@ -78,7 +79,6 @@ import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude hiding (ask)
-import Control.Exception (throwIO)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Types (runBackground)
@@ -90,16 +90,18 @@ import "base64" Data.ByteString.Base64 qualified as B64
 data OtlpRequestMetadata = OtlpRequestMetadata
   { otlpApiKey :: Maybe Text
   }
-  deriving (Show, Eq)
+  deriving (Eq, Show)
+
 
 -- | Parse Authorization header from gRPC metadata
 instance ParseMetadata OtlpRequestMetadata where
   parseMetadata metadata = do
     -- Look for "authorization" header (case-insensitive)
     let authHeader = find isAuthHeader metadata
-    pure $ OtlpRequestMetadata
-      { otlpApiKey = fmap extractApiKey authHeader
-      }
+    pure
+      $ OtlpRequestMetadata
+        { otlpApiKey = fmap extractApiKey authHeader
+        }
     where
       isAuthHeader :: CustomMetadata -> Bool
       isAuthHeader (CustomMetadata (AsciiHeader name) _) =
@@ -110,9 +112,10 @@ instance ParseMetadata OtlpRequestMetadata where
       extractApiKey (CustomMetadata _ value) =
         -- Support both "Bearer <token>" and raw token formats
         let valueText = decodeUtf8 value
-        in case T.stripPrefix "Bearer " valueText of
-             Just token -> T.strip token
-             Nothing -> T.strip valueText
+         in case T.stripPrefix "Bearer " valueText of
+              Just token -> T.strip token
+              Nothing -> T.strip valueText
+
 
 -- | Global error counters for common parsing errors (wire type, UTF-8, etc)
 wireTypeErrorsRef :: IORef (HashMap Text (Int, AE.Value))
@@ -1368,14 +1371,17 @@ processTraceRequest metadataApiKey req = do
   when (not (V.null allApiKeys) || not (V.null atIds)) $ do
     projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
     let allProjectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
-    when (null allProjectIds) $
-      liftIO $ throwIO $ GrpcException
+    when (null allProjectIds)
+      $ liftIO
+      $ throwIO
+      $ GrpcException
         { grpcError = GrpcUnauthenticated
         , grpcErrorMessage = Just "Invalid or missing project API key"
         , grpcErrorMetadata = []
         , grpcErrorDetails = Nothing
         }
-    Log.logInfo "Traces: Authentication successful"
+    Log.logInfo
+      "Traces: Authentication successful"
       (AE.object ["project_ids" AE..= map Projects.unProjectId allProjectIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
 
   projectIdsAndKeys <-
@@ -1394,12 +1400,14 @@ processTraceRequest metadataApiKey req = do
   let !spans = convertResourceSpansToOtelLogs currentTime projectCaches projectIdsAndKeys resourceSpans
       !spans' = V.fromList spans
 
-  Log.logInfo "Traces: Converted resource spans to OtelLogs"
+  Log.logInfo
+    "Traces: Converted resource spans to OtelLogs"
     (AE.object ["span_count" AE..= length spans])
 
   unless (V.null spans') do
     Telemetry.bulkInsertOtelLogsAndSpansTF spans'
-    Log.logInfo "Traces: Successfully inserted spans into database"
+    Log.logInfo
+      "Traces: Successfully inserted spans into database"
       (AE.object ["inserted_count" AE..= V.length spans'])
 
 
@@ -1434,14 +1442,17 @@ processLogsRequest metadataApiKey req = do
   when (not (V.null allApiKeys) || not (V.null atIds)) $ do
     projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
     let allProjectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
-    when (null allProjectIds) $
-      liftIO $ throwIO $ GrpcException
+    when (null allProjectIds)
+      $ liftIO
+      $ throwIO
+      $ GrpcException
         { grpcError = GrpcUnauthenticated
         , grpcErrorMessage = Just "Invalid or missing project API key"
         , grpcErrorMetadata = []
         , grpcErrorDetails = Nothing
         }
-    Log.logInfo "Logs: Authentication successful"
+    Log.logInfo
+      "Logs: Authentication successful"
       (AE.object ["project_ids" AE..= map Projects.unProjectId allProjectIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
 
   projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
@@ -1458,12 +1469,14 @@ processLogsRequest metadataApiKey req = do
 
   let !logs = join $ V.toList $ V.map (convertResourceLogsToOtelLogs currentTime projectCaches projectIdsAndKeys) resourceLogs
 
-  Log.logInfo "Logs: Converted resource logs to OtelLogs"
+  Log.logInfo
+    "Logs: Converted resource logs to OtelLogs"
     (AE.object ["log_count" AE..= length logs])
 
   unless (null logs) do
     Telemetry.bulkInsertOtelLogsAndSpansTF (V.fromList logs)
-    Log.logInfo "Logs: Successfully inserted logs into database"
+    Log.logInfo
+      "Logs: Successfully inserted logs into database"
       (AE.object ["inserted_count" AE..= length logs])
 
 
@@ -1499,7 +1512,8 @@ processMetricsRequest metadataApiKey req = do
 
   case pidM of
     Just pid -> do
-      Log.logInfo "Metrics: Authentication successful"
+      Log.logInfo
+        "Metrics: Authentication successful"
         (AE.object ["project_id" AE..= Projects.unProjectId pid, "project_key" AE..= projectKey, "metadata_auth" AE..= isJust metadataApiKey])
 
       -- Fetch project cache using cache pattern
@@ -1509,21 +1523,25 @@ processMetricsRequest metadataApiKey req = do
       let !projectCaches = HashMap.singleton pid projectCache
           !metricRecords = convertResourceMetricsToMetricRecords currentTime projectCaches pid resourceMetrics
 
-      Log.logInfo "Metrics: Converted resource metrics to MetricRecords"
+      Log.logInfo
+        "Metrics: Converted resource metrics to MetricRecords"
         (AE.object ["metric_count" AE..= length metricRecords])
 
       unless (null metricRecords) do
         Telemetry.bulkInsertMetrics (V.fromList metricRecords)
-        Log.logInfo "Metrics: Successfully inserted metrics into database"
+        Log.logInfo
+          "Metrics: Successfully inserted metrics into database"
           (AE.object ["inserted_count" AE..= length metricRecords])
     Nothing ->
       -- Return authentication error for gRPC requests with invalid or missing keys
-      liftIO $ throwIO $ GrpcException
-        { grpcError = GrpcUnauthenticated
-        , grpcErrorMessage = Just "Invalid or missing project API key"
-        , grpcErrorMetadata = []
-        , grpcErrorDetails = Nothing
-        }
+      liftIO
+        $ throwIO
+        $ GrpcException
+          { grpcError = GrpcUnauthenticated
+          , grpcErrorMessage = Just "Invalid or missing project API key"
+          , grpcErrorMetadata = []
+          , grpcErrorDetails = Nothing
+          }
 
 
 -- | Metrics service handler (Export)
@@ -1600,11 +1618,11 @@ metricsServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
 
 services :: Log.Logger -> AuthContext -> TracerProvider -> [SomeRpcHandler IO]
 services appLogger appCtx tp =
-  fromMethods $
-    RawMethod (traceServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf TS.TraceService "export")) $
-    RawMethod (logsServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf LS.LogsService "export")) $
-    RawMethod (metricsServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf MS.MetricsService "export")) $
-    NoMoreMethods
+  fromMethods
+    $ RawMethod (traceServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf TS.TraceService "export"))
+    $ RawMethod (logsServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf LS.LogsService "export"))
+    $ RawMethod (metricsServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf MS.MetricsService "export"))
+    $ NoMoreMethods
 
 
 type instance RequestMetadata (Protobuf TS.TraceService "export") = OtlpRequestMetadata

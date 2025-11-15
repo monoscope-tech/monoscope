@@ -34,8 +34,7 @@ import Effectful.Log (Log)
 import Effectful.Log qualified as Log
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
-import Log (LogLevel (..))
-import Log (Logger)
+import Log (LogLevel (..), Logger)
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Log.Internal.Logger (withLogger)
 import OpenTelemetry.Context qualified as Context

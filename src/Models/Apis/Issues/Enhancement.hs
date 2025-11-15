@@ -32,7 +32,7 @@ data IssueEnhancement = IssueEnhancement
 
 
 -- | Enhance a single issue with LLM-generated title and description
-enhanceIssueWithLLM :: (ELLM.LLM :> es) => AuthContext -> Issues.Issue -> Eff es (Either Text IssueEnhancement)
+enhanceIssueWithLLM :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text IssueEnhancement)
 enhanceIssueWithLLM authCtx issue = do
   -- Generate enhanced title
   titleResult <- generateEnhancedTitle authCtx issue
@@ -56,7 +56,7 @@ enhanceIssueWithLLM authCtx issue = do
 
 
 -- | Generate an enhanced title using LLM
-generateEnhancedTitle :: (ELLM.LLM :> es) => AuthContext -> Issues.Issue -> Eff es (Either Text Text)
+generateEnhancedTitle :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text Text)
 generateEnhancedTitle authCtx issue = do
   let prompt = buildTitlePrompt issue
   result <- AI.callOpenAIAPIEff prompt authCtx.config.openaiApiKey
@@ -70,7 +70,7 @@ generateEnhancedTitle authCtx issue = do
 
 
 -- | Generate enhanced description with recommended actions
-generateEnhancedDescription :: (ELLM.LLM :> es) => AuthContext -> Issues.Issue -> Eff es (Either Text (Text, Text, Text))
+generateEnhancedDescription :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text (Text, Text, Text))
 generateEnhancedDescription authCtx issue = do
   let prompt = buildDescriptionPrompt issue
   result <- AI.callOpenAIAPIEff prompt authCtx.config.openaiApiKey
@@ -257,7 +257,7 @@ buildDescriptionPrompt issue =
 
 
 -- | Classify issue as critical/safe and count breaking/incremental changes
-classifyIssueCriticality :: (ELLM.LLM :> es) => AuthContext -> Issues.Issue -> Eff es (Either Text (Bool, Int, Int))
+classifyIssueCriticality :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text (Bool, Int, Int))
 classifyIssueCriticality authCtx issue = do
   let prompt = buildCriticalityPrompt issue
   result' <- AI.callOpenAIAPIEff prompt authCtx.config.openaiApiKey

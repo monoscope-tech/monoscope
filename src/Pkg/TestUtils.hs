@@ -528,7 +528,7 @@ toServantResponse trATCtx trSessAndHeader trLogger k = do
 -- | Run a query effect (like Charts.queryMetrics) in test context
 -- This is for effects that return data directly (not wrapped in RespHeaders)
 -- Uses frozen time to match background job context
-runQueryEffect :: TestResources -> (forall es. (Error ServantS.ServerError :> es, IOE :> es, Effectful.Reader.Static.Reader AuthContext :> es, Time :> es) => Eff es a) -> IO a
+runQueryEffect :: TestResources -> (forall es. (Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, IOE :> es, Time :> es) => Eff es a) -> IO a
 runQueryEffect TestResources{..} action = do
   action
     & runErrorNoCallStack @ServantS.ServerError
@@ -631,11 +631,12 @@ getPendingBackgroundJobs authCtx = do
 logBackgroundJobsInfo :: Log.Logger -> V.Vector (Job, BackgroundJobs.BgJobs) -> IO ()
 logBackgroundJobsInfo logger jobs = do
   logLevel <- Logging.getLogLevelFromEnv
-  let jobsList = V.toList jobs <&> \(job, bgJob) ->
-        AE.object
-          [ "type" AE..= BackgroundJobs.jobTypeName bgJob
-          , "id" AE..= job.jobId
-          ]
+  let jobsList =
+        V.toList jobs <&> \(job, bgJob) ->
+          AE.object
+            [ "type" AE..= BackgroundJobs.jobTypeName bgJob
+            , "id" AE..= job.jobId
+            ]
   runEff
     $ Logging.runLog "test" logger logLevel
     $ Log.logTrace "Background Jobs Queue" (AE.object ["count" AE..= V.length jobs, "jobs" AE..= jobsList])

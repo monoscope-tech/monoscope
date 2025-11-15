@@ -37,9 +37,9 @@ mkResource :: Text -> PR.Resource
 mkResource apiKey =
   defMessage
     & PRF.attributes
-      .~ [ defMessage & PCF.key .~ "service.name" & PCF.value .~ (defMessage & PCF.stringValue .~ "test-service")
-         , defMessage & PCF.key .~ "at-project-key" & PCF.value .~ (defMessage & PCF.stringValue .~ apiKey)
-         ]
+    .~ [ defMessage & PCF.key .~ "service.name" & PCF.value .~ (defMessage & PCF.stringValue .~ "test-service")
+       , defMessage & PCF.key .~ "at-project-key" & PCF.value .~ (defMessage & PCF.stringValue .~ apiKey)
+       ]
 
 
 -- | Create OTLP log message at a specific time
@@ -63,14 +63,22 @@ createOtelSpanAtTime apiKey trId spanId parentSpanIdM spanName timestamp = do
       parentSpanIdBS = maybe "" (\pid -> fromRight "" $ B16.decode $ encodeUtf8 $ T.replicate (16 - T.length pid) "0" <> pid) parentSpanIdM
       otelSpan =
         defMessage
-          & PTF.traceId .~ traceIdBS
-          & PTF.spanId .~ spanIdBS
-          & PTF.parentSpanId .~ parentSpanIdBS
-          & PTF.name .~ spanName
-          & PTF.kind .~ PT.Span'SPAN_KIND_SERVER
-          & PTF.startTimeUnixNano .~ startTime
-          & PTF.endTimeUnixNano .~ endTime
-          & PTF.attributes .~ [defMessage & PCF.key .~ "http.method" & PCF.value .~ (defMessage & PCF.stringValue .~ "GET")]
+          & PTF.traceId
+          .~ traceIdBS
+            & PTF.spanId
+          .~ spanIdBS
+            & PTF.parentSpanId
+          .~ parentSpanIdBS
+            & PTF.name
+          .~ spanName
+            & PTF.kind
+          .~ PT.Span'SPAN_KIND_SERVER
+            & PTF.startTimeUnixNano
+          .~ startTime
+            & PTF.endTimeUnixNano
+          .~ endTime
+            & PTF.attributes
+          .~ [defMessage & PCF.key .~ "http.method" & PCF.value .~ (defMessage & PCF.stringValue .~ "GET")]
       scopeSpan = defMessage & PTF.spans .~ [otelSpan]
       request = defMessage @TS.ExportTraceServiceRequest & TSF.resourceSpans .~ [defMessage & PTF.resource .~ mkResource apiKey & PTF.scopeSpans .~ [scopeSpan]]
   pure $ encodeMessage request
