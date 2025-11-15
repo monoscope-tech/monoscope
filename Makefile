@@ -89,9 +89,15 @@ timescaledb-docker:
 timescaledb-docker-tmp:
 	docker run -it --rm --name=monoscope -p 5432:5432/tcp \
 		-e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=monoscope \
+		-e TZ=UTC \
 		--mount type=tmpfs,destination=/var/lib/postgresql/data,tmpfs-size=1G \
+		--user root \
+		--entrypoint /bin/bash \
 		docker.io/timescale/timescaledb-ha:pg16-all \
-		-c shared_preload_libraries='pg_stat_statements,timescaledb' -c max_connections=200
+		-c "apt-get update -qq && apt-get install -y -qq faketime > /dev/null 2>&1 && \
+		    exec gosu postgres faketime '2025-01-01 01:00:00' docker-entrypoint.sh postgres \
+		    -c shared_preload_libraries='pg_stat_statements,timescaledb' \
+		    -c max_connections=200"
 
 update-service-worker:
 	npx workbox generateSW workbox-config.js

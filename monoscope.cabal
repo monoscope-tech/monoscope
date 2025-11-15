@@ -436,6 +436,7 @@ test-suite integration-tests
   main-is: Main.hs
   other-modules:
       MonitoringSpec
+      Opentelemetry.GrpcIngestionSpec
       Opentelemetry.OtlpServerSpec
       Pages.Anomalies.AnomalyListSpec
       Pages.ApiSpec
@@ -493,13 +494,16 @@ test-suite integration-tests
     , data-default
     , effectful
     , generic-lens
+    , grapesy
     , hs-opentelemetry-instrumentation-auto
     , hspec
+    , lens
     , monoscope
     , odd-jobs
     , pg-entity
     , pg-transact
     , postgresql-simple
+    , proto-lens
     , relude >=1.2.0.0
     , resource-pool
     , servant-server
