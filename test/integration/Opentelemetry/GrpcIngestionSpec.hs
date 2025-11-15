@@ -74,10 +74,11 @@ queryLogs tr queryM = do
 expectLogsJson :: Log.LogsGet -> IO (V.Vector (V.Vector AE.Value))
 expectLogsJson = \case
   Log.LogsGetJson dataset _ _ _ _ _ _ _ -> pure dataset
-  Log.LogPage _ -> expectationFailure "Got LogPage instead of LogsGetJson - json parameter not working?"
-  Log.LogsGetError (PageCtx _ err) -> expectationFailure $ "Got LogsGetError: " <> toString err
-  Log.LogsGetErrorSimple err -> expectationFailure $ "Got LogsGetErrorSimple: " <> toString err
-  Log.LogsQueryLibrary _ _ _ -> expectationFailure "Got LogsQueryLibrary instead of LogsGetJson"
+  Log.LogPage _ -> fail "Got LogPage instead of LogsGetJson - json parameter not working?"
+  Log.LogsGetError (PageCtx _ err) -> fail $ "Got LogsGetError: " <> toString err
+  Log.LogsGetErrorSimple err -> fail $ "Got LogsGetErrorSimple: " <> toString err
+  Log.LogsQueryLibrary _ _ _ -> fail "Got LogsQueryLibrary instead of LogsGetJson"
+  Log.LogsPatternList _ _ _ _ -> fail "Got LogsPatternList instead of LogsGetJson"
 
 
 spec :: Spec
@@ -113,12 +114,8 @@ spec = aroundAll withTestResources do
       -- Trace with no API key in resource attributes (tested in OtlpServer directly)
       traceBytes <- OtlpMock.createOtelTraceAtTime "" "Test Span" frozenTime
       let traceReq = either (error . toText) id (decodeMessage traceBytes :: Either String TS.ExportTraceServiceRequest)
-      void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto traceReq)
-      void $ runAllBackgroundJobs tr.trATCtx
-      -- Verify no traces were stored
-      result <- queryLogs tr (Just "name == \"Test Span\"")
-      dataset <- expectLogsJson result
-      V.length dataset `shouldBe` 0
+      OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto traceReq)
+        `shouldThrow` (\e -> case e of GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False)
 
     it "Test 4.1: should ingest metrics via all 3 keys using metricsServiceExport" $ \tr -> do
       keys <- traverse (createTestAPIKey tr) ["metric-key-1", "metric-key-2", "metric-key-3"]
