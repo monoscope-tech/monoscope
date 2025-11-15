@@ -20,7 +20,8 @@ import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
 import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService qualified as TS
 import Relude
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldSatisfy, shouldThrow)
+import Data.Aeson qualified as AE
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldContain, shouldSatisfy, shouldThrow)
 import Text.Read (read)
 
 
@@ -63,20 +64,20 @@ ingestMetric tr apiKey metricName value timestamp = do
   void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto metricReq)
 
 -- | Helper to query logs with default parameters
-queryLogs :: TestResources -> Maybe Text -> IO Log.LogsResp
+queryLogs :: TestResources -> Maybe Text -> IO Log.LogsGet
 queryLogs tr queryM = do
   let (timeFrom, timeTo) = testTimeRange
   toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
     $ Log.apiLogH pid queryM Nothing Nothing Nothing (Just timeFrom) (Just timeTo) Nothing (Just "spans") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
 
 -- | Helper to extract dataset from LogsResp
-expectLogsJson :: Log.LogsResp -> IO (V.Vector a)
+expectLogsJson :: Log.LogsGet -> IO (V.Vector (V.Vector AE.Value))
 expectLogsJson = \case
   Log.LogsGetJson dataset _ _ _ _ _ _ _ -> pure dataset
   Log.LogPage _ -> expectationFailure "Got LogPage instead of LogsGetJson - json parameter not working?"
   Log.LogsGetError (PageCtx _ err) -> expectationFailure $ "Got LogsGetError: " <> toString err
   Log.LogsGetErrorSimple err -> expectationFailure $ "Got LogsGetErrorSimple: " <> toString err
-  _ -> expectationFailure "Expected LogsGetJson response but got different type"
+  Log.LogsQueryLibrary _ _ _ -> expectationFailure "Got LogsQueryLibrary instead of LogsGetJson"
 
 
 spec :: Spec
