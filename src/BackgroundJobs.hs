@@ -32,7 +32,7 @@ import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
-import Log (LogLevel (..), Logger, runLogT)
+import Log (LogLevel (..), Logger, logTrace, runLogT)
 import Log qualified as LogLegacy
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
@@ -785,7 +785,7 @@ queryMonitorsTriggered queryMonitorIds = do
 
 handleQueryMonitorThreshold :: Monitors.QueryMonitorEvaled -> Bool -> ATBackgroundCtx ()
 handleQueryMonitorThreshold monitorE isAlert = do
-  Log.logAttention "Query Monitors Triggered " monitorE
+  Log.logTrace "Query Monitors Triggered " monitorE
   _ <- dbtToEff $ Monitors.updateQMonitorTriggeredState monitorE.id isAlert
 
   -- Create query alert issue
