@@ -47,7 +47,12 @@ live-test-reload-cabal:
 	ghcid --test 'cabal test --ghc-options="-w -j4" --test-show-details=streaming'
 
 test:
-	USE_EXTERNAL_DB=true  cabal test -j --ghc-options="-O0 -j$(NCPUS)"  --test-show-details=direct --test-options='--color --jobs=$(NCPUS)'
+	# --test-show-details=never - Shows only a summary at the end
+	# --test-show-details=failures - Shows output only for failed tests (after completion)
+	# --test-show-details=always - Shows all test output, but buffers it and displays after the test suite completes
+	# --test-show-details=streaming - Similar to direct, provides real-time output (introduced in newer Cabal versions)
+	#  -test-show-details=direct Cabal streams the test output directly to your terminal in real-time as the tests run.
+	USE_EXTERNAL_DB=true  cabal test -j --ghc-options="-O0 -j$(NCPUS)"  --test-show-details=never --test-options='--color --jobs=$(NCPUS)'
 
 test-unit:
 	cabal test unit-tests -j --ghc-options="-O0 -j$(NCPUS)"  --test-show-details=direct --test-options='--color --jobs=$(NCPUS)'
