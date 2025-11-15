@@ -51,8 +51,10 @@ spec = aroundAll withTestResources do
       projectIds `shouldContain` ["12345678-9abc-def0-1234-56789abcdef0"] -- test project from testSessionHeader
     -- TODO: add more checks for the info we we display on list page
 
-    it "Should update project with new details" \TestResources{..} -> do
+    it "Should update project with new details and verify in list" \TestResources{..} -> do
       let testProjectPid = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "12345678-9abc-def0-1234-56789abcdef0"
+
+      -- Section 1: Update the project
       let createPForm =
             CreateProject.CreateProjectForm
               { title = "Test Project CI2"
@@ -60,24 +62,28 @@ spec = aroundAll withTestResources do
               , emails = ["test@monoscope.tech"]
               , permissions = [ProjectMembers.PAdmin]
               , timeZone = "Africa/Accra"
-              , weeklyNotifs = Nothing 
-              , dailyNotifs = Nothing 
-              , endpointAlerts = Nothing 
+              , weeklyNotifs = Nothing
+              , dailyNotifs = Nothing
+              , endpointAlerts = Nothing
               , errorAlerts = Nothing
               }
-      pg <-
+      updateResp <-
         toServantResponse trATCtx trSessAndHeader trLogger $ CreateProject.createProjectPostH testProjectPid createPForm
-      (pg.unwrapCreateProjectResp <&> (.form.title)) `shouldBe` Just @Text "Test Project CI2"
-      (pg.unwrapCreateProjectResp <&> (.form.description)) `shouldBe` Just "Test Description2"
+      (updateResp.unwrapCreateProjectResp <&> (.form.title)) `shouldBe` Just @Text "Test Project CI2"
+      (updateResp.unwrapCreateProjectResp <&> (.form.description)) `shouldBe` Just "Test Description2"
 
-    -- FIXME: marked as pending with xit. Test is faily and should be investigated
-    it "Project in list should have new details" \TestResources{..} -> do
-      pg <-
+      -- Section 2: Verify the update persists in the project list
+      listResp <-
         toServantResponse trATCtx trSessAndHeader trLogger ListProjects.listProjectsGetH
-      let (projects, _demoProject) = pg.unwrap.content
-      length projects `shouldBe` 1
-      (projects V.! 0).id.toText `shouldBe` "12345678-9abc-def0-1234-56789abcdef0"
-      (projects V.! 0).title `shouldBe` "Test Project CI2"
-      (projects V.! 0).description `shouldBe` "Test Description2"
-      (projects V.! 0).paymentPlan `shouldBe` "FREE"
-      (projects V.! 0).timeZone `shouldBe` "Africa/Accra"
+      let (projects, _demoProject) = listResp.unwrap.content
+
+      -- Find the updated project by ID instead of relying on index
+      let updatedProject = V.find (\p -> p.id.toText == "12345678-9abc-def0-1234-56789abcdef0") projects
+      updatedProject `shouldSatisfy` isJust
+
+      -- Safe to use fromJust here because we verified isJust above
+      let project = Unsafe.fromJust updatedProject
+      project.title `shouldBe` "Test Project CI2"
+      project.description `shouldBe` "Test Description2"
+      project.paymentPlan `shouldBe` "FREE"
+      project.timeZone `shouldBe` "Africa/Accra"

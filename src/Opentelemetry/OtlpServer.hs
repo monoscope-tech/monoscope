@@ -5,6 +5,12 @@ module Opentelemetry.OtlpServer (
   processList,
   runServer,
   -- Exported for testing
+  logsServiceExport,
+  traceServiceExport,
+  metricsServiceExport,
+  processLogsRequest,
+  processTraceRequest,
+  processMetricsRequest,
   migrateHttpSemanticConventions,
   parseConnectionString,
   migrateElasticsearchPathParts,
@@ -70,6 +76,7 @@ import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude hiding (ask)
+import Control.Exception (throwIO)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Types (runBackground)
@@ -1309,103 +1316,172 @@ runServer appLogger appCtx tp = do
         }
 
 
+-- | Process trace request (extracted for testing)
+processTraceRequest :: (Concurrent :> es, DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es) => TS.ExportTraceServiceRequest -> Eff es ()
+processTraceRequest req = do
+  Log.logInfo "Received trace export request" AE.Null
+
+  currentTime <- liftIO getCurrentTime
+  appCtx <- ask @AuthContext
+
+  let !resourceSpans = V.fromList $ req ^. TSF.resourceSpans
+      !projectKeys = getSpanAttributeValue "at-project-key" resourceSpans
+      atIds' = getSpanAttributeValue "at-project-id" resourceSpans
+      atIds = V.catMaybes $ Projects.projectIdFromText <$> atIds'
+
+  -- Verify authentication: if project keys or IDs are present, they must resolve to valid projects
+  when (not (V.null projectKeys) || not (V.null atIds)) $ do
+    projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
+    let allProjectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
+    when (null allProjectIds) $
+      liftIO $ throwIO $ GrpcException
+        { grpcError = GrpcUnauthenticated
+        , grpcErrorMessage = Just "Invalid or missing project API key"
+        , grpcErrorMetadata = []
+        , grpcErrorDetails = Nothing
+        }
+    Log.logInfo "Traces: Authentication successful"
+      (AE.object ["project_ids" AE..= map Projects.unProjectId allProjectIds, "project_keys" AE..= V.toList projectKeys])
+
+  projectIdsAndKeys <-
+    checkpoint "processList:traces:getProjectIds"
+      $ ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
+  -- Fetch project caches for limit checking
+  projectCaches <- checkpoint "processList:traces:getProjectCaches" $ do
+    let projectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
+
+    caches <- forM projectIds $ \pid -> do
+      cache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
+        mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
+        pure $ fromMaybe defaultProjectCache mpjCache
+      pure (pid, cache)
+    pure $ HashMap.fromList caches
+  let !spans = convertResourceSpansToOtelLogs currentTime projectCaches projectIdsAndKeys resourceSpans
+      !spans' = V.fromList spans
+
+  Log.logInfo "Traces: Converted resource spans to OtelLogs"
+    (AE.object ["span_count" AE..= length spans])
+
+  unless (V.null spans') do
+    Telemetry.bulkInsertOtelLogsAndSpansTF spans'
+    Log.logInfo "Traces: Successfully inserted spans into database"
+      (AE.object ["inserted_count" AE..= V.length spans'])
+
+
 -- | Trace service handler (Export)
 traceServiceExport :: Log.Logger -> AuthContext -> TracerProvider -> Proto TS.ExportTraceServiceRequest -> IO (Proto TS.ExportTraceServiceResponse)
 traceServiceExport appLogger appCtx tp (Proto req) = do
-  _ <- runBackground appLogger appCtx tp do
-    Log.logInfo "Received trace export request" AE.Null
-
-    currentTime <- liftIO getCurrentTime
-
-    let !resourceSpans = V.fromList $ req ^. TSF.resourceSpans
-        !projectKeys = getSpanAttributeValue "at-project-key" resourceSpans
-        atIds' = getSpanAttributeValue "at-project-id" resourceSpans
-        atIds = V.catMaybes $ Projects.projectIdFromText <$> atIds'
-
-    projectIdsAndKeys <-
-      checkpoint "processList:traces:getProjectIds"
-        $ ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
-    -- Fetch project caches for limit checking
-    projectCaches <- checkpoint "processList:traces:getProjectCaches" $ do
-      let projectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
-
-      caches <- forM projectIds $ \pid -> do
-        cache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-          mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
-          pure $ fromMaybe defaultProjectCache mpjCache
-        pure (pid, cache)
-      pure $ HashMap.fromList caches
-    let !spans = convertResourceSpansToOtelLogs currentTime projectCaches projectIdsAndKeys resourceSpans
-        !spans' = V.fromList spans
-
-    unless (V.null spans') $ Telemetry.bulkInsertOtelLogsAndSpansTF spans'
-
+  _ <- runBackground appLogger appCtx tp $ processTraceRequest req
   -- Return an empty response
   pure defMessage
+
+
+-- | Process logs request (extracted for testing)
+processLogsRequest :: (Concurrent :> es, DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es) => LS.ExportLogsServiceRequest -> Eff es ()
+processLogsRequest req = do
+  Log.logInfo "Received logs export request" AE.Null
+  currentTime <- liftIO getCurrentTime
+  appCtx <- ask @AuthContext
+
+  let !resourceLogs = V.fromList $ req ^. PLF.resourceLogs
+      !projectKeys = getLogAttributeValue "at-project-key" resourceLogs
+      atIds' = getLogAttributeValue "at-project-id" resourceLogs
+      atIds = V.catMaybes $ Projects.projectIdFromText <$> atIds'
+
+  -- Verify authentication: if project keys or IDs are present, they must resolve to valid projects
+  when (not (V.null projectKeys) || not (V.null atIds)) $ do
+    projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
+    let allProjectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
+    when (null allProjectIds) $
+      liftIO $ throwIO $ GrpcException
+        { grpcError = GrpcUnauthenticated
+        , grpcErrorMessage = Just "Invalid or missing project API key"
+        , grpcErrorMetadata = []
+        , grpcErrorDetails = Nothing
+        }
+    Log.logInfo "Logs: Authentication successful"
+      (AE.object ["project_ids" AE..= map Projects.unProjectId allProjectIds, "project_keys" AE..= V.toList projectKeys])
+
+  projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
+
+  -- Fetch project caches using cache pattern
+  projectCaches <- checkpoint "processList:logs:getProjectCaches" $ do
+    let projectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
+    caches <- forM projectIds $ \pid -> do
+      cache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
+        mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
+        pure $ fromMaybe defaultProjectCache mpjCache
+      pure (pid, cache)
+    pure $ HashMap.fromList caches
+
+  let !logs = join $ V.toList $ V.map (convertResourceLogsToOtelLogs currentTime projectCaches projectIdsAndKeys) resourceLogs
+
+  Log.logInfo "Logs: Converted resource logs to OtelLogs"
+    (AE.object ["log_count" AE..= length logs])
+
+  unless (null logs) do
+    Telemetry.bulkInsertOtelLogsAndSpansTF (V.fromList logs)
+    Log.logInfo "Logs: Successfully inserted logs into database"
+      (AE.object ["inserted_count" AE..= length logs])
 
 
 -- | Logs service handler (Export)
 logsServiceExport :: Log.Logger -> AuthContext -> TracerProvider -> Proto LS.ExportLogsServiceRequest -> IO (Proto LS.ExportLogsServiceResponse)
 logsServiceExport appLogger appCtx tp (Proto req) = do
-  _ <- runBackground appLogger appCtx tp $ do
-    Log.logInfo "Received logs export request" AE.Null
-    currentTime <- liftIO getCurrentTime
-
-    let !resourceLogs = V.fromList $ req ^. PLF.resourceLogs
-        !projectKeys = getLogAttributeValue "at-project-key" resourceLogs
-        atIds' = getLogAttributeValue "at-project-id" resourceLogs
-        atIds = V.catMaybes $ Projects.projectIdFromText <$> atIds'
-
-    projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
-
-    -- Fetch project caches using cache pattern
-    projectCaches <- checkpoint "processList:logs:getProjectCaches" $ do
-      let projectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
-      caches <- forM projectIds $ \pid -> do
-        cache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-          mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
-          pure $ fromMaybe defaultProjectCache mpjCache
-        pure (pid, cache)
-      pure $ HashMap.fromList caches
-
-    let !logs = join $ V.toList $ V.map (convertResourceLogsToOtelLogs currentTime projectCaches projectIdsAndKeys) resourceLogs
-
-    unless (null logs) do
-      Telemetry.bulkInsertOtelLogsAndSpansTF (V.fromList logs)
-
+  _ <- runBackground appLogger appCtx tp $ processLogsRequest req
   -- Return an empty response
   pure defMessage
+
+
+-- | Process metrics request (extracted for testing)
+processMetricsRequest :: (DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Log :> es) => MS.ExportMetricsServiceRequest -> Eff es ()
+processMetricsRequest req = do
+  Log.logInfo "Received metrics export request" AE.Null
+
+  currentTime <- liftIO getCurrentTime
+  appCtx <- ask @AuthContext
+
+  let !resourceMetrics = V.fromList $ req ^. PMF.resourceMetrics
+      !projectKey = getMetricAttributeValue "at-project-key" resourceMetrics
+
+  pidM <- do
+    p1 <- join <$> forM projectKey ProjectApiKeys.getProjectIdByApiKey
+    let p2 = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" resourceMetrics
+    pure (p1 <|> p2)
+
+  case pidM of
+    Just pid -> do
+      Log.logInfo "Metrics: Authentication successful"
+        (AE.object ["project_id" AE..= Projects.unProjectId pid, "project_key" AE..= projectKey])
+
+      -- Fetch project cache using cache pattern
+      projectCache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
+        mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
+        pure $ fromMaybe defaultProjectCache mpjCache
+      let !projectCaches = HashMap.singleton pid projectCache
+          !metricRecords = convertResourceMetricsToMetricRecords currentTime projectCaches pid resourceMetrics
+
+      Log.logInfo "Metrics: Converted resource metrics to MetricRecords"
+        (AE.object ["metric_count" AE..= length metricRecords])
+
+      unless (null metricRecords) do
+        Telemetry.bulkInsertMetrics (V.fromList metricRecords)
+        Log.logInfo "Metrics: Successfully inserted metrics into database"
+          (AE.object ["inserted_count" AE..= length metricRecords])
+    Nothing ->
+      -- Return authentication error for gRPC requests with invalid or missing keys
+      liftIO $ throwIO $ GrpcException
+        { grpcError = GrpcUnauthenticated
+        , grpcErrorMessage = Just "Invalid or missing project API key"
+        , grpcErrorMetadata = []
+        , grpcErrorDetails = Nothing
+        }
 
 
 -- | Metrics service handler (Export)
 metricsServiceExport :: Log.Logger -> AuthContext -> TracerProvider -> Proto MS.ExportMetricsServiceRequest -> IO (Proto MS.ExportMetricsServiceResponse)
 metricsServiceExport appLogger appCtx tp (Proto req) = do
-  _ <- runBackground appLogger appCtx tp $ do
-    Log.logInfo "Received metrics export request" AE.Null
-
-    currentTime <- liftIO getCurrentTime
-
-    let !resourceMetrics = V.fromList $ req ^. PMF.resourceMetrics
-        !projectKey = getMetricAttributeValue "at-project-key" resourceMetrics
-
-    pidM <- do
-      p1 <- join <$> forM projectKey ProjectApiKeys.getProjectIdByApiKey
-      let p2 = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" resourceMetrics
-      pure (p1 <|> p2)
-
-    case pidM of
-      Just pid -> do
-        -- Fetch project cache using cache pattern
-        projectCache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-          mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
-          pure $ fromMaybe defaultProjectCache mpjCache
-        let !projectCaches = HashMap.singleton pid projectCache
-            !metricRecords = convertResourceMetricsToMetricRecords currentTime projectCaches pid resourceMetrics
-
-        unless (null metricRecords)
-          $ Telemetry.bulkInsertMetrics (V.fromList metricRecords)
-      Nothing -> Log.logAttention_ "Project API Key and project ID not available in metrics"
-
+  _ <- runBackground appLogger appCtx tp $ processMetricsRequest req
   -- Return an empty response
   pure defMessage
 

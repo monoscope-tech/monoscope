@@ -18,6 +18,7 @@ module Pkg.TestUtils (
   refreshMaterializedView,
   setBjRunAtInThePast,
   toServantResponse,
+  runQueryEffect,
   -- Helper functions for tests
   processMessagesAndBackgroundJobs,
   createRequestDumps,
@@ -61,12 +62,12 @@ import Database.Postgres.Temp (cacheAction, cacheConfig, toConnectionString, wit
 import Database.Postgres.Temp qualified as TmpPostgres
 import Effectful
 import Effectful.Concurrent (runConcurrent)
-import Effectful.Error.Static (runErrorNoCallStack)
+import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (runLabeled)
 import Effectful.PostgreSQL.Transact.Effect qualified as DB
 import Effectful.Reader.Static qualified
-import Effectful.Time (runFrozenTime, runTime)
+import Effectful.Time (Time, runFrozenTime, runTime)
 import Log qualified
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Projects.Projects qualified as Projects
@@ -518,6 +519,19 @@ toServantResponse trATCtx trSessAndHeader trLogger k = do
     )
     <&> Servant.getResponse
     . fromRightShow
+
+
+-- | Run a query effect (like Charts.queryMetrics) in test context
+-- This is for effects that return data directly (not wrapped in RespHeaders)
+-- Uses frozen time to match background job context
+runQueryEffect :: TestResources -> (forall es. (Error ServantS.ServerError :> es, IOE :> es, Effectful.Reader.Static.Reader AuthContext :> es, Time :> es) => Eff es a) -> IO a
+runQueryEffect TestResources{..} action = do
+  action
+    & runErrorNoCallStack @ServantS.ServerError
+    & Effectful.Reader.Static.runReader trATCtx
+    & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
+    & runEff
+    <&> fromRightShow
 
 
 msg1 :: Text -> AE.Value
