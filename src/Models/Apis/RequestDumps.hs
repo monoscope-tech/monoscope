@@ -520,6 +520,9 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
         , "project_id" AE..= show pid
         , "source" AE..= source
         , "target_spans" AE..= fromMaybe "" targetSpansM
+        , "time_range_from" AE..= fmap (toText . iso8601Show) (fst dateRange)
+        , "time_range_to" AE..= fmap (toText . iso8601Show) (snd dateRange)
+        , "current_time_used_for_defaults" AE..= (toText $ iso8601Show now)
         ]
     )
 
