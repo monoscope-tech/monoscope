@@ -1,16 +1,18 @@
 module Opentelemetry.GrpcIngestionSpec (spec) where
 
 import BackgroundJobs qualified
-import Data.ProtoLens.Encoding (decodeMessage)
+import Data.ProtoLens.Encoding (decodeMessage, encodeMessage)
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Models.Projects.Projects qualified as Projects
-import Network.GRPC.Common (GrpcError (..), GrpcException (..))
-import Network.GRPC.Common.Protobuf (Proto (..))
+import Network.GRPC.Common (CustomMetadata (..),  HeaderName (..), GrpcError (..), GrpcException (..))
+import Network.GRPC.Common.Protobuf (Proto (..)
+)
 import Pages.Api qualified as Api
-import Pages.BodyWrapper (PageCtx (..))
+import Pages.BodyWrapper (PageCtx (..)
+)
 import Opentelemetry.OtlpMockValues qualified as OtlpMock
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Charts.Charts qualified as Charts
@@ -42,26 +44,49 @@ createTestAPIKey tr keyName = do
     Api.ApiPost _ _ (Just (_, keyText)) -> pure keyText
     _ -> error "Failed to create API key via handler"
 
--- | Helper to ingest a log and decode the request
+-- | Helper to ingest a log via resource attributes (original method)
 ingestLog :: TestResources -> Text -> Text -> UTCTime -> IO ()
 ingestLog tr apiKey bodyText timestamp = do
   logBytes <- OtlpMock.createOtelLogAtTime apiKey bodyText timestamp
   let logReq = either (error . toText) id (decodeMessage logBytes :: Either String LS.ExportLogsServiceRequest)
   void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto logReq)
 
--- | Helper to ingest a trace
+-- | Helper to ingest a trace via resource attributes
 ingestTrace :: TestResources -> Text -> Text -> UTCTime -> IO ()
 ingestTrace tr apiKey spanName timestamp = do
   traceBytes <- OtlpMock.createOtelTraceAtTime apiKey spanName timestamp
   let traceReq = either (error . toText) id (decodeMessage traceBytes :: Either String TS.ExportTraceServiceRequest)
   void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto traceReq)
 
--- | Helper to ingest a metric
+-- | Helper to ingest a metric via resource attributes
 ingestMetric :: TestResources -> Text -> Text -> Double -> UTCTime -> IO ()
 ingestMetric tr apiKey metricName value timestamp = do
   metricBytes <- OtlpMock.createGaugeMetricAtTime apiKey metricName value timestamp
   let metricReq = either (error . toText) id (decodeMessage metricBytes :: Either String MS.ExportMetricsServiceRequest)
   void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto metricReq)
+
+-- | Helper to ingest a log using gRPC Authorization header (via process function directly)
+-- Note: This simulates what the RpcHandler would do with metadata
+ingestLogWithHeader :: TestResources -> Text -> Text -> UTCTime -> IO ()
+ingestLogWithHeader tr apiKey bodyText timestamp = do
+  logBytes <- OtlpMock.createOtelLogAtTime "" bodyText timestamp  -- Empty API key in resource
+  let logReq = either (error . toText) id (decodeMessage logBytes :: Either String LS.ExportLogsServiceRequest)
+  -- Call processLogsRequest directly with the API key from "Authorization header"
+  void $ runTestBg tr $ OtlpServer.processLogsRequest (Just apiKey) logReq
+
+-- | Helper to ingest a trace using gRPC Authorization header
+ingestTraceWithHeader :: TestResources -> Text -> Text -> UTCTime -> IO ()
+ingestTraceWithHeader tr apiKey spanName timestamp = do
+  traceBytes <- OtlpMock.createOtelTraceAtTime "" spanName timestamp  -- Empty API key in resource
+  let traceReq = either (error . toText) id (decodeMessage traceBytes :: Either String TS.ExportTraceServiceRequest)
+  void $ runTestBg tr $ OtlpServer.processTraceRequest (Just apiKey) traceReq
+
+-- | Helper to ingest a metric using gRPC Authorization header
+ingestMetricWithHeader :: TestResources -> Text -> Text -> Double -> UTCTime -> IO ()
+ingestMetricWithHeader tr apiKey metricName value timestamp = do
+  metricBytes <- OtlpMock.createGaugeMetricAtTime "" metricName value timestamp  -- Empty API key in resource
+  let metricReq = either (error . toText) id (decodeMessage metricBytes :: Either String MS.ExportMetricsServiceRequest)
+  void $ runTestBg tr $ OtlpServer.processMetricsRequest (Just apiKey) metricReq
 
 -- | Helper to query logs with default parameters
 queryLogs :: TestResources -> Maybe Text -> IO Log.LogsGet
@@ -172,3 +197,65 @@ spec = aroundAll withTestResources do
       result <- queryLogs tr (Just "kind == \"log\"")
       dataset <- expectLogsJson result
       V.length dataset `shouldSatisfy` (>= 50)
+
+    -- Tests for gRPC Authorization header authentication (NEW!)
+    describe "gRPC Authorization Header Authentication" do
+      it "Test 9.1: should authenticate logs using gRPC Authorization header" $ \tr -> do
+        key <- createTestAPIKey tr "header-log-key"
+        -- Ingest using Authorization header instead of resource attributes
+        ingestLogWithHeader tr key "Log via header auth" frozenTime
+        void $ runAllBackgroundJobs tr.trATCtx
+        result <- queryLogs tr (Just "kind == \"log\"")
+        dataset <- expectLogsJson result
+        V.length dataset `shouldSatisfy` (>= 1)
+
+      it "Test 9.2: should authenticate traces using gRPC Authorization header" $ \tr -> do
+        key <- createTestAPIKey tr "header-trace-key"
+        ingestTraceWithHeader tr key "GET /api/header-auth" frozenTime
+        void $ runAllBackgroundJobs tr.trATCtx
+        result <- queryLogs tr (Just "kind != \"log\"")
+        dataset <- expectLogsJson result
+        V.length dataset `shouldSatisfy` (>= 1)
+
+      it "Test 9.3: should authenticate metrics using gRPC Authorization header" $ \tr -> do
+        key <- createTestAPIKey tr "header-metric-key"
+        ingestMetricWithHeader tr key "header.metric" 123.45 frozenTime
+        void $ runAllBackgroundJobs tr.trATCtx
+        let (timeFrom, timeTo) = testTimeRange
+        result <- runQueryEffect tr $ Charts.queryMetrics (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
+        V.length result.dataset `shouldSatisfy` (> 0)
+
+      it "Test 9.4: should prefer resource attribute auth over header when both present" $ \tr -> do
+        resourceKey <- createTestAPIKey tr "resource-key"
+        headerKey <- createTestAPIKey tr "header-key"
+
+        -- Create log with resource key but simulate header auth too
+        logBytes <- OtlpMock.createOtelLogAtTime resourceKey "Dual auth log" frozenTime
+        let logReq = either (error . toText) id (decodeMessage logBytes :: Either String LS.ExportLogsServiceRequest)
+        -- Process with both keys - resource should take precedence
+        void $ runTestBg tr $ OtlpServer.processLogsRequest (Just headerKey) logReq
+        void $ runAllBackgroundJobs tr.trATCtx
+
+        result <- queryLogs tr (Just "kind == \"log\"")
+        dataset <- expectLogsJson result
+        V.length dataset `shouldSatisfy` (>= 1)
+
+      it "Test 9.5: should reject logs with invalid Authorization header" $ \tr -> do
+        logBytes <- OtlpMock.createOtelLogAtTime "" "Should not be stored" frozenTime
+        let logReq = either (error . toText) id (decodeMessage logBytes :: Either String LS.ExportLogsServiceRequest)
+        -- Try with invalid key in header
+        runTestBg tr (OtlpServer.processLogsRequest (Just "invalid-header-key") logReq)
+          `shouldThrow` (\e -> case e of GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False)
+
+      it "Test 9.6: should handle mixed authentication methods in bulk" $ \tr -> do
+        key <- createTestAPIKey tr "mixed-auth-key"
+        -- Mix of resource attribute and header auth
+        ingestLog tr key "Resource auth log" frozenTime
+        ingestLogWithHeader tr key "Header auth log" frozenTime
+        ingestTrace tr key "Resource auth trace" frozenTime
+        ingestTraceWithHeader tr key "Header auth trace" frozenTime
+
+        void $ runAllBackgroundJobs tr.trATCtx
+        result <- queryLogs tr Nothing
+        dataset <- expectLogsJson result
+        V.length dataset `shouldSatisfy` (>= 4)

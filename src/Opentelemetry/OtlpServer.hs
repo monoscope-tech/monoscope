@@ -56,9 +56,11 @@ import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), Severity
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common
 import Network.GRPC.Common.Protobuf
-import Network.GRPC.Server (SomeRpcHandler)
+import Network.GRPC.Server (RpcHandler, SomeRpcHandler, mkRpcHandler, getRequestMetadata, recvFinalInput, sendFinalOutput)
 import Network.GRPC.Server.Run hiding (runServer)
-import Network.GRPC.Server.StreamType
+import Network.GRPC.Server.StreamType (Methods (..), fromMethods)
+import qualified Data.CaseInsensitive as CI
+import qualified Data.ByteString.Char8 as C8
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (AesonText (..))
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
@@ -83,6 +85,34 @@ import System.Types (runBackground)
 import Utils (b64ToJson, freeTierDailyMaxEvents, nestedJsonFromDotNotation)
 import "base64" Data.ByteString.Base64 qualified as B64
 
+
+-- | Custom request metadata for OTLP services containing optional API key from Authorization header
+data OtlpRequestMetadata = OtlpRequestMetadata
+  { otlpApiKey :: Maybe Text
+  }
+  deriving (Show, Eq)
+
+-- | Parse Authorization header from gRPC metadata
+instance ParseMetadata OtlpRequestMetadata where
+  parseMetadata metadata = do
+    -- Look for "authorization" header (case-insensitive)
+    let authHeader = find isAuthHeader metadata
+    pure $ OtlpRequestMetadata
+      { otlpApiKey = fmap extractApiKey authHeader
+      }
+    where
+      isAuthHeader :: CustomMetadata -> Bool
+      isAuthHeader (CustomMetadata (AsciiHeader name) _) =
+        CI.mk name == CI.mk "authorization"
+      isAuthHeader _ = False
+
+      extractApiKey :: CustomMetadata -> Text
+      extractApiKey (CustomMetadata _ value) =
+        -- Support both "Bearer <token>" and raw token formats
+        let valueText = decodeUtf8 value
+        in case T.stripPrefix "Bearer " valueText of
+             Just token -> T.strip token
+             Nothing -> T.strip valueText
 
 -- | Global error counters for common parsing errors (wire type, UTF-8, etc)
 wireTypeErrorsRef :: IORef (HashMap Text (Int, AE.Value))
@@ -1316,9 +1346,9 @@ runServer appLogger appCtx tp = do
         }
 
 
--- | Process trace request (extracted for testing)
-processTraceRequest :: (Concurrent :> es, DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es) => TS.ExportTraceServiceRequest -> Eff es ()
-processTraceRequest req = do
+-- | Process trace request with optional API key from gRPC metadata (extracted for testing)
+processTraceRequest :: (Concurrent :> es, DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
+processTraceRequest metadataApiKey req = do
   Log.logInfo "Received trace export request" AE.Null
 
   currentTime <- liftIO getCurrentTime
@@ -1329,9 +1359,14 @@ processTraceRequest req = do
       atIds' = getSpanAttributeValue "at-project-id" resourceSpans
       atIds = V.catMaybes $ Projects.projectIdFromText <$> atIds'
 
+      -- Combine API key from metadata with keys from resource attributes
+      !allApiKeys = case metadataApiKey of
+        Just key -> V.cons key projectKeys
+        Nothing -> projectKeys
+
   -- Verify authentication: if project keys or IDs are present, they must resolve to valid projects
-  when (not (V.null projectKeys) || not (V.null atIds)) $ do
-    projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
+  when (not (V.null allApiKeys) || not (V.null atIds)) $ do
+    projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
     let allProjectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
     when (null allProjectIds) $
       liftIO $ throwIO $ GrpcException
@@ -1341,11 +1376,11 @@ processTraceRequest req = do
         , grpcErrorDetails = Nothing
         }
     Log.logInfo "Traces: Authentication successful"
-      (AE.object ["project_ids" AE..= map Projects.unProjectId allProjectIds, "project_keys" AE..= V.toList projectKeys])
+      (AE.object ["project_ids" AE..= map Projects.unProjectId allProjectIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
 
   projectIdsAndKeys <-
     checkpoint "processList:traces:getProjectIds"
-      $ ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
+      $ ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
   -- Fetch project caches for limit checking
   projectCaches <- checkpoint "processList:traces:getProjectCaches" $ do
     let projectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
@@ -1371,14 +1406,16 @@ processTraceRequest req = do
 -- | Trace service handler (Export)
 traceServiceExport :: Log.Logger -> AuthContext -> TracerProvider -> Proto TS.ExportTraceServiceRequest -> IO (Proto TS.ExportTraceServiceResponse)
 traceServiceExport appLogger appCtx tp (Proto req) = do
-  _ <- runBackground appLogger appCtx tp $ processTraceRequest req
+  -- Note: This version is for backwards compatibility when called directly in tests
+  -- The RpcHandler version below has access to metadata
+  _ <- runBackground appLogger appCtx tp $ processTraceRequest Nothing req
   -- Return an empty response
   pure defMessage
 
 
--- | Process logs request (extracted for testing)
-processLogsRequest :: (Concurrent :> es, DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es) => LS.ExportLogsServiceRequest -> Eff es ()
-processLogsRequest req = do
+-- | Process logs request with optional API key from gRPC metadata (extracted for testing)
+processLogsRequest :: (Concurrent :> es, DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
+processLogsRequest metadataApiKey req = do
   Log.logInfo "Received logs export request" AE.Null
   currentTime <- liftIO getCurrentTime
   appCtx <- ask @AuthContext
@@ -1388,9 +1425,14 @@ processLogsRequest req = do
       atIds' = getLogAttributeValue "at-project-id" resourceLogs
       atIds = V.catMaybes $ Projects.projectIdFromText <$> atIds'
 
+      -- Combine API key from metadata with keys from resource attributes
+      !allApiKeys = case metadataApiKey of
+        Just key -> V.cons key projectKeys
+        Nothing -> projectKeys
+
   -- Verify authentication: if project keys or IDs are present, they must resolve to valid projects
-  when (not (V.null projectKeys) || not (V.null atIds)) $ do
-    projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
+  when (not (V.null allApiKeys) || not (V.null atIds)) $ do
+    projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
     let allProjectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
     when (null allProjectIds) $
       liftIO $ throwIO $ GrpcException
@@ -1400,9 +1442,9 @@ processLogsRequest req = do
         , grpcErrorDetails = Nothing
         }
     Log.logInfo "Logs: Authentication successful"
-      (AE.object ["project_ids" AE..= map Projects.unProjectId allProjectIds, "project_keys" AE..= V.toList projectKeys])
+      (AE.object ["project_ids" AE..= map Projects.unProjectId allProjectIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
 
-  projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys projectKeys
+  projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
 
   -- Fetch project caches using cache pattern
   projectCaches <- checkpoint "processList:logs:getProjectCaches" $ do
@@ -1428,14 +1470,16 @@ processLogsRequest req = do
 -- | Logs service handler (Export)
 logsServiceExport :: Log.Logger -> AuthContext -> TracerProvider -> Proto LS.ExportLogsServiceRequest -> IO (Proto LS.ExportLogsServiceResponse)
 logsServiceExport appLogger appCtx tp (Proto req) = do
-  _ <- runBackground appLogger appCtx tp $ processLogsRequest req
+  -- Note: This version is for backwards compatibility when called directly in tests
+  -- The RpcHandler version below has access to metadata
+  _ <- runBackground appLogger appCtx tp $ processLogsRequest Nothing req
   -- Return an empty response
   pure defMessage
 
 
--- | Process metrics request (extracted for testing)
-processMetricsRequest :: (DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Log :> es) => MS.ExportMetricsServiceRequest -> Eff es ()
-processMetricsRequest req = do
+-- | Process metrics request with optional API key from gRPC metadata (extracted for testing)
+processMetricsRequest :: (DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Log :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
+processMetricsRequest metadataApiKey req = do
   Log.logInfo "Received metrics export request" AE.Null
 
   currentTime <- liftIO getCurrentTime
@@ -1445,14 +1489,18 @@ processMetricsRequest req = do
       !projectKey = getMetricAttributeValue "at-project-key" resourceMetrics
 
   pidM <- do
-    p1 <- join <$> forM projectKey ProjectApiKeys.getProjectIdByApiKey
-    let p2 = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" resourceMetrics
-    pure (p1 <|> p2)
+    -- Try metadata API key first, then resource attribute key, then project ID
+    p1 <- case metadataApiKey of
+      Just key -> ProjectApiKeys.getProjectIdByApiKey key
+      Nothing -> pure Nothing
+    p2 <- join <$> forM projectKey ProjectApiKeys.getProjectIdByApiKey
+    let p3 = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" resourceMetrics
+    pure (p1 <|> p2 <|> p3)
 
   case pidM of
     Just pid -> do
       Log.logInfo "Metrics: Authentication successful"
-        (AE.object ["project_id" AE..= Projects.unProjectId pid, "project_key" AE..= projectKey])
+        (AE.object ["project_id" AE..= Projects.unProjectId pid, "project_key" AE..= projectKey, "metadata_auth" AE..= isJust metadataApiKey])
 
       -- Fetch project cache using cache pattern
       projectCache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
@@ -1481,7 +1529,9 @@ processMetricsRequest req = do
 -- | Metrics service handler (Export)
 metricsServiceExport :: Log.Logger -> AuthContext -> TracerProvider -> Proto MS.ExportMetricsServiceRequest -> IO (Proto MS.ExportMetricsServiceResponse)
 metricsServiceExport appLogger appCtx tp (Proto req) = do
-  _ <- runBackground appLogger appCtx tp $ processMetricsRequest req
+  -- Note: This version is for backwards compatibility when called directly in tests
+  -- The RpcHandler version below has access to metadata
+  _ <- runBackground appLogger appCtx tp $ processMetricsRequest Nothing req
   -- Return an empty response
   pure defMessage
 
@@ -1497,32 +1547,76 @@ isAesonTextEmpty (Just (AesonText v)) =
     _ -> False
 
 
+-- | RpcHandler for trace service with metadata access
+traceServiceRpcHandler :: Log.Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf TS.TraceService "export")
+traceServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
+  -- Get request metadata (includes Authorization header)
+  metadata <- getRequestMetadata call
+  let apiKey = otlpApiKey metadata
+
+  -- Receive the request
+  Proto req <- recvFinalInput call
+
+  -- Process the request with API key from metadata
+  _ <- runBackground appLogger appCtx tp $ processTraceRequest apiKey req
+
+  -- Send empty response
+  sendFinalOutput call (defMessage, NoMetadata)
+
+
+-- | RpcHandler for logs service with metadata access
+logsServiceRpcHandler :: Log.Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf LS.LogsService "export")
+logsServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
+  -- Get request metadata (includes Authorization header)
+  metadata <- getRequestMetadata call
+  let apiKey = otlpApiKey metadata
+
+  -- Receive the request
+  Proto req <- recvFinalInput call
+
+  -- Process the request with API key from metadata
+  _ <- runBackground appLogger appCtx tp $ processLogsRequest apiKey req
+
+  -- Send empty response
+  sendFinalOutput call (defMessage, NoMetadata)
+
+
+-- | RpcHandler for metrics service with metadata access
+metricsServiceRpcHandler :: Log.Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf MS.MetricsService "export")
+metricsServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
+  -- Get request metadata (includes Authorization header)
+  metadata <- getRequestMetadata call
+  let apiKey = otlpApiKey metadata
+
+  -- Receive the request
+  Proto req <- recvFinalInput call
+
+  -- Process the request with API key from metadata
+  _ <- runBackground appLogger appCtx tp $ processMetricsRequest apiKey req
+
+  -- Send empty response
+  sendFinalOutput call (defMessage, NoMetadata)
+
+
 services :: Log.Logger -> AuthContext -> TracerProvider -> [SomeRpcHandler IO]
 services appLogger appCtx tp =
-  fromMethods
-    ( simpleMethods
-        (mkNonStreaming $ traceServiceExport appLogger appCtx tp :: ServerHandler IO (Protobuf TS.TraceService "export"))
-    )
-    <> fromMethods
-      ( simpleMethods
-          (mkNonStreaming $ logsServiceExport appLogger appCtx tp :: ServerHandler IO (Protobuf LS.LogsService "export"))
-      )
-    <> fromMethods
-      ( simpleMethods
-          (mkNonStreaming $ metricsServiceExport appLogger appCtx tp :: ServerHandler IO (Protobuf MS.MetricsService "export"))
-      )
+  fromMethods $
+    RawMethod (traceServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf TS.TraceService "export")) $
+    RawMethod (logsServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf LS.LogsService "export")) $
+    RawMethod (metricsServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf MS.MetricsService "export")) $
+    NoMoreMethods
 
 
-type instance RequestMetadata (Protobuf TS.TraceService "export") = NoMetadata
+type instance RequestMetadata (Protobuf TS.TraceService "export") = OtlpRequestMetadata
 type instance ResponseInitialMetadata (Protobuf TS.TraceService "export") = NoMetadata
 type instance ResponseTrailingMetadata (Protobuf TS.TraceService "export") = NoMetadata
 
 
-type instance RequestMetadata (Protobuf LS.LogsService "export") = NoMetadata
+type instance RequestMetadata (Protobuf LS.LogsService "export") = OtlpRequestMetadata
 type instance ResponseInitialMetadata (Protobuf LS.LogsService "export") = NoMetadata
 type instance ResponseTrailingMetadata (Protobuf LS.LogsService "export") = NoMetadata
 
 
-type instance RequestMetadata (Protobuf MS.MetricsService "export") = NoMetadata
+type instance RequestMetadata (Protobuf MS.MetricsService "export") = OtlpRequestMetadata
 type instance ResponseInitialMetadata (Protobuf MS.MetricsService "export") = NoMetadata
 type instance ResponseTrailingMetadata (Protobuf MS.MetricsService "export") = NoMetadata
