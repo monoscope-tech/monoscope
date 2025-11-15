@@ -4,6 +4,7 @@ import Data.Aeson qualified as AE
 import Data.Effectful.Notify
 import Effectful
 import Effectful.Log (Log)
+import Log (LogLevel (..))
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Relude
 import System.Logging qualified as Logging
@@ -44,8 +45,9 @@ spec = describe "Notify Effect" $ do
 
 -- Helper to run test with proper effect setup
 runTestNotify :: Eff '[Notify, Log, IOE] a -> IO ([Notification], a)
-runTestNotify action = LogBulk.withBulkStdOutLogger $ \logger ->
+runTestNotify action = LogBulk.withBulkStdOutLogger $ \logger -> do
+  logLevel <- Logging.getLogLevelFromEnv
   action
     & runNotifyTest
-    & Logging.runLog "test" logger
+    & Logging.runLog "test" logger logLevel
     & runEff

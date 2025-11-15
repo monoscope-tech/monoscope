@@ -36,7 +36,6 @@ import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types (KeyValue (..))
 import Data.Cache (Cache (..), newCache)
-import Data.Default (Default (..))
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
 import Data.Effectful.UUID (runStaticUUID, runUUID)
@@ -88,6 +87,7 @@ import System.Clock (TimeSpec (TimeSpec))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Config qualified as Config
 import System.Directory (getFileSize, listDirectory)
+import System.Envy (DefConfig (..), decodeWithDefaults)
 import System.Logging qualified as Logging
 import System.Tracing qualified as Tracing
 import System.Types (ATAuthCtx, ATBackgroundCtx, RespHeaders, atAuthToBase, effToServantHandlerTest)
@@ -385,11 +385,12 @@ testSessionHeader pool = do
 
   tp <- liftIO getGlobalTracerProvider
   logger <- liftIO $ Log.mkLogger "test" (\_ -> pure ())
+  logLevel <- liftIO Logging.getLogLevelFromEnv
   Auth.sessionByID (Just pSessId) "requestID" False "light" Nothing
     & runErrorNoCallStack @Servant.ServerError
     & DB.runDB pool
     & runTime
-    & Logging.runLog "test" logger
+    & Logging.runLog "test" logger logLevel
     & Tracing.runTracing tp
     & runUUID
     & runHTTPWreq
@@ -418,7 +419,7 @@ runTestBackgroundWithLogger logger appCtx process = do
       & DB.runDB appCtx.pool
       & runLabeled @"timefusion" (DB.runDB appCtx.timefusionPgPool)
       & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
-      & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
+      & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
       & Tracing.runTracing tp
       & runUUID
       & runHTTPWreq
@@ -438,10 +439,10 @@ runTestBackgroundWithLogger logger appCtx process = do
           Data.Effectful.Notify.WhatsAppNotification whatsappData ->
             ("WhatsApp" :: Text, Data.Effectful.Notify.to whatsappData, Just (Data.Effectful.Notify.template whatsappData))
     Log.logInfo "Notification" notifInfo
-      & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
+      & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
       & Effectful.runEff
     Log.logTrace "Notification payload" notification
-      & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
+      & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
       & Effectful.runEff
   pure result
 
@@ -474,16 +475,19 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
   -- Load OpenAI API key from environment for tests
   openaiKey <- fromMaybe "" <$> lookupEnv "OPENAI_API_KEY"
 
+  -- Load config from environment variables (including LOG_LEVEL)
+  envConfig <- decodeWithDefaults defConfig
+
   let atAuthCtx =
         AuthContext
-          (def @EnvConfig)
+          envConfig
           pool
           pool
           pool
           projectCache
           logsPatternCache
           projectKeyCache
-          ( (def :: EnvConfig)
+          ( envConfig
               { apiKeyEncryptionSecretKey = "apitoolkit123456123456apitoolkit"
               , convertkitApiKey = ""
               , convertkitApiSecret = ""
@@ -623,14 +627,18 @@ getPendingBackgroundJobs authCtx = do
   pure jobsWithParsed
 
 
--- | Log background jobs info for debugging
-logBackgroundJobsInfo :: V.Vector (Job, BackgroundJobs.BgJobs) -> IO ()
-logBackgroundJobsInfo jobs = do
-  putTextLn $ "\n=== Background Jobs Queue (Count: " <> show (V.length jobs) <> ") ==="
-  V.forM_ jobs \(job, bgJob) -> do
-    let jobType = BackgroundJobs.jobTypeName bgJob
-    putTextLn $ "  - " <> jobType <> " (ID: " <> show job.jobId <> ")"
-  putTextLn "=================================\n"
+-- | Log background jobs info for debugging (respects LOG_LEVEL)
+logBackgroundJobsInfo :: Log.Logger -> V.Vector (Job, BackgroundJobs.BgJobs) -> IO ()
+logBackgroundJobsInfo logger jobs = do
+  logLevel <- Logging.getLogLevelFromEnv
+  let jobsList = V.toList jobs <&> \(job, bgJob) ->
+        AE.object
+          [ "type" AE..= BackgroundJobs.jobTypeName bgJob
+          , "id" AE..= job.jobId
+          ]
+  runEff
+    $ Logging.runLog "test" logger logLevel
+    $ Log.logTrace "Background Jobs Queue" (AE.object ["count" AE..= V.length jobs, "jobs" AE..= jobsList])
 
 
 runAllBackgroundJobs :: AuthContext -> IO (V.Vector Job)
