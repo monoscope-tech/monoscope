@@ -55,7 +55,7 @@ spec = aroundAll withTestResources do
       _ <- runTestBg tr $ processFiveMinuteSpans currentTime pid
 
       pendingJobs <- getPendingBackgroundJobs trATCtx
-      logBackgroundJobsInfo pendingJobs
+      logBackgroundJobsInfo trLogger pendingJobs
 
       _ <- runAllBackgroundJobs trATCtx
       endpoints <- withPool trPool $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0 "Incoming"

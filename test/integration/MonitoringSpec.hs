@@ -64,6 +64,6 @@ spec = aroundAll withTestResources do
       _ <- withPool trPool $ PGT.execute [sql|CALL monitors.check_triggered_query_monitors(0, '{}'::jsonb)|] ()
 
       pendingJobs <- getPendingBackgroundJobs trATCtx
-      logBackgroundJobsInfo pendingJobs
+      logBackgroundJobsInfo trLogger pendingJobs
 
       void $ runAllBackgroundJobs trATCtx

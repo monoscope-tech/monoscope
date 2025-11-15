@@ -8,11 +8,9 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Models.Projects.Projects qualified as Projects
 import Network.GRPC.Common (CustomMetadata (..),  HeaderName (..), GrpcError (..), GrpcException (..))
-import Network.GRPC.Common.Protobuf (Proto (..)
-)
+import Network.GRPC.Common.Protobuf (Proto (..))
 import Pages.Api qualified as Api
-import Pages.BodyWrapper (PageCtx (..)
-)
+import Pages.BodyWrapper (PageCtx (..))
 import Opentelemetry.OtlpMockValues qualified as OtlpMock
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Charts.Charts qualified as Charts

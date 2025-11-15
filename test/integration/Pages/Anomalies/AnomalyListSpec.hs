@@ -91,7 +91,7 @@ spec = aroundAll withTestResources do
 
       -- Check what background jobs were created and run only NewAnomaly jobs
       pendingJobs <- getPendingBackgroundJobs trATCtx
-      logBackgroundJobsInfo pendingJobs
+      logBackgroundJobsInfo trLogger pendingJobs
 
       -- Run only NewAnomaly jobs (which create issues from anomalies)
       _ <- runBackgroundJobsWhere trATCtx $ \case
@@ -120,7 +120,7 @@ spec = aroundAll withTestResources do
 
       -- Get and run shape/field anomaly jobs
       pendingJobs2 <- getPendingBackgroundJobs trATCtx
-      logBackgroundJobsInfo pendingJobs2
+      logBackgroundJobsInfo trLogger pendingJobs2
 
       _ <- runBackgroundJobsWhere trATCtx $ \case
         BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
@@ -163,7 +163,7 @@ spec = aroundAll withTestResources do
 
       -- Get pending jobs and run only NewAnomaly jobs for shapes and fields
       pendingJobs3 <- getPendingBackgroundJobs trATCtx
-      logBackgroundJobsInfo pendingJobs3
+      logBackgroundJobsInfo trLogger pendingJobs3
 
       _ <- runBackgroundJobsWhere trATCtx $ \case
         BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
@@ -193,7 +193,7 @@ spec = aroundAll withTestResources do
 
       -- Get and run shape/field anomaly jobs
       pendingJobs4 <- getPendingBackgroundJobs trATCtx
-      logBackgroundJobsInfo pendingJobs4
+      logBackgroundJobsInfo trLogger pendingJobs4
 
       _ <- runBackgroundJobsWhere trATCtx $ \case
         BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
@@ -221,7 +221,7 @@ spec = aroundAll withTestResources do
 
       -- Get and run format anomaly jobs
       pendingJobs5 <- getPendingBackgroundJobs trATCtx
-      logBackgroundJobsInfo pendingJobs5
+      logBackgroundJobsInfo trLogger pendingJobs5
 
       _ <- runBackgroundJobsWhere trATCtx $ \case
         BackgroundJobs.NewAnomaly{anomalyType = "format"} -> True

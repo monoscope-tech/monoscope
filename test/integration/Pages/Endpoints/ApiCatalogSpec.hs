@@ -161,7 +161,7 @@ spec = aroundAll withTestResources do
     it "processes anomaly background jobs to create issues" \tr@TestResources{..} -> do
       -- Get pending jobs and log them
       pendingJobs <- getPendingBackgroundJobs trATCtx
-      logBackgroundJobsInfo pendingJobs
+      logBackgroundJobsInfo trLogger pendingJobs
 
       -- Run only NewAnomaly jobs to create issues from anomalies
       _ <- runBackgroundJobsWhere trATCtx $ \case
