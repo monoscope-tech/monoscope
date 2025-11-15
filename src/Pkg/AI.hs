@@ -1,17 +1,12 @@
 module Pkg.AI (callOpenAIAPI, callOpenAIAPIEff, systemPrompt, getNormalTupleReponse, getAskLLMResponse, ChatLLMResponse (..)) where
 
 import Data.Aeson qualified as AE
+import Data.Effectful.LLM (callOpenAIAPI)
 import Data.Effectful.LLM qualified as ELLM
 import Data.List qualified as L
 import Data.Text qualified as T
-import Data.Vector qualified as V
 import Effectful (Eff, (:>))
-import Langchain.LLM.Core qualified as LLM
-import Langchain.LLM.Huggingface (Huggingface (modelName))
-import Langchain.LLM.OpenAI
 import Models.Telemetry.Schema qualified as Schema
-import OpenAI.V1.Chat.Completions qualified as OpenAIV1
-import OpenAI.V1.Models qualified as Models
 import Relude
 
 
@@ -27,33 +22,6 @@ data ChatLLMResponse = ChatLLMResponse
 -- | Effectful version that uses the LLM effect (supports caching)
 callOpenAIAPIEff :: ELLM.LLM :> es => Text -> Text -> Eff es (Either Text Text)
 callOpenAIAPIEff fullPrompt apiKey = ELLM.callLLM fullPrompt apiKey
-
-
--- | Original IO version for backward compatibility
-callOpenAIAPI :: Text -> Text -> IO (Either Text Text)
-callOpenAIAPI fullPrompt apiKey = do
-  let openAI =
-        OpenAI
-          { apiKey = apiKey
-          , callbacks = []
-          , baseUrl = Nothing
-          }
-      -- Create chat completion parameters with model name
-      userMessage =
-        OpenAIV1.User
-          { OpenAIV1.content = V.fromList [OpenAIV1.Text{OpenAIV1.text = fullPrompt}]
-          , OpenAIV1.name = Nothing
-          }
-      params =
-        OpenAIV1._CreateChatCompletion
-          { OpenAIV1.model = "gpt-4o-mini"
-          , OpenAIV1.messages = V.fromList [userMessage]
-          }
-  -- Use langchain-hs to generate response
-  result <- liftIO $ LLM.generate openAI fullPrompt (Just params)
-  case result of
-    Left err -> pure $ Left $ "LLM Error: " <> show err
-    Right response -> pure $ Right response
 
 
 getNormalTupleReponse :: Text -> Either Text (Text, Maybe Text)
@@ -100,36 +68,6 @@ getAskLLMResponse response =
               apiResponse' = apiResponse{visualization = vType}
            in Right apiResponse'
 
-
--- let lines' = lines $ T.strip response
---     queryLine = fromMaybe "" (viaNonEmpty head lines')
-
---     -- Check if a visualization type is specified
---     vizTypeM =
---       if length lines' > 1
---         then parseVisualizationType (lines' L.!! 1)
---         else Nothing
-
---     -- Clean the query by removing any code block markup and language identifiers
---     cleanedQuery =
---       T.strip
---         $ if "```" `T.isPrefixOf` queryLine
---           then
---             let withoutFirstLine = maybe "" (unlines . toList) $ viaNonEmpty tail (lines queryLine)
---                 withoutBackticks = T.takeWhile (/= '`') withoutFirstLine
---              in T.strip withoutBackticks
---           else queryLine
---  in -- Check if the response indicates an invalid query
---     if "Please provide a query"
---       `T.isInfixOf` cleanedQuery
---       || "I need more"
---         `T.isInfixOf` cleanedQuery
---       || "Could you please"
---         `T.isInfixOf` cleanedQuery
---       || T.length cleanedQuery
---         < 3
---       then pure $ Left "INVALID_QUERY_ERROR"
---       else pure $ Right (cleanedQuery, vizTypeM)
 
 -- Parse visualization type from the response
 parseVisualizationType :: Text -> Maybe Text
