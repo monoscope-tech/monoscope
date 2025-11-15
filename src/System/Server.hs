@@ -70,7 +70,7 @@ optionsMiddleware app req respond =
 
 runServer :: IOE :> es => Log.Logger -> AuthContext -> TracerProvider -> Eff es ()
 runServer appLogger env tp = do
-  loggingMiddleware <- Logging.runLog (show env.config.environment) appLogger WaiLog.mkLogMiddleware
+  loggingMiddleware <- Logging.runLog (show env.config.environment) appLogger env.config.logLevel WaiLog.mkLogMiddleware
   let server = mkServer appLogger env tp
   let warpSettings =
         defaultSettings
@@ -102,7 +102,7 @@ runServer appLogger env tp = do
           -- . loggingMiddleware
           $ server
   let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env tp
-  let exceptionLogger = logException env.config.environment appLogger
+  let exceptionLogger = logException env.config.environment appLogger env.config.logLevel
   asyncs <-
     liftIO
       $ sequence
@@ -137,9 +137,9 @@ shutdownMonoscope env =
     Pool.destroyAllResources env.timefusionPgPool
 
 
-logException :: Text -> Log.Logger -> Safe.SomeException -> IO ()
-logException envTxt logger exception =
+logException :: Text -> Log.Logger -> Log.LogLevel -> Safe.SomeException -> IO ()
+logException envTxt logger logLevel exception =
   runEff
     . runTime
-    . Logging.runLog envTxt logger
+    . Logging.runLog envTxt logger logLevel
     $ Log.logAttention "odd-jobs runner crashed " (show @Text exception)

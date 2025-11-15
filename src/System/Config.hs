@@ -15,6 +15,7 @@ import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Migration qualified as Migrations
 import Effectful
 import Effectful.Fail (Fail)
+import Log (LogLevel (..))
 import Models.Projects.Projects qualified as Projects
 import Pkg.DBUtils qualified as DBUtils
 import Relude
@@ -22,6 +23,11 @@ import Servant.Server (Handler)
 import System.Clock (TimeSpec (TimeSpec))
 import System.Envy (DefConfig (..), FromEnv (..), ReadShowVar (..), Var (..), decodeWithDefaults, fromVar, toVar)
 import System.Logging qualified as Logging
+
+
+-- Default log level is Info (used by the Default deriving for EnvConfig)
+instance Default LogLevel where
+  def = LogInfo
 
 
 data EnvConfig = EnvConfig
@@ -70,6 +76,7 @@ data EnvConfig = EnvConfig
   , courierApiKey :: Text
   , environment :: Text
   , loggingDestination :: Logging.LoggingDestination
+  , logLevel :: LogLevel
   , lemonSqueezyApiKey :: Text
   , lemonSqueezyUrl :: Text
   , lemonSqueezyCriticalUrl :: Text
@@ -134,6 +141,7 @@ instance DefConfig EnvConfig where
       , messagesPerPubsubPullBatch = 200
       , rrwebTopics = ["rrweb-client"]
       , loggingDestination = Logging.StdOut
+      , logLevel = LogInfo -- Default to Info level
       , smtpPort = 465
       , maxConcurrentJobs = 4 -- Sane default, can be increased based on CPU cores
       }
@@ -143,6 +151,19 @@ instance DefConfig EnvConfig where
 instance Var [Text] where
   fromVar = Just . T.splitOn "," . toText
   toVar = toString . T.intercalate ","
+
+
+-- Support unmarshalling LogLevel from environment variable
+-- Accepts: "trace", "info", or "attention" (case-insensitive)
+instance Var LogLevel where
+  fromVar str = case T.toLower (toText str) of
+    "trace" -> Just LogTrace
+    "info" -> Just LogInfo
+    "attention" -> Just LogAttention
+    _ -> Nothing
+  toVar LogTrace = "trace"
+  toVar LogInfo = "info"
+  toVar LogAttention = "attention"
 
 
 -- Rename to AppContext

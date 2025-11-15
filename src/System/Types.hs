@@ -124,7 +124,7 @@ effToServantHandler env logger tp app =
     & runDB env.pool
     & runLabeled @"timefusion" (runDB env.timefusionPgPool)
     & runTime
-    & Logging.runLog (show env.config.environment) logger
+    & Logging.runLog (show env.config.environment) logger env.config.logLevel
     & Tracing.runTracing tp
     & runConcurrent
     & Ki.runStructuredConcurrency
@@ -142,7 +142,7 @@ effToServantHandlerTest env logger tp app =
     & runDB env.pool
     & runLabeled @"timefusion" (runDB env.timefusionPgPool)
     & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
-    & Logging.runLog (show env.config.environment) logger
+    & Logging.runLog (show env.config.environment) logger env.config.logLevel
     & Tracing.runTracing tp
     & runConcurrent
     & Ki.runStructuredConcurrency
@@ -186,7 +186,7 @@ runBackground logger appCtx tp process =
     & runDB appCtx.pool
     & runLabeled @"timefusion" (runDB appCtx.timefusionPgPool)
     & runTime
-    & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
+    & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
     & Tracing.runTracing tp
     & runUUID
     & runHTTPWreq

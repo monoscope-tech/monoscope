@@ -75,7 +75,8 @@ import System.Config (
     basicAuthPassword,
     basicAuthUsername,
     convertkitApiKey,
-    environment
+    environment,
+    logLevel
   ),
  )
 import System.Logging (logInfo)
@@ -108,7 +109,7 @@ authHandler :: Logger -> AuthContext -> APItoolkitAuthContext
 authHandler logger env =
   mkAuthHandler \request ->
     handler request
-      & Logging.runLog (show env.config.environment) logger
+      & Logging.runLog (show env.config.environment) logger env.config.logLevel
       & DB.runDB env.pool
       & runHTTPWreq
       & runUUID

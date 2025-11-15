@@ -12,6 +12,7 @@ module System.Logging (
   logAttention,
   timeAction,
   LoggingDestination (..),
+  getLogLevelFromEnv,
 )
 where
 
@@ -20,6 +21,7 @@ import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.ByteString.Char8 qualified as BS
 import Data.Default (Default (..))
+import Data.Text qualified as T
 import Data.Time.Clock as Time (NominalDiffTime, diffUTCTime)
 import Effectful (
   Eff,
@@ -32,6 +34,7 @@ import Effectful.Log (Log)
 import Effectful.Log qualified as Log
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
+import Log (LogLevel (..))
 import Log (Logger)
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Log.Internal.Logger (withLogger)
@@ -64,9 +67,10 @@ runLog
    . IOE :> es
   => Text
   -> Logger
+  -> Log.LogLevel
   -> Eff (Log ': es) a
   -> Eff es a
-runLog envTxt logger = Log.runLog ("[AT]-" <> envTxt) logger Log.LogTrace
+runLog envTxt logger minLogLevel = Log.runLog ("[AT]-" <> envTxt) logger minLogLevel
 
 
 makeLogger :: IOE :> es => LoggingDestination -> (Logger -> Eff es a) -> Eff es a
@@ -152,3 +156,17 @@ timeAction action = do
   result <- action
   end <- Time.currentTime
   pure (result, Time.diffUTCTime end start)
+
+
+-- | Read log level from LOG_LEVEL environment variable
+-- Defaults to LogTrace (most verbose) if not set or invalid
+getLogLevelFromEnv :: IO LogLevel
+getLogLevelFromEnv = do
+  maybeLevel <- lookupEnv "LOG_LEVEL"
+  pure $ case maybeLevel of
+    Just levelStr -> case T.toLower (toText levelStr) of
+      "trace" -> LogTrace
+      "info" -> LogInfo
+      "attention" -> LogAttention
+      _ -> LogTrace -- Default to trace if invalid value
+    Nothing -> LogTrace -- Default to trace if not set
