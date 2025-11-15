@@ -1,5 +1,5 @@
 packages: . 
-with-compiler: ghc-9.10.2
+with-compiler: ghc-9.10.3
 multi-repl: True
 write-ghc-environment-files: always
 -- import: https://www.stackage.org/nightly-2025-01-20/cabal.config
@@ -7,7 +7,7 @@ write-ghc-environment-files: always
 
 -- with-compiler: ghc-9.8.2
 --import: https://www.stackage.org/nightly-2025-05-19/cabal.config
-import: https://www.stackage.org/lts-24.9/cabal.config
+import: https://www.stackage.org/lts-24.19/cabal.config
 
 
 -- Override dependencies from stack.yaml
@@ -21,8 +21,8 @@ source-repository-package
 
 source-repository-package
   type: git
-  location: https://github.com/tonyalaribe/odd-jobs.git
-  tag: 7a0eee112cb582746f14cfe6a527a86ef1c4c5e0
+  location: https://github.com/saurabhnanda/odd-jobs.git
+  tag: d6d37e2eabafcb1e286a190d98d73c4d12ff6e53
   subdir: .
 
 source-repository-package
@@ -50,7 +50,9 @@ source-repository-package
 source-repository-package
   type: git
   location: https://github.com/well-typed/grapesy.git
-  tag: 4d374aca55bb5392e3b91ae47d6ca5625ffc59b6
+  tag: 411b3e173575275cb2c745992dfe6782d2d87115
+  -- tag: 5d51f1e605a184bb426d4be39b90bd5e912a8230
+  -- tag: 51ca5d197147cd2b9a3baf81db4c04c8c7d33fec
   subdir: grapesy
   subdir: grpc-spec
 
@@ -78,13 +80,19 @@ source-repository-package
 source-repository-package
   type: git 
   location: https://github.com/tusharad/langchain-hs
-  tag: 120d54578df976a8fe6548ff24e7b02b375ec4e4
+  tag: f6f6b823c2d2291a067b0dcfd02dd9e6b93d35fb
   subdir: .
 
 source-repository-package
   type: git 
   location: https://github.com/tusharad/ollama-haskell
-  tag: 05c7869652870a2a88bec259f501ee77cec79134
+  tag: 33807a3a5a507e99d92b26e245c0aed582fde581
+  subdir: .
+
+source-repository-package
+  type: git 
+  location: https://github.com/MercuryTechnologies/openai
+  tag: 3a5c00527bcda652a188ee7c54127eea90ce1bb7 
   subdir: .
 
 constraints:

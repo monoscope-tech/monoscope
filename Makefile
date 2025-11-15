@@ -1,6 +1,6 @@
 # GHC_VERSION := $(shell stack ghc -- --version | awk '{print $$NF}')
 # GHC_VERSION := $(shell stack ghc -- --version | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -n 1)
-GHC_VERSION := 9.10.2
+GHC_VERSION := 9.10.3
 ARCH := $(shell uname -m | sed 's/arm64/aarch64/' | tr '[:upper:]' '[:lower:]')
 OS := $(shell uname -s | sed 's/Darwin/osx/' | tr '[:upper:]' '[:lower:]')
 OS_ARCH := $(ARCH)-$(OS)
