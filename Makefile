@@ -61,7 +61,7 @@ test-doctests:
 	cabal test doctests -j --ghc-options="-O0 -j$(NCPUS)" --test-show-details=direct 
 
 test-integration:
-	USE_EXTERNAL_DB=true cabal test integration-tests -j --ghc-options="-O0 -j$(NCPUS)" --test-show-details=direct --test-options='--color --jobs=$(NCPUS)'
+	LOG_LEVEL=attention USE_EXTERNAL_DB=true cabal test integration-tests -j --ghc-options="-O0 -j$(NCPUS)" --test-show-details=direct --test-options='--color --jobs=$(NCPUS)'
 
 live-test-unit:
 	ghcid --test 'cabal test monoscope:unit-tests --ghc-options="-w -j4" --test-show-details=streaming'
