@@ -14,6 +14,11 @@ module Pages.Onboarding.Onboarding (
   NotifChannelForm (..),
   OnboardingInfoForm (..),
   OnboardingConfForm (..),
+  OnboardingGet (..),
+  OnboardingStepData (..),
+  OnboardingInfoPost (..),
+  OnboardingConfPost (..),
+  OnboardingPhoneEmailsPost (..),
 ) where
 
 import Control.Lens qualified as L
@@ -53,7 +58,7 @@ import Web.FormUrlEncoded
 
 
 -- 'Info', 'Survey', 'CreateMonitor','NotifChannel','Integration', 'Pricing', 'Complete'
-onboardingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+onboardingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders OnboardingGet)
 onboardingGetH pid onboardingStepM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -64,9 +69,8 @@ onboardingGetH pid onboardingStepM = do
           }
       questions = fromMaybe (AE.Object []) project.questions
       onboardingStep = fromMaybe "Info" onboardingStepM
-  case onboardingStep of
-    "Complete" -> do
-      addRespHeaders $ PageCtx bodyConfig $ onboardingCompleteBody pid
+  stepData <- case onboardingStep of
+    "Complete" -> pure $ CompleteStep pid
     "Survey" -> do
       let host = fromMaybe "" $ lookupValueText questions "location"
           func = case questions of
@@ -81,7 +85,7 @@ onboardingGetH pid onboardingStepM = do
                     _ -> []
                in fun
             _ -> []
-      addRespHeaders $ PageCtx bodyConfig $ onboardingConfigBody pid host func
+      pure $ SurveyStep pid host func
     "NotifChannel" -> do
       slack <- getProjectSlackData pid
       discord <- getDiscordDataByProjectId pid
@@ -89,21 +93,26 @@ onboardingGetH pid onboardingStepM = do
           emails = project.notifyEmails
           hasDiscord = isJust discord
           hasSlack = isJust slack
-      addRespHeaders $ PageCtx bodyConfig $ notifChannels appCtx pid phone emails hasDiscord hasSlack
+          slackRedirectUri = appCtx.env.slackRedirectUri
+          discordRedirectUri = appCtx.env.discordRedirectUri
+          slackUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> appCtx.config.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:history,groups:history,im:history,mpim:history&user_scope=" <> "&redirect_uri=" <> slackRedirectUri <> pid.toText <> "?onboarding=true"
+          discordUrl = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> "&state=" <> pid.toText <> "__onboarding" <> "&redirect_uri=" <> discordRedirectUri
+      pure $ NotifChannelStep pid slackUrl discordUrl phone emails hasSlack hasDiscord
     "Integration" -> do
       apiKey <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
       let key = if V.length apiKey > 0 then let defKey = V.head apiKey in defKey.keyPrefix else "<API_KEY>"
-      addRespHeaders $ PageCtx bodyConfig $ integrationsPage pid key
+      pure $ IntegrationStep pid key
     "Pricing" -> do
       let lemonUrl = appCtx.config.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
           critical = appCtx.config.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
           paymentPlan = project.paymentPlan
-      addRespHeaders $ PageCtx bodyConfig $ pricingPage pid lemonUrl critical paymentPlan appCtx.config.enableFreetier appCtx.config.basicAuthEnabled
+      pure $ PricingStep pid lemonUrl critical paymentPlan appCtx.config.enableFreetier appCtx.config.basicAuthEnabled
     _ -> do
       let firstName = sess.user.firstName
           lastName = sess.user.lastName
           (companyName, companySize, foundUsfrom) = (fromMaybe "" $ lookupValueText questions "companyName", fromMaybe "" $ lookupValueText questions "companySize", fromMaybe "" $ lookupValueText questions "foundUsFrom")
-      addRespHeaders $ PageCtx bodyConfig $ onboardingInfoBody pid firstName lastName companyName companySize foundUsfrom
+      pure $ InfoStep pid firstName lastName companyName companySize foundUsfrom
+  addRespHeaders $ OnboardingGet $ PageCtx bodyConfig stepData
 
 
 -- addRespHeaders $ PageCtx bodyConfig $ div_ [class_ "container"] $ "Hello world"
@@ -140,6 +149,100 @@ data NotifChannelForm = NotifChannelForm
   deriving anyclass (AE.FromJSON, AE.ToJSON, FromForm)
 
 
+-- | Data type representing different onboarding steps
+data OnboardingStepData
+  = InfoStep
+      { stepPid :: Projects.ProjectId
+      , firstName :: Text
+      , lastName :: Text
+      , companyName :: Text
+      , companySize :: Text
+      , foundUsFrom :: Text
+      }
+  | SurveyStep
+      { stepPid :: Projects.ProjectId
+      , location :: Text
+      , functionality :: [Text]
+      }
+  | NotifChannelStep
+      { stepPid :: Projects.ProjectId
+      , slackUrl :: Text
+      , discordUrl :: Text
+      , phoneNumber :: Text
+      , emails :: V.Vector Text
+      , hasSlack :: Bool
+      , hasDiscord :: Bool
+      }
+  | IntegrationStep
+      { stepPid :: Projects.ProjectId
+      , apiKey :: Text
+      }
+  | PricingStep
+      { stepPid :: Projects.ProjectId
+      , lemonUrl :: Text
+      , criticalUrl :: Text
+      , paymentPlan :: Text
+      , enableFreetier :: Bool
+      , basicAuthEnabled :: Bool
+      }
+  | CompleteStep
+      { stepPid :: Projects.ProjectId
+      }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+-- | Response type for onboarding GET handler
+newtype OnboardingGet = OnboardingGet (PageCtx OnboardingStepData)
+  deriving stock (Generic, Show)
+
+
+instance ToHtml OnboardingGet where
+  toHtml (OnboardingGet (PageCtx bwconf stepData)) = toHtml $ PageCtx bwconf $ renderStep stepData
+    where
+      renderStep = \case
+        CompleteStep{..} -> onboardingCompleteBody stepPid
+        SurveyStep{..} -> onboardingConfigBody stepPid location functionality
+        NotifChannelStep{..} -> notifChannelsWithUrls slackUrl discordUrl stepPid phoneNumber emails hasDiscord hasSlack
+        IntegrationStep{..} -> integrationsPage stepPid apiKey
+        PricingStep{..} -> pricingPage stepPid lemonUrl criticalUrl paymentPlan enableFreetier basicAuthEnabled
+        InfoStep{..} -> onboardingInfoBody stepPid firstName lastName companyName companySize foundUsFrom
+  toHtmlRaw = toHtml
+
+
+-- | Response type for onboarding info POST handler (redirects to next step)
+newtype OnboardingInfoPost = OnboardingInfoPost ()
+  deriving stock (Generic, Show)
+
+
+instance ToHtml OnboardingInfoPost where
+  toHtml _ = ""
+  toHtmlRaw = toHtml
+
+
+-- | Response type for onboarding configuration POST handler (redirects to next step)
+newtype OnboardingConfPost = OnboardingConfPost ()
+  deriving stock (Generic, Show)
+
+
+instance ToHtml OnboardingConfPost where
+  toHtml _ = ""
+  toHtmlRaw = toHtml
+
+
+-- | Response type for phone/emails POST handler
+data OnboardingPhoneEmailsPost = OnboardingPhoneEmailsPost
+  { projectId :: Projects.ProjectId
+  , emails :: V.Vector Text
+  }
+  deriving stock (Generic, Show)
+
+
+instance ToHtml OnboardingPhoneEmailsPost where
+  toHtml (OnboardingPhoneEmailsPost pid emails) = toHtmlRaw $ inviteTeamMemberModal pid emails
+  toHtmlRaw = toHtml
+
+
 onboardingStepSkipped :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 onboardingStepSkipped pid stepM = do
   (sess, project) <- Sessions.sessionAndProject pid
@@ -161,7 +264,7 @@ getNextStep "Integration" = "Pricing"
 getNextStep _ = "Info"
 
 
-phoneEmailPostH :: Projects.ProjectId -> NotifChannelForm -> ATAuthCtx (RespHeaders (Html ()))
+phoneEmailPostH :: Projects.ProjectId -> NotifChannelForm -> ATAuthCtx (RespHeaders OnboardingPhoneEmailsPost)
 phoneEmailPostH pid form = do
   (sess, project) <- Sessions.sessionAndProject pid
   let phone = form.phoneNumber
@@ -175,7 +278,7 @@ phoneEmailPostH pid form = do
   projectMembers <- dbtToEff $ Projects.usersByProjectId pid
   let emails' = (\u -> CI.original u.email) <$> projectMembers
   _ <- dbtToEff $ execute q (V.fromList notifsTxt, phone, V.fromList emails, newCompleted, pid)
-  addRespHeaders $ inviteTeamMemberModal pid (V.fromList $ ordNub $ emails <> V.toList emails')
+  addRespHeaders $ OnboardingPhoneEmailsPost pid (V.fromList $ ordNub $ emails <> V.toList emails')
 
 
 checkIntegrationGet :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -209,7 +312,7 @@ verifiedCheck = div_ [class_ "flex items-center gap-2 text-textSuccess"] do
   faSprite_ "circle-check" "regular" "h-4 w-4"
 
 
-onboardingInfoPost :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders (Html ()))
+onboardingInfoPost :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders OnboardingInfoPost)
 onboardingInfoPost pid form = do
   (sess, project) <- Sessions.sessionAndProject pid
   let firstName = form.firstName
@@ -229,10 +332,10 @@ onboardingInfoPost pid form = do
   _ <- dbtToEff $ execute [sql| update projects.projects set title=?,questions=?,onboarding_steps_completed=? where id=? |] (form.companyName, jsonBytes, newCompleted, pid)
   _ <- dbtToEff $ execute [sql| update users.users set first_name= ?, last_name=? where id=? |] (firstName, lastName, sess.user.id)
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Survey"
-  addRespHeaders ""
+  addRespHeaders $ OnboardingInfoPost ()
 
 
-onboardingConfPost :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (RespHeaders (Html ()))
+onboardingConfPost :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (RespHeaders OnboardingConfPost)
 onboardingConfPost pid form = do
   (sess, project) <- Sessions.sessionAndProject pid
   let infoJson =
@@ -248,7 +351,7 @@ onboardingConfPost pid form = do
       newCompleted = insertIfNotExist "Survey" stepsCompleted
   _ <- dbtToEff $ execute [sql| update projects.projects set questions=?, onboarding_steps_completed=? where id=? |] (jsonBytes, newCompleted, pid)
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
-  addRespHeaders ""
+  addRespHeaders $ OnboardingConfPost ()
 
 
 onboardingCompleteBody :: Projects.ProjectId -> Html ()
@@ -634,7 +737,11 @@ notifChannels appCtx pid phone emails hasDiscord hasSlack = do
       discordUri = appCtx.env.discordRedirectUri
       slackUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> appCtx.config.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:history,groups:history,im:history,mpim:history&user_scope=" <> "&redirect_uri=" <> slackRedirectUri <> pid.toText <> "?onboarding=true"
       discordUrl = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> "&state=" <> pid.toText <> "__onboarding" <> "&redirect_uri=" <> discordUri
+  notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack
 
+
+notifChannelsWithUrls :: Text -> Text -> Projects.ProjectId -> Text -> V.Vector Text -> Bool -> Bool -> Html ()
+notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack = do
   div_ [class_ "w-[550px] mx-auto mt-[156px] mb-10"] $ do
     div_ [id_ "inviteModalContainer"] pass
     div_ [class_ "flex-col gap-4 flex w-full"] $ do

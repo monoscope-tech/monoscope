@@ -6,6 +6,7 @@ module Pages.Projects.Integrations (
   NotifListForm,
   integrationsSettingsGetH,
   updateNotificationsChannel,
+  NotificationsUpdatePost (..),
 )
 where
 
@@ -76,17 +77,27 @@ data NotifListForm = NotifListForm
   deriving anyclass (AE.FromJSON, FromForm)
 
 
-updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (RespHeaders (Html ()))
+-- | Response type for notification channel update POST handler
+newtype NotificationsUpdatePost = NotificationsUpdatePost ()
+  deriving stock (Generic, Show)
+
+
+instance ToHtml NotificationsUpdatePost where
+  toHtml _ = ""
+  toHtmlRaw = toHtml
+
+
+updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (RespHeaders NotificationsUpdatePost)
 updateNotificationsChannel pid NotifListForm{notificationsChannel, phones} = do
   validationResult <- validateNotificationChannels pid notificationsChannel phones
   case validationResult of
     Left errorMessage -> do
       addErrorToast errorMessage Nothing
-      addRespHeaders ""
+      addRespHeaders $ NotificationsUpdatePost ()
     Right () -> do
       _ <- dbtToEff $ Projects.updateNotificationsChannel pid notificationsChannel phones
       addSuccessToast "Updated Notification Channels Successfully" Nothing
-      addRespHeaders ""
+      addRespHeaders $ NotificationsUpdatePost ()
 
 
 validateNotificationChannels :: Projects.ProjectId -> [Text] -> [Text] -> ATAuthCtx (Either Text ())

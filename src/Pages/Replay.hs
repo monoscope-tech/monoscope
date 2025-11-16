@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Pages.Replay (replayPostH, ReplayPost, processReplayEvents, replaySessionGetH) where
+module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH) where
 
 import Conduit (runConduit)
 import Control.Lens
@@ -68,7 +68,7 @@ replayPostH :: Projects.ProjectId -> ReplayPost -> ATBaseCtx AE.Value
 replayPostH pid body@ReplayPost{..} = do
   pubResult <- publishReplayEvent body pid
   case pubResult of
-    Left errMsg -> pure $ AE.object ["status" AE..= ("warning" :: Text), "message" AE..= errMsg]
+    Left errMsg -> pure $ AE.object ["status" AE..= ("warning" :: Text), "message" AE..= errMsg, "sessionId" AE..= sessionId]
     Right messageId -> do pure $ AE.object ["status" AE..= ("ok" :: Text), "messageId" AE..= messageId, "sessionId" AE..= sessionId]
 
 
