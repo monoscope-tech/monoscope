@@ -18,6 +18,7 @@ module Pkg.TestUtils (
   refreshMaterializedView,
   setBjRunAtInThePast,
   toServantResponse,
+  toBaseServantResponse,
   runQueryEffect,
   -- Helper functions for tests
   processMessagesAndBackgroundJobs,
@@ -26,6 +27,14 @@ module Pkg.TestUtils (
   processAllBackgroundJobsMultipleTimes,
   processShapeAndFieldAnomalyJobs,
   processFormatAnomalyJobs,
+  -- OTLP/Telemetry helpers
+  createTestAPIKey,
+  ingestLog,
+  ingestTrace,
+  ingestMetric,
+  ingestLogWithHeader,
+  ingestTraceWithHeader,
+  ingestMetricWithHeader,
 )
 where
 
@@ -43,6 +52,7 @@ import Data.Effectful.Wreq (runHTTPGolden, runHTTPWreq)
 import Data.Either.Extra
 import Data.HashMap.Strict qualified as HashMap
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool)
+import Data.ProtoLens.Encoding (decodeMessage)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.UUID qualified as UUID
@@ -74,10 +84,17 @@ import Models.Telemetry.SummaryGenerator qualified as SummaryGenerator
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
+import Network.GRPC.Common.Protobuf (Proto (..))
 import OddJobs.Job (Job (..))
 import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
+import Opentelemetry.OtlpMockValues qualified as OtlpMock
+import Opentelemetry.OtlpServer qualified as OtlpServer
+import Pages.Api qualified as Api
 import Pkg.DeriveUtils (AesonText (..))
 import ProcessMessage qualified
+import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
+import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
+import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService qualified as TS
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
@@ -90,7 +107,7 @@ import System.Directory (getFileSize, listDirectory)
 import System.Envy (DefConfig (..), decodeWithDefaults)
 import System.Logging qualified as Logging
 import System.Tracing qualified as Tracing
-import System.Types (ATAuthCtx, ATBackgroundCtx, RespHeaders, atAuthToBase, effToServantHandlerTest)
+import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, effToServantHandlerTest)
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 
@@ -525,6 +542,21 @@ toServantResponse trATCtx trSessAndHeader trLogger k = do
     . fromRightShow
 
 
+-- | Run a base context handler (like webhookPostH, replayPostH) in test context
+toBaseServantResponse
+  :: AuthContext
+  -> Log.Logger
+  -> ATBaseCtx a
+  -> IO a
+toBaseServantResponse trATCtx trLogger k = do
+  tp <- getGlobalTracerProvider
+  ( k
+      & effToServantHandlerTest trATCtx trLogger tp
+      & ServantS.runHandler
+    )
+    <&> fromRightShow
+
+
 -- | Run a query effect (like Charts.queryMetrics) in test context
 -- This is for effects that return data directly (not wrapped in RespHeaders)
 -- Uses frozen time to match background job context
@@ -865,3 +897,65 @@ processFormatAnomalyJobs tr@TestResources{..} = do
           (Just (AE.String "NewAnomaly"), Just (AE.String "format")) -> True
           _ -> False
       _ -> False
+
+
+-- OTLP/Telemetry helper functions for ingesting test data
+-- These helpers allow tests to ingest data through handlers instead of raw SQL
+
+-- | Helper to create an API key for testing using handler
+createTestAPIKey :: TestResources -> Projects.ProjectId -> Text -> IO Text
+createTestAPIKey tr projectId keyName = do
+  result <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger $ Api.apiPostH projectId (Api.GenerateAPIKeyForm keyName Nothing)
+  case result of
+    Api.ApiPost _ _ (Just (_, keyText)) -> pure keyText
+    _ -> error "Failed to create API key via handler"
+
+
+-- | Helper to ingest a log via resource attributes (original method)
+ingestLog :: TestResources -> Text -> Text -> UTCTime -> IO ()
+ingestLog tr apiKey bodyText timestamp = do
+  logBytes <- OtlpMock.createOtelLogAtTime apiKey bodyText timestamp
+  let logReq = either (error . toText) id (decodeMessage logBytes :: Either String LS.ExportLogsServiceRequest)
+  void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto logReq)
+
+
+-- | Helper to ingest a trace via resource attributes
+ingestTrace :: TestResources -> Text -> Text -> UTCTime -> IO ()
+ingestTrace tr apiKey spanName timestamp = do
+  traceBytes <- OtlpMock.createOtelTraceAtTime apiKey spanName timestamp
+  let traceReq = either (error . toText) id (decodeMessage traceBytes :: Either String TS.ExportTraceServiceRequest)
+  void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto traceReq)
+
+
+-- | Helper to ingest a metric via resource attributes
+ingestMetric :: TestResources -> Text -> Text -> Double -> UTCTime -> IO ()
+ingestMetric tr apiKey metricName value timestamp = do
+  metricBytes <- OtlpMock.createGaugeMetricAtTime apiKey metricName value timestamp
+  let metricReq = either (error . toText) id (decodeMessage metricBytes :: Either String MS.ExportMetricsServiceRequest)
+  void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto metricReq)
+
+
+-- | Helper to ingest a log using gRPC Authorization header (via process function directly)
+-- Note: This simulates what the RpcHandler would do with metadata
+ingestLogWithHeader :: TestResources -> Text -> Text -> UTCTime -> IO ()
+ingestLogWithHeader tr apiKey bodyText timestamp = do
+  logBytes <- OtlpMock.createOtelLogAtTime "" bodyText timestamp -- Empty API key in resource
+  let logReq = either (error . toText) id (decodeMessage logBytes :: Either String LS.ExportLogsServiceRequest)
+  -- Call processLogsRequest directly with the API key from "Authorization header"
+  void $ runTestBg tr $ OtlpServer.processLogsRequest (Just apiKey) logReq
+
+
+-- | Helper to ingest a trace using gRPC Authorization header
+ingestTraceWithHeader :: TestResources -> Text -> Text -> UTCTime -> IO ()
+ingestTraceWithHeader tr apiKey spanName timestamp = do
+  traceBytes <- OtlpMock.createOtelTraceAtTime "" spanName timestamp -- Empty API key in resource
+  let traceReq = either (error . toText) id (decodeMessage traceBytes :: Either String TS.ExportTraceServiceRequest)
+  void $ runTestBg tr $ OtlpServer.processTraceRequest (Just apiKey) traceReq
+
+
+-- | Helper to ingest a metric using gRPC Authorization header
+ingestMetricWithHeader :: TestResources -> Text -> Text -> Double -> UTCTime -> IO ()
+ingestMetricWithHeader tr apiKey metricName value timestamp = do
+  metricBytes <- OtlpMock.createGaugeMetricAtTime "" metricName value timestamp -- Empty API key in resource
+  let metricReq = either (error . toText) id (decodeMessage metricBytes :: Either String MS.ExportMetricsServiceRequest)
+  void $ runTestBg tr $ OtlpServer.processMetricsRequest (Just apiKey) metricReq
