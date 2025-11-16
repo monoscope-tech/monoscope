@@ -442,6 +442,7 @@ test-suite integration-tests
       Opentelemetry.OtlpServerSpec
       Pages.Anomalies.AnomalyListSpec
       Pages.ApiSpec
+      Pages.BusinessFlowsSpec
       Pages.Endpoints.ApiCatalogSpec
       Pages.LogExplorer.LogSpec
       Pages.Monitors.AlertsSpec
