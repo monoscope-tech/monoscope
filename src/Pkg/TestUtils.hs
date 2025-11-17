@@ -376,7 +376,7 @@ rollback conn actionToRollback = mask $ \restore -> do
 testSessionHeader :: MonadIO m => Pool Connection -> m (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Sessions.Session)
 testSessionHeader pool = do
   pSessId <-
-    Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@apitoolkit.io"
+    Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@monoscope.tech"
       & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 10])
       & runHTTPGolden "./tests/golden/"
       & DB.runDB pool
