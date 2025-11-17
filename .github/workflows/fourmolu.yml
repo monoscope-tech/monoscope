@@ -8,11 +8,22 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Cache fourmolu
+        id: cache-fourmolu
+        uses: actions/cache@v3
+        with:
+          path: ~/.local/bin/fourmolu
+          key: fourmolu-0.19.0.0
+
       - name: Install fourmolu
+        if: steps.cache-fourmolu.outputs.cache-hit != 'true'
         run: |
-          curl -sL https://github.com/fourmolu/fourmolu/releases/download/v0.19.0.0/fourmolu-0.19.0.0-linux-x86_64 -o fourmolu
-          chmod +x fourmolu
-          sudo mv fourmolu /usr/local/bin/
+          mkdir -p ~/.local/bin
+          curl -sL https://github.com/fourmolu/fourmolu/releases/download/v0.19.0.0/fourmolu-0.19.0.0-linux-x86_64 -o ~/.local/bin/fourmolu
+          chmod +x ~/.local/bin/fourmolu
+
+      - name: Add fourmolu to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Format code
         run: make fmt
