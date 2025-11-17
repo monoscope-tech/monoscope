@@ -4,11 +4,27 @@ jobs:
   format:
     runs-on: ubuntu-latest
     steps:
-      # Note that you must checkout your code before running haskell-actions/run-fourmolu
       - uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: haskell-actions/run-fourmolu@v11
         with:
           version: '0.19.0.0'
+          mode: 'inplace'
           pattern: |
             src/**/*.hs
             !src/Main.hs
+
+      - name: Commit formatted code
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add -A
+          git diff --staged --quiet || git commit -m "Auto-format code with fourmolu"
+
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.ref }}
