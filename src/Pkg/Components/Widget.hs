@@ -317,12 +317,12 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                    <> maybeToMonoid (widget._projectId <&> (.toText))
-                    <> "/dashboards/"
-                    <> maybeToMonoid widget._dashboardId
-                    <> "/widgets/"
-                    <> wId
-                    <> "/duplicate"
+                  <> maybeToMonoid (widget._projectId <&> (.toText))
+                  <> "/dashboards/"
+                  <> maybeToMonoid widget._dashboardId
+                  <> "/widgets/"
+                  <> wId
+                  <> "/duplicate"
               , hxTrigger_ "click"
               , [__| on click set (the closest <details/>).open to false
                      on htmx:beforeSwap
@@ -373,7 +373,7 @@ renderTraceTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-              <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
+            <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ tableId <> "_bordered"
         ]
         do
@@ -436,7 +436,7 @@ renderTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-              <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
+            <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ tableId <> "_bordered"
         ]
         do
@@ -537,7 +537,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ chartId <> "_bordered"
         ]
         do
