@@ -478,7 +478,7 @@ runTestBackgroundWithLogger logger appCtx process = do
 
 
 -- | Run an effect action in test context (for non-servant handlers like Auth.sessionByID)
-runTestEffect :: Pool Connection -> Log.Logger -> TracerProvider -> (forall es. (DB.DB :> es, Error ServantS.ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es, Log :> es, Tracing :> es, IOE :> es) => Eff es a) -> IO (Either ServantS.ServerError a)
+runTestEffect :: Pool Connection -> Log.Logger -> TracerProvider -> (forall es. (DB.DB :> es, Error ServantS.ServerError :> es, HTTP :> es, IOE :> es, Log :> es, Time :> es, Tracing :> es, UUIDEff :> es) => Eff es a) -> IO (Either ServantS.ServerError a)
 runTestEffect pool logger tp action = do
   logLevel <- Logging.getLogLevelFromEnv
   action
@@ -566,9 +566,10 @@ toServantResponse trATCtx trSessAndHeader trLogger k = do
     ( atAuthToBase trSessAndHeader k
         & effToServantHandlerTest trATCtx trLogger tp
         & ServantS.runHandler
-      )
+    )
       <&> fromRightShow
   pure (headersResp, Servant.getResponse headersResp)
+
 
 testServant :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)
 testServant tr = toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger

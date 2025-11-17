@@ -730,6 +730,7 @@ formField labelText inputType inputName inputId inputValue = do
       then textarea_ [class_ "textarea w-full rounded-lg border border-strokeStrong", type_ "text", name_ inputName, id_ inputId] ""
       else input_ [class_ "input w-full h-12", type_ inputType, name_ inputName, id_ inputId, value_ inputValue]
 
+
 notifChannelsWithUrls :: Text -> Text -> Projects.ProjectId -> Text -> V.Vector Text -> Bool -> Bool -> Html ()
 notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack = do
   div_ [class_ "w-[550px] mx-auto mt-[156px] mb-10"] $ do
