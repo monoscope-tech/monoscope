@@ -18,6 +18,7 @@ import Pages.BodyWrapper (PageCtx (..))
 import Pkg.TestUtils
 import Relude
 import Servant.API (ResponseHeader(..), lookupResponseHeader)
+import Servant.Server qualified as ServantS
 import Test.Hspec
 import Servant.Htmx
 import BackgroundJobs qualified
@@ -30,12 +31,32 @@ import Pages.Replay qualified as Replay
 import Pages.S3 qualified as S3
 
 
-testPid :: Projects.ProjectId
-testPid = Projects.ProjectId UUID.nil
+-- Test context that includes both test resources and a dynamically created project
+data TestContext = TestContext
+  { tcResources :: TestResources
+  , tcProjectId :: Projects.ProjectId
+  }
+
+-- Create a new project for testing and provide it along with test resources
+withTestProject :: (TestContext -> IO ()) -> IO ()
+withTestProject action = withTestResources $ \tr -> do
+  headers <- (atAuthToBase tr.trSessAndHeader CreateProject.projectOnboardingH & effToServantHandlerTest tr.trATCtx tr.trLogger tr.trTracerProvider & ServantS.runHandler) <&> fromRightShow
+  case lookupResponseHeader @"Location" headers of
+    Header location -> do
+      let pidText = T.takeWhile (/= '/') $ T.drop 3 location
+      case UUID.fromText pidText of
+        Just uuid -> do
+          -- Refresh session to pick up sudo status and new project
+          let projectId = Projects.ProjectId uuid
+          refreshedSession <- refreshSession tr.trPool tr.trSessAndHeader
+          let updatedTr = tr{trSessAndHeader = refreshedSession}
+          action $ TestContext updatedTr projectId
+        Nothing -> fail $ "Could not parse project ID from location: " <> T.unpack location
+    _ -> fail "No Location header in projectOnboarding response"
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = aroundAll withTestProject do
   describe "Onboarding Flow" do
     onboardingTests
 
@@ -54,10 +75,10 @@ spec = aroundAll withTestResources do
 
 
 -- | Onboarding Tests - Test through API calls instead of DB queries
-onboardingTests :: SpecWith TestResources
+onboardingTests :: SpecWith TestContext
 onboardingTests = do
   describe "should complete all onboarding steps in sequence" do
-    it "Step 1: Info - should save and retrieve user information" \tr -> do
+    it "Step 1: Info - should save and retrieve user information" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
       let infoForm =
             Onboarding.OnboardingInfoForm
               { firstName = "John"
@@ -77,7 +98,7 @@ onboardingTests = do
             foundUsFrom `shouldBe` "google"
           _ -> fail "Expected InfoStep"
 
-    it "Step 2: Survey - should save and retrieve survey preferences" \tr -> do
+    it "Step 2: Survey - should save and retrieve survey preferences" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
       let surveyForm =
             Onboarding.OnboardingConForm
               { location = "usa"
@@ -93,7 +114,7 @@ onboardingTests = do
             functionality `shouldMatchList` ["logs", "analytics"]
           _ -> fail "Expected SurveyStep"
 
-    it "Step 3: NotifChannel - should save and retrieve notification preferences" \tr -> do
+    it "Step 3: NotifChannel - should save and retrieve notification preferences" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
       let notifForm =
             Onboarding.NotifChannelForm
               { phoneNumber = "+1234567890"
@@ -112,13 +133,13 @@ onboardingTests = do
             V.toList emails `shouldMatchList` ["team@example.com", "alerts@example.com"]
           _ -> fail "Expected NotifChannelStep"
 
-    it "Step 4: Integration - should show error when no events ingested yet" \tr -> do
+    it "Step 4: Integration - should show error when no events ingested yet" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
       (headers, _) <- testServant tr $ Onboarding.checkIntegrationGet testPid Nothing
       case lookupResponseHeader @"HX-Trigger-After-Settle" headers of
         Header triggerHeader -> triggerHeader `shouldSatisfy` T.isInfixOf "No events found yet"
         _ -> fail "Expected HX-Trigger-After-Settle header with error toast"
 
-    it "Step 4: Integration - should show API key after integration" \tr -> do
+    it "Step 4: Integration - should show API key after integration" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
       -- Ingest a test event to simulate integration
       apiKey <- createTestAPIKey tr testPid "integration-test-key"
       currentTime <- liftIO getCurrentTime
@@ -134,27 +155,30 @@ onboardingTests = do
           _ -> fail "Expected IntegrationStep"
 
 
--- | Settings Page Tests - Verify project settings
-settingsTests :: SpecWith TestResources
+-- | Settings Page Tests - Verify project settings created during onboarding
+settingsTests :: SpecWith TestContext
 settingsTests = do
-  it "should display project title, description, timezone, and alert configurations" \tr -> do
+  it "should display project title, description, timezone, and alert configurations from onboarding" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     (_, result) <- testServant tr $ CreateProject.projectSettingsGetH testPid
     case result of
       CreateProject.CreateProject (PageCtx _ (_, _, _, _, _, form, _, project)) -> do
+        -- Verify default values from onboarding project creation
         project.title `shouldNotBe` ""
-        project.description `shouldNotBe` ""
-        form.timeZone `shouldNotBe` ""
-        form.weeklyNotifs `shouldBe` Nothing
-        form.dailyNotifs `shouldBe` Nothing
-        form.errorAlerts `shouldBe` Nothing
-        form.endpointAlerts `shouldBe` Nothing
+        -- Description and timezone are empty by default during onboarding
+        project.description `shouldBe` ""
+        form.timeZone `shouldBe` ""
+        -- Alert toggles default to enabled during onboarding
+        form.weeklyNotifs `shouldBe` Just "on"
+        form.dailyNotifs `shouldBe` Just "on"
+        form.errorAlerts `shouldBe` Just "on"
+        form.endpointAlerts `shouldBe` Just "on"
       _ -> fail "Expected CreateProject response"
 
-  it "should update alert configurations via POST and persist changes" \tr -> do
+  it "should update alert configurations via POST and persist changes" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     let updateForm =
           CreateProject.CreateProjectForm
-            { title = "Updated Test Project"
-            , description = "Updated description"
+            { title = "ACME Corp"  -- Update project title
+            , description = ""  -- Keep empty description
             , emails = []
             , permissions = []
             , timeZone = "America/New_York"
@@ -168,8 +192,8 @@ settingsTests = do
     (_, result) <- testServant tr $ CreateProject.projectSettingsGetH testPid
     case result of
       CreateProject.CreateProject (PageCtx _ (_, _, _, _, _, form, _, project)) -> do
-        project.title `shouldBe` "Updated Test Project"
-        project.description `shouldBe` "Updated description"
+        -- Verify the POST updated the values correctly
+        project.title `shouldBe` "ACME Corp"
         form.timeZone `shouldBe` "America/New_York"
         form.weeklyNotifs `shouldBe` Just "on"
         form.dailyNotifs `shouldBe` Nothing
@@ -177,19 +201,19 @@ settingsTests = do
         form.endpointAlerts `shouldBe` Just "on"
       _ -> fail "Expected CreateProject response"
 
-  it "should load manage members page" \tr -> do
+  it "should load manage members page" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     result <- testServant tr $ ManageMembers.manageMembersGetH testPid
     case result of
       (_, ManageMembers.ManageMembersGet (PageCtx _ members)) -> do
         V.length members `shouldSatisfy` (>= 0)
       _ -> fail "Expected ManageMembersGet response"
 
-  it "should load billing page" \tr -> do
+  it "should load billing page" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     result <- testServant tr $ LemonSqueezy.manageBillingGetH testPid Nothing
     case result of
       (_, LemonSqueezy.BillingGet (PageCtx _ _)) -> pass
 
-  it "should load delete project page" \tr -> do
+  it "should load delete project page" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     (_, _result) <- testServant tr $ CreateProject.deleteProjectGetH testPid
     pass
 
@@ -220,24 +244,24 @@ settingsTests = do
 
 
 -- | LemonSqueezy Webhook Tests - Table-driven testing for all webhook events
-lemonSqueezyWebhookTests :: SpecWith TestResources
+lemonSqueezyWebhookTests :: SpecWith TestContext
 lemonSqueezyWebhookTests = do
   describe "should process webhook events" do
-    forM_ webhookTestCases $ \(eventName, testDesc, payloadFn, verifyFn) ->
-      it testDesc $ \tr -> do
+    forM_ webhookTestCases $ \(eventName, testDesc, payloadFn, testFn) ->
+      it testDesc $ \TestContext{tcResources = tr, tcProjectId = testPid} -> do
         let payload = payloadFn testPid
-        _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ LemonSqueezy.webhookPostH Nothing payload
-        verifyFn tr.trPool
+        let callWebhook = void $ toBaseServantResponse tr.trATCtx tr.trLogger $ LemonSqueezy.webhookPostH Nothing payload
+        testFn testPid tr.trPool callWebhook
 
 
--- | Test cases for LemonSqueezy webhooks
-webhookTestCases :: [(Text, String, Projects.ProjectId -> LemonSqueezy.WebhookData, Pool Connection -> IO ())]
+webhookTestCases :: [(Text, String, Projects.ProjectId -> LemonSqueezy.WebhookData, Projects.ProjectId -> Pool Connection -> IO () -> IO ())]
 webhookTestCases =
   [ ( "subscription_created"
     , "should create subscription on subscription_created event"
     , createWebhookPayload "subscription_created"
-    , \pool -> do
-        subs <- DBT.withPool pool $ DBT.query [sql|SELECT COUNT(*) FROM apis.subscriptions|] ()
+    , \testPid pool callWebhook -> do
+        _ <- callWebhook
+        subs <- DBT.withPool pool $ DBT.query [sql|SELECT COUNT(*) FROM apis.subscriptions WHERE project_id = ?|] (Only testPid.toText)
         case subs of
           [Only (count :: Int)] -> count `shouldBe` 1
           _ -> fail "Failed to query subscriptions"
@@ -245,41 +269,51 @@ webhookTestCases =
   , ( "subscription_cancelled"
     , "should downgrade to free on subscription_cancelled event"
     , createWebhookPayload "subscription_cancelled"
-    , \pool -> do
-        -- First create a subscription
-        _ <- DBT.withPool pool $ do
-          subId <- ModelLemonSqueezy.LemonSubId <$> liftIO UUIDV4.nextRandom
-          currentZonedTime <- liftIO getZonedTime
-          let sub =
-                ModelLemonSqueezy.LemonSub
-                  { id = subId
-                  , createdAt = currentZonedTime
-                  , updatedAt = currentZonedTime
-                  , projectId = testPid.toText
-                  , subscriptionId = 12345
-                  , orderId = 67890
-                  , firstSubId = 111
-                  , productName = "Test Plan"
-                  , userEmail = "test@example.com"
-                  }
-          ModelLemonSqueezy.addSubscription sub
-        -- Now the webhook should downgrade it
-        pass
+    , \testPid pool callWebhook -> do
+        setupProjectWithSubscription pool testPid "GraduatedPricing"
+        _ <- callWebhook
+        verifyPaymentPlan pool testPid "FREE"
     )
   , ( "subscription_resumed"
     , "should upgrade to paid on subscription_resumed event"
     , createWebhookPayload "subscription_resumed"
-    , \_ -> pass -- Verification happens in webhook processing
+    , \testPid pool callWebhook -> do
+        _ <- DBT.withPool pool $ DBT.execute [sql|UPDATE projects.projects SET payment_plan = 'FREE', order_id = '67890', sub_id = '12345', first_sub_item_id = '111' WHERE id = ?|] (Only testPid)
+        _ <- callWebhook
+        paymentPlan <- DBT.withPool pool $ DBT.queryOne [sql|SELECT payment_plan FROM projects.projects WHERE id = ?|] (Only testPid)
+        case paymentPlan of
+          Just (Only (plan :: Text)) -> plan `shouldNotBe` "FREE"
+          _ -> fail "Failed to query payment plan"
     )
   , ( "subscription_expired"
     , "should downgrade to free on subscription_expired event"
     , createWebhookPayload "subscription_expired"
-    , \_ -> pass -- Verification happens in webhook processing
+    , \testPid pool callWebhook -> do
+        setupProjectWithSubscription pool testPid "GraduatedPricing"
+        _ <- callWebhook
+        verifyPaymentPlan pool testPid "FREE"
     )
   ]
 
 
--- | Helper to create webhook payloads
+setupProjectWithSubscription :: Pool Connection -> Projects.ProjectId -> Text -> IO ()
+setupProjectWithSubscription pool testPid plan = do
+  _ <- DBT.withPool pool $ do
+    subId <- ModelLemonSqueezy.LemonSubId <$> liftIO UUIDV4.nextRandom
+    currentZonedTime <- liftIO getZonedTime
+    ModelLemonSqueezy.addSubscription $ ModelLemonSqueezy.LemonSub subId currentZonedTime currentZonedTime testPid.toText 12345 67890 111 "Test Plan" "test@example.com"
+  _ <- DBT.withPool pool $ DBT.execute [sql|UPDATE projects.projects SET payment_plan = ?, order_id = '67890', sub_id = '12345', first_sub_item_id = '111' WHERE id = ?|] (plan, testPid)
+  pure ()
+
+
+verifyPaymentPlan :: Pool Connection -> Projects.ProjectId -> Text -> IO ()
+verifyPaymentPlan pool testPid expected = do
+  paymentPlan <- DBT.withPool pool $ DBT.queryOne [sql|SELECT payment_plan FROM projects.projects WHERE id = ?|] (Only testPid)
+  case paymentPlan of
+    Just (Only (plan :: Text)) -> plan `shouldBe` expected
+    _ -> fail "Failed to query payment plan"
+
+
 createWebhookPayload :: Text -> Projects.ProjectId -> LemonSqueezy.WebhookData
 createWebhookPayload eventName pid =
   LemonSqueezy.WebhookData
@@ -311,9 +345,9 @@ createWebhookPayload eventName pid =
 
 
 -- | Billing Usage Calculation Tests
-billingUsageTests :: SpecWith TestResources
+billingUsageTests :: SpecWith TestContext
 billingUsageTests = do
-  it "should calculate usage within billing cycle correctly" \tr -> do
+  it "should calculate usage within billing cycle correctly" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     currentTime <- liftIO getCurrentTime
     let cycleStart = addUTCTime (-10 * 24 * 60 * 60) currentTime -- 10 days ago
 
@@ -339,7 +373,7 @@ billingUsageTests = do
       LemonSqueezy.BillingGet (PageCtx _ (_, totalReqs, _, _, _, _, _, _, _)) -> do
         totalReqs `shouldBe` 5 -- Should count the 5 spans we ingested
 
-  it "should handle cycle boundaries correctly" \tr -> do
+  it "should handle cycle boundaries correctly" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     currentTime <- liftIO getCurrentTime
     let cycleStart = addUTCTime (-40 * 24 * 60 * 60) currentTime -- 40 days ago (more than a month)
         oldTime = addUTCTime (-35 * 24 * 60 * 60) currentTime
@@ -368,9 +402,9 @@ billingUsageTests = do
 
 
 -- | Replay Session Recording Tests
-replayTests :: SpecWith TestResources
+replayTests :: SpecWith TestContext
 replayTests = do
-  it "should ingest replay events successfully" \tr -> do
+  it "should ingest replay events successfully" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     sessionId <- liftIO UUIDV4.nextRandom
     currentTime <- liftIO getCurrentTime
 
@@ -393,7 +427,7 @@ replayTests = do
           _ -> fail "Missing or invalid sessionId field"
       _ -> fail "Expected Object response"
 
-  it "should handle empty event arrays" \tr -> do
+  it "should handle empty event arrays" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     sessionId <- liftIO UUIDV4.nextRandom
     currentTime <- liftIO getCurrentTime
 
@@ -413,7 +447,7 @@ replayTests = do
           _ -> fail "Missing or invalid status field"
       _ -> fail "Expected Object response"
 
-  it "should retrieve replay session data" \tr -> do
+  it "should retrieve replay session data" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     sessionId <- liftIO UUIDV4.nextRandom
 
     (_, result) <- testServant tr $ Replay.replaySessionGetH testPid sessionId
@@ -427,7 +461,7 @@ replayTests = do
 
 
 -- | S3 Configuration Tests - Table-driven testing for validation scenarios
-s3ConfigTests :: SpecWith TestResources
+s3ConfigTests :: SpecWith TestContext
 s3ConfigTests = do
   describe "should validate S3 credentials" do
     it "PENDING: Requires Minio setup" $ \_ -> do
@@ -449,7 +483,7 @@ s3ConfigTests = do
     --       (False, Nothing) -> fail "Project not found"
     --       _ -> pure () -- Other cases - validation might fail but that's ok for invalid credentials
 
-  it "should remove S3 configuration" \tr -> do
+  it "should remove S3 configuration" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     -- First add an S3 config
     let s3Form =
           Projects.ProjectS3Bucket

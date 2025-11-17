@@ -12,7 +12,7 @@ module Pages.Projects.CreateProject (
   PricingUpdateForm (..),
   projectDeleteGetH,
   projectSettingsGetH,
-  projectOnboarding,
+  projectOnboardingH,
   deleteProjectGetH,
   CreateProject (..),
   pricingUpdateGetH,
@@ -110,8 +110,8 @@ createProjectFormV =
     <*> check1 description Valor.pass
 
 
-projectOnboarding :: ATAuthCtx (Headers '[Header "Location" Text] (PageCtx (Html ())))
-projectOnboarding = do
+projectOnboardingH :: ATAuthCtx (Headers '[Header "Location" Text] (PageCtx (Html ())))
+projectOnboardingH = do
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
   sess <- Sessions.getSession

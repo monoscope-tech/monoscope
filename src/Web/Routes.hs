@@ -463,7 +463,7 @@ projectsServer :: Servant.ServerT ProjectsRoutes ATAuthCtx
 projectsServer =
   ProjectsRoutes'
     { listGet = ListProjects.listProjectsGetH
-    , onboardingProject = CreateProject.projectOnboarding
+    , onboardingProject = CreateProject.projectOnboardingH
     , createPost = CreateProject.createProjectPostH
     , settingsGet = CreateProject.projectSettingsGetH
     , integrationGet = Integrations.integrationsSettingsGetH

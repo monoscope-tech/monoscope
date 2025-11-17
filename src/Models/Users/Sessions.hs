@@ -206,11 +206,11 @@ sessionAndProject pid = do
   sess <- getSession
   let projects = sess.persistentSession.projects.getProjects
   case V.find (\v -> v.id == pid) projects of
-    Just p -> pure (sess, p)
-    Nothing ->
-      if pid == Projects.ProjectId UUID.nil || sess.user.isSudo
-        then do
-          dbtToEff (Projects.projectById pid) >>= \case
-            Just p -> pure (sess, p)
-            Nothing -> throwError $ err302{errHeaders = [("Location", "/p/?missingProjectPermission")]}
-        else throwError $ err302{errHeaders = [("Location", "/p/?missingProjectPermission")]}
+    -- Don't use cached data for onboarding projects as they're actively being updated
+    Just p | p.paymentPlan /= "ONBOARDING" -> pure (sess, p)
+    -- Fetch fresh from DB for: onboarding projects, not found in cache, nil project, or sudo users
+    _ | pid == Projects.ProjectId UUID.nil || sess.user.isSudo ->
+      dbtToEff (Projects.projectById pid) >>= \case
+        Just p -> pure (sess, p)
+        Nothing -> throwError $ err302{errHeaders = [("Location", "/p/?missingProjectPermission")]}
+    _ -> throwError $ err302{errHeaders = [("Location", "/p/?missingProjectPermission")]}

@@ -6,6 +6,8 @@ module Pkg.TestUtils (
   fromRightShow,
   TestResources (..),
   testSessionHeader,
+  refreshSession,
+  runTestEffect,
   testRequestMsgs,
   TestRequestMessages (..),
   convert,
@@ -20,6 +22,8 @@ module Pkg.TestUtils (
   setBjRunAtInThePast,
   toServantResponse,
   toBaseServantResponse,
+  atAuthToBase,
+  effToServantHandlerTest,
   runQueryEffect,
   -- Helper functions for tests
   processMessagesAndBackgroundJobs,
@@ -48,8 +52,8 @@ import Data.Aeson.Types (KeyValue (..))
 import Data.Cache (Cache (..), newCache)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
-import Data.Effectful.UUID (runStaticUUID, runUUID)
-import Data.Effectful.Wreq (runHTTPGolden, runHTTPWreq)
+import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
+import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPWreq)
 import Data.Either.Extra
 import Data.HashMap.Strict qualified as HashMap
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool)
@@ -75,6 +79,7 @@ import Effectful.Concurrent (runConcurrent)
 import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (runLabeled)
+import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect qualified as DB
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runFrozenTime, runTime)
@@ -107,6 +112,7 @@ import System.Config qualified as Config
 import System.Directory (getFileSize, listDirectory)
 import System.Envy (DefConfig (..), decodeWithDefaults)
 import System.Logging qualified as Logging
+import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, effToServantHandlerTest)
 import Web.Auth qualified as Auth
@@ -123,12 +129,10 @@ migrate db = do
   initializationRes <- Migration.runMigration conn Migration.defaultOptions MigrationInitialization
 
   migrationRes <- Migration.runMigration conn Migration.defaultOptions $ MigrationDirectory migrationsDirr
-  -- Create a nil user and projects to make subsequent tests easier (with conflict handling)
+  -- Set nil user as sudo for tests and create test project
   let q =
-        [sql| INSERT into users.users (id, first_name, last_name, email) 
-              VALUES ('00000000-0000-0000-0000-000000000000', 'FN', 'LN', 'test@apitoolkit.io')
-              ON CONFLICT (id) DO NOTHING;
-              
+        [sql| UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000000';
+
               INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
               VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project', 'FREE', true, NULL, true, true)
               ON CONFLICT (id) DO UPDATE SET payment_plan = 'FREE', active = true, deleted_at = NULL;
@@ -309,12 +313,10 @@ ensureTemplateDatabase masterConnStr templateDbName = do
     _ <- Migration.runMigration templateConn Migration.defaultOptions MigrationInitialization
     _ <- Migration.runMigration templateConn Migration.defaultOptions $ MigrationDirectory migrationsDirr
 
-    -- Create test user and project
+    -- Set nil user as sudo for tests and create test project
     let setupData =
-          [sql| INSERT into users.users (id, first_name, last_name, email) 
-                VALUES ('00000000-0000-0000-0000-000000000000', 'FN', 'LN', 'test@apitoolkit.io')
-                ON CONFLICT (id) DO NOTHING;
-                
+          [sql| UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000000';
+
                 INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
                 VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project', 'FREE', true, NULL, true, true)
                 ON CONFLICT (id) DO UPDATE SET payment_plan = 'FREE', active = true, deleted_at = NULL;
@@ -374,7 +376,7 @@ rollback conn actionToRollback = mask $ \restore -> do
 testSessionHeader :: MonadIO m => Pool Connection -> m (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Sessions.Session)
 testSessionHeader pool = do
   pSessId <-
-    Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@apitoolkit.io"
+    Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "hello@monoscope.tech"
       & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 10])
       & runHTTPGolden "./tests/golden/"
       & DB.runDB pool
@@ -387,9 +389,9 @@ testSessionHeader pool = do
   _ <-
     withPool pool
       $ DBT.execute
-        [sql|INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
-         VALUES (?, 'Test Project', 'FREE', true, NULL, true, true)
-         ON CONFLICT (id) DO UPDATE SET payment_plan = 'FREE', active = true, deleted_at = NULL, weekly_notif = true, daily_notif = true|]
+        [sql|INSERT INTO projects.projects (id, title, description, payment_plan, active, deleted_at, weekly_notif, daily_notif)
+         VALUES (?, 'Test Project', 'Test Description', 'FREE', true, NULL, true, true)
+         ON CONFLICT (id) DO UPDATE SET title = 'Test Project', description = 'Test Description', payment_plan = 'FREE', active = true, deleted_at = NULL, weekly_notif = true, daily_notif = true|]
         (Only testProjectId)
 
   -- Add project member permissions
@@ -397,22 +399,25 @@ testSessionHeader pool = do
     withPool pool
       $ DBT.execute
         [sql|INSERT INTO projects.project_members (project_id, user_id, permission)
-         VALUES (?, '00000000-0000-0000-0000-000000000001', 'admin')
+         VALUES (?, '00000000-0000-0000-0000-000000000000', 'admin')
          ON CONFLICT (project_id, user_id) DO UPDATE SET permission = 'admin'|]
         (Only testProjectId)
 
   tp <- liftIO getGlobalTracerProvider
   logger <- liftIO $ Log.mkLogger "test" (\_ -> pure ())
-  logLevel <- liftIO Logging.getLogLevelFromEnv
-  Auth.sessionByID (Just pSessId) "requestID" False "light" Nothing
-    & runErrorNoCallStack @Servant.ServerError
-    & DB.runDB pool
-    & runTime
-    & Logging.runLog "test" logger logLevel
-    & Tracing.runTracing tp
-    & runUUID
-    & runHTTPWreq
-    & runEff
+  runTestEffect pool logger tp (Auth.sessionByID (Just pSessId) "requestID" True "light" Nothing)
+    & liftIO
+    <&> fromRightShow
+
+
+-- | Refresh a session to pick up any new projects added to the user
+refreshSession :: MonadIO m => Pool Connection -> Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Sessions.Session -> m (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Sessions.Session)
+refreshSession pool sessionHeaders = do
+  let session = Servant.getResponse sessionHeaders
+      pSessId = session.sessionId
+  tp <- liftIO getGlobalTracerProvider
+  logger <- liftIO $ Log.mkLogger "test" (\_ -> pure ())
+  runTestEffect pool logger tp (Auth.sessionByID (Just pSessId) "requestID" session.isSidebarClosed session.theme Nothing)
     & liftIO
     <&> fromRightShow
 
@@ -463,6 +468,21 @@ runTestBackgroundWithLogger logger appCtx process = do
       & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
       & Effectful.runEff
   pure result
+
+
+-- | Run an effect action in test context (for non-servant handlers like Auth.sessionByID)
+runTestEffect :: Pool Connection -> Log.Logger -> TracerProvider -> (forall es. (DB.DB :> es, Error ServantS.ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es, Log :> es, Tracing :> es, IOE :> es) => Eff es a) -> IO (Either ServantS.ServerError a)
+runTestEffect pool logger tp action = do
+  logLevel <- Logging.getLogLevelFromEnv
+  action
+    & runErrorNoCallStack @ServantS.ServerError
+    & DB.runDB pool
+    & runTime
+    & Logging.runLog "test" logger logLevel
+    & Tracing.runTracing tp
+    & runUUID
+    & runHTTPWreq
+    & runEff
 
 
 -- | Run a background job action using TestResources
