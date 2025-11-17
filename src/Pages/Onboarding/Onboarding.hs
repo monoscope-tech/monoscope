@@ -3,8 +3,8 @@
 
 module Pages.Onboarding.Onboarding (
   onboardingGetH,
-  onboardingInfoPost,
-  onboardingConfPost,
+  onboardingInfoPostH,
+  onboardingConfPostH,
   phoneEmailPostH,
   pricingPage,
   checkIntegrationGet,
@@ -312,8 +312,8 @@ verifiedCheck = div_ [class_ "flex items-center gap-2 text-textSuccess"] do
   faSprite_ "circle-check" "regular" "h-4 w-4"
 
 
-onboardingInfoPost :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders OnboardingInfoPost)
-onboardingInfoPost pid form = do
+onboardingInfoPostH :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders OnboardingInfoPost)
+onboardingInfoPostH pid form = do
   (sess, project) <- Sessions.sessionAndProject pid
   let firstName = form.firstName
       lastName = form.lastName
@@ -335,8 +335,8 @@ onboardingInfoPost pid form = do
   addRespHeaders $ OnboardingInfoPost ()
 
 
-onboardingConfPost :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (RespHeaders OnboardingConfPost)
-onboardingConfPost pid form = do
+onboardingConfPostH :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (RespHeaders OnboardingConfPost)
+onboardingConfPostH pid form = do
   (sess, project) <- Sessions.sessionAndProject pid
   let infoJson =
         KM.fromList
@@ -729,16 +729,6 @@ formField labelText inputType inputName inputId inputValue = do
     if inputType == "textarea"
       then textarea_ [class_ "textarea w-full rounded-lg border border-strokeStrong", type_ "text", name_ inputName, id_ inputId] ""
       else input_ [class_ "input w-full h-12", type_ inputType, name_ inputName, id_ inputId, value_ inputValue]
-
-
-notifChannels :: AuthContext -> Projects.ProjectId -> Text -> V.Vector Text -> Bool -> Bool -> Html ()
-notifChannels appCtx pid phone emails hasDiscord hasSlack = do
-  let slackRedirectUri = appCtx.env.slackRedirectUri
-      discordUri = appCtx.env.discordRedirectUri
-      slackUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> appCtx.config.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:history,groups:history,im:history,mpim:history&user_scope=" <> "&redirect_uri=" <> slackRedirectUri <> pid.toText <> "?onboarding=true"
-      discordUrl = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> "&state=" <> pid.toText <> "__onboarding" <> "&redirect_uri=" <> discordUri
-  notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack
-
 
 notifChannelsWithUrls :: Text -> Text -> Projects.ProjectId -> Text -> V.Vector Text -> Bool -> Bool -> Html ()
 notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack = do

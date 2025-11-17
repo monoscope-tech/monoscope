@@ -77,13 +77,8 @@ onboardingTests = do
               { location = "usa"
               , functionality = ["logs", "analytics"]
               }
-
-      -- Save the data
       _ <- testServant tr $ Onboarding.onboardingConfPostH testPid surveyForm
-
-      -- Verify by calling the GET handler
       result <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Survey")
-
       case result of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.SurveyStep{..} -> do
@@ -97,13 +92,8 @@ onboardingTests = do
               { phoneNumber = "+1234567890"
               , emails = ["team@example.com", "alerts@example.com"]
               }
-
-      -- Save the data
       _ <- testServant tr $ Onboarding.phoneEmailPostH testPid notifForm
-
-      -- Verify by calling the GET handler
       result <- testServant tr $ Onboarding.onboardingGetH testPid (Just "NotifChannel")
-
       case result of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.NotifChannelStep{..} -> do
@@ -111,7 +101,7 @@ onboardingTests = do
             V.toList emails `shouldMatchList` ["team@example.com", "alerts@example.com"]
           _ -> fail "Expected NotifChannelStep"
 
-    -- TODO: test the non happy case. check 
+    -- TODO: test the non happy case. check  that the integration is not yet done, and then that it becomes marked as done, after integration.
     it "Step 4: Integration - should show API key after integration" \tr -> do
       -- Ingest a test event to simulate integration
       apiKey <- createTestAPIKey tr testPid "integration-test-key"

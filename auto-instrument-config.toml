@@ -6,9 +6,9 @@ value = "IO"
 type = "constructor"
 value = "ATAuthCtx"
 
-[[targets]]
-type = "constructor"
-value = "ATBackgroundCtx"
+# [[targets]]
+# type = "constructor"
+# value = "ATBackgroundCtx"
 
 [[targets]]
 type = "constructor"
@@ -36,6 +36,6 @@ service_name = "monoscope"
 
 [span_attributes]
 # Add useful attributes to all spans
-db.system = "postgresql"
-http.scheme = "https"
+# db.system = "postgresql"
+# http.scheme = "https"
 deployment.environment = "${ENV:-development}"
