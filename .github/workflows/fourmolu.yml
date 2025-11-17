@@ -11,7 +11,7 @@ jobs:
       - uses: haskell-actions/run-fourmolu@v11
         with:
           version: '0.19.0.0'
-          mode: 'inplace'
+          extra-args: '--mode inplace'
           pattern: |
             src/**/*.hs
             !src/Main.hs
