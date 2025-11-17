@@ -42,10 +42,10 @@ import Effectful.Dispatch.Dynamic
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Effectful.TH
-import System.Logging qualified as Log
 import Network.Wreq (FormParam ((:=)), auth, basicAuth, defaults, header, postWith)
 import Relude hiding (Reader, State, ask, get, modify, put, runState)
 import System.Config qualified as Config
+import System.Logging qualified as Log
 
 
 -- Notification data types

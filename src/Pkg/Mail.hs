@@ -18,7 +18,6 @@ import Effectful (
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static (Reader, ask)
-import System.Logging qualified as Log
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Slack (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.Projects qualified as Projects
@@ -26,6 +25,7 @@ import Network.HTTP.Types (urlEncode)
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (env))
 import System.Config qualified as Config
+import System.Logging qualified as Log
 
 
 sendPostmarkEmail :: Notify.Notify :> es => Text -> Maybe (Text, AE.Value) -> Maybe (Text, Text) -> Eff es ()
@@ -33,7 +33,7 @@ sendPostmarkEmail receiver tmpOptionsM subMsg =
   Notify.sendNotification $ Notify.emailNotification receiver tmpOptionsM subMsg
 
 
-sendSlackMessage :: (IOE :> es, DB :> es, Log :> es, Notify.Notify :> es) => Projects.ProjectId -> Text -> Eff es ()
+sendSlackMessage :: (DB :> es, IOE :> es, Log :> es, Notify.Notify :> es) => Projects.ProjectId -> Text -> Eff es ()
 sendSlackMessage pid message = do
   slackData <- getProjectSlackData pid
   case slackData of

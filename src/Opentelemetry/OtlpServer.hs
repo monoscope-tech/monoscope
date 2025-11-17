@@ -53,7 +53,6 @@ import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
 import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogBase
-import System.Logging qualified as Log
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.SummaryGenerator (generateSummary)
@@ -83,6 +82,7 @@ import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Unsafe (unsafePerformIO)
+import System.Logging qualified as Log
 import System.Types (runBackground)
 import Utils (b64ToJson, freeTierDailyMaxEvents, nestedJsonFromDotNotation)
 import "base64" Data.ByteString.Base64 qualified as B64

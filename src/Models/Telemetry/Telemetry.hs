@@ -88,7 +88,6 @@ import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static qualified as Eff
-import System.Logging qualified as Log
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects (ProjectId (unProjectId))
 import Models.Projects.Projects qualified as Projects
@@ -99,6 +98,7 @@ import Relude hiding (ask)
 import RequestMessages (replaceAllFormats)
 import System.Config (AuthContext)
 import System.Config qualified as SysConfig
+import System.Logging qualified as Log
 import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
 import Utils (lookupValueText, toXXHash)
