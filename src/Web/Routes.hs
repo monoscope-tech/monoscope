@@ -25,7 +25,7 @@ import Effectful.Time qualified as Time
 -- Web and server imports
 import GitHash (giCommitDate, giHash, tGitInfoCwd)
 import Log (Logger, UTCTime)
-import Lucid (Html)
+import Lucid
 import Network.HTTP.Types (notFound404)
 import Network.Wai (Request, queryString)
 import Servant
@@ -46,7 +46,6 @@ import Web.Error
 
 -- Model imports
 import Models.Apis.Anomalies qualified as Anomalies
-import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Reports qualified as ReportsM
 import Models.Projects.Dashboards qualified as Dashboards
@@ -55,6 +54,13 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 
 -- Page imports
+
+import Data.Aeson.Key qualified as AEKey
+import Data.HashMap.Lazy qualified as HM
+import Data.Vector qualified as V
+import Models.Apis.Endpoints qualified as Endpoints
+import Models.Telemetry.Telemetry qualified as Telemetry
+import NeatInterpolation (text)
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.Api qualified as Api
 import Pages.BodyWrapper (PageCtx (..))
@@ -67,6 +73,7 @@ import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
 import Pages.LemonSqueezy qualified as LemonSqueezy
 import Pages.LogExplorer.Log qualified as Log
+import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors.Alerts qualified as Alerts
 import Pages.Monitors.Testing qualified as Testing
@@ -83,6 +90,7 @@ import Pages.Telemetry.Metrics qualified as Metrics
 import Pages.Telemetry.Trace qualified as Trace
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget qualified as Widget
+import Utils
 
 
 -- =============================================================================
@@ -190,6 +198,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
     chartsDataGet :: mode :- "chart_data" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> ReqBody '[JSON, FormUrlEncoded] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
   , widgetGet :: mode :- "p" :> ProjectId :> "widget" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> AllQueryParams :> Get '[HTML] (RespHeaders Widget.Widget)
+  , flamegraphGet :: mode :- "p" :> ProjectId :> "widget" :> "flamegraph" :> Capture "traceId" Text :> QPT "shapeView" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Endpoints and fields
     endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> Get '[HTML] (RespHeaders ApiCatalog.EndpointRequestStatsVM)
   , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> QPI "skip" :> Get '[HTML] (RespHeaders ApiCatalog.CatalogList)
@@ -386,6 +395,7 @@ cookieProtectedServer =
       chartsDataGet = Charts.queryMetrics
     , widgetPost = Widget.widgetPostH
     , widgetGet = widgetGetH
+    , flamegraphGet = flamegraphGetH
     , -- Slack/Discord handlers
       reportsGet = Reports.reportsGetH
     , reportsSingleGet = Reports.singleReportGetH
@@ -543,6 +553,53 @@ widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
 
   -- Return the processed widget
   addRespHeaders processedWidget
+
+
+-- flamegraph GET handler
+flamegraphGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+flamegraphGetH pid trId shapeViewM = do
+  spanRecords' <- Telemetry.getSpandRecordsByTraceId pid trId Nothing
+  let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
+      serviceColors = getServiceColors ((\x -> getServiceName x.resource) <$> spanRecords)
+  let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
+  sp <- case shapeViewM of
+    Just _ -> do
+      shapesAvgs <- Telemetry.getTraceShapes pid $ V.singleton trId
+      let spansJson =
+            ( \x ->
+                let targ = V.find (\(_, n, _, _) -> n == x.spanName) shapesAvgs
+                 in getSpanJson targ x
+            )
+              <$> spanRecords
+      pure spansJson
+    Nothing -> do
+      let spansJson = (getSpanJson Nothing) <$> spanRecords
+      pure spansJson
+  let spjson = decodeUtf8 $ AE.encode sp
+  addRespHeaders $ do
+    div_ [class_ "w-full sticky top-0 border-b border-b-strokeWeak h-6 text-xs relative", id_ "time-container"] pass
+    div_ [class_ "w-full overflow-x-hidden min-h-56 h-full relative", id_ $ "a" <> trId] pass
+    div_ [class_ "h-full top-0  absolute z-50 hidden", id_ "time-bar-indicator"] do
+      div_ [class_ "relative h-full"] do
+        div_ [class_ "text-xs top-[-18px] absolute -translate-x-1/2 whitespace-nowrap", id_ "line-time"] "2 ms"
+        div_ [class_ "h-[calc(100%-24px)] mt-[24px] w-[1px] bg-strokeWeak"] pass
+    script_ [text|flameGraphChart($spjson, "a$trId", $colorsJson);|]
+
+
+getSpanJson :: Maybe (Text, Text, Int, Int) -> Telemetry.SpanRecord -> AE.Value
+getSpanJson tgtM sp =
+  AE.object
+    [ "spanId" AE..= sp.spanId
+    , "name" AE..= sp.spanName
+    , "value" AE..= maybe sp.spanDurationNs (\(_, _, d, _) -> fromIntegral d) tgtM
+    , "start" AE..= start
+    , "parentId" AE..= sp.parentSpanId
+    , "serviceName" AE..= getServiceName sp.resource
+    , "hasErrors" AE..= spanHasErrors sp
+    , "totalSpans" AE..= maybe 1 (\(_, _, _, c) -> c) tgtM
+    ]
+  where
+    start = utcTimeToNanoseconds sp.startTime
 
 
 -- =============================================================================

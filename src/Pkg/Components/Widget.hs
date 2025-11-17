@@ -24,7 +24,7 @@ import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Text.Printf (printf)
 import Text.Slugify (slugify)
-import Utils (faSprite_, getDurationNSMS, getServiceColors, onpointerdown_, prettyPrintCount, prettyPrintDuration)
+import Utils (faSprite_, getServiceColors, onpointerdown_, prettyPrintCount, prettyPrintDuration)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData, parseQueryParam)
 
@@ -327,12 +327,12 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                  <> maybeToMonoid (widget._projectId <&> (.toText))
-                  <> "/dashboards/"
-                  <> maybeToMonoid widget._dashboardId
-                  <> "/widgets/"
-                  <> wId
-                  <> "/duplicate"
+                    <> maybeToMonoid (widget._projectId <&> (.toText))
+                    <> "/dashboards/"
+                    <> maybeToMonoid widget._dashboardId
+                    <> "/widgets/"
+                    <> wId
+                    <> "/duplicate"
               , hxTrigger_ "click"
               , [__| on click set (the closest <details/>).open to false
                      on htmx:beforeSwap
@@ -383,7 +383,7 @@ renderTraceTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-            <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ tableId <> "_bordered"
         ]
         do
@@ -446,7 +446,7 @@ renderTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-            <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ tableId <> "_bordered"
         ]
         do
@@ -547,7 +547,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ chartId <> "_bordered"
         ]
         do
@@ -913,22 +913,18 @@ renderTraceDataTable widget dataRows spGroup = do
         forM_ (zip columns [0 ..]) \(col, idx) -> do
           th_
             [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" col.align
-            , onclick_ $ "window.sortTable('" <> tableId <> "', " <> T.pack (show idx) <> ", this)"
             , data_ "sort-direction" "none"
             ]
             do
               div_ [class_ "flex items-center justify-between"] do
                 toHtml col.title
-                span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
     tbody_ [] do
       forM_ (V.toList dataRows) \row -> do
         let val = V.last row
         let cdrn = (fromMaybe [] $ HM.lookup val spGroup)
-        -- let clickFnc = "on click toggle .hidden on the next <tr/> then call htmx.trigger('#b-" <> val <> "')"
         tr_ [[__|on click toggle .hidden on the next <tr/>|], class_ "cursor-pointer"] do
           forM_ (zip columns [0 ..]) \(col, idx) -> do
             let value = getRowValue col idx row
-
             if col.field == "latency_breakdown"
               then td_ [class_ "py-2"] do
                 renderLatencyBreakdown cdrn
@@ -936,27 +932,13 @@ renderTraceDataTable widget dataRows spGroup = do
                 toHtml $ formatColumnValue col value
         tr_ [class_ "hidden"] do
           td_ [colspan_ "100%"] do
-            renderSpanListView $ V.fromList cdrn
-
-
-renderSpanListView :: V.Vector (Text, Int, Int) -> Html ()
-renderSpanListView shapeWithDuration = do
-  div_ [class_ "space-y-4 w-full p-2"] $ do
-    let totalDur = V.sum (V.map (\(_, d, _) -> fromIntegral d) shapeWithDuration) :: Double
-    let colors = getServiceColors (fmap (\(n, _, _) -> n) shapeWithDuration)
-    forM_ (V.toList shapeWithDuration) $ \(name, dur, events) -> do
-      let durMs = dur `div` 1000000
-      div_ [class_ "flex gap-12 w-full items-center hover:bg-fillWeak"] do
-        div_ [class_ "flex w-2/3 gap-4 items-center"] $ do
-          div_ [class_ "w-2/3 truncate ellipsis text-sm"] $ toHtml name
-          div_ [class_ "text-sm w-24"] $ toHtml $ show events
-          div_ [class_ "text-sm w-24"] $ toHtml $ getDurationNSMS $ fromIntegral dur
-        div_ [class_ "h-5 relative overflow-hidden bg-fillWeak rounded", style_ $ "width:150px"] $ do
-          let barWidth = 150.0
-              width = (fromIntegral dur / totalDur) * barWidth
-              color = fromMaybe "bg-black" $ HM.lookup name colors
-              tooltip = name <> ": " <> T.pack (show durMs) <> " ms"
-          div_ [class_ ("h-full absolute top-0 border  " <> color), title_ tooltip, style_ $ "width:" <> show width <> "px;"] pass
+            whenJust widget._projectId \p -> do
+              div_
+                [ class_ "w-full group px-2 pt-4 border relative flex flex-col rounded-lg overflow-hidden"
+                , id_ $ "t" <> val
+                ]
+                do
+                  a_ [hxTrigger_ "intersect once", hxGet_ $ "/p/" <> p.toText <> "/widget/flamegraph/" <> val <> "?shapeView=true", hxTarget_ $ "#t" <> val, hxSwap_ "innerHTML"] pass
 
 
 renderLatencyBreakdown :: [(Text, Int, Int)] -> Html ()

@@ -857,7 +857,7 @@ tabs:
             columnType: duration
             unit: ms
           - field: span_count
-            title: Span Count
+            title: Trace Count
             columnType: number
           - field: latency_breakdown
             title: Latency breakdown

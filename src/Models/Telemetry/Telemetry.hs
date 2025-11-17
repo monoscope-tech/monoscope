@@ -504,16 +504,16 @@ logRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne q (createdAt, p
 
 
 getSpandRecordsByTraceId :: DB :> es => Projects.ProjectId -> Text -> Maybe UTCTime -> Eff es (V.Vector OtelLogsAndSpans)
-getSpandRecordsByTraceId pid trId tme = dbtToEff $ query q (pid.toText, start, end, trId)
+getSpandRecordsByTraceId pid trId tme = dbtToEff $ query (Query $ encodeUtf8 q) (pid.toText, trId)
   where
     (start, end) = case tme of
       Nothing -> ("now() - interval '1 day'", "now()")
       Just ts -> ((toText . iso8601Show) $ addUTCTime (-60 * 5) ts, (toText . iso8601Show) $ addUTCTime (60 * 5) ts)
     q =
-      [sql|
+      [text|
       SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
                   hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date::timestamptz
-              FROM otel_logs_and_spans where project_id=? and timestamp >=  ? AND timestamp <= ? and context___trace_id=? ORDER BY start_time ASC;
+              FROM otel_logs_and_spans where project_id=? and timestamp >= $start AND timestamp <= $end and context___trace_id=? ORDER BY start_time ASC;
     |]
 
 
