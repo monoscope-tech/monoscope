@@ -50,7 +50,7 @@ spec :: Spec
 spec = aroundAll withTestResources do
   describe "Check Alerts" do
     it "should return an empty list" \tr -> do
-      pg <-
+      (_, pg) <-
         testServant tr $ Alerts.alertListGetH testPid
       case pg of
         Alerts.AlertListGet monitors -> do
@@ -58,14 +58,14 @@ spec = aroundAll withTestResources do
         _ -> fail "unexpected response"
 
     it "should insert an alert" \tr -> do
-      pg <-
+      (_, pg) <-
         testServant tr $ Alerts.alertUpsertPostH testPid alertForm
       case pg of
         Alerts.AlertNoContent d -> do
           d `shouldBe` ""
         _ -> fail "unexpected response"
     it "should return a list with the inserted alert" \tr -> do
-      pg <-
+      (_, pg) <-
         testServant tr $ Alerts.alertListGetH testPid
       case pg of
         Alerts.AlertListGet monitors -> do
@@ -76,7 +76,7 @@ spec = aroundAll withTestResources do
           alert.id `shouldBe` QueryMonitorId alertId
         _ -> fail "unexpected response"
     it "should get single alert" \tr -> do
-      pg <-
+      (_, pg) <-
         testServant tr $ Alerts.alertSingleGetH testPid (QueryMonitorId alertId)
       case pg of
         Alerts.AlertSingle pid monitorM -> do

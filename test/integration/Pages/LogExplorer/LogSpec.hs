@@ -28,7 +28,7 @@ spec :: Spec
 spec = aroundAll withTestResources do
   describe "Check Log Page" do
     it "should return an empty list" \tr -> do
-      pg <-
+      (_, pg) <-
         testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
 
       case pg of
@@ -62,8 +62,8 @@ spec = aroundAll withTestResources do
       let oneDayFuture = addUTCTime 86400 frozenTime  -- 1 day in the future
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" threeDaysAgo
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" oneDayFuture
-      
-      pg <-
+
+      (_, pg) <-
         testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
 
       case pg of
@@ -98,7 +98,7 @@ spec = aroundAll withTestResources do
 
       -- Test with a query filter (using proper string comparison for JSONB field)
       let query = "status_code == \"200\""
-      pg <-
+      (_, pg) <-
         testServant tr $ Log.apiLogH testPid (Just query) Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
 
       case pg of
@@ -123,7 +123,7 @@ spec = aroundAll withTestResources do
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
 
       -- First page
-      pg1 <-
+      (_, pg1) <-
         testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
 
       case pg1 of
@@ -148,7 +148,7 @@ spec = aroundAll withTestResources do
       -- Request specific columns (using columns that actually exist in the database)
       -- Note: Just request additional columns beyond the default ones
       let cols = "id,timestamp,name,duration"
-      pg <- testServant tr $ 
+      (_, pg) <- testServant tr $ 
         Log.apiLogH testPid Nothing (Just cols) Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
 
       case pg of
@@ -168,7 +168,7 @@ spec = aroundAll withTestResources do
       let msgs = [("m1", BL.toStrict $ AE.encode reqMsg)]
       _ <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
       
-      pg <- testServant tr $ 
+      (_, pg) <- testServant tr $ 
         Log.apiLogH testPid (Just invalidQuery) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
       
       -- Invalid query should be ignored, returning all results (no filter applied)
@@ -182,7 +182,7 @@ spec = aroundAll withTestResources do
 
     it "should handle malformed query operators" \tr -> do
       let malformedQuery = "status_code === \"200\""  -- Invalid operator
-      pg <- testServant tr $ 
+      (_, pg) <- testServant tr $ 
         Log.apiLogH testPid (Just malformedQuery) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
       
       case pg of
@@ -206,7 +206,7 @@ spec = aroundAll withTestResources do
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
 
       -- First page
-      pg1 <- testServant tr $
+      (_, pg1) <- testServant tr $
         Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
 
       case pg1 of
@@ -243,7 +243,7 @@ spec = aroundAll withTestResources do
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
       
       -- Get all results
-      pg <- testServant tr $ 
+      (_, pg) <- testServant tr $ 
         Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
       
       case pg of
@@ -276,7 +276,7 @@ spec = aroundAll withTestResources do
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-9000) frozenTime  -- 2.5 hours ago
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-5400) frozenTime   -- 1.5 hours ago
       
-      pg <- testServant tr $ 
+      (_, pg) <- testServant tr $ 
         Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
       
       case pg of
@@ -305,7 +305,7 @@ spec = aroundAll withTestResources do
       _ <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
       
       -- Test "1H" - should get messages from last hour (msgNow and msgHourBefore)
-      pg1 <- testServant tr $ 
+      (_, pg1) <- testServant tr $ 
         Log.apiLogH testPid Nothing Nothing Nothing (Just "1H") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
       
       case pg1 of
@@ -317,7 +317,7 @@ spec = aroundAll withTestResources do
         _ -> error "Expected JSON response but got something else"
       
       -- Test "24H" - should get messages from last 24 hours  
-      pg2 <- testServant tr $ 
+      (_, pg2) <- testServant tr $ 
         Log.apiLogH testPid Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
       
       case pg2 of
@@ -329,7 +329,7 @@ spec = aroundAll withTestResources do
 
     it "should handle missing time range (default behavior)" \tr -> do
       -- When no time range is specified, it should use a default (e.g., last 24 hours)
-      pg <- testServant tr $ 
+      (_, pg) <- testServant tr $ 
         Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
       
       case pg of

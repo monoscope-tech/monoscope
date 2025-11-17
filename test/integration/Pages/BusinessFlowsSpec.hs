@@ -17,12 +17,15 @@ import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pkg.TestUtils
 import Relude
+import Servant.API (ResponseHeader(..), lookupResponseHeader)
 import Test.Hspec
-
+import Servant.Htmx
 import BackgroundJobs qualified
 import OddJobs.Job (Job (..))
 import Pages.LemonSqueezy qualified as LemonSqueezy
 import Pages.Onboarding.Onboarding qualified as Onboarding
+import Pages.Projects.CreateProject qualified as CreateProject
+import Pages.Projects.ManageMembers qualified as ManageMembers
 import Pages.Replay qualified as Replay
 import Pages.S3 qualified as S3
 
@@ -35,6 +38,9 @@ spec :: Spec
 spec = aroundAll withTestResources do
   describe "Onboarding Flow" do
     onboardingTests
+
+  describe "Project Settings" do
+    settingsTests
 
   describe "LemonSqueezy Billing" do
     lemonSqueezyWebhookTests
@@ -60,9 +66,9 @@ onboardingTests = do
               , companySize = "11 - 25"
               , whereDidYouHearAboutUs = "google"
               }
-
-      _ <- testServant tr $ Onboarding.onboardingInfoPostH testPid infoForm
-      result <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Info")
+      (headers, _) <- testServant tr $ Onboarding.onboardingInfoPostH testPid infoForm
+      lookupResponseHeader @"HX-Redirect" headers `shouldBe` Header ("/p/" <> testPid.toText <> "/onboarding?step=Survey")
+      (_, result) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Info")
       case result of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.InfoStep{..} -> do
@@ -77,8 +83,9 @@ onboardingTests = do
               { location = "usa"
               , functionality = ["logs", "analytics"]
               }
-      _ <- testServant tr $ Onboarding.onboardingConfPostH testPid surveyForm
-      result <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Survey")
+      (headers, _) <- testServant tr $ Onboarding.onboardingConfPostH testPid surveyForm
+      lookupResponseHeader @"HX-Redirect" headers `shouldBe` Header ("/p/" <> testPid.toText <> "/onboarding?step=NotifChannel")
+      (_, result) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Survey")
       case result of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.SurveyStep{..} -> do
@@ -92,8 +99,12 @@ onboardingTests = do
               { phoneNumber = "+1234567890"
               , emails = ["team@example.com", "alerts@example.com"]
               }
-      _ <- testServant tr $ Onboarding.phoneEmailPostH testPid notifForm
-      result <- testServant tr $ Onboarding.onboardingGetH testPid (Just "NotifChannel")
+      (_, postResult) <- testServant tr $ Onboarding.phoneEmailPostH testPid notifForm
+      case postResult of
+        Onboarding.OnboardingPhoneEmailsPost pid emails -> do
+          pid `shouldBe` testPid
+          V.length emails `shouldSatisfy` (> 0) -- Should include at least the submitted emails
+      (_, result) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "NotifChannel")
       case result of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.NotifChannelStep{..} -> do
@@ -101,25 +112,87 @@ onboardingTests = do
             V.toList emails `shouldMatchList` ["team@example.com", "alerts@example.com"]
           _ -> fail "Expected NotifChannelStep"
 
-    -- TODO: test the non happy case. check  that the integration is not yet done, and then that it becomes marked as done, after integration.
+    it "Step 4: Integration - should show error when no events ingested yet" \tr -> do
+      (headers, _) <- testServant tr $ Onboarding.checkIntegrationGet testPid Nothing
+      case lookupResponseHeader @"HX-Trigger-After-Settle" headers of
+        Header triggerHeader -> triggerHeader `shouldSatisfy` T.isInfixOf "No events found yet"
+        _ -> fail "Expected HX-Trigger-After-Settle header with error toast"
+
     it "Step 4: Integration - should show API key after integration" \tr -> do
       -- Ingest a test event to simulate integration
       apiKey <- createTestAPIKey tr testPid "integration-test-key"
       currentTime <- liftIO getCurrentTime
       ingestTrace tr apiKey "test" currentTime
 
-      -- Mark as complete
-      _ <- testServant tr $ Onboarding.checkIntegrationGet testPid Nothing
-
-      -- Verify by calling the GET handler
-      result <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Integration")
-
+      (headers, _) <- testServant tr $ Onboarding.checkIntegrationGet testPid Nothing
+      lookupResponseHeader @"HX-Redirect" headers `shouldBe` Header ("/p/" <> testPid.toText <> "/onboarding?step=Pricing")
+      (_, result) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Integration")
       case result of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.IntegrationStep _stepPid stepApiKey -> do
-            -- Should have a valid API key (not the placeholder)
             stepApiKey `shouldNotBe` "<API_KEY>"
           _ -> fail "Expected IntegrationStep"
+
+
+-- | Settings Page Tests - Verify project settings
+settingsTests :: SpecWith TestResources
+settingsTests = do
+  it "should display project title, description, timezone, and alert configurations" \tr -> do
+    (_, result) <- testServant tr $ CreateProject.projectSettingsGetH testPid
+    case result of
+      CreateProject.CreateProject (PageCtx _ (_, _, _, _, _, form, _, project)) -> do
+        project.title `shouldNotBe` ""
+        project.description `shouldNotBe` ""
+        form.timeZone `shouldNotBe` ""
+        form.weeklyNotifs `shouldBe` Nothing
+        form.dailyNotifs `shouldBe` Nothing
+        form.errorAlerts `shouldBe` Nothing
+        form.endpointAlerts `shouldBe` Nothing
+      _ -> fail "Expected CreateProject response"
+
+  it "should update alert configurations via POST and persist changes" \tr -> do
+    let updateForm =
+          CreateProject.CreateProjectForm
+            { title = "Updated Test Project"
+            , description = "Updated description"
+            , emails = []
+            , permissions = []
+            , timeZone = "America/New_York"
+            , errorAlerts = Just "on"
+            , endpointAlerts = Just "on"
+            , weeklyNotifs = Just "on"
+            , dailyNotifs = Nothing
+            }
+    _ <- testServant tr $ CreateProject.createProjectPostH testPid updateForm
+
+    (_, result) <- testServant tr $ CreateProject.projectSettingsGetH testPid
+    case result of
+      CreateProject.CreateProject (PageCtx _ (_, _, _, _, _, form, _, project)) -> do
+        project.title `shouldBe` "Updated Test Project"
+        project.description `shouldBe` "Updated description"
+        form.timeZone `shouldBe` "America/New_York"
+        form.weeklyNotifs `shouldBe` Just "on"
+        form.dailyNotifs `shouldBe` Nothing
+        form.errorAlerts `shouldBe` Just "on"
+        form.endpointAlerts `shouldBe` Just "on"
+      _ -> fail "Expected CreateProject response"
+
+  it "should load manage members page" \tr -> do
+    result <- testServant tr $ ManageMembers.manageMembersGetH testPid
+    case result of
+      (_, ManageMembers.ManageMembersGet (PageCtx _ members)) -> do
+        V.length members `shouldSatisfy` (>= 0)
+      _ -> fail "Expected ManageMembersGet response"
+
+  it "should load billing page" \tr -> do
+    result <- testServant tr $ LemonSqueezy.manageBillingGetH testPid Nothing
+    case result of
+      (_, LemonSqueezy.BillingGet (PageCtx _ _)) -> pass
+
+  it "should load delete project page" \tr -> do
+    (_, _result) <- testServant tr $ CreateProject.deleteProjectGetH testPid
+    pass
+
     -- TODO: after creating the projects and verifying them on the onboarding forms again, 
     -- please verify the settings pages contain the same data. Eg 
     -- /p/<pid>/settings renders project Title, Timezone, descrioption and these alert configurations. 
@@ -260,7 +333,7 @@ billingUsageTests = do
     void $ runTestBg tr $ BackgroundJobs.processBackgroundJob tr.trATCtx undefined (BackgroundJobs.ReportUsage testPid)
 
     -- Get billing info
-    result <- testServant tr $ LemonSqueezy.manageBillingGetH testPid Nothing
+    (_, result) <- testServant tr $ LemonSqueezy.manageBillingGetH testPid Nothing
 
     case result of
       LemonSqueezy.BillingGet (PageCtx _ (_, totalReqs, _, _, _, _, _, _, _)) -> do
@@ -287,7 +360,7 @@ billingUsageTests = do
     void $ runTestBg tr $ BackgroundJobs.processBackgroundJob tr.trATCtx undefined (BackgroundJobs.ReportUsage testPid)
 
     -- Get billing info - should only count data from current cycle
-    result <- testServant tr $ LemonSqueezy.manageBillingGetH testPid Nothing
+    (_, result) <- testServant tr $ LemonSqueezy.manageBillingGetH testPid Nothing
 
     case result of
       LemonSqueezy.BillingGet (PageCtx _ (_, totalReqs, _, _, _, _, _, _, _)) -> do
@@ -343,7 +416,7 @@ replayTests = do
   it "should retrieve replay session data" \tr -> do
     sessionId <- liftIO UUIDV4.nextRandom
 
-    result <- testServant tr $ Replay.replaySessionGetH testPid sessionId
+    (_, result) <- testServant tr $ Replay.replaySessionGetH testPid sessionId
 
     case result of
       AE.Object obj -> do

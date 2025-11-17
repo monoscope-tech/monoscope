@@ -532,17 +532,18 @@ toServantResponse
   -> Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Sessions.Session
   -> Log.Logger
   -> ATAuthCtx (RespHeaders a)
-  -> IO a
+  -> IO (RespHeaders a, a)
 toServantResponse trATCtx trSessAndHeader trLogger k = do
   tp <- getGlobalTracerProvider
-  ( atAuthToBase trSessAndHeader k
-      & effToServantHandlerTest trATCtx trLogger tp
-      & ServantS.runHandler
-    )
-    <&> Servant.getResponse
-    . fromRightShow
+  headersResp <-
+    ( atAuthToBase trSessAndHeader k
+        & effToServantHandlerTest trATCtx trLogger tp
+        & ServantS.runHandler
+      )
+      <&> fromRightShow
+  pure (headersResp, Servant.getResponse headersResp)
 
-testServant :: TestResources -> ATAuthCtx (RespHeaders a) -> IO a
+testServant :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)
 testServant tr = toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
 
 
@@ -909,7 +910,7 @@ processFormatAnomalyJobs tr@TestResources{..} = do
 -- | Helper to create an API key for testing using handler
 createTestAPIKey :: TestResources -> Projects.ProjectId -> Text -> IO Text
 createTestAPIKey tr projectId keyName = do
-  result <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger $ Api.apiPostH projectId (Api.GenerateAPIKeyForm keyName Nothing)
+  (_, result) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger $ Api.apiPostH projectId (Api.GenerateAPIKeyForm keyName Nothing)
   case result of
     Api.ApiPost _ _ (Just (_, keyText)) -> pure keyText
     _ -> error "Failed to create API key via handler"

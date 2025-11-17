@@ -32,7 +32,7 @@ spec = aroundAll withTestResources do
               { emails = ["example@gmail.com"]
               , permissions = [ProjectMembers.PAdmin]
               }
-      pg <-
+      (_, pg) <-
         testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
       -- Check if the response contains the newly added member
       case pg of
@@ -46,7 +46,7 @@ spec = aroundAll withTestResources do
               { emails = ["example@gmail.com"]
               , permissions = [ProjectMembers.PView]
               }
-      pg <-
+      (_, pg) <-
         testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
 
       -- Check if the member's permission is updated
@@ -60,7 +60,7 @@ spec = aroundAll withTestResources do
         _ -> fail "Expected ManageMembersPost response"
 
     it "Get members" \tr -> do
-      pg <-
+      (_, pg) <-
         testServant tr $ ManageMembers.manageMembersGetH testPid
 
       -- Check if the response contains the expected members
@@ -77,7 +77,7 @@ spec = aroundAll withTestResources do
               { emails = []
               , permissions = []
               }
-      pg <-
+      (_, pg) <-
         testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
 
       -- Check if the member is deleted
@@ -93,7 +93,7 @@ spec = aroundAll withTestResources do
               { emails = ["example@gmail.com"]
               , permissions = [ProjectMembers.PAdmin]
               }
-      pg <-
+      (_, pg) <-
         testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
       -- Check if the response contains the newly added member
       case pg of

@@ -509,6 +509,8 @@ test-suite integration-tests
     , proto-lens
     , relude >=1.2.0.0
     , resource-pool
+    , servant
+    , servant-htmx
     , servant-server
     , time
     , uuid

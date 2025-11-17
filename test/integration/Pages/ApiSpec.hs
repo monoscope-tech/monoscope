@@ -21,12 +21,12 @@ spec :: Spec
 spec = aroundAll withTestResources do
   describe "Check API Keys" do
     it "should have one default apikey" \tr -> do
-      (Api.ApiGet (PageCtx bwconf (pid, apiKeys))) <- testServant tr $ Api.apiGetH testPid
+      (_, Api.ApiGet (PageCtx bwconf (pid, apiKeys))) <- testServant tr $ Api.apiGetH testPid
       length apiKeys `shouldBe` 1 -- Default API key from test setup
 
     it "should add apikey" \tr -> do
       let apikeyForm = Api.GenerateAPIKeyForm{title = "Test", from = Nothing}
-      (Api.ApiPost pid apiKeys apiKeyM) <- testServant tr $ Api.apiPostH testPid apikeyForm
+      (_, Api.ApiPost pid apiKeys apiKeyM) <- testServant tr $ Api.apiPostH testPid apikeyForm
       length apiKeys `shouldBe` 2
       testPid `shouldBe` pid
       isJust apiKeyM `shouldBe` True
@@ -36,22 +36,22 @@ spec = aroundAll withTestResources do
       apiKey.keyPrefix `shouldBe` keyText
 
     it "should get apikey list" \tr -> do
-      (Api.ApiGet (PageCtx bwconf (pid, apiKeys))) <- testServant tr $ Api.apiGetH testPid
+      (_, Api.ApiGet (PageCtx bwconf (pid, apiKeys))) <- testServant tr $ Api.apiGetH testPid
       length apiKeys `shouldBe` 2
 
     it "should delete apikey" \tr -> do
-      (Api.ApiGet (PageCtx bwconf (_pid, apiKeys))) <- testServant tr $ Api.apiGetH testPid
+      (_, Api.ApiGet (PageCtx bwconf (_pid, apiKeys))) <- testServant tr $ Api.apiGetH testPid
       length apiKeys `shouldBe` 2
       let apiKey = V.head apiKeys
 
-      (Api.ApiPost pid apiKys apiKeyM) <- testServant tr $ Api.apiDeleteH testPid apiKey.id
+      (_, Api.ApiPost pid apiKys apiKeyM) <- testServant tr $ Api.apiDeleteH testPid apiKey.id
       isNothing apiKeyM `shouldBe` True
       length apiKys `shouldBe` 2
       let apk = V.head apiKys
       apk.active `shouldBe` False
       pid `shouldBe` testPid
     it "should get apikey list (revoked)" \tr -> do
-      (Api.ApiGet (PageCtx _ (_pid, apks))) <- testServant tr $ Api.apiGetH testPid
+      (_, Api.ApiGet (PageCtx _ (_pid, apks))) <- testServant tr $ Api.apiGetH testPid
       length apks `shouldBe` 2
       -- Find the revoked key (the one we just deleted)
       let revokedKey = V.find (not . (.active)) apks

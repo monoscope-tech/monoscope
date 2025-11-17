@@ -37,7 +37,7 @@ spec = aroundAll withTestResources do
   describe "Check Reports" do
     it "should toggle reports notifs" \tr -> do
       -- Get initial state
-      res1 <- testServant tr $ PageReports.reportsGetH testPid Nothing Nothing Nothing
+      (_, res1) <- testServant tr $ PageReports.reportsGetH testPid Nothing Nothing Nothing
       case res1 of
         PageReports.ReportsGetMain (PageCtx _ (_, _, _, daily1, weekly1)) -> do
           -- Initial state should be daily=True, weekly=True from testSessionHeader
@@ -61,7 +61,7 @@ spec = aroundAll withTestResources do
         Nothing -> error "Project not found"
       
       -- Also check via the reports page
-      res <- testServant tr $ PageReports.reportsGetH testPid Nothing Nothing Nothing
+      (_, res) <- testServant tr $ PageReports.reportsGetH testPid Nothing Nothing Nothing
       case res of
         PageReports.ReportsGetMain (PageCtx _ (pid, reports, _, _, _)) -> do
           pid `shouldBe` testPid

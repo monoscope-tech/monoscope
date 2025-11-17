@@ -38,8 +38,9 @@ testTimeRange = (toText $ iso8601Show $ addUTCTime (-3600) frozenTime, toText $ 
 queryLogs :: TestResources -> Maybe Text -> IO Log.LogsGet
 queryLogs tr queryM = do
   let (timeFrom, timeTo) = testTimeRange
-  toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+  (_, result) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
     $ Log.apiLogH pid queryM Nothing Nothing Nothing (Just timeFrom) (Just timeTo) Nothing (Just "spans") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+  pure result
 
 -- | Helper to extract dataset from LogsResp
 expectLogsJson :: Log.LogsGet -> IO (V.Vector (V.Vector AE.Value))

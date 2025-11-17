@@ -325,7 +325,9 @@ tests:
       - pg-entity
       - postgresql-simple
       - effectful
+      - servant
       - servant-server
+      - servant-htmx
       - resource-pool
       - generic-lens
       - odd-jobs

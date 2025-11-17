@@ -51,7 +51,7 @@ testPid = Projects.ProjectId UUID.nil
 -- Helper function to get anomalies from API
 getAnomalies :: TestResources -> IO (V.Vector AnomalyList.IssueVM)
 getAnomalies tr = do
-  pg <- testServant tr $ 
+  (_, pg) <- testServant tr $ 
     AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
   case pg of
     AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> pure anomalies
@@ -62,7 +62,7 @@ spec :: Spec
 spec = aroundAll withTestResources do
   describe "Check Anomaly List" do
     it "should return an empty list" \tr -> do
-      pg <-
+      (_, pg) <-
         testServant tr $ AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
       case pg of
@@ -236,7 +236,7 @@ spec = aroundAll withTestResources do
       length anomalies `shouldSatisfy` (> 0)
 
     it "should get acknowledged anomalies" \tr -> do
-      pg <- testServant tr $ 
+      (_, pg) <- testServant tr $ 
         AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowledged") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case pg of
         AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do

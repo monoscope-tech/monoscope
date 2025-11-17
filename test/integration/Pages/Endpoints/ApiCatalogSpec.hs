@@ -42,7 +42,7 @@ testPid = Projects.ProjectId UUID.nil
 -- Helper function to get endpoint stats
 getEndpointStats :: TestResources -> Maybe Text -> Maybe Text -> IO (V.Vector ApiCatalog.EnpReqStatsVM)
 getEndpointStats tr filterParam hostM = do
-  resp <- testServant tr $
+  (_, resp) <- testServant tr $
     ApiCatalog.endpointListGetH testPid Nothing Nothing filterParam hostM Nothing Nothing Nothing Nothing Nothing Nothing Nothing
   case resp of
     ApiCatalog.EndpointsListPage (PageCtx _ (ItemsList.ItemsPage _ enpList)) -> pure enpList
@@ -89,7 +89,7 @@ spec :: Spec
 spec = aroundAll withTestResources do
   describe "API Catalog and Endpoints" do
     it "returns empty list when no data exists" \tr -> do
-      catalogList <- testServant tr $ 
+      (_, catalogList) <- testServant tr $ 
           ApiCatalog.apiCatalogH testPid Nothing Nothing Nothing Nothing
       case catalogList of
         ApiCatalog.CatalogListPage (PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents)) -> 
@@ -139,7 +139,7 @@ spec = aroundAll withTestResources do
       verifyEndpointsCreated tr
 
     it "returns hosts list after processing messages" \tr -> do
-      catalogList <- testServant tr $ 
+      (_, catalogList) <- testServant tr $ 
           ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing
       case catalogList of
         ApiCatalog.CatalogListPage (PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents)) ->

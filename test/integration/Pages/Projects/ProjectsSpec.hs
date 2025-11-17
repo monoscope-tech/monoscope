@@ -35,14 +35,14 @@ spec = aroundAll withTestResources do
               , endpointAlerts = Nothing 
               , errorAlerts = Nothing
               }
-      pg <-
+      (_, pg) <-
         testServant tr $ CreateProject.createProjectPostH testPid createPForm
       -- Demo project update should be blocked, but form returns submitted values
       (pg.unwrapCreateProjectResp <&> (.form.title)) `shouldBe` Just @Text "Test Project CI"
       (pg.unwrapCreateProjectResp <&> (.form.description)) `shouldBe` Just "Test Description"
 
     it "Non empty project list" \tr -> do
-      pg <-
+      (_, pg) <-
         testServant tr ListProjects.listProjectsGetH
       let (projects, _demoProject) = pg.unwrap.content
       length projects `shouldBe` 1
@@ -67,13 +67,13 @@ spec = aroundAll withTestResources do
               , endpointAlerts = Nothing
               , errorAlerts = Nothing
               }
-      updateResp <-
+      (_, updateResp) <-
         testServant tr $ CreateProject.createProjectPostH testProjectPid createPForm
       (updateResp.unwrapCreateProjectResp <&> (.form.title)) `shouldBe` Just @Text "Test Project CI2"
       (updateResp.unwrapCreateProjectResp <&> (.form.description)) `shouldBe` Just "Test Description2"
 
       -- Section 2: Verify the update persists in the project list
-      listResp <-
+      (_, listResp) <-
         testServant tr ListProjects.listProjectsGetH
       let (projects, _demoProject) = listResp.unwrap.content
 
