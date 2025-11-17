@@ -41,8 +41,8 @@ testPid = Projects.ProjectId UUID.nil
 
 -- Helper function to get endpoint stats
 getEndpointStats :: TestResources -> Maybe Text -> Maybe Text -> IO (V.Vector ApiCatalog.EnpReqStatsVM)
-getEndpointStats TestResources{..} filterParam hostM = do
-  resp <- toServantResponse trATCtx trSessAndHeader trLogger $ 
+getEndpointStats tr filterParam hostM = do
+  resp <- testServant tr $
     ApiCatalog.endpointListGetH testPid Nothing Nothing filterParam hostM Nothing Nothing Nothing Nothing Nothing Nothing Nothing
   case resp of
     ApiCatalog.EndpointsListPage (PageCtx _ (ItemsList.ItemsPage _ enpList)) -> pure enpList
@@ -50,8 +50,8 @@ getEndpointStats TestResources{..} filterParam hostM = do
 
 -- Helper function to verify endpoint creation
 verifyEndpointsCreated :: TestResources -> IO ()
-verifyEndpointsCreated TestResources{..} = do
-  endpoints <- withPool trPool $ DBT.query [sql|
+verifyEndpointsCreated tr = do
+  endpoints <- withPool tr.trPool $ DBT.query [sql|
     SELECT url_path, method, host, hash
     FROM apis.endpoints
     WHERE project_id = ?
@@ -88,17 +88,17 @@ prepareTestMessages = do
 spec :: Spec
 spec = aroundAll withTestResources do
   describe "API Catalog and Endpoints" do
-    it "returns empty list when no data exists" \tr@TestResources{..} -> do
-      catalogList <- toServantResponse trATCtx trSessAndHeader trLogger $ 
+    it "returns empty list when no data exists" \tr -> do
+      catalogList <- testServant tr $ 
           ApiCatalog.apiCatalogH testPid Nothing Nothing Nothing Nothing
       case catalogList of
         ApiCatalog.CatalogListPage (PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents)) -> 
           length hostsAndEvents `shouldBe` 0
         _ -> expectationFailure "Expected CatalogListPage"
 
-    it "creates endpoints from processed spans" \tr@TestResources{..} -> do
+    it "creates endpoints from processed spans" \tr -> do
       -- First verify the demo project exists
-      projectExists <- withPool trPool $ DBT.query [sql|
+      projectExists <- withPool tr.trPool $ DBT.query [sql|
         SELECT COUNT(*)
         FROM projects.projects
         WHERE id = ?
@@ -112,7 +112,7 @@ spec = aroundAll withTestResources do
       processMessagesAndBackgroundJobs tr msgs
       
       -- Debug: Check if any spans were inserted at all
-      allSpansCount <- withPool trPool $ DBT.query [sql|
+      allSpansCount <- withPool tr.trPool $ DBT.query [sql|
         SELECT COUNT(*)
         FROM otel_logs_and_spans
       |] () :: IO (V.Vector (Only Int))
@@ -124,7 +124,7 @@ spec = aroundAll withTestResources do
         _ -> pure ()
       
       -- Debug: Check if spans were actually inserted for our project
-      spanCount <- withPool trPool $ DBT.query [sql|
+      spanCount <- withPool tr.trPool $ DBT.query [sql|
         SELECT COUNT(*)
         FROM otel_logs_and_spans
         WHERE project_id = ? AND (name = 'monoscope.http' OR name = 'apitoolkit-http-span')
@@ -138,17 +138,17 @@ spec = aroundAll withTestResources do
       
       verifyEndpointsCreated tr
 
-    it "returns hosts list after processing messages" \tr@TestResources{..} -> do
-      catalogList <- toServantResponse trATCtx trSessAndHeader trLogger $ 
+    it "returns hosts list after processing messages" \tr -> do
+      catalogList <- testServant tr $ 
           ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing
       case catalogList of
         ApiCatalog.CatalogListPage (PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents)) ->
           length hostsAndEvents `shouldBe` 2
         _ -> expectationFailure "Expected CatalogListPage"
 
-    it "creates anomalies automatically via database triggers" \tr@TestResources{..} -> do
+    it "creates anomalies automatically via database triggers" \tr -> do
       -- Verify anomalies were created by triggers
-      anomaliesCount <- withPool trPool $ DBT.query [sql|
+      anomaliesCount <- withPool tr.trPool $ DBT.query [sql|
         SELECT COUNT(*)
         FROM apis.anomalies
         WHERE project_id = ?
@@ -158,18 +158,18 @@ spec = aroundAll withTestResources do
         [(Only count)] -> count `shouldSatisfy` (> 0)
         _ -> error "Unexpected anomalies count result"
 
-    it "processes anomaly background jobs to create issues" \tr@TestResources{..} -> do
+    it "processes anomaly background jobs to create issues" \tr -> do
       -- Get pending jobs and log them
-      pendingJobs <- getPendingBackgroundJobs trATCtx
-      logBackgroundJobsInfo trLogger pendingJobs
+      pendingJobs <- getPendingBackgroundJobs tr.trATCtx
+      logBackgroundJobsInfo tr.trLogger pendingJobs
 
       -- Run only NewAnomaly jobs to create issues from anomalies
-      _ <- runBackgroundJobsWhere trATCtx $ \case
+      _ <- runBackgroundJobsWhere tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{} -> True
         _ -> False
 
       -- Verify issues were created
-      issuesCount <- withPool trPool $ DBT.query [sql|
+      issuesCount <- withPool tr.trPool $ DBT.query [sql|
         SELECT COUNT(*)
         FROM apis.issues
         WHERE project_id = ? AND issue_type = 'api_change'
@@ -201,9 +201,9 @@ spec = aroundAll withTestResources do
       noHostEndpoints <- getEndpointStats tr (Just "Inbox") Nothing
       V.length emptyHostEndpoints `shouldBe` V.length noHostEndpoints
 
-    it "returns active endpoints after acknowledging issues" \tr@TestResources{..} -> do
+    it "returns active endpoints after acknowledging issues" \tr -> do
       -- Acknowledge all endpoint issues
-      _ <- withPool trPool $ DBT.execute [sql|
+      _ <- withPool tr.trPool $ DBT.execute [sql|
         UPDATE apis.issues 
         SET acknowledged_at = NOW(), acknowledged_by = ?
         WHERE project_id = ? AND issue_type = 'api_change'
@@ -222,19 +222,19 @@ spec = aroundAll withTestResources do
       enp1.endpointHash `shouldBe` toXXHash (testPid.toText <> "172.31.29.11" <> "GET" <> "/")
       enp2.endpointHash `shouldBe` toXXHash (testPid.toText <> "api.test.com" <> "POST" <> "/api/v1/user/login")
 
-    -- it "handles anomaly bulk actions correctly" \tr@TestResources{..} -> do
+    -- it "handles anomaly bulk actions correctly" \tr -> do
     --   -- First ensure endpoints are created and all background jobs are processed
     --   msgs <- prepareTestMessages
     --   processMessagesAndBackgroundJobs tr msgs
     --   createRequestDumps tr testPid 10
     --
     --   -- Process all background jobs multiple times to ensure anomalies are created
-    --   _ <- runAllBackgroundJobs trATCtx
-    --   _ <- runAllBackgroundJobs trATCtx
-    --   _ <- runAllBackgroundJobs trATCtx
+    --   _ <- runAllBackgroundJobs tr.trATCtx
+    --   _ <- runAllBackgroundJobs tr.trATCtx
+    --   _ <- runAllBackgroundJobs tr.trATCtx
     --
     --   -- Check what anomalies were created as issues (not endpoint type)
-    --   nonEndpointIssues <- withPool trPool $ DBT.query [sql|
+    --   nonEndpointIssues <- withPool tr.trPool $ DBT.query [sql|
     --     SELECT id, anomaly_type, target_hash
     --     FROM apis.issues
     --     WHERE project_id = ? AND anomaly_type != 'endpoint'
@@ -243,7 +243,7 @@ spec = aroundAll withTestResources do
     --   -- If we have non-endpoint issues, test the anomaly list API
     --   if V.length nonEndpointIssues > 0 then do
     --     -- Get anomalies through the API
-    --     pg <- toServantResponse trATCtx trSessAndHeader trLogger $ 
+    --     pg <- testServant tr $ 
     --       AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
     --
     --     case pg of
@@ -255,7 +255,7 @@ spec = aroundAll withTestResources do
     --         case V.headM anomalies of
     --           Just (AnomalyList.IssueVM _ _ _ firstAnomaly) -> do
     --             let bulkFrm = AnomalyList.AnomalyBulk{anomalyId = [anomalyIdText firstAnomaly.id]}
-    --             _ <- toServantResponse trATCtx trSessAndHeader trLogger $ 
+    --             _ <- testServant tr $ 
     --               AnomalyList.anomalyBulkActionsPostH testPid "acknowlege" bulkFrm
     --             pass
     --           Nothing -> error "Expected at least one anomaly"
@@ -264,13 +264,13 @@ spec = aroundAll withTestResources do
     --     -- Skip test if no non-endpoint issues were created
     --     pendingWith "No non-endpoint issues were created in this test run"
 
-    it "creates shape and field anomalies alongside endpoint anomalies" \tr@TestResources{..} -> do
+    it "creates shape and field anomalies alongside endpoint anomalies" \tr -> do
       -- First ensure endpoints are created and anomalies are generated
       msgs <- prepareTestMessages
       processMessagesAndBackgroundJobs tr msgs
       
       -- Check that we have anomalies for shapes and fields too
-      anomalyTypes <- withPool trPool $ DBT.query [sql|
+      anomalyTypes <- withPool tr.trPool $ DBT.query [sql|
         SELECT DISTINCT anomaly_type::text, COUNT(*)
         FROM apis.anomalies
         WHERE project_id = ?
@@ -288,9 +288,9 @@ spec = aroundAll withTestResources do
       hasType "field" `shouldBe` True
       hasType "format" `shouldBe` True
 
-    it "filters endpoints by request type (incoming/outgoing)" \tr@TestResources{..} -> do
+    it "filters endpoints by request type (incoming/outgoing)" \tr -> do
       -- All our test endpoints are incoming (outgoing = false)
-      endpoints <- withPool trPool $ DBT.query [sql|
+      endpoints <- withPool tr.trPool $ DBT.query [sql|
         SELECT outgoing, COUNT(*)
         FROM apis.endpoints
         WHERE project_id = ?

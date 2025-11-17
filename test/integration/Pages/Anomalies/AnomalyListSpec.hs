@@ -50,8 +50,8 @@ testPid = Projects.ProjectId UUID.nil
 
 -- Helper function to get anomalies from API
 getAnomalies :: TestResources -> IO (V.Vector AnomalyList.IssueVM)
-getAnomalies TestResources{..} = do
-  pg <- toServantResponse trATCtx trSessAndHeader trLogger $ 
+getAnomalies tr = do
+  pg <- testServant tr $ 
     AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
   case pg of
     AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> pure anomalies
@@ -61,16 +61,16 @@ getAnomalies TestResources{..} = do
 spec :: Spec
 spec = aroundAll withTestResources do
   describe "Check Anomaly List" do
-    it "should return an empty list" \TestResources{..} -> do
+    it "should return an empty list" \tr -> do
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+        testServant tr $ AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do
           length anomalies `shouldBe` 0
         _ -> error "Unexpected response"
 
-    it "should create endpoint anomalies (not visible in anomaly list)" \tr@TestResources{..} -> do
+    it "should create endpoint anomalies (not visible in anomaly list)" \tr -> do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
@@ -84,23 +84,23 @@ spec = aroundAll withTestResources do
       processMessagesAndBackgroundJobs tr msgs
 
       -- Check that endpoint was created in database
-      endpoints <- withPool trPool $ DBT.query [sql|
+      endpoints <- withPool tr.trPool $ DBT.query [sql|
         SELECT hash FROM apis.endpoints WHERE project_id = ?
       |] (Only testPid) :: IO (V.Vector (Only Text))
       V.length endpoints `shouldBe` 1
 
       -- Check what background jobs were created and run only NewAnomaly jobs
-      pendingJobs <- getPendingBackgroundJobs trATCtx
-      logBackgroundJobsInfo trLogger pendingJobs
+      pendingJobs <- getPendingBackgroundJobs tr.trATCtx
+      logBackgroundJobsInfo tr.trLogger pendingJobs
 
       -- Run only NewAnomaly jobs (which create issues from anomalies)
-      _ <- runBackgroundJobsWhere trATCtx $ \case
+      _ <- runBackgroundJobsWhere tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{} -> True
         _ -> False
       createRequestDumps tr testPid 10
       
       -- Check that API change issue was created for the endpoint
-      apiChangeIssues <- withPool trPool $ DBT.query [sql|
+      apiChangeIssues <- withPool tr.trPool $ DBT.query [sql|
         SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
       |] (Only testPid) :: IO (V.Vector (Only Issues.IssueId))
       V.length apiChangeIssues `shouldBe` 1
@@ -110,29 +110,29 @@ spec = aroundAll withTestResources do
       -- API change issues are visible in the anomaly list
       length anomalies `shouldBe` 1 -- Should see the API change issue
 
-    it "should acknowledge endpoint anomaly and reveal child anomalies" \tr@TestResources{..} -> do
+    it "should acknowledge endpoint anomaly and reveal child anomalies" \tr -> do
       -- Find the API change issue for the endpoint
-      apiChangeIssues <- withPool trPool $ DBT.query [sql|
+      apiChangeIssues <- withPool tr.trPool $ DBT.query [sql|
         SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
       |] (Only testPid) :: IO (V.Vector (Only Issues.IssueId))
       V.length apiChangeIssues `shouldBe` 1
       let issueId = apiChangeIssues V.! 0 & (\(Only iid) -> iid)
 
       -- Get and run shape/field anomaly jobs
-      pendingJobs2 <- getPendingBackgroundJobs trATCtx
-      logBackgroundJobsInfo trLogger pendingJobs2
+      pendingJobs2 <- getPendingBackgroundJobs tr.trATCtx
+      logBackgroundJobsInfo tr.trLogger pendingJobs2
 
-      _ <- runBackgroundJobsWhere trATCtx $ \case
+      _ <- runBackgroundJobsWhere tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
         _ -> False
 
       -- Acknowledge the endpoint anomaly directly using Issues module
       -- This avoids the old acknowledgeAnomalies function that queries non-existent columns
-      let sess = Servant.getResponse trSessAndHeader
-      withPool trPool $ Issues.acknowledgeIssue issueId (sess.user).id
+      let sess = Servant.getResponse tr.trSessAndHeader
+      withPool tr.trPool $ Issues.acknowledgeIssue issueId (sess.user).id
       
       -- Verify it was acknowledged
-      acknowledgedIssue <- withPool trPool $ Issues.selectIssueById issueId
+      acknowledgedIssue <- withPool tr.trPool $ Issues.selectIssueById issueId
       case acknowledgedIssue of
         Just issue -> isJust issue.acknowledgedAt `shouldBe` True
         Nothing -> error "Issue not found after acknowledgment"
@@ -145,7 +145,7 @@ spec = aroundAll withTestResources do
       -- There should be API change issues visible after acknowledging the endpoint
       V.length visibleApiChangeIssues `shouldSatisfy` (> 0)
 
-    it "should detect new shape anomaly after endpoint acknowledgment" \tr@TestResources{..} -> do
+    it "should detect new shape anomaly after endpoint acknowledgment" \tr -> do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
@@ -162,22 +162,22 @@ spec = aroundAll withTestResources do
       createRequestDumps tr testPid 10
 
       -- Get pending jobs and run only NewAnomaly jobs for shapes and fields
-      pendingJobs3 <- getPendingBackgroundJobs trATCtx
-      logBackgroundJobsInfo trLogger pendingJobs3
+      pendingJobs3 <- getPendingBackgroundJobs tr.trATCtx
+      logBackgroundJobsInfo tr.trLogger pendingJobs3
 
-      _ <- runBackgroundJobsWhere trATCtx $ \case
+      _ <- runBackgroundJobsWhere tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
         _ -> False
       
       -- Acknowledge API change issues first
-      apiChangeIssues <- withPool trPool $ DBT.query [sql|
+      apiChangeIssues <- withPool tr.trPool $ DBT.query [sql|
         SELECT id, endpoint_hash FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
       |] (Only testPid) :: IO (V.Vector (Issues.IssueId, Text))
       
       forM_ apiChangeIssues $ \(issueId, _) -> do
         -- Acknowledge directly using Issues module
-        let sess = Servant.getResponse trSessAndHeader
-        withPool trPool $ Issues.acknowledgeIssue issueId (sess.user).id
+        let sess = Servant.getResponse tr.trSessAndHeader
+        withPool tr.trPool $ Issues.acknowledgeIssue issueId (sess.user).id
 
       -- Now check anomaly list
       anomalies <- getAnomalies tr
@@ -187,20 +187,20 @@ spec = aroundAll withTestResources do
       length filteredApiChangeIssues `shouldSatisfy` (>= 1) -- At least one API change issue
       length anomalies `shouldSatisfy` (> 0)
 
-    it "should detect new format anomaly" \tr@TestResources{..} -> do
+    it "should detect new format anomaly" \tr -> do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
 
       -- Get and run shape/field anomaly jobs
-      pendingJobs4 <- getPendingBackgroundJobs trATCtx
-      logBackgroundJobsInfo trLogger pendingJobs4
+      pendingJobs4 <- getPendingBackgroundJobs tr.trATCtx
+      logBackgroundJobsInfo tr.trLogger pendingJobs4
 
-      _ <- runBackgroundJobsWhere trATCtx $ \case
+      _ <- runBackgroundJobsWhere tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
         _ -> False
       
       -- Find and acknowledge the API change issues
-      apiChangeIssuesForAck <- withPool trPool $ DBT.query [sql|
+      apiChangeIssuesForAck <- withPool tr.trPool $ DBT.query [sql|
         SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
       |] (Only testPid) :: IO (V.Vector (Only Issues.IssueId))
       
@@ -210,8 +210,8 @@ spec = aroundAll withTestResources do
       case V.headM apiChangeIssuesForAck of
         Just (Only issueId) -> do
           -- Acknowledge directly using Issues module
-          let sess = Servant.getResponse trSessAndHeader
-          withPool trPool $ Issues.acknowledgeIssue issueId (sess.user).id
+          let sess = Servant.getResponse tr.trSessAndHeader
+          withPool tr.trPool $ Issues.acknowledgeIssue issueId (sess.user).id
         Nothing -> error "No API change issue found"
 
       -- Now send a message with different format
@@ -220,10 +220,10 @@ spec = aroundAll withTestResources do
       processMessagesAndBackgroundJobs tr msgs
 
       -- Get and run format anomaly jobs
-      pendingJobs5 <- getPendingBackgroundJobs trATCtx
-      logBackgroundJobsInfo trLogger pendingJobs5
+      pendingJobs5 <- getPendingBackgroundJobs tr.trATCtx
+      logBackgroundJobsInfo tr.trLogger pendingJobs5
 
-      _ <- runBackgroundJobsWhere trATCtx $ \case
+      _ <- runBackgroundJobsWhere tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{anomalyType = "format"} -> True
         _ -> False
 
@@ -235,8 +235,8 @@ spec = aroundAll withTestResources do
       length formatApiChangeIssues `shouldSatisfy` (>= 1)
       length anomalies `shouldSatisfy` (> 0)
 
-    it "should get acknowledged anomalies" \tr@TestResources{..} -> do
-      pg <- toServantResponse trATCtx trSessAndHeader trLogger $ 
+    it "should get acknowledged anomalies" \tr -> do
+      pg <- testServant tr $ 
         AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowledged") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case pg of
         AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do

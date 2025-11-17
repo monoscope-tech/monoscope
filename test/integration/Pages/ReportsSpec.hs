@@ -35,9 +35,9 @@ testPid = Projects.ProjectId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0
 spec :: Spec
 spec = aroundAll withTestResources do
   describe "Check Reports" do
-    it "should toggle reports notifs" \TestResources{..} -> do
+    it "should toggle reports notifs" \tr -> do
       -- Get initial state
-      res1 <- toServantResponse trATCtx trSessAndHeader trLogger $ PageReports.reportsGetH testPid Nothing Nothing Nothing
+      res1 <- testServant tr $ PageReports.reportsGetH testPid Nothing Nothing Nothing
       case res1 of
         PageReports.ReportsGetMain (PageCtx _ (_, _, _, daily1, weekly1)) -> do
           -- Initial state should be daily=True, weekly=True from testSessionHeader
@@ -47,13 +47,13 @@ spec = aroundAll withTestResources do
         
       -- Toggle daily
       _ <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ PageReports.reportsPostH testPid "daily"
+        testServant tr $ PageReports.reportsPostH testPid "daily"
       -- Toggle weekly  
       _ <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ PageReports.reportsPostH testPid "weekly"
+        testServant tr $ PageReports.reportsPostH testPid "weekly"
         
       -- Check final state - fetch project from DB to avoid cache
-      projectM <- withPool trPool $ Projects.projectById testPid
+      projectM <- withPool tr.trPool $ Projects.projectById testPid
       case projectM of
         Just project -> do
           project.dailyNotif `shouldBe` False  -- toggled from True to False
@@ -61,16 +61,16 @@ spec = aroundAll withTestResources do
         Nothing -> error "Project not found"
       
       -- Also check via the reports page
-      res <- toServantResponse trATCtx trSessAndHeader trLogger $ PageReports.reportsGetH testPid Nothing Nothing Nothing
+      res <- testServant tr $ PageReports.reportsGetH testPid Nothing Nothing Nothing
       case res of
         PageReports.ReportsGetMain (PageCtx _ (pid, reports, _, _, _)) -> do
           pid `shouldBe` testPid
           length reports `shouldBe` 0
         _ -> error "Unexpected response"
 
-    -- it "should create and get all reports" \tr@TestResources{..} -> do
+    -- it "should create and get all reports" \tr -> do
     --   -- Ensure the project has notifications enabled
-    --   _ <- withPool trPool $ DBT.execute
+    --   _ <- withPool tr.trPool $ DBT.execute
     --     [sql|UPDATE projects.projects SET weekly_notif = true, daily_notif = true WHERE id = ?|]
     --     (Only testPid)
     --
@@ -88,36 +88,36 @@ spec = aroundAll withTestResources do
     --   let reqMsg4 = Unsafe.fromJust $ convert $ updateProjectId $ testRequestMsgs.reqMsg2 "2024-07-05T12:06:26.620094239Z"
     --
     --   let msgs = concat (replicate 100 [("m1", BL.toStrict $ AE.encode reqMsg1), ("m2", BL.toStrict $ AE.encode reqMsg2)]) ++ [("m3", BL.toStrict $ AE.encode reqMsg3), ("m4", BL.toStrict $ AE.encode reqMsg4)]
-    --   _ <- runTestBackground trATCtx $ processMessages msgs HashMap.empty
+    --   _ <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
     --
     --   -- Process the spans to generate endpoints and other data needed for reports
     --   -- Use a time slightly after the messages to ensure they're captured
     --   let processTime = addUTCTime 1 currentTime -- 1 second after the messages
-    --   _ <- runTestBackground trATCtx $ processFiveMinuteSpans processTime
+    --   _ <- runTestBackground tr.trATCtx $ processFiveMinuteSpans processTime
     --
     --   -- Make sure there's data to report on by processing background jobs first
     --   createRequestDumps tr testPid 10
     --   processAllBackgroundJobsMultipleTimes tr
     --
     --   -- Create report jobs
-    --   _ <- liftIO $ withResource trPool \conn -> do
+    --   _ <- liftIO $ withResource tr.trPool \conn -> do
     --     _ <- createJob conn "background_jobs" $ BackgroundJobs.DailyReports testPid
     --     _ <- createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports testPid
     --     pass
     --
     --   -- Run all background jobs to process the reports
-    --   _ <- runAllBackgroundJobs trATCtx
+    --   _ <- runAllBackgroundJobs tr.trATCtx
     --
     --   -- Additional background job processing to ensure reports are created
     --   processAllBackgroundJobsMultipleTimes tr
     --
     --   -- Check if reports were actually created in the database
-    --   dbReports <- withPool trPool $ Reports.reportHistoryByProject testPid 0
+    --   dbReports <- withPool tr.trPool $ Reports.reportHistoryByProject testPid 0
     --
     --
     --   length dbReports `shouldBe` 2
     --
-    --   res <- toServantResponse trATCtx trSessAndHeader trLogger $ PageReports.reportsGetH testPid Nothing Nothing Nothing
+    --   res <- testServant tr $ PageReports.reportsGetH testPid Nothing Nothing Nothing
     --   case res of
     --     PageReports.ReportsGetMain (PageCtx _ (pid, reports, next, daily, weekly)) -> do
     --       pid `shouldBe` testPid
@@ -129,7 +129,7 @@ spec = aroundAll withTestResources do
     --       dailyReport.reportType `shouldBe` "daily"
     --       weeklyReport.reportType `shouldBe` "weekly"
     --
-    --       r <- toServantResponse trATCtx trSessAndHeader trLogger $ PageReports.singleReportGetH testPid dailyReport.id Nothing
+    --       r <- testServant tr $ PageReports.singleReportGetH testPid dailyReport.id Nothing
     --       case r of
     --         PageReports.ReportsGetSingle (PageCtx _ (prid, reportM)) -> do
     --           prid `shouldBe` testPid

@@ -23,9 +23,9 @@ testPid = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "00000000-0000-
 spec :: Spec
 spec = aroundAll withTestResources do
   describe "Members Creation, Update and Consumption" do
-    it "Create member" \TestResources{..} -> do
+    it "Create member" \tr -> do
       -- Update project to a paid plan to allow multiple members
-      _ <- withPool trPool $ PGT.execute [sql|UPDATE projects.projects SET payment_plan = 'PAID' WHERE id = ?|] (Only testPid)
+      _ <- withPool tr.trPool $ PGT.execute [sql|UPDATE projects.projects SET payment_plan = 'PAID' WHERE id = ?|] (Only testPid)
       pass
       let member =
             ManageMembers.ManageMembersForm
@@ -33,21 +33,21 @@ spec = aroundAll withTestResources do
               , permissions = [ProjectMembers.PAdmin]
               }
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersPostH testPid Nothing member
+        testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
       -- Check if the response contains the newly added member
       case pg of
         ManageMembers.ManageMembersPost p -> do
           "example@gmail.com" `shouldSatisfy` (`elem` (p & V.toList & map (.email)))
         _ -> fail "Expected ManageMembersPost response"
 
-    it "Update member permissions" \TestResources{..} -> do
+    it "Update member permissions" \tr -> do
       let member =
             ManageMembers.ManageMembersForm
               { emails = ["example@gmail.com"]
               , permissions = [ProjectMembers.PView]
               }
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersPostH testPid Nothing member
+        testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
 
       -- Check if the member's permission is updated
       case pg of
@@ -59,9 +59,9 @@ spec = aroundAll withTestResources do
           pass
         _ -> fail "Expected ManageMembersPost response"
 
-    it "Get members" \TestResources{..} -> do
+    it "Get members" \tr -> do
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersGetH testPid
+        testServant tr $ ManageMembers.manageMembersGetH testPid
 
       -- Check if the response contains the expected members
       case pg of
@@ -71,14 +71,14 @@ spec = aroundAll withTestResources do
           length projMembers `shouldBe` 1
         _ -> fail "Expected ManageMembersGet response"
 
-    it "Delete member" \TestResources{..} -> do
+    it "Delete member" \tr -> do
       let member =
             ManageMembers.ManageMembersForm
               { emails = []
               , permissions = []
               }
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersPostH testPid Nothing member
+        testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
 
       -- Check if the member is deleted
       case pg of
@@ -87,14 +87,14 @@ spec = aroundAll withTestResources do
           "example@gmail.com" `shouldNotSatisfy` (`elem` emails)
         _ -> fail "Expected ManageMembersPost response"
 
-    it "Should add member after deletion" \TestResources{..} -> do
+    it "Should add member after deletion" \tr -> do
       let member =
             ManageMembers.ManageMembersForm
               { emails = ["example@gmail.com"]
               , permissions = [ProjectMembers.PAdmin]
               }
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ ManageMembers.manageMembersPostH testPid Nothing member
+        testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
       -- Check if the response contains the newly added member
       case pg of
         ManageMembers.ManageMembersPost p -> do

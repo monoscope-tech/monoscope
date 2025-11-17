@@ -21,7 +21,7 @@ import Test.Hspec
 spec :: Spec
 spec = aroundAll withTestResources do
   describe "Query Log Monitors" do
-    it "should create monitor with no triggers" $ \tr@TestResources{..} -> do
+    it "should create monitor with no triggers" $ \tr -> do
       currentTime <- getCurrentTime
       let queryMonitor =
             convertToQueryMonitor (Projects.ProjectId UUID.nil) currentTime (Monitors.QueryMonitorId UUID.nil)
@@ -46,7 +46,7 @@ spec = aroundAll withTestResources do
                 , conditionType = Nothing
                 , source = Nothing
                 }
-      respC <- withPool trPool $ Monitors.queryMonitorUpsert queryMonitor
+      respC <- withPool tr.trPool $ Monitors.queryMonitorUpsert queryMonitor
       respC `shouldBe` 1
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
@@ -61,9 +61,9 @@ spec = aroundAll withTestResources do
       r <- runTestBg tr $ processMessages msgs HashMap.empty
       r `shouldBe` ["m1", "m2", "m4", "m5", "m5"]
 
-      _ <- withPool trPool $ PGT.execute [sql|CALL monitors.check_triggered_query_monitors(0, '{}'::jsonb)|] ()
+      _ <- withPool tr.trPool $ PGT.execute [sql|CALL monitors.check_triggered_query_monitors(0, '{}'::jsonb)|] ()
 
-      pendingJobs <- getPendingBackgroundJobs trATCtx
-      logBackgroundJobsInfo trLogger pendingJobs
+      pendingJobs <- getPendingBackgroundJobs tr.trATCtx
+      logBackgroundJobsInfo tr.trLogger pendingJobs
 
-      void $ runAllBackgroundJobs trATCtx
+      void $ runAllBackgroundJobs tr.trATCtx

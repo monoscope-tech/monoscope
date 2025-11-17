@@ -11,6 +11,7 @@ module Pkg.TestUtils (
   convert,
   runTestBackground,
   runTestBg,
+  testServant,
   runAllBackgroundJobs,
   getPendingBackgroundJobs,
   logBackgroundJobsInfo,
@@ -540,6 +541,9 @@ toServantResponse trATCtx trSessAndHeader trLogger k = do
     )
     <&> Servant.getResponse
     . fromRightShow
+
+testServant :: TestResources -> ATAuthCtx (RespHeaders a) -> IO a
+testServant tr = toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
 
 
 -- | Run a base context handler (like webhookPostH, replayPostH) in test context

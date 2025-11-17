@@ -22,7 +22,7 @@ testPid = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "00000000-0000-
 spec :: Spec
 spec = aroundAll withTestResources do
   describe "Check Course Creation, Update and Consumption" do
-    it "Cannot update demo project without sudo" \TestResources{..} -> do
+    it "Cannot update demo project without sudo" \tr -> do
       let createPForm =
             CreateProject.CreateProjectForm
               { title = "Test Project CI"
@@ -36,14 +36,14 @@ spec = aroundAll withTestResources do
               , errorAlerts = Nothing
               }
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ CreateProject.createProjectPostH testPid createPForm
+        testServant tr $ CreateProject.createProjectPostH testPid createPForm
       -- Demo project update should be blocked, but form returns submitted values
       (pg.unwrapCreateProjectResp <&> (.form.title)) `shouldBe` Just @Text "Test Project CI"
       (pg.unwrapCreateProjectResp <&> (.form.description)) `shouldBe` Just "Test Description"
 
-    it "Non empty project list" \TestResources{..} -> do
+    it "Non empty project list" \tr -> do
       pg <-
-        toServantResponse trATCtx trSessAndHeader trLogger ListProjects.listProjectsGetH
+        testServant tr ListProjects.listProjectsGetH
       let (projects, _demoProject) = pg.unwrap.content
       length projects `shouldBe` 1
       -- Should have test project created in testSessionHeader (demo project is returned separately)
@@ -51,7 +51,7 @@ spec = aroundAll withTestResources do
       projectIds `shouldContain` ["12345678-9abc-def0-1234-56789abcdef0"] -- test project from testSessionHeader
     -- TODO: add more checks for the info we we display on list page
 
-    it "Should update project with new details and verify in list" \TestResources{..} -> do
+    it "Should update project with new details and verify in list" \tr -> do
       let testProjectPid = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "12345678-9abc-def0-1234-56789abcdef0"
 
       -- Section 1: Update the project
@@ -68,13 +68,13 @@ spec = aroundAll withTestResources do
               , errorAlerts = Nothing
               }
       updateResp <-
-        toServantResponse trATCtx trSessAndHeader trLogger $ CreateProject.createProjectPostH testProjectPid createPForm
+        testServant tr $ CreateProject.createProjectPostH testProjectPid createPForm
       (updateResp.unwrapCreateProjectResp <&> (.form.title)) `shouldBe` Just @Text "Test Project CI2"
       (updateResp.unwrapCreateProjectResp <&> (.form.description)) `shouldBe` Just "Test Description2"
 
       -- Section 2: Verify the update persists in the project list
       listResp <-
-        toServantResponse trATCtx trSessAndHeader trLogger ListProjects.listProjectsGetH
+        testServant tr ListProjects.listProjectsGetH
       let (projects, _demoProject) = listResp.unwrap.content
 
       -- Find the updated project by ID instead of relying on index

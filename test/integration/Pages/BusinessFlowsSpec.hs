@@ -51,7 +51,7 @@ spec = aroundAll withTestResources do
 onboardingTests :: SpecWith TestResources
 onboardingTests = do
   describe "should complete all onboarding steps in sequence" do
-    it "Step 1: Info - should save and retrieve user information" \TestResources{..} -> do
+    it "Step 1: Info - should save and retrieve user information" \tr -> do
       let infoForm =
             Onboarding.OnboardingInfoForm
               { firstName = "John"
@@ -61,12 +61,8 @@ onboardingTests = do
               , whereDidYouHearAboutUs = "google"
               }
 
-      -- Save the data
-      _ <- toServantResponse trATCtx trSessAndHeader trLogger $ Onboarding.onboardingInfoPost testPid infoForm
-
-      -- Verify by calling the GET handler which should show the saved data
-      result <- toServantResponse trATCtx trSessAndHeader trLogger $ Onboarding.onboardingGetH testPid (Just "Info")
-
+      _ <- testServant tr $ Onboarding.onboardingInfoPostH testPid infoForm
+      result <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Info")
       case result of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.InfoStep{..} -> do
@@ -75,7 +71,7 @@ onboardingTests = do
             foundUsFrom `shouldBe` "google"
           _ -> fail "Expected InfoStep"
 
-    it "Step 2: Survey - should save and retrieve survey preferences" \TestResources{..} -> do
+    it "Step 2: Survey - should save and retrieve survey preferences" \tr -> do
       let surveyForm =
             Onboarding.OnboardingConForm
               { location = "usa"
@@ -83,10 +79,10 @@ onboardingTests = do
               }
 
       -- Save the data
-      _ <- toServantResponse trATCtx trSessAndHeader trLogger $ Onboarding.onboardingConfPost testPid surveyForm
+      _ <- testServant tr $ Onboarding.onboardingConfPostH testPid surveyForm
 
       -- Verify by calling the GET handler
-      result <- toServantResponse trATCtx trSessAndHeader trLogger $ Onboarding.onboardingGetH testPid (Just "Survey")
+      result <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Survey")
 
       case result of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
@@ -95,7 +91,7 @@ onboardingTests = do
             functionality `shouldMatchList` ["logs", "analytics"]
           _ -> fail "Expected SurveyStep"
 
-    it "Step 3: NotifChannel - should save and retrieve notification preferences" \TestResources{..} -> do
+    it "Step 3: NotifChannel - should save and retrieve notification preferences" \tr -> do
       let notifForm =
             Onboarding.NotifChannelForm
               { phoneNumber = "+1234567890"
@@ -103,10 +99,10 @@ onboardingTests = do
               }
 
       -- Save the data
-      _ <- toServantResponse trATCtx trSessAndHeader trLogger $ Onboarding.phoneEmailPostH testPid notifForm
+      _ <- testServant tr $ Onboarding.phoneEmailPostH testPid notifForm
 
       -- Verify by calling the GET handler
-      result <- toServantResponse trATCtx trSessAndHeader trLogger $ Onboarding.onboardingGetH testPid (Just "NotifChannel")
+      result <- testServant tr $ Onboarding.onboardingGetH testPid (Just "NotifChannel")
 
       case result of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
@@ -116,17 +112,17 @@ onboardingTests = do
           _ -> fail "Expected NotifChannelStep"
 
     -- TODO: test the non happy case. check 
-    it "Step 4: Integration - should show API key after integration" \tr@TestResources{..} -> do
+    it "Step 4: Integration - should show API key after integration" \tr -> do
       -- Ingest a test event to simulate integration
       apiKey <- createTestAPIKey tr testPid "integration-test-key"
       currentTime <- liftIO getCurrentTime
       ingestTrace tr apiKey "test" currentTime
 
       -- Mark as complete
-      _ <- toServantResponse trATCtx trSessAndHeader trLogger $ Onboarding.checkIntegrationGet testPid Nothing
+      _ <- testServant tr $ Onboarding.checkIntegrationGet testPid Nothing
 
       -- Verify by calling the GET handler
-      result <- toServantResponse trATCtx trSessAndHeader trLogger $ Onboarding.onboardingGetH testPid (Just "Integration")
+      result <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Integration")
 
       case result of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
@@ -165,10 +161,10 @@ lemonSqueezyWebhookTests :: SpecWith TestResources
 lemonSqueezyWebhookTests = do
   describe "should process webhook events" do
     forM_ webhookTestCases $ \(eventName, testDesc, payloadFn, verifyFn) ->
-      it testDesc $ \TestResources{..} -> do
+      it testDesc $ \tr -> do
         let payload = payloadFn testPid
-        _ <- toBaseServantResponse trATCtx trLogger $ LemonSqueezy.webhookPostH Nothing payload
-        verifyFn trPool
+        _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ LemonSqueezy.webhookPostH Nothing payload
+        verifyFn tr.trPool
 
 
 -- | Test cases for LemonSqueezy webhooks
@@ -254,13 +250,13 @@ createWebhookPayload eventName pid =
 -- | Billing Usage Calculation Tests
 billingUsageTests :: SpecWith TestResources
 billingUsageTests = do
-  it "should calculate usage within billing cycle correctly" \tr@TestResources{..} -> do
+  it "should calculate usage within billing cycle correctly" \tr -> do
     currentTime <- liftIO getCurrentTime
     let cycleStart = addUTCTime (-10 * 24 * 60 * 60) currentTime -- 10 days ago
 
     -- Configure project for billing: set payment_plan, first_sub_item_id, billing_day, and usage_last_reported
     _ <-
-      DBT.withPool trPool
+      DBT.withPool tr.trPool
         $ DBT.execute
           [sql|UPDATE projects.projects SET payment_plan = 'Pro', first_sub_item_id = 12345, billing_day = ?, usage_last_reported = ? WHERE id = ?|]
           (cycleStart, cycleStart, testPid)
@@ -271,23 +267,23 @@ billingUsageTests = do
       ingestTrace tr apiKey ("test-span-" <> show i) currentTime
 
     -- Run the ReportUsage background job to populate daily_usage
-    void $ runTestBg tr $ BackgroundJobs.processBackgroundJob trATCtx undefined (BackgroundJobs.ReportUsage testPid)
+    void $ runTestBg tr $ BackgroundJobs.processBackgroundJob tr.trATCtx undefined (BackgroundJobs.ReportUsage testPid)
 
     -- Get billing info
-    result <- toServantResponse trATCtx trSessAndHeader trLogger $ LemonSqueezy.manageBillingGetH testPid Nothing
+    result <- testServant tr $ LemonSqueezy.manageBillingGetH testPid Nothing
 
     case result of
       LemonSqueezy.BillingGet (PageCtx _ (_, totalReqs, _, _, _, _, _, _, _)) -> do
         totalReqs `shouldBe` 5 -- Should count the 5 spans we ingested
 
-  it "should handle cycle boundaries correctly" \tr@TestResources{..} -> do
+  it "should handle cycle boundaries correctly" \tr -> do
     currentTime <- liftIO getCurrentTime
     let cycleStart = addUTCTime (-40 * 24 * 60 * 60) currentTime -- 40 days ago (more than a month)
         oldTime = addUTCTime (-35 * 24 * 60 * 60) currentTime
 
     -- Configure project for billing: set payment_plan, first_sub_item_id, billing_day, and usage_last_reported
     _ <-
-      DBT.withPool trPool
+      DBT.withPool tr.trPool
         $ DBT.execute
           [sql|UPDATE projects.projects SET payment_plan = 'Pro', first_sub_item_id = 12345, billing_day = ?, usage_last_reported = ? WHERE id = ?|]
           (cycleStart, cycleStart, testPid)
@@ -298,10 +294,10 @@ billingUsageTests = do
     ingestTrace tr apiKey "new-span" currentTime
 
     -- Run the ReportUsage background job to populate daily_usage
-    void $ runTestBg tr $ BackgroundJobs.processBackgroundJob trATCtx undefined (BackgroundJobs.ReportUsage testPid)
+    void $ runTestBg tr $ BackgroundJobs.processBackgroundJob tr.trATCtx undefined (BackgroundJobs.ReportUsage testPid)
 
     -- Get billing info - should only count data from current cycle
-    result <- toServantResponse trATCtx trSessAndHeader trLogger $ LemonSqueezy.manageBillingGetH testPid Nothing
+    result <- testServant tr $ LemonSqueezy.manageBillingGetH testPid Nothing
 
     case result of
       LemonSqueezy.BillingGet (PageCtx _ (_, totalReqs, _, _, _, _, _, _, _)) -> do
@@ -311,7 +307,7 @@ billingUsageTests = do
 -- | Replay Session Recording Tests
 replayTests :: SpecWith TestResources
 replayTests = do
-  it "should ingest replay events successfully" \TestResources{..} -> do
+  it "should ingest replay events successfully" \tr -> do
     sessionId <- liftIO UUIDV4.nextRandom
     currentTime <- liftIO getCurrentTime
 
@@ -322,7 +318,7 @@ replayTests = do
             , timestamp = currentTime
             }
 
-    result <- toBaseServantResponse trATCtx trLogger $ Replay.replayPostH testPid replayData
+    result <- toBaseServantResponse tr.trATCtx tr.trLogger $ Replay.replayPostH testPid replayData
 
     case result of
       AE.Object obj -> do
@@ -334,7 +330,7 @@ replayTests = do
           _ -> fail "Missing or invalid sessionId field"
       _ -> fail "Expected Object response"
 
-  it "should handle empty event arrays" \TestResources{..} -> do
+  it "should handle empty event arrays" \tr -> do
     sessionId <- liftIO UUIDV4.nextRandom
     currentTime <- liftIO getCurrentTime
 
@@ -345,7 +341,7 @@ replayTests = do
             , timestamp = currentTime
             }
 
-    result <- toBaseServantResponse trATCtx trLogger $ Replay.replayPostH testPid replayData
+    result <- toBaseServantResponse tr.trATCtx tr.trLogger $ Replay.replayPostH testPid replayData
 
     case result of
       AE.Object obj -> do
@@ -354,10 +350,10 @@ replayTests = do
           _ -> fail "Missing or invalid status field"
       _ -> fail "Expected Object response"
 
-  it "should retrieve replay session data" \TestResources{..} -> do
+  it "should retrieve replay session data" \tr -> do
     sessionId <- liftIO UUIDV4.nextRandom
 
-    result <- toServantResponse trATCtx trSessAndHeader trLogger $ Replay.replaySessionGetH testPid sessionId
+    result <- testServant tr $ Replay.replaySessionGetH testPid sessionId
 
     case result of
       AE.Object obj -> do
@@ -375,12 +371,12 @@ s3ConfigTests = do
       -- TODO: Re-enable when Minio is set up
       pendingWith "S3 validation tests require Minio to be configured"
     -- forM_ s3ValidationCases $ \(testDesc, s3Form, shouldSucceed) ->
-    --   it testDesc $ \TestResources{..} -> do
-    --     result <- toServantResponse trATCtx trSessAndHeader trLogger $ S3.brings3PostH testPid s3Form
+    --   it testDesc $ \tr -> do
+    --     result <- testServant tr $ S3.brings3PostH testPid s3Form
 
     --     -- Check if S3 config was saved based on success expectation
     --     savedConfigM <-
-    --       DBT.withPool trPool
+    --       DBT.withPool tr.trPool
     --         $ DBT.queryOne [sql|SELECT s3_bucket FROM projects.projects WHERE id = ?|] (Only testPid)
     --     let savedConfig = fmap fromOnly savedConfigM
 
@@ -390,7 +386,7 @@ s3ConfigTests = do
     --       (False, Nothing) -> fail "Project not found"
     --       _ -> pure () -- Other cases - validation might fail but that's ok for invalid credentials
 
-  it "should remove S3 configuration" \TestResources{..} -> do
+  it "should remove S3 configuration" \tr -> do
     -- First add an S3 config
     let s3Form =
           Projects.ProjectS3Bucket
@@ -402,17 +398,17 @@ s3ConfigTests = do
             }
 
     _ <-
-      DBT.withPool trPool
+      DBT.withPool tr.trPool
         $ DBT.execute
           [sql|UPDATE projects.projects SET s3_bucket = ? WHERE id = ?|]
           (Just s3Form, testPid)
 
     -- Now remove it
-    _ <- toServantResponse trATCtx trSessAndHeader trLogger $ S3.brings3RemoveH testPid
+    _ <- testServant tr $ S3.brings3RemoveH testPid
 
     -- Verify it was removed
     savedConfigM <-
-      DBT.withPool trPool
+      DBT.withPool tr.trPool
         $ DBT.queryOne [sql|SELECT s3_bucket FROM projects.projects WHERE id = ?|] (Only testPid)
     let savedConfig = fmap fromOnly savedConfigM
 

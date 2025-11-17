@@ -42,7 +42,7 @@ spec = aroundAll withTestResources do
       resp <- runTestBg tr $ processMessages msgs HashMap.empty
       resp `shouldBe` ["m1", "m2"]
 
-    it "We should expect 2 endpoints, albeit unacknowleged." $ \tr@TestResources{..} -> do
+    it "We should expect 2 endpoints, albeit unacknowleged." $ \tr -> do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
@@ -54,11 +54,11 @@ spec = aroundAll withTestResources do
       _ <- runTestBg tr $ processMessages msgs HashMap.empty
       _ <- runTestBg tr $ processFiveMinuteSpans currentTime pid
 
-      pendingJobs <- getPendingBackgroundJobs trATCtx
-      logBackgroundJobsInfo trLogger pendingJobs
+      pendingJobs <- getPendingBackgroundJobs tr.trATCtx
+      logBackgroundJobsInfo tr.trLogger pendingJobs
 
-      _ <- runAllBackgroundJobs trATCtx
-      endpoints <- withPool trPool $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0 "Incoming"
+      _ <- runAllBackgroundJobs tr.trATCtx
+      endpoints <- withPool tr.trPool $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0 "Incoming"
       length endpoints `shouldBe` 3
       forM_ endpoints \enp ->
         ["/", "/api/v1/user/login", "/service/extension/backup/mboximport"] `shouldContain` [enp.urlPath]
