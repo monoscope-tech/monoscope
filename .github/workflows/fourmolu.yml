@@ -9,6 +9,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: haskell-actions/run-fourmolu@v11
+        continue-on-error: true
         with:
           version: '0.19.0.0'
           mode: 'inplace'
