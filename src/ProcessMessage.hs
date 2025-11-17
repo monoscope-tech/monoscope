@@ -35,7 +35,7 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static qualified as Eff
 
-import Log qualified
+import System.Logging qualified as Log
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Formats qualified as Formats

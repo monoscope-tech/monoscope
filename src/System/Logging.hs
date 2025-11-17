@@ -6,10 +6,13 @@ module System.Logging (
   runLog,
   logWithTrace,
   logInfo,
+  logInfo_,
   logWarn,
   logError,
   logDebug,
+  logTrace,
   logAttention,
+  logAttention_,
   timeAction,
   LoggingDestination (..),
   getLogLevelFromEnv,
@@ -141,8 +144,20 @@ logDebug :: (AE.ToJSON a, IOE :> es, Log :> es) => Text -> a -> Eff es ()
 logDebug = logWithTrace Log.LogTrace -- Using LogTrace for debug
 
 
+logTrace :: (AE.ToJSON a, IOE :> es, Log :> es) => Text -> a -> Eff es ()
+logTrace = logWithTrace Log.LogTrace
+
+
 logAttention :: (AE.ToJSON a, IOE :> es, Log :> es) => Text -> a -> Eff es ()
 logAttention = logWithTrace Log.LogAttention
+
+
+logInfo_ :: (IOE :> es, Log :> es) => Text -> Eff es ()
+logInfo_ msg = logInfo msg ()
+
+
+logAttention_ :: (IOE :> es, Log :> es) => Text -> Eff es ()
+logAttention_ msg = logAttention msg ()
 
 
 timeAction

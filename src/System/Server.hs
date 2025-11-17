@@ -13,7 +13,8 @@ import Effectful
 import Effectful.Concurrent (runConcurrent)
 import Effectful.Fail (runFailIO)
 import Effectful.Time (runTime)
-import Log qualified
+import Log (LogLevel (..), runLogT)
+import Log qualified as LogBase
 import Network.HTTP.Types (status200)
 import Network.Wai
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setOnException, setPort)
@@ -68,7 +69,7 @@ optionsMiddleware app req respond =
     else app req respond
 
 
-runServer :: IOE :> es => Log.Logger -> AuthContext -> TracerProvider -> Eff es ()
+runServer :: IOE :> es => LogBase.Logger -> AuthContext -> TracerProvider -> Eff es ()
 runServer appLogger env tp = do
   loggingMiddleware <- Logging.runLog (show env.config.environment) appLogger env.config.logLevel WaiLog.mkLogMiddleware
   let server = mkServer appLogger env tp
@@ -76,8 +77,8 @@ runServer appLogger env tp = do
         defaultSettings
           & setPort env.config.port
           & setOnException \_ exception ->
-            Log.runLogT "monoscope" appLogger Log.LogAttention
-              $ Log.logAttention "Unhandled exception"
+            runLogT "monoscope" appLogger LogAttention
+              $ LogBase.logAttention "Unhandled exception"
               $ AE.object ["exception" AE..= show @String exception]
   let compressionSettings =
         defaultGzipSettings
@@ -121,7 +122,7 @@ instance FromHttpApiData ByteString where
   parseUrlPiece = Right . encodeUtf8
 
 
-mkServer :: Log.Logger -> AuthContext -> TracerProvider -> Servant.Application
+mkServer :: LogBase.Logger -> AuthContext -> TracerProvider -> Servant.Application
 mkServer logger env tp = do
   genericServeTWithContext
     (effToServantHandler env logger tp)
@@ -137,9 +138,7 @@ shutdownMonoscope env =
     Pool.destroyAllResources env.timefusionPgPool
 
 
-logException :: Text -> Log.Logger -> Log.LogLevel -> Safe.SomeException -> IO ()
+logException :: Text -> LogBase.Logger -> LogLevel -> Safe.SomeException -> IO ()
 logException envTxt logger logLevel exception =
-  runEff
-    . runTime
-    . Logging.runLog envTxt logger logLevel
-    $ Log.logAttention "odd-jobs runner crashed " (show @Text exception)
+  runLogT envTxt logger logLevel
+    $ LogBase.logAttention "odd-jobs runner crashed " (show @Text exception)

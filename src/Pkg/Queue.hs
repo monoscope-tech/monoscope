@@ -22,7 +22,8 @@ import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
 import Kafka.Consumer qualified as K
 import Kafka.Producer qualified as KP
-import Log qualified
+import Log (LogLevel (..), Logger, runLogT)
+import Log qualified as LogBase
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Relude
@@ -92,8 +93,8 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
             >>= \case
               Left e -> do
                 liftIO
-                  $ Log.runLogT "apitoolkit" appLogger Log.LogAttention
-                  $ Log.logAttention "pubsubService: CAUGHT EXCEPTION - Error processing messages" (AE.object ["error" AE..= show e, "message_count" AE..= length (catMaybes msgsB64), "first_attrs" AE..= firstAttrs, "checkpoint" AE..= ("pubsubService:exception" :: String)])
+                  $ runLogT "apitoolkit" appLogger LogAttention
+                  $ LogBase.logAttention "pubsubService: CAUGHT EXCEPTION - Error processing messages" (AE.object ["error" AE..= show e, "message_count" AE..= length (catMaybes msgsB64), "first_attrs" AE..= firstAttrs, "checkpoint" AE..= ("pubsubService:exception" :: String)])
 
                 -- Send to dead letter queue unless it's an unrecoverable error
                 unless (isUnrecoverableError e)
@@ -108,7 +109,7 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
         unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
       case result of
         Left e -> do
-          liftIO $ Log.runLogT "apitoolkit" appLogger Log.LogAttention $ Log.logAttention "Run Pubsub exception" (show e)
+          liftIO $ runLogT "apitoolkit" appLogger LogAttention $ LogBase.logAttention "Run Pubsub exception" (show e)
           pass
         Right _ -> pass
   where
@@ -174,8 +175,8 @@ kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
   -- Include dead letter topic in the list of topics to consume
   let allTopics = kafkaTopics <> [appCtx.config.kafkaDeadLetterTopic]
 
-  Log.runLogT "kafka-service" appLogger Log.LogInfo
-    $ Log.logInfo "Starting Kafka consumer service"
+  runLogT "kafka-service" appLogger LogInfo
+    $ LogBase.logInfo "Starting Kafka consumer service"
     $ AE.object
       [ "client_id" AE..= clientId
       , "topics" AE..= kafkaTopics
@@ -189,16 +190,16 @@ kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
     (either throwIO pure =<< K.newConsumer (consumerProps appCtx.config clientId) consumerSub)
     K.closeConsumer
     $ \consumer -> do
-      Log.runLogT "kafka-service" appLogger Log.LogInfo
-        $ Log.logInfo "Kafka consumer connected successfully, starting message polling loop"
+      runLogT "kafka-service" appLogger LogInfo
+        $ LogBase.logInfo "Kafka consumer connected successfully, starting message polling loop"
         $ AE.object ["client_id" AE..= clientId]
       forever do
         pollResult@(leftRecords, rightRecords) <- partitionEithers <$> K.pollMessageBatch consumer (K.Timeout 100) (K.BatchSize appCtx.config.messagesPerPubsubPullBatch) -- timeout in milliseconds
 
         -- Log polling errors if any
         unless (null leftRecords) $ do
-          Log.runLogT "kafka-service" appLogger Log.LogAttention
-            $ Log.logAttention "Kafka poll returned errors"
+          runLogT "kafka-service" appLogger LogAttention
+            $ LogBase.logAttention "Kafka poll returned errors"
             $ AE.object
               [ "error_count" AE..= length leftRecords
               , "errors" AE..= map show leftRecords
@@ -244,8 +245,8 @@ kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
                 )
                 >>= \case
                   Left e -> do
-                    Log.runLogT "apitoolkit" appLogger Log.LogAttention
-                      $ Log.logAttention "kafkaService: CAUGHT EXCEPTION - Error processing Kafka messages" (AE.object ["error" AE..= show e, "topic" AE..= topic, "ce-type" AE..= ceType, "record_count" AE..= length allRecords, "attributes" AE..= attributes, "checkpoint" AE..= ("kafkaService:exception" :: String)])
+                    runLogT "apitoolkit" appLogger LogAttention
+                      $ LogBase.logAttention "kafkaService: CAUGHT EXCEPTION - Error processing Kafka messages" (AE.object ["error" AE..= show e, "topic" AE..= topic, "ce-type" AE..= ceType, "record_count" AE..= length allRecords, "attributes" AE..= attributes, "checkpoint" AE..= ("kafkaService:exception" :: String)])
 
                     -- Send to dead letter queue unless it's an unrecoverable error
                     unless (isUnrecoverableError e)

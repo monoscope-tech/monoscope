@@ -12,7 +12,7 @@ import Deriving.Aeson qualified as DAE
 import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
-import Log qualified
+import System.Logging qualified as Log
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Relude hiding (ask, asks, max, min)

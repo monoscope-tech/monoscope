@@ -51,7 +51,9 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
-import Log qualified
+import Log (LogLevel (..), Logger, runLogT)
+import Log qualified as LogBase
+import System.Logging qualified as Log
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.SummaryGenerator (generateSummary)
@@ -124,7 +126,7 @@ wireTypeErrorsRef = unsafePerformIO $ IORef.newIORef HashMap.empty
 
 
 -- | Initialize periodic error logging
-initPeriodicErrorLogging :: Log.Logger -> IO ()
+initPeriodicErrorLogging :: Logger -> IO ()
 initPeriodicErrorLogging logger = void $ forkIO $ forever $ do
   threadDelay (60 * 1000000) -- 60 seconds
   errors <- IORef.atomicModifyIORef' wireTypeErrorsRef (\m -> (HashMap.empty, m))
@@ -144,8 +146,8 @@ initPeriodicErrorLogging logger = void $ forkIO $ forever $ do
                   | (k, (count, example)) <- HashMap.toList errors
                   ]
             ]
-    Log.runLogT "monoscope" logger Log.LogAttention
-      $ Log.logAttention "Wire type errors summary" errorDetails
+    runLogT "monoscope" logger LogAttention
+      $ LogBase.logAttention "Wire type errors summary" errorDetails
 
 
 -- | Minimum valid timestamp in nanoseconds (Year 2000)
@@ -1334,7 +1336,7 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
 -- Server
 ---------------------------------------------------------------------------------------
 
-runServer :: Log.Logger -> AuthContext -> TracerProvider -> IO ()
+runServer :: Logger -> AuthContext -> TracerProvider -> IO ()
 runServer appLogger appCtx tp = do
   initPeriodicErrorLogging appLogger
   runServerWithHandlers def config (services appLogger appCtx tp)
@@ -1412,7 +1414,7 @@ processTraceRequest metadataApiKey req = do
 
 
 -- | Trace service handler (Export)
-traceServiceExport :: Log.Logger -> AuthContext -> TracerProvider -> Proto TS.ExportTraceServiceRequest -> IO (Proto TS.ExportTraceServiceResponse)
+traceServiceExport :: Logger -> AuthContext -> TracerProvider -> Proto TS.ExportTraceServiceRequest -> IO (Proto TS.ExportTraceServiceResponse)
 traceServiceExport appLogger appCtx tp (Proto req) = do
   -- Note: This version is for backwards compatibility when called directly in tests
   -- The RpcHandler version below has access to metadata
@@ -1481,7 +1483,7 @@ processLogsRequest metadataApiKey req = do
 
 
 -- | Logs service handler (Export)
-logsServiceExport :: Log.Logger -> AuthContext -> TracerProvider -> Proto LS.ExportLogsServiceRequest -> IO (Proto LS.ExportLogsServiceResponse)
+logsServiceExport :: Logger -> AuthContext -> TracerProvider -> Proto LS.ExportLogsServiceRequest -> IO (Proto LS.ExportLogsServiceResponse)
 logsServiceExport appLogger appCtx tp (Proto req) = do
   -- Note: This version is for backwards compatibility when called directly in tests
   -- The RpcHandler version below has access to metadata
@@ -1545,7 +1547,7 @@ processMetricsRequest metadataApiKey req = do
 
 
 -- | Metrics service handler (Export)
-metricsServiceExport :: Log.Logger -> AuthContext -> TracerProvider -> Proto MS.ExportMetricsServiceRequest -> IO (Proto MS.ExportMetricsServiceResponse)
+metricsServiceExport :: Logger -> AuthContext -> TracerProvider -> Proto MS.ExportMetricsServiceRequest -> IO (Proto MS.ExportMetricsServiceResponse)
 metricsServiceExport appLogger appCtx tp (Proto req) = do
   -- Note: This version is for backwards compatibility when called directly in tests
   -- The RpcHandler version below has access to metadata
@@ -1566,7 +1568,7 @@ isAesonTextEmpty (Just (AesonText v)) =
 
 
 -- | RpcHandler for trace service with metadata access
-traceServiceRpcHandler :: Log.Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf TS.TraceService "export")
+traceServiceRpcHandler :: Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf TS.TraceService "export")
 traceServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
   -- Get request metadata (includes Authorization header)
   metadata <- getRequestMetadata call
@@ -1583,7 +1585,7 @@ traceServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
 
 
 -- | RpcHandler for logs service with metadata access
-logsServiceRpcHandler :: Log.Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf LS.LogsService "export")
+logsServiceRpcHandler :: Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf LS.LogsService "export")
 logsServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
   -- Get request metadata (includes Authorization header)
   metadata <- getRequestMetadata call
@@ -1600,7 +1602,7 @@ logsServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
 
 
 -- | RpcHandler for metrics service with metadata access
-metricsServiceRpcHandler :: Log.Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf MS.MetricsService "export")
+metricsServiceRpcHandler :: Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf MS.MetricsService "export")
 metricsServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
   -- Get request metadata (includes Authorization header)
   metadata <- getRequestMetadata call
@@ -1616,7 +1618,7 @@ metricsServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
   sendFinalOutput call (defMessage, NoMetadata)
 
 
-services :: Log.Logger -> AuthContext -> TracerProvider -> [SomeRpcHandler IO]
+services :: Logger -> AuthContext -> TracerProvider -> [SomeRpcHandler IO]
 services appLogger appCtx tp =
   fromMethods
     $ RawMethod (traceServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf TS.TraceService "export"))

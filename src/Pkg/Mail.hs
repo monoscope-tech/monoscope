@@ -12,12 +12,13 @@ import Data.Time
 import Data.Vector qualified as V
 import Effectful (
   Eff,
+  IOE,
   type (:>),
  )
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static (Reader, ask)
-import Log qualified
+import System.Logging qualified as Log
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Slack (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.Projects qualified as Projects
@@ -32,7 +33,7 @@ sendPostmarkEmail receiver tmpOptionsM subMsg =
   Notify.sendNotification $ Notify.emailNotification receiver tmpOptionsM subMsg
 
 
-sendSlackMessage :: (DB :> es, Log :> es, Notify.Notify :> es) => Projects.ProjectId -> Text -> Eff es ()
+sendSlackMessage :: (IOE :> es, DB :> es, Log :> es, Notify.Notify :> es) => Projects.ProjectId -> Text -> Eff es ()
 sendSlackMessage pid message = do
   slackData <- getProjectSlackData pid
   case slackData of

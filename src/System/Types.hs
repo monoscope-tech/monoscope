@@ -241,9 +241,9 @@ addSuccessToast :: State.State TriggerEvents :> es => Text -> Maybe Text -> Eff 
 addSuccessToast = addToast "success"
 
 
-addErrorToast :: (Log :> es, State.State TriggerEvents :> es) => Text -> Maybe Text -> Eff es ()
+addErrorToast :: (IOE :> es, Log :> es, State.State TriggerEvents :> es) => Text -> Maybe Text -> Eff es ()
 addErrorToast msg msg2 = do
-  Log.logAttention_ $ "ERROR: " <> msg <> " => " <> maybeToMonoid msg2
+  Logging.logAttention_ $ "ERROR: " <> msg <> " => " <> maybeToMonoid msg2
   addToast "error" msg msg2
 
 
