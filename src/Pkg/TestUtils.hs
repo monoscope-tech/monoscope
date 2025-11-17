@@ -376,7 +376,7 @@ rollback conn actionToRollback = mask $ \restore -> do
 testSessionHeader :: MonadIO m => Pool Connection -> m (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Sessions.Session)
 testSessionHeader pool = do
   pSessId <-
-    Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "hello@monoscope.tech"
+    Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@apitoolkit.io"
       & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 10])
       & runHTTPGolden "./tests/golden/"
       & DB.runDB pool
@@ -399,7 +399,7 @@ testSessionHeader pool = do
     withPool pool
       $ DBT.execute
         [sql|INSERT INTO projects.project_members (project_id, user_id, permission)
-         VALUES (?, '00000000-0000-0000-0000-000000000000', 'admin')
+         VALUES (?, '00000000-0000-0000-0000-000000000001', 'admin')
          ON CONFLICT (project_id, user_id) DO UPDATE SET permission = 'admin'|]
         (Only testProjectId)
 
