@@ -384,6 +384,13 @@ testSessionHeader pool = do
       & runEff
       & liftIO
 
+  -- Grant sudo privileges to test user
+  _ <-
+    withPool pool
+      $ DBT.execute
+        [sql|UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000001'|]
+        ()
+
   -- Create a test project and add it to the user's session
   let testProjectId = Projects.ProjectId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
   _ <-
