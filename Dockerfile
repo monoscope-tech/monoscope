@@ -30,7 +30,7 @@ COPY workbox-config.js ./
 RUN npx workbox generateSW workbox-config.js
 
 # Stage 2: Build Haskell application
-FROM haskell:9.10.3 AS haskell-builder
+FROM haskell:9.12.2 AS haskell-builder
 
 # Install system dependencies (combined into single layer)
 RUN apt-get update && apt-get install -y \

@@ -78,13 +78,8 @@ data WidgetType
   | WTTraces
   | WTFlamegraph
   deriving stock (Enum, Eq, Generic, Show, THS.Lift)
-  deriving anyclass (NFData)
+  deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "WT", DAE.CamelToSnake]] WidgetType
-
-
--- TODO: Delete after upgrading > 9.10
-instance Default WidgetType where
-  def = WTTimeseries
 
 
 data SummarizeBy
@@ -93,13 +88,8 @@ data SummarizeBy
   | SBMin
   | SBCount
   deriving stock (Enum, Eq, Generic, Show, THS.Lift)
-  deriving anyclass (NFData)
+  deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "SB", DAE.CamelToSnake]] SummarizeBy
-
-
--- TODO: Delete after upgrading > 9.10
-instance Default SummarizeBy where
-  def = SBSum
 
 
 summarizeByPrefix :: SummarizeBy -> Text

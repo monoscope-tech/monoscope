@@ -9,7 +9,7 @@ env:
   LD_LIBRARY_PATH: '/usr/local/lib:$LD_LIBRARY_PATH'
   # GitHub Actions runners have 2 cores for Linux
   CABAL_JOBS: 2
-  GHC_VERSION: 9.10.2
+  GHC_VERSION: 9.12.2
 
 jobs:
   test:
