@@ -176,14 +176,14 @@
   --color-accent-content: rgb(0 104 255);
   --color-neutral: rgba(0 21 128 / 0.04);
   --color-neutral-content: rgba(0 6 38 / 0.9);
-  --color-info: rgba(38 176 255 / 0.05);
-  --color-info-content: rgb(26 116 168);
-  --color-success: rgba(10 204 146 / 0.05);
-  --color-success-content: rgb(6 122 87);
-  --color-warning: rgba(255 192 46 / 0.05);
-  --color-warning-content: rgb(143 108 26);
-  --color-error: rgba(255 74 74 / 0.05);
-  --color-error-content: rgb(199 58 58);
+  --color-info: oklch(49.3% 0.088 241);
+  --color-info-content: oklch(49.3% 0.088 241);
+  --color-success: oklch(47.8% 0.13 162);
+  --color-success-content: oklch(47.8% 0.13 162);
+  --color-warning: oklch(54.7% 0.126 69);
+  --color-warning-content: oklch(54.7% 0.126 69);
+  --color-error: oklch(51.3% 0.197 21);
+  --color-error-content: oklch(51.3% 0.197 21);
   --radius-selector: 0.4rem;
   --radius-field: 0.4rem;
   --radius-box: 1rem;
@@ -201,25 +201,25 @@
   prefersdark: true;
   color-scheme: 'dark';
   --color-base-100: var(--color-bgBase);
-  --color-base-200: rgba(255 255 255 / 0.06);
-  --color-base-300: rgba(255 255 255 / 0.06);
-  --color-base-content: rgb(255 255 255);
+  --color-base-200: oklch(18% 0.02 263);
+  --color-base-300: oklch(20% 0.02 263);
+  --color-base-content: oklch(85% 0.02 263);
   --color-primary: rgb(0 104 255);
-  --color-primary-content: rgb(255 255 255);
+  --color-primary-content: oklch(85% 0.02 263);
   --color-secondary: var(--color-textBrand);
-  --color-secondary-content: rgba(255 255 255 / 0.78);
+  --color-secondary-content: oklch(78% 0.018 263);
   --color-accent: rgba(255 255 255 / 0.03);
   --color-accent-content: rgb(0 104 255);
   --color-neutral: rgba(255 255 255 / 0.06);
-  --color-neutral-content: rgb(255 255 255);
-  --color-info: rgba(126 192 229 / 0.08);
-  --color-info-content: rgb(126 192 229);
-  --color-success: rgba(119 199 175 / 0.08);
-  --color-success-content: rgb(119 199 175);
-  --color-warning: rgba(224 190 112 / 0.08);
-  --color-warning-content: rgb(224 190 112);
-  --color-error: rgba(255 156 156 / 0.08);
-  --color-error-content: rgb(255 156 156);
+  --color-neutral-content: oklch(85% 0.02 263);
+  --color-info: oklch(75.5% 0.098 241);
+  --color-info-content: oklch(75.5% 0.098 241);
+  --color-success: oklch(75.3% 0.092 162);
+  --color-success-content: oklch(75.3% 0.092 162);
+  --color-warning: oklch(79.5% 0.106 92);
+  --color-warning-content: oklch(79.5% 0.106 92);
+  --color-error: oklch(77.2% 0.126 21);
+  --color-error-content: oklch(77.2% 0.126 21);
   --radius-selector: 0.3rem;
   --radius-field: 0.4rem;
   --radius-box: 1rem;
@@ -923,21 +923,21 @@ code, pre, .code, .monospace {
 
     /* Text colors - Dark theme */
     --color-textBrand: oklch(70% 0.15 241);
-    --color-textDisabled: rgba(255 255 255 / 0.20);
+    --color-textDisabled: oklch(60% 0.01 263);
     --color-textError: oklch(77.2% 0.126 21);
     --color-textInformation: oklch(75.5% 0.098 241);
-    --color-textInverseDisabled: rgba(0 17 102 / 0.1);
-    --color-textInverse-strong: rgba(0 6 38 / 0.9);
-    --color-textInverse-weak: rgba(0 8 51 / 0.65);
-    --color-textStrong: oklch(85% 0 0);
+    --color-textInverseDisabled: oklch(45% 0.008 263);
+    --color-textInverse-strong: oklch(20% 0.015 263);
+    --color-textInverse-weak: oklch(35% 0.012 263);
+    --color-textStrong: oklch(85% 0.02 263);
     --color-textSuccess: oklch(75.3% 0.092 162);
     --color-textWarning: oklch(79.5% 0.106 92);
-    --color-textWeak: oklch(70% 0 0);
+    --color-textWeak: oklch(70% 0.015 263);
 
     /* Update fallback colors for dark mode */
     --fallback-b2: rgba(255 255 255 / 0.06);
-    --tab-color: oklch(70% 0 0);
-    --fallback-pc: oklch(95% 0 0);
+    --tab-color: oklch(70% 0.015 263);
+    --fallback-pc: oklch(95% 0.015 263);
     --fallback-bc: rgba(255 255 255 / 0.6);
   }
   .btn-primary {
