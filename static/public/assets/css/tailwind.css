@@ -854,11 +854,11 @@ code, pre, .code, .monospace {
   /* Dark mode overrides */
   [data-theme="dark"] {
     /* Background colors - Dark theme */
-    --color-bgAlternate: oklch(20.1% 0.015 263);
-    --color-bgBase: oklch(16.4% 0.012 263);
+    --color-bgAlternate: oklch(18% 0.025 263);
+    --color-bgBase: oklch(14% 0.025 263);
     --color-bgInverse: rgb(255 255 255);
-    --color-bgOverlay: oklch(26.4% 0.012 263);
-    --color-bgRaised: oklch(22.0% 0.010 263);
+    --color-bgOverlay: oklch(24% 0.025 263);
+    --color-bgRaised: oklch(20% 0.022 263);
     --color-bgSunken: rgb(0 0 0);
     --color-bgBrand: rgb(59 130 246);
 
@@ -875,7 +875,7 @@ code, pre, .code, .monospace {
     --color-fillInverseDisabled: rgba(0 17 102 / 0.1);
     --color-fillInverse-hover: rgba(0 21 128 / 0.04);
     --color-fillInverse-press: rgba(0 17 102 / 0.1);
-    --color-fillInverse-strong: oklch(16.4% 0.012 263);
+    --color-fillInverse-strong: oklch(14% 0.025 263);
     --color-fillInverse-weak: rgba(0 21 128 / 0.04);
     --color-fillOverlay: rgba(0 6 38 / 0.9);
     --color-fillPress: rgba(255 255 255 / 0.12);
