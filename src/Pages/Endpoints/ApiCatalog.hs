@@ -124,6 +124,7 @@ renderapiCatalog pid host timeFilter requestType = div_ [class_ "flex py-4 gap-8
       $ (def :: Widget.Widget)
         { Widget.standalone = Just True
         , Widget.title = Just host.host
+        , Widget.wType = Widget.WTTimeseries
         , Widget.showTooltip = Just False
         , Widget.naked = Just True
         , Widget.xAxis = Just (def{Widget.showAxisLabel = Just False})

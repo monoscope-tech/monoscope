@@ -950,6 +950,7 @@ renderIssue hideByDefault currTime timeFilter issue isWidget = do
       $ (def :: Widget.Widget)
         { Widget.standalone = Just True
         , Widget.id = Just issueId
+        , Widget.wType = Widget.WTTimeseries
         , Widget.title = Just issueId
         , Widget.showTooltip = Just False
         , Widget.naked = Just True
