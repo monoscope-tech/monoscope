@@ -273,6 +273,7 @@ renderEndpoint activePage currTime enp = do
       $ Widget.widget_
       $ (def :: Widget.Widget)
         { Widget.standalone = Just True
+        , Widget.wType = Widget.WTTimeseries
         , Widget.id = Just enp.endpointHash
         , Widget.title = Just enp.endpointHash
         , Widget.showTooltip = Just False

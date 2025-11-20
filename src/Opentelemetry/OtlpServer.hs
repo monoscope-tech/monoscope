@@ -26,7 +26,6 @@ import Data.Aeson.KeyMap qualified as KEM
 import Data.Base64.Types qualified as B64
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
-import Data.ByteString.Char8 qualified as C8
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.UUID (UUIDEff)
