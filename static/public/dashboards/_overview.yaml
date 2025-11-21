@@ -855,16 +855,14 @@ tabs:
           - field: total_time
             title: Avg Duration
             columnType: duration
-            unit: ms
           - field: span_count
             title: Trace Count
             columnType: number
           - field: latency_breakdown
             title: Latency breakdown
-            columnType: duration
         sql: |
           SELECT
-            resource___service___name,
+            COALESCE(resource___service___name,'Unknown'),
             name,
             ROUND(AVG(duration/1000000), 2)::text AS avg_duration,
             COUNT(*)::text AS span_count,

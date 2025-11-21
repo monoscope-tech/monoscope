@@ -27,7 +27,7 @@ import Text.Slugify (slugify)
 import Utils (faSprite_, getServiceColors, onpointerdown_, prettyPrintCount, prettyPrintDuration)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData, parseQueryParam)
-
+import Utils
 
 -- Generic instance for parsing JSON arrays from form data
 instance AE.FromJSON a => FromHttpApiData [a] where
@@ -381,7 +381,7 @@ renderTraceTable widget = do
           div_
             [ class_ "h-full overflow-auto p-3"
             , hxGet_ $ "/p/" <> fromMaybe "" (widget._projectId <&> (.toText)) <> "/widget?widgetJSON=" <> decodeUtf8 (urlEncode True widgetJson)
-            , hxTrigger_ "load, update-query from:window"
+            , hxTrigger_ "load"
             , hxTarget_ $ "#" <> tableId
             , hxSelect_ $ "#" <> tableId
             , hxSwap_ "outerHTML"
@@ -416,7 +416,7 @@ renderTraceTable widget = do
                         $ span_ [class_ "loading loading-spinner loading-sm"] ""
       script_
         [type_ "text/javascript"]
-        [text| htmx.process("#$tableId") |]
+        [text| htmx.process(".widget-target") |]
 
 
 -- Table widget rendering
@@ -928,6 +928,7 @@ renderTraceDataTable widget dataRows spGroup = do
                 , id_ $ "t" <> val
                 ]
                 do
+                  span_ [class_ "loading loading-dots loading-sm self-center"] ""
                   a_ [hxTrigger_ "intersect once", hxGet_ $ "/p/" <> p.toText <> "/widget/flamegraph/" <> val <> "?shapeView=true", hxTarget_ $ "#t" <> val, hxSwap_ "innerHTML"] pass
 
 
@@ -1017,15 +1018,6 @@ formatColumnValue col value = case col.columnType of
       Nothing -> value <> foldMap (" " <>) col.unit
   Just "duration" ->
     case readMaybe (T.unpack value) :: Maybe Double of
-      Just v ->
-        -- Convert to nanoseconds based on unit, then format
-        let nsValue = case col.unit of
-              Just "ms" -> v * 1_000_000 -- milliseconds to nanoseconds
-              Just "s" -> v * 1_000_000_000 -- seconds to nanoseconds
-              Just "μs" -> v * 1_000 -- microseconds to nanoseconds
-              Just "us" -> v * 1_000 -- microseconds to nanoseconds (alt)
-              Just "ns" -> v -- already nanoseconds
-              _ -> v -- assume nanoseconds if no unit
-         in prettyPrintDuration nsValue
+      Just v -> toText $ getDurationNSMS (fromIntegral (round v :: Int))
       Nothing -> value <> foldMap (" " <>) col.unit
   _ -> value <> foldMap (" " <>) col.unit
