@@ -24,10 +24,11 @@ import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Text.Printf (printf)
 import Text.Slugify (slugify)
+import Utils
 import Utils (faSprite_, getServiceColors, onpointerdown_, prettyPrintCount, prettyPrintDuration)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData, parseQueryParam)
-import Utils
+
 
 -- Generic instance for parsing JSON arrays from form data
 instance AE.FromJSON a => FromHttpApiData [a] where
