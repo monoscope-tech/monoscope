@@ -4,7 +4,8 @@ module Models.Telemetry.Telemetry (
   LogRecord (..),
   logRecordByProjectAndId,
   spanRecordByProjectAndId,
-  getSpandRecordsByTraceId,
+  getSpanRecordsByTraceId,
+  getSpanRecordsByTraceIds,
   convertOtelLogsAndSpansToSpanRecord,
   getTotalEventsToReport,
   SpanRecord (..),
@@ -503,18 +504,42 @@ logRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne q (createdAt, p
              FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
-getSpandRecordsByTraceId :: DB :> es => Projects.ProjectId -> Text -> Maybe UTCTime -> Eff es (V.Vector OtelLogsAndSpans)
-getSpandRecordsByTraceId pid trId tme = dbtToEff $ query (Query $ encodeUtf8 q) (pid.toText, trId)
+getSpanRecordsByTraceId :: DB :> es => Projects.ProjectId -> Text -> Maybe UTCTime -> Eff es (V.Vector OtelLogsAndSpans)
+getSpanRecordsByTraceId pid trId tme = do
+  dbtToEff $ query q (pid.toText, start, end, trId)
   where
     (start, end) = case tme of
       Nothing -> ("now() - interval '1 day'", "now()")
       Just ts -> ((toText . iso8601Show) $ addUTCTime (-60 * 5) ts, (toText . iso8601Show) $ addUTCTime (60 * 5) ts)
     q =
-      [text|
+      [sql|
       SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
                   hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date::timestamptz
-              FROM otel_logs_and_spans where project_id=? and timestamp >= $start AND timestamp <= $end and context___trace_id=? ORDER BY start_time ASC;
+              FROM otel_logs_and_spans where project_id=? and timestamp >= ? AND timestamp <= ? and context___trace_id=? ORDER BY start_time ASC;
     |]
+
+
+getSpanRecordsByTraceIds :: DB :> es => Projects.ProjectId -> V.Vector Text -> Maybe UTCTime -> Eff es (V.Vector OtelLogsAndSpans)
+getSpanRecordsByTraceIds pid traceIds tme = do
+  dbtToEff $ query (Query $ encodeUtf8 q) (pid.toText, start, end, traceIds)
+  where
+    (start, end) =
+      case tme of
+        Nothing -> ("now() - interval '1 day'", "now()")
+        Just ts -> (toText (iso8601Show $ addUTCTime (-300) ts), toText (iso8601Show $ addUTCTime 300 ts))
+    q =
+      [text|
+        SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity,
+               body, attributes, resource, hashes, kind, status_code, status_message,
+               start_time, end_time, events, links, duration, name,
+               parent_id, summary, date::timestamptz
+        FROM otel_logs_and_spans 
+        WHERE project_id = ?
+          AND timestamp >= ?
+          AND timestamp <= ?
+          AND context___trace_id = ANY(?)
+        ORDER BY context___trace_id ASC, start_time ASC;
+      |]
 
 
 spanRecordByProjectAndId :: DB :> es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)

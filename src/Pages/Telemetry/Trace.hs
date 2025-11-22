@@ -30,7 +30,7 @@ traceH :: Projects.ProjectId -> Text -> Maybe UTCTime -> Maybe Text -> Maybe Tex
 traceH pid trId timestamp spanIdM nav = do
   if isJust nav
     then do
-      spanRecords' <- Telemetry.getSpandRecordsByTraceId pid trId timestamp
+      spanRecords' <- Telemetry.getSpanRecordsByTraceId pid trId timestamp
       let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
       let sid = fromMaybe "" spanIdM
           targetSpan = fromMaybe (V.head spanRecords') (V.find (\x -> maybe False (\s -> s.span_id == Just sid) x.context) spanRecords')
@@ -49,7 +49,7 @@ traceH pid trId timestamp spanIdM nav = do
       traceItemM <- Telemetry.getTraceDetails pid trId timestamp
       case traceItemM of
         Just traceItem -> do
-          spanRecords' <- Telemetry.getSpandRecordsByTraceId pid trId timestamp
+          spanRecords' <- Telemetry.getSpanRecordsByTraceId pid trId timestamp
           let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
               pageProps = PageProps pid traceItem spanRecords
           addRespHeaders $ TraceDetails pageProps
@@ -138,14 +138,14 @@ tracePage p = do
             div_ [class_ "flex gap-2 w-full pt-2"] do
               div_
                 [ class_ "w-[65%] group px-2 pt-4 border relative flex flex-col rounded-lg overflow-hidden"
-                , id_ "flame-graph-container"
+                , id_ $ "flame-graph-container-" <> traceItem.traceId
                 ]
                 do
-                  div_ [class_ "w-full sticky top-0 border-b border-b-strokeWeak h-6 text-xs relative", id_ "time-container"] pass
+                  div_ [class_ "w-full sticky top-0 border-b border-b-strokeWeak h-6 text-xs relative", id_ $ "time-container-" <> traceItem.traceId] pass
                   div_ [class_ "w-full overflow-x-hidden min-h-56 h-full relative", id_ $ "a" <> traceItem.traceId] pass
-                  div_ [class_ "h-full top-0  absolute z-50 hidden", id_ "time-bar-indicator"] do
+                  div_ [class_ "h-full top-0  absolute z-50 hidden", id_ $ "time-bar-indicator-" <> traceItem.traceId] do
                     div_ [class_ "relative h-full"] do
-                      div_ [class_ "text-xs top-[-18px] absolute -translate-x-1/2 whitespace-nowrap", id_ "line-time"] "2 ms"
+                      div_ [class_ "text-xs top-[-18px] absolute -translate-x-1/2 whitespace-nowrap", id_ $ "line-time-" <> traceItem.traceId] "2 ms"
                       div_ [class_ "h-[calc(100%-24px)] mt-[24px] w-[1px] bg-strokeWeak"] pass
 
               div_ [class_ "border rounded-lg w-[35%] overflow-x-hidden"] do
@@ -207,7 +207,7 @@ tracePage p = do
          htmx.trigger('#trigger-span-' + span, 'click')
       }
   |]
-  script_ [text|flameGraphChart($spanJson, "a$trId", $colorsJson);|]
+  script_ [text|flameGraphChart($spanJson, "$trId", $colorsJson);|]
   script_ [text|waterFallGraphChart($waterFallJson, "waterfall-$trId", $colorsJson);|]
 
 

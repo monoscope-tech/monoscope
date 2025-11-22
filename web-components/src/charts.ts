@@ -106,26 +106,11 @@ export function flameGraphChart(data: FlameGraphItem[], renderAt: string, colors
 
   const fData = modifySpansForFlameGraph(data);
 
-  // const heightOfJson = (json) => {
-  //   const recur = (item, level = 0) => {
-  //     if ((item.children || []).length === 0) {
-  //       return level;
-  //     }
-  //     let maxLevel = level;
-  //     for (const child of item.children) {
-  //       const tempLevel = recur(child, level + 1);
-  //       maxLevel = Math.max(maxLevel, tempLevel);
-  //     }
-  //     return maxLevel;
-  //   };
-  //   return recur(json);
-  // };
-
   const renderItem = (item: ItemsWithStyle, renderAt: string, rootVal: number, containerWidth?: number) => {
     const [level, xStart, xEnd] = item.value;
 
     // Get container - we need it for appending the element
-    const container = document.querySelector('#' + renderAt) as HTMLElement;
+    const container = document.querySelector('#a' + renderAt) as HTMLElement;
     if (!container) return;
 
     // Use cached containerWidth if provided, otherwise calculate it
@@ -170,12 +155,12 @@ export function flameGraphChart(data: FlameGraphItem[], renderAt: string, colors
 
   let maxDuration = 0;
   function flameGraph(stackTrace: FlameGraphItem[], target: string) {
-    const container = document.querySelector('#' + target);
+    const container = document.querySelector('#a' + target);
     if (container) {
       container.innerHTML = '';
       const rootVal = stackTrace.sort((a, b) => b.value - a.value)[0].value || 1;
       maxDuration = rootVal;
-      generateTimeIntervals(rootVal, 'time-container');
+      generateTimeIntervals(rootVal, 'time-container-' + target);
 
       // Cache container width to avoid multiple reflows
       const containerWidth = container.offsetWidth - SCROLL_BAR_WIDTH;
@@ -189,12 +174,12 @@ export function flameGraphChart(data: FlameGraphItem[], renderAt: string, colors
 
   flameGraph(fData, renderAt);
 
-  const flameGraphContainer = document.querySelector('#flame-graph-container')!;
+  const flameGraphContainer = document.querySelector('#flame-graph-container-' + renderAt)!;
 
   // Cache DOM elements and values outside the mousemove handler
-  const lineContainer = document.querySelector('#time-bar-indicator') as HTMLElement;
-  const timeElement = document.querySelector('#line-time') as HTMLElement;
-  const timeContainer = document.querySelector('#time-container') as HTMLElement;
+  const lineContainer = document.querySelector('#time-bar-indicator-' + renderAt) as HTMLElement;
+  const timeElement = document.querySelector('#line-time-' + renderAt) as HTMLElement;
+  const timeContainer = document.querySelector('#time-container-' + renderAt) as HTMLElement;
   let cachedBoundingX: number | null = null;
   let cachedContainerWidth: number | null = null;
 
@@ -233,7 +218,7 @@ export function flameGraphChart(data: FlameGraphItem[], renderAt: string, colors
     }
   });
   flameGraphContainer.addEventListener('mouseleave', (e) => {
-    const lineContainer = document.querySelector('#time-bar-indicator') as HTMLElement;
+    const lineContainer = document.querySelector('#time-bar-indicator-' + renderAt) as HTMLElement;
     if (lineContainer) {
       lineContainer.style.display = 'none';
     }
@@ -268,7 +253,7 @@ function buildHierachy(spans: FlameGraphItem[]) {
 }
 
 function generateTimeIntervals(duration: number, target: string) {
-  const container = document.querySelector('#' + target) as HTMLElement;
+  const container = document.querySelector('#a' + target) as HTMLElement;
   if (!container) return;
 
   // Cache width calculation
@@ -354,7 +339,7 @@ export function waterFallGraphChart(fData: WaterfallItem[], renderAt: string, se
 }
 
 function buildWaterfall(spans: WaterfallItem[], target: string, serviceColors: Record<string, string>, start: number, maxDuration: number) {
-  const container = document.querySelector('#' + target);
+  const container = document.querySelector('#ba' + target);
   if (container) {
     const containerWidth = 550;
     container.innerHTML = '';
