@@ -329,12 +329,20 @@ pAgoFunction = do
 --
 -- >>> parse pValues "" "ago(7d)"
 -- Right (AgoExpression "7d")
+--
+-- Test single-quoted strings:
+-- >>> parse pValues "" "'hello'"
+-- Right (Str "hello")
+--
+-- >>> parse pValues "" "['SELECT','INSERT']"
+-- Right (List [Str "SELECT",Str "INSERT"])
 pValues :: Parser Values
 pValues =
   choice @[]
     [ Null <$ string "null"
     , Boolean <$> (True <$ string "true" <|> False <$ string "false" <|> False <$ string "FALSE" <|> True <$ string "TRUE")
     , Str . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"'))
+    , Str . toText <$> (char '\'' *> manyTill L.charLiteral (char '\''))
     , List [] <$ string "[]"
     , List <$> sqParens (pValues `sepBy` (space *> char ',' <* space))
     , List [] <$ string "()"
@@ -374,6 +382,13 @@ pValues =
 --
 -- >>> parse pTerm "" "description has_all [\"user\", \"login\"]"
 -- Right (HasAll (Subject "description" "description" []) (List [Str "user",Str "login"]))
+--
+-- Test has_any and has_all with single-quoted strings:
+-- >>> parse pTerm "" "attributes.db.operation.name has_any ['SELECT','INSERT']"
+-- Right (HasAny (Subject "attributes.db.operation.name" "attributes" [FieldKey "db",FieldKey "operation",FieldKey "name"]) (List [Str "SELECT",Str "INSERT"]))
+--
+-- >>> parse pTerm "" "tags has_all ['urgent','critical']"
+-- Right (HasAll (Subject "tags" "tags" []) (List [Str "urgent",Str "critical"]))
 --
 -- >>> parse pTerm "" "url contains \"api\""
 -- Right (Contains (Subject "url" "url" []) (Str "api"))
