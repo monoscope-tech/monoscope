@@ -338,6 +338,19 @@ packages:
     git: https://github.com/iand675/hs-opentelemetry
     subdir: propagators/b3
 - completed:
+    commit: 3a5c00527bcda652a188ee7c54127eea90ce1bb7
+    git: https://github.com/MercuryTechnologies/openai
+    name: openai
+    pantry-tree:
+      sha256: 55d906d420a3e08346700ff456172921a2ab90e9a17abe6529117f815d7890d4
+      size: 5200
+    subdir: .
+    version: 2.2.1
+  original:
+    commit: 3a5c00527bcda652a188ee7c54127eea90ce1bb7
+    git: https://github.com/MercuryTechnologies/openai
+    subdir: .
+- completed:
     commit: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
     git: https://github.com/google/proto-lens
     name: proto-lens-setup

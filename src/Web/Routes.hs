@@ -558,7 +558,7 @@ widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
 -- flamegraph GET handler
 flamegraphGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 flamegraphGetH pid trId shapeViewM = do
-  spanRecords' <- Telemetry.getSpandRecordsByTraceId pid trId Nothing
+  spanRecords' <- Telemetry.getSpanRecordsByTraceId pid trId Nothing
   let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
       serviceColors = getServiceColors ((\x -> getServiceName x.resource) <$> spanRecords)
   let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]

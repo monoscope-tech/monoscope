@@ -55,6 +55,10 @@ extra-deps:
       - utils/exceptions
       - propagators/datadog
       - propagators/b3
+  - git: https://github.com/MercuryTechnologies/openai
+    commit: 3a5c00527bcda652a188ee7c54127eea90ce1bb7
+    subdir: .
+
   - git: https://github.com/google/proto-lens
     commit: 815c852b046612256fc0f5f7e8585ec4e55dd9b7
     subdirs:

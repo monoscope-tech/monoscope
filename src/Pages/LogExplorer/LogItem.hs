@@ -19,7 +19,6 @@ import Data.Map qualified as Map
 import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
-import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful.Labeled (labeled)
@@ -290,7 +289,7 @@ expandedItemView pid item aptSp leftM rightM = do
                 "Copy request as curl"
                 faSprite_ "copy" "regular" "w-3 h-3"
           _ -> pass
-        let createdAt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" item.timestamp
+        let createdAt = formatUTC item.timestamp
         whenJust item.context $ \ctx -> do
           whenJust ctx.trace_id $ \trId -> do
             let tracePath = "/p/" <> pid.toText <> "/traces/" <> trId <> "/?timestamp=" <> createdAt

@@ -17,9 +17,11 @@ import Lucid
 import Lucid.Htmx (hxExt_, hxGet_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation
 import Network.HTTP.Types (urlEncode)
 import Pages.Charts.Charts qualified as Charts
+import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Text.Printf (printf)
@@ -318,12 +320,12 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                  <> maybeToMonoid (widget._projectId <&> (.toText))
-                  <> "/dashboards/"
-                  <> maybeToMonoid widget._dashboardId
-                  <> "/widgets/"
-                  <> wId
-                  <> "/duplicate"
+                    <> maybeToMonoid (widget._projectId <&> (.toText))
+                    <> "/dashboards/"
+                    <> maybeToMonoid widget._dashboardId
+                    <> "/widgets/"
+                    <> wId
+                    <> "/duplicate"
               , hxTrigger_ "click"
               , [__| on click set (the closest <details/>).open to false
                      on htmx:beforeSwap
@@ -374,7 +376,7 @@ renderTraceTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-            <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ tableId <> "_bordered"
         ]
         do
@@ -437,7 +439,7 @@ renderTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-            <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ tableId <> "_bordered"
         ]
         do
@@ -538,7 +540,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+              <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
         , id_ $ chartId <> "_bordered"
         ]
         do
@@ -892,8 +894,8 @@ renderTableWithDataAndParams widget dataRows params = do
                   else toHtml $ formatColumnValue col value
 
 
-renderTraceDataTable :: Widget -> V.Vector (V.Vector Text) -> HashMap Text [(Text, Int, Int)] -> Html ()
-renderTraceDataTable widget dataRows spGroup = do
+renderTraceDataTable :: Widget -> V.Vector (V.Vector Text) -> HashMap Text [(Text, Int, Int)] -> HashMap Text [Telemetry.SpanRecord] -> Text -> Html ()
+renderTraceDataTable widget dataRows spGroup spansGrouped colorsJson = do
   let columns = fromMaybe [] widget.columns
   let tableId = maybeToMonoid widget.id
 
@@ -913,7 +915,15 @@ renderTraceDataTable widget dataRows spGroup = do
       forM_ (V.toList dataRows) \row -> do
         let val = V.last row
         let cdrn = (fromMaybe [] $ HM.lookup val spGroup)
-        tr_ [[__|on click toggle .hidden on the next <tr/>|], class_ "cursor-pointer"] do
+        let spansJson =
+              ( \x ->
+                  let targ = find (\(n, _, _) -> n == x.spanName) (cdrn)
+                   in getSpanJson targ x
+              )
+                <$> (fromMaybe [] $ HM.lookup val spansGrouped)
+        let spjson = (decodeUtf8 $ fromLazy $ AE.encode spansJson)
+        let clcFun = [text|on click toggle .hidden on the next <tr/> then call flameGraphChart($spjson, "$val", $colorsJson)|]
+        tr_ [term "_" clcFun, class_ "cursor-pointer"] do
           forM_ (zip columns [0 ..]) \(col, idx) -> do
             let value = getRowValue col idx row
             if col.field == "latency_breakdown"
@@ -926,11 +936,36 @@ renderTraceDataTable widget dataRows spGroup = do
             whenJust widget._projectId \p -> do
               div_
                 [ class_ "w-full group px-2 pt-4 border relative flex flex-col rounded-lg overflow-hidden"
-                , id_ $ "t" <> val
+                , id_ $ "flame-graph-container-" <> val
                 ]
                 do
-                  span_ [class_ "loading loading-dots loading-sm self-center"] ""
-                  a_ [hxTrigger_ "intersect once", hxGet_ $ "/p/" <> p.toText <> "/widget/flamegraph/" <> val <> "?shapeView=true", hxTarget_ $ "#t" <> val, hxSwap_ "innerHTML"] pass
+                  renderFlameGraph val
+
+
+getSpanJson :: Maybe (Text, Int, Int) -> Telemetry.SpanRecord -> AE.Value
+getSpanJson tgtM sp =
+  AE.object
+    [ "spanId" AE..= sp.spanId
+    , "name" AE..= sp.spanName
+    , "value" AE..= maybe sp.spanDurationNs (\(_, d, _) -> fromIntegral d) tgtM
+    , "start" AE..= start
+    , "parentId" AE..= sp.parentSpanId
+    , "serviceName" AE..= getServiceName sp.resource
+    , "hasErrors" AE..= spanHasErrors sp
+    , "totalSpans" AE..= maybe 1 (\(_, _, c) -> c) tgtM
+    ]
+  where
+    start = utcTimeToNanoseconds sp.startTime
+
+
+renderFlameGraph :: Text -> Html ()
+renderFlameGraph trId = do
+  div_ [class_ "w-full sticky top-0 border-b border-b-strokeWeak h-6 text-xs relative", id_ $ "time-container-" <> trId] pass
+  div_ [class_ "w-full overflow-x-hidden min-h-56 h-full relative", id_ $ "a" <> trId] pass
+  div_ [class_ "h-full top-0  absolute z-50 hidden", id_ $ "time-bar-indicator-" <> trId] do
+    div_ [class_ "relative h-full"] do
+      div_ [class_ "text-xs top-[-18px] absolute -translate-x-1/2 whitespace-nowrap", id_ $ "line-time-" <> trId] "2 ms"
+      div_ [class_ "h-[calc(100%-24px)] mt-[24px] w-[1px] bg-strokeWeak"] pass
 
 
 renderLatencyBreakdown :: [(Text, Int, Int)] -> Html ()

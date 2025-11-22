@@ -2,10 +2,12 @@ module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..
 
 import Control.Lens
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEKey
 import Data.Default
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as Wreq
 import Data.Generics.Labels ()
+import Data.HashMap.Lazy qualified as HM
 import Data.HashMap.Lazy qualified as M
 import Data.List qualified as List
 import Data.Map qualified as Map
@@ -40,6 +42,7 @@ import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
+import Pages.LogExplorer.LogItem (getServiceName)
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
 import Pkg.Components.Modals qualified as Modals
 import Pkg.Components.TimePicker qualified as TimePicker
@@ -52,8 +55,7 @@ import Servant.API.ResponseHeaders (Headers, addHeader)
 import System.Config (AuthContext (..))
 import System.Types
 import Text.Slugify (slugify)
-import Utils (checkFreeTierExceeded, faSprite_)
-import Utils qualified
+import Utils
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -138,7 +140,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
               , value_ $ maybeToMonoid var.value
               ]
-            <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
+              <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
   const tagifyInstances = new Map();
@@ -354,7 +356,7 @@ processWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widgetBas
   forOf (#children . _Just . traverse) widget' $ \child ->
     processWidget pid now timeRange allParams
       $ child
-      & #_dashboardId %~ (<|> widget'._dashboardId)
+        & #_dashboardId %~ (<|> widget'._dashboardId)
 
 
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
@@ -364,11 +366,11 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
     let issuesVM = V.map (AnomalyList.IssueVM False True now "24h") issues
     pure
       $ widget
-      & #html
-        ?~ renderText
-          ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-              $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml)
-          )
+        & #html
+          ?~ renderText
+            ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
+                $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml)
+            )
   Widget.WTStat -> do
     stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure $ widget & #dataset ?~ def{Widget.source = AE.Null, Widget.value = stat.dataFloat}
@@ -378,31 +380,39 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
     -- Render the table with data server-side
     pure
       $ widget
-      & #html
-        ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
+        & #html
+          ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
   Widget.WTTraces -> do
     tracesD <- Charts.queryMetrics (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     let trIds = V.map V.last tracesD.dataText
     shapeWithDuration <- Telemetry.getTraceShapes pid trIds
     -- group shapes by trace id (convert Vector to list and bind the result)
     let grouped = M.fromListWith (++) [(trId, [(spanName, duration, events)]) | (trId, spanName, duration, events) <- V.toList shapeWithDuration]
+
+    spanRecords' <- Telemetry.getSpanRecordsByTraceIds pid trIds Nothing
+    let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
+        serviceColors = getServiceColors ((\x -> getServiceName x.resource) <$> spanRecords)
+    let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
+    let spansGrouped = M.fromListWith (++) [(sp.traceId, [sp]) | sp <- V.toList spanRecords]
+    shapesAvgs <- Telemetry.getTraceShapes pid trIds
+
     pure
       $ widget
-      & #html
-        ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText grouped)
+        & #html
+          ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText grouped spansGrouped colorsJson)
   _ -> do
     metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure
       $ widget
-      & #dataset
-        ?~ Widget.WidgetDataset
-          { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
-          , rowsPerMin = metricsD.rowsPerMin
-          , value = Just metricsD.rowsCount
-          , from = metricsD.from
-          , to = metricsD.to
-          , stats = metricsD.stats
-          }
+        & #dataset
+          ?~ Widget.WidgetDataset
+            { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
+            , rowsPerMin = metricsD.rowsPerMin
+            , value = Just metricsD.rowsCount
+            , from = metricsD.from
+            , to = metricsD.to
+            , stats = metricsD.stats
+            }
 
 
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
@@ -482,10 +492,10 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
       let newLayout =
             Just
               $ maybe def Relude.id orig.layout
-              & #x %~ (<|> item.x)
-              & #y %~ (<|> item.y)
-              & #w %~ (<|> item.w)
-              & #h %~ (<|> item.h)
+                & #x %~ (<|> item.x)
+                & #y %~ (<|> item.y)
+                & #w %~ (<|> item.w)
+                & #h %~ (<|> item.h)
       pure
         orig
           { Widget.layout = newLayout
@@ -658,7 +668,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
                     , class_ $ "hidden page-drawer-tab-" <> T.toLower tabName
                     , name_ $ wid <> "-drawer-tab"
                     ]
-                  <> [checked_ | isActive]
+                    <> [checked_ | isActive]
                 toHtml tabName
           mkTab "Overview" (effectiveActiveTab /= "edit")
           mkTab "Edit" (effectiveActiveTab == "edit")

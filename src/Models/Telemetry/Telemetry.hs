@@ -102,7 +102,7 @@ import System.Config qualified as SysConfig
 import System.Logging qualified as Log
 import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
-import Utils (lookupValueText, toXXHash)
+import Utils (formatUTC, lookupValueText, toXXHash)
 
 
 -- Helper function to get nested value from a map using dot notation
@@ -476,13 +476,13 @@ data MetricChartListData = MetricChartListData
 
 
 getTraceDetails :: DB :> es => Projects.ProjectId -> Text -> Maybe UTCTime -> Eff es (Maybe Trace)
-getTraceDetails pid trId tme = dbtToEff $ queryOne q (pid.toText, startTime, endTime, trId)
+getTraceDetails pid trId tme = dbtToEff $ queryOne (Query $ encodeUtf8 q) (pid.toText, trId)
   where
     (startTime, endTime) = case tme of
       Nothing -> ("now() - interval '1 day'", "now()")
-      Just ts -> ((toText . iso8601Show) $ addUTCTime (-60 * 5) ts, (toText . iso8601Show) $ addUTCTime (60 * 5) ts)
+      Just ts -> ("'" <> (formatUTC $ addUTCTime (-60 * 5) ts) <> "'", "'" <> (formatUTC $ addUTCTime (60 * 5) ts) <> "'")
     q = do
-      [sql| SELECT
+      [text| SELECT
               context___trace_id,
               MIN(start_time) AS trace_start_time,
               MAX(COALESCE(end_time, start_time)) AS trace_end_time,
@@ -490,7 +490,7 @@ getTraceDetails pid trId tme = dbtToEff $ queryOne q (pid.toText, startTime, end
               COUNT(context->>'span_id') AS total_spans,
               ARRAY_REMOVE(ARRAY_AGG(DISTINCT jsonb_extract_path_text(resource, 'service.name')), NULL) AS service_names
             FROM otel_logs_and_spans
-            WHERE  project_id = ? AND timestamp BETWEEN ? AND ? AND context___trace_id = ?
+            WHERE  project_id = ? AND timestamp BETWEEN $startTime AND $endTime AND context___trace_id = ?
             GROUP BY context___trace_id;
         |]
 
@@ -506,27 +506,27 @@ logRecordByProjectAndId pid createdAt rdId = dbtToEff $ queryOne q (createdAt, p
 
 getSpanRecordsByTraceId :: DB :> es => Projects.ProjectId -> Text -> Maybe UTCTime -> Eff es (V.Vector OtelLogsAndSpans)
 getSpanRecordsByTraceId pid trId tme = do
-  dbtToEff $ query q (pid.toText, start, end, trId)
+  dbtToEff $ query (Query $ encodeUtf8 q) (pid.toText, trId)
   where
     (start, end) = case tme of
       Nothing -> ("now() - interval '1 day'", "now()")
-      Just ts -> ((toText . iso8601Show) $ addUTCTime (-60 * 5) ts, (toText . iso8601Show) $ addUTCTime (60 * 5) ts)
+      Just ts -> ("'" <> (formatUTC $ addUTCTime (-60 * 5) ts) <> "'", "'" <> (formatUTC $ addUTCTime (60 * 5) ts) <> "'")
     q =
-      [sql|
+      [text|
       SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
                   hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date::timestamptz
-              FROM otel_logs_and_spans where project_id=? and timestamp >= ? AND timestamp <= ? and context___trace_id=? ORDER BY start_time ASC;
+              FROM otel_logs_and_spans where project_id=? and timestamp >= $start AND timestamp <= $end and context___trace_id=? ORDER BY start_time ASC;
     |]
 
 
 getSpanRecordsByTraceIds :: DB :> es => Projects.ProjectId -> V.Vector Text -> Maybe UTCTime -> Eff es (V.Vector OtelLogsAndSpans)
 getSpanRecordsByTraceIds pid traceIds tme = do
-  dbtToEff $ query (Query $ encodeUtf8 q) (pid.toText, start, end, traceIds)
+  dbtToEff $ query (Query $ encodeUtf8 q) (pid.toText, traceIds)
   where
     (start, end) =
       case tme of
         Nothing -> ("now() - interval '1 day'", "now()")
-        Just ts -> (toText (iso8601Show $ addUTCTime (-300) ts), toText (iso8601Show $ addUTCTime 300 ts))
+        Just ts -> ("'" <> toText (iso8601Show $ addUTCTime (-300) ts) <> "'", "'" <> toText (iso8601Show $ addUTCTime 300 ts) <> "'")
     q =
       [text|
         SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity,
@@ -535,8 +535,8 @@ getSpanRecordsByTraceIds pid traceIds tme = do
                parent_id, summary, date::timestamptz
         FROM otel_logs_and_spans 
         WHERE project_id = ?
-          AND timestamp >= ?
-          AND timestamp <= ?
+          AND timestamp >= $start
+          AND timestamp <= $end
           AND context___trace_id = ANY(?)
         ORDER BY context___trace_id ASC, start_time ASC;
       |]
