@@ -1047,24 +1047,26 @@ convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans
     $ V.map
       ( \rs ->
           let projectKey = fromMaybe "" $ listToMaybe $ V.toList $ getSpanAttributeValue "at-project-key" (V.singleton rs)
-              projectId = case find (\(k, _) -> k == projectKey) pids of
-                Just (_, v) -> Just v
-                Nothing ->
-                  let pidText = fromMaybe "" $ listToMaybe $ V.toList $ getSpanAttributeValue "at-project-id" (V.singleton rs)
-                      uId = UUID.fromText pidText
-                   in ((Just . Projects.ProjectId) =<< uId)
+              projectId =
+                case find (\(k, _) -> k == projectKey && k /= "") pids of
+                  Just (_, v) -> Just v
+                  Nothing ->
+                    case listToMaybe $ V.toList $ getSpanAttributeValue "at-project-id" (V.singleton rs) of
+                      Just pidText | Just uid <- UUID.fromText pidText -> Just (Projects.ProjectId uid)
+                      -- Fallback to header auth when span has no project attributes
+                      _ | not (V.null pids) -> Just (snd $ V.head pids)
+                      _ -> Nothing
            in case projectId of
                 Just pid ->
                   case HashMap.lookup pid projectCaches of
                     Just cache ->
-                      -- Check if project has exceeded daily limit for free tier
                       let !totalDailyEvents = toInteger cache.dailyEventCount + toInteger cache.dailyMetricCount
                           !isFreeTier = cache.paymentPlan == "Free"
                           !hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
                        in if hasExceededLimit
-                            then [] -- Discard events for projects that exceeded limits
+                            then []
                             else convertScopeSpansToOtelLogs fallbackTime pid (Just $ rs ^. PTF.resource) rs
-                    Nothing -> [] -- No cache found, discard
+                    Nothing -> []
                 _ -> []
       )
       resourceSpans
