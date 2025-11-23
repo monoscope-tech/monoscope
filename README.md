@@ -72,17 +72,48 @@ Monoscope is built on **OpenTelemetry**, the industry-standard observability fra
 ### Quick Integration Examples
 
 ```bash
-# For Python applications
-pip install opentelemetry-api opentelemetry-sdk
-export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:8080"
+# Python - Auto-instrument any Python app
+pip install opentelemetry-distro opentelemetry-exporter-otlp
+opentelemetry-bootstrap -a install
+OTEL_SERVICE_NAME="my-python-app" \
+OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317" \
+opentelemetry-instrument python myapp.py
 
-# For Node.js applications
-npm install @opentelemetry/api @opentelemetry/sdk-node
-export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:8080"
+# Node.js - Auto-instrument any Node.js app
+npm install --save @opentelemetry/auto-instrumentations-node
+OTEL_SERVICE_NAME="my-node-app" \
+OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317" \
+node --require @opentelemetry/auto-instrumentations-node/register app.js
 
-# For Kubernetes clusters
-helm install opentelemetry-collector open-telemetry/opentelemetry-collector \
-  --set config.exporters.otlp.endpoint="monoscope:8080"
+# Java - Auto-instrument any Java app
+curl -L https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/latest/download/opentelemetry-javaagent.jar -o otel-agent.jar
+OTEL_SERVICE_NAME="my-java-app" \
+OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317" \
+java -javaagent:otel-agent.jar -jar myapp.jar
+
+# .NET - Auto-instrument any .NET app
+dotnet add package OpenTelemetry.AutoInstrumentation --prerelease
+OTEL_SERVICE_NAME="my-dotnet-app" \
+OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317" \
+OTEL_DOTNET_AUTO_INSTRUMENTATION_ENABLED=true \
+dotnet run
+
+# Kubernetes - Auto-instrument pods with OpenTelemetry Operator
+kubectl apply -f https://github.com/open-telemetry/opentelemetry-operator/releases/latest/download/opentelemetry-operator.yaml
+kubectl apply -f - <<EOF
+apiVersion: opentelemetry.io/v1alpha1
+kind: Instrumentation
+metadata:
+  name: my-instrumentation
+spec:
+  exporter:
+    endpoint: http://monoscope:4317
+  propagators:
+    - tracecontext
+    - baggage
+EOF
+# Then annotate your deployments:
+kubectl patch deployment my-app -p '{"spec":{"template":{"metadata":{"annotations":{"instrumentation.opentelemetry.io/inject-java":"my-instrumentation"}}}}}'
 ```
 
 Monoscope automatically correlates logs, metrics, and traces from the same service, giving you a complete picture of your system's behavior. No manual correlation or configuration required.
