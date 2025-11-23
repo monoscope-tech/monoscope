@@ -44,7 +44,7 @@ spec = aroundAll withTestResources do
     it "Non empty project list" \tr -> do
       (_, pg) <-
         testServant tr ListProjects.listProjectsGetH
-      let (projects, _demoProject) = pg.unwrap.content
+      let (projects, _demoProject, _showDemoProject) = pg.unwrap.content
       length projects `shouldBe` 1
       -- Should have test project created in testSessionHeader (demo project is returned separately)
       let projectIds = map (.id.toText) (V.toList projects)
@@ -75,7 +75,7 @@ spec = aroundAll withTestResources do
       -- Section 2: Verify the update persists in the project list
       (_, listResp) <-
         testServant tr ListProjects.listProjectsGetH
-      let (projects, _demoProject) = listResp.unwrap.content
+      let (projects, _demoProject, _showDemoProject) = listResp.unwrap.content
 
       -- Find the updated project by ID instead of relying on index
       let updatedProject = V.find (\p -> p.id.toText == "12345678-9abc-def0-1234-56789abcdef0") projects
