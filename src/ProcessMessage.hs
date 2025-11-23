@@ -224,7 +224,9 @@ processSpanToEntities pjc otelSpan dumpId =
       !host = fromMaybe "" $ attrValue ^? key "net" . key "host" . key "name" . _String
 
       -- Extract SDK type from attributes (needed for URL normalization)
-      !sdkTypeStr = fromMaybe "unknown" $ attrValue ^? key "apitoolkit" . key "sdk_type" . _String
+      !sdkTypeStr = fromMaybe "unknown" $
+        (attrValue ^? key "monoscope" . key "sdk_type" . _String) <|>
+        (attrValue ^? key "apitoolkit" . key "sdk_type" . _String)
       !sdkType = fromMaybe RequestDumps.SDKUnknown $ readMaybe $ toString sdkTypeStr
 
       -- URL normalization and dynamic path parameter extraction
@@ -439,10 +441,10 @@ createSpanAttributes rm =
           , ("http.url", AE.String rm.rawUrl)
           , ("url.path", AE.String $ fromMaybe "/" rm.urlPath)
           , ("url.full", AE.String rm.rawUrl)
-          , ("apitoolkit.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
-          , ("apitoolkit.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
-          , ("apitoolkit.sdk_type", AE.String $ show rm.sdkType)
-          , ("apitoolkit.errors", AE.String $ maybe "[]" (Relude.decodeUtf8 . AE.encode) rm.errors)
+          , ("monoscope.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
+          , ("monoscope.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
+          , ("monoscope.sdk_type", AE.String $ show rm.sdkType)
+          , ("monoscope.errors", AE.String $ maybe "[]" (Relude.decodeUtf8 . AE.encode) rm.errors)
           ]
    in baseAttrs
         `lodashMerge` refererObj
@@ -451,7 +453,7 @@ createSpanAttributes rm =
   where
     -- Process tags
     tagsObj = case rm.tags of
-      Just tags -> nestedJsonFromDotNotation [("apitoolkit.tags", AE.Array $ V.fromList $ map AE.String tags)]
+      Just tags -> nestedJsonFromDotNotation [("monoscope.tags", AE.Array $ V.fromList $ map AE.String tags)]
       Nothing -> AE.object []
 
     -- Process referer

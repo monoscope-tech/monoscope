@@ -165,7 +165,7 @@ craftSessionCookie
 craftSessionCookie (PersistentSessionId content) rememberSession =
   defaultSetCookie
     { setCookieValue = UUID.toASCIIBytes content
-    , setCookieName = "apitoolkit_session"
+    , setCookieName = "monoscope_session"
     , setCookiePath = Just "/"
     , setCookieHttpOnly = True
     , setCookieSameSite = Just sameSiteLax

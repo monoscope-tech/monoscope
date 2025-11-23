@@ -182,14 +182,14 @@ withLocalSetup f = do
 withExternalDBSetup :: (Pool Connection -> IO ()) -> IO ()
 withExternalDBSetup f = do
   let masterConnStr = "host=localhost port=5432 user=postgres password=postgres dbname=postgres"
-      templateDbName = "apitoolkit_test_template"
+      templateDbName = "monoscope_test_template"
 
   -- Create or update template database
   ensureTemplateDatabase masterConnStr templateDbName
 
   -- Generate unique test database name using UUID (replace hyphens with underscores)
   uuid <- nextRandom
-  let testDbName = "apitoolkit_test_" <> T.replace "-" "_" (T.pack $ show uuid)
+  let testDbName = "monoscope_test_" <> T.replace "-" "_" (T.pack $ show uuid)
 
   -- Create test database from template
   masterConn <- connectPostgreSQL masterConnStr
@@ -533,7 +533,7 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
           logsPatternCache
           projectKeyCache
           ( envConfig
-              { apiKeyEncryptionSecretKey = "apitoolkit123456123456apitoolkit"
+              { apiKeyEncryptionSecretKey = "monoscope123456123456monoscope12"
               , convertkitApiKey = ""
               , convertkitApiSecret = ""
               , requestPubsubTopics = ["monoscope-prod-default"]

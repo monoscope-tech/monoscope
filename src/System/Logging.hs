@@ -78,7 +78,7 @@ runLog envTxt logger minLogLevel = Log.runLog ("[AT]-" <> envTxt) logger minLogL
 makeLogger :: IOE :> es => LoggingDestination -> (Logger -> Eff es a) -> Eff es a
 makeLogger StdOut = LogBulk.withBulkStdOutLogger
 makeLogger Json = LogBulk.withBulkJsonStdOutLogger
-makeLogger JSONFile = withJSONFileBackend FileBackendConfig{destinationFile = "logs/apitoolkit.json"}
+makeLogger JSONFile = withJSONFileBackend FileBackendConfig{destinationFile = "logs/monoscope.json"}
 
 
 newtype FileBackendConfig = FileBackendConfig

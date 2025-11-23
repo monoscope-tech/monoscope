@@ -216,7 +216,7 @@ themeFromCookie cookies = case L.lookup "theme" cookies of
 
 
 getSessionId :: Cookies -> Handler (Maybe Sessions.PersistentSessionId)
-getSessionId cookies = pure $ Sessions.PersistentSessionId <$> (UUID.fromASCIIBytes =<< L.lookup "apitoolkit_session" cookies)
+getSessionId cookies = pure $ Sessions.PersistentSessionId <$> (UUID.fromASCIIBytes =<< L.lookup "monoscope_session" cookies)
 
 
 handlerToEff

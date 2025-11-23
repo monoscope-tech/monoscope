@@ -24,7 +24,7 @@ dist-newstyle
 env
 .vscode
 /logs/
-apitoolkit-server-exe
+monoscope-server-exe
 gha-creds-*.json
 .DS_Store
 **/*/.DS_Store
@@ -32,7 +32,7 @@ gha-creds-*.json
 testkit
 coverage
 errors.err
-apitoolkit-server-exe*
+monoscope-server-exe*
 .hiedb-shm
 .hiedb-wal
 stack.yaml.local

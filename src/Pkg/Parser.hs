@@ -422,7 +422,7 @@ parseQueryStringToWhereClause q =
 
 
 ----------------------------------------------------------------------------------
--- parseQueryToComponents converts an apitoolkit query to components which can be executed directly against a database
+-- parseQueryToComponents converts a monoscope query to components which can be executed directly against a database
 ----------------------------------------------------------------------------------
 -- >>> Right (q, cmp) = parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "request_body.message!=\"blabla\" AND method==\"GET\""
 -- >>> q

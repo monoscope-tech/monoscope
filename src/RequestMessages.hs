@@ -630,7 +630,7 @@ valueToFormatNum val
   | otherwise = "unknown"
 
 
--- fieldsToFieldDTO processes a field from apitoolkit clients into a field and format record,
+-- fieldsToFieldDTO processes a field from monoscope clients into a field and format record,
 -- which can then be converted into separate sql insert queries.
 fieldsToFieldDTO :: Fields.FieldCategoryEnum -> Projects.ProjectId -> Text -> (Text, V.Vector AE.Value) -> (Fields.Field, Formats.Format)
 fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =

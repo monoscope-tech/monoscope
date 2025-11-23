@@ -93,7 +93,7 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
             >>= \case
               Left e -> do
                 liftIO
-                  $ runLogT "apitoolkit" appLogger LogAttention
+                  $ runLogT "monoscope" appLogger LogAttention
                   $ LogBase.logAttention "pubsubService: CAUGHT EXCEPTION - Error processing messages" (AE.object ["error" AE..= show e, "message_count" AE..= length (catMaybes msgsB64), "first_attrs" AE..= firstAttrs, "checkpoint" AE..= ("pubsubService:exception" :: String)])
 
                 -- Send to dead letter queue unless it's an unrecoverable error
@@ -109,7 +109,7 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
         unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
       case result of
         Left e -> do
-          liftIO $ runLogT "apitoolkit" appLogger LogAttention $ LogBase.logAttention "Run Pubsub exception" (show e)
+          liftIO $ runLogT "monoscope" appLogger LogAttention $ LogBase.logAttention "Run Pubsub exception" (show e)
           pass
         Right _ -> pass
   where
@@ -171,7 +171,7 @@ kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> [Text] -> ([(Text
 kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
   -- Generate unique client ID for logging/metrics
   instanceUuid <- UUID.toText <$> UUID.nextRandom
-  let clientId = "apitoolkit-" <> T.take 8 instanceUuid
+  let clientId = "monoscope-" <> T.take 8 instanceUuid
   -- Include dead letter topic in the list of topics to consume
   let allTopics = kafkaTopics <> [appCtx.config.kafkaDeadLetterTopic]
 
@@ -245,7 +245,7 @@ kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
                 )
                 >>= \case
                   Left e -> do
-                    runLogT "apitoolkit" appLogger LogAttention
+                    runLogT "monoscope" appLogger LogAttention
                       $ LogBase.logAttention "kafkaService: CAUGHT EXCEPTION - Error processing Kafka messages" (AE.object ["error" AE..= show e, "topic" AE..= topic, "ce-type" AE..= ceType, "record_count" AE..= length allRecords, "attributes" AE..= attributes, "checkpoint" AE..= ("kafkaService:exception" :: String)])
 
                     -- Send to dead letter queue unless it's an unrecoverable error
