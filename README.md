@@ -224,7 +224,7 @@ Monoscope uses AI to understand your system's behavior, automatically detect ano
 
 ## 🏢 Companies That Use Us
 
-Trusted by 5000+ developers at proactive engineering companies including:
+Trusted by developers at proactive engineering companies including:
 
 <div align="center">
   <table>
@@ -283,216 +283,55 @@ Trusted by 5000+ developers at proactive engineering companies including:
 >
 > **— Lazarus Morrison**, Founder of Community Fluency
 
-## 📚 Documentation
+## 🛠️ Quick Start with Docker Compose
 
-- [Features](#features)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-- [Development Setup](#development-setup)
-- [Testing](#-testing)
-- [Contributing](#-contributing)
-- [License](#-license)
-
----
-
-## Features
-
-- 🤖 **AI-Powered Anomaly Detection**: Leverages LLMs to automatically identify and alert on unusual patterns
-- ☁️ **S3-Compatible Storage**: Store logs, metrics and traces in any S3-compatible object storage
-- 🚀 **High Performance**: Written in Haskell and rust for reliability and performance
-- 📈 **Real-Time Analytics**: Monitor your systems with minimal latency
-- 🔌 **Extensible**: Easy to integrate with existing monitoring infrastructure
-
-### Getting Started
-
-- [Installation Guide](docs/installation.md)
-- [Configuration](docs/configuration.md)
-- [Architecture Deep Dive](docs/architecture.md)
-
-### Tutorials
-
-- [5-Minute Quick Start](docs/quickstart.md)
-- [Monitoring Kubernetes](docs/kubernetes.md)
-- [Alert Configuration](docs/alerts.md)
-
-## 🛠️ Installation
-
-<details>
-<summary><strong>Prerequisites</strong></summary>
-
-### Prerequisites
-
-Before installing Monoscope, ensure you have the following dependencies:
-
-- **Haskell**: Install via GHCup
-- **PostgreSQL with TimescaleDB**: For time-series data storage
-- **LLVM**: Required for compilation
-- **Google Cloud SDK**: For GCP integration (if using GCP)
-
-### Installation
-
-1. **Install Haskell via GHCup**
+Get Monoscope running in under 2 minutes:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
-```
-
-2. **Clone the Repository**
-
-```bash
+# Clone and start Monoscope
 git clone https://github.com/monoscope-tech/monoscope.git
 cd monoscope
+docker-compose up -d
+
+# Access the UI at http://localhost:8080
+# Default credentials: admin / changeme
 ```
 
-3. **Install System Dependencies**
-
-**For macOS:**
+That's it! Monoscope is now running with TimescaleDB included. Send your first telemetry:
 
 ```bash
-# Install LLVM
-brew install llvm
+# Install telemetrygen for testing
+go install github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen@latest
 
-# Install PostgreSQL with TimescaleDB
-brew install postgresql
-brew install timescaledb
-
-# Install libpq
-brew install libpq
+# Send test data (replace YOUR_API_KEY with one from the UI)
+telemetrygen traces --otlp-endpoint localhost:4317 --otlp-insecure \
+  --otlp-header 'X-API-Key="YOUR_API_KEY"' --traces 100
 ```
 
-**For Linux (Ubuntu/Debian):**
+## 📚 Documentation
 
-```bash
-# Install LLVM
-sudo apt-get install llvm
+### Getting Started
+- [Complete Getting Started Guide](docs/getting-started.md) - Installation options and first steps
+- [Configuration Reference](docs/configuration.md) - All configuration options
 
-# Install PostgreSQL and TimescaleDB
-# Follow instructions at: https://docs.timescale.com/install/latest/
+### Guides
+- [Monitoring Kubernetes](docs/kubernetes.md) - Deploy on K8s and monitor clusters
+- [Alert Configuration](docs/alerts.md) - Set up AI-powered anomaly detection
+- [Architecture Overview](docs/architecture.md) - Technical deep dive
 
-# Install libpq
-sudo apt-get install libpq-dev
-```
+### Development
+- [Development Guide](DEVELOPMENT.md) - Building from source and contributing
 
-4. **Configure Google Cloud (Optional)**
+## 🏆 How Monoscope Compares
 
-If using Google Cloud integration:
-
-```bash
-gcloud auth application-default login
-```
-
-5. **Run Monoscope**
-
-```bash
-stack run
-```
-
-</details>
-
-<details>
-<summary><strong>Development Setup</strong></summary>
-
-## Development Setup
-
-### Database Setup with Docker
-
-1. **Create a Docker volume for PostgreSQL data:**
-
-```bash
-docker volume create pgdata
-```
-
-2. **Run TimescaleDB in Docker:**
-
-```bash
-make timescaledb-docker
-```
-
-3. **Configure pg_cron extension:**
-
-Add the following to your PostgreSQL configuration:
-
-```sql
-ALTER system SET cron.database_name = 'monoscope';
-ALTER system SET shared_preload_libraries = 'pg_cron';
-```
-
-Then restart the TimescaleDB Docker container.
-
-### Development Tools
-
-**Install code formatting and linting tools:**
-
-```bash
-# Code formatter
-brew install ormolu
-
-# Linter
-brew install hlint
-```
-
-**Useful commands:**
-
-```bash
-# Format code
-make fmt
-
-# Run linter
-make lint
-```
-
-💡 **Tip**: For better IDE support, compile Haskell Language Server locally to avoid crashes, especially on macOS. See [issue #2391](https://github.com/haskell/haskell-language-server/issues/2391).
-
-### Service Worker
-
-To build the service worker:
-
-```bash
-workbox generateSW workbox-config.js
-```
-
-</details>
-
-## 🧪 Testing
-
-<details>
-<summary><strong>Running Tests</strong></summary>
-
-### Run all tests
-
-```haskell
-make test
-# OR
-stack test --ghc-options=-w
-```
-
-### Run only unit tests
-
-Unit tests don't require a database connection and run much faster. They include doctests and pure function tests.
-
-```haskell
-make test-unit
-# OR
-stack test monoscope-server:unit-tests --ghc-options=-w
-```
-
-### Run unit tests with file watching for development
-
-```haskell
-make live-test-unit
-# OR
-stack test monoscope-server:unit-tests --ghc-options=-w --file-watch
-```
-
-### Run a specific individual test
-
-```haskell
-stack test --test-arguments "--match=SeedingConfig" monoscope-server:tests
-# OR
-stack test --ta "--match=SeedingConfig" monoscope-server:tests
-```
-
-</details>
+| Feature                 | Monoscope   | Datadog        | Elastic | Prometheus |
+| ----------------------- | ----------- | -------------- | ------- | ---------- |
+| AI Anomaly Detection    | ✅ Built-in | ❌ Add-on      | ❌      | ❌         |
+| Natural Language Search | ✅          | ❌             | ❌      | ❌         |
+| Cost-Effective Storage  | ✅ S3       | ❌ Proprietary | ✅      | ✅         |
+| No Configuration Alerts | ✅          | ❌             | ❌      | ❌         |
+| Open Source             | ✅          | ❌             | ✅      | ✅         |
+| Simple Setup            | ✅ 2 min    | ❌ Complex     | ❌      | ❌         |
 
 ## 🤝 Community
 
@@ -503,38 +342,25 @@ stack test --ta "--match=SeedingConfig" monoscope-server:tests
 
 ## 🌍 Contributing
 
-We welcome contributions to Monoscope! Please feel free to:
-
-- Report bugs and request features via [GitHub Issues](https://github.com/monoscope-tech/monoscope/issues)
-- Submit pull requests for bug fixes and new features
-- Improve documentation and examples
-- Share your use cases and feedback
-
-Before contributing, please read our contributing guidelines and ensure your code passes all tests and linting checks.
-
-## 📄 License
-
-Monoscope is open source software. Please see the LICENSE file for details.
+We welcome contributions! See our [Development Guide](DEVELOPMENT.md) for:
+- Setting up your development environment
+- Running tests and linting
+- Submitting pull requests
+- Code style guidelines
 
 ## 🚀 Roadmap
 
 - [ ] Kubernetes Operator
 - [ ] Terraform Provider
 - [ ] Mobile App
-- [ ] Distributed Tracing Support
+- [ ] Enhanced Distributed Tracing
 - [ ] Custom ML Model Training
 
 See our [public roadmap](https://github.com/monoscope-tech/monoscope/projects) for more details.
 
-## 🏆 Comparisons
+## 📄 License
 
-| Feature                 | Monoscope   | Datadog        | Elastic | Prometheus |
-| ----------------------- | ----------- | -------------- | ------- | ---------- |
-| AI Anomaly Detection    | ✅ Built-in | ❌ Add-on      | ❌      | ❌         |
-| Natural Language Search | ✅          | ❌             | ❌      | ❌         |
-| Cost-Effective Storage  | ✅ S3       | ❌ Proprietary | ✅      | ✅         |
-| No Configuration Alerts | ✅          | ❌             | ❌      | ❌         |
-| Open Source             | ✅          | ❌             | ✅      | ✅         |
+Monoscope is open source software licensed under the MIT License. See [LICENSE](LICENSE) for details.
 
 ---
 
