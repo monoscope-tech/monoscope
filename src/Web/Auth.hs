@@ -34,7 +34,6 @@ import Effectful (
  )
 import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
-import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.PostgreSQL.Transact.Effect qualified as DB
 import Effectful.Reader.Static (ask, asks)
@@ -79,7 +78,6 @@ import System.Config (
     logLevel
   ),
  )
-import System.Logging (logInfo)
 import System.Logging qualified as Logging
 import System.Types (ATBaseCtx)
 import Utils (escapedQueryPartial)
@@ -116,7 +114,7 @@ authHandler logger env =
       & runTime
       & effToHandler
   where
-    handler :: (DB :> es, Error ServerError :> es, HTTP :> es, IOE :> es, Log :> es, Time :> es, UUIDEff :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
+    handler :: (DB :> es, Error ServerError :> es, HTTP :> es, IOE :> es, Time :> es, UUIDEff :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
     handler req = do
       -- Check if basic auth is enabled and try to authenticate
       if env.config.basicAuthEnabled
