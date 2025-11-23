@@ -1,0 +1,145 @@
+version: '3.8'
+
+services:
+  # TimescaleDB service (PostgreSQL with TimescaleDB extension)
+  timescaledb:
+    image: timescale/timescaledb-ha:pg16-all
+    container_name: monoscope-timescaledb
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=monoscope
+      - TZ=UTC
+    command: >
+      postgres
+      -c shared_preload_libraries='pg_stat_statements,timescaledb'
+      -c max_connections=200
+      -c log_statement='all'
+      -c log_duration=on
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - monoscope-network
+
+  # Monoscope application service
+  monoscope:
+    image: ghcr.io/monoscope-tech/monoscope:latest
+    container_name: monoscope-app
+    restart: unless-stopped
+    ports:
+      - "8080:8080"     # HTTP API
+      - "4317:4317"     # gRPC port for OpenTelemetry
+    environment:
+      - DATABASE_URL=host=timescaledb user=postgres password=postgres dbname=monoscope port=5432 sslmode=disable
+      - PORT=8080
+      - GRPC_PORT=4317
+      - MIGRATIONS_DIR=/app/static/migrations/
+      - ENVIRONMENT=DEV
+      - LOGGING_DESTINATION=StdOut
+      - BASIC_AUTH_ENABLED=True
+      - BASIC_AUTH_USERNAME=admin
+      - BASIC_AUTH_PASSWORD=changeme
+      - API_KEY_ENCRYPTION_SECRET_KEY=monoscope123456monoscope1234567
+      - MESSAGES_PER_PUBSUB_PULL_BATCH=100
+      - MIGRATE_AND_INITIALIZE_ON_START=True
+      - REQUEST_PUBSUB_TOPICS=monoscope-dev-1
+      - ENABLE_BACKGROUND_JOBS=True
+      - ENABLE_PUBSUB_SERVICE=False
+      - ENABLE_BROWSER_MONITORING=True
+      # ConvertKit settings (optional - leave empty if not using)
+      - CONVERTKIT_API_KEY=${CONVERTKIT_API_KEY:-}
+      - CONVERTKIT_API_SECRET=${CONVERTKIT_API_SECRET:-}
+      # Auth0 settings (update these with your actual values)
+      - AUTH0_SECRET=${AUTH0_SECRET:-}
+      - AUTH0_CLIENT_ID=${AUTH0_CLIENT_ID:-}
+      - AUTH0_DOMAIN=${AUTH0_DOMAIN:-}
+      - AUTH0_LOGOUT_REDIRECT=http://localhost:8080
+      - AUTH0_CALLBACK=http://localhost:8080/auth_callback
+      # Email settings (optional)
+      - SENDGRIDAPIKEY=${SENDGRIDAPIKEY:-}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-25}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_SENDER=${SMTP_SENDER:-}
+      # Other optional settings
+      - SLACK_CLIENT_ID=${SLACK_CLIENT_ID:-}
+      - SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET:-}
+      - SLACK_REDIRECT_URI=http://localhost:8080/slack/oauth/callback/
+      - GOOGLE_SERVICE_ACCOUNT_B64=${GOOGLE_SERVICE_ACCOUNT_B64:-}
+      - COURIER_CLIENT_KEY=${COURIER_CLIENT_KEY:-}
+      - COURIER_API_KEY=${COURIER_API_KEY:-}
+      - POSTMARK_TOKEN=${POSTMARK_TOKEN:-}
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    volumes:
+      - ./static:/app/static:ro
+    networks:
+      - monoscope-network
+
+  # Optional: TimescaleDB with ephemeral storage for testing
+  # Start with: docker-compose --profile test up
+  timescaledb-test:
+    image: timescale/timescaledb-ha:pg16-all
+    container_name: monoscope-timescaledb-test
+    profiles: ["test"]  # Only starts when explicitly requested with --profile test
+    ports:
+      - "5433:5432"  # Different port to avoid conflicts
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=monoscope_test_template
+      - TZ=UTC
+    command: >
+      postgres
+      -c shared_preload_libraries='pg_stat_statements,timescaledb'
+      -c max_connections=200
+    tmpfs:
+      - /var/lib/postgresql/data:size=1G
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - monoscope-network
+
+  # Optional: pgAdmin for database management
+  # Start with: docker-compose --profile dev up
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: monoscope-pgadmin
+    profiles: ["dev"]  # Only starts when explicitly requested with --profile dev
+    restart: unless-stopped
+    ports:
+      - "5050:80"
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@apitoolkit.io
+      - PGADMIN_DEFAULT_PASSWORD=admin
+      - PGADMIN_CONFIG_SERVER_MODE=False
+      - PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - timescaledb
+    networks:
+      - monoscope-network
+
+volumes:
+  timescale_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+networks:
+  monoscope-network:
+    driver: bridge
