@@ -8,6 +8,8 @@
 
 ### Open-source monitoring that understands your systems
 
+Monoscope uses AI to automatically detect anomalies in your logs, metrics, and traces. Query in natural language, store years of data affordably in S3, and reduce alert fatigue by 90%.
+
 [![GitHub Release](https://img.shields.io/github/v/release/monoscope-tech/monoscope)](https://github.com/monoscope-tech/monoscope/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Haskell](https://img.shields.io/badge/Built%20with-Haskell-5e5086?logo=haskell)](https://www.haskell.org/)
@@ -15,6 +17,11 @@
 
 [**Website**](https://monoscope.tech) • [**Discord**](https://discord.gg/monoscope) • [**Twitter**](https://twitter.com/monoscope) • [**Documentation**](https://docs.monoscope.tech)
 
+</div>
+
+<div align="center" style="margin-top: 1em; margin-bottom: 1em;">
+<a href="#-what-is-monoscope">🚀 What is Monoscope?</a> • <a href="#️-quick-start">🛠️ Quick Start</a> • <a href="#-integration">📊 Integration</a><br>
+<a href="#-ai-anomaly-detection">🤖 AI Anomaly Detection</a> • <a href="#-natural-language-queries">💬 Natural Language Search</a> • <a href="https://github.com/monoscope-tech/monoscope">⭐ Star Us</a> • <a href="#-community">🤝 Contributing</a>
 </div>
 
 <br />
@@ -134,6 +141,14 @@ Ask questions in plain English:
 - "Show me all errors in the payment service in the last hour"
 - "What caused the spike in response time yesterday?"
 - "Which services are consuming the most memory?"
+
+## AI Anomaly Detection
+
+Monoscope's AI continuously learns your system's behavior patterns and alerts you to genuine issues without configuration:
+
+- **Context-aware**: Understands that high CPU during deployments is normal, but not at 3 AM
+- **Pattern recognition**: Learns daily, weekly, and monthly patterns automatically
+- **Cross-signal correlation**: Analyzes logs, metrics, and traces together for deeper insights
 
 ## Architecture
 
