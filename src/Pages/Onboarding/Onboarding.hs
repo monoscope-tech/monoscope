@@ -377,7 +377,7 @@ pricingPage pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled = do
       paymentPlanPicker pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled
       div_ [class_ "flex flex-col gap-2 w-full"] do
         span_ [class_ " text-textStrong text-2xl font-semibold mt-20"] "FAQ"
-        div_ [class_ "flex flex-col mt-4 w-full"] do
+        div_ [class_ "flex flex-col mt-4 w-full divide-y divide-weak"] do
           faQ "What is an event?" "An event is any of span, log, or metric that you send to Monoscope."
           faQ "How do you handle security and sensitive data?" "We employ encryption and authentication measures to ensure the security of your data during transmission and storage. All our SDKs also support redacting data. You can simply specify the JSONPath to the fields that you don't want the SDKs to forward to Monoscope, and those sensitive fields will be stripped out/redacted before the data even leaves your servers and replaced with the text \"CLIENT REDACTED\" on our end. We will never see anything you don't want us to see."
           faQ "What makes us better than others?" "Aside the observerbility features like traces, logs, metrics etc. Monoscope takes it a step further by monitoring request payloads for both incoming and outgoing requests, automatic error reportings like sentry and payload changes detections which gives engineering teams with all the information the need to seamlessly debug and fix issues in their servers."
@@ -531,6 +531,38 @@ integrationsPage pid apikey =
               do
                 span_ "Copy"
                 faSprite_ "copy" "regular" "h-4 w-4"
+
+        -- Quick Test section
+        details_ [class_ "my-6 p-4 bg-fillWeak border border-strokeWeak rounded-xl"] do
+          summary_ [class_ "text-textStrong font-semibold cursor-pointer flex items-center gap-2"] do
+            faSprite_ "flask-vial" "regular" "h-4 w-4"
+            span_ "Quick Test - Send test data with telemetrygen"
+          div_ [class_ "mt-4 space-y-4"] do
+            p_ [class_ "text-textWeak text-sm"] "Test your integration quickly by sending sample traces using telemetrygen, a tool that generates OTLP telemetry data."
+
+            div_ [class_ "space-y-3"] do
+              div_ do
+                div_ [class_ "text-textStrong font-medium mb-2"] "1. Install telemetrygen:"
+                div_ [class_ "bg-bgBase p-3 rounded-lg font-mono text-sm overflow-x-auto"]
+                  "go install github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen@latest"
+
+              div_ do
+                div_ [class_ "text-textStrong font-medium mb-2"] "2. Send test traces:"
+                div_ [class_ "bg-bgBase p-3 rounded-lg font-mono text-sm overflow-x-auto", id_ "telemetrygen-command"]
+                  $ toHtml $ "telemetrygen traces --otlp-endpoint localhost:4317 \\\n  --otlp-insecure \\\n  --otlp-header 'Authorization=\"Bearer " <> apikey <> "\"' \\\n  --traces 10 \\\n  --duration 5s"
+                button_
+                  [ class_ "mt-2 px-3 py-1 text-xs bg-fillBrand-strong rounded text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90 cursor-pointer"
+                  , type_ "button"
+                  , onpointerdown_ "navigator.clipboard.writeText(document.getElementById('telemetrygen-command').textContent); this.innerHTML = '<span>Copied!</span>';"
+                  ]
+                  do
+                    span_ "Copy command"
+                    faSprite_ "copy" "regular" "h-3 w-3"
+
+            div_ [class_ "mt-3 p-3 bg-fillSuccess-weak border border-strokeSuccess-weak rounded-lg"] do
+              p_ [class_ "text-textSuccess text-sm"] do
+                faSprite_ "circle-info" "regular" "h-4 w-4 inline mr-1"
+                "After running the command, you should see traces appear in your dashboard within a few seconds."
 
         -- Display integration groups
         forM_ integrationGroups \(groupName, langsList) -> div_ [class_ "mb-6"] do
@@ -943,11 +975,11 @@ stepIndicator step title prevUrl = do
 
 faQ :: Text -> Text -> Html ()
 faQ question answer =
-  div_ [class_ "w-full py-4 border-t border-weak flex flex-col"] $ do
-    button_ [class_ " text-textStrong font-semibold flex w-full justify-between items-center", [__|on click toggle .hidden on the next <div/>|]] do
-      span_ [] $ toHtml question
-      faSprite_ "chevron-down" "regular" "h-4 w-4  text-textWeak"
-    div_ [class_ " text-textWeak font-medium w-full hidden"] $ toHtml answer
+  div_ [class_ "w-full py-5 flex flex-col group/faq"] $ do
+    button_ [class_ "text-textStrong font-semibold flex w-full justify-between items-center hover:text-textStrong cursor-pointer", [__|on click toggle .hidden on the next <div/> then toggle .rotate-180 on <svg/> in me|]] do
+      span_ [class_ "text-left pr-4 leading-normal"] $ toHtml question
+      faSprite_ "chevron-down" "regular" "h-4 w-4 text-textWeak group-hover/faq:text-textStrong transition-transform duration-200"
+    div_ [class_ "text-textWeak font-medium w-full hidden pt-4 leading-relaxed"] $ toHtml answer
 
 
 universalIndicator :: Html ()
