@@ -26,7 +26,7 @@ Monoscope lets you ingest and explore your logs, traces and metrics in S3 bucket
 </p>
 
 <div align="center" style="margin-top: 1em; margin-bottom: 1em;">
-<a href="#-what-is-monoscope">🚀 What is Monoscope?</a> • <a href="#-quick-start-installation">🛠️ Quick Start Installation</a> • <a href="#-ingesting-logs-metrics--traces">📊 Ingesting Logs, Metrics & Traces</a><br>
+<a href="#-what-is-monoscope">🚀 What is Monoscope?</a> • <a href="#️-quick-start-installation">🛠️ Quick Start Installation</a> • <a href="#-ingesting-logs-metrics--traces">📊 Ingesting Logs, Metrics & Traces</a><br>
 <a href="#-ai-anomaly-detection">🤖 AI Anomaly Detection</a> • <a href="#-natural-language-search">💬 Natural Language Search</a> • <a href="https://github.com/monoscope-tech/monoscope">⭐ Star Us</a> • <a href="#-contributing">🤝 Contributing</a>
 </div>
 
@@ -61,7 +61,7 @@ cd monoscope
 docker-compose up
 ```
 
-Visit `http://localhost:8080` to access Monoscope. [Full installation guide →](docs/installation.md)
+Visit `http://localhost:8080` to access Monoscope.
 
 ## 📊 Ingesting Logs, Metrics & Traces
 
@@ -222,17 +222,76 @@ Monoscope uses AI to understand your system's behavior, automatically detect ano
 - **Engineering Leaders** getting visibility across complex systems
 - **Startups** implementing enterprise-grade observability on a budget
 
+## 🏢 Companies That Use Us
+
+Trusted by 5000+ developers at proactive engineering companies including:
+
+<div align="center">
+  <table>
+    <tr>
+      <td align="center" width="25%">
+        <img src="https://monoscope.tech/assets/img/customers/grovepay.svg" alt="GrovePay" height="40" />
+        <br />
+        <sub><b>GrovePay</b></sub>
+      </td>
+      <td align="center" width="25%">
+        <img src="https://monoscope.tech/assets/img/customers/sameday.svg" alt="SameDay" height="40" />
+        <br />
+        <sub><b>SameDay</b></sub>
+      </td>
+      <td align="center" width="25%">
+        <img src="https://monoscope.tech/assets/img/customers/platnova.png" alt="Platnova" height="40" />
+        <br />
+        <sub><b>Platnova</b></sub>
+      </td>
+      <td align="center" width="25%">
+        <img src="https://monoscope.tech/assets/img/customers/payfonte.svg" alt="PayFonte" height="40" />
+        <br />
+        <sub><b>PayFonte</b></sub>
+      </td>
+    </tr>
+    <tr>
+      <td align="center" width="25%">
+        <img src="https://monoscope.tech/assets/img/customers/thepeer.svg" alt="ThePeer" height="40" />
+        <br />
+        <sub><b>ThePeer</b></sub>
+      </td>
+      <td align="center" width="25%">
+        <img src="https://monoscope.tech/assets/img/customers/blockradar-full.svg" alt="BlockRadar" height="40" />
+        <br />
+        <sub><b>BlockRadar</b></sub>
+      </td>
+      <td align="center" width="25%">
+        <img src="https://monoscope.tech/assets/img/customers/partna.svg" alt="Partna" height="40" />
+        <br />
+        <sub><b>Partna</b></sub>
+      </td>
+      <td align="center" width="25%">
+        <!-- Empty cell for alignment -->
+      </td>
+    </tr>
+  </table>
+</div>
+
+### What Our Users Say
+
+> "The best observability tool we use today at Woodcore, monoscope notifies us about any slight change that happens on the system. Most especially, for the features we utilise today on monoscope, would cost us a lot more elsewhere."
+>
+> **— Samuel Joseph**, Woodcore
+
+> "Monoscope has transformed how we handle monitoring at Community Fluency. The AI-powered insights save us hours every week."
+>
+> **— Lazarus Morrison**, Founder of Community Fluency
+
 ## 📚 Documentation
 
 - [Features](#features)
-- [Getting Started](#getting-started)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Development Setup](#development-setup)
-- [Testing](#testing)
-- [Useful Links](#useful-links)
-- [Contributing](#contributing)
-- [License](#license)
+- [Testing](#-testing)
+- [Contributing](#-contributing)
+- [License](#-license)
 
 ---
 
@@ -248,14 +307,12 @@ Monoscope uses AI to understand your system's behavior, automatically detect ano
 
 - [Installation Guide](docs/installation.md)
 - [Configuration](docs/configuration.md)
-- [API Reference](docs/api.md)
 - [Architecture Deep Dive](docs/architecture.md)
 
 ### Tutorials
 
 - [5-Minute Quick Start](docs/quickstart.md)
 - [Monitoring Kubernetes](docs/kubernetes.md)
-- [Custom Dashboards](docs/dashboards.md)
 - [Alert Configuration](docs/alerts.md)
 
 ## 🛠️ Installation
