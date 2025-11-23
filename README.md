@@ -30,6 +30,8 @@ Monoscope uses AI to automatically detect anomalies in your logs, metrics, and t
   <img width="100%" src="https://github.com/user-attachments/assets/6175c23b-f3ac-450a-9ae3-4b86371f4f54" alt="Monoscope Dashboard" />
 </div>
 
+<br/>
+
 ## What is Monoscope?
 
 AI-powered observability platform that automatically detects anomalies in your logs, metrics, and traces. Query in natural language, store data affordably in S3, and get alerts that matter.
@@ -38,9 +40,13 @@ AI-powered observability platform that automatically detects anomalies in your l
 
 - 🤖 AI anomaly detection without configuration
 - 💬 Natural language search
-- 📊 OpenTelemetry native (750+ integrations)
-- 💰 Cost-effective S3 storage
-- ⚡ Built for scale with TimeFusion engine
+- 🕵️ Correlate/search logs, metrics, session replays and traces all in one place
+- ⚡ Live tail logs and traces to always get the freshest events
+- 🔭 OpenTelemetry supported out of the box (750+ integrations)
+- ⏱️ Monitor health and performance from HTTP requests to DB queries (APM)
+- 💰 Cost-effective S3 storage with TimeFusion engine
+
+<br/>
 
 ## Quick Start
 
@@ -64,6 +70,8 @@ go install github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemet
 telemetrygen traces --otlp-endpoint localhost:4317 --otlp-insecure \
   --otlp-header 'Authorization="Bearer YOUR_API_KEY"' --traces 10
 ```
+
+<br/>
 
 ## Integration
 
@@ -134,6 +142,8 @@ kubectl patch deployment my-app -p \
 
 </details>
 
+<br/>
+
 ## Natural Language Queries
 
 Ask questions in plain English:
@@ -142,6 +152,8 @@ Ask questions in plain English:
 - "What caused the spike in response time yesterday?"
 - "Which services are consuming the most memory?"
 
+<br/>
+
 ## AI Anomaly Detection
 
 Monoscope's AI continuously learns your system's behavior patterns and alerts you to genuine issues without configuration:
@@ -149,6 +161,8 @@ Monoscope's AI continuously learns your system's behavior patterns and alerts yo
 - **Context-aware**: Understands that high CPU during deployments is normal, but not at 3 AM
 - **Pattern recognition**: Learns daily, weekly, and monthly patterns automatically
 - **Cross-signal correlation**: Analyzes logs, metrics, and traces together for deeper insights
+
+<br/>
 
 ## Architecture
 
@@ -162,6 +176,8 @@ graph LR
     F --> G[Alerts & Dashboards]
 ```
 
+<br/>
+
 ## How It Compares
 
 | Feature              | Monoscope   | Datadog   | Elastic | Prometheus |
@@ -172,20 +188,30 @@ graph LR
 | Open Source          | ✅          | ❌        | ✅      | ✅         |
 | Setup Time           | 2 min       | Hours     | Hours   | Hours      |
 
+<br/>
+
 ## Screenshots
 
-<table>
-  <tr>
-    <td width="50%">
-      <img src="https://github.com/user-attachments/assets/6175c23b-f3ac-450a-9ae3-4b86371f4f54" alt="Log Explorer" />
-      <p align="center"><i>Log Explorer</i></p>
-    </td>
-    <td width="50%">
-      <img src="https://github.com/user-attachments/assets/3dae136a-e627-4278-91a1-81c5af5f8cd6" alt="Dashboard" />
-      <p align="center"><i>Dashboard Analytics</i></p>
-    </td>
-  </tr>
-</table>
+### Log Explorer - Unified View
+Logs and trace spans displayed together in context for complete observability.
+
+<img src="https://github.com/user-attachments/assets/6175c23b-f3ac-450a-9ae3-4b86371f4f54" alt="Log Explorer Main View" width="100%" />
+
+<br/>
+
+### Trace Context Integration
+See detailed trace information alongside logs for debugging complex distributed systems.
+
+<img src="https://github.com/user-attachments/assets/baf78e6f-2b75-4b6f-be56-94a0b3da9f31" alt="Log Explorer with Trace Context" width="100%" />
+
+<br/>
+
+### Dashboard Analytics
+Real-time metrics and performance monitoring with AI-powered insights.
+
+<img src="https://github.com/user-attachments/assets/3dae136a-e627-4278-91a1-81c5af5f8cd6" alt="Dashboard Analytics View" width="100%" />
+
+<br/>
 
 ## Users
 
@@ -199,6 +225,8 @@ graph LR
 
 > "Monoscope notifies us about any slight change on the system. Features that would cost us a lot more elsewhere." — **Samuel Joseph, Woodcore**
 
+<br/>
+
 ## Documentation
 
 - [Getting Started Guide](docs/getting-started.md)
@@ -206,9 +234,13 @@ graph LR
 - [Kubernetes Guide](docs/kubernetes.md)
 - [Development Guide](DEVELOPMENT.md)
 
+<br/>
+
 ## Community
 
 💬 [Discord](https://discord.gg/monoscope) • 🐛 [Issues](https://github.com/monoscope-tech/monoscope/issues) • 🐦 [Twitter](https://twitter.com/monoscope)
+
+<br/>
 
 ## License
 
