@@ -213,14 +213,23 @@ Real-time metrics and performance monitoring with AI-powered insights.
 
 <br/>
 
-## Users
+## Trusted by Leading Companies
 
 <div align="center">
-  <img src="https://monoscope.tech/assets/img/customers/grovepay.svg" alt="GrovePay" height="30" /> &nbsp;
-  <img src="https://monoscope.tech/assets/img/customers/sameday.svg" alt="SameDay" height="30" /> &nbsp;
-  <img src="https://monoscope.tech/assets/img/customers/platnova.png" alt="Platnova" height="30" /> &nbsp;
-  <img src="https://monoscope.tech/assets/img/customers/payfonte.svg" alt="PayFonte" height="30" /> &nbsp;
-  <img src="https://monoscope.tech/assets/img/customers/thepeer.svg" alt="ThePeer" height="30" />
+  <table>
+    <tr>
+      <td align="center"><img src="https://monoscope.tech/assets/img/customers/andela.svg" alt="Andela" height="30" width="80" /></td>
+      <td align="center"><img src="https://monoscope.tech/assets/img/customers/partna.svg" alt="Partna" height="30" width="80" /></td>
+      <td align="center"><img src="https://monoscope.tech/assets/img/customers/grovepay.svg" alt="GrovePay" height="30" width="80" /></td>
+      <td align="center"><img src="https://monoscope.tech/assets/img/customers/sameday.svg" alt="SameDay" height="30" width="80" /></td>
+    </tr>
+    <tr>
+      <td align="center"><img src="https://monoscope.tech/assets/img/customers/platnova.png" alt="Platnova" height="30" width="80" /></td>
+      <td align="center"><img src="https://monoscope.tech/assets/img/customers/payfonte.svg" alt="PayFonte" height="30" width="80" /></td>
+      <td align="center"><img src="https://monoscope.tech/assets/img/customers/thepeer.svg" alt="ThePeer" height="30" width="80" /></td>
+      <td align="center"><img src="https://monoscope.tech/assets/img/customers/blockradar-full.svg" alt="BlockRadar" height="30" width="80" /></td>
+    </tr>
+  </table>
 </div>
 
 > "Monoscope notifies us about any slight change on the system. Features that would cost us a lot more elsewhere." — **Samuel Joseph, Woodcore**
