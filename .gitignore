@@ -21,7 +21,9 @@ static/public/assets/css/tailwind.min.css
 .hiedb
 dist-newstyle
 .env
+.envx
 env
+apitoolkit-server-exe
 .vscode
 /logs/
 monoscope-server-exe
