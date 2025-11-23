@@ -828,24 +828,10 @@ tabs:
         unit: ns
         layout: { w: 6, h: 4 }
 
-      # Trace Waterfall/Flamegraph
-      - type: flamegraph
-        title: 'Trace Visualization'
-        layout: { w: 12, h: 8 }
-        sql: |
-          SELECT *
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND parent_id = ''
-            AND ('{{var-service}}' = '' OR resource___service___name = '{{var-service}}')
-            {{time_filter}}
-          ORDER BY timestamp DESC
-          LIMIT 1
-
       # Trace List
       - type: traces
         title: 'Recent Traces'
-        layout: { w: 12, h: 6 }
+        layout: { w: 12, h: 9 }
         columns:
           - field: resource_name
             title: Resource
