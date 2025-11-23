@@ -514,12 +514,12 @@ integrationsPage pid apikey =
         <> pid.toText
         <> "/onboarding?step=NotifChannel"
       div_ [class_ "flex-col w-full gap-4 flex mt-4 px-12 overflow-y-auto flex-grow"] do
-        p_ [class_ "text-textStrong"] do
+        p_ [class_ "text-textStrong leading-relaxed"] do
           "Send Logs, Metrics or Traces. Select an item below for instructions. "
           br_ []
           "Click proceed when you're done integrating your applications."
 
-        div_ [class_ "my-6 p-4 bg-fillWeak border border-strokeWeak rounded-xl"] do
+        div_ [class_ "mt-6 mb-0 p-4 bg-fillWeak border border-strokeWeak rounded-xl"] do
           div_ [class_ "mb-2 text-textStrong font-semibold"] "Your API Key"
           div_ [class_ "flex items-center gap-2"] do
             div_ [class_ "flex-1 font-mono bg-bgBase p-3 border border-strokeWeak rounded-lg overflow-x-auto", id_ "api-key-display"] $ toHtml apikey
@@ -533,10 +533,10 @@ integrationsPage pid apikey =
                 faSprite_ "copy" "regular" "h-4 w-4"
 
         -- Quick Test suggestion banner
-        div_ [class_ "my-4 p-4 bg-gradient-to-r from-fillInfo-weak to-transparent border-l-4 border-strokeInfo rounded-lg flex items-center gap-4"] do
+        div_ [class_ "mt-0 mb-6 p-4 bg-gradient-to-r from-fillInfo-weak to-transparent border-l-4 border-strokeInfo rounded-lg flex items-center gap-4"] do
           faSprite_ "lightbulb" "regular" "h-5 w-5 text-textInfo flex-shrink-0"
           div_ [class_ "flex-1"] do
-            p_ [class_ "text-sm text-textStrong"] do
+            p_ [class_ "text-sm text-textStrong leading-relaxed"] do
               "Want to test quickly? "
               button_
                 [ class_ "text-textBrand hover:text-textBrand-strong underline font-medium"
@@ -574,7 +574,7 @@ integrationsPage pid apikey =
 
               -- Welcome text
               h2_ [class_ "text-3xl text-textStrong"] "👈 Select your stack on the left to begin"
-              p_ [class_ "text-lg text-textWeak max-w-md"] do
+              p_ [class_ "text-lg text-textWeak max-w-md leading-relaxed"] do
                 "You can also check out our youtube videos for more interactive walkthorughs."
 
                 -- YouTube video embeds
@@ -654,7 +654,7 @@ integrationsPage pid apikey =
           faSprite_ "flask-vial" "regular" "h-5 w-5"
           span_ "Quick Test with Telemetrygen"
 
-        p_ [class_ "text-textWeak mb-6"] "Telemetrygen is a testing tool that generates OTLP telemetry data. Use it to quickly verify your setup is working correctly."
+        p_ [class_ "text-textWeak mb-6 leading-relaxed"] "Telemetrygen is a testing tool that generates OTLP telemetry data. Use it to quickly verify your setup is working correctly."
 
         div_ [class_ "space-y-4"] do
           -- Step 1: Install
@@ -664,7 +664,7 @@ integrationsPage pid apikey =
               span_ "Install telemetrygen"
             div_ [class_ "bg-bgBase p-3 rounded font-mono text-sm overflow-x-auto border border-strokeWeak"]
               "go install github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen@latest"
-            p_ [class_ "text-xs text-textWeak mt-2"] "Requires Go 1.20 or later"
+            p_ [class_ "text-xs text-textWeak mt-2 leading-relaxed"] "Requires Go 1.20 or later"
 
           -- Step 2: Run command
           div_ [class_ "p-4 bg-fillWeak rounded-lg"] do
@@ -687,8 +687,8 @@ integrationsPage pid apikey =
         div_ [class_ "mt-6 p-4 bg-fillSuccess-weak border border-strokeSuccess-weak rounded-lg flex items-start gap-3"] do
           faSprite_ "circle-check" "regular" "h-5 w-5 text-textSuccess flex-shrink-0 mt-0.5"
           div_ do
-            p_ [class_ "text-textSuccess text-sm font-medium"] "What happens next?"
-            p_ [class_ "text-textSuccess text-sm mt-1"] "After running the command, traces will appear in your dashboard within seconds. You can then proceed with the full SDK integration."
+            p_ [class_ "text-textSuccess text-sm font-medium leading-relaxed"] "What happens next?"
+            p_ [class_ "text-textSuccess text-sm mt-1 leading-relaxed"] "After running the command, traces will appear in your dashboard within seconds. You can then proceed with the full SDK integration."
 
         div_ [class_ "modal-action"] do
           button_ [class_ "btn", onclick_ "document.getElementById('telemetrygen-modal').close()"] "Close"
