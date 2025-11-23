@@ -362,9 +362,9 @@ onboardingCompleteBody pid = do
       div_ [class_ "p-3 bg-fillSuccess-weak rounded-full w-max border-strokeSuccess-weak gap-2 inline-flex"]
         $ faSprite_ "circle-check" "regular" "h-8 w-8 text-iconSuccess"
       div_ [class_ "flex flex-col gap-2"] do
-        h3_ [class_ " text-textStrong font-semibold text-2xl"] "Onboarding completed!"
+        h3_ [class_ " text-textStrong  text-2xl"] "Onboarding completed!"
         p_ [class_ " text-textWeak text-sm"] "You're all set! You can now start using exploring the monoscope dashboard by clicking the button below."
-      a_ [class_ "btn-primary py-2 font-semibold rounded-lg text-center mt-1", href_ $ "/p/" <> pid.toText <> "/"] "Go to your dashboard"
+      a_ [class_ "btn-primary py-2  rounded-lg text-center mt-1", href_ $ "/p/" <> pid.toText <> "/"] "Go to your dashboard"
   script_ [src_ "/public/assets/js/confetti.js"] ("" :: Text)
 
 
@@ -376,7 +376,7 @@ pricingPage pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled = do
         stepIndicator 5 "Please pick a plan" $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
       paymentPlanPicker pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled
       div_ [class_ "flex flex-col gap-2 w-full"] do
-        span_ [class_ " text-textStrong text-2xl font-semibold mt-20"] "FAQ"
+        span_ [class_ " text-textStrong text-2xl  mt-20"] "FAQ"
         div_ [class_ "flex flex-col mt-4 w-full divide-y divide-weak"] do
           faQ "What is an event?" "An event is any of span, log, or metric that you send to Monoscope."
           faQ "How do you handle security and sensitive data?" "We employ encryption and authentication measures to ensure the security of your data during transmission and storage. All our SDKs also support redacting data. You can simply specify the JSONPath to the fields that you don't want the SDKs to forward to Monoscope, and those sensitive fields will be stripped out/redacted before the data even leaves your servers and replaced with the text \"CLIENT REDACTED\" on our end. We will never see anything you don't want us to see."
@@ -514,13 +514,13 @@ integrationsPage pid apikey =
         <> pid.toText
         <> "/onboarding?step=NotifChannel"
       div_ [class_ "flex-col w-full gap-4 flex mt-4 px-12 overflow-y-auto flex-grow"] do
-        p_ [class_ "text-textStrong leading-relaxed"] do
+        p_ [class_ "text-textWeak leading-relaxed"] do
           "Send Logs, Metrics or Traces. Select an item below for instructions. "
           br_ []
           "Click proceed when you're done integrating your applications."
 
         div_ [class_ "mt-6 mb-0 p-4 bg-fillWeak border border-strokeWeak rounded-xl"] do
-          div_ [class_ "mb-2 text-textStrong font-semibold"] "Your API Key"
+          div_ [class_ "mb-2 text-textWeak"] "Your API Key"
           div_ [class_ "flex items-center gap-2"] do
             div_ [class_ "flex-1 font-mono bg-bgBase p-3 border border-strokeWeak rounded-lg overflow-x-auto", id_ "api-key-display"] $ toHtml apikey
             button_
@@ -533,22 +533,20 @@ integrationsPage pid apikey =
                 faSprite_ "copy" "regular" "h-4 w-4"
 
         -- Quick Test suggestion banner
-        div_ [class_ "mb-4 px-4 bg-gradient-to-r from-fillInfo-weak to-transparent border-l-4 border-strokeInfo rounded-lg flex items-center gap-4"] do
-          faSprite_ "lightbulb" "regular" "h-5 w-5 text-textInfo flex-shrink-0"
-          div_ [class_ "flex-1"] do
-            p_ [class_ "text-sm text-textStrong"] do
-              "Want to test quickly? "
-              button_
-                [ class_ "text-textBrand hover:text-textBrand-strong underline font-medium"
-                , type_ "button"
-                , onclick_ "document.getElementById('telemetrygen-modal').showModal()"
-                ]
-                "Use telemetrygen"
-              " to send sample data in seconds"
+        div_ [class_ "mb-4 px-4 bg-gradient-to-r from-fillInfo-weak to-transparent border-l-4 border-strokeInfo rounded-lg"] do
+          p_ [class_ "text-sm text-textStrong"] do
+            "Want to test quickly? "
+            button_
+              [ class_ "text-textBrand hover:text-textBrand-strong underline font-medium cursor-pointer"
+              , type_ "button"
+              , onclick_ "document.getElementById('telemetrygen-modal').showModal()"
+              ]
+              "Use telemetrygen"
+            " to send sample data in seconds"
 
         -- Display integration groups
         forM_ integrationGroups \(groupName, langsList) -> div_ [class_ "mb-6"] do
-          div_ [class_ "text-textStrong font-semibold text-xl mb-2"] $ toHtml groupName
+          div_ [class_ "text-textWeak  text-xl mb-2"] $ toHtml groupName
           div_ [class_ "grid grid-cols-2 gap-2"]
             $ forM_ langsList \(lang, langName, _) ->
               languageItem pid langName lang
@@ -741,7 +739,7 @@ languageItem pid lang ext = do
         , onchange_ $ "if(this.checked) { document.getElementById('" <> ext <> "_main').scrollIntoView({behavior: 'smooth'}); }"
         ]
       div_ [class_ "flex w-full items-center justify-between"] do
-        div_ [class_ "flex items-center gap-2 text-sm font-semibold"] do
+        div_ [class_ "flex items-center gap-2 text-sm "] do
           img_ [class_ "h-5 w-5", src_ $ "/public/assets/svgs/" <> ext <> ".svg"]
           span_ $ toHtml lang
         div_ [class_ "hidden group-has-[.checkbox:checked]/li:block text-sm toggle-target", id_ $ "integration-check-container" <> T.replace "#" "" lang] do
@@ -760,11 +758,11 @@ languageItem pid lang ext = do
 -- Helper function to render connection status button
 connectionStatusButton :: Bool -> Text -> Html ()
 connectionStatusButton isConnected connectUrl
-  | isConnected = button_ [class_ "text-textSuccess font-semibold"] "Connected"
+  | isConnected = button_ [class_ "text-textSuccess "] "Connected"
   | otherwise =
       a_
         [ target_ "_blank"
-        , class_ "border px-3 h-8 flex items-center shadow-xs border-[var(--brand-color)] rounded-lg text-textBrand font-semibold"
+        , class_ "border px-3 h-8 flex items-center shadow-xs border-[var(--brand-color)] rounded-lg text-textBrand "
         , href_ connectUrl
         ]
         "Connect"
@@ -888,7 +886,7 @@ inviteTeamMemberModal pid emails = do
       div_ [class_ "modal-box bg-bgRaised flex flex-col gap-4"] $ do
         div_ [class_ "p-3 bg-fillSuccess-weak rounded-full w-max border-strokeSuccess-weak gap-2 inline-flex"]
           $ faSprite_ "circle-check" "regular" "h-6 w-6 text-iconSuccess"
-        span_ [class_ " text-textStrong text-2xl font-semibold"] "We've sent you a test notification"
+        span_ [class_ " text-textStrong text-2xl "] "We've sent you a test notification"
         div_ [class_ "text-textWeak"] "No notification? Close this modal and verify emails and channels."
         div_ [class_ "h-1 w-full  bg-fillWeak"] pass
         div_ [class_ "flex-col gap-4 flex"] $ do
@@ -902,7 +900,7 @@ inviteTeamMemberModal pid emails = do
                     input_ [class_ "input input-sm w-full", placeholder_ "email@example.com", type_ "email", id_ "add-member-input"]
                 button_ [class_ "btn-primary rounded-xl px-4 py-2 justify-center items-center flex text-white text-sm cursor-pointer", onpointerdown_ "appendMember()"] "invite"
               div_ [class_ "w-full"] $ do
-                div_ [class_ "w-full  text-textStrong text-sm font-semibold"] "Members"
+                div_ [class_ "w-full  text-textStrong text-sm "] "Members"
                 div_ [class_ "w-full border-t border-weak"] $ do
                   form_
                     [ class_ "flex-col flex"
@@ -991,7 +989,7 @@ stepIndicator step title prevUrl = do
       img_ [class_ "h-7 dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
       img_ [class_ "h-7 hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
     div_ [class_ "flex-col gap-2 flex w-full"] $ do
-      div_ [class_ " text-textStrong text-base font-semibold"] $ "Step " <> show step <> " of 5"
+      div_ [class_ " text-textStrong text-base "] $ "Step " <> show step <> " of 5"
       div_ [class_ "grid grid-cols-5 w-full gap-1"] $ do
         forM_ [1 .. 5] $ \i -> div_ [class_ $ "h-2 w-full rounded-sm " <> if step >= i then "btn-primary rounded-sm" else " bg-fillWeak shadow-sm border border-strokeWeak"] pass
       when (step > 1) $ do
@@ -1004,7 +1002,7 @@ stepIndicator step title prevUrl = do
 faQ :: Text -> Text -> Html ()
 faQ question answer =
   div_ [class_ "w-full py-5 flex flex-col group/faq"] $ do
-    button_ [class_ "text-textStrong font-semibold flex w-full justify-between items-center hover:text-textStrong cursor-pointer", [__|on click toggle .hidden on the next <div/> then toggle .rotate-180 on <svg/> in me|]] do
+    button_ [class_ "text-textStrong  flex w-full justify-between items-center hover:text-textStrong cursor-pointer", [__|on click toggle .hidden on the next <div/> then toggle .rotate-180 on <svg/> in me|]] do
       span_ [class_ "text-left pr-4 leading-normal"] $ toHtml question
       faSprite_ "chevron-down" "regular" "h-4 w-4 text-textWeak group-hover/faq:text-textStrong transition-transform duration-200"
     div_ [class_ "text-textWeak font-medium w-full hidden pt-4 leading-relaxed"] $ toHtml answer

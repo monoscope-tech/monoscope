@@ -352,7 +352,7 @@ openSourcePricing pid isCurrent = do
               span_ [class_ ""] "Free forever"
           div_ do
             button_
-              ( [ class_ $ "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg " <> if isCurrent then "bg-fillDisabled cursor-not-allowed border-0 text-textInverse-strong" else "bg-green-600 hover:bg-green-700 text-white"
+              ( [ class_ $ "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg " <> if isCurrent then "bg-fillDisabled cursor-not-allowed border-0 text-textInverse-strong" else "bg-green-700 hover:bg-green-600 text-white"
                 , type_ "submit"
                 ]
                   <> if isCurrent then [disabled_ "disabled"] else []

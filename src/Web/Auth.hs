@@ -122,10 +122,8 @@ authHandler logger env =
       if env.config.basicAuthEnabled
         then do
           let authHeader = L.lookup hAuthorization $ requestHeaders req
-          logInfo "Basic auth check" ("Auth header present: " <> show (isJust authHeader))
           case authHeader >>= validateBasicAuth env.config of
             Just (username, _password) -> do
-              logInfo "Basic auth success" ("User: " <> username)
               -- Basic auth successful, create a session for the basic auth user
               let isSidebarClosed = sidebarClosedFromCookie $ getCookies req
               let theme = themeFromCookie $ getCookies req
@@ -142,11 +140,9 @@ authHandler logger env =
               case mbPersistentSession of
                 Just _ -> do
                   -- We have a valid cookie session, proceed normally
-                  logInfo "Basic auth fallback" "Valid cookie session exists"
                   proceedWithCookieAuth req env.config.basicAuthEnabled
                 Nothing -> do
                   -- No valid session and basic auth is enabled - return 401
-                  logInfo "Basic auth required" "No valid auth provided"
                   throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
         else
           -- Basic auth not enabled, use normal cookie auth
@@ -342,8 +338,12 @@ authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
   userId <- case userM of
     Nothing -> do
       user <- Users.createUser firstName lastName picture email
-      Users.insertUser user
-      pure user.id
+      -- Make basic auth users sudo for admin access
+      let userWithSudo = if T.isSuffixOf "@basic-auth.local" email
+                         then user { Users.isSudo = True }
+                         else user
+      Users.insertUser userWithSudo
+      pure userWithSudo.id
     Just user -> pure user.id
   persistentSessId <- Sessions.newPersistentSessionId
   Sessions.insertSession persistentSessId userId (Sessions.SessionData Map.empty)

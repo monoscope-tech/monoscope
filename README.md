@@ -91,6 +91,21 @@ helm install opentelemetry-collector open-telemetry/opentelemetry-collector \
 
 Monoscope automatically correlates logs, metrics, and traces from the same service, giving you a complete picture of your system's behavior. No manual correlation or configuration required.
 
+### Testing with Telemetrygen
+
+Send test telemetry data to validate your setup:
+
+```bash
+# Install telemetrygen
+go install github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen@latest
+
+# Send test traces with your API key
+telemetrygen traces --otlp-endpoint localhost:4317 \
+  --otlp-insecure \
+  --otlp-header 'Authorization="Bearer YOUR_API_KEY"' \
+  --traces 10 --duration 5s
+```
+
 ## 🤖 AI Anomaly Detection
 
 Monoscope's AI engine continuously learns your system's normal behavior patterns and automatically alerts you to genuine issues:

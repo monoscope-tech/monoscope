@@ -9,6 +9,7 @@ where
 import Data.Default (def)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask)
 import Fmt
@@ -18,8 +19,9 @@ import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
 import Relude hiding (ask, asks)
-import System.Config (AuthContext (..))
-import System.Types
+import Servant.Server (err302, errHeaders)
+import System.Config (AuthContext (..), EnvConfig (..))
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_)
 
 
@@ -44,20 +46,23 @@ listProjectsGetH = do
           , Projects.createdAt = project.createdAt
           }
 
-  addRespHeaders $ ListProjectsGet $ PageCtx bwconf (projects, demoProject)
+  -- Redirect to new project page if no projects and demo is disabled
+  if V.null projects && not appCtx.env.showDemoProject
+    then throwError $ err302{errHeaders = [("Location", "/p/new")]}
+    else addRespHeaders $ ListProjectsGet $ PageCtx bwconf (projects, demoProject, appCtx.env.showDemoProject)
 
 
-newtype ListProjectsGet = ListProjectsGet {unwrap :: PageCtx (V.Vector Projects.Project', Projects.Project')}
+newtype ListProjectsGet = ListProjectsGet {unwrap :: PageCtx (V.Vector Projects.Project', Projects.Project', Bool)}
   deriving stock (Show)
 
 
 instance ToHtml ListProjectsGet where
-  toHtml (ListProjectsGet (PageCtx bwconf (projects, demoProject))) = toHtml $ PageCtx bwconf $ listProjectsBody bwconf.sessM projects demoProject
+  toHtml (ListProjectsGet (PageCtx bwconf (projects, demoProject, showDemoProject))) = toHtml $ PageCtx bwconf $ listProjectsBody bwconf.sessM projects demoProject showDemoProject
   toHtmlRaw = toHtml
 
 
-listProjectsBody :: Maybe Sessions.Session -> V.Vector Projects.Project' -> Projects.Project' -> Html ()
-listProjectsBody sessM projects demoProject = do
+listProjectsBody :: Maybe Sessions.Session -> V.Vector Projects.Project' -> Projects.Project' -> Bool -> Html ()
+listProjectsBody sessM projects demoProject showDemoProject = do
   -- Custom succinct navbar
   nav_ [class_ "fixed top-0 left-0 right-0 bg-bgBase border-b border-strokeWeak z-50"] do
     div_ [class_ "flex items-center justify-between px-6 py-3"] do
@@ -95,8 +100,8 @@ listProjectsBody sessM projects demoProject = do
       h3_ [class_ "text-textWeak text-lg font-medium mb-4"] "Your Projects"
       div_ [class_ "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"] $ mapM_ projectCard_ $ V.toList projects
 
-    -- Demo Project Section
-    div_ [] do
+    -- Demo Project Section (only show if enabled)
+    when showDemoProject $ div_ [] do
       h3_ [class_ "text-textWeak text-lg font-medium mb-4"] "Demo Project"
       div_ [class_ "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"] $ projectCard_ demoProject
 

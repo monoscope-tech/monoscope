@@ -1,0 +1,30 @@
+# Docker Compose Override for Local Development
+#
+# To use this file for local development:
+# 1. Copy this file to docker-compose.override.yml:
+#    cp docker-compose.override.yml.example docker-compose.override.yml
+#
+# 2. Docker Compose will automatically use the override file
+#
+# This override will build the Monoscope image locally instead of pulling from GitHub Packages
+
+version: '3.8'
+
+services:
+  # Override monoscope service to build locally
+  monoscope:
+    # Comment out or remove the image line to build locally
+    image: ~
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+    # Optional: Mount source code for development (requires rebuild on changes)
+    volumes:
+      - ./static:/app/static:ro
+      - ./config:/app/config:ro
+    # Optional: Add development environment variables
+    environment:
+      - ENVIRONMENT=DEV
+      - LOG_LEVEL=debug

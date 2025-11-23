@@ -127,6 +127,7 @@ data EnvConfig = EnvConfig
   , enableEventsTableUpdates :: Bool
   , enableDailyJobScheduling :: Bool
   , maxConcurrentJobs :: Int
+  , showDemoProject :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)
@@ -144,6 +145,7 @@ instance DefConfig EnvConfig where
       , logLevel = LogInfo -- Default to Info level
       , smtpPort = 465
       , maxConcurrentJobs = 4 -- Sane default, can be increased based on CPU cores
+      , showDemoProject = False -- Default to hidden
       }
 
 
