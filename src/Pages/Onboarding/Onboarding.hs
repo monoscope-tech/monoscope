@@ -533,10 +533,10 @@ integrationsPage pid apikey =
                 faSprite_ "copy" "regular" "h-4 w-4"
 
         -- Quick Test suggestion banner
-        div_ [class_ "mt-0 mb-6 p-4 bg-gradient-to-r from-fillInfo-weak to-transparent border-l-4 border-strokeInfo rounded-lg flex items-center gap-4"] do
+        div_ [class_ "mb-4 px-4 bg-gradient-to-r from-fillInfo-weak to-transparent border-l-4 border-strokeInfo rounded-lg flex items-center gap-4"] do
           faSprite_ "lightbulb" "regular" "h-5 w-5 text-textInfo flex-shrink-0"
           div_ [class_ "flex-1"] do
-            p_ [class_ "text-sm text-textStrong leading-relaxed"] do
+            p_ [class_ "text-sm text-textStrong"] do
               "Want to test quickly? "
               button_
                 [ class_ "text-textBrand hover:text-textBrand-strong underline font-medium"
