@@ -128,7 +128,7 @@ const REGEX_PATTERNS = {
 
   // Operator patterns
   operatorMatch:
-    /([\w\.]+)\s*(==|!=|>=|<=|>|<|=~|in|!in|has|!has|has_any|has_all|contains|!contains|startswith|!startswith|endswith|!endswith|matches)\s*$/,
+    /([\w\.]+)\s*(==|!=|>=|<=|>|<|=~|!in|in|has_any|has_all|!has|has|!contains|contains|!startswith|startswith|!endswith|endswith|matches)\s*$/,
 
   // Value patterns
   afterQuotedValue: /".*"\s*$/,
@@ -409,6 +409,14 @@ monaco.languages.registerCompletionItemProvider('aql', {
           label: '("value1", "value2")',
           kind: monaco.languages.CompletionItemKind.Snippet,
           insertText: '("value1", "value2") ',
+          range: createRange(),
+        });
+      } else if (operator === 'has_any' || operator === 'has_all') {
+        // Special handling for 'has_any' and 'has_all' operators - suggest array syntax
+        suggestions.push({
+          label: '["value1", "value2"]',
+          kind: monaco.languages.CompletionItemKind.Snippet,
+          insertText: '["value1", "value2"] ',
           range: createRange(),
         });
       } else {
