@@ -3,7 +3,7 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="/static/public/assets/svgs/logo_white.svg">
   <source media="(prefers-color-scheme: light)" srcset="/static/public/assets/svgs/logo_black.svg">
-  <img src="/static/public/assets/svgs/logo_black.svg" alt="Monoscope Logo" width="400" />
+  <img src="/static/public/assets/svgs/logo_black.svg" alt="Monoscope Logo" width="250" />
 </picture>
 
 ### Open-source monitoring that understands your systems
