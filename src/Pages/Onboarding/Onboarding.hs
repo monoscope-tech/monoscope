@@ -660,7 +660,8 @@ integrationsPage pid apikey =
             div_ [class_ "text-textStrong font-medium mb-2 flex items-center gap-2"] do
               span_ [class_ "inline-flex items-center justify-center w-6 h-6 rounded-full bg-fillBrand-weak text-textBrand text-sm font-bold"] "1"
               span_ "Install telemetrygen"
-            div_ [class_ "bg-bgBase p-3 rounded font-mono text-sm overflow-x-auto border border-strokeWeak"]
+            div_
+              [class_ "bg-bgBase p-3 rounded font-mono text-sm overflow-x-auto border border-strokeWeak"]
               "go install github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen@latest"
             p_ [class_ "text-xs text-textWeak mt-2 leading-relaxed"] "Requires Go 1.20 or later"
 
@@ -671,7 +672,11 @@ integrationsPage pid apikey =
               span_ "Send test traces"
             div_ [class_ "relative"] do
               pre_ [class_ "bg-bgBase p-3 rounded font-mono text-sm overflow-x-auto border border-strokeWeak", id_ "telemetrygen-cmd"]
-                $ code_ $ toHtml $ "telemetrygen traces --otlp-endpoint localhost:4317 \\\n  --otlp-insecure \\\n  --otlp-header 'Authorization=\"Bearer " <> apikey <> "\"' \\\n  --traces 10 \\\n  --duration 5s"
+                $ code_
+                $ toHtml
+                $ "telemetrygen traces --otlp-endpoint localhost:4317 \\\n  --otlp-insecure \\\n  --otlp-header 'Authorization=\"Bearer "
+                <> apikey
+                <> "\"' \\\n  --traces 10 \\\n  --duration 5s"
               button_
                 [ class_ "absolute top-2 right-2 px-3 py-1 text-xs bg-fillBrand-strong rounded text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90"
                 , type_ "button"

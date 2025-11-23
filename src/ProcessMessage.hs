@@ -224,9 +224,10 @@ processSpanToEntities pjc otelSpan dumpId =
       !host = fromMaybe "" $ attrValue ^? key "net" . key "host" . key "name" . _String
 
       -- Extract SDK type from attributes (needed for URL normalization)
-      !sdkTypeStr = fromMaybe "unknown" $
-        (attrValue ^? key "monoscope" . key "sdk_type" . _String) <|>
-        (attrValue ^? key "apitoolkit" . key "sdk_type" . _String)
+      !sdkTypeStr =
+        fromMaybe "unknown"
+          $ (attrValue ^? key "monoscope" . key "sdk_type" . _String)
+          <|> (attrValue ^? key "apitoolkit" . key "sdk_type" . _String)
       !sdkType = fromMaybe RequestDumps.SDKUnknown $ readMaybe $ toString sdkTypeStr
 
       -- URL normalization and dynamic path parameter extraction

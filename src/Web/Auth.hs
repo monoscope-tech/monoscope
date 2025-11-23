@@ -173,15 +173,18 @@ sessionByID mbPersistentSessionId requestID isSidebarClosed theme url basicAuthE
               let mU = mbPess <&> (.user.getUser)
               case (mU, mbPess) of
                 (Just uu, Just uSess) -> pure (uu, uSess.id, uSess)
-                _ -> if basicAuthEnabled
-                       then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
-                       else throwError $ err302{errHeaders = [("Location", "/to_login?redirect_to=" <> fromMaybe "" url)]}
-            else if basicAuthEnabled
-              then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
-              else throwError $ err302{errHeaders = [("Location", "/login?redirect_to=" <> fromMaybe "" url)]}
-        Nothing -> if basicAuthEnabled
-          then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
-          else throwError $ err302{errHeaders = [("Location", "/to_login?redirect_to=" <> fromMaybe "" url)]}
+                _ ->
+                  if basicAuthEnabled
+                    then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
+                    else throwError $ err302{errHeaders = [("Location", "/to_login?redirect_to=" <> fromMaybe "" url)]}
+            else
+              if basicAuthEnabled
+                then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
+                else throwError $ err302{errHeaders = [("Location", "/login?redirect_to=" <> fromMaybe "" url)]}
+        Nothing ->
+          if basicAuthEnabled
+            then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
+            else throwError $ err302{errHeaders = [("Location", "/to_login?redirect_to=" <> fromMaybe "" url)]}
   let sessionCookie = Sessions.craftSessionCookie sessionId False
   pure $ Sessions.addCookie sessionCookie (Sessions.Session{persistentSession, ..})
 
@@ -339,9 +342,10 @@ authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
     Nothing -> do
       user <- Users.createUser firstName lastName picture email
       -- Make basic auth users sudo for admin access
-      let userWithSudo = if T.isSuffixOf "@basic-auth.local" email
-                         then user { Users.isSudo = True }
-                         else user
+      let userWithSudo =
+            if T.isSuffixOf "@basic-auth.local" email
+              then user{Users.isSudo = True}
+              else user
       Users.insertUser userWithSudo
       pure userWithSudo.id
     Just user -> pure user.id

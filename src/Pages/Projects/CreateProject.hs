@@ -314,8 +314,9 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan} = do
               foundUsFrom = fromMaybe "" $ project.questions >>= (`lookupValueText` "foundUsFrom")
           createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.user.id pid fullName [foundUsFrom] foundUsFrom
         users <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
-        unless (T.null envCfg.convertkitApiKey) $
-          forM_ users $ \user -> ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original user.email) pid.toText project.title name
+        unless (T.null envCfg.convertkitApiKey)
+          $ forM_ users
+          $ \user -> ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original user.email) pid.toText project.title name
 
   -- Handle Open Source plan when basic auth is enabled
   case plan of
