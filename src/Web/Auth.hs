@@ -132,7 +132,7 @@ authHandler logger env =
               requestID <- liftIO $ getRequestID req
               -- Use a fixed email for basic auth users
               sessId <- authorizeUserAndPersist Nothing "Basic" "Auth" "" (username <> "@basic-auth.local")
-              sessionByID (Just sessId) requestID isSidebarClosed theme Nothing
+              sessionByID (Just sessId) requestID isSidebarClosed theme Nothing env.config.basicAuthEnabled
             Nothing -> do
               -- When basic auth is enabled, check if we have a valid cookie session
               -- If not, we should require basic auth instead of redirecting to Auth0
@@ -143,26 +143,26 @@ authHandler logger env =
                 Just _ -> do
                   -- We have a valid cookie session, proceed normally
                   logInfo "Basic auth fallback" "Valid cookie session exists"
-                  proceedWithCookieAuth req
+                  proceedWithCookieAuth req env.config.basicAuthEnabled
                 Nothing -> do
                   -- No valid session and basic auth is enabled - return 401
                   logInfo "Basic auth required" "No valid auth provided"
-                  throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"APItoolkit\"")]}
+                  throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
         else
           -- Basic auth not enabled, use normal cookie auth
-          proceedWithCookieAuth req
+          proceedWithCookieAuth req env.config.basicAuthEnabled
 
-    proceedWithCookieAuth req = do
+    proceedWithCookieAuth req basicAuthEnabledFlag = do
       let cookies = getCookies req
       mbPersistentSessionId <- handlerToEff $ getSessionId cookies
       let isSidebarClosed = sidebarClosedFromCookie cookies
       let theme = themeFromCookie cookies
       requestID <- liftIO $ getRequestID req
-      sessionByID mbPersistentSessionId requestID isSidebarClosed theme (Just $ getRequestUrl req)
+      sessionByID mbPersistentSessionId requestID isSidebarClosed theme (Just $ getRequestUrl req) basicAuthEnabledFlag
 
 
-sessionByID :: (DB :> es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Sessions.PersistentSessionId -> Text -> Bool -> Text -> Maybe ByteString -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
-sessionByID mbPersistentSessionId requestID isSidebarClosed theme url = do
+sessionByID :: (DB :> es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Sessions.PersistentSessionId -> Text -> Bool -> Text -> Maybe ByteString -> Bool -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
+sessionByID mbPersistentSessionId requestID isSidebarClosed theme url basicAuthEnabled = do
   mbPersistentSession <- join <$> mapM Sessions.getPersistentSession mbPersistentSessionId
   let mUser = mbPersistentSession <&> (.user.getUser)
   (user, sessionId, persistentSession) <- case (mUser, mbPersistentSession) of
@@ -177,9 +177,15 @@ sessionByID mbPersistentSessionId requestID isSidebarClosed theme url = do
               let mU = mbPess <&> (.user.getUser)
               case (mU, mbPess) of
                 (Just uu, Just uSess) -> pure (uu, uSess.id, uSess)
-                _ -> throwError $ err302{errHeaders = [("Location", "/to_login?redirect_to=" <> fromMaybe "" url)]}
-            else throwError $ err302{errHeaders = [("Location", "/login?redirect_to=" <> fromMaybe "" url)]}
-        Nothing -> throwError $ err302{errHeaders = [("Location", "/to_login?redirect_to=" <> fromMaybe "" url)]}
+                _ -> if basicAuthEnabled
+                       then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
+                       else throwError $ err302{errHeaders = [("Location", "/to_login?redirect_to=" <> fromMaybe "" url)]}
+            else if basicAuthEnabled
+              then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
+              else throwError $ err302{errHeaders = [("Location", "/login?redirect_to=" <> fromMaybe "" url)]}
+        Nothing -> if basicAuthEnabled
+          then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
+          else throwError $ err302{errHeaders = [("Location", "/to_login?redirect_to=" <> fromMaybe "" url)]}
   let sessionCookie = Sessions.craftSessionCookie sessionId False
   pure $ Sessions.addCookie sessionCookie (Sessions.Session{persistentSession, ..})
 
@@ -248,8 +254,13 @@ logoutH = do
 
 loginRedirectH :: Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
 loginRedirectH redirectToM = do
-  let redirectTo = "/login?redirect_to=" <> fromMaybe "/" redirectToM
-  pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
+  envCfg <- asks env
+  -- If basic auth is enabled, return 401 instead of redirecting to /login
+  if envCfg.basicAuthEnabled
+    then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
+    else do
+      let redirectTo = "/login?redirect_to=" <> fromMaybe "/" redirectToM
+      pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
 
 -- loginH
@@ -262,10 +273,14 @@ loginH
        )
 loginH redirectToM = do
   envCfg <- asks env
-  stateVar <- liftIO $ UUID.toText <$> UUIDV4.nextRandom
-  let escapedUri = escapedQueryPartial $ envCfg.auth0Callback <> "?redirect_to=" <> fromMaybe "/" redirectToM
-  let redirectTo = envCfg.auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg.auth0ClientId <> "&redirect_uri=" <> escapedUri <> "&state=" <> stateVar <> "&scope=openid profile email"
-  pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
+  -- If basic auth is enabled, return 401 instead of redirecting to OAuth
+  if envCfg.basicAuthEnabled
+    then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
+    else do
+      stateVar <- liftIO $ UUID.toText <$> UUIDV4.nextRandom
+      let escapedUri = escapedQueryPartial $ envCfg.auth0Callback <> "?redirect_to=" <> fromMaybe "/" redirectToM
+      let redirectTo = envCfg.auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg.auth0ClientId <> "&redirect_uri=" <> escapedUri <> "&state=" <> stateVar <> "&scope=openid profile email"
+      pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
 
 -- authCallbackH will accept a request with code and state, and use that code to queery auth- for an auth token, and then for user info

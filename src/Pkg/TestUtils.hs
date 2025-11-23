@@ -412,7 +412,7 @@ testSessionHeader pool = do
 
   tp <- liftIO getGlobalTracerProvider
   logger <- liftIO $ Log.mkLogger "test" (\_ -> pure ())
-  runTestEffect pool logger tp (Auth.sessionByID (Just pSessId) "requestID" True "light" Nothing)
+  runTestEffect pool logger tp (Auth.sessionByID (Just pSessId) "requestID" True "light" Nothing False)
     & liftIO
     <&> fromRightShow
 
@@ -424,7 +424,7 @@ refreshSession pool sessionHeaders = do
       pSessId = session.sessionId
   tp <- liftIO getGlobalTracerProvider
   logger <- liftIO $ Log.mkLogger "test" (\_ -> pure ())
-  runTestEffect pool logger tp (Auth.sessionByID (Just pSessId) "requestID" session.isSidebarClosed session.theme Nothing)
+  runTestEffect pool logger tp (Auth.sessionByID (Just pSessId) "requestID" session.isSidebarClosed session.theme Nothing False)
     & liftIO
     <&> fromRightShow
 
