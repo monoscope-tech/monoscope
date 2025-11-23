@@ -52,10 +52,6 @@ Monoscope is an open-source observability platform that uses artificial intellig
 ## 🛠️ Quick Start Installation
 
 ```bash
-# Run with Docker (recommended)
-docker run -p 8080:8080 monoscope/monoscope:latest
-
-# Or clone and run locally
 git clone https://github.com/monoscope-tech/monoscope.git
 cd monoscope
 docker-compose up
@@ -311,15 +307,18 @@ telemetrygen traces --otlp-endpoint localhost:4317 --otlp-insecure \
 ## 📚 Documentation
 
 ### Getting Started
+
 - [Complete Getting Started Guide](docs/getting-started.md) - Installation options and first steps
 - [Configuration Reference](docs/configuration.md) - All configuration options
 
 ### Guides
+
 - [Monitoring Kubernetes](docs/kubernetes.md) - Deploy on K8s and monitor clusters
 - [Alert Configuration](docs/alerts.md) - Set up AI-powered anomaly detection
 - [Architecture Overview](docs/architecture.md) - Technical deep dive
 
 ### Development
+
 - [Development Guide](DEVELOPMENT.md) - Building from source and contributing
 
 ## 🏆 How Monoscope Compares
@@ -343,6 +342,7 @@ telemetrygen traces --otlp-endpoint localhost:4317 --otlp-insecure \
 ## 🌍 Contributing
 
 We welcome contributions! See our [Development Guide](DEVELOPMENT.md) for:
+
 - Setting up your development environment
 - Running tests and linting
 - Submitting pull requests
