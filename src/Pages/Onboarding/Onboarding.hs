@@ -532,37 +532,19 @@ integrationsPage pid apikey =
                 span_ "Copy"
                 faSprite_ "copy" "regular" "h-4 w-4"
 
-        -- Quick Test section
-        details_ [class_ "my-6 p-4 bg-fillWeak border border-strokeWeak rounded-xl"] do
-          summary_ [class_ "text-textStrong font-semibold cursor-pointer flex items-center gap-2"] do
-            faSprite_ "flask-vial" "regular" "h-4 w-4"
-            span_ "Quick Test - Send test data with telemetrygen"
-          div_ [class_ "mt-4 space-y-4"] do
-            p_ [class_ "text-textWeak text-sm"] "Test your integration quickly by sending sample traces using telemetrygen, a tool that generates OTLP telemetry data."
-
-            div_ [class_ "space-y-3"] do
-              div_ do
-                div_ [class_ "text-textStrong font-medium mb-2"] "1. Install telemetrygen:"
-                div_ [class_ "bg-bgBase p-3 rounded-lg font-mono text-sm overflow-x-auto"]
-                  "go install github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen@latest"
-
-              div_ do
-                div_ [class_ "text-textStrong font-medium mb-2"] "2. Send test traces:"
-                div_ [class_ "bg-bgBase p-3 rounded-lg font-mono text-sm overflow-x-auto", id_ "telemetrygen-command"]
-                  $ toHtml $ "telemetrygen traces --otlp-endpoint localhost:4317 \\\n  --otlp-insecure \\\n  --otlp-header 'Authorization=\"Bearer " <> apikey <> "\"' \\\n  --traces 10 \\\n  --duration 5s"
-                button_
-                  [ class_ "mt-2 px-3 py-1 text-xs bg-fillBrand-strong rounded text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90 cursor-pointer"
-                  , type_ "button"
-                  , onpointerdown_ "navigator.clipboard.writeText(document.getElementById('telemetrygen-command').textContent); this.innerHTML = '<span>Copied!</span>';"
-                  ]
-                  do
-                    span_ "Copy command"
-                    faSprite_ "copy" "regular" "h-3 w-3"
-
-            div_ [class_ "mt-3 p-3 bg-fillSuccess-weak border border-strokeSuccess-weak rounded-lg"] do
-              p_ [class_ "text-textSuccess text-sm"] do
-                faSprite_ "circle-info" "regular" "h-4 w-4 inline mr-1"
-                "After running the command, you should see traces appear in your dashboard within a few seconds."
+        -- Quick Test suggestion banner
+        div_ [class_ "my-4 p-4 bg-gradient-to-r from-fillInfo-weak to-transparent border-l-4 border-strokeInfo rounded-lg flex items-center gap-4"] do
+          faSprite_ "lightbulb" "regular" "h-5 w-5 text-textInfo flex-shrink-0"
+          div_ [class_ "flex-1"] do
+            p_ [class_ "text-sm text-textStrong"] do
+              "Want to test quickly? "
+              button_
+                [ class_ "text-textBrand hover:text-textBrand-strong underline font-medium"
+                , type_ "button"
+                , onclick_ "document.getElementById('telemetrygen-modal').showModal()"
+                ]
+                "Use telemetrygen"
+              " to send sample data in seconds"
 
         -- Display integration groups
         forM_ integrationGroups \(groupName, langsList) -> div_ [class_ "mb-6"] do
@@ -664,6 +646,52 @@ integrationsPage pid apikey =
                     , class_ "prose-a:!text-textBrand prose-a:!underline"
                     ]
                     ""
+
+    -- Telemetrygen modal
+    term "dialog" [id_ "telemetrygen-modal", class_ "modal"] do
+      div_ [class_ "modal-box max-w-2xl"] do
+        h3_ [class_ "text-lg font-bold text-textStrong flex items-center gap-2 mb-4"] do
+          faSprite_ "flask-vial" "regular" "h-5 w-5"
+          span_ "Quick Test with Telemetrygen"
+
+        p_ [class_ "text-textWeak mb-6"] "Telemetrygen is a testing tool that generates OTLP telemetry data. Use it to quickly verify your setup is working correctly."
+
+        div_ [class_ "space-y-4"] do
+          -- Step 1: Install
+          div_ [class_ "p-4 bg-fillWeak rounded-lg"] do
+            div_ [class_ "text-textStrong font-medium mb-2 flex items-center gap-2"] do
+              span_ [class_ "inline-flex items-center justify-center w-6 h-6 rounded-full bg-fillBrand-weak text-textBrand text-sm font-bold"] "1"
+              span_ "Install telemetrygen"
+            div_ [class_ "bg-bgBase p-3 rounded font-mono text-sm overflow-x-auto border border-strokeWeak"]
+              "go install github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen@latest"
+            p_ [class_ "text-xs text-textWeak mt-2"] "Requires Go 1.20 or later"
+
+          -- Step 2: Run command
+          div_ [class_ "p-4 bg-fillWeak rounded-lg"] do
+            div_ [class_ "text-textStrong font-medium mb-2 flex items-center gap-2"] do
+              span_ [class_ "inline-flex items-center justify-center w-6 h-6 rounded-full bg-fillBrand-weak text-textBrand text-sm font-bold"] "2"
+              span_ "Send test traces"
+            div_ [class_ "relative"] do
+              pre_ [class_ "bg-bgBase p-3 rounded font-mono text-sm overflow-x-auto border border-strokeWeak", id_ "telemetrygen-cmd"]
+                $ code_ $ toHtml $ "telemetrygen traces --otlp-endpoint localhost:4317 \\\n  --otlp-insecure \\\n  --otlp-header 'Authorization=\"Bearer " <> apikey <> "\"' \\\n  --traces 10 \\\n  --duration 5s"
+              button_
+                [ class_ "absolute top-2 right-2 px-3 py-1 text-xs bg-fillBrand-strong rounded text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90"
+                , type_ "button"
+                , onclick_ "navigator.clipboard.writeText(document.getElementById('telemetrygen-cmd').textContent); this.innerHTML = 'Copied!';"
+                ]
+                do
+                  span_ "Copy"
+                  faSprite_ "copy" "regular" "h-3 w-3"
+
+        -- Success message
+        div_ [class_ "mt-6 p-4 bg-fillSuccess-weak border border-strokeSuccess-weak rounded-lg flex items-start gap-3"] do
+          faSprite_ "circle-check" "regular" "h-5 w-5 text-textSuccess flex-shrink-0 mt-0.5"
+          div_ do
+            p_ [class_ "text-textSuccess text-sm font-medium"] "What happens next?"
+            p_ [class_ "text-textSuccess text-sm mt-1"] "After running the command, traces will appear in your dashboard within seconds. You can then proceed with the full SDK integration."
+
+        div_ [class_ "modal-action"] do
+          button_ [class_ "btn", onclick_ "document.getElementById('telemetrygen-modal').close()"] "Close"
 
     -- Highlight.js CDN for syntax highlighting
     link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css"]
