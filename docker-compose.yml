@@ -54,6 +54,8 @@ services:
       - ENABLE_BACKGROUND_JOBS=True
       - ENABLE_PUBSUB_SERVICE=False
       - ENABLE_BROWSER_MONITORING=True
+      # Demo project - set to True to enable demo project in the UI
+      - SHOW_DEMO_PROJECT=False
       # ConvertKit settings (optional - leave empty if not using)
       - CONVERTKIT_API_KEY=${CONVERTKIT_API_KEY:-}
       - CONVERTKIT_API_SECRET=${CONVERTKIT_API_SECRET:-}
