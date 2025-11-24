@@ -215,35 +215,19 @@ Real-time metrics and performance monitoring with AI-powered insights.
 
 ## Trusted by Leading Companies
 
-<style>
-.company-logos img {
-  height: 30px;
-  width: 80px;
-  object-fit: contain;
-  opacity: 0.5;
-  filter: brightness(0) saturate(100%);
-}
-
-@media (prefers-color-scheme: dark) {
-  .company-logos img {
-    filter: brightness(0) saturate(100%) invert(1);
-  }
-}
-</style>
-
-<div align="center" class="company-logos">
+<div align="center">
   <table>
     <tr>
-      <td align="center"><img src="https://monoscope.tech/assets/img/customers/andela.svg" alt="Andela" /></td>
-      <td align="center"><img src="https://monoscope.tech/assets/img/customers/partna.svg" alt="Partna" /></td>
-      <td align="center"><img src="https://monoscope.tech/assets/img/customers/grovepay.svg" alt="GrovePay" /></td>
-      <td align="center"><img src="https://monoscope.tech/assets/img/customers/sameday.svg" alt="SameDay" /></td>
+      <td align="center" width="120" height="60"><img src="https://monoscope.tech/assets/img/customers/andela.svg" alt="Andela" height="30" /></td>
+      <td align="center" width="120" height="60"><img src="https://monoscope.tech/assets/img/customers/partna.svg" alt="Partna" height="30" /></td>
+      <td align="center" width="120" height="60"><img src="https://monoscope.tech/assets/img/customers/grovepay.svg" alt="GrovePay" height="30" /></td>
+      <td align="center" width="120" height="60"><img src="https://monoscope.tech/assets/img/customers/sameday.svg" alt="SameDay" height="30" /></td>
     </tr>
     <tr>
-      <td align="center"><img src="https://monoscope.tech/assets/img/customers/platnova.png" alt="Platnova" /></td>
-      <td align="center"><img src="https://monoscope.tech/assets/img/customers/payfonte.svg" alt="PayFonte" /></td>
-      <td align="center"><img src="https://monoscope.tech/assets/img/customers/thepeer.svg" alt="ThePeer" /></td>
-      <td align="center"><img src="https://monoscope.tech/assets/img/customers/blockradar-full.svg" alt="BlockRadar" /></td>
+      <td align="center" width="120" height="60"><img src="https://monoscope.tech/assets/img/customers/platnova.png" alt="Platnova" height="30" /></td>
+      <td align="center" width="120" height="60"><img src="https://monoscope.tech/assets/img/customers/payfonte.svg" alt="PayFonte" height="30" /></td>
+      <td align="center" width="120" height="60"><img src="https://monoscope.tech/assets/img/customers/thepeer.svg" alt="ThePeer" height="30" /></td>
+      <td align="center" width="120" height="60"><img src="https://monoscope.tech/assets/img/customers/blockradar-full.svg" alt="BlockRadar" height="30" /></td>
     </tr>
   </table>
 </div>
