@@ -7,7 +7,7 @@ services:
     container_name: monoscope-timescaledb
     restart: unless-stopped
     ports:
-      - "5432:5432"
+      - '5432:5432'
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
@@ -22,7 +22,7 @@ services:
     volumes:
       - timescale_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -35,8 +35,8 @@ services:
     container_name: monoscope-app
     restart: unless-stopped
     ports:
-      - "8080:8080"     # HTTP API
-      - "4317:4317"     # gRPC port for OpenTelemetry
+      - '8080:8080' # HTTP API
+      - '4317:4317' # gRPC port for OpenTelemetry
     environment:
       - DATABASE_URL=host=timescaledb user=postgres password=postgres dbname=monoscope port=5432 sslmode=disable
       - PORT=8080
@@ -47,7 +47,7 @@ services:
       - BASIC_AUTH_ENABLED=True
       - BASIC_AUTH_USERNAME=admin
       - BASIC_AUTH_PASSWORD=changeme
-      - API_KEY_ENCRYPTION_SECRET_KEY=monoscope123456monoscope1234567
+      - API_KEY_ENCRYPTION_SECRET_KEY=monoscope123456monoscope12345678
       - MESSAGES_PER_PUBSUB_PULL_BATCH=100
       - MIGRATE_AND_INITIALIZE_ON_START=True
       - REQUEST_PUBSUB_TOPICS=monoscope-dev-1
@@ -93,9 +93,9 @@ services:
   timescaledb-test:
     image: timescale/timescaledb-ha:pg16-all
     container_name: monoscope-timescaledb-test
-    profiles: ["test"]  # Only starts when explicitly requested with --profile test
+    profiles: ['test'] # Only starts when explicitly requested with --profile test
     ports:
-      - "5433:5432"  # Different port to avoid conflicts
+      - '5433:5432' # Different port to avoid conflicts
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
@@ -108,7 +108,7 @@ services:
     tmpfs:
       - /var/lib/postgresql/data:size=1G
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
       interval: 5s
       timeout: 3s
       retries: 5
@@ -120,10 +120,10 @@ services:
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: monoscope-pgadmin
-    profiles: ["dev"]  # Only starts when explicitly requested with --profile dev
+    profiles: ['dev'] # Only starts when explicitly requested with --profile dev
     restart: unless-stopped
     ports:
-      - "5050:80"
+      - '5050:80'
     environment:
       - PGADMIN_DEFAULT_EMAIL=admin@apitoolkit.io
       - PGADMIN_DEFAULT_PASSWORD=admin
@@ -145,3 +145,4 @@ volumes:
 networks:
   monoscope-network:
     driver: bridge
+
