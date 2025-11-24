@@ -978,25 +978,30 @@ sendReportForProject pid rType = do
               let firstName = user.firstName
                   projectTitle = pr.title
                   userEmail = CI.original user.email
-                  anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
-                  perf = RP.getPerformanceEmailTemplate endpoint_rp previous_week
-                  perf_count = V.length perf
-                  perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else V.take 10 perf
+                  anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies'
+                  perf_count = V.length endpointPerformance
+                  perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else ((\(u, m, p, d, dc, req, cc) -> AE.object ["host" AE..= u, "urlPath" AE..= p, "method" AE..= m, "averageLatency" AE..= d, "latencyChange" AE..= dc]) <$> V.take 10 endpointPerformance)
                   rp_url = "https://app.monoscope.tech/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
                   dayEnd = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone currentTime))
                   sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentTime
                   sevenDaysAgoZonedTime = utcToZonedTime timeZone sevenDaysAgoUTCTime
                   dayStart = show $ localDay (zonedTimeToLocalTime sevenDaysAgoZonedTime)
                   freeTierLimitExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
+                  slowQueriesCount = V.length $ slowDbQueries
+                  sqlowQueriesList = if slowQueriesCount == 0 then [AE.object ["message" AE..= "No slow queries detected."]] else (\(x, y, z) -> AE.object ["statement" AE..= x, "latency" AE..= z, "total" AE..= y]) <$> slowDbQueries
                   templateVars =
                     [aesonQQ|{
                      "user_name": #{firstName},
+                     "total_events": #{totalEvents},
+                     "total_errors": #{totalErrors},
                      "project_name": #{projectTitle},
                      "anomalies_count": #{total_anomalies},
                      "anomalies":  #{anmls},
                      "report_url": #{rp_url},
                      "performance_count": #{perf_count},
                      "performance": #{perf_shrt},
+                     "queries": #{sqlowQueriesList},
+                     "slow_queries_count": #{slowQueriesCount},
                      "start_date": #{dayStart},
                      "end_date": #{dayEnd},
                      "free_exceeded": #{freeTierLimitExceeded}

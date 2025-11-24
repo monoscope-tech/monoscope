@@ -27,7 +27,6 @@ import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Text.Printf (printf)
 import Text.Slugify (slugify)
 import Utils
-import Utils (faSprite_, getServiceColors, onpointerdown_, prettyPrintCount, prettyPrintDuration)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData, parseQueryParam)
 

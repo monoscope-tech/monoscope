@@ -3,16 +3,10 @@
 module Pages.Reports (
   reportsGetH,
   singleReportGetH,
-  buildReportJSON,
-  buildPerformanceJSON,
-  buildAnomalyJSON,
-  getPerformanceInsight,
   renderEndpointsTable,
-  getPerformanceEmailTemplate,
   getAnomaliesEmailTemplate,
   reportsPostH,
   buildReportJson',
-  ReportAnomalyType (..),
   PerformanceReport (..),
   ReportsGet (..),
   ReportsPost (..),
@@ -20,36 +14,27 @@ module Pages.Reports (
 where
 
 import Data.Aeson qualified as AE
-import Data.Aeson.Types qualified as AEP
 import Data.Default (def)
 import Data.List (foldl)
-import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Time (defaultTimeLocale, formatTime)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple.Newtypes (getAeson)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
-import Models.Apis.Anomalies qualified as Anomalies
-import Models.Apis.Issues qualified as Issue
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Reports qualified as Reports
-import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
-import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (..))
 import Pkg.Components.Widget qualified as Widget
-import Pkg.Components.Widget qualified as Widgets
 import Relude hiding (ask)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
-import Text.Printf (printf)
 import Utils (checkFreeTierExceeded, faSprite_, getDurationNSMS, prettyPrintCount)
 
 
@@ -64,90 +49,6 @@ data PerformanceReport = PerformanceReport
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
-
-
-data ReportAnomalyType
-  = ATEndpoint
-      { endpointUrlPath :: Text
-      , endpointMethod :: Text
-      , eventsCount :: Int
-      }
-  | ATShape
-      { endpointUrlPath :: Text
-      , endpointMethod :: Text
-      , targetHash :: Text
-      , newUniqueFields :: [Text]
-      , updatedFieldFormats :: [Text]
-      , deletedFields :: [Text]
-      , eventsCount :: Int
-      }
-  | ATFormat
-      { endpointUrlPath :: Text
-      , keyPath :: Text
-      , endpointMethod :: Text
-      , formatType :: Text
-      , formatExamples :: [Text]
-      , eventsCount :: Int
-      }
-  | ATRuntimeException
-      { endpointUrlPath :: Text
-      }
-  | UnknownAnomaly
-  deriving stock (Generic, Show)
-  deriving anyclass (AE.ToJSON)
-
-
-instance AE.FromJSON ReportAnomalyType where
-  parseJSON = AE.withObject "ReportAnomalyType" $ \o -> do
-    anomalyType <- o AE..:? "anomaly_type" :: AEP.Parser (Maybe Text)
-    case anomalyType of
-      Just _ -> pure UnknownAnomaly
-      Nothing -> do
-        tag <- o AE..:? "tag" :: AEP.Parser (Maybe Text)
-        case tag of
-          Just "ATEndpoint" ->
-            ATEndpoint
-              <$> o
-              AE..: "endpointUrlPath"
-              <*> o
-              AE..: "endpointMethod"
-              <*> o
-              AE..: "eventsCount"
-          Just "ATShape" ->
-            ATShape
-              <$> o
-              AE..: "endpointUrlPath"
-              <*> o
-              AE..: "endpointMethod"
-              <*> o
-              AE..: "targetHash"
-              <*> o
-              AE..: "newUniqueFields"
-              <*> o
-              AE..: "updatedFieldFormats"
-              <*> o
-              AE..: "deletedFields"
-              <*> o
-              AE..: "eventsCount"
-          Just "ATFormat" ->
-            ATFormat
-              <$> o
-              AE..: "endpointUrlPath"
-              <*> o
-              AE..: "keyPath"
-              <*> o
-              AE..: "endpointMethod"
-              <*> o
-              AE..: "formatType"
-              <*> o
-              AE..: "formatExamples"
-              <*> o
-              AE..: "eventsCount"
-          Just "ATRuntimeException" ->
-            ATRuntimeException
-              <$> o
-              AE..: "endpointUrlPath"
-          _ -> pure UnknownAnomaly
 
 
 data StatData = StatData
@@ -177,11 +78,11 @@ data DBQueryStat = DBQueryStat
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
 data IssueStat = IssueStat
-  { id :: Issue.IssueId
+  { id :: Issues.IssueId
   , title :: Text
   , critical :: Bool
   , severity :: Text
-  , issueType :: Issue.IssueType
+  , issueType :: Issues.IssueType
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -193,15 +94,15 @@ data ReportData = ReportData
   , events :: StatData
   , spanTypeStats :: [SpanTypeStats]
   , slowDbQueries :: [DBQueryStat]
-  , errorDataset :: Widgets.WidgetDataset
-  , eventsDataset :: Widgets.WidgetDataset
+  , errorDataset :: Widget.WidgetDataset
+  , eventsDataset :: Widget.WidgetDataset
   , issues :: [IssueStat]
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
 
 
-getDataset :: Charts.MetricsData -> Widgets.WidgetDataset
+getDataset :: Charts.MetricsData -> Widget.WidgetDataset
 getDataset chartEv =
   Widget.WidgetDataset
     { source = AE.toJSON $ V.cons (AE.toJSON <$> chartEv.headers) (AE.toJSON <<$>> chartEv.dataset)
@@ -228,6 +129,11 @@ buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStats
         , "eventsDataset" AE..= (getDataset chartEv)
         , "issues" AE..= ((\(i, t, c, s, tp) -> IssueStat i t c s tp) <$> issues)
         ]
+
+
+getAnomaliesEmailTemplate :: V.Vector (Issues.IssueId, Text, Bool, Text, Issues.IssueType) -> V.Vector AE.Value
+getAnomaliesEmailTemplate issues =
+  V.map (\(i, t, c, s, tp) -> AE.object ["id" AE..= i, "title" AE..= t, "critical" AE..= c, "severity" AE..= s, "issueType" AE..= tp]) issues
 
 
 reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders ReportsPost)
@@ -518,153 +424,3 @@ getFaSprite category =
     "external" -> "globe"
     "internal" -> "function"
     _ -> "cube"
-
-
-buildReportJSON :: V.Vector Issues.IssueL -> V.Vector RequestForReport -> V.Vector EndpointPerf -> AE.Value
-buildReportJSON anomalies endpoints_perf previous_perf =
-  let anomalies_json = buildAnomalyJSON anomalies (length anomalies)
-      perf_insight = getPerformanceInsight endpoints_perf previous_perf
-      perf_json = buildPerformanceJSON perf_insight
-      report_json = case anomalies_json of
-        AE.Object va -> case perf_json of
-          AE.Object vp -> AE.Object (vp <> va)
-          _ -> AE.object []
-        _ -> AE.object []
-   in report_json
-
-
-buildPerformanceJSON :: V.Vector PerformanceReport -> AE.Value
-buildPerformanceJSON pr = AE.object ["endpoints" AE..= pr]
-
-
-buildAnomalyJSON :: V.Vector Issues.IssueL -> Int -> AE.Value
-buildAnomalyJSON anomalies total = AE.object ["anomalies" AE..= V.catMaybes (V.map buildjson anomalies), "anomaliesCount" AE..= total]
-  where
-    buildjson :: Issues.IssueL -> Maybe AE.Value
-    buildjson issue = case issue.issueType of
-      Issues.APIChange ->
-        case AE.fromJSON (getAeson issue.issueData) of
-          AE.Success (apiData :: Issues.APIChangeData) ->
-            Just
-              $ AE.object
-                [ "endpointUrlPath" AE..= apiData.endpointPath
-                , "endpointMethod" AE..= apiData.endpointMethod
-                , "targetHash" AE..= issue.endpointHash
-                , "tag" AE..= Anomalies.ATShape
-                , "newUniqueFields" AE..= apiData.newFields
-                , "updatedFieldFormats" AE..= apiData.modifiedFields
-                , "deletedFields" AE..= apiData.deletedFields
-                , "eventsCount" AE..= issue.eventCount
-                ]
-          _ -> Nothing
-      Issues.RuntimeException ->
-        case AE.fromJSON (getAeson issue.issueData) of
-          AE.Success (errorData :: Issues.RuntimeExceptionData) ->
-            Just
-              $ AE.object
-                [ "endpointUrlPath" AE..= fromMaybe "/" errorData.requestPath
-                , "endpointMethod" AE..= fromMaybe "UNKNOWN" errorData.requestMethod
-                , "tag" AE..= Anomalies.ATRuntimeException
-                , "eventsCount" AE..= issue.eventCount
-                ]
-          _ -> Nothing
-      _ -> Nothing
-
-
-getAnomaliesEmailTemplate :: V.Vector Issues.IssueL -> V.Vector AE.Value
-getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
-  where
-    buildEmailjson :: Issues.IssueL -> AE.Value
-    buildEmailjson issue =
-      let baseObject =
-            [ "title" AE..= issue.title
-            , "eventsCount" AE..= issue.eventCount
-            , "firstSeen" AE..= formatUTC issue.lastSeen
-            ]
-       in case issue.issueType of
-            Issues.APIChange ->
-              case AE.fromJSON (getAeson issue.issueData) of
-                AE.Success (apiData :: Issues.APIChangeData) ->
-                  AE.object
-                    $ baseObject
-                    <> [ "tag" AE..= "ATShape"
-                       , "deletedFields" AE..= length apiData.deletedFields
-                       , "endpointMethod" AE..= apiData.endpointMethod
-                       , "endpointUrlPath" AE..= apiData.endpointPath
-                       , "newUniqueFields" AE..= length apiData.newFields
-                       , "updatedFields" AE..= length apiData.modifiedFields
-                       ]
-                _ -> AE.object baseObject
-            Issues.RuntimeException ->
-              case AE.fromJSON (getAeson issue.issueData) of
-                AE.Success (errorData :: Issues.RuntimeExceptionData) ->
-                  AE.object
-                    $ baseObject
-                    <> [ "tag" AE..= "ATRuntimeException"
-                       , "endpointMethod" AE..= fromMaybe "UNKNOWN" errorData.requestMethod
-                       , "endpointUrlPath" AE..= fromMaybe "/" errorData.requestPath
-                       ]
-                _ -> AE.object baseObject
-            _ -> AE.object baseObject
-
-
-formatUTC :: UTCTime -> String
-formatUTC = formatTime defaultTimeLocale "%Y-%m-%d %H:%M"
-
-
-getPerformanceInsight :: V.Vector RequestDumps.RequestForReport -> V.Vector RequestDumps.EndpointPerf -> V.Vector PerformanceReport
-getPerformanceInsight req_dumps previous_p =
-  let prMap = Map.fromList [(p.endpointHash, p.averageDuration) | p <- V.toList previous_p]
-      pin = V.map (mapFunc prMap) req_dumps
-      perfInfo = V.filter (\x -> x.durationDiffPct > 15 || x.durationDiffPct < -15) pin
-   in perfInfo
-
-
-getPerformanceEmailTemplate :: V.Vector RequestDumps.RequestForReport -> V.Vector RequestDumps.EndpointPerf -> V.Vector AE.Value
-getPerformanceEmailTemplate pr previous_p =
-  ( \p ->
-      AE.object
-        [ "endpointUrlPath" AE..= p.urlPath
-        , "endpointMethod" AE..= p.method
-        , "averageLatency" AE..= getMs p.averageDuration
-        , "latencyChange" AE..= 0
-        ]
-  )
-    <$> getPerformanceInsight pr previous_p
-  where
-    getMs :: Integer -> String
-    getMs val = msText
-      where
-        dbo = divideIntegers val 1000000
-        msText = printf "%.2fms" dbo
-
-
-mapFunc :: Map.Map Text Integer -> RequestDumps.RequestForReport -> PerformanceReport
-mapFunc prMap rd =
-  case Map.lookup rd.endpointHash prMap of
-    Just prevDuration ->
-      let diff = rd.averageDuration - prevDuration
-          diffPct = divideIntegers diff prevDuration * 100
-       in PerformanceReport
-            { urlPath = rd.urlPath
-            , method = rd.method
-            , host = ""
-            , averageDuration = rd.averageDuration
-            , durationDiffPct = diffPct
-            , requestCount = 0
-            , requestDiffPct = 0
-            }
-    Nothing ->
-      PerformanceReport
-        { urlPath = rd.urlPath
-        , method = rd.method
-        , host = ""
-        , averageDuration = rd.averageDuration
-        , durationDiffPct = 0
-        , requestCount = 0
-        , requestDiffPct = 0
-        }
-
-
-divideIntegers :: Integer -> Integer -> Double
-divideIntegers a b = fromIntegral a / fromIntegral b
