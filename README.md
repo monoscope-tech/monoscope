@@ -20,7 +20,7 @@ Ingest and explore logs, traces, and metrics stored in your S3 buckets. Query wi
 </div>
 
 <div align="center" style="margin-top: 1em; margin-bottom: 1em;">
-<a href="#what-is-monoscope">What is Monoscope?</a> • <a href="#quick-start">Quick Start</a> • <a href="#integration">Integration</a> • <a href="#ai-agents--reports">AI Agents</a> • <a href="#community">Community</a>
+<a href="#what-is-monoscope">What is Monoscope?</a> • <a href="#cloud-vs-self-hosted">Cloud vs Self-hosted</a> • <a href="#quick-start">Quick Start</a> • <a href="#ai-agents--reports">AI Agents</a> • <a href="#roadmap">Roadmap</a>
 </div>
 
 <br />
@@ -44,6 +44,22 @@ Monoscope is an open-source observability platform that stores your telemetry da
 - 🔭 **OpenTelemetry native** — 750+ integrations out of the box
 - ⚡ **Live tail** — Stream logs and traces in real-time
 - 🕵️ **Unified view** — Correlate logs, metrics, traces, and session replays in one place
+
+<br/>
+
+## Cloud vs Self-hosted
+
+In both options, you bring your own S3 buckets—your data stays yours.
+
+| | Cloud | Self-hosted |
+|---|---|---|
+| **Storage** | Your S3 buckets | Your S3 buckets |
+| **Compute** | Managed by us | You manage |
+| **Auth & SSO** | Built-in | DIY |
+| **Alert channels** | Slack, PagerDuty, etc. | Basic email |
+| **Pricing** | [Usage-based](https://monoscope.tech/pricing) | Free (AGPL-3.0) |
+
+→ [Start free on Cloud](https://monoscope.tech) or continue below to self-host.
 
 <br/>
 
@@ -170,10 +186,13 @@ Create AI agents that monitor your systems on a schedule:
 graph LR
     A[Your Apps] -->|Logs/Metrics/Traces| B[Ingestion API]
     B --> C[TimeFusion Engine]
-    C --> D[S3 Storage]
-    C --> E[LLM Pipeline]
-    E --> F[Anomaly Detection]
-    F --> G[Alerts & Dashboards]
+    C --> D[(S3 Storage)]
+    D --> E[Query Engine]
+    E --> F[Dashboards]
+    D --> G[AI Agent Scheduler]
+    G -->|LLM Analysis| H[Anomaly Detection]
+    H --> I[Email Reports]
+    H --> J[Alert Channels]
 ```
 
 <br/>
@@ -242,6 +261,20 @@ Real-time metrics and performance monitoring with AI-powered insights.
 - [Configuration](docs/configuration.md)
 - [Kubernetes Guide](docs/kubernetes.md)
 - [Development Guide](DEVELOPMENT.md)
+
+<br/>
+
+## Roadmap
+
+- [x] Custom dashboards builder
+- [ ] More out-of-the-box dashboards
+- [ ] AIOps workflow builder
+- [ ] Full migration to TimeFusion storage engine
+- [ ] Metrics aggregation rules
+- [ ] Multi-tenant workspace support
+- [ ] More alert channel integrations
+
+See our [public roadmap](https://github.com/monoscope-tech/monoscope/projects) for details and to vote on features.
 
 <br/>
 
