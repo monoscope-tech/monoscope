@@ -6,7 +6,7 @@
 
 **Subject:** [···] Welcome to Monoscope
 
-![Monoscope Logo](#)
+![Monoscope Logo](monoscope.png)
 
 ---
 
@@ -14,13 +14,13 @@ Hi {{first_name}},
 
 Welcome to Monoscope! We're glad you're here.
 
-Monoscope is a unified observability platform for logs, traces, metrics, and APIs—with your data stored in your own S3 bucket. Unlimited retention, no surprise bills, and AI-powered search that actually understands what you're looking for.
+Monoscope is a unified observability platform for logs, traces, metrics, and APIs. Your data is stored in your own S3 bucket with unlimited retention, no surprise bills, and AI-powered search that actually understands what you're looking for.
 
 ### Next steps to get started
 
-- **[Connect your S3 bucket](https://docs.monoscope.dev/getting-started/s3-setup)** — Own your data, pay nothing for retention
-- **[Send your first telemetry](https://docs.monoscope.dev/getting-started/connect)** — OpenTelemetry setup in under 5 minutes
-- **[Explore with AI](https://docs.monoscope.dev/getting-started/ai-queries)** — Query logs, traces, and metrics in plain English
+- **[Connect your S3 bucket](https://docs.monoscope.dev/getting-started/s3-setup)**: Own your data, pay nothing for retention
+- **[Send your first telemetry](https://docs.monoscope.dev/getting-started/connect)**: OpenTelemetry setup in under 5 minutes
+- **[Explore with AI](https://docs.monoscope.dev/getting-started/ai-queries)**: Query logs, traces, and metrics in plain English
 
 ---
 
@@ -40,7 +40,7 @@ If you have any questions or need some help, reply directly to this email.
 
 **Subject:** Stop paying for log retention (1/6)
 
-![Monoscope Logo](#)
+![Monoscope Logo](monoscope.png)
 
 [Open Monoscope](https://app.monoscope.dev)
 
@@ -56,9 +56,9 @@ First up: **bring your own S3 bucket** and say goodbye to retention fees.
 
 ![S3 Bucket Architecture Demo](#)
 
-Other observability tools charge per GB ingested _and_ retained. With Monoscope, all your telemetry—logs, traces, metrics, everything—lives in your own S3 bucket. You control the data and the costs.
+Other observability tools charge per GB ingested _and_ retained. With Monoscope, all your telemetry (logs, traces, metrics, everything) lives in your own S3 bucket. You control the data and the costs.
 
-💰 Zero retention fees—keep years of logs, traces, and metrics
+💰 Zero retention fees. Keep years of logs, traces, and metrics
 
 🔒 Your data never leaves your infrastructure
 
@@ -84,7 +84,7 @@ If you have any questions or need some help, reply directly to this email.
 
 **Subject:** Logs and traces, finally in the same view (2/6)
 
-![Monoscope Logo](#)
+![Monoscope Logo](monoscope.png)
 
 [Open Monoscope](https://app.monoscope.dev)
 
@@ -96,7 +96,7 @@ In most tools, logs and traces live in separate tabs. In Monoscope, **they're me
 
 ---
 
-See exactly which service logged what, while processing which customer request—all in context.
+See exactly which service logged what, while processing which customer request. All in context.
 
 ![Unified Tree View Demo](#)
 
@@ -108,7 +108,7 @@ See exactly which service logged what, while processing which customer request�
 
 ---
 
-When something breaks at 3am, you'll know exactly where and why—without opening five different tools.
+When something breaks at 3am, you'll know exactly where and why. No need to open five different tools.
 
 [**See it in action**](https://app.monoscope.dev/explore)
 
@@ -126,7 +126,7 @@ If you have any questions or need some help, reply directly to this email.
 
 **Subject:** "Show me errors from the last hour" (3/6)
 
-![Monoscope Logo](#)
+![Monoscope Logo](monoscope.png)
 
 [Open Monoscope](https://app.monoscope.dev)
 
@@ -138,7 +138,7 @@ Forget query languages. With Monoscope, **just type what you're looking for in p
 
 ---
 
-Our AI-powered explorer turns natural language into queries and charts instantly—across logs, traces, metrics, and more.
+Our AI-powered explorer turns natural language into queries and charts instantly. It works across logs, traces, metrics, and more.
 
 ![AI Query Demo](#)
 
@@ -170,7 +170,7 @@ If you have any questions or need some help, reply directly to this email.
 
 **Subject:** Catch breaking API changes before your users do (4/6)
 
-![Monoscope Logo](#)
+![Monoscope Logo](monoscope.png)
 
 [Open Monoscope](https://app.monoscope.dev)
 
@@ -182,7 +182,7 @@ Beyond logs and metrics, Monoscope has a unique capability: **automatic API chan
 
 ---
 
-We fingerprint your API responses and detect schema changes—before your customers report bugs.
+We fingerprint your API responses and detect schema changes before your customers report bugs.
 
 ![API Change Detection Demo](#)
 
@@ -212,7 +212,7 @@ If you have any questions or need some help, reply directly to this email.
 
 **Subject:** Alerts that learn what's normal (5/6)
 
-![Monoscope Logo](#)
+![Monoscope Logo](monoscope.png)
 
 [Open Monoscope](https://app.monoscope.dev)
 
@@ -220,7 +220,7 @@ If you have any questions or need some help, reply directly to this email.
 
 Hi {{first_name}},
 
-Monoscope doesn't just store your telemetry—it **watches for anomalies** across your entire stack.
+Monoscope doesn't just store your telemetry. It **watches for anomalies** across your entire stack.
 
 ---
 
@@ -234,7 +234,7 @@ Set up intelligent alerts on logs, metrics, traces, and API behavior. They adapt
 
 🐢 Catch slow database queries, error spikes, latency regressions
 
-🔔 Slack, Discord, email, webhook—your choice
+🔔 Slack, Discord, email, webhook. Your choice
 
 ---
 
@@ -256,7 +256,7 @@ If you have any questions or need some help, reply directly to this email.
 
 **Subject:** Build dashboards with plain English (6/6)
 
-![Monoscope Logo](#)
+![Monoscope Logo](monoscope.png)
 
 [Open Monoscope](https://app.monoscope.dev)
 
@@ -268,7 +268,7 @@ Finally, turn all your telemetry into **dashboards** that give your team instant
 
 ---
 
-Track service health, error rates, database performance, API latency—all powered by the same AI queries.
+Track service health, error rates, database performance, API latency. All powered by the same AI queries.
 
 ![Dashboard Builder Demo](#)
 
@@ -331,10 +331,10 @@ Reply to this email if you'd like a personalized walkthrough.
 | ----- | -------------------- | ------------------------------------------------------------------------------------------- |
 | 1/6   | BYOB S3 storage      | Cost is a massive pain point with Datadog/Coralogix. Zero retention fees for all telemetry. |
 | 2/6   | Unified tree view    | Logs in context with traces. Most tools separate these into tabs.                           |
-| 3/6   | AI natural language  | Query logs, traces, metrics, DB queries—all in plain English. No PromQL/LogQL.              |
+| 3/6   | AI natural language  | Query logs, traces, metrics, DB queries in plain English. No PromQL/LogQL.                  |
 | 4/6   | API change detection | Unique to Monoscope. Catches schema breaks before users report them.                        |
 | 5/6   | Smart anomaly alerts | Baseline learning across entire stack, not just static thresholds.                          |
-| 6/6   | Unified dashboards   | Logs, metrics, traces, APIs—all in one dashboard with AI-powered charting.                  |
+| 6/6   | Unified dashboards   | Logs, metrics, traces, APIs in one dashboard with AI-powered charting.                      |
 
 ---
 
