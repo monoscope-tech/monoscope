@@ -196,8 +196,14 @@ export function flameGraphChart(data: FlameGraphItem[], renderAt: string, colors
   // Initial cache update
   updateCache();
 
-  // Update cache on resize
-  window.addEventListener('resize', debounce(updateCache, 250));
+  ['resize', 'toggle-sidebar', 'loglist-resize'].forEach((eventName) => {
+    const updateCacheDebounced = debounce(updateCache, 250);
+    const flameGraphDebounced = debounce(() => flameGraph(fData, renderAt), 100);
+    window.addEventListener(eventName, () => {
+      updateCacheDebounced();
+      flameGraphDebounced();
+    });
+  });
 
   flameGraphContainer.addEventListener('mousemove', (e) => {
     if (e.currentTarget && cachedBoundingX !== null && cachedContainerWidth !== null) {

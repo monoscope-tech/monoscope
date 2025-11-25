@@ -386,6 +386,7 @@ resizer_ targetId urlParam increasingDirection =
                 if newWidth < 0 set newWidth to 0 end
                 set :lastWidth to newWidth then
                 call applyMove(:target, newWidth)
+                then send "loglist-resize" to <body/>
             end 
         end
         
@@ -1108,8 +1109,8 @@ alertConfigurationForm_ project alertM = do
                                      })
                                    end|]
                             ]
-                          ++ [required_ "" | req]
-                          ++ [value_ (maybe "" (show) vM) | isJust vM]
+                            ++ [required_ "" | req]
+                            ++ [value_ (maybe "" (show) vM) | isJust vM]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)
