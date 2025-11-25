@@ -10,7 +10,7 @@
 
 Ingest and explore logs, traces, and metrics stored in your S3 buckets. Query with natural language. Create AI agents that detect anomalies and send daily/weekly reports to your inbox.
 
-[![GitHub Release](https://img.shields.io/github/v/release/monoscope-tech/monoscope)](https://github.com/monoscope-tech/monoscope/releases)
+[![GitHub Release](https://img.shields.io/github/v/release/monoscope-tech/monoscope?include_prereleases)](https://github.com/monoscope-tech/monoscope/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 [![Haskell](https://img.shields.io/badge/Built%20with-Haskell-5e5086?logo=haskell)](https://www.haskell.org/)
 [![Discord](https://img.shields.io/discord/904634773329297429?color=7289da&logo=discord&logoColor=white)](https://discord.gg/BSFCaUHxt4)
