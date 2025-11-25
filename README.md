@@ -13,7 +13,7 @@ Ingest and explore logs, traces, and metrics stored in your S3 buckets. Query wi
 [![GitHub Release](https://img.shields.io/github/v/release/monoscope-tech/monoscope)](https://github.com/monoscope-tech/monoscope/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 [![Haskell](https://img.shields.io/badge/Built%20with-Haskell-5e5086?logo=haskell)](https://www.haskell.org/)
-[![Discord](https://img.shields.io/discord/123456789?color=7289da&logo=discord&logoColor=white)](https://discord.gg/BSFCaUHxt4)
+[![Discord](https://img.shields.io/discord/904634773329297429?color=7289da&logo=discord&logoColor=white)](https://discord.gg/BSFCaUHxt4)
 
 [**Website**](https://monoscope.tech) • [**Discord**](https://discord.gg/BSFCaUHxt4) • [**Twitter**](https://x.com/monoscope-tech) • [**Documentation**](https://docs.monoscope.tech)
 
@@ -194,6 +194,17 @@ graph LR
     H --> I[Email Reports]
     H --> J[Alert Channels]
 ```
+
+### Powered by TimeFusion
+
+Monoscope is built on [**TimeFusion**](https://github.com/monoscope-tech/timefusion), our open-source time-series database for observability workloads.
+
+| | |
+|---|---|
+| 🗄️ **S3-native** | Data lives in your S3 buckets—no vendor lock-in |
+| 🐘 **PostgreSQL compatible** | Use any Postgres client or driver |
+| ⚡ **500K+ events/sec** | Columnar storage with Apache Arrow |
+| 💵 **Pay only for S3** | No expensive proprietary storage fees |
 
 <br/>
 
