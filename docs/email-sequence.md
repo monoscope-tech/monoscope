@@ -2,7 +2,7 @@
 
 ---
 
-## Welcome Email
+## [···] Welcome Email
 
 **Subject:** [···] Welcome to Monoscope
 
@@ -18,13 +18,13 @@ Monoscope is a unified observability platform for logs, traces, metrics, and API
 
 ### Next steps to get started
 
-- **[Connect your S3 bucket](https://docs.monoscope.dev/getting-started/s3-setup)**: Own your data, pay nothing for retention
-- **[Send your first telemetry](https://docs.monoscope.dev/getting-started/connect)**: OpenTelemetry setup in under 5 minutes
-- **[Explore with AI](https://docs.monoscope.dev/getting-started/ai-queries)**: Query logs, traces, and metrics in plain English
+- **[Connect your S3 bucket](https://monoscope.tech/docs/getting-started/s3-setup)**: Own your data, pay nothing for retention
+- **[Send your first telemetry](https://monoscope.tech/docs/getting-started/connect)**: OpenTelemetry setup in under 5 minutes
+- **[Explore with AI](https://monoscope.tech/docs/getting-started/ai-queries)**: Query logs, traces, and metrics in plain English
 
 ---
 
-[**Explore the Docs**](https://docs.monoscope.dev)
+[**Explore the Docs**](https://monoscope.tech/docs)
 
 ---
 
@@ -38,11 +38,11 @@ If you have any questions or need some help, reply directly to this email.
 
 ## [···] Your data, your bucket (1/6)
 
-**Subject:** Stop paying for log retention (1/6)
+**Subject:** [···] Stop paying for log retention (1/6)
 
 ![Monoscope Logo](monoscope.png)
 
-[Open Monoscope](https://app.monoscope.dev)
+[Open Monoscope](https://app.monoscope.tech)
 
 ---
 
@@ -68,7 +68,7 @@ Other observability tools charge per GB ingested _and_ retained. With Monoscope,
 
 No more choosing between visibility and budget.
 
-[**Connect your bucket**](https://docs.monoscope.dev/s3-setup)
+[**Connect your bucket**](https://monoscope.tech/docs/s3-setup)
 
 ---
 
@@ -82,11 +82,11 @@ If you have any questions or need some help, reply directly to this email.
 
 ## [···] Logs and traces, finally together (2/6)
 
-**Subject:** Logs and traces, finally in the same view (2/6)
+**Subject:** [···] Logs and traces, finally in the same view (2/6)
 
 ![Monoscope Logo](monoscope.png)
 
-[Open Monoscope](https://app.monoscope.dev)
+[Open Monoscope](https://app.monoscope.tech)
 
 ---
 
@@ -110,7 +110,7 @@ See exactly which service logged what, while processing which customer request. 
 
 When something breaks at 3am, you'll know exactly where and why. No need to open five different tools.
 
-[**See it in action**](https://app.monoscope.dev/explore)
+[**See it in action**](https://app.monoscope.tech)
 
 ---
 
@@ -124,11 +124,11 @@ If you have any questions or need some help, reply directly to this email.
 
 ## [···] Ask your data anything (3/6)
 
-**Subject:** "Show me errors from the last hour" (3/6)
+**Subject:** [···] Show me errors from the last hour (3/6)
 
 ![Monoscope Logo](monoscope.png)
 
-[Open Monoscope](https://app.monoscope.dev)
+[Open Monoscope](https://app.monoscope.tech)
 
 ---
 
@@ -154,7 +154,7 @@ Our AI-powered explorer turns natural language into queries and charts instantly
 
 Type a question. Get a chart, filtered logs, or trace details. No PromQL. No LogQL. No learning curve.
 
-[**Try AI queries**](https://app.monoscope.dev/explore)
+[**Try AI queries**](https://app.monoscope.tech/explore)
 
 ---
 
@@ -168,11 +168,11 @@ If you have any questions or need some help, reply directly to this email.
 
 ## [···] Catch breaking API changes instantly (4/6)
 
-**Subject:** Catch breaking API changes before your users do (4/6)
+**Subject:** [···] Catch breaking API changes before your users do (4/6)
 
 ![Monoscope Logo](monoscope.png)
 
-[Open Monoscope](https://app.monoscope.dev)
+[Open Monoscope](https://app.monoscope.tech)
 
 ---
 
@@ -196,7 +196,7 @@ We fingerprint your API responses and detect schema changes before your customer
 
 No more "the API changed and nobody told us" incidents. This works alongside your logs, traces, and metrics to give you complete visibility.
 
-[**Learn how it works**](https://docs.monoscope.dev/api-changes)
+[**Learn how it works**](https://monoscope.tech/docs/api-changes)
 
 ---
 
@@ -210,11 +210,11 @@ If you have any questions or need some help, reply directly to this email.
 
 ## [···] Anomaly detection that learns (5/6)
 
-**Subject:** Alerts that learn what's normal (5/6)
+**Subject:** [···] Alerts that learn what's normal (5/6)
 
 ![Monoscope Logo](monoscope.png)
 
-[Open Monoscope](https://app.monoscope.dev)
+[Open Monoscope](https://app.monoscope.tech)
 
 ---
 
@@ -240,7 +240,7 @@ Set up intelligent alerts on logs, metrics, traces, and API behavior. They adapt
 
 Get notified about what matters, not what's normal.
 
-[**Create your first alert**](https://app.monoscope.dev/alerts/new)
+[**Create your first alert**](https://app.monoscope.tech/)
 
 ---
 
@@ -254,11 +254,11 @@ If you have any questions or need some help, reply directly to this email.
 
 ## [···] Build dashboards with plain English (6/6)
 
-**Subject:** Build dashboards with plain English (6/6)
+**Subject:** [···] Build dashboards with plain English (6/6)
 
 ![Monoscope Logo](monoscope.png)
 
-[Open Monoscope](https://app.monoscope.dev)
+[Open Monoscope](https://app.monoscope.tech)
 
 ---
 
