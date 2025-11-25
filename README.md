@@ -6,12 +6,12 @@
   <img src="/static/public/assets/svgs/logo_black.svg" alt="Monoscope Logo" width="250" />
 </picture>
 
-### Open-source monitoring that understands your systems
+### Open-source observability platform with S3 storage
 
-Monoscope uses AI to automatically detect anomalies in your logs, metrics, and traces. Query in natural language, store years of data affordably in S3, and reduce alert fatigue by 90%.
+Ingest and explore logs, traces, and metrics stored in your S3 buckets. Query with natural language. Create AI agents that detect anomalies and send daily/weekly reports to your inbox.
 
 [![GitHub Release](https://img.shields.io/github/v/release/monoscope-tech/monoscope)](https://github.com/monoscope-tech/monoscope/releases)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 [![Haskell](https://img.shields.io/badge/Built%20with-Haskell-5e5086?logo=haskell)](https://www.haskell.org/)
 [![Discord](https://img.shields.io/discord/123456789?color=7289da&logo=discord&logoColor=white)](https://discord.gg/BSFCaUHxt4)
 
@@ -20,8 +20,7 @@ Monoscope uses AI to automatically detect anomalies in your logs, metrics, and t
 </div>
 
 <div align="center" style="margin-top: 1em; margin-bottom: 1em;">
-<a href="#-what-is-monoscope">🚀 What is Monoscope?</a> • <a href="#️-quick-start">🛠️ Quick Start</a> • <a href="#-integration">📊 Integration</a><br>
-<a href="#-ai-anomaly-detection">🤖 AI Anomaly Detection</a> • <a href="#-natural-language-queries">💬 Natural Language Search</a> • <a href="https://github.com/monoscope-tech/monoscope">⭐ Star Us</a> • <a href="#-community">🤝 Contributing</a>
+<a href="#what-is-monoscope">What is Monoscope?</a> • <a href="#quick-start">Quick Start</a> • <a href="#integration">Integration</a> • <a href="#ai-agents--reports">AI Agents</a> • <a href="#community">Community</a>
 </div>
 
 <br />
@@ -34,17 +33,17 @@ Monoscope uses AI to automatically detect anomalies in your logs, metrics, and t
 
 ## What is Monoscope?
 
-AI-powered observability platform that automatically detects anomalies in your logs, metrics, and traces. Query in natural language, store data affordably in S3, and get alerts that matter.
+Monoscope is an open-source observability platform that stores your telemetry data in S3-compatible storage. Self-host it or use our [cloud offering](https://monoscope.tech).
 
-**Key features:**
+**Core capabilities:**
 
-- 🤖 AI anomaly detection without configuration
-- 💬 Natural language search
-- 🕵️ Correlate/search logs, metrics, session replays and traces all in one place
-- ⚡ Live tail logs and traces to always get the freshest events
-- 🔭 OpenTelemetry supported out of the box (750+ integrations)
-- ⏱️ Monitor health and performance from HTTP requests to DB queries (APM)
-- 💰 Cost-effective S3 storage with TimeFusion engine
+- 💰 **S3 storage** — Store years of logs, metrics, and traces affordably in your own S3 buckets
+- 💬 **Natural language queries** — Search your data using plain English via LLMs
+- 🤖 **AI agents** — Create agents that run on a schedule to detect anomalies and surface insights
+- 📧 **Email reports** — Receive daily/weekly summaries of important events and anomalies
+- 🔭 **OpenTelemetry native** — 750+ integrations out of the box
+- ⚡ **Live tail** — Stream logs and traces in real-time
+- 🕵️ **Unified view** — Correlate logs, metrics, traces, and session replays in one place
 
 <br/>
 
@@ -146,21 +145,22 @@ kubectl patch deployment my-app -p \
 
 ## Natural Language Queries
 
-Ask questions in plain English:
+Query your telemetry data in plain English:
 
 - "Show me all errors in the payment service in the last hour"
 - "What caused the spike in response time yesterday?"
-- "Which services are consuming the most memory?"
+- "Which endpoints have the highest p99 latency?"
 
 <br/>
 
-## AI Anomaly Detection
+## AI Agents & Reports
 
-Monoscope's AI continuously learns your system's behavior patterns and alerts you to genuine issues without configuration:
+Create AI agents that monitor your systems on a schedule:
 
-- **Context-aware**: Understands that high CPU during deployments is normal, but not at 3 AM
-- **Pattern recognition**: Learns daily, weekly, and monthly patterns automatically
-- **Cross-signal correlation**: Analyzes logs, metrics, and traces together for deeper insights
+- **Scheduled analysis** — Agents run at intervals you define (hourly, daily, weekly)
+- **Anomaly detection** — Automatically surface unusual patterns in logs, metrics, and traces
+- **Email reports** — Receive summaries of important events and insights directly in your inbox
+- **Customizable focus** — Configure agents to watch specific services, error types, or metrics
 
 <br/>
 
@@ -180,13 +180,13 @@ graph LR
 
 ## How It Compares
 
-| Feature              | Monoscope   | Datadog   | Elastic | Prometheus |
-| -------------------- | ----------- | --------- | ------- | ---------- |
-| AI Anomaly Detection | ✅ Built-in | ❌ Add-on | ❌      | ❌         |
-| Natural Language     | ✅          | ❌        | ❌      | ❌         |
-| S3 Storage           | ✅          | ❌        | ✅      | ✅         |
-| Open Source          | ✅          | ❌        | ✅      | ✅         |
-| Setup Time           | 2 min       | Hours     | Hours   | Hours      |
+| Feature                | Monoscope   | Datadog   | Elastic | Prometheus |
+| ---------------------- | ----------- | --------- | ------- | ---------- |
+| S3/Object Storage      | ✅ Native   | ❌        | ✅      | ✅         |
+| Natural Language Query | ✅          | ❌        | ❌      | ❌         |
+| AI Agents & Reports    | ✅ Built-in | ❌ Add-on | ❌      | ❌         |
+| Open Source            | ✅ AGPL-3.0 | ❌        | ✅      | ✅         |
+| Self-hostable          | ✅          | ❌        | ✅      | ✅         |
 
 <br/>
 
@@ -253,7 +253,9 @@ Real-time metrics and performance monitoring with AI-powered insights.
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+AGPL-3.0. See [LICENSE](LICENSE) for details.
+
+For commercial licensing options, contact us at [hello@monoscope.tech](mailto:hello@monoscope.tech).
 
 ---
 
