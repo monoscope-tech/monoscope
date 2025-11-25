@@ -1168,6 +1168,7 @@ getProjectStatsBySpanType projectId start end = dbtToEff $ query q (projectId, s
         WHERE project_id = ?
           AND timestamp >= ?
           AND timestamp <= ?
+          AND kind != 'log'
         GROUP BY span_type
         ORDER BY total_events DESC;
       |]
@@ -1210,6 +1211,7 @@ WHERE
   project_id = ?
   AND timestamp >= ?
   AND timestamp <= ?
+  AND kind != 'log'
   AND attributes___db___query___text IS NOT NULL
 GROUP BY attributes___db___query___text
 HAVING ROUND(AVG(duration)/1000000) > 500

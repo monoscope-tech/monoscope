@@ -8,7 +8,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.Effectful.UUID qualified as UUID
 import Data.Either qualified as Unsafe
 import Data.HashMap.Strict qualified as HM
-import Data.List (nub)
+import Data.List (foldl, nub)
 import Data.List.Extra (chunksOf, groupBy)
 import Data.Map.Lazy qualified as Map
 import Data.Pool (withResource)
@@ -988,19 +988,29 @@ sendReportForProject pid rType = do
                   dayStart = show $ localDay (zonedTimeToLocalTime sevenDaysAgoZonedTime)
                   freeTierLimitExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
                   slowQueriesCount = V.length $ slowDbQueries
-                  sqlowQueriesList = if slowQueriesCount == 0 then [AE.object ["message" AE..= "No slow queries detected."]] else (\(x, y, z) -> AE.object ["statement" AE..= x, "latency" AE..= z, "total" AE..= y]) <$> slowDbQueries
+                  slowQueriesList = if slowQueriesCount == 0 then [AE.object ["message" AE..= "No slow queries detected."]] else (\(x, y, z) -> AE.object ["statement" AE..= x, "latency" AE..= z, "total" AE..= y]) <$> slowDbQueries
+                  totalAnomalies = length anomalies'
+                  (errTotal, apiTotal, qTotal) = foldl (\(e, a, m) (_, _, _, _, t) -> (e + if t == Issues.RuntimeException then 1 else 0, a + if t == Issues.APIChange then 1 else 0, m + if t == Issues.QueryAlert then 1 else 0)) (0, 0, 0) anomalies'
+                  runtimeErrorsBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral errTotal / fromIntegral totalAnomalies) * 99
+                  apiChangesBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral apiTotal / fromIntegral totalAnomalies) * 99
+                  alertIssuesBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral qTotal / fromIntegral totalAnomalies) * 99
                   templateVars =
                     [aesonQQ|{
                      "user_name": #{firstName},
                      "total_events": #{totalEvents},
                      "total_errors": #{totalErrors},
+                     "events_chart_url": #{allQ},
+                     "errors_chart_url": #{errQ},
                      "project_name": #{projectTitle},
                      "anomalies_count": #{total_anomalies},
+                     "errors_bar_per": #{runtimeErrorsBarPercentage},
+                     "api_bar_per": #{apiChangesBarPercentage},
+                     "alerts_bar_per": #{alertIssuesBarPercentage},
                      "anomalies":  #{anmls},
                      "report_url": #{rp_url},
                      "performance_count": #{perf_count},
                      "performance": #{perf_shrt},
-                     "queries": #{sqlowQueriesList},
+                     "queries": #{slowQueriesList},
                      "slow_queries_count": #{slowQueriesCount},
                      "start_date": #{dayStart},
                      "end_date": #{dayEnd},
