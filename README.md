@@ -15,7 +15,7 @@ Ingest and explore logs, traces, and metrics stored in your S3 buckets. Query wi
 [![Haskell](https://img.shields.io/badge/Built%20with-Haskell-5e5086?logo=haskell)](https://www.haskell.org/)
 [![Discord](https://img.shields.io/discord/904634773329297429?color=7289da&logo=discord&logoColor=white)](https://discord.gg/BSFCaUHxt4)
 
-[**Website**](https://monoscope.tech) • [**Discord**](https://discord.gg/BSFCaUHxt4) • [**Twitter**](https://x.com/monoscope-tech) • [**Documentation**](https://docs.monoscope.tech)
+[**Website**](https://monoscope.tech) • [**Playground**](https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/log_explorer) • [**Discord**](https://discord.gg/BSFCaUHxt4) • [**Twitter**](https://x.com/monoscope-tech) • [**Documentation**](https://docs.monoscope.tech)
 
 </div>
 
