@@ -28,7 +28,7 @@ Monoscope is a unified observability platform for logs, traces, metrics, and API
 
 ---
 
-If you have any questions or need help, reply directly to this email.
+If you have any questions or need some help, reply directly to this email.
 
 — The Monoscope Team
 
@@ -72,7 +72,7 @@ No more choosing between visibility and budget.
 
 ---
 
-If you have any questions or need help, reply directly to this email.
+If you have any questions or need some help, reply directly to this email.
 
 — The Monoscope Team
 
@@ -114,7 +114,7 @@ When something breaks at 3am, you'll know exactly where and why—without openin
 
 ---
 
-If you have any questions or need help, reply directly to this email.
+If you have any questions or need some help, reply directly to this email.
 
 — The Monoscope Team
 
@@ -158,7 +158,7 @@ Type a question. Get a chart, filtered logs, or trace details. No PromQL. No Log
 
 ---
 
-If you have any questions or need help, reply directly to this email.
+If you have any questions or need some help, reply directly to this email.
 
 — The Monoscope Team
 
@@ -200,7 +200,7 @@ No more "the API changed and nobody told us" incidents. This works alongside you
 
 ---
 
-If you have any questions or need help, reply directly to this email.
+If you have any questions or need some help, reply directly to this email.
 
 — The Monoscope Team
 
@@ -244,7 +244,7 @@ Get notified about what matters, not what's normal.
 
 ---
 
-If you have any questions or need help, reply directly to this email.
+If you have any questions or need some help, reply directly to this email.
 
 — The Monoscope Team
 

@@ -1,0 +1,68 @@
+version: 2
+updates:
+  # Root npm dependencies
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      npm-dev-dependencies:
+        dependency-type: "development"
+        update-types:
+          - "minor"
+          - "patch"
+      npm-prod-dependencies:
+        dependency-type: "production"
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # Web components npm dependencies
+  - package-ecosystem: "npm"
+    directory: "/web-components"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      web-components-dev:
+        dependency-type: "development"
+        update-types:
+          - "minor"
+          - "patch"
+      web-components-prod:
+        dependency-type: "production"
+        update-types:
+          - "minor"
+          - "patch"
+      lit-ecosystem:
+        patterns:
+          - "lit*"
+          - "@lit*"
+      vite-ecosystem:
+        patterns:
+          - "vite*"
+          - "@vite*"
+      vitest-ecosystem:
+        patterns:
+          - "vitest*"
+          - "@vitest*"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(ci)"
