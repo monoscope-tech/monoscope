@@ -58,10 +58,6 @@ module Utils (
   prettyPrintDuration,
   extractMessageFromLog,
   getPercentileColors,
-  -- Badge helpers
-  badgeClass,
-  badge_,
-  badgeOutline_,
   -- Fill color helpers
   statusFillColor,
   statusFillColorText,
@@ -894,21 +890,6 @@ extractMessageFromLog (Object obj) =
       Just val -> Just (T.pack $ show val)
       Nothing -> Nothing
 extractMessageFromLog _ = Nothing
-
-
--- | Base class for all badges
-badgeClass :: Text
-badgeClass = "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1"
-
-
--- | Solid badge with fill color
-badge_ :: Text -> Html () -> Html ()
-badge_ colorClass = span_ [class_ $ badgeClass <> " border-transparent " <> colorClass <> " text-textInverse-strong shadow-sm"]
-
-
--- | Outline badge (for change types like added/modified/removed)
-badgeOutline_ :: Text -> Html () -> Html ()
-badgeOutline_ colorClass = span_ [class_ $ badgeClass <> " " <> colorClass]
 
 
 -- | Get fill color class for HTTP status codes

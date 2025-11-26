@@ -53,7 +53,7 @@ import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (badge_, badgeOutline_, changeTypeFillColor, checkFreeTierExceeded, escapedQueryPartial, faSprite_, methodFillColor, statusFillColor)
+import Utils (changeTypeFillColor, checkFreeTierExceeded, escapedQueryPartial, faSprite_, methodFillColor, statusFillColor)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -713,19 +713,19 @@ renderIssue hideByDefault currTime timeFilter issue isWidget = do
           -- Type badge
           case issue.issueType of
             Issues.RuntimeException ->
-              badge_ "bg-fillError-strong" do
+              span_ [class_ "badge bg-fillError-strong"] do
                 faSprite_ "triangle-alert" "regular" "w-3 h-3"
                 "ERROR"
             Issues.QueryAlert ->
-              badge_ "bg-fillWarning-strong" do
+              span_ [class_ "badge bg-fillWarning-strong"] do
                 faSprite_ "zap" "regular" "w-3 h-3"
                 "ALERT"
             Issues.APIChange ->
               if issue.critical
-                then badge_ "bg-fillError-strong" do
+                then span_ [class_ "badge bg-fillError-strong"] do
                   faSprite_ "exclamation-triangle" "regular" "w-3 h-3"
                   "BREAKING"
-                else badge_ "bg-fillInformation-strong" do
+                else span_ [class_ "badge bg-fillInformation-strong"] do
                   faSprite_ "info" "regular" "w-3 h-3 mr-0.5"
                   "Incremental"
 
@@ -742,7 +742,7 @@ renderIssue hideByDefault currTime timeFilter issue isWidget = do
           case AE.fromJSON (getAeson issue.issueData) of
             AE.Success (apiData :: Issues.APIChangeData) -> do
               div_ [class_ "flex items-center gap-2"] do
-                badge_ (methodFillColor apiData.endpointMethod) $ toHtml apiData.endpointMethod
+                span_ [class_ $ "badge " <> methodFillColor apiData.endpointMethod] $ toHtml apiData.endpointMethod
                 -- Endpoint path
                 span_ [class_ "font-mono bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml apiData.endpointPath
             _ -> pass
@@ -1030,26 +1030,26 @@ renderPayloadChange isResponse change =
       -- Status code or method badge
       case (change.statusCode, change.method) of
         (Just statusCode, _) ->
-          badge_ (statusFillColor statusCode) $ toHtml $ show statusCode <> " " <> fromMaybe "" change.statusText
+          span_ [class_ $ "badge " <> statusFillColor statusCode] $ toHtml $ show statusCode <> " " <> fromMaybe "" change.statusText
         (_, Just method) ->
-          badge_ "bg-fillInformation-strong" $ toHtml method
+          span_ [class_ "badge bg-fillInformation-strong"] $ toHtml method
         _ -> pass
 
       -- Content type badge
-      badgeOutline_ "border-strokeWeak text-textWeak bg-bgRaised" $ toHtml change.contentType
+      span_ [class_ "badge-outline border-strokeWeak text-textWeak bg-bgRaised"] $ toHtml change.contentType
 
       -- Change type badge
       case change.changeType of
         Anomalies.Breaking ->
-          badge_ "bg-fillError-strong" do
+          span_ [class_ "badge bg-fillError-strong"] do
             faSprite_ "circle-x" "regular" "w-3 h-3 mr-1"
             "Breaking"
         Anomalies.Incremental ->
-          badge_ "bg-fillInformation-strong" do
+          span_ [class_ "badge bg-fillInformation-strong"] do
             faSprite_ "info" "regular" "w-3 h-3 mr-1"
             "Incremental"
         Anomalies.Safe ->
-          badge_ "bg-fillSuccess-strong" do
+          span_ [class_ "badge bg-fillSuccess-strong"] do
             faSprite_ "circle-check" "regular" "w-3 h-3 mr-1"
             "Safe"
 
@@ -1067,7 +1067,7 @@ renderPayloadChange isResponse change =
             $ case (change.statusCode, change.statusText) of
               (Just code, Just txt) -> toHtml $ show code <> " Response Changes"
               _ -> "Payload Changes"
-          badgeOutline_ "border-strokeWeak text-textWeak bg-fillWeak" $ toHtml change.contentType
+          span_ [class_ "badge-outline border-strokeWeak text-textWeak bg-fillWeak"] $ toHtml change.contentType
 
         -- Individual field changes
         div_ [class_ "space-y-3"] do
@@ -1105,11 +1105,11 @@ renderFieldChange fieldChange =
               Anomalies.Modified -> "modified"
               Anomalies.Added -> "added"
               Anomalies.Removed -> "removed"
-        badgeOutline_ (changeTypeFillColor kindText) $ toHtml kindText
+        span_ [class_ $ "badge-outline " <> changeTypeFillColor kindText] $ toHtml kindText
 
         -- Breaking badge if applicable
         when fieldChange.breaking do
-          badge_ "bg-fillError-strong" do
+          span_ [class_ "badge bg-fillError-strong"] do
             faSprite_ "triangle-alert" "regular" "w-3 h-3 mr-1"
             "Breaking"
 

@@ -255,6 +255,15 @@ body, :host {
 }
 
 @layer custom {
+  /* Badge component - solid filled badges */
+  .badge {
+    @apply inline-flex items-center justify-center rounded-md border border-transparent px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-textInverse-strong shadow-sm;
+  }
+  /* Badge component - outline badges */
+  .badge-outline {
+    @apply inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1;
+  }
+
   .tab-not-active {
     --tab-color: var(--fallback-bc, oklch(var(--bc) / 0.5));
     --tab-bg: transparent;
