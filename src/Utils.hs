@@ -24,26 +24,16 @@ module Utils (
   insertIfNotExist,
   parseUTC,
   lookupVecTextByKey,
-  getStatusBorderColor,
-  faIcon_,
   deleteParam,
-  quoteTxt,
-  textToBool,
-  getMethodBorderColor,
   getSeverityColor,
-  getMethodColor,
-  getStatusColor,
   unwrapJsonPrimValue,
   listToIndexHashMap,
   b64ToJson,
-  lookupMapText,
   getOtelLangVersion,
-  lookupMapInt,
   freeTierLimitExceededBanner,
   checkFreeTierExceeded,
   isDemoAndNotSudo,
   escapedQueryPartial,
-  convertToDHMS,
   getSpanStatusColor,
   getKindColor,
   displayTimestamp,
@@ -81,7 +71,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
+import Data.Time (ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
 import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (formatTime)
@@ -156,26 +146,11 @@ faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes]
       _ -> $(hashFile "/public/assets/svgs/fa-sprites/regular.svg")
 
 
--- DO NOT USE. Copy the svg into static/public/assets/svgs/fa-sprites/regular.svg or solid.svg
-faIcon_ :: Text -> Text -> Text -> Html ()
-faIcon_ faIcon faClasses classes = do
-  i_ [class_ faClasses, term "data-fa-symbol" faIcon] ""
-  svg_ [class_ classes] $ Svg.use_ [href_ $ "#" <> faIcon]
-
-
 deleteParam :: Text -> Text -> Text
 deleteParam key url = if needle == "" then url else T.replace needle "" url
   where
     needle = url =~ reg :: Text
     reg = "&" <> key <> "(=[^&]*)?|^" <> key <> "(=[^&]*)?&?" :: Text
-
-
-quoteTxt :: Text -> Text
-quoteTxt a = "'" <> a <> "'"
-
-
-textToBool :: Text -> Bool
-textToBool a = a == "true"
 
 
 userIsProjectMember :: Session.PersistentSession -> Projects.ProjectId -> DBT IO Bool
@@ -185,40 +160,6 @@ userIsProjectMember sess pid = do
     else do
       user <- ProjectMembers.selectProjectActiveMember pid sess.userId
       case user of Nothing -> pure False; Just _ -> pure True
-
-
-getMethodColor :: Text -> Text
-getMethodColor "POST" = " cbadge-sm badge-pink "
-getMethodColor "PUT" = " cbadge-sm badge-lime "
-getMethodColor "DELETE" = " cbadge-sm badge-error "
-getMethodColor "PATCH" = " cbadge-sm badge-cyan "
-getMethodColor "GET" = " cbadge-sm badge-blue"
-getMethodColor _ = " cbadge-sm badge-neutral"
-
-
-getMethodBorderColor :: Text -> Text
-getMethodBorderColor "POST" = "border-pink-500"
-getMethodBorderColor "PUT" = "border-lime-500"
-getMethodBorderColor "DELETE" = "border-error-500"
-getMethodBorderColor "PATCH" = "border-cyan-500"
-getMethodBorderColor "GET" = "border-blue-500"
-getMethodBorderColor _ = "border-slate-200"
-
-
-getStatusColor :: Int -> Text
-getStatusColor status
-  | status < 200 = "cbadge-sm badge-neutral"
-  | status >= 200 && status < 300 = "cbadge-sm badge-2xx"
-  | status >= 300 && status < 400 = "cbadge-sm badge-3xx"
-  | otherwise = "cbadge-sm badge-4xx"
-
-
-getStatusBorderColor :: Int -> Text
-getStatusBorderColor status
-  | status < 200 = "border-slate-200"
-  | status >= 200 && status < 300 = "border-green-500"
-  | status >= 300 && status < 400 = "border-yellow-500"
-  | otherwise = "cbadge-sm badge-neutral"
 
 
 getGrpcStatusColor :: Int -> Text
@@ -444,20 +385,6 @@ unwrapJsonPrimValue _ (AE.Object _) = "{..}"
 unwrapJsonPrimValue _ (AE.Array items) = "[" <> toText (show (length items)) <> "]"
 
 
--- FIXME: delete
-lookupMapText :: Text -> HashMap Text AE.Value -> Maybe Text
-lookupMapText key hashMap = case HM.lookup key hashMap of
-  Just (AE.String textValue) -> Just textValue -- Extract text from Value if it's a String
-  _ -> Nothing
-
-
--- FIXME: delete
-lookupMapInt :: Text -> HashMap Text AE.Value -> Int
-lookupMapInt key hashMap = case HM.lookup key hashMap of
-  Just (AE.Number val) -> fromMaybe 0 $ toBoundedInteger val -- Extract text from Value if it's a String
-  _ -> 0
-
-
 lookupVecText :: V.Vector AE.Value -> Int -> Maybe Text
 lookupVecText vec idx = case vec V.!? idx of
   Just (AE.String textValue) -> Just textValue -- Extract text from Value if it's a String
@@ -674,15 +601,6 @@ nestedJsonFromDotNotation =
          in lodashMerge acc nestedObj
     )
     (AE.object [])
-
-
-convertToDHMS :: NominalDiffTime -> (Int, Int, Int, Int)
-convertToDHMS diffTime =
-  let totalSeconds = floor diffTime :: Int
-      (days, rem1) = (totalSeconds `divMod` 86400)
-      (hours, rem2) = rem1 `divMod` 3600
-      (minutes, seconds) = rem2 `divMod` 60
-   in (7 - days, hours, minutes, seconds)
 
 
 isDemoAndNotSudo :: Projects.ProjectId -> Bool -> Bool
