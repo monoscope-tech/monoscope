@@ -7,7 +7,7 @@ module Models.Apis.Anomalies (
   IssueL (..),
   IssueEventAgg (..),
   AnomalyTypes (..),
-  AnomalyId (..),
+  AnomalyId,
   IssuesData (..),
   ATError (..),
   NewEndpointIssue (..),
@@ -81,6 +81,7 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
+import Pkg.DeriveUtils (UUIDId (..), idToText)
 import Relude hiding (id, many, some)
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
@@ -90,14 +91,11 @@ import Text.Megaparsec.Char.Lexer qualified as L
 import Utils
 
 
-newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}
-  deriving stock (Generic, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, NFData)
-  deriving newtype (Default, Eq, FromField, FromHttpApiData, Ord, ToField)
+type AnomalyId = UUIDId "anomaly"
 
 
 anomalyIdText :: AnomalyId -> Text
-anomalyIdText = UUID.toText . unAnomalyId
+anomalyIdText = idToText
 
 
 data AnomalyTypes

@@ -52,6 +52,7 @@ import Models.Apis.Fields.Types qualified as Fields (
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Relude.Unsafe as Unsafe (read)
 import Text.RE.Replace (matched)
@@ -656,7 +657,7 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
       , isRequired = False
       }
   , Formats.Format
-      { id = Formats.FormatId UUID.nil
+      { id = UUIDId UUID.nil
       , createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
       , updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
       , projectId = projectID

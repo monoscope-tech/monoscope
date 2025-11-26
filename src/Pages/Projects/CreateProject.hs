@@ -45,6 +45,7 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMembers qualified as Projects
 import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (UUIDId (..))
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
@@ -123,7 +124,7 @@ projectOnboardingH = do
       let h = "/p/" <> p.id.toText <> "/onboarding"
       pure $ addHeader h $ PageCtx bwconf ""
     _ -> do
-      pid <- Projects.ProjectId <$> UUID.genUUID
+      pid <- UUIDId <$> UUID.genUUID
       let pr = Projects.CreateProject{id = pid, title = "Onboarding Project", description = "", paymentPlan = "ONBOARDING", timeZone = "", subId = Nothing, firstSubItemId = Nothing, orderId = Nothing, weeklyNotif = True, dailyNotif = True, endpointAlerts = True, errorAlerts = True}
       dbtToEff $ Projects.insertProject pr
       projectKeyUUID <- UUID.genUUID

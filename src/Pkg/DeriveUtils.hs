@@ -1,17 +1,29 @@
 module Pkg.DeriveUtils (
   AesonText (..),
   PGTextArray (..),
+  UUIDId (..),
+  idToText,
+  idFromText,
   unAesonText,
   unAesonTextMaybe,
+  executeManyV,
 ) where
 
 import Data.Aeson qualified as AE
+import Data.Default (Default)
+import Data.Default.Instances ()
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (ResultError (ConversionFailed))
+import Database.PostgreSQL.Simple (FromRow, Query, ResultError (ConversionFailed), ToRow)
 import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
+import Database.PostgreSQL.Transact (DBT, executeMany)
+import GHC.Records (HasField (getField))
+import GHC.TypeLits (Symbol)
+import Language.Haskell.TH.Syntax qualified as THS
 import Relude
+import Web.HttpApiData (FromHttpApiData)
 
 
 -- | Newtype wrapper for JSON fields that can handle JSONB, ByteString, and varchar/text columns
@@ -72,3 +84,34 @@ instance FromField PGTextArray where
 
 instance ToField PGTextArray where
   toField (PGTextArray v) = toField v
+
+
+-- | Generic UUID-based ID type with phantom type parameter for type safety
+-- Usage: type ProjectId = UUIDId "project"
+newtype UUIDId (name :: Symbol) = UUIDId {unUUIDId :: UUID.UUID}
+  deriving stock (Generic, Read, Show, THS.Lift)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, Hashable, NFData, Ord, ToField)
+  deriving anyclass (FromRow, ToRow)
+
+
+instance HasField "toText" (UUIDId name) Text where
+  getField = UUID.toText . unUUIDId
+
+
+instance HasField "unwrap" (UUIDId name) UUID.UUID where
+  getField = coerce
+
+
+-- | Convert any UUID-based ID to Text
+idToText :: UUIDId name -> Text
+idToText = UUID.toText . unUUIDId
+
+
+-- | Parse Text to a UUID-based ID
+idFromText :: Text -> Maybe (UUIDId name)
+idFromText = fmap UUIDId . UUID.fromText
+
+
+-- | Vector-friendly executeMany helper
+executeManyV :: ToRow q => Query -> V.Vector q -> DBT IO Int64
+executeManyV q = executeMany q . V.toList

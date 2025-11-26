@@ -43,6 +43,7 @@ import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (Reader, asks)
 import Effectful.Reader.Static qualified as EffReader
 import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (UUIDId (..))
 import Models.Users.Users
 import Models.Users.Users qualified as Users
 import Relude
@@ -210,7 +211,7 @@ sessionAndProject pid = do
     Just p | p.paymentPlan /= "ONBOARDING" -> pure (sess, p)
     -- Fetch fresh from DB for: onboarding projects, not found in cache, nil project, or sudo users
     _
-      | pid == Projects.ProjectId UUID.nil || sess.user.isSudo ->
+      | pid == UUIDId UUID.nil || sess.user.isSudo ->
           dbtToEff (Projects.projectById pid) >>= \case
             Just p -> pure (sess, p)
             Nothing -> throwError $ err302{errHeaders = [("Location", "/p/?missingProjectPermission")]}

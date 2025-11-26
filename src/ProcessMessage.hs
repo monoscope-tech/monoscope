@@ -17,7 +17,7 @@ import Data.Aeson.Lens (key, _Object, _String)
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.Aeson.Types qualified as AE
 import Data.ByteString.Lazy.Char8 qualified as BL
-import Pkg.DeriveUtils (AesonText (..), unAesonTextMaybe)
+import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe)
 
 import Data.Cache qualified as Cache
 import Data.Effectful.UUID (UUIDEff)
@@ -151,7 +151,7 @@ processMessages msgs attrs = do
     else do
       caches <- liftIO $ do
         -- Use parallel evaluation for cache fetching
-        let projectIds = (\(_, m) -> Projects.ProjectId m.projectId) <$> rMsgs
+        let projectIds = (\(_, m) -> UUIDId m.projectId) <$> rMsgs
         cachePairs <- forM projectIds $ \pid ->
           Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
             mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
@@ -161,7 +161,7 @@ processMessages msgs attrs = do
       let projectCaches = HashMap.fromList caches
 
       spans <- forM rMsgs \(rmAckId, msg) -> do
-        let pid = Projects.ProjectId msg.projectId
+        let pid = UUIDId msg.projectId
         case HashMap.lookup pid projectCaches of
           Just cache ->
             -- Check if project has exceeded daily limit for free tier
@@ -206,7 +206,7 @@ jsonToMap _ = Nothing
 -- which fire PostgreSQL triggers to create anomaly records.
 processSpanToEntities :: Projects.ProjectCache -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, Maybe Shapes.Shape, V.Vector Fields.Field, V.Vector Formats.Format, V.Vector Text)
 processSpanToEntities pjc otelSpan dumpId =
-  let !projectId = Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText otelSpan.project_id
+  let !projectId = UUIDId $ Unsafe.fromJust $ UUID.fromText otelSpan.project_id
 
       -- Extract HTTP attributes from nested JSON structure
       !attributes = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
@@ -305,7 +305,7 @@ processSpanToEntities pjc otelSpan dumpId =
               $ Endpoints.Endpoint
                 { createdAt = otelSpan.timestamp
                 , updatedAt = otelSpan.timestamp
-                , id = Endpoints.EndpointId dumpId
+                , id = UUIDId dumpId
                 , projectId = projectId
                 , urlPath = urlPath
                 , urlParams = AE.emptyObject -- TODO: Should this use pathParams?
@@ -326,7 +326,7 @@ processSpanToEntities pjc otelSpan dumpId =
           else
             Just
               $ Shapes.Shape
-                { id = Shapes.ShapeId dumpId
+                { id = UUIDId dumpId
                 , createdAt = otelSpan.timestamp
                 , updatedAt = otelSpan.timestamp
                 , approvedOn = Nothing

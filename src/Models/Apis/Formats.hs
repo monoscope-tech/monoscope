@@ -1,6 +1,6 @@
 module Models.Apis.Formats (
   Format (..),
-  FormatId (..),
+  FormatId,
   SwFormat (..),
   formatsByFieldHash,
   formatsByFieldsHashes,
@@ -9,9 +9,7 @@ module Models.Apis.Formats (
 ) where
 
 import Data.Aeson qualified as AE
-import Data.Default (Default)
 import Data.Time (ZonedTime)
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (query)
 import Database.PostgreSQL.Entity.Types
@@ -19,7 +17,6 @@ import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
@@ -27,13 +24,11 @@ import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (UUIDId (..))
 import Relude
-import Servant (FromHttpApiData)
 
 
-newtype FormatId = FormatId {unFormatId :: UUID.UUID}
-  deriving stock (Generic, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, NFData, Ord, ToField)
+type FormatId = UUIDId "format"
 
 
 data Format = Format

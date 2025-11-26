@@ -37,7 +37,6 @@ import Control.Exception.Safe qualified as Safe
 import Data.Time (getCurrentTime)
 import Effectful
 import Effectful.Fail (runFailIO)
-import Models.Projects.Projects (ProjectId (ProjectId))
 import Pkg.TestUtils (runTestBackground)
 import System.Config qualified as Cfg
 

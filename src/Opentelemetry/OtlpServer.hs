@@ -54,6 +54,7 @@ import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogBase
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unUUIDId)
 import Models.Telemetry.SummaryGenerator (generateSummary)
 import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), Severity (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -63,7 +64,6 @@ import Network.GRPC.Server (RpcHandler, SomeRpcHandler, getRequestMetadata, mkRp
 import Network.GRPC.Server.Run hiding (runServer)
 import Network.GRPC.Server.StreamType (Methods (..), fromMethods)
 import OpenTelemetry.Trace (TracerProvider)
-import Pkg.DeriveUtils (AesonText (..))
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
 import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService qualified as TS
@@ -938,7 +938,7 @@ convertResourceLogsToOtelLogs !fallbackTime !projectCaches !pids resourceLogs =
         Nothing ->
           let pidText = fromMaybe "" $ listToMaybe $ V.toList $ getLogAttributeValue "at-project-id" (V.singleton resourceLogs)
               uId = UUID.fromText pidText
-           in ((Just . Projects.ProjectId) =<< uId)
+           in ((Just . UUIDId) =<< uId)
    in case projectId of
         Just pid ->
           case HashMap.lookup pid projectCaches of
@@ -1052,7 +1052,7 @@ convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans
                   Just (_, v) -> Just v
                   Nothing ->
                     case listToMaybe $ V.toList $ getSpanAttributeValue "at-project-id" (V.singleton rs) of
-                      Just pidText | Just uid <- UUID.fromText pidText -> Just (Projects.ProjectId uid)
+                      Just pidText | Just uid <- UUID.fromText pidText -> Just (UUIDId uid)
                       -- Fallback to header auth when span has no project attributes
                       _ | not (V.null pids) -> Just (snd $ V.head pids)
                       _ -> Nothing
@@ -1301,7 +1301,7 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
                             _ -> 0
                           !attributes = keyValueToJSON $ V.fromList $ point ^. PMF.attributes
                        in Telemetry.MetricRecord
-                            { projectId = Projects.unProjectId pid
+                            { projectId = unUUIDId pid
                             , id = Nothing
                             , metricName = metric ^. PMF.name
                             , metricDescription = metric ^. PMF.description
@@ -1385,7 +1385,7 @@ processTraceRequest metadataApiKey req = do
         }
     Log.logInfo
       "Traces: Authentication successful"
-      (AE.object ["project_ids" AE..= map Projects.unProjectId allProjectIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
+      (AE.object ["project_ids" AE..= map unUUIDId allProjectIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
 
   projectIdsAndKeys <-
     checkpoint "processList:traces:getProjectIds"
@@ -1456,7 +1456,7 @@ processLogsRequest metadataApiKey req = do
         }
     Log.logInfo
       "Logs: Authentication successful"
-      (AE.object ["project_ids" AE..= map Projects.unProjectId allProjectIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
+      (AE.object ["project_ids" AE..= map unUUIDId allProjectIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
 
   projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
 
@@ -1517,7 +1517,7 @@ processMetricsRequest metadataApiKey req = do
     Just pid -> do
       Log.logInfo
         "Metrics: Authentication successful"
-        (AE.object ["project_id" AE..= Projects.unProjectId pid, "project_key" AE..= projectKey, "metadata_auth" AE..= isJust metadataApiKey])
+        (AE.object ["project_id" AE..= unUUIDId pid, "project_key" AE..= projectKey, "metadata_auth" AE..= isJust metadataApiKey])
 
       -- Fetch project cache using cache pattern
       projectCache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do

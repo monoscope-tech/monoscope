@@ -96,7 +96,7 @@ import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
 import Opentelemetry.OtlpMockValues qualified as OtlpMock
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Api qualified as Api
-import Pkg.DeriveUtils (AesonText (..))
+import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
 import ProcessMessage qualified
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
@@ -392,7 +392,7 @@ testSessionHeader pool = do
         ()
 
   -- Create a test project and add it to the user's session
-  let testProjectId = Projects.ProjectId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
+  let testProjectId = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
   _ <-
     withPool pool
       $ DBT.execute
@@ -765,7 +765,7 @@ processMessagesAndBackgroundJobs :: TestResources -> [(Text, ByteString)] -> IO 
 processMessagesAndBackgroundJobs tr@TestResources{..} msgs = do
   currentTime <- getCurrentTime
   let futureTime = addUTCTime 1 currentTime
-  let testProjectId = Projects.ProjectId UUID.nil
+  let testProjectId = UUIDId UUID.nil
 
   _ <- runTestBg tr do
     _ <- ProcessMessage.processMessages msgs HashMap.empty

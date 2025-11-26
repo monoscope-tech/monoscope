@@ -4,7 +4,7 @@
 module Models.Apis.Endpoints (
   Endpoint (..),
   SwEndpoint (..),
-  EndpointId (..),
+  EndpointId,
   EndpointRequestStats (..),
   Host (..),
   HostEvents (..),
@@ -14,7 +14,6 @@ module Models.Apis.Endpoints (
   endpointUrlPath,
   endpointRequestStatsByProject,
   endpointById,
-  endpointIdText,
   endpointToUrlPath,
   endpointByHash,
   endpointsByHashes,
@@ -27,9 +26,7 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
-import Data.Default.Instances ()
 import Data.Time (UTCTime, ZonedTime)
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (query, queryOne)
 import Database.PostgreSQL.Entity.Types
@@ -37,38 +34,25 @@ import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (ToField, toField)
+import Database.PostgreSQL.Simple.ToField (toField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
-import GHC.Records (HasField (getField))
-import Language.Haskell.TH.Syntax qualified as THS
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
+import Pkg.DeriveUtils (UUIDId (..), idToText)
 import Relude
-import Web.HttpApiData (FromHttpApiData)
 
 
-newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
-  deriving stock (Generic, Read, Show, THS.Lift)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, NFData, Ord, ToField)
-  deriving anyclass (FromRow, ToRow)
+type EndpointId = UUIDId "endpoint"
 
 
 newtype Host = Host {host :: Text}
   deriving stock (Eq, Generic, Show)
   deriving anyclass (Default, FromRow, NFData, ToRow)
-
-
-instance HasField "toText" EndpointId Text where
-  getField = UUID.toText . unEndpointId
-
-
-endpointIdText :: EndpointId -> Text
-endpointIdText = UUID.toText . unEndpointId
 
 
 -- TODO: Introduce request header hashes and response header hashes
@@ -97,7 +81,7 @@ endpointToUrlPath enp = endpointUrlPath enp.projectId enp.id
 
 
 endpointUrlPath :: Projects.ProjectId -> EndpointId -> Text
-endpointUrlPath pid eid = "/p/" <> pid.toText <> "/endpoints/" <> endpointIdText eid
+endpointUrlPath pid eid = "/p/" <> pid.toText <> "/endpoints/" <> idToText eid
 
 
 bulkInsertEndpoints :: DB :> es => V.Vector Endpoint -> Eff es ()

@@ -15,6 +15,7 @@ import Effectful.Reader.Static (ask)
 import Fmt
 import Lucid
 import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (UUIDId (..))
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
@@ -27,7 +28,7 @@ import Utils (faSprite_)
 
 listProjectsGetH :: ATAuthCtx (RespHeaders ListProjectsGet)
 listProjectsGetH = do
-  (sess, project) <- Sessions.sessionAndProject (Projects.ProjectId UUID.nil)
+  (sess, project) <- Sessions.sessionAndProject (UUIDId UUID.nil)
   appCtx <- ask @AuthContext
   let bwconf =
         (def :: BWConfig)

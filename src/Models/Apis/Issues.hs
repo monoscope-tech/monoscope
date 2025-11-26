@@ -14,7 +14,7 @@
 -- - docs/anomaly-detection-triggers.sql (database trigger details)
 module Models.Apis.Issues (
   -- * Core Types
-  IssueId (..),
+  IssueId,
   IssueType (..),
   Issue (..),
   IssueL (..),
@@ -52,7 +52,6 @@ import Data.Default (Default, def)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Data.Time.LocalTime (ZonedTime, utcToLocalZonedTime)
-import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
@@ -72,20 +71,16 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
+import Pkg.DeriveUtils (UUIDId (..), idToText)
 import Relude hiding (id)
-import Servant (FromHttpApiData (..))
 import Utils (formatUTC)
 
 
--- | Issue ID type
-newtype IssueId = IssueId {unIssueId :: UUID.UUID}
-  deriving stock (Generic, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, NFData)
-  deriving newtype (Default, Eq, FromField, FromHttpApiData, Ord, ToField)
+type IssueId = UUIDId "issue"
 
 
 issueIdText :: IssueId -> Text
-issueIdText = UUID.toText . unIssueId
+issueIdText = idToText
 
 
 -- | Issue types
@@ -464,7 +459,7 @@ archiveIssue issueId = void $ execute q (Only issueId)
 -- | Create API Change issue from anomalies
 createAPIChangeIssue :: Projects.ProjectId -> Text -> V.Vector Anomalies.AnomalyVM -> IO Issue
 createAPIChangeIssue projectId endpointHash anomalies = do
-  issueId <- IssueId <$> UUID.nextRandom
+  issueId <- UUIDId <$> UUID.nextRandom
   now <- getCurrentTime
 
   let firstAnomaly = V.head anomalies
@@ -515,7 +510,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
 -- | Create Runtime Exception issue
 createRuntimeExceptionIssue :: Projects.ProjectId -> RequestDumps.ATError -> IO Issue
 createRuntimeExceptionIssue projectId atError = do
-  issueId <- IssueId <$> UUID.nextRandom
+  issueId <- UUIDId <$> UUID.nextRandom
   errorZonedTime <- utcToLocalZonedTime atError.when
 
   let exceptionData =
@@ -561,7 +556,7 @@ createRuntimeExceptionIssue projectId atError = do
 -- | Create Query Alert issue
 createQueryAlertIssue :: Projects.ProjectId -> Text -> Text -> Text -> Double -> Double -> Text -> IO Issue
 createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thresholdType = do
-  issueId <- IssueId <$> UUID.nextRandom
+  issueId <- UUIDId <$> UUID.nextRandom
   now <- getCurrentTime
   zonedNow <- utcToLocalZonedTime now
 

@@ -48,7 +48,7 @@ import Models.Apis.RequestDumps (ATError (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.LemonSqueezy qualified as LemonSqueezy
-import Models.Projects.Projects (ProjectId (unProjectId))
+import Pkg.DeriveUtils (UUIDId (..))
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Users qualified as Users
@@ -327,7 +327,7 @@ processBackgroundJob authCtx job bgJob =
           pass
       Log.logInfo "Completed usage report for project" ("project_id", pid.toText)
     CleanupDemoProject -> do
-      let pid = Projects.ProjectId{unProjectId = UUID.nil}
+      let pid = UUIDId UUID.nil
       -- DELETE PROJECT members
       _ <- withPool authCtx.pool $ PTR.execute [sql| DELETE FROM projects.project_members WHERE project_id = ? |] (Only pid)
       -- SOFT DELETE test collections
@@ -390,7 +390,7 @@ generateOtelFacetsBatch projectIds timestamp = do
         ]
         $ \sp -> do
           addEvent sp "facet_generation.started" []
-          result <- try $ Facets.generateAndSaveFacets (Projects.ProjectId $ Unsafe.fromJust $ UUID.fromText pid) "otel_logs_and_spans" Facets.facetColumns 50 timestamp
+          result <- try $ Facets.generateAndSaveFacets (UUIDId $ Unsafe.fromJust $ UUID.fromText pid) "otel_logs_and_spans" Facets.facetColumns 50 timestamp
           case result of
             Left (e :: SomeException) -> do
               addEvent sp "facet_generation.failed" [("error", OA.toAttribute $ T.pack (show e))]
@@ -940,7 +940,7 @@ sendReportForProject pid rType = do
     previous_week <- dbtToEff $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid typTxt
     let rp_json = RP.buildReportJson' totalEvents totalErrors eventsChange errorsChange spanStatsDiff endpointPerformance slowDbQueries chartDataEvents chartDataErrors anomalies'
     timeZone <- liftIO getCurrentTimeZone
-    reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
+    reportId <- UUIDId <$> liftIO UUIDV4.nextRandom
     let report =
           Reports.Report
             { id = reportId
@@ -958,7 +958,7 @@ sendReportForProject pid rType = do
       Log.logInfo "Sending report notifications for" pid
       let stmTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" startTime
           currentTimeTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" currentTime
-          reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> show report.id.reportId
+          reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
           chartShotUrl = ctx.env.chartShotUrl <> "?t=bar&p=" <> pid.toText <> "&from=" <> stmTxt <> "&to=" <> currentTimeTxt
           allQ = chartShotUrl <> "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 "summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
           errQ = chartShotUrl <> "&theme=roma" <> "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 "status_code == \"ERROR\" | summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
@@ -981,7 +981,7 @@ sendReportForProject pid rType = do
                   anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies'
                   perf_count = V.length endpointPerformance
                   perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else ((\(u, m, p, d, dc, req, cc) -> AE.object ["host" AE..= u, "urlPath" AE..= p, "method" AE..= m, "averageLatency" AE..= d, "latencyChange" AE..= dc]) <$> V.take 10 endpointPerformance)
-                  rp_url = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> show report.id.reportId
+                  rp_url = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
                   dayEnd = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone currentTime))
                   sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentTime
                   sevenDaysAgoZonedTime = utcToZonedTime timeZone sevenDaysAgoUTCTime
@@ -1243,7 +1243,7 @@ processIssuesEnhancement scheduledTime = do
     forM_ issuesByProject \projectIssues -> case V.uncons projectIssues of
       Nothing -> pass
       Just ((_, pid), _) -> do
-        let issueIds = V.map (Issues.IssueId . fst) projectIssues
+        let issueIds = V.map (UUIDId . fst) projectIssues
         void $ createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid issueIds
 
 

@@ -180,7 +180,7 @@ reportsGetH pid page hxRequest hxBoosted = do
 
   reports <- dbtToEff $ Reports.reportHistoryByProject pid pg
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
-  let nextUrl = "/p/" <> show pid.unProjectId <> "/reports?page=" <> show (pg + 1)
+  let nextUrl = "/p/" <> pid.toText <> "/reports?page=" <> show (pg + 1)
   case (hxRequest, hxBoosted) of
     (Just "true", Nothing) -> addRespHeaders $ ReportsGetList pid reports nextUrl
     _ -> do
@@ -332,7 +332,7 @@ reportsPage pid reports nextUrl daily weekly =
           let h = V.head reports
           a_
             [ class_ "w-full text-center  cursor-pointer"
-            , hxGet_ $ "/p/" <> pid.toText <> "/reports/" <> (show h.id.reportId)
+            , hxGet_ $ "/p/" <> pid.toText <> "/reports/" <> h.id.toText
             , hxTarget_ "#detailSidebar"
             , hxSwap_ "innerHTML"
             , hxTrigger_ "intersect once"
@@ -353,7 +353,7 @@ reportListItems pid reports nextUrl =
         div_ [class_ $ "w-full"] do
           a_
             [ class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"
-            , hxGet_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId
+            , hxGet_ $ "/p/" <> pid.toText <> "/reports/" <> report.id.toText
             , hxTarget_ "#detailSidebar"
             , hxSwap_ "innerHTML"
             ]

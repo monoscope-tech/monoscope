@@ -90,11 +90,10 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static qualified as Eff
 import Models.Apis.RequestDumps qualified as RequestDumps
-import Models.Projects.Projects (ProjectId (unProjectId))
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..))
-import Pkg.DeriveUtils (AesonText (..), unAesonTextMaybe)
+import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe)
 import Relude hiding (ask)
 import RequestMessages (replaceAllFormats)
 import System.Config (AuthContext)
@@ -1117,7 +1116,7 @@ extractATError spanObj (AE.Object o) = do
   -- This ensures similar errors are grouped while allowing variations in the actual message
   return
     $ RequestDumps.ATError
-      { projectId = UUID.fromText spanObj.project_id >>= (\uid -> Just Projects.ProjectId{unProjectId = uid})
+      { projectId = UUID.fromText spanObj.project_id >>= (Just . UUIDId)
       , when = spanObj.timestamp
       , errorType = typ
       , rootErrorType = typ

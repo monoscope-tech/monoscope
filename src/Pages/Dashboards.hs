@@ -34,6 +34,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Pkg.DeriveUtils (UUIDId (..))
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users
 import NeatInterpolation
@@ -925,7 +926,7 @@ dashboardsPostH :: Projects.ProjectId -> DashboardForm -> ATAuthCtx (RespHeaders
 dashboardsPostH pid form = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
-  did <- Dashboards.DashboardId <$> UUID.genUUID
+  did <- UUIDId <$> UUID.genUUID
   let dashM = find (\dashboard -> dashboard.file == Just form.file) dashboardTemplates
   let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> did.toText
   dbtToEff
@@ -966,7 +967,7 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
   let mkPath p d = "/p/" <> pid.toText <> p <> d <> "?" <> toQueryParams qparams
       q = [sql|select id::text from projects.dashboards where project_id=? and (homepage_since is not null or base_template=?)|]
       newDashboard = do
-        did <- Dashboards.DashboardId <$> UUID.genUUID
+        did <- UUIDId <$> UUID.genUUID
         dbtToEff
           $ DBT.insert @Dashboards.DashboardVM
             Dashboards.DashboardVM
@@ -1043,7 +1044,7 @@ dashboardDuplicatePostH pid dashId = do
     Just dashVM -> do
       (sess, _) <- Sessions.sessionAndProject pid
       now <- Time.currentTime
-      newDashId <- Dashboards.DashboardId <$> UUID.genUUID
+      newDashId <- UUIDId <$> UUID.genUUID
 
       let copyTitle = if dashVM.title == "" then "Untitled (Copy)" else dashVM.title <> " (Copy)"
       let updatedSchema =

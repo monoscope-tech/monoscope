@@ -1,11 +1,10 @@
-module Models.Projects.Dashboards (Dashboard (..), DashboardVM (..), DashboardId (..), readDashboardFile, Variable (..), VariableType (..), Tab (..), getDashboardById, readDashboardsFromDirectory, readDashboardEndpoint, replaceQueryVariables) where
+module Models.Projects.Dashboards (Dashboard (..), DashboardVM (..), DashboardId, readDashboardFile, Variable (..), VariableType (..), Tab (..), getDashboardById, readDashboardsFromDirectory, readDashboardEndpoint, replaceQueryVariables) where
 
 import Control.Exception (try)
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.Default
-import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
@@ -26,7 +25,6 @@ import Deriving.Aeson.Stock qualified as DAES
 import Effectful
 import Effectful.Error.Static (Error, throwError)
 import Effectful.PostgreSQL.Transact.Effect
-import GHC.Records (HasField (getField))
 import Language.Haskell.TH (Exp, Q, runIO)
 import Language.Haskell.TH.Syntax qualified as THS
 import Models.Projects.Projects qualified as Projects
@@ -35,8 +33,9 @@ import NeatInterpolation (text)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DashboardUtils qualified as DashboardUtils
+import Pkg.DeriveUtils (UUIDId (..))
 import Relude
-import Servant (FromHttpApiData, ServerError (..), err404)
+import Servant (ServerError (..), err404)
 import System.Directory (listDirectory)
 
 
@@ -60,18 +59,7 @@ data DashboardVM = DashboardVM
     via (GenericEntity '[Schema "projects", TableName "dashboards", PrimaryKey "id", FieldModifiers '[CamelToSnake]] DashboardVM)
 
 
-newtype DashboardId = DashboardId {unDashboardId :: UUID.UUID}
-  deriving stock (Generic, Read, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, Hashable, NFData, Ord, ToField)
-  deriving anyclass (FromRow, ToRow)
-
-
-instance HasField "unwrap" DashboardId UUID.UUID where
-  getField = coerce
-
-
-instance HasField "toText" DashboardId Text where
-  getField = UUID.toText . unDashboardId
+type DashboardId = UUIDId "dashboard"
 
 
 data Dashboard = Dashboard

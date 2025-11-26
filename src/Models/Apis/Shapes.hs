@@ -2,7 +2,7 @@ module Models.Apis.Shapes (
   Shape (..),
   ShapeWithFields (..),
   SwShape (..),
-  ShapeId (..),
+  ShapeId,
   getShapeFields,
   bulkInsertShapes,
   shapeIdText,
@@ -15,7 +15,6 @@ where
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Time (UTCTime, getZonedTime)
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (query)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
@@ -23,7 +22,6 @@ import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
@@ -33,20 +31,15 @@ import Models.Apis.Fields.Types
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.Projects qualified as Projescts
+import Pkg.DeriveUtils (UUIDId (..), idToText)
 import Relude
-import Web.HttpApiData (FromHttpApiData)
 
 
-newtype ShapeId = ShapeId {unShapeId :: UUID.UUID}
-  deriving stock (Generic, Show)
-  deriving newtype (NFData)
-  deriving
-    (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, Ord, ToField)
-    via UUID.UUID
+type ShapeId = UUIDId "shape"
 
 
 shapeIdText :: ShapeId -> Text
-shapeIdText = UUID.toText . unShapeId
+shapeIdText = idToText
 
 
 data ShapeWithFields = ShapeWidthFields

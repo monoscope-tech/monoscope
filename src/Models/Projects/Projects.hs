@@ -1,7 +1,7 @@
 module Models.Projects.Projects (
   Project (..),
   Project' (..),
-  ProjectId (..),
+  ProjectId,
   CreateProject (..),
   NotificationChannel (..),
   OnboardingStep (..),
@@ -23,7 +23,7 @@ module Models.Projects.Projects (
   updateNotificationsChannel,
   updateUsageLastReported,
   updateProjectS3Bucket,
-  QueryLibItemId (..),
+  QueryLibItemId,
   QueryLibType (..),
   QueryLibItem (..),
   queryLibHistoryForUser,
@@ -36,7 +36,6 @@ where
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Time (UTCTime, ZonedTime)
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (execute, query, queryOne)
@@ -51,31 +50,19 @@ import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import GHC.Records (HasField (getField))
-import Language.Haskell.TH.Syntax qualified as THS
 import Models.Users.Users qualified as Users
 import Pkg.DBUtils (WrappedEnumSC (..))
+import Pkg.DeriveUtils (UUIDId (..), idFromText)
 import Pkg.Parser.Stats (Section)
 import Relude
 import Web.FormUrlEncoded (FromForm)
-import Web.HttpApiData
 
 
-newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
-  deriving stock (Generic, Read, Show, THS.Lift)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, Hashable, NFData, Ord, ToField)
-  deriving anyclass (FromRow, ToRow)
-
-
-instance HasField "unwrap" ProjectId UUID.UUID where
-  getField = coerce
-
-
-instance HasField "toText" ProjectId Text where
-  getField = UUID.toText . unProjectId
+type ProjectId = UUIDId "project"
 
 
 projectIdFromText :: Text -> Maybe ProjectId
-projectIdFromText pid = ProjectId <$> UUID.fromText pid
+projectIdFromText = idFromText
 
 
 data NotificationChannel
@@ -382,17 +369,7 @@ updateProjectS3Bucket pid bucket = dbtToEff $ execute q (bucket, pid)
 
 
 ---------------------------------
-newtype QueryLibItemId = QueryLibItemId {unQueryLibItemId :: UUID.UUID}
-  deriving stock (Generic, Read, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, Hashable, NFData, Ord, ToField)
-
-
-instance HasField "unwrap" QueryLibItemId UUID.UUID where
-  getField = coerce
-
-
-instance HasField "toText" QueryLibItemId Text where
-  getField = UUID.toText . unQueryLibItemId
+type QueryLibItemId = UUIDId "querylib"
 
 
 data QueryLibType = QLTHistory | QLTSaved

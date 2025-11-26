@@ -1,6 +1,6 @@
 module Models.Apis.Reports (
   Report (..),
-  ReportId (..),
+  ReportId,
   ReportListItem (..),
   addReport,
   reportHistoryByProject,
@@ -8,32 +8,21 @@ module Models.Apis.Reports (
 ) where
 
 import Data.Aeson qualified as AE
-import Data.Default (Default)
 import Data.Default.Instances ()
 import Data.Time (UTCTime, ZonedTime)
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (insert, selectById)
 import Database.PostgreSQL.Entity.DBT (query)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple hiding (execute, query)
-import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField
 import Database.PostgreSQL.Transact (DBT)
-import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (UUIDId (..))
 import Relude
-import Web.HttpApiData (FromHttpApiData)
 
 
-newtype ReportId = ReportId {reportId :: UUID.UUID}
-  deriving stock (Generic, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, NFData, Ord, ToField)
-
-
-instance HasField "toText" ReportId Text where
-  getField = UUID.toText . reportId
+type ReportId = UUIDId "report"
 
 
 data Report = Report

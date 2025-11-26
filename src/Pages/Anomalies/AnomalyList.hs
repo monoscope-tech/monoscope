@@ -40,6 +40,7 @@ import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (UUIDId (..))
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users (User (id))
 import NeatInterpolation (text)
@@ -68,14 +69,14 @@ acknowlegeAnomalyGetH pid aid hostM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   -- Convert to Issues.IssueId for new system
-  let issueId = Issues.IssueId aid.unAnomalyId
+  let issueId = UUIDId aid.unUUIDId
   -- Use new Issues acknowledge function
   _ <- dbtToEff $ Issues.acknowledgeIssue issueId sess.user.id
   -- Still use old cascade for compatibility
-  let text_id = V.fromList [UUID.toText aid.unAnomalyId]
+  let text_id = V.fromList [UUID.toText aid.unUUIDId]
   v <- dbtToEff $ Anomalies.acknowledgeAnomalies sess.user.id text_id
   _ <- dbtToEff $ Anomalies.acknowlegeCascade sess.user.id v
-  addRespHeaders $ Acknowlege pid (Issues.IssueId aid.unAnomalyId) True
+  addRespHeaders $ Acknowlege pid (UUIDId aid.unUUIDId) True
 
 
 unAcknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
@@ -85,7 +86,7 @@ unAcknowlegeAnomalyGetH pid aid = do
   let qI = [sql| update apis.issues set acknowledged_by=null, acknowledged_at=null where id=? |]
   _ <- dbtToEff $ execute qI (Only aid)
   _ <- dbtToEff $ execute q (Only aid)
-  addRespHeaders $ Acknowlege pid (Issues.IssueId aid.unAnomalyId) False
+  addRespHeaders $ Acknowlege pid (UUIDId aid.unUUIDId) False
 
 
 archiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
@@ -95,7 +96,7 @@ archiveAnomalyGetH pid aid = do
   let qI = [sql| update apis.issues set archived_at=NOW() where id=? |]
   _ <- dbtToEff $ execute qI (Only aid)
   _ <- dbtToEff $ execute q (Only aid)
-  addRespHeaders $ Archive pid (Issues.IssueId aid.unAnomalyId) True
+  addRespHeaders $ Archive pid (UUIDId aid.unUUIDId) True
 
 
 unArchiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
@@ -105,7 +106,7 @@ unArchiveAnomalyGetH pid aid = do
   let qI = [sql| update apis.issues set archived_at=null where id=? |]
   _ <- dbtToEff $ execute qI (Only aid)
   _ <- dbtToEff $ execute q (Only aid)
-  addRespHeaders $ Archive pid (Issues.IssueId aid.unAnomalyId) False
+  addRespHeaders $ Archive pid (UUIDId aid.unUUIDId) False
 
 
 data AnomalyAction
@@ -184,7 +185,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
         let mockCreatedTime = utcToZonedTime utc currTime
         let mockIssue1 =
               Issues.IssueL
-                { id = Issues.IssueId $ UUID.fromString "00000000-0000-0000-0000-000000000001" & fromMaybe (error "Invalid UUID")
+                { id = UUIDId $ UUID.fromString "00000000-0000-0000-0000-000000000001" & fromMaybe (error "Invalid UUID")
                 , createdAt = mockCreatedTime
                 , updatedAt = mockCreatedTime
                 , projectId = pid
@@ -345,7 +346,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
         -- Store payload changes separately as they're not part of IssueL structure
         let mockIssue2 =
               Issues.IssueL
-                { id = Issues.IssueId $ UUID.fromString "00000000-0000-0000-0000-000000000004" & fromMaybe (error "Invalid UUID")
+                { id = UUIDId $ UUID.fromString "00000000-0000-0000-0000-000000000004" & fromMaybe (error "Invalid UUID")
                 , createdAt = utcToZonedTime utc $ currTime{utctDayTime = utctDayTime currTime - 21600} -- 6 hours ago
                 , updatedAt = utcToZonedTime utc $ currTime{utctDayTime = utctDayTime currTime - 21600}
                 , projectId = pid
@@ -468,7 +469,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
         -- Mock issue 3: Payment Processing Error (Runtime Exception)
         let mockIssue3 =
               Issues.IssueL
-                { id = Issues.IssueId $ UUID.fromString "00000000-0000-0000-0000-000000000007" & fromMaybe (error "Invalid UUID")
+                { id = UUIDId $ UUID.fromString "00000000-0000-0000-0000-000000000007" & fromMaybe (error "Invalid UUID")
                 , createdAt = utcToZonedTime utc $ currTime{utctDayTime = utctDayTime currTime - 3600} -- 1 hour ago
                 , updatedAt = utcToZonedTime utc $ currTime{utctDayTime = utctDayTime currTime - 3600}
                 , projectId = pid
@@ -509,7 +510,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
         -- Mock issue 4: Query Alert
         let mockIssue4 =
               Issues.IssueL
-                { id = Issues.IssueId $ UUID.fromString "00000000-0000-0000-0000-000000000009" & fromMaybe (error "Invalid UUID")
+                { id = UUIDId $ UUID.fromString "00000000-0000-0000-0000-000000000009" & fromMaybe (error "Invalid UUID")
                 , createdAt = utcToZonedTime utc $ currTime{utctDayTime = utctDayTime currTime - 1800} -- 30 minutes ago
                 , updatedAt = utcToZonedTime utc $ currTime{utctDayTime = utctDayTime currTime - 1800}
                 , projectId = pid
