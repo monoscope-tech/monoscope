@@ -96,7 +96,7 @@ In most tools, logs and traces live in separate tabs. In Monoscope, **they're me
 
 ---
 
-See exactly which service logged what, while processing which customer request. All in context.
+Expand a request and trace its entire journey: the HTTP call to your payment service, the gRPC call it made to Stripe, the logs it wrote along the way, and the SQL query that updated the order. All in one tree.
 
 ![Unified Tree View Demo](#)
 
