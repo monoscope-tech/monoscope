@@ -163,7 +163,7 @@ processBackgroundJob authCtx job bgJob =
       userM <- Users.userById userId
       whenJust userM \user -> do
         let firstName = user.firstName
-        let project_url = "https://app.monoscope.tech/p/" <> projectId.toText
+        let project_url = authCtx.env.hostUrl <> "p/" <> projectId.toText
         let templateVars =
               [aesonQQ|{
              "user_name": #{firstName},
@@ -176,7 +176,7 @@ processBackgroundJob authCtx job bgJob =
       let stackString = intercalate ", " $ map toString stack
       forM_ users \user -> do
         let userEmail = CI.original user.email
-        let project_url = "https://app.monoscope.tech/p/" <> projectId.toText
+        let project_url = authCtx.env.hostUrl <> "p/" <> projectId.toText
         let project_title = project.title
         let msg =
               [fmtTrim|
@@ -194,7 +194,7 @@ processBackgroundJob authCtx job bgJob =
       userM <- Users.userById userId
       whenJust userM \user -> do
         let firstName = user.firstName
-        let project_url = "https://app.monoscope.tech/p/" <> projectId.toText
+        let project_url = authCtx.env.hostUrl <> "p/" <> projectId.toText
         let templateVars =
               [aesonQQ|{
             "user_name": #{firstName},
@@ -981,7 +981,7 @@ sendReportForProject pid rType = do
                   anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies'
                   perf_count = V.length endpointPerformance
                   perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else ((\(u, m, p, d, dc, req, cc) -> AE.object ["host" AE..= u, "urlPath" AE..= p, "method" AE..= m, "averageLatency" AE..= d, "latencyChange" AE..= dc]) <$> V.take 10 endpointPerformance)
-                  rp_url = "https://app.monoscope.tech/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
+                  rp_url = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> show report.id.reportId
                   dayEnd = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone currentTime))
                   sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentTime
                   sevenDaysAgoZonedTime = utcToZonedTime timeZone sevenDaysAgoUTCTime
@@ -1104,7 +1104,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
                     )
                       <$> errors
                   title = project.title
-                  errors_url = "https://app.monoscope.tech/p/" <> pid.toText <> "/issues/"
+                  errors_url = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
                   templateVars =
                     [aesonQQ|{
                         "project_name": #{title},
@@ -1191,7 +1191,7 @@ processAPIChangeAnomalies pid targetHashes = do
                   AE.object
                     [ "user_name" AE..= u.firstName
                     , "project_name" AE..= project.title
-                    , "anomaly_url" AE..= ("https://app.monoscope.tech/p/" <> pid.toText <> "/issues")
+                    , "anomaly_url" AE..= (authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues")
                     , "endpoint_name" AE..= endpointInfo
                     ]
             sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing
