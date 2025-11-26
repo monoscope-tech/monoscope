@@ -58,6 +58,16 @@ module Utils (
   prettyPrintDuration,
   extractMessageFromLog,
   getPercentileColors,
+  -- Badge helpers
+  badgeClass,
+  badge_,
+  badgeOutline_,
+  -- Fill color helpers
+  statusFillColor,
+  statusFillColorText,
+  methodFillColor,
+  levelFillColor,
+  changeTypeFillColor,
 )
 where
 
@@ -884,3 +894,68 @@ extractMessageFromLog (Object obj) =
       Just val -> Just (T.pack $ show val)
       Nothing -> Nothing
 extractMessageFromLog _ = Nothing
+
+
+-- | Base class for all badges
+badgeClass :: Text
+badgeClass = "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1"
+
+
+-- | Solid badge with fill color
+badge_ :: Text -> Html () -> Html ()
+badge_ colorClass = span_ [class_ $ badgeClass <> " border-transparent " <> colorClass <> " text-textInverse-strong shadow-sm"]
+
+
+-- | Outline badge (for change types like added/modified/removed)
+badgeOutline_ :: Text -> Html () -> Html ()
+badgeOutline_ colorClass = span_ [class_ $ badgeClass <> " " <> colorClass]
+
+
+-- | Get fill color class for HTTP status codes
+statusFillColor :: Int -> Text
+statusFillColor code
+  | code >= 500 = "bg-fillError-strong"
+  | code >= 400 = "bg-fillWarning-strong"
+  | code >= 300 = "bg-fillBrand-strong"
+  | code >= 200 = "bg-fillSuccess-strong"
+  | otherwise = "bg-fillStrong"
+
+
+-- | Get fill color from status code text (first char: "2xx", "3xx", etc.)
+statusFillColorText :: Text -> Text
+statusFillColorText val = case T.take 1 val of
+  "5" -> "bg-fillError-strong"
+  "4" -> "bg-fillWarning-strong"
+  "3" -> "bg-fillBrand-strong"
+  "2" -> "bg-fillSuccess-strong"
+  _ -> "bg-fillStrong"
+
+
+-- | Get fill color class for HTTP methods
+methodFillColor :: Text -> Text
+methodFillColor method = case T.toUpper method of
+  "GET" -> "bg-fillBrand-strong"
+  "POST" -> "bg-fillSuccess-strong"
+  "PUT" -> "bg-fillWarning-strong"
+  "DELETE" -> "bg-fillError-strong"
+  "PATCH" -> "bg-fillBrand-strong"
+  _ -> "bg-fillBrand-strong"
+
+
+-- | Get fill color class for log levels
+levelFillColor :: Text -> Text
+levelFillColor level = case T.toLower level of
+  v | "error" `T.isInfixOf` v || "fatal" `T.isInfixOf` v -> "bg-fillError-strong"
+  v | "warn" `T.isInfixOf` v -> "bg-fillWarning-strong"
+  v | "info" `T.isInfixOf` v -> "bg-fillBrand-strong"
+  v | "debug" `T.isInfixOf` v || "trace" `T.isInfixOf` v -> "bg-fillStrong"
+  _ -> "bg-fillWeak"
+
+
+-- | Get outline color classes for change types (added/modified/removed)
+changeTypeFillColor :: Text -> Text
+changeTypeFillColor changeType = case T.toLower changeType of
+  "added" -> "text-fillSuccess-strong border-strokeSuccess-strong bg-fillSuccess-weak"
+  "modified" -> "text-fillInformation-strong border-strokeInformation-strong bg-fillInformation-weak"
+  "removed" -> "text-fillError-strong border-strokeError-strong bg-fillError-weak"
+  _ -> "text-textWeak border-strokeWeak bg-fillWeak"

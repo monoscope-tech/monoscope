@@ -40,20 +40,20 @@ import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..))
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users (User (id))
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pkg.Components.ItemsList (TabFilter (..), TabFilterOpt (..))
 import Pkg.Components.ItemsList qualified as ItemsList
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (checkFreeTierExceeded, escapedQueryPartial, faSprite_)
+import Utils (badge_, badgeOutline_, changeTypeFillColor, checkFreeTierExceeded, escapedQueryPartial, faSprite_, methodFillColor, statusFillColor)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -713,19 +713,19 @@ renderIssue hideByDefault currTime timeFilter issue isWidget = do
           -- Type badge
           case issue.issueType of
             Issues.RuntimeException ->
-              span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-strong text-textInverse-strong shadow-sm"] do
+              badge_ "bg-fillError-strong" do
                 faSprite_ "triangle-alert" "regular" "w-3 h-3"
                 "ERROR"
             Issues.QueryAlert ->
-              span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-strong text-textInverse-strong shadow-sm"] do
+              badge_ "bg-fillWarning-strong" do
                 faSprite_ "zap" "regular" "w-3 h-3"
                 "ALERT"
             Issues.APIChange ->
               if issue.critical
-                then span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-strong text-textInverse-strong shadow-sm"] do
+                then badge_ "bg-fillError-strong" do
                   faSprite_ "exclamation-triangle" "regular" "w-3 h-3"
                   "BREAKING"
-                else span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillInformation-strong text-textInverse-strong shadow-sm"] do
+                else badge_ "bg-fillInformation-strong" do
                   faSprite_ "info" "regular" "w-3 h-3 mr-0.5"
                   "Incremental"
 
@@ -742,15 +742,7 @@ renderIssue hideByDefault currTime timeFilter issue isWidget = do
           case AE.fromJSON (getAeson issue.issueData) of
             AE.Success (apiData :: Issues.APIChangeData) -> do
               div_ [class_ "flex items-center gap-2"] do
-                -- Method badge
-                let methodClass = case apiData.endpointMethod of
-                      "GET" -> "bg-fillInformation-strong"
-                      "POST" -> "bg-fillSuccess-strong"
-                      "PUT" -> "bg-fillWarning-strong"
-                      "DELETE" -> "bg-fillError-strong"
-                      _ -> "bg-fillInformation-strong"
-                span_ [class_ $ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent " <> methodClass <> " text-textInverse-strong shadow-sm"] do
-                  toHtml apiData.endpointMethod
+                badge_ (methodFillColor apiData.endpointMethod) $ toHtml apiData.endpointMethod
                 -- Endpoint path
                 span_ [class_ "font-mono bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml apiData.endpointPath
             _ -> pass
@@ -1037,37 +1029,27 @@ renderPayloadChange isResponse change =
     div_ [class_ "flex items-center gap-3 mb-3 flex-wrap"] do
       -- Status code or method badge
       case (change.statusCode, change.method) of
-        (Just statusCode, _) -> do
-          let statusClass = case statusCode of
-                200 -> "bg-fillSuccess-strong text-textInverse-strong shadow-sm"
-                401 -> "bg-fillWarning-strong text-textInverse-strong shadow-sm"
-                422 -> "bg-fillWarning-strong text-textInverse-strong shadow-sm"
-                404 -> "bg-fillWarning-strong text-textInverse-strong shadow-sm"
-                500 -> "bg-fillError-strong text-textInverse-strong shadow-sm"
-                _ -> "bg-fillInformation-strong text-textInverse-strong shadow-sm"
-          span_ [class_ $ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent " <> statusClass] do
-            toHtml $ show statusCode <> " " <> fromMaybe "" change.statusText
+        (Just statusCode, _) ->
+          badge_ (statusFillColor statusCode) $ toHtml $ show statusCode <> " " <> fromMaybe "" change.statusText
         (_, Just method) ->
-          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillInformation-strong text-textInverse-strong shadow-sm"] do
-            toHtml method
+          badge_ "bg-fillInformation-strong" $ toHtml method
         _ -> pass
 
       -- Content type badge
-      span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-strokeWeak text-textWeak bg-bgRaised"] do
-        toHtml change.contentType
+      badgeOutline_ "border-strokeWeak text-textWeak bg-bgRaised" $ toHtml change.contentType
 
       -- Change type badge
       case change.changeType of
         Anomalies.Breaking ->
-          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillError-strong text-textInverse-strong shadow-sm"] do
+          badge_ "bg-fillError-strong" do
             faSprite_ "circle-x" "regular" "w-3 h-3 mr-1"
             "Breaking"
         Anomalies.Incremental ->
-          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillInformation-strong text-textInverse-strong shadow-sm"] do
+          badge_ "bg-fillInformation-strong" do
             faSprite_ "info" "regular" "w-3 h-3 mr-1"
             "Incremental"
         Anomalies.Safe ->
-          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillSuccess-strong text-textInverse-strong shadow-sm"] do
+          badge_ "bg-fillSuccess-strong" do
             faSprite_ "circle-check" "regular" "w-3 h-3 mr-1"
             "Safe"
 
@@ -1085,8 +1067,7 @@ renderPayloadChange isResponse change =
             $ case (change.statusCode, change.statusText) of
               (Just code, Just txt) -> toHtml $ show code <> " Response Changes"
               _ -> "Payload Changes"
-          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-xs border-strokeWeak text-textWeak bg-fillWeak"] do
-            toHtml change.contentType
+          badgeOutline_ "border-strokeWeak text-textWeak bg-fillWeak" $ toHtml change.contentType
 
         -- Individual field changes
         div_ [class_ "space-y-3"] do
@@ -1120,17 +1101,15 @@ renderFieldChange fieldChange =
         span_ [class_ "font-mono text-sm bg-fillWeak px-2 py-1 rounded text-textStrong"] $ toHtml fieldChange.path
 
         -- Change kind badge
-        case fieldChange.changeKind of
-          Anomalies.Modified ->
-            span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-fillInformation-strong border-strokeInformation-strong bg-fillInformation-weak"] "modified"
-          Anomalies.Added ->
-            span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-fillSuccess-strong border-strokeSuccess-strong bg-fillSuccess-weak"] "added"
-          Anomalies.Removed ->
-            span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-fillError-strong border-strokeError-strong bg-fillError-weak"] "removed"
+        let kindText = case fieldChange.changeKind of
+              Anomalies.Modified -> "modified"
+              Anomalies.Added -> "added"
+              Anomalies.Removed -> "removed"
+        badgeOutline_ (changeTypeFillColor kindText) $ toHtml kindText
 
         -- Breaking badge if applicable
         when fieldChange.breaking do
-          span_ [class_ "inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 border-transparent bg-fillError-strong text-textInverse-strong shadow-sm"] do
+          badge_ "bg-fillError-strong" do
             faSprite_ "triangle-alert" "regular" "w-3 h-3 mr-1"
             "Breaking"
 

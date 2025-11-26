@@ -46,7 +46,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (checkFreeTierExceeded, faSprite_, formatUTC, getServiceColors, listToIndexHashMap, lookupVecTextByKey, onpointerdown_, prettyPrintCount)
+import Utils (checkFreeTierExceeded, faSprite_, formatUTC, getServiceColors, levelFillColor, listToIndexHashMap, lookupVecTextByKey, methodFillColor, onpointerdown_, prettyPrintCount, statusFillColorText)
 
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
@@ -69,27 +69,10 @@ renderFacets :: FacetSummary -> Html ()
 renderFacets facetSummary = do
   let (FacetData facetMap) = facetSummary.facetJson
 
-      -- Color functions for different facet types
-      statusColorFn val = case T.take 1 val of
-        "2" -> "bg-fillSuccess-strong"
-        "3" -> "bg-fillBrand-strong"
-        "4" -> "bg-fillWarning-strong"
-        "5" -> "bg-fillError-strong"
-        _ -> "bg-fillStrong"
-
-      methodColorFn val = case T.toUpper val of
-        "GET" -> "bg-fillBrand-strong"
-        "POST" -> "bg-fillSuccess-strong"
-        "PUT" -> "bg-fillWarning-strong"
-        "DELETE" -> "bg-fillError-strong"
-        _ -> "bg-fillBrand-strong"
-
-      levelColorFn val = case T.toLower val of
-        v | "error" `T.isInfixOf` v -> "bg-fillError-strong"
-        v | "warn" `T.isInfixOf` v -> "bg-fillWarning-strong"
-        v | "info" `T.isInfixOf` v -> "bg-fillBrand-strong"
-        v | "debug" `T.isInfixOf` v -> "bg-fillStrong"
-        _ -> "bg-fillWeak"
+      -- Color functions for different facet types (using shared Utils)
+      statusColorFn = statusFillColorText
+      methodColorFn = methodFillColor
+      levelColorFn = levelFillColor
 
       -- Group facet fields by category
       -- Define mapping of field keys to display names and color functions
