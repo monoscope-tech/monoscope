@@ -47,9 +47,9 @@ import Models.Apis.Fields.Types qualified as Fields (
   FieldCategoryEnum (..),
   FieldId (FieldId),
   FieldTypes (..),
+  Format (..),
   fieldCategoryEnumToText,
  )
-import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
@@ -633,7 +633,7 @@ valueToFormatNum val
 
 -- fieldsToFieldDTO processes a field from monoscope clients into a field and format record,
 -- which can then be converted into separate sql insert queries.
-fieldsToFieldDTO :: Fields.FieldCategoryEnum -> Projects.ProjectId -> Text -> (Text, V.Vector AE.Value) -> (Fields.Field, Formats.Format)
+fieldsToFieldDTO :: Fields.FieldCategoryEnum -> Projects.ProjectId -> Text -> (Text, V.Vector AE.Value) -> (Fields.Field, Fields.Format)
 fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
   ( Fields.Field
       { createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
@@ -656,7 +656,7 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
       , isEnum = False
       , isRequired = False
       }
-  , Formats.Format
+  , Fields.Format
       { id = UUIDId UUID.nil
       , createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
       , updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"

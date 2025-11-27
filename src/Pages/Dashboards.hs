@@ -44,7 +44,6 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem (getServiceName)
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
-import Pkg.Components.Modals qualified as Modals
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
@@ -71,7 +70,7 @@ instance ToHtml DashboardGet where
 dashboardPage_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> [(Text, Maybe Text)] -> Html ()
 dashboardPage_ pid dashId dash dashVM allParams = do
   -- when  $ freeTierLimitExceededBanner pid.toText
-  Modals.modal_ "pageTitleModalId" ""
+  Components.modal_ "pageTitleModalId" ""
     $ form_
       [ class_ "flex flex-col p-3 gap-3"
       , hxPatch_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/rename")
@@ -806,7 +805,7 @@ renderDashboardListItem checked tmplClass title value description icon prview = 
 
 dashboardsGet_ :: DashboardsGet -> Html ()
 dashboardsGet_ dg = do
-  unless dg.embedded $ Modals.modal_ "newDashboardMdl" "" $ form_
+  unless dg.embedded $ Components.modal_ "newDashboardMdl" "" $ form_
     [ class_ "grid grid-cols-7 overflow-hidden h-full gap-4 group/md"
     , hxPost_ ""
     ]

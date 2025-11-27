@@ -1,3 +1,5 @@
+{-# OPTIONS_GHC -Wno-name-shadowing #-}
+
 module Models.Apis.Fields.Types (
   Field (..),
   FieldTypes (..),
@@ -11,6 +13,12 @@ module Models.Apis.Fields.Types (
   parseFieldTypes,
   fieldTypeToText,
   fieldCategoryEnumToText,
+  bulkInsertFields,
+  -- Formats
+  Format (..),
+  FormatId,
+  SwFormat (..),
+  bulkInsertFormat,
 )
 where
 
@@ -19,15 +27,22 @@ import Data.Default
 import Data.HashMap.Strict qualified as HM
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
+import Database.PostgreSQL.Simple.FromRow (field)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
+import Database.PostgreSQL.Transact (executeMany)
 import Deriving.Aeson qualified as DAE
+import Effectful
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Pkg.DBUtils (WrappedEnumSC (..))
+import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Web.HttpApiData (FromHttpApiData)
 
@@ -244,3 +259,86 @@ instance Eq Field where
     (f1.projectId == f2.projectId)
       && (f1.endpointHash == f2.endpointHash)
       && (f1.keyPath == f2.keyPath)
+
+
+bulkInsertFields :: DB :> es => V.Vector Field -> Eff es ()
+bulkInsertFields fields = void $ dbtToEff $ executeMany q (V.toList rowsToInsert)
+  where
+    q =
+      [sql| INSERT into apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; |]
+    rowsToInsert :: V.Vector (Projects.ProjectId, Text, Text, FieldTypes, Text, Text, Text, FieldCategoryEnum, Text)
+    rowsToInsert =
+      V.map
+        ( \fld ->
+            ( fld.projectId
+            , fld.endpointHash
+            , fld.key
+            , fld.fieldType
+            , fld.format
+            , fld.description
+            , fld.keyPath
+            , fld.fieldCategory
+            , fld.hash
+            )
+        )
+        fields
+
+
+---------------------------------
+-- Formats
+type FormatId = UUIDId "format"
+
+
+data Format = Format
+  { id :: FormatId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , projectId :: Projects.ProjectId
+  , fieldHash :: Text
+  , fieldType :: FieldTypes
+  , fieldFormat :: Text
+  , examples :: V.Vector AE.Value
+  , hash :: Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
+  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "formats", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Format)
+  deriving (FromField) via Aeson Format
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Format
+
+
+bulkInsertFormat :: DB :> es => V.Vector Format -> Eff es ()
+bulkInsertFormat formats = void $ dbtToEff $ executeMany q $ V.toList rowsToInsert
+  where
+    q =
+      [sql|
+      insert into apis.formats (project_id, field_hash, field_type, field_format, examples, hash)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (hash)
+        DO
+          UPDATE SET field_type= EXCLUDED.field_type, examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit 20);
+      |]
+    rowsToInsert =
+      formats <&> \fmt ->
+        ( fmt.projectId
+        , fmt.fieldHash
+        , fmt.fieldType
+        , fmt.fieldFormat
+        , fmt.examples
+        , fmt.hash
+        )
+
+
+data SwFormat = SwFormat
+  { swFieldHash :: Text
+  , swFieldType :: FieldTypes
+  , swFieldFormat :: Text
+  , swExamples :: V.Vector AE.Value
+  , swHash :: Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
+  deriving anyclass (AE.ToJSON)
+  deriving (FromField) via Aeson SwFormat
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwFormat

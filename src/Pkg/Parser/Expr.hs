@@ -1,4 +1,4 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, FieldKey (..), pSquareBracketKey, pTerm, jsonPathQuery, display, pDuration, pNowFunction, pAgoFunction, pValues) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, FieldKey (..), pSquareBracketKey, pTerm, jsonPathQuery, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..)) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -11,11 +11,25 @@ import Data.Text qualified as T
 import Data.Text.Builder.Linear (Builder)
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
 import Data.Vector qualified as V
-import Pkg.Parser.Core
 import Relude hiding (GT, LT, Sum, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, space, space1, string)
 import Text.Megaparsec.Char.Lexer qualified as L
+
+
+type Parser = Parsec Void Text
+
+
+class ToQueryText a where
+  toQText :: a -> Text
+
+
+sc :: Parser ()
+sc = L.space space1 (L.skipLineComment "//") (L.skipBlockComment "/*" "*/")
+
+
+symbol :: Text -> Parser Text
+symbol = L.symbol sc
 
 
 -- $setup

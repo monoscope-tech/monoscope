@@ -12,7 +12,7 @@ import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
-import Pkg.Components.Modals qualified as Components
+import Pages.Components (modal_)
 import Relude
 import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_)
 
@@ -42,7 +42,7 @@ data LogQueryBoxConfig = LogQueryBoxConfig
 -- This component provides a unified interface for querying logs and visualizing data
 logQueryBox_ :: LogQueryBoxConfig -> Html ()
 logQueryBox_ config = do
-  Components.modal_ "saveQueryMdl" "" $ form_
+  modal_ "saveQueryMdl" "" $ form_
     [ class_ "flex flex-col p-3 gap-3"
     , id_ "saveQueryForm"
     , hxGet_ $ "/p/" <> config.pid.toText <> "/log_explorer?layout=SaveQuery"

@@ -37,7 +37,6 @@ import Effectful.Reader.Static qualified as Eff
 
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields
-import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
@@ -204,7 +203,7 @@ jsonToMap _ = Nothing
 -- The extracted entities are compared against the project cache to avoid
 -- redundant database operations. New entities will trigger database inserts
 -- which fire PostgreSQL triggers to create anomaly records.
-processSpanToEntities :: Projects.ProjectCache -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, Maybe Shapes.Shape, V.Vector Fields.Field, V.Vector Formats.Format, V.Vector Text)
+processSpanToEntities :: Projects.ProjectCache -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, Maybe Shapes.Shape, V.Vector Fields.Field, V.Vector Fields.Format, V.Vector Text)
 processSpanToEntities pjc otelSpan dumpId =
   let !projectId = UUIDId $ Unsafe.fromJust $ UUID.fromText otelSpan.project_id
 

@@ -64,7 +64,6 @@ library
       Devel
       Models.Apis.Anomalies
       Models.Apis.Endpoints
-      Models.Apis.Fields
       Models.Apis.Fields.Facets
       Models.Apis.Fields.Query
       Models.Apis.Fields.Types
@@ -77,11 +76,9 @@ library
       Models.Apis.Shapes
       Models.Apis.Slack
       Models.Projects.Dashboards
-      Models.Projects.LemonSqueezy
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
-      Models.Projects.ProjectsEmail
       Models.Telemetry.Schema
       Models.Telemetry.SummaryGenerator
       Models.Telemetry.Telemetry
@@ -120,7 +117,6 @@ library
       Pkg.Components.ExternalHeadScripts
       Pkg.Components.ItemsList
       Pkg.Components.LogQueryBox
-      Pkg.Components.Modals
       Pkg.Components.TimePicker
       Pkg.Components.Widget
       Pkg.ConvertKit
@@ -128,10 +124,8 @@ library
       Pkg.DBUtils
       Pkg.DeriveUtils
       Pkg.Drain
-      Pkg.Google
       Pkg.Mail
       Pkg.Parser
-      Pkg.Parser.Core
       Pkg.Parser.Expr
       Pkg.Parser.Stats
       Pkg.Queue

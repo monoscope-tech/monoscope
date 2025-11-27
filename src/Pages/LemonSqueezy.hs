@@ -15,7 +15,6 @@ import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx (hxGet_)
 import Lucid.Hyperscript (__)
-import Models.Projects.LemonSqueezy qualified as LemonSqueezy
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
@@ -89,12 +88,12 @@ webhookPostH secretHeaderM dat = do
   case dat.meta.eventName of
     "subscription_created" -> do
       currentTime <- liftIO getZonedTime
-      subId <- LemonSqueezy.LemonSubId <$> liftIO UUIDV4.nextRandom
+      subId <- Projects.LemonSubId <$> liftIO UUIDV4.nextRandom
       let projectId = case dat.meta.customData of
             Nothing -> ""
             Just d -> fromMaybe "" d.projectId
       let sub =
-            LemonSqueezy.LemonSub
+            Projects.LemonSub
               { id = subId
               , createdAt = currentTime
               , updatedAt = currentTime
@@ -105,16 +104,16 @@ webhookPostH secretHeaderM dat = do
               , productName = dat.dataVal.attributes.productName
               , userEmail = dat.dataVal.attributes.userEmail
               }
-      _ <- dbtToEff $ LemonSqueezy.addSubscription sub
+      _ <- dbtToEff $ Projects.addSubscription sub
       pure "subscription created"
     "subscription_cancelled" -> do
-      _ <- dbtToEff $ LemonSqueezy.downgradeToFree orderId subItem.subscriptionId subItem.id
+      _ <- dbtToEff $ Projects.downgradeToFree orderId subItem.subscriptionId subItem.id
       pure "downgraded"
     "subscription_resumed" -> do
-      _ <- dbtToEff $ LemonSqueezy.upgradeToPaid orderId subItem.subscriptionId subItem.id
+      _ <- dbtToEff $ Projects.upgradeToPaid orderId subItem.subscriptionId subItem.id
       pure "Upgraded"
     "subscription_expired" -> do
-      _ <- dbtToEff $ LemonSqueezy.downgradeToFree orderId subItem.subscriptionId subItem.id
+      _ <- dbtToEff $ Projects.downgradeToFree orderId subItem.subscriptionId subItem.id
       pure "Downgraded to free,sub expired"
     _ -> pure ""
 
@@ -135,7 +134,7 @@ manageBillingGetH pid from = do
   let envCfg = appCtx.config
   currentTime <- Time.currentTime
   let cycleStart = calculateCycleStartDate dat currentTime
-  totalRequests <- dbtToEff $ LemonSqueezy.getTotalUsage pid cycleStart
+  totalRequests <- dbtToEff $ Projects.getTotalUsage pid cycleStart
   let requestAfter = totalRequests - 20_000_000
   let estimatedAmount = show $ if requestAfter <= 0 then "34.00" else printf "%.2f" (fromIntegral requestAfter / 500_000 + 34.00)
   let last_reported = show project.usageLastReported

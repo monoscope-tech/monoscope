@@ -52,8 +52,8 @@ import Models.Apis.Fields.Types qualified as Fields (
   FieldCategoryEnum,
   FieldId,
   FieldTypes,
+  FormatId,
  )
-import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
@@ -184,7 +184,7 @@ data AnomalyVM = AnomalyVM
   , fieldCategory :: Maybe Fields.FieldCategoryEnum
   , fieldFormat :: Maybe Text
   , --
-    formatId :: Maybe Formats.FormatId
+    formatId :: Maybe Fields.FormatId
   , formatType :: Maybe Fields.FieldTypes -- fieldFormat in the formats table
   , formatExamples :: Maybe (V.Vector Text)
   , --
@@ -345,7 +345,7 @@ data NewFieldIssue = NewFieldIssue
 
 
 data NewFormatIssue = NewFormatIssue
-  { id :: Formats.FormatId
+  { id :: Fields.FormatId
   , endpointId :: Endpoints.EndpointId
   , endpointMethod :: Text
   , endpointUrlPath :: Text

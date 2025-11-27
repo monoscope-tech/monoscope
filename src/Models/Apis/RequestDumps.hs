@@ -47,7 +47,7 @@ import Effectful
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Time qualified as Time
-import Models.Apis.Fields.Query ()
+import Models.Apis.Fields.Types ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.Parser

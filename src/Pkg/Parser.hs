@@ -9,7 +9,6 @@ import Data.Time.Clock (UTCTime (..), addUTCTime, diffUTCTime, secondsToDiffTime
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
-import Pkg.Parser.Core (ToQueryText (..))
 import Pkg.Parser.Expr
 import Pkg.Parser.Stats
 import PyF (fmt)

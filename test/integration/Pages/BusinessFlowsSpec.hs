@@ -12,7 +12,6 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Connection, Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Models.Projects.LemonSqueezy qualified as ModelLemonSqueezy
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pkg.TestUtils
@@ -299,9 +298,9 @@ webhookTestCases =
 setupProjectWithSubscription :: Pool Connection -> Projects.ProjectId -> Text -> IO ()
 setupProjectWithSubscription pool testPid plan = do
   _ <- DBT.withPool pool $ do
-    subId <- ModelLemonSqueezy.LemonSubId <$> liftIO UUIDV4.nextRandom
+    subId <- Projects.LemonSubId <$> liftIO UUIDV4.nextRandom
     currentZonedTime <- liftIO getZonedTime
-    ModelLemonSqueezy.addSubscription $ ModelLemonSqueezy.LemonSub subId currentZonedTime currentZonedTime testPid.toText 12345 67890 111 "Test Plan" "test@example.com"
+    Projects.addSubscription $ Projects.LemonSub subId currentZonedTime currentZonedTime testPid.toText 12345 67890 111 "Test Plan" "test@example.com"
   _ <- DBT.withPool pool $ DBT.execute [sql|UPDATE projects.projects SET payment_plan = ?, order_id = '67890', sub_id = '12345', first_sub_item_id = '111' WHERE id = ?|] (plan, testPid)
   pure ()
 

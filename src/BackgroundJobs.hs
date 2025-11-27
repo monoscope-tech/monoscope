@@ -37,9 +37,7 @@ import Log qualified as LogLegacy
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Facets qualified as Facets
-import Models.Apis.Fields.Query qualified as FieldsQ
 import Models.Apis.Fields.Types qualified as Fields
-import Models.Apis.Formats qualified as Formats
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Issues.Enhancement qualified as Enhancement
 import Models.Apis.Monitors qualified as Monitors
@@ -47,7 +45,7 @@ import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps (ATError (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
-import Models.Projects.LemonSqueezy qualified as LemonSqueezy
+import Pkg.DeriveUtils (UUIDId (..))
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Users qualified as Users
@@ -322,7 +320,7 @@ processBackgroundJob authCtx job bgJob =
         Log.logInfo "Total events to report" ("events_count", totalToReport + totalMetricsCount)
         Relude.when (totalToReport > 0) do
           liftIO $ reportUsageToLemonsqueezy fSubId (totalToReport + totalMetricsCount) authCtx.config.lemonSqueezyApiKey
-          _ <- dbtToEff $ LemonSqueezy.addDailyUsageReport pid totalToReport
+          _ <- dbtToEff $ Projects.addDailyUsageReport pid totalToReport
           _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
           pass
       Log.logInfo "Completed usage report for project" ("project_id", pid.toText)
@@ -695,8 +693,8 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
   result <- try $ Ki.scoped \scope -> do
     unless (null endpointsFinal) $ void $ Ki.fork scope $ Endpoints.bulkInsertEndpoints endpointsFinal
     unless (null shapesFinal) $ void $ Ki.fork scope $ Shapes.bulkInsertShapes shapesFinal
-    unless (null fieldsFinal) $ void $ Ki.fork scope $ FieldsQ.bulkInsertFields fieldsFinal
-    unless (null formatsFinal) $ void $ Ki.fork scope $ Formats.bulkInsertFormat formatsFinal
+    unless (null fieldsFinal) $ void $ Ki.fork scope $ Fields.bulkInsertFields fieldsFinal
+    unless (null formatsFinal) $ void $ Ki.fork scope $ Fields.bulkInsertFormat formatsFinal
     Ki.atomically $ Ki.awaitAll scope
 
   case result of
