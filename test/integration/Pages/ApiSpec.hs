@@ -5,6 +5,7 @@ import Data.Vector qualified as V
 import Models.Projects.ProjectApiKeys (ProjectApiKey (..))
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
@@ -14,7 +15,7 @@ import Pages.Api qualified as Api
 
 
 testPid :: Projects.ProjectId
-testPid = Projects.ProjectId UUID.nil
+testPid = UUIDId UUID.nil
 
 
 spec :: Spec

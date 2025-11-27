@@ -7,6 +7,7 @@ import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import BackgroundJobs (processFiveMinuteSpans)
@@ -16,7 +17,7 @@ import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldContain)
 
 
 pid :: Projects.ProjectId
-pid = Projects.ProjectId UUID.nil
+pid = UUIDId UUID.nil
 
 
 spec :: Spec

@@ -15,6 +15,7 @@ import Database.PostgreSQL.Simple (Connection)
 import Effectful
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
@@ -26,7 +27,7 @@ import Web.ClientMetadata (ClientMetadata (..), clientMetadataH)
 
 
 testId :: Projects.ProjectId
-testId = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"
+testId = Unsafe.fromJust $ UUIDId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"
 
 
 spec :: Spec

@@ -11,6 +11,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Pages.Monitors (AlertUpsertForm (..), convertToQueryMonitor)
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import Relude
@@ -24,7 +25,7 @@ spec = aroundAll withTestResources do
     it "should create monitor with no triggers" $ \tr -> do
       currentTime <- getCurrentTime
       let queryMonitor =
-            convertToQueryMonitor (Projects.ProjectId UUID.nil) currentTime (Monitors.QueryMonitorId UUID.nil)
+            convertToQueryMonitor (UUIDId UUID.nil) currentTime (Monitors.QueryMonitorId UUID.nil)
               $ AlertUpsertForm
                 { alertId = Nothing
                 , warningThreshold = Just "3"

@@ -6,6 +6,7 @@ import Data.Vector qualified as V
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper
+import Pkg.DeriveUtils (UUIDId (..))
 import Pages.Projects
 import Pages.Projects qualified as CreateProject
 import Pages.Projects qualified as ListProjects
@@ -16,7 +17,7 @@ import Test.Hspec
 
 
 testPid :: Projects.ProjectId
-testPid = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"
+testPid = Unsafe.fromJust $ UUIDId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"
 
 
 spec :: Spec
@@ -52,7 +53,7 @@ spec = aroundAll withTestResources do
     -- TODO: add more checks for the info we we display on list page
 
     it "Should update project with new details and verify in list" \tr -> do
-      let testProjectPid = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "12345678-9abc-def0-1234-56789abcdef0"
+      let testProjectPid = Unsafe.fromJust $ UUIDId <$> UUID.fromText "12345678-9abc-def0-1234-56789abcdef0"
 
       -- Section 1: Update the project
       let createPForm =

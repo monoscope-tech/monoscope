@@ -10,6 +10,7 @@ import Data.UUID qualified as UUID
 import Models.Apis.Reports qualified as Reports
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
+import Pkg.DeriveUtils (UUIDId (..))
 import Pages.Reports qualified as PageReports
 
 import BackgroundJobs qualified
@@ -29,7 +30,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 
 
 testPid :: Projects.ProjectId
-testPid = Projects.ProjectId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
+testPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
 
 
 spec :: Spec

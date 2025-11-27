@@ -12,6 +12,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
+import Pkg.DeriveUtils (UUIDId (..))
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
@@ -21,7 +22,7 @@ import Test.Hspec
 
 
 testPid :: Projects.ProjectId
-testPid = Projects.ProjectId UUID.nil
+testPid = UUIDId UUID.nil
 
 
 spec :: Spec

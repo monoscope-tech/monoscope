@@ -9,6 +9,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper
+import Pkg.DeriveUtils (UUIDId (..))
 import Pages.Projects qualified as ManageMembers
 import Pkg.TestUtils
 import Relude
@@ -17,7 +18,7 @@ import Test.Hspec
 
 
 testPid :: Projects.ProjectId
-testPid = Unsafe.fromJust $ Projects.ProjectId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"
+testPid = Unsafe.fromJust $ UUIDId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"
 
 
 spec :: Spec

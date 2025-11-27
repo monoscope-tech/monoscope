@@ -22,11 +22,12 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..), query)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Models.Apis.Anomalies (AnomalyId(..))
+import Models.Apis.Anomalies (AnomalyId)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
+import Pkg.DeriveUtils (UUIDId (..))
 import Models.Users.Sessions (Session(..))
 import OddJobs.Job (Job (..))
 import Pages.Anomalies qualified as AnomalyList
@@ -46,7 +47,7 @@ import Utils (toXXHash)
 
 
 testPid :: Projects.ProjectId
-testPid = Projects.ProjectId UUID.nil
+testPid = UUIDId UUID.nil
 
 -- Helper function to get anomalies from API
 getAnomalies :: TestResources -> IO (V.Vector AnomalyList.IssueVM)

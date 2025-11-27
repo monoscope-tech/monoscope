@@ -8,6 +8,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Models.Projects.Projects qualified as Projects
 import Network.GRPC.Common (CustomMetadata (..),  HeaderName (..), GrpcError (..), GrpcException (..))
+import Pkg.DeriveUtils (UUIDId (..))
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Pages.Api qualified as Api
 import Pages.BodyWrapper (PageCtx (..))
@@ -26,7 +27,7 @@ import Text.Read (read)
 
 
 pid :: Projects.ProjectId
-pid = Projects.ProjectId UUID.nil
+pid = UUIDId UUID.nil
 
 frozenTime :: UTCTime
 frozenTime = read "2025-01-01 00:00:00 UTC"

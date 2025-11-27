@@ -14,6 +14,7 @@ import Database.PostgreSQL.Simple (Connection, Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
 import Servant.API (ResponseHeader(..), lookupResponseHeader)
@@ -46,7 +47,7 @@ withTestProject action = withTestResources $ \tr -> do
       case UUID.fromText pidText of
         Just uuid -> do
           -- Refresh session to pick up sudo status and new project
-          let projectId = Projects.ProjectId uuid
+          let projectId = UUIDId uuid
           refreshedSession <- refreshSession tr.trPool tr.trSessAndHeader
           let updatedTr = tr{trSessAndHeader = refreshedSession}
           action $ TestContext updatedTr projectId
