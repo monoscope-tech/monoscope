@@ -78,5 +78,3 @@ data SwFormat = SwFormat
   deriving anyclass (AE.ToJSON)
   deriving (FromField) via Aeson SwFormat
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwFormat
-
-

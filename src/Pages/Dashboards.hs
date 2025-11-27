@@ -34,7 +34,6 @@ import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Pkg.DeriveUtils (UUIDId (..))
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users
 import NeatInterpolation
@@ -48,6 +47,7 @@ import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visType
 import Pkg.Components.Modals qualified as Modals
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import Servant (NoContent (..), ServerError, err404, errBody)

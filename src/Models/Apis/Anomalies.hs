@@ -608,5 +608,3 @@ insertErrorQueryAndParams pid err = (q, params)
       , MkDBField err.message
       , MkDBField err
       ]
-
-

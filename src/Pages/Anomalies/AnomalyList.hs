@@ -46,8 +46,8 @@ import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pkg.Components.ItemsList (TabFilter (..), TabFilterOpt (..))
 import Pkg.Components.ItemsList qualified as ItemsList
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..))

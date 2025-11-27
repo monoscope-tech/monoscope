@@ -54,7 +54,6 @@ import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogBase
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unUUIDId)
 import Models.Telemetry.SummaryGenerator (generateSummary)
 import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), Severity (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -64,6 +63,7 @@ import Network.GRPC.Server (RpcHandler, SomeRpcHandler, getRequestMetadata, mkRp
 import Network.GRPC.Server.Run hiding (runServer)
 import Network.GRPC.Server.StreamType (Methods (..), fromMethods)
 import OpenTelemetry.Trace (TracerProvider)
+import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unUUIDId)
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
 import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService qualified as TS

@@ -38,9 +38,9 @@ import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (Reader, asks)
 import Effectful.Reader.Static qualified as EffReader
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..))
 import Models.Users.Users
 import Models.Users.Users qualified as Users
+import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Servant (Header, Headers, ServerError, addHeader, err302, errHeaders, getResponse)
 import Web.Cookie (

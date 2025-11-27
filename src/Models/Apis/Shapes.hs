@@ -114,5 +114,3 @@ data SwShape = SwShape
   deriving anyclass (AE.ToJSON)
   deriving (FromField) via Aeson SwShape
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwShape
-
-

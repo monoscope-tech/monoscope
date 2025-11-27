@@ -42,5 +42,3 @@ bulkInsertFields fields = void $ dbtToEff $ executeMany q (V.toList rowsToInsert
             )
         )
         fields
-
-
