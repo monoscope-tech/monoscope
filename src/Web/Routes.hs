@@ -77,7 +77,6 @@ import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as Alerts
 import Pages.Monitors.Testing qualified as Testing
-import Pkg.Components.ItemsList qualified as ItemsList
 import Pages.Onboarding.Onboarding qualified as Onboarding
 import Pages.Projects qualified as CreateProject
 import Pages.Projects qualified as Integrations
@@ -89,6 +88,7 @@ import Pages.S3 qualified as S3
 import Pages.Share qualified as Share
 import Pages.Telemetry qualified as Metrics
 import Pages.Telemetry qualified as Trace
+import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget qualified as Widget
 import Utils
 

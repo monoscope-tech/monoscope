@@ -25,8 +25,10 @@ statBox pid title helpInfo val bckupValM = wrapper do
   where
     tl = getTargetPage title
     pidT = maybe "" (.toText) pid
-    wrapper = if T.null tl then div_ [class_ "col-span-1 p-5 card-round col-span-1 flex flex-row content-between justify-between"]
-              else a_ [href_ $ "/p/" <> pidT <> tl, class_ "col-span-1 p-5 card-round flex flex-row content-between justify-between"]
+    wrapper =
+      if T.null tl
+        then div_ [class_ "col-span-1 p-5 card-round col-span-1 flex flex-row content-between justify-between"]
+        else a_ [href_ $ "/p/" <> pidT <> tl, class_ "col-span-1 p-5 card-round flex flex-row content-between justify-between"]
 
 
 statBox_ :: Maybe ProjectId -> Maybe (Text, Text, Text) -> Text -> Text -> Text -> Maybe Int -> Maybe Text -> Html ()

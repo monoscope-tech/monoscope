@@ -44,12 +44,12 @@ import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default (..))
 import Data.Effectful.UUID qualified as UUID
-import Data.UUID qualified as RealUUID
 import Data.Effectful.Wreq
 import Data.Effectful.Wreq qualified as W
 import Data.List.Unique (uniq)
 import Data.Pool (withResource)
 import Data.Text qualified as T
+import Data.UUID qualified as RealUUID
 import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
 import Data.Vector qualified as V

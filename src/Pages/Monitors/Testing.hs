@@ -273,9 +273,14 @@ unifiedMonitorCard item = do
 
     editUrl = case item.details of
       AlertDetails{query, visualizationType} ->
-        "/p/" <> item.projectId <> "/log_explorer/?alert=" <> item.monitorId
-          <> "&query=" <> toUriStr query
-          <> "&viz_type=" <> visualizationType
+        "/p/"
+          <> item.projectId
+          <> "/log_explorer/?alert="
+          <> item.monitorId
+          <> "&query="
+          <> toUriStr query
+          <> "&viz_type="
+          <> visualizationType
 
     toggleUrl = "/p/" <> item.projectId <> "/monitors/alerts/" <> item.monitorId <> "/toggle_active"
 

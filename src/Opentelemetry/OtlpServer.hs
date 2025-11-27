@@ -718,6 +718,7 @@ createProtoErrorInfo err msg =
        in AE.object ["err_type" AE..= errorType, "field_path" AE..= fieldPath, "full_err" AE..= err, "msg_size" AE..= BS.length msg]
     _ -> AE.object ["full_err" AE..= err, "msg_size" AE..= BS.length msg]
 
+
 -- | Record a protobuf decode error, categorizing wire type, UTF-8, and EOF errors
 recordProtoError :: MonadIO m => Text -> String -> ByteString -> (Text -> AE.Value -> m ()) -> m ()
 recordProtoError prefix err msg logFn = do
