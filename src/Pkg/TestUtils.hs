@@ -1,7 +1,5 @@
 module Pkg.TestUtils (
   withSetup,
-  abort,
-  rollback,
   withTestResources,
   fromRightShow,
   TestResources (..),
@@ -28,10 +26,7 @@ module Pkg.TestUtils (
   -- Helper functions for tests
   processMessagesAndBackgroundJobs,
   createRequestDumps,
-  processEndpointAnomalyJobs,
   processAllBackgroundJobsMultipleTimes,
-  processShapeAndFieldAnomalyJobs,
-  processFormatAnomalyJobs,
   -- OTLP/Telemetry helpers
   createTestAPIKey,
   ingestLog,
@@ -44,7 +39,7 @@ module Pkg.TestUtils (
 where
 
 import BackgroundJobs qualified
-import Control.Exception (bracket_, finally, mask, throwIO)
+import Control.Exception (finally, throwIO)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
@@ -69,7 +64,6 @@ import Database.PostgreSQL.Simple (Connection, Only (..), close, connectPostgreS
 import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory, MigrationInitialization))
 import Database.PostgreSQL.Simple.Migration qualified as Migration
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.Transaction (newSavepoint, rollbackToAndReleaseSavepoint)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact qualified as PgT
 import Database.Postgres.Temp (cacheAction, cacheConfig, toConnectionString, withConfig, withDbCache)
@@ -352,23 +346,6 @@ ensureTemplateDatabase masterConnStr templateDbName = do
     pure ()
 
   close masterConn
-
-
--- throw away all db changes that happened within this abort block
-abort :: (Connection -> IO a) -> Connection -> IO a
-abort f conn =
-  bracket_
-    (execute_ conn "BEGIN")
-    (execute_ conn "ROLLBACK")
-    (f conn)
-
-
--- can be a nested transaction, and creates a savepoint which then gets auto rolled back,
--- while reusing all the setup and db operations that happened up until that savepoint
-rollback :: Connection -> IO a -> IO a
-rollback conn actionToRollback = mask $ \restore -> do
-  sp <- newSavepoint conn
-  restore actionToRollback `finally` rollbackToAndReleaseSavepoint conn sp
 
 
 -- | `testSessionHeader` would log a user in and automatically generate a session header
@@ -870,22 +847,6 @@ createRequestDumps TestResources{..} projectId numRequestsPerEndpoint = do
           )
 
 
--- Helper function to process endpoint anomaly jobs
-processEndpointAnomalyJobs :: TestResources -> IO ()
-processEndpointAnomalyJobs tr@TestResources{..} = do
-  bgJobs <- runAllBackgroundJobs trATCtx
-  whenJust (V.find isEndpointAnomalyJob bgJobs) \job -> do
-    bgJob <- BackgroundJobs.throwParsePayload job
-    void $ runTestBg tr $ BackgroundJobs.processBackgroundJob trATCtx job bgJob
-  where
-    isEndpointAnomalyJob (Job{jobPayload}) = case jobPayload of
-      AE.Object obj ->
-        case (AEKM.lookup "tag" obj, AEKM.lookup "anomalyType" obj) of
-          (Just (AE.String "NewAnomaly"), Just (AE.String "endpoint")) -> True
-          _ -> False
-      _ -> False
-
-
 -- Helper function to process all background jobs until none remain
 -- Some background jobs spawn other jobs, so we run iteratively
 processAllBackgroundJobsMultipleTimes :: TestResources -> IO ()
@@ -895,41 +856,6 @@ processAllBackgroundJobsMultipleTimes TestResources{..} = go 10 -- max 10 iterat
     go n = do
       jobs <- runAllBackgroundJobs trATCtx
       unless (V.null jobs) $ go (n - 1)
-
-
--- Helper function to process shape and field anomaly jobs
-processShapeAndFieldAnomalyJobs :: TestResources -> IO ()
-processShapeAndFieldAnomalyJobs tr@TestResources{..} = do
-  bgJobs <- runAllBackgroundJobs trATCtx
-  let anomalyJobs = V.filter isShapeOrFieldAnomalyJob bgJobs
-  forM_ anomalyJobs \job -> do
-    bgJob <- BackgroundJobs.throwParsePayload job
-    void $ runTestBg tr $ BackgroundJobs.processBackgroundJob trATCtx job bgJob
-  where
-    isShapeOrFieldAnomalyJob (Job{jobPayload}) = case jobPayload of
-      AE.Object obj ->
-        case (AEKM.lookup "tag" obj, AEKM.lookup "anomalyType" obj) of
-          (Just (AE.String "NewAnomaly"), Just (AE.String aType)) ->
-            aType == "shape" || aType == "field"
-          _ -> False
-      _ -> False
-
-
--- Helper function to process format anomaly jobs
-processFormatAnomalyJobs :: TestResources -> IO ()
-processFormatAnomalyJobs tr@TestResources{..} = do
-  bgJobs <- runAllBackgroundJobs trATCtx
-  let formatJobs = V.filter isFormatAnomalyJob bgJobs
-  forM_ formatJobs \job -> do
-    bgJob <- BackgroundJobs.throwParsePayload job
-    void $ runTestBg tr $ BackgroundJobs.processBackgroundJob trATCtx job bgJob
-  where
-    isFormatAnomalyJob (Job{jobPayload}) = case jobPayload of
-      AE.Object obj ->
-        case (AEKM.lookup "tag" obj, AEKM.lookup "anomalyType" obj) of
-          (Just (AE.String "NewAnomaly"), Just (AE.String "format")) -> True
-          _ -> False
-      _ -> False
 
 
 -- OTLP/Telemetry helper functions for ingesting test data

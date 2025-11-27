@@ -37,11 +37,8 @@ module Models.Telemetry.Telemetry (
   bulkInsertMetrics,
   bulkInsertOtelLogsAndSpansTF,
   getMetricChartListData,
-  getLogsByTraceIds,
   getMetricLabelValues,
   getTraceShapes,
-  getValsWithPrefix,
-  getSpanAttribute,
   getMetricServiceNames,
   SpanEvent (..),
   SpanLink (..),
@@ -56,7 +53,6 @@ where
 import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
-import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Base16 qualified as B16
 import Data.Effectful.UUID (UUIDEff, genUUID)
@@ -80,7 +76,6 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.ToRow
 import Database.PostgreSQL.Simple.Types (Query (..))
-import Database.PostgreSQL.Transact qualified as DBT
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
@@ -595,30 +590,6 @@ GROUP BY mm.metric_name, mm.metric_type, mm.metric_unit, mm.metric_description, 
 |]
 
 
-getLogsByTraceIds :: DB :> es => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector (V.Vector AE.Value))
-getLogsByTraceIds pid traceIds = do
-  logitems <- queryToValues pid traceIds
-  pure $ V.mapMaybe valueToVector logitems
-
-
-valueToVector :: Only AE.Value -> Maybe (V.Vector AE.Value)
-valueToVector (Only val) = case val of
-  AE.Array arr -> Just arr
-  _ -> Nothing
-
-
-queryToValues :: DB :> es => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector (Only AE.Value))
-queryToValues pid traceIds
-  | V.null traceIds = pure V.empty
-  | otherwise = dbtToEff $ V.fromList <$> DBT.query q (pid.toText, traceIds)
-  where
-    q =
-      [sql|
-      SELECT json_build_array(id, timestamp, context___trace_id, context___span_id, CAST(EXTRACT(EPOCH FROM (timestamp)) * 1_000_000_000 AS BIGINT), severity___severity_text, body, resource->>'service.name')
-      FROM otel_logs_and_spans WHERE project_id = ? AND context___trace_id = ANY(?) and attributes___session___id is null;
-    |]
-
-
 getMetricData :: DB :> es => Projects.ProjectId -> Text -> Eff es (Maybe MetricDataPoint)
 getMetricData pid metricName = dbtToEff $ queryOne q (pid, metricName, pid, metricName)
   where
@@ -911,19 +882,6 @@ bulkInserSpansAndLogsQuery =
 
 removeDuplic :: Eq a => Eq e => [(a, e, b, c, d, q)] -> [(a, e, b, c, d, q)]
 removeDuplic = L.nubBy (\(a1, a2, _, _, _, _) (b1, b2, _, _, _, _) -> a1 == b1 && a2 == b2)
-
-
-getValsWithPrefix :: Text -> AE.Object -> AE.Value
-getValsWithPrefix prefix obj = AE.object $ map (\k -> (AEK.fromText (T.replace prefix "" $ AEK.toText k), fromMaybe (AE.object []) $ KEM.lookup k obj)) keys
-  where
-    keys = filter (\k -> prefix `T.isPrefixOf` AEK.toText k) (KEM.keys obj)
-
-
-getSpanAttribute :: Text -> AE.Object -> Maybe Text
-getSpanAttribute key attr = case KEM.lookup (AEK.fromText key) attr of
-  Just (AE.String v) -> Just v
-  Just (AE.Number v) -> Just $ show v
-  _ -> Nothing
 
 
 data Severity = Severity

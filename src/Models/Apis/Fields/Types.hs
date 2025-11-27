@@ -7,25 +7,18 @@ module Models.Apis.Fields.Types (
   FacetSummary (..),
   FacetValue (..),
   FacetData (..),
-  fieldIdText,
   parseFieldCategoryEnum,
   parseFieldTypes,
-  groupFieldsByCategory,
   fieldTypeToText,
   fieldCategoryEnumToText,
-  fieldsToNormalized,
-  textFieldTypeToText,
 )
 where
 
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.HashMap.Strict qualified as HM
-import Data.List qualified as L
-import Data.Text qualified as T
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
-import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
@@ -36,7 +29,6 @@ import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Pkg.DBUtils (WrappedEnumSC (..))
 import Relude
-import Relude.Unsafe ((!!))
 import Web.HttpApiData (FromHttpApiData)
 
 
@@ -53,10 +45,6 @@ newtype FieldId = FieldId {unFieldId :: UUID.UUID}
   deriving
     (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, Ord, ToField)
     via UUID.UUID
-
-
-fieldIdText :: FieldId -> Text
-fieldIdText = UUID.toText . unFieldId
 
 
 data FieldTypes
@@ -97,16 +85,6 @@ fieldTypeToText FTObject = "object"
 fieldTypeToText FTList = "list"
 fieldTypeToText FTNull = "null"
 fieldTypeToText FTUnknown = "unknown"
-
-
-textFieldTypeToText :: Text -> Text
-textFieldTypeToText "FTString" = "string"
-textFieldTypeToText "FTNumber" = "number"
-textFieldTypeToText "FTBool" = "bool"
-textFieldTypeToText "FTObject" = "object"
-textFieldTypeToText "FTList" = "list"
-textFieldTypeToText "FTNull" = "null"
-textFieldTypeToText _ = "unknown"
 
 
 parseFieldTypes :: (Eq s, IsString s) => s -> Maybe FieldTypes
@@ -174,18 +152,6 @@ instance FromField FieldCategoryEnum where
         case parseFieldCategoryEnum bs of
           Just a -> pure a
           Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'field_type' enum, got " <> decodeUtf8 bs <> " instead."
-
-
-fieldsToNormalized :: [Field] -> [(Text, Maybe Field)]
-fieldsToNormalized =
-  sortNub . concatMap \field ->
-    map
-      ((,Nothing) . fst)
-      ( field.keyPath
-          & T.dropWhile (== '.')
-          & T.breakOnAll "."
-      )
-      & (++ [(T.dropWhile (== '.') field.keyPath, Just field)])
 
 
 data Field = Field
@@ -278,19 +244,3 @@ instance Eq Field where
     (f1.projectId == f2.projectId)
       && (f1.endpointHash == f2.endpointHash)
       && (f1.keyPath == f2.keyPath)
-
-
--- | NB: The GroupBy function has been merged into the vectors package.
--- We should use that instead of converting to list, once that is available on hackage.
--- We use group by, only because the query returns the result sorted by the field_category.
--- >>> let qparam = (def::Field){fieldCategory=FCQueryParam}
--- >>> let respB = (def::Field){fieldCategory=FCResponseBody}
--- >>> let respB2 = (def::Field){fieldCategory=FCResponseBody, key="respBody2"}
--- >>> groupFieldsByCategory $ V.fromList [qparam, respB, respB2]
--- fromList [(FCQueryParam,[Field {id = FieldId {unFieldId = 00000000-0000-0000-0000-000000000000}, createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, projectId = ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000}, endpointHash = "", key = "", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = "", fieldCategory = FCQueryParam, hash = "", isEnum = False, isRequired = False}]),(FCResponseBody,[Field {id = FieldId {unFieldId = 00000000-0000-0000-0000-000000000000}, createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, projectId = ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000}, endpointHash = "", key = "", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = "", fieldCategory = FCResponseBody, hash = "", isEnum = False, isRequired = False},Field {id = FieldId {unFieldId = 00000000-0000-0000-0000-000000000000}, createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, projectId = ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000}, endpointHash = "", key = "respBody2", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = "", fieldCategory = FCResponseBody, hash = "", isEnum = False, isRequired = False}])]
-groupFieldsByCategory :: V.Vector Field -> Map FieldCategoryEnum [Field]
-groupFieldsByCategory fields = fromList fieldGroupTupple
-  where
-    fields' = V.toList fields
-    fieldGroup = L.groupBy (\f1 f2 -> f1.fieldCategory == f2.fieldCategory) fields'
-    fieldGroupTupple = map (\f -> ((f !! 0).fieldCategory, f)) fieldGroup

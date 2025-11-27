@@ -26,7 +26,6 @@ module Models.Apis.Issues (
 
   -- * Database Operations
   insertIssue,
-  insertIssues,
   selectIssueById,
   selectIssues,
   findOpenIssueForEndpoint,
@@ -34,7 +33,6 @@ module Models.Apis.Issues (
   updateIssueEnhancement,
   updateIssueCriticality,
   acknowledgeIssue,
-  archiveIssue,
 
   -- * Conversion Functions
   createAPIChangeIssue,
@@ -63,7 +61,7 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact (DBT, executeMany)
+import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
@@ -305,24 +303,6 @@ DO UPDATE SET
     |]
 
 
--- | Insert multiple issues
-insertIssues :: V.Vector Issue -> DBT IO Int64
-insertIssues issues = executeMany q (V.toList issues)
-  where
-    q =
-      [sql|
-      INSERT INTO apis.issues (
-        id, created_at, updated_at, project_id, issue_type, endpoint_hash,
-        acknowledged_at, acknowledged_by, archived_at,
-        title, service, critical, severity,
-        affected_requests, affected_clients, error_rate,
-        recommended_action, migration_complexity,
-        issue_data, request_payloads, response_payloads, 
-        llm_enhanced_at, llm_enhancement_version
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    |]
-
-
 -- | Select issue by ID
 selectIssueById :: IssueId -> DBT IO (Maybe Issue)
 selectIssueById = selectOneByField [field| id |] . Only
@@ -447,13 +427,6 @@ acknowledgeIssue issueId userId = void $ execute q (userId, issueId)
       SET acknowledged_at = NOW(), acknowledged_by = ?
       WHERE id = ?
     |]
-
-
--- | Archive issue
-archiveIssue :: IssueId -> DBT IO ()
-archiveIssue issueId = void $ execute q (Only issueId)
-  where
-    q = [sql| UPDATE apis.issues SET archived_at = NOW() WHERE id = ? |]
 
 
 -- | Create API Change issue from anomalies

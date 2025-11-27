@@ -12,7 +12,6 @@ module Models.Projects.ProjectApiKeys (
   newProjectApiKeys,
   insertProjectApiKey,
   projectApiKeysByProjectId,
-  countProjectApiKeysByProjectId,
   projectIdsByProjectApiKeys,
   revokeApiKey,
   getProjectApiKey,
@@ -25,7 +24,7 @@ import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (execute, query, queryOne, withPool)
+import Database.PostgreSQL.Entity.DBT (execute, queryOne, withPool)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -104,16 +103,6 @@ activateApiKey kid = do
   where
     q =
       [sql| UPDATE projects.project_api_keys SET deleted_at=null, active=true where id=?;|]
-
-
-countProjectApiKeysByProjectId :: Projects.ProjectId -> DBT IO Int
-countProjectApiKeysByProjectId pid = do
-  result <- query q pid
-  case result of
-    [Only count] -> return count
-    v -> return $ length v
-  where
-    q = [sql| SELECT count(*) FROM projects.project_api_keys WHERE project_id=? |]
 
 
 getProjectApiKey :: ProjectApiKeyId -> DBT IO (Maybe ProjectApiKey)

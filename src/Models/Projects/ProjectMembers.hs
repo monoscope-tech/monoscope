@@ -7,7 +7,6 @@ module Models.Projects.ProjectMembers (
   selectActiveProjectMembers,
   updateProjectMembersPermissons,
   softDeleteProjectMembers,
-  selectProjectActiveMember,
 ) where
 
 import Control.Error (note)
@@ -16,7 +15,7 @@ import Data.Default.Instances ()
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (query, queryOne)
+import Database.PostgreSQL.Entity.DBT (query)
 import Database.PostgreSQL.Entity.Types (
   CamelToSnake,
   Entity,
@@ -129,12 +128,6 @@ selectActiveProjectMembers = query q
                    WHERE pm.project_id=?::uuid and pm.active=TRUE 
                    ORDER BY pm.created_at ASC;
         |]
-
-
-selectProjectActiveMember :: Projects.ProjectId -> Users.UserId -> DBT IO (Maybe ProjectMembers)
-selectProjectActiveMember pid userId = queryOne q (pid, userId)
-  where
-    q = [sql| SELECT * from projects.project_members where project_id = ? AND user_id = ?  AND deleted_at is null AND active = true; |]
 
 
 updateProjectMembersPermissons :: [(UUID.UUID, Permissions)] -> DBT IO ()

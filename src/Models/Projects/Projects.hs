@@ -9,9 +9,7 @@ module Models.Projects.Projects (
   insertProject,
   projectIdFromText,
   usersByProjectId,
-  userByProjectId,
   selectProjectsForUser,
-  updateOnboardingStepsCompleted,
   getProjectByPhoneNumber,
   updateProject,
   deleteProject,
@@ -298,14 +296,6 @@ usersByProjectId pid = query q (Only pid)
                 from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=? and u.active IS True;|]
 
 
-userByProjectId :: ProjectId -> Users.UserId -> DBT IO (V.Vector Users.User)
-userByProjectId pid user_id = query q (user_id, pid)
-  where
-    q =
-      [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number,  u.is_sudo
-                from users.users u join projects.project_members pm on (pm.user_id= ?) where project_id=? and u.active IS True;|]
-
-
 updateProject :: CreateProject -> DBT IO Int64
 updateProject cp = do
   execute q (cp.title, cp.description, cp.paymentPlan, cp.subId, cp.firstSubItemId, cp.orderId, cp.timeZone, cp.weeklyNotif, cp.dailyNotif, cp.endpointAlerts, cp.errorAlerts, cp.id)
@@ -348,12 +338,6 @@ updateNotificationsChannel pid channels phones = execute q (list, V.fromList pho
   where
     list = V.fromList channels
     q = [sql| UPDATE projects.projects SET notifications_channel=?::notification_channel_enum[], whatsapp_numbers=? WHERE id=?;|]
-
-
-updateOnboardingStepsCompleted :: ProjectId -> V.Vector Text -> DBT IO Int64
-updateOnboardingStepsCompleted pid steps = execute q (steps, pid)
-  where
-    q = [sql| UPDATE projects.projects SET onboarding_steps_completed=? WHERE id=?;|]
 
 
 updateUsageLastReported :: ProjectId -> ZonedTime -> DBT IO Int64

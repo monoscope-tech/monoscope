@@ -1,6 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 
-module System.Config (EnvConfig (..), AuthContext (..), DashboardM, ctxToHandler, getAppContext, configToEnv, DeploymentEnv (..)) where
+module System.Config (EnvConfig (..), AuthContext (..), getAppContext, configToEnv, DeploymentEnv (..)) where
 
 import Colourista.IO (blueMessage)
 import Data.Cache (Cache, newCache)
@@ -19,7 +19,6 @@ import Log (LogLevel (..))
 import Models.Projects.Projects qualified as Projects
 import Pkg.DBUtils qualified as DBUtils
 import Relude
-import Servant.Server (Handler)
 import System.Clock (TimeSpec (TimeSpec))
 import System.Envy (DefConfig (..), FromEnv (..), ReadShowVar (..), Var (..), decodeWithDefaults, fromVar, toVar)
 import System.Logging qualified as Logging
@@ -180,15 +179,6 @@ data AuthContext = AuthContext
   , config :: EnvConfig
   }
   deriving stock (Generic)
-
-
--- TODO: remove
-type DashboardM = ReaderT AuthContext Handler
-
-
--- TODO: remove
-ctxToHandler :: AuthContext -> DashboardM a -> Handler a
-ctxToHandler s x = runReaderT x s
 
 
 -- ===============

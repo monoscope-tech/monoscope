@@ -8,7 +8,6 @@ module Models.Users.Users (
   userById,
   userByEmail,
   createEmptyUser,
-  addUserToAllProjects,
 ) where
 
 import Data.Aeson qualified as AE
@@ -132,14 +131,3 @@ createEmptyUser :: Text -> PgT.DBT IO (Maybe UserId)
 createEmptyUser email = PgT.queryOne q (Only email)
   where
     q = [sql| insert into users.users (email, active) values (?, TRUE) on conflict do nothing returning id |]
-
-
--- addUserToAllProjects is a hack for development to add the user to all projects
-addUserToAllProjects :: Text -> PgT.DBT IO Int64
-addUserToAllProjects email = PgT.execute q values
-  where
-    q =
-      [sql| insert into projects.project_members (active, project_id, permission, user_id)
-            select true::Boolean, id, 'admin'::projects.project_permissions, (select id from users.users where email=?) from projects.projects
-            on conflict do nothing; |]
-    values = Only email

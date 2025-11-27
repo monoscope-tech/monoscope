@@ -13,21 +13,17 @@ module Models.Users.Sessions (
   emptySessionCookie,
   getSession,
   insertSession,
-  deleteSession,
   getPersistentSession,
-  lookup,
   newPersistentSessionId,
 ) where
 
 import Data.Default
 import Data.Effectful.UUID (UUIDEff)
 import Data.Effectful.UUID qualified as UUID
-import Data.Map.Strict qualified as Map
 import Data.Text.Display
 import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple hiding (execute)
@@ -35,7 +31,6 @@ import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.Newtypes
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField
-import Database.PostgreSQL.Transact hiding (DB, execute, queryOne)
 import Effectful
 import Effectful.Error.Static (throwError)
 import Effectful.Error.Static qualified as EffError
@@ -126,10 +121,6 @@ insertSession pid userId sessionData = void <$> dbtToEff $ DBT.execute q (pid, u
     q = [sql| insert into users.persistent_sessions(id, user_id, session_data) VALUES (?, ?, ?) |]
 
 
-deleteSession :: PersistentSessionId -> DBT IO ()
-deleteSession sessionId = delete @PersistentSession (Only sessionId)
-
-
 -- TODO: getting persistent session happens very frequently, so we should create a view for this, when our user base grows.
 getPersistentSession :: DB :> es => PersistentSessionId -> Eff es (Maybe PersistentSession)
 getPersistentSession sessionId = dbtToEff $ DBT.queryOne q value
@@ -144,10 +135,6 @@ getPersistentSession sessionId = dbtToEff $ DBT.queryOne q value
         where ps.id=?
         GROUP BY ps.created_at, ps.updated_at, ps.id, ps.user_id, ps.session_data, u.* ,u.is_sudo; |]
     value = Only sessionId
-
-
-lookup :: Text -> SessionData -> Maybe Text
-lookup key (SessionData sdMap) = Map.lookup key sdMap
 
 
 getSession

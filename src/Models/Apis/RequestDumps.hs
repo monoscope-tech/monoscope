@@ -12,10 +12,8 @@ module Models.Apis.RequestDumps (
   requestDumpLogUrlPath,
   getRequestDumpForReports,
   getRequestDumpsForPreviousReportPeriod,
-  getRequestType,
   getLast24hTotalRequest,
   getLastSevenDaysTotalRequest,
-  parseSDKType,
   fetchLogPatterns,
   selectChildSpansAndLogs,
 )
@@ -98,40 +96,6 @@ data SDKTypes
 
 instance ToField SDKTypes where
   toField sdkType = toField @String (show sdkType)
-
-
-parseSDKType :: Text -> SDKTypes
-parseSDKType "GoGin" = GoGin
-parseSDKType "GoBuiltIn" = GoBuiltIn
-parseSDKType "GoGorillaMux" = GoGorillaMux
-parseSDKType "GoFiber" = GoFiber
-parseSDKType "GoDefault" = GoDefault
-parseSDKType "GoOutgoing" = GoOutgoing
-parseSDKType "PhpLaravel" = PhpLaravel
-parseSDKType "PhpSymfony" = PhpSymfony
-parseSDKType "JsNest" = JsNest
-parseSDKType "JsFastify" = JsFastify
-parseSDKType "JavaSpringBoot" = JavaSpringBoot
-parseSDKType "JsAxiosOutgoing" = JsAxiosOutgoing
-parseSDKType "DotNet" = DotNet
-parseSDKType "PythonFastApi" = PythonFastApi
-parseSDKType "PythonFlask" = PythonFlask
-parseSDKType "PythonDjango" = PythonDjango
-parseSDKType "PythonOutgoing" = PythonOutgoing
-parseSDKType "JsAdonis" = JsAdonis
-parseSDKType "PhpSlim" = PhpSlim
-parseSDKType "GuzzleOutgoing" = GuzzleOutgoing
-parseSDKType "ElixirPhoenix" = ElixirPhoenix
-parseSDKType "PythonPyramid" = PythonPyramid
-parseSDKType "DotNetOutgoing" = DotNetOutgoing
-parseSDKType "TestkitOutgoing" = TestkitOutgoing
-parseSDKType "JavaSpring" = JavaSpring
-parseSDKType "JavaApacheOutgoing" = JavaApacheOutgoing
-parseSDKType "JavaVertx" = JavaVertx
-parseSDKType "JsOutgoing" = JsOutgoing
-parseSDKType "JsNext" = JsNext
-parseSDKType "SDKUnknown" = SDKUnknown
-parseSDKType _ = JsExpress
 
 
 instance FromField SDKTypes where
@@ -223,13 +187,6 @@ normalizeUrlPath SDKUnknown statusCode _method urlPath = removeQueryParams statu
 -- Outgoing
 -- >>> getRequestType JsAxiosOutgoing
 -- Outgoing
-
-getRequestType :: SDKTypes -> RequestTypes
-getRequestType sdkType
-  | T.isSuffixOf "Outgoing" (show sdkType) = Outgoing
-  | T.isSuffixOf "Background" (show sdkType) = Background
-  | otherwise = Incoming
-
 
 -- removeQueryParams ...
 -- >>> removeQueryParams 200 "https://apitoolkit.io/abc/:bla?q=abc"

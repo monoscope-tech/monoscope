@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendWhatsAppAlert, sendDiscordNotif, sendSlackAlert, NotificationAlerts (..), sendDiscordAlert) where
+module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), sendDiscordAlert) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
@@ -41,12 +41,6 @@ sendSlackMessage pid message = do
       let payload = [aesonQQ| {"text": #{message}, "type":"mrkdwn"} |]
       Notify.sendNotification $ Notify.slackNotification s.webhookUrl payload
     Nothing -> Log.logAttention "sendSlackMessage is not configured. But was called" (pid, message)
-
-
-sendDiscordNotif :: Notify.Notify :> es => Text -> Text -> Eff es ()
-sendDiscordNotif message channelId = do
-  let msg = AE.object ["content" AE..= message]
-  Notify.sendNotification $ Notify.discordNotification channelId msg
 
 
 data NotificationAlerts

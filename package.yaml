@@ -1,10 +1,10 @@
 name: monoscope
 version: 0.1.0.0
-github: "githubuser/monoscope"
+github: 'githubuser/monoscope'
 license: BSD3
-author: "Author name here"
-maintainer: "example@example.com"
-copyright: "2021 Author name here"
+author: 'Author name here'
+maintainer: 'example@example.com'
+copyright: '2021 Author name here'
 language: GHC2021
 spec-version: 0.36.0
 
@@ -44,8 +44,6 @@ extra-source-files:
 
 ghc-options:
   - -fwrite-ide-info
-  - -hiedir .hiefiles
-  #- "-hidir=.hifiles"
   - -threaded
   - -fplugin AutoInstrument
   - -Weverything
@@ -280,17 +278,17 @@ executables:
       - -rtsopts
       - -with-rtsopts=-N
       - -j4
-      - "+RTS -N -A128m -n2m -RTS"
+      - '+RTS -N -A128m -n2m -RTS'
       # - -O2
       # - -fPIC
     dependencies:
       - monoscope
       - hs-opentelemetry-instrumentation-auto
       - name: relude
-        version: ">= 1.2.0.0"
+        version: '>= 1.2.0.0'
         mixin:
           - (Relude as Prelude)
-          - ""
+          - ''
 
 tests:
   doctests:

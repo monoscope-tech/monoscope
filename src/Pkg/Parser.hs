@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (parseQueryStringToWhereClause, queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames, pSource, parseQueryToAST, ToQueryText (..), replaceNestJsonWithColumns, calculateAutoBinWidth) where
+module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth) where
 
 import Control.Error (hush)
 import Data.Default (Default (def))
@@ -359,68 +359,6 @@ sqlFromQueryComponents sqlCfg qc =
       )
 
 
------------------------------------------------------------------------------------
-
--- Add more cases as needed, e.g., for List
-
-----------------------------------------------------------------------------------
--- Convert Query as string to a string capable of being
--- used in the where clause of an sql statement
-----------------------------------------------------------------------------------
--- >>> parseQueryStringToWhereClause "request_body.message!=\"blabla\" AND method==\"GET\""
--- Right "request_body->>'message'!='blabla' AND method='GET'"
---
--- >>> parseQueryStringToWhereClause "request_body.message!=\"blabla\" AND method==\"GET\""
--- Right "request_body->>'message'!='blabla' AND method='GET'"
---
--- >>> parseQueryStringToWhereClause "request_body.message==\"blabla\" AND method==\"GET\""
--- Right "request_body->>'message'='blabla' AND method='GET'"
---
--- >>> parseQueryStringToWhereClause "request_body.message.tags[*].name!=\"blabla\" AND method==\"GET\""
--- Right "jsonb_path_exists(request_body, $$$.\"message\".tags[*].\"name\" ? (@ != \"blabla\")$$::jsonpath) AND method='GET'"
---
--- >>> parseQueryStringToWhereClause "errors[*].error_type==\"Exception\""
--- Right "jsonb_path_exists(errors, $$$[*].\"error_type\" ? (@ == \"Exception\")$$::jsonpath)"
---
--- -- FIXME: broken. Should return non empty query
--- >>> parseQueryStringToWhereClause "errors==[]"
--- Right ""
---
--- -- FIXME: broken. Should return non empty query
--- >>> parseQueryStringToWhereClause "errors[*].error_type==[]" -- works with empty array but not otherwise. Right "jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ == {} )')"
--- Right ""
---
--- -- FIXME: broken. Should return non empty query
--- >>> parseQueryStringToWhereClause "errors.error_type==[]"
--- Right ""
---
--- >>> parseQueryStringToWhereClause "errors[*].error_type=~/^ab.*c/"
--- Right "jsonb_path_exists(errors, $$$[*].\"error_type\" ? (@ like_regex \"^ab.*c\" flag \"i\" )$$::jsonpath)"
---
--- >>> parseQueryStringToWhereClause "response_body.roles[*] == \"user\""
--- Right "jsonb_path_exists(response_body, $$$.roles[*] ? (@ == \"user\")$$::jsonpath)"
---
--- >>> parseQueryStringToWhereClause "field_hashes[*]==\"42dd8b6020091ea9c01\""
--- Right "jsonb_path_exists(field_hashes, $$$[*] ? (@ == \"42dd8b6020091ea9c01\")$$::jsonpath)"
---
--- >>>  parseQueryStringToWhereClause "request_body.is_customer==true"
--- Right "request_body->>'is_customer'=true"
---
--- >>>  parseQueryStringToWhereClause "duration > 500ms"
--- Right "request_body->>'is_customer'=true"
---
-parseQueryStringToWhereClause :: Text -> Either Text Text
-parseQueryStringToWhereClause q =
-  let trimmedQ = T.strip q
-   in if trimmedQ == ""
-        then Right ""
-        else
-          bimap
-            (toText . errorBundlePretty)
-            (\x -> fromMaybe "" (sectionsToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) x).whereClause)
-            (parse parseQuery "" trimmedQ)
-
-
 ----------------------------------------------------------------------------------
 -- parseQueryToComponents converts a monoscope query to components which can be executed directly against a database
 ----------------------------------------------------------------------------------
@@ -557,41 +495,3 @@ colsNoAsClause = mapMaybe (\x -> Safe.headMay $ T.strip <$> T.splitOn "as" x)
 
 instance HasField "toColNames" QueryComponents [Text] where
   getField qc = qc.finalColumns
-
-
--- | Converts OpenTelemetry nested JSON attribute notation to flattened database column names
--- This function handles the translation from dot notation (e.g., "attributes.http.request.method")
--- to triple-underscore notation (e.g., "attributes___http___request___method") used in the database schema
-replaceNestJsonWithColumns :: Text -> Text
-replaceNestJsonWithColumns =
-  T.replace "url_path" "attributes___url___path"
-    . T.replace "attributes.http.request.method" "attributes___http___request___method"
-    . T.replace "attributes.http.request.method_original" "attributes___http___request___method_original"
-    . T.replace "attributes.http.response.status_code" "attributes___http___response___status_code"
-    . T.replace "attributes.http.request.resend_count" "attributes___http___request___resend_count"
-    . T.replace "attributes.http.request.body.size" "attributes___http___request___body___size"
-    . T.replace "attributes.url.fragment" "attributes___url___fragment"
-    . T.replace "attributes.url.full" "attributes___url___full"
-    . T.replace "attributes.url.path" "attributes___url___path"
-    . T.replace "attributes.url.query" "attributes___url___query"
-    . T.replace "attributes.url.scheme" "attributes___url___scheme"
-    . T.replace "attributes.user_agent.original" "attributes___user_agent___original"
-    . T.replace "attributes.db.system.name" "attributes___db___system___name"
-    . T.replace "attributes.db.collection.name" "attributes___db___collection___name"
-    . T.replace "attributes.db.namespace" "attributes___db___namespace"
-    . T.replace "attributes.db.operation.name" "attributes___db___operation___name"
-    . T.replace "attributes.db.operation.batch.size" "attributes___db___operation___batch___size"
-    . T.replace "attributes.db.query.summary" "attributes___db___query___summary"
-    . T.replace "attributes.db.query.text" "attributes___db___query___text"
-    . T.replace "context.trace_id" "context___trace_id"
-    . T.replace "context.span_id" "context___span_id"
-    . T.replace "context.trace_state" "context___trace_state"
-    . T.replace "context.trace_flags" "context___trace_flags"
-    . T.replace "context.is_remote" "context___is_remote"
-    . T.replace "resource.service.name" "resource___service___name"
-    . T.replace "resource.service.version" "resource___service___version"
-    . T.replace "resource.service.instance.id" "resource___service___instance___id"
-    . T.replace "resource.service.namespace" "resource___service___namespace"
-    . T.replace "resource.telemetry.sdk.language" "resource___telemetry___sdk___language"
-    . T.replace "resource.telemetry.sdk.name" "resource___telemetry___sdk___name"
-    . T.replace "resource.telemetry.sdk.version" "resource___telemetry___sdk___version"

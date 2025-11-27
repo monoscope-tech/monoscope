@@ -10,17 +10,8 @@ module Models.Apis.Endpoints (
   HostEvents (..),
   bulkInsertEndpoints,
   dependenciesAndEventsCount,
-  endpointsByProjectId,
-  endpointUrlPath,
   endpointRequestStatsByProject,
-  endpointById,
-  endpointToUrlPath,
-  endpointByHash,
-  endpointsByHashes,
-  getProjectHosts,
-  insertEndpoints,
   countEndpointInbox,
-  getEndpointsByAnomalyTargetHash,
 )
 where
 
@@ -28,7 +19,7 @@ import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Time (UTCTime, ZonedTime)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (query, queryOne)
+import Database.PostgreSQL.Entity.DBT (query)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -43,7 +34,7 @@ import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Pkg.DeriveUtils (UUIDId (..), idToText)
+import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 
 
@@ -73,15 +64,6 @@ data Endpoint = Endpoint
   deriving anyclass (Default, FromRow, NFData, ToRow)
   deriving (FromField) via Aeson Endpoint
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Endpoint
-
-
--- | endpointToUrlPath builds a monoscope path link to the endpoint details page of that endpoint.
-endpointToUrlPath :: Endpoint -> Text
-endpointToUrlPath enp = endpointUrlPath enp.projectId enp.id
-
-
-endpointUrlPath :: Projects.ProjectId -> EndpointId -> Text
-endpointUrlPath pid eid = "/p/" <> pid.toText <> "/endpoints/" <> idToText eid
 
 
 bulkInsertEndpoints :: DB :> es => V.Vector Endpoint -> Eff es ()
@@ -157,35 +139,6 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
   |]
 
 
-endpointById :: EndpointId -> PgT.DBT IO (Maybe Endpoint)
-endpointById eid = queryOne q (Only eid)
-  where
-    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description from apis.endpoints where id=? |]
-
-
-endpointByHash :: Projects.ProjectId -> Text -> PgT.DBT IO (Maybe Endpoint)
-endpointByHash pid hash = queryOne q (pid, hash)
-  where
-    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description from apis.endpoints where project_id=? AND hash=? |]
-
-
-endpointsByHashes :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector Endpoint)
-endpointsByHashes pid hashes
-  | V.null hashes = pure V.empty
-  | otherwise = query q (pid, hashes)
-  where
-    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description from apis.endpoints where project_id=? AND hash=ANY(?)|]
-
-
-getEndpointsByAnomalyTargetHash :: Projects.ProjectId -> V.Vector Text -> PgT.DBT IO (V.Vector Host)
-getEndpointsByAnomalyTargetHash pid hashes
-  | V.null hashes = pure V.empty
-  | otherwise = query q (pid, prefixHashes)
-  where
-    q = [sql|select distinct host from apis.endpoints where project_id=? AND hash LIKE ANY(?)|]
-    prefixHashes = (<> "%") <$> hashes
-
-
 data SwEndpoint = SwEndpoint
   { urlPath :: Text
   , urlParams :: AE.Value -- Key value map of key to the type. Needs a bit more figuring out.
@@ -208,51 +161,6 @@ data HostEvents = HostEvents
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
-
-
-endpointsByProjectId :: Projects.ProjectId -> Text -> PgT.DBT IO (V.Vector SwEndpoint)
-endpointsByProjectId pid host = query q (pid, host)
-  where
-    q =
-      [sql|
-         SELECT url_path, url_params, method, host, hash, description
-         FROM apis.endpoints enp
-         INNER JOIN
-         apis.anomalies ann ON (ann.anomaly_type = 'endpoint' AND ann.target_hash = enp.hash)
-         WHERE enp.project_id = ?
-           AND enp.host = ?
-           AND ann.acknowleged_at IS NOT NULL
-       |]
-
-
-insertEndpoints :: [Endpoint] -> DBT IO Int64
-insertEndpoints endpoints = do
-  let q =
-        [sql|
-        INSERT INTO apis.endpoints
-        (project_id, url_path, url_params, method, host, hash, description)
-        VALUES (?,?,?,?,?,?,?) ON CONFLICT (hash) DO UPDATE SET
-         description = CASE WHEN EXCLUDED.description <> '' THEN EXCLUDED.description ELSE apis.endpoints.description END;
-      |]
-  let params = map getEndpointParams endpoints
-  executeMany q params
-  where
-    getEndpointParams :: Endpoint -> (Projects.ProjectId, Text, AE.Value, Text, Text, Text, Text)
-    getEndpointParams endpoint =
-      ( endpoint.projectId
-      , endpoint.urlPath
-      , endpoint.urlParams
-      , endpoint.method
-      , endpoint.host
-      , endpoint.hash
-      , endpoint.description
-      )
-
-
-getProjectHosts :: Projects.ProjectId -> PgT.DBT IO (V.Vector Host)
-getProjectHosts pid = query q (Only pid)
-  where
-    q = [sql| SELECT DISTINCT host FROM apis.endpoints where  project_id = ? AND outgoing=false AND host!= '' |]
 
 
 dependenciesAndEventsCount :: Projects.ProjectId -> Text -> Text -> Int -> Text -> DBT IO (V.Vector HostEvents)

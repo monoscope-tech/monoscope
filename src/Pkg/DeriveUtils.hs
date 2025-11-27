@@ -6,7 +6,6 @@ module Pkg.DeriveUtils (
   idFromText,
   unAesonText,
   unAesonTextMaybe,
-  executeManyV,
 ) where
 
 import Data.Aeson qualified as AE
@@ -14,11 +13,10 @@ import Data.Default (Default)
 import Data.Default.Instances ()
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (FromRow, Query, ResultError (ConversionFailed), ToRow)
+import Database.PostgreSQL.Simple (FromRow, ResultError (ConversionFailed), ToRow)
 import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
-import Database.PostgreSQL.Transact (DBT, executeMany)
 import GHC.Records (HasField (getField))
 import GHC.TypeLits (Symbol)
 import Language.Haskell.TH.Syntax qualified as THS
@@ -110,8 +108,3 @@ idToText = UUID.toText . unUUIDId
 -- | Parse Text to a UUID-based ID
 idFromText :: Text -> Maybe (UUIDId name)
 idFromText = fmap UUIDId . UUID.fromText
-
-
--- | Vector-friendly executeMany helper
-executeManyV :: ToRow q => Query -> V.Vector q -> DBT IO Int64
-executeManyV q = executeMany q . V.toList

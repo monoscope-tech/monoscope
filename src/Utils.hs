@@ -6,12 +6,8 @@ module Utils (
   eitherStrToText,
   onpointerdown_,
   jsonValueToHtmlTree,
-  userIsProjectMember,
-  GetOrRedirect,
   freeTierDailyMaxEvents,
   JSONHttpApiData (..),
-  redirect,
-  lookupVecByKey,
   parseTime,
   DBField (..),
   faSprite_,
@@ -22,7 +18,6 @@ module Utils (
   lookupValueText,
   formatUTC,
   insertIfNotExist,
-  parseUTC,
   lookupVecTextByKey,
   deleteParam,
   getSeverityColor,
@@ -34,8 +29,6 @@ module Utils (
   checkFreeTierExceeded,
   isDemoAndNotSudo,
   escapedQueryPartial,
-  getSpanStatusColor,
-  getKindColor,
   displayTimestamp,
   utcTimeToNanoseconds,
   getDurationNSMS,
@@ -45,9 +38,7 @@ module Utils (
   getGrpcStatusColor,
   nestedJsonFromDotNotation,
   prettyPrintCount,
-  prettyPrintDuration,
   extractMessageFromLog,
-  getPercentileColors,
   -- Fill color helpers
   statusFillColor,
   statusFillColorText,
@@ -83,9 +74,7 @@ import Lucid
 import Lucid.Hyperscript (__)
 import Lucid.Svg qualified as Svg
 import Models.Apis.RequestDumps qualified as RequestDumps
-import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Session
 import NeatInterpolation (text)
 import Network.HTTP.Types (urlEncode)
 import Network.URI (escapeURIString, isUnescapedInURI)
@@ -111,15 +100,8 @@ eitherStrToText (Left str) = Left $ toText str
 eitherStrToText (Right a) = Right a
 
 
-type GetOrRedirect = '[WithStatus 200 (Html ()), WithStatus 302 (Headers '[Header "Location" Text] NoContent)]
-
-
 escapedQueryPartial :: Text -> Text
 escapedQueryPartial x = toText $ escapeURIString isUnescapedInURI $ toString x
-
-
-redirect :: Text -> Headers '[Header "Location" Text] NoContent
-redirect destination = addHeader destination NoContent
 
 
 data DBField = forall a. (Show a, ToField a) => MkDBField a
@@ -151,15 +133,6 @@ deleteParam key url = if needle == "" then url else T.replace needle "" url
   where
     needle = url =~ reg :: Text
     reg = "&" <> key <> "(=[^&]*)?|^" <> key <> "(=[^&]*)?&?" :: Text
-
-
-userIsProjectMember :: Session.PersistentSession -> Projects.ProjectId -> DBT IO Bool
-userIsProjectMember sess pid = do
-  if sess.isSudo
-    then pure True
-    else do
-      user <- ProjectMembers.selectProjectActiveMember pid sess.userId
-      case user of Nothing -> pure False; Just _ -> pure True
 
 
 getGrpcStatusColor :: Int -> Text
@@ -357,23 +330,6 @@ jsonValueToHtmlTree val pathM = do
       span_ [class_ "pl-5 closing-token"] $ toHtml closing
 
 
-getSpanStatusColor :: Text -> Text
-getSpanStatusColor "ERROR" = "cbadge-sm badge-error"
-getSpanStatusColor "OK" = "cbadge-sm badge-success"
-getSpanStatusColor _ = "cbadge-sm badge-neutral"
-
-
--- data SpanKind = SKInternal | SKServer | SKClient | SKProducer | SKConsumer | SKUnspecified
-
-getKindColor :: Text -> Text
-getKindColor "INTERNAL" = "badge-info"
-getKindColor "SERVER" = "badge-success"
-getKindColor "CLIENT" = "badge-warning"
-getKindColor "PRODUCER" = "badge-success"
-getKindColor "CONSUMER" = "badge-warning"
-getKindColor _ = "badge-outline"
-
-
 unwrapJsonPrimValue :: Bool -> AE.Value -> Text
 unwrapJsonPrimValue _ (AE.Bool True) = "true"
 unwrapJsonPrimValue _ (AE.Bool False) = "false"
@@ -415,10 +371,6 @@ lookupVecBoolByKey vec colIdxMap key =
 
 lookupVecIntByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Int
 lookupVecIntByKey vec colIdxMap key = (HM.lookup key colIdxMap >>= Just . lookupVecInt vec) & fromMaybe 0
-
-
-lookupVecByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe AE.Value
-lookupVecByKey vec colIdxMap key = HM.lookup key colIdxMap >>= (vec V.!?)
 
 
 lookupValueText :: AE.Value -> Text -> Maybe Text
@@ -469,10 +421,6 @@ displayTimestamp inputDateString =
 formatUTC :: UTCTime -> Text
 formatUTC utcTime =
   toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" utcTime
-
-
-parseUTC :: Text -> Maybe UTCTime
-parseUTC utcTime = iso8601ParseM (toString utcTime)
 
 
 freeTierLimitExceededBanner :: Text -> Html ()
@@ -526,54 +474,6 @@ getServiceColors services = go services HM.empty []
               colorIdx = sum (map ord $ toString $ toXXHash service) `mod` length availableColors
               selectedColor = availableColors L.!! colorIdx
            in go (V.tail svcs) (HM.insert service selectedColor assignedColors) (selectedColor : usedColors)
-
-
--- | Get colors for percentile metrics in latency distribution charts
--- Returns a HashMap mapping percentile labels (p50, p75, p90, p95, p99) to tailwind color classes
--- Colors progress from cool (green) for low percentiles to warm (red) for high percentiles
-getPercentileColors :: [Text] -> HashMap Text Text
-getPercentileColors percentiles = HM.fromList $ map assignColor percentiles
-  where
-    -- Define a color mapping for common percentiles
-    -- Using a progression from cool to warm colors to indicate severity
-    percentileColorMap :: HashMap Text Text
-    percentileColorMap =
-      HM.fromList
-        [ ("p50", "bg-green-400") -- Median - good performance
-        , ("p75", "bg-cyan-400") -- 75th percentile - acceptable
-        , ("p90", "bg-yellow-400") -- 90th percentile - warning
-        , ("p95", "bg-orange-400") -- 95th percentile - concerning
-        , ("p99", "bg-red-400") -- 99th percentile - critical
-        , ("p100", "bg-red-600") -- Maximum - most critical
-        -- Alternative naming conventions
-        , ("median", "bg-green-400")
-        , ("q1", "bg-emerald-400") -- First quartile
-        , ("q3", "bg-amber-400") -- Third quartile
-        , ("max", "bg-red-600")
-        , ("min", "bg-blue-400")
-        ]
-
-    -- Fallback colors for non-standard percentiles
-    fallbackColors :: V.Vector Text
-    fallbackColors =
-      V.fromList
-        [ "bg-indigo-400"
-        , "bg-purple-400"
-        , "bg-pink-400"
-        , "bg-teal-400"
-        , "bg-lime-400"
-        ]
-
-    -- Assign color to a percentile label
-    assignColor :: Text -> (Text, Text)
-    assignColor percentile =
-      case HM.lookup (T.toLower percentile) percentileColorMap of
-        Just color -> (percentile, color)
-        Nothing ->
-          -- For unknown percentiles, use a deterministic fallback color
-          let colorIdx = sum (map ord $ toString percentile) `mod` V.length fallbackColors
-              fallbackColor = fallbackColors V.! colorIdx
-           in (percentile, fallbackColor)
 
 
 toXXHash :: Text -> Text
@@ -681,17 +581,6 @@ prettyPrintCount n
   | n >= 1_000_000 = T.show (n `div` 1_000_000) <> "." <> T.show ((n `mod` 1_000_000) `div` 100_000) <> "M"
   | n >= 1_000 = T.show (n `div` 1_000) <> "." <> T.show ((n `mod` 1_000) `div` 100) <> "K"
   | otherwise = T.show n
-
-
--- Pretty print duration from nanoseconds to human-readable format
-prettyPrintDuration :: Double -> Text
-prettyPrintDuration ns
-  | ns >= 3_600_000_000_000 = T.pack (printf "%.1fh" (ns / 3_600_000_000_000)) -- hours
-  | ns >= 60_000_000_000 = T.pack (printf "%.1fm" (ns / 60_000_000_000)) -- minutes
-  | ns >= 1_000_000_000 = T.pack (printf "%.1fs" (ns / 1_000_000_000)) -- seconds
-  | ns >= 1_000_000 = T.pack (printf "%.1fms" (ns / 1_000_000)) -- milliseconds
-  | ns >= 1_000 = T.pack (printf "%.1fμs" (ns / 1_000)) -- microseconds
-  | otherwise = T.pack (printf "%.0fns" ns) -- nanoseconds
 
 
 messageKeys :: [T.Text]

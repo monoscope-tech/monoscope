@@ -1,7 +1,5 @@
 module Models.Apis.Anomalies (
   AnomalyVM (..),
-  errorByHash,
-  insertIssues,
   AnomalyActions (..),
   Issue (..),
   IssueL (..),
@@ -18,33 +16,15 @@ module Models.Apis.Anomalies (
   ChangeType (..),
   FieldChange (..),
   FieldChangeKind (..),
-  selectIssueByHash,
-  bulkInsertErrors,
   insertErrorQueryAndParams,
-  selectIssues,
   parseAnomalyTypes,
-  convertAnomalyToIssue,
   detectService,
-  getReportAnomalies,
   parseAnomalyActions,
   getAnomaliesVM,
-  anomalyIdText,
   errorsByHashes,
   countAnomalies,
-  parseAnomalyRawTypes,
   acknowlegeCascade,
   acknowledgeAnomalies,
-  getShapeParentAnomaliesVM,
-  getFormatParentAnomalyVM,
-  findOpenIssueForEndpoint,
-  updateIssueWithNewAnomaly,
-  -- mergeIssues, -- DEPRECATED
-  -- getEndpointFromIssueData, -- DEPRECATED
-  -- getShapeChangesFromIssueData, -- DEPRECATED
-  -- getFieldFromIssueData, -- DEPRECATED
-  -- getErrorDataFromIssueData, -- DEPRECATED
-  selectIssueById,
-  -- updateIssueEnhancement, -- DEPRECATED
 )
 where
 
@@ -56,8 +36,8 @@ import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (execute, query, queryOne)
-import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
+import Database.PostgreSQL.Entity.DBT (execute, query)
+import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -65,10 +45,8 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Time (parseUTCTime)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact (DBT, executeMany)
+import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
-import Effectful
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields (
   FieldCategoryEnum,
@@ -81,7 +59,7 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
-import Pkg.DeriveUtils (UUIDId (..), idToText)
+import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (id, many, some)
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
@@ -92,10 +70,6 @@ import Utils
 
 
 type AnomalyId = UUIDId "anomaly"
-
-
-anomalyIdText :: AnomalyId -> Text
-anomalyIdText = idToText
 
 
 data AnomalyTypes
@@ -137,15 +111,6 @@ parseAnomalyTypes "shape" = Just ATShape
 parseAnomalyTypes "format" = Just ATFormat
 parseAnomalyTypes "runtime_exception" = Just ATRuntimeException
 parseAnomalyTypes _ = Nothing
-
-
-parseAnomalyRawTypes :: Text -> AnomalyTypes
-parseAnomalyRawTypes "ATField" = ATField
-parseAnomalyRawTypes "ATEndpoint" = ATEndpoint
-parseAnomalyRawTypes "ATShape" = ATShape
-parseAnomalyRawTypes "ATFormat" = ATFormat
-parseAnomalyRawTypes "ATRuntimeException" = ATRuntimeException
-parseAnomalyRawTypes _ = ATUnknown
 
 
 instance FromField AnomalyTypes where
@@ -288,123 +253,6 @@ where
     OR NOT (an.anomaly_type = ANY('{"endpoint","shape","field","format"}'::apis.anomaly_type[]))
   ) AND an.project_id=? AND an.target_hash=ANY(?)
       |]
-
-
-getShapeParentAnomaliesVM :: Projects.ProjectId -> V.Vector Text -> DBT IO (V.Vector Text)
-getShapeParentAnomaliesVM pid hashes
-  | V.null hashes = pure V.empty
-  | otherwise = query q (pid, hashes)
-  where
-    q =
-      [sql|SELECT target_hash
-           FROM apis.issues iss JOIN apis.anomalies aan ON iss.id = aan.id
-           WHERE iss.project_id = ? AND ANY(?) LIKE iss.target_hash ||'%' AND iss.anomaly_type='endpoint' AND aan.acknowleged_at IS NULL
-      |]
-
-
-getFormatParentAnomalyVM :: Projects.ProjectId -> Text -> DBT IO Int
-getFormatParentAnomalyVM pid hash = do
-  result <- query q (pid, hash)
-  case result of
-    [Only countt] -> return countt
-    v -> return $ length v
-  where
-    q =
-      [sql|
-              SELECT COUNT(*)
-              FROM apis.issues iss
-              JOIN apis.anomalies aan ON iss.id = aan.id
-              WHERE iss.project_id = ? AND ? LIKE iss.target_hash ||'%' AND iss.anomaly_type != 'format' AND aan.acknowleged_at IS NULL
-      |]
-
-
-selectIssues :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int -> Int -> DBT IO (V.Vector IssueL)
-selectIssues pid endpointM isAcknowleged isArchived sortM limitM skipM = query (Query $ encodeUtf8 q) (MkDBField pid : paramList)
-  where
-    boolToNullSubQ a = if a then " not " else ""
-    condlist =
-      catMaybes
-        [ (\a -> " acknowleged_at is" <> a <> " null ") . boolToNullSubQ <$> isAcknowleged
-        , (\a -> " archived_at is" <> a <> " null ") . boolToNullSubQ <$> isArchived
-        , "endpoint_id=?" <$ endpointM
-        ]
-    cond
-      | null condlist = mempty
-      | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
-    paramList = mapMaybe (MkDBField <$>) [endpointM]
-    orderBy = case sortM of
-      Nothing -> "created_at desc"
-      Just "first_seen" -> "created_at desc"
-      Just "events" -> "events desc"
-      Just "last_seen" -> "last_seen desc"
-      _ -> "created_at desc"
-
-    limit = maybe "" (\x -> "limit " <> show x) limitM
-    skip = "offset " <> show skipM <> " "
-
-    -- Exclude endpoints from anomaly list
-    q =
-      [text|
-SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
-    endpoint_id, acknowledged_by, archived_at,
-    CASE
-      WHEN anomaly_type='shape' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND shape_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
-      -- Format requires a CONTAINS query which is not covered by the regular indexes. GIN index can't have created_at compound indexes, so its a slow query
-      -- WHEN anomaly_type='format' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND iss.target_hash=ANY(format_hashes) AND created_at > current_timestamp - interval '14d' )
-      WHEN anomaly_type='runtime_exception' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND errors @> ('[{"hash": "' || iss.target_hash || '"}]')::jsonb AND created_at > current_timestamp - interval '14d')
-      ELSE (0, NOW()::TEXT)
-    END as req_count,
-    title, service, critical, breaking_changes, incremental_changes,
-    affected_requests, affected_clients, estimated_requests, migration_complexity, recommended_action,
-    request_payloads, response_payloads, COALESCE(anomaly_hashes, '{}'), COALESCE(endpoint_hash, '')
-    FROM apis.issues iss WHERE project_id = ? $cond
-    AND anomaly_type!='endpoint' 
-    ORDER BY $orderBy $skip $limit |]
-
-
-selectIssueByHash :: Projects.ProjectId -> Text -> DBT IO (Maybe IssueL)
-selectIssueByHash pid targetHash = queryOne q (pid, targetHash)
-  where
-    q =
-      [sql|
-SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
-    endpoint_id, acknowleged_by, archived_at,
-    CASE
-      WHEN anomaly_type='endpoint' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND endpoint_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
-      WHEN anomaly_type='shape' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND shape_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
-      WHEN anomaly_type='format' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND iss.target_hash=ANY(format_hashes) AND created_at > current_timestamp - interval '14d' )
-      WHEN anomaly_type='runtime_exception' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND errors @> ('[{"hash": "' || iss.target_hash || '"}]')::jsonb AND created_at > current_timestamp - interval '14d')
-      ELSE (0::BIGINT, NOW()::TEXT)
-    END as req_count,
-    title, service, critical, breaking_changes, incremental_changes,
-    affected_requests, affected_clients, estimated_requests, migration_complexity, recommended_action,
-    request_payloads, response_payloads, COALESCE(anomaly_hashes, '{}'), COALESCE(endpoint_hash, '')
-    FROM apis.issues iss WHERE project_id = ? and target_hash=? LIMIT 1
-    |]
-
-
-getReportAnomalies :: Projects.ProjectId -> Text -> DBT IO (V.Vector IssueL)
-getReportAnomalies pid report_type = query (Query $ encodeUtf8 q) pid
-  where
-    report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
-    q =
-      [text|
-  SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
-    endpoint_id, acknowleged_by, archived_at,
-    CASE
-      WHEN anomaly_type='endpoint' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND endpoint_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
-      WHEN anomaly_type='shape' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND shape_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
-      -- Format requires a CONTAINS query which is not covered by the regular indexes. GIN index can't have created_at compound indexes, so its a slow query
-      -- WHEN anomaly_type='format' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND iss.target_hash=ANY(format_hashes) AND created_at > current_timestamp - interval '14d' )
-      WHEN anomaly_type='runtime_exception' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND errors @> ('[{"hash": "' || iss.target_hash || '"}]')::jsonb AND created_at > current_timestamp - interval '14d')
-      ELSE (0::BIGINT, NOW()::TEXT)
-    END as req_count,
-    title, service, critical, breaking_changes, incremental_changes,
-    affected_requests, affected_clients, estimated_requests, migration_complexity, recommended_action,
-    request_payloads, response_payloads, COALESCE(anomaly_hashes, '{}'), COALESCE(endpoint_hash, '')
-    FROM apis.issues iss WHERE project_id = ?  and created_at > current_timestamp - interval $report_interval
-    ORDER BY req_count desc limit 20
-        |]
 
 
 countAnomalies :: Projects.ProjectId -> Text -> DBT IO Int
@@ -701,74 +549,6 @@ data FieldChangeKind = Modified | Added | Removed
   deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
 
 
--- Helper function to create IssuesData based on AnomalyType
-createIssueData :: Maybe Text -> AnomalyVM -> Maybe IssuesData
-createIssueData hostM anomaly = case anomaly.anomalyType of
-  ATShape ->
-    IDNewShapeIssue
-      <$> ( NewShapeIssue
-              <$> anomaly.shapeId
-              <*> anomaly.endpointId
-              <*> anomaly.endpointMethod
-              <*> anomaly.endpointUrlPath
-              <*> pure (fromMaybe "" hostM)
-              <*> pure anomaly.shapeNewUniqueFields
-              <*> pure anomaly.shapeDeletedFields
-              <*> pure anomaly.shapeUpdatedFieldFormats
-          )
-  ATField ->
-    IDNewFieldIssue
-      <$> ( NewFieldIssue
-              <$> anomaly.fieldId
-              <*> anomaly.endpointId
-              <*> anomaly.endpointMethod
-              <*> anomaly.endpointUrlPath
-              <*> pure (fromMaybe "" hostM)
-              <*> anomaly.fieldKey
-              <*> anomaly.fieldKeyPath
-              <*> anomaly.fieldCategory
-              <*> anomaly.fieldFormat
-          )
-  ATFormat ->
-    IDNewFormatIssue
-      <$> ( NewFormatIssue
-              <$> anomaly.formatId
-              <*> anomaly.endpointId
-              <*> anomaly.endpointMethod
-              <*> anomaly.endpointUrlPath
-              <*> pure (fromMaybe "" hostM)
-              <*> anomaly.fieldKeyPath
-              <*> anomaly.formatType
-              <*> anomaly.fieldCategory
-              <*> pure anomaly.formatExamples
-          )
-  ATEndpoint ->
-    IDNewEndpointIssue
-      <$> ( NewEndpointIssue
-              <$> anomaly.endpointId
-              <*> anomaly.endpointMethod
-              <*> anomaly.endpointUrlPath
-              <*> pure (fromMaybe "" hostM)
-          )
-  _ -> Nothing
-
-
--- Helper function to generate issue title based on anomaly type
-generateIssueTitle :: AnomalyVM -> Text
-generateIssueTitle anomaly = case anomaly.anomalyType of
-  ATShape -> case (V.length anomaly.shapeNewUniqueFields, V.length anomaly.shapeDeletedFields, V.length anomaly.shapeUpdatedFieldFormats) of
-    (n, 0, 0) -> "New fields detected in " <> fromMaybe "endpoint" anomaly.endpointUrlPath
-    (0, d, 0) -> "Fields removed from " <> fromMaybe "endpoint" anomaly.endpointUrlPath
-    (0, 0, u) -> "Field formats updated in " <> fromMaybe "endpoint" anomaly.endpointUrlPath
-    _ -> "Schema changes detected in " <> fromMaybe "endpoint" anomaly.endpointUrlPath
-  ATField -> "New field detected: " <> fromMaybe "" anomaly.fieldKey
-  ATFormat -> "Field format changed: " <> fromMaybe "" anomaly.fieldKeyPath
-  ATEndpoint -> "New endpoint detected: " <> fromMaybe "" anomaly.endpointMethod <> " " <> fromMaybe "" anomaly.endpointUrlPath
-  ATRuntimeException -> "Runtime exception detected"
-  _ -> "Unknown anomaly detected"
-
-
--- Helper function to detect service from endpoint path or host
 detectService :: Maybe Text -> Maybe Text -> Text
 detectService hostM endpointPathM =
   let pathSegments = maybe [] (T.splitOn "/" . T.dropWhile (== '/')) endpointPathM
@@ -780,187 +560,6 @@ detectService hostM endpointPathM =
    in if T.null serviceFromPath
         then fromMaybe "api-service" hostM
         else serviceFromPath
-
-
--- Helper function to assess if changes are critical
-assessCriticality :: AnomalyVM -> Bool
-assessCriticality anomaly = case anomaly.anomalyType of
-  ATShape -> V.length anomaly.shapeDeletedFields > 0 || V.length anomaly.shapeUpdatedFieldFormats > 0
-  ATFormat -> True -- Format changes are often breaking
-  ATEndpoint -> False -- New endpoints are not critical
-  ATRuntimeException -> True -- Runtime exceptions are critical
-  _ -> False
-
-
--- Helper function to count breaking changes
-countBreakingChanges :: AnomalyVM -> Int
-countBreakingChanges anomaly = case anomaly.anomalyType of
-  ATShape -> V.length anomaly.shapeDeletedFields + V.length anomaly.shapeUpdatedFieldFormats
-  ATFormat -> 1
-  _ -> 0
-
-
--- Helper function to count incremental changes
-countIncrementalChanges :: AnomalyVM -> Int
-countIncrementalChanges anomaly = case anomaly.anomalyType of
-  ATShape -> V.length anomaly.shapeNewUniqueFields
-  ATField -> 1
-  ATEndpoint -> 1
-  _ -> 0
-
-
--- Helper function to assess migration complexity
-assessMigrationComplexity :: AnomalyVM -> Text
-assessMigrationComplexity anomaly =
-  let breakingCount = countBreakingChanges anomaly
-   in if breakingCount == 0
-        then "low"
-        else
-          if breakingCount <= 2
-            then "medium"
-            else "high"
-
-
--- Helper function to generate recommended action
-generateRecommendedAction :: AnomalyVM -> Text
-generateRecommendedAction anomaly = case anomaly.anomalyType of
-  ATShape ->
-    let hasBreaking = V.length anomaly.shapeDeletedFields > 0 || V.length anomaly.shapeUpdatedFieldFormats > 0
-     in if hasBreaking
-          then "Review breaking changes and implement backward compatibility or schedule client migration"
-          else "Update documentation and notify clients of new optional fields"
-  ATFormat -> "Validate data format compatibility and update validation rules"
-  ATEndpoint -> "Document new endpoint and update API specifications"
-  ATRuntimeException -> "Investigate error cause and implement fix"
-  _ -> "Review changes and assess impact"
-
-
--- Helper function to generate example payloads (placeholder for now)
-generateExamplePayloads :: AnomalyVM -> [PayloadChange]
-generateExamplePayloads anomaly = case anomaly.anomalyType of
-  ATShape ->
-    let changes = generateFieldChanges anomaly
-        hasBreaking = countBreakingChanges anomaly > 0
-        description = generatePayloadChangeDescription anomaly
-     in if not (null changes)
-          then
-            [ PayloadChange
-                { method = anomaly.endpointMethod
-                , statusCode = Nothing
-                , statusText = Nothing
-                , contentType = "application/json"
-                , changeType = if hasBreaking then Breaking else Incremental
-                , description = description
-                , changes = changes
-                , exampleBefore = "{}" -- TODO: Generate from actual data
-                , exampleAfter = "{}" -- TODO: Generate from actual data
-                }
-            ]
-          else []
-  _ -> []
-
-
--- Helper function to generate descriptive text for payload changes
-generatePayloadChangeDescription :: AnomalyVM -> Text
-generatePayloadChangeDescription anomaly =
-  let newCount = V.length anomaly.shapeNewUniqueFields
-      deletedCount = V.length anomaly.shapeDeletedFields
-      updatedCount = V.length anomaly.shapeUpdatedFieldFormats
-      parts =
-        catMaybes
-          [ if newCount > 0 then Just (show newCount <> " new field" <> if newCount > 1 then "s" else "") else Nothing
-          , if deletedCount > 0 then Just (show deletedCount <> " removed field" <> if deletedCount > 1 then "s" else "") else Nothing
-          , if updatedCount > 0 then Just (show updatedCount <> " modified field" <> if updatedCount > 1 then "s" else "") else Nothing
-          ]
-   in if null parts
-        then "No changes detected"
-        else "Schema updated: " <> T.intercalate ", " parts
-
-
--- Helper function to generate field changes from anomaly
-generateFieldChanges :: AnomalyVM -> [FieldChange]
-generateFieldChanges anomaly =
-  let newFields =
-        V.toList anomaly.shapeNewUniqueFields <&> \fieldName ->
-          FieldChange
-            { fieldName = fieldName
-            , changeKind = Added
-            , breaking = False
-            , path = fieldName
-            , changeDescription = "New field added"
-            , oldType = Nothing
-            , newType = Just "unknown"
-            , oldValue = Nothing
-            , newValue = Nothing
-            }
-      deletedFields =
-        V.toList anomaly.shapeDeletedFields <&> \fieldName ->
-          FieldChange
-            { fieldName = fieldName
-            , changeKind = Removed
-            , breaking = True
-            , path = fieldName
-            , changeDescription = "Field removed"
-            , oldType = Just "unknown"
-            , newType = Nothing
-            , oldValue = Nothing
-            , newValue = Nothing
-            }
-      updatedFields =
-        V.toList anomaly.shapeUpdatedFieldFormats <&> \fieldName ->
-          FieldChange
-            { fieldName = fieldName
-            , changeKind = Modified
-            , breaking = True
-            , path = fieldName
-            , changeDescription = "Field format changed"
-            , oldType = Just "unknown"
-            , newType = Just "unknown"
-            , oldValue = Nothing
-            , newValue = Nothing
-            }
-   in newFields ++ deletedFields ++ updatedFields
-
-
--- Main conversion function
-convertAnomalyToIssue :: Maybe Text -> AnomalyVM -> Maybe Issue
-convertAnomalyToIssue hostM anomaly = do
-  issueData <- createIssueData hostM anomaly
-  let endpointHashValue = case anomaly.anomalyType of
-        ATShape -> T.take 8 anomaly.targetHash
-        ATFormat -> T.take 8 anomaly.targetHash
-        ATEndpoint -> anomaly.targetHash
-        _ -> ""
-  return
-    Issue
-      { id = anomaly.id
-      , createdAt = anomaly.createdAt
-      , updatedAt = anomaly.updatedAt
-      , projectId = anomaly.projectId
-      , acknowlegedAt = anomaly.acknowlegedAt
-      , anomalyType = anomaly.anomalyType
-      , targetHash = anomaly.targetHash
-      , issueData = issueData
-      , endpointId = anomaly.endpointId
-      , acknowlegedBy = anomaly.acknowlegedBy
-      , archivedAt = anomaly.archivedAt
-      , -- Enhanced fields
-        title = generateIssueTitle anomaly
-      , service = detectService hostM anomaly.endpointUrlPath
-      , critical = assessCriticality anomaly
-      , breakingChanges = countBreakingChanges anomaly
-      , incrementalChanges = countIncrementalChanges anomaly
-      , affectedRequests = 0 -- TODO: Calculate from actual request data
-      , affectedClients = 0 -- TODO: Calculate from actual client data
-      , estimatedRequests = "N/A" -- TODO: Calculate from metrics
-      , migrationComplexity = assessMigrationComplexity anomaly
-      , recommendedAction = generateRecommendedAction anomaly
-      , requestPayloads = Aeson $ generateExamplePayloads anomaly
-      , responsePayloads = Aeson [] -- TODO: Generate response payloads
-      -- New fields for anomaly grouping
-      , anomalyHashes = V.singleton anomaly.targetHash
-      , endpointHash = endpointHashValue
-      }
 
 
 newtype ErrorId = ErrorId {unErrorId :: UUID.UUID}
@@ -983,10 +582,6 @@ data ATError = ATError
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "errors", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ATError)
   deriving (FromField, ToField) via Aeson ATError
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
-
-
-errorByHash :: Text -> DBT IO (Maybe ATError)
-errorByHash hash = selectOneByField [field| hash |] (Only hash)
 
 
 errorsByHashes :: Projects.ProjectId -> V.Vector Text -> DBT IO (V.Vector ATError)
@@ -1015,153 +610,3 @@ insertErrorQueryAndParams pid err = (q, params)
       ]
 
 
-bulkInsertErrors :: DB :> es => V.Vector RequestDumps.ATError -> Eff es ()
-bulkInsertErrors errors = void $ dbtToEff $ executeMany q (V.toList rowsToInsert)
-  where
-    q =
-      [sql| INSERT into apis.errors  (project_id,created_at, hash, error_type, message, error_data) 
-            VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING; |]
-    rowsToInsert =
-      errors <&> \err ->
-        ( Unsafe.fromJust err.projectId
-        , err.when
-        , Unsafe.fromJust err.hash -- Nothing state should never happen
-        , err.errorType
-        , err.message
-        , err
-        )
-
-
-insertIssues :: V.Vector Issue -> DBT IO Int64
-insertIssues issues = executeMany q (V.toList issues)
-  where
-    q =
-      [sql|insert into apis.issues (id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash,
-                      issue_data, endpoint_id, acknowledged_by, archived_at, title, service, critical, breaking_changes,
-                      incremental_changes, affected_requests, affected_clients, estimated_requests, migration_complexity,
-                      recommended_action, request_payloads, response_payloads, anomaly_hashes, endpoint_hash) 
-                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                      ON CONFLICT (project_id, target_hash) DO NOTHING;
-                      |]
-
-
--- Find an existing open issue for an endpoint
-findOpenIssueForEndpoint :: Projects.ProjectId -> Text -> DBT IO (Maybe Issue)
-findOpenIssueForEndpoint pid endpointHash = queryOne q (pid, endpointHash)
-  where
-    q =
-      [sql|
-      SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
-        endpoint_id, acknowledged_by, archived_at, title, service, critical, breaking_changes, incremental_changes,
-        affected_requests, affected_clients, estimated_requests, migration_complexity, recommended_action,
-        request_payloads, response_payloads, COALESCE(anomaly_hashes, '{}'), COALESCE(endpoint_hash, '')
-      FROM apis.issues 
-      WHERE project_id = ? 
-        AND endpoint_hash = ? 
-        AND acknowleged_at IS NULL 
-        AND archived_at IS NULL
-      LIMIT 1
-    |]
-
-
--- Update existing issue with new anomaly data
-updateIssueWithNewAnomaly :: Issue -> V.Vector Text -> [PayloadChange] -> [PayloadChange] -> DBT IO Int64
-updateIssueWithNewAnomaly existingIssue newAnomalyHashes newRequestPayloads newResponsePayloads =
-  execute q params
-  where
-    q =
-      [sql|
-      UPDATE apis.issues 
-      SET 
-        anomaly_hashes = array_cat(anomaly_hashes, ?),
-        breaking_changes = breaking_changes + ?,
-        incremental_changes = incremental_changes + ?,
-        request_payloads = COALESCE(request_payloads, '[]'::jsonb) || ?::jsonb,
-        response_payloads = COALESCE(response_payloads, '[]'::jsonb) || ?::jsonb,
-        updated_at = NOW()
-      WHERE id = ?
-    |]
-    newBreaking = length $ filter (\p -> p.changeType == Breaking) (newRequestPayloads ++ newResponsePayloads)
-    newIncremental = length $ filter (\p -> p.changeType == Incremental || p.changeType == Safe) (newRequestPayloads ++ newResponsePayloads)
-    params =
-      ( newAnomalyHashes
-      , newBreaking
-      , newIncremental
-      , Aeson newRequestPayloads
-      , Aeson newResponsePayloads
-      , existingIssue.id
-      )
-
-
--- Merge multiple issues into one (for grouping logic)
--- DEPRECATED: These functions are for the old Issue model
--- mergeIssues :: V.Vector Issue -> Issue
--- mergeIssues issues = case V.uncons issues of
---   Nothing -> error "Cannot merge empty issues vector"
---   Just (firstIssue, rest) -> V.foldl' mergeTwo firstIssue rest
---   where
---     mergeTwo :: Issue -> Issue -> Issue
---     mergeTwo base new = base
---       { anomalyHashes = base.anomalyHashes <> new.anomalyHashes
---       , breakingChanges = base.breakingChanges + new.breakingChanges
---       , incrementalChanges = base.incrementalChanges + new.incrementalChanges
---       , affectedRequests = base.affectedRequests + new.affectedRequests
---       , affectedClients = max base.affectedClients new.affectedClients
---       , requestPayloads = mergePayloadLists base.requestPayloads new.requestPayloads
---       , responsePayloads = mergePayloadLists base.responsePayloads new.responsePayloads
---       , updatedAt = if zonedTimeToUTC base.updatedAt > zonedTimeToUTC new.updatedAt then base.updatedAt else new.updatedAt
---       , critical = base.critical || new.critical
---       }
---
---     mergePayloadLists :: Aeson [PayloadChange] -> Aeson [PayloadChange] -> Aeson [PayloadChange]
---     mergePayloadLists (Aeson pl1) (Aeson pl2) = Aeson (pl1 ++ pl2)
-
--- DEPRECATED: Helper functions for extracting data from IssuesData (old model)
--- getEndpointFromIssueData :: IssuesData -> Maybe Text
--- getEndpointFromIssueData (IDNewEndpointIssue issue) = Just $ issue.endpointMethod <> " " <> issue.endpointUrlPath
--- getEndpointFromIssueData _ = Nothing
-
--- getShapeChangesFromIssueData :: IssuesData -> ([Text], [Text], [Text])
--- getShapeChangesFromIssueData (IDNewShapeIssue issue) =
---   (V.toList issue.newUniqueFields, V.toList issue.deletedFields, V.toList issue.updatedFieldFormats)
--- getShapeChangesFromIssueData _ = ([], [], [])
-
--- getFieldFromIssueData :: IssuesData -> Maybe Text
--- getFieldFromIssueData (IDNewFieldIssue issue) = Just issue.key
--- getFieldFromIssueData (IDNewFormatIssue issue) = Just issue.fieldKeyPath
--- getFieldFromIssueData _ = Nothing
-
--- getErrorDataFromIssueData :: IssuesData -> Maybe RequestDumps.ATError
--- getErrorDataFromIssueData (IDNewRuntimeExceptionIssue err) = Just err
--- getErrorDataFromIssueData _ = Nothing
-
--- Select issue by ID
-selectIssueById :: AnomalyId -> DBT IO (Maybe Issue)
-selectIssueById aid = queryOne q (Only aid)
-  where
-    q =
-      [sql|
-      SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data,
-        endpoint_id, acknowledged_by, archived_at, title, service, critical, breaking_changes, incremental_changes,
-        affected_requests, affected_clients, estimated_requests, migration_complexity, recommended_action,
-        request_payloads, response_payloads, COALESCE(anomaly_hashes, '{}'), COALESCE(endpoint_hash, '')
-      FROM apis.issues 
-      WHERE id = ?
-      LIMIT 1
-    |]
-
--- DEPRECATED: Update issue with LLM enhancement (old model)
--- updateIssueEnhancement :: AnomalyId -> Text -> Text -> Text -> DBT IO Int64
--- updateIssueEnhancement issueId title recommendedAction migrationComplexity =
---   execute q (title, recommendedAction, migrationComplexity, issueId)
---   where
---     q = [sql|
---       UPDATE apis.issues
---       SET title = ?,
---           recommended_action = ?,
---           migration_complexity = ?,
---           llm_enhanced_at = NOW(),
---           llm_enhancement_version = 1,
---           updated_at = NOW()
---       WHERE id = ?
---     |]
