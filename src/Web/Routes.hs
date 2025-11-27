@@ -76,7 +76,6 @@ import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors.Alerts qualified as Alerts
-import Pages.Monitors.Testing qualified as Testing
 import Pages.Onboarding.Onboarding qualified as Onboarding
 import Pages.Projects.CreateProject qualified as CreateProject
 import Pages.Projects.Integrations qualified as Integrations
@@ -282,8 +281,6 @@ data MonitorsRoutes' mode = MonitorsRoutes'
   , alertSingleGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Get '[HTML] (RespHeaders Alerts.Alert)
   , alertSingleToggleActive :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[HTML] (RespHeaders Alerts.Alert)
   , alertOverviewGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "overview" :> Get '[HTML] (RespHeaders Alerts.Alert)
-  , monitorListGet :: mode :- "monitors" :> QueryParam "filter" Text :> QueryParam "since" Text :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage Testing.UnifiedMonitorItem)))
-  , unifiedMonitorOverviewGet :: mode :- "monitors" :> Capture "monitor_id" Text :> "overview" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   }
   deriving stock (Generic)
 
@@ -463,8 +460,6 @@ monitorsServer pid =
     , alertSingleGet = Alerts.alertSingleGetH pid
     , alertSingleToggleActive = Alerts.alertSingleToggleActiveH pid
     , alertOverviewGet = Alerts.alertOverviewGetH pid
-    , monitorListGet = Testing.unifiedMonitorsGetH pid
-    , unifiedMonitorOverviewGet = Testing.unifiedMonitorOverviewH pid
     }
 
 

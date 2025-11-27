@@ -105,7 +105,6 @@ library
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
       Pages.Monitors.Alerts
-      Pages.Monitors.Testing
       Pages.Onboarding.Onboarding
       Pages.Projects.CreateProject
       Pages.Projects.Integrations
