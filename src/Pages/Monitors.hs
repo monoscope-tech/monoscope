@@ -5,12 +5,14 @@ module Pages.Monitors (
   alertListGetH,
   alertUpsertPostH,
   alertOverviewGetH,
+  monitorsPageGetH,
   AlertUpsertForm (..),
   Alert (..),
 )
 where
 
 import Data.CaseInsensitive qualified as CI
+import Data.Default (def)
 import Data.Either.Extra (fromRight')
 import Data.Text qualified as T
 import Data.Time.Clock (UTCTime)
@@ -18,15 +20,20 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions qualified as Sessions
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pkg.Parser (defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
-import Relude
+import Relude hiding (ask)
+import System.Config (AuthContext (..))
 import System.Types
+import Utils (checkFreeTierExceeded, faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -141,14 +148,15 @@ data Alert
   | AlertSingle Projects.ProjectId (Maybe Monitors.QueryMonitor)
   | AlertNoContent Text
   | AlertRedirect Text
+  | AlertPage (PageCtx (Html ()))
 
 
 instance ToHtml Alert where
   toHtml (AlertListGet monitors) = toHtml $ queryMonitors_ monitors
   toHtml (AlertSingle pid monitor) = toHtml $ alertSingleComp pid monitor
   toHtml (AlertNoContent msg) = toHtml msg
-  toHtml (AlertRedirect url) = do
-    script_ $ "window.location.href = '" <> url <> "';"
+  toHtml (AlertRedirect url) = script_ $ "window.location.href = '" <> url <> "';"
+  toHtml (AlertPage page) = toHtml page
   toHtmlRaw = toHtml
 
 
@@ -207,4 +215,45 @@ alertOverviewGetH pid alertId = do
   -- Redirect to the unified monitor overview page
   addRespHeaders $ AlertRedirect $ "/p/" <> pid.toText <> "/monitors/" <> alertId.toText <> "/overview"
 
--- Removed old alert overview page components as they are now handled in the unified Testing module
+
+-- | Full page handler for /p/<pid>/monitors
+monitorsPageGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders Alert)
+monitorsPageGetH pid = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
+  monitors <- dbtToEff $ Monitors.queryMonitorsAll pid
+  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess
+          , currProject = Just project
+          , pageTitle = "Alerts"
+          , menuItem = Just "Alerts"
+          , docsLink = Just "https://monoscope.tech/docs/monitors/"
+          , freeTierExceeded = freeTierExceeded
+          , config = appCtx.env
+          , pageActions = Just $ div_ [class_ "flex gap-2"] do
+              a_ [class_ "btn btn-sm btn-primary gap-2", href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"] do
+                faSprite_ "bell" "regular" "h-4 w-4"
+                "Create Alert"
+          }
+  addRespHeaders $ AlertPage $ PageCtx bwconf (monitorsPageContent_ pid monitors)
+
+
+monitorsPageContent_ :: Projects.ProjectId -> V.Vector Monitors.QueryMonitor -> Html ()
+monitorsPageContent_ pid monitors = do
+  let activeMonitors = V.filter (isNothing . (.deactivatedAt)) monitors
+      inactiveMonitors = V.filter (isJust . (.deactivatedAt)) monitors
+  section_ [class_ "pt-2 mx-auto px-14 w-full flex flex-col gap-4"] do
+    when (V.null monitors) do
+      div_ [class_ "flex flex-col items-center justify-center py-16 text-center"] do
+        faSprite_ "bell-slash" "regular" "h-12 w-12 text-iconNeutral mb-4"
+        h3_ [class_ "text-lg font-medium text-textStrong mb-2"] "No alerts configured yet"
+        p_ [class_ "text-textWeak mb-4"] "Create an alert to get notified when your queries match certain conditions."
+        a_ [class_ "btn btn-primary", href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"] "Create Alert"
+    unless (V.null monitors) do
+      div_ [class_ "flex gap-4 mb-4"] do
+        div_ [class_ "badge badge-lg badge-ghost"] $ toHtml $ "Active: " <> show (V.length activeMonitors)
+        div_ [class_ "badge badge-lg badge-ghost"] $ toHtml $ "Inactive: " <> show (V.length inactiveMonitors)
+      div_ [id_ "alertsListContainer"] do
+        queryMonitors_ monitors

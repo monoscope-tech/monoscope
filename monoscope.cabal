@@ -102,6 +102,7 @@ library
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
       Pages.Monitors
+      Pages.Monitors.Testing
       Pages.Onboarding.Onboarding
       Pages.Projects
       Pages.Replay

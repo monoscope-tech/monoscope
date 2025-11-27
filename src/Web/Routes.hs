@@ -76,6 +76,8 @@ import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as Alerts
+import Pages.Monitors.Testing qualified as Testing
+import Pkg.Components.ItemsList qualified as ItemsList
 import Pages.Onboarding.Onboarding qualified as Onboarding
 import Pages.Projects qualified as CreateProject
 import Pages.Projects qualified as Integrations
@@ -215,7 +217,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
     projects :: mode :- ProjectsRoutes
   , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes
   , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes
-  , monitors :: mode :- "p" :> ProjectId :> MonitorsRoutes
+  , monitors :: mode :- "p" :> ProjectId :> "monitors" :> MonitorsRoutes
   , traces :: mode :- "p" :> ProjectId :> TelemetryRoutes
   }
   deriving stock (Generic)
@@ -275,8 +277,9 @@ type MonitorsRoutes = NamedRoutes MonitorsRoutes'
 
 type MonitorsRoutes' :: Type -> Type
 data MonitorsRoutes' mode = MonitorsRoutes'
-  { alertUpsertPost :: mode :- "alerts" :> ReqBody '[FormUrlEncoded] Alerts.AlertUpsertForm :> Post '[HTML] (RespHeaders Alerts.Alert)
-  , alertListGet :: mode :- "alerts" :> Get '[HTML] (RespHeaders Alerts.Alert)
+  { listGet :: mode :- QueryParam "filter" Text :> QueryParam "since" Text :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage Testing.UnifiedMonitorItem)))
+  , overviewGet :: mode :- Capture "monitor_id" Text :> "overview" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , alertUpsertPost :: mode :- "alerts" :> ReqBody '[FormUrlEncoded] Alerts.AlertUpsertForm :> Post '[HTML] (RespHeaders Alerts.Alert)
   , alertSingleGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Get '[HTML] (RespHeaders Alerts.Alert)
   , alertSingleToggleActive :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[HTML] (RespHeaders Alerts.Alert)
   , alertOverviewGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "overview" :> Get '[HTML] (RespHeaders Alerts.Alert)
@@ -454,8 +457,9 @@ telemetryServer pid =
 monitorsServer :: Projects.ProjectId -> Servant.ServerT MonitorsRoutes ATAuthCtx
 monitorsServer pid =
   MonitorsRoutes'
-    { alertUpsertPost = Alerts.alertUpsertPostH pid
-    , alertListGet = Alerts.alertListGetH pid
+    { listGet = Testing.unifiedMonitorsGetH pid
+    , overviewGet = Testing.unifiedMonitorOverviewH pid
+    , alertUpsertPost = Alerts.alertUpsertPostH pid
     , alertSingleGet = Alerts.alertSingleGetH pid
     , alertSingleToggleActive = Alerts.alertSingleToggleActiveH pid
     , alertOverviewGet = Alerts.alertOverviewGetH pid
