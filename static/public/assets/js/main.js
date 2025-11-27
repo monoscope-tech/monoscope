@@ -71,6 +71,21 @@ window.getQueryFromEditor = () =>
     .find(el => el && el.editor)
     ?.editor.getValue() || ''
 
+// Visualization type getter - returns the current viz type from URL or selected tab
+window.getVizType = () => {
+  const urlParams = new URLSearchParams(window.location.search)
+  const urlVizType = urlParams.get('viz_type')
+  if (urlVizType) return urlVizType
+
+  const checkedRadio = document.querySelector('#visualizationTabs input[type="radio"]:checked')
+  if (checkedRadio) {
+    const value = checkedRadio.value
+    // Map viz-* prefix to the actual type name for storage
+    return value.startsWith('viz-') ? value.substring(4) : value
+  }
+  return 'timeseries' // default
+}
+
 // Time range getter from UI
 window.getTimeRange = () => {
   const customRange = document.getElementById('custom_range_input')?.value

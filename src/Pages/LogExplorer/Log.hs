@@ -435,8 +435,11 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
       Just alertId -> dbtToEff $ Monitors.queryMonitorById (Monitors.QueryMonitorId alertId)
       Nothing -> return Nothing
 
+  -- Use alert's visualization type if no vizType specified and alert is loaded
+  let effectiveVizType = vizTypeM <|> ((.visualizationType) <$> alertDM)
+
   -- Skip table load on initial page load unless it's a JSON request
-  let shouldSkipLoad = layoutM == Nothing && hxRequestM == Nothing && jsonM /= Just "true" || vizTypeM == Just "patterns"
+  let shouldSkipLoad = layoutM == Nothing && hxRequestM == Nothing && jsonM /= Just "true" || effectiveVizType == Just "patterns"
       fetchLogs =
         if authCtx.env.enableTimefusionReads
           then labeled @"timefusion" @DB $ RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
@@ -457,7 +460,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
 
-  patterns <- case vizTypeM of
+  patterns <- case effectiveVizType of
     Just "patterns" -> do
       patternsResult <- RequestDumps.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
       return $ Just patternsResult
@@ -556,7 +559,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
             , targetEvent = targetEventM
             , showTrace = showTraceM
             , facets = facetSummary
-            , vizType = vizTypeM
+            , vizType = effectiveVizType
             , alert = alertDM
             , patterns = patterns
             , patternsToSkip
@@ -565,7 +568,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
             }
 
       let jsonResponse = LogsGetJson finalVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap resultCount
-      addRespHeaders $ case (layoutM, hxRequestM, jsonM, vizTypeM) of
+      addRespHeaders $ case (layoutM, hxRequestM, jsonM, effectiveVizType) of
         (_, Just "true", _, Just "patterns") -> LogsPatternList pid (fromMaybe V.empty patterns) patternsToSkip pTargetM
         (Just "SaveQuery", _, _, _) -> LogsQueryLibrary pid queryLibSaved queryLibRecent
         (Just "resultTable", Just "true", _, _) -> jsonResponse
@@ -974,8 +977,8 @@ alertConfigurationForm_ project alertM = do
     div_ [class_ "p-4 pt-3 flex-1 overflow-y-auto c-scroll"] do
       form_
         [ id_ "alert-form"
-        , hxPost_ $ "/p/" <> pid.toText <> "/alerts"
-        , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans'}"
+        , hxPost_ $ "/p/" <> pid.toText <> "/monitors/alerts"
+        , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType()}"
         , hxSwap_ "none"
         , class_ "flex flex-col gap-3"
         , [__|on htmx:afterRequest

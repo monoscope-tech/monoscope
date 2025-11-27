@@ -238,7 +238,8 @@ logQueryBox_ config = do
 visualizationTabs_ :: Maybe Text -> Bool -> Maybe Text -> Bool -> Html ()
 visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
   div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-fillWeak p-1 rounded-lg", id_ "visualizationTabs", role_ "tablist"] do
-    let defaultVizType = if alert then "viz-timeseries" else fromMaybe "logs" vizTypeM
+    -- Use vizTypeM if provided, otherwise default to timeseries for alerts or logs otherwise
+    let defaultVizType = fromMaybe (if alert then "timeseries" else "logs") vizTypeM
         containerSelector = fromMaybe "visualization-widget-container" widgetContainerId
 
     forM_ visTypes $ \(icon, label, vizType, emoji) -> do

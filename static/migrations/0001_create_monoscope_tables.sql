@@ -740,6 +740,7 @@ CREATE TABLE IF NOT EXISTS monitors.query_monitors
   deleted_at                   TIMESTAMP WITH TIME ZONE
 );
 SELECT manage_updated_at('monitors.query_monitors');
+ALTER TABLE monitors.query_monitors ADD COLUMN IF NOT EXISTS visualization_type TEXT NOT NULL DEFAULT 'timeseries';
 
 
 CREATE TABLE IF NOT EXISTS apis.subscriptions (

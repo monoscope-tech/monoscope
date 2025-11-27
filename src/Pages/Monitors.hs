@@ -53,10 +53,11 @@ data AlertUpsertForm = AlertUpsertForm
   , since :: Text
   , from :: Text
   , to :: Text
-  , frequency :: Maybe Text -- Added for monitor schedule
-  , timeWindow :: Maybe Text -- Added for monitor schedule
-  , conditionType :: Maybe Text -- Added for condition type
-  , source :: Maybe Text -- Added for source support
+  , frequency :: Maybe Text
+  , timeWindow :: Maybe Text
+  , conditionType :: Maybe Text
+  , source :: Maybe Text
+  , vizType :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -64,18 +65,14 @@ data AlertUpsertForm = AlertUpsertForm
 
 convertToQueryMonitor :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitorId -> AlertUpsertForm -> Monitors.QueryMonitor
 convertToQueryMonitor projectId now queryMonitorId alertForm =
-  -- FIXME: handle errors correctly, not crashing
   let sqlQueryCfg = (defSqlQueryCfg projectId fixedUTCTime Nothing Nothing){presetRollup = Just "5m"}
       (_, qc) = fromRight' $ parseQueryToComponents sqlQueryCfg alertForm.query
       warningThresholdInt = readMaybe . toString =<< alertForm.warningThreshold
 
-      -- Parse frequency from "Xm" format (e.g., "5m" -> 5)
-      -- Ensure minimum interval is 1 minute
       checkInterval = case alertForm.frequency of
-        Just freq -> max 1 $ fromMaybe 5 $ readMaybe $ toString $ T.dropEnd 1 freq -- Remove 'm' suffix, enforce min 1
-        Nothing -> 5 -- Default to 5 minutes
+        Just freq -> max 1 $ fromMaybe 5 $ readMaybe $ toString $ T.dropEnd 1 freq
+        Nothing -> 5
 
-      -- Determine if this is a threshold-based alert
       isThresholdAlert = alertForm.conditionType == Just "threshold_exceeded"
 
       alertConfig =
@@ -102,10 +99,11 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , warningLastTriggered = Nothing
         , alertLastTriggered = Nothing
         , triggerLessThan = alertForm.direction == "below"
-        , thresholdSustainedForMins = 0 -- Placeholder, set according to your logic
+        , thresholdSustainedForMins = 0
         , alertConfig
         , deletedAt = Nothing
         , deactivatedAt = Nothing
+        , visualizationType = fromMaybe "timeseries" alertForm.vizType
         }
 
 
@@ -163,7 +161,7 @@ instance ToHtml Alert where
 alertSingleComp :: Projects.ProjectId -> Maybe Monitors.QueryMonitor -> Html ()
 alertSingleComp pid monitor = do
   div_ [] do
-    a_ [class_ "border-y p-3 block cursor-pointer", hxGet_ $ "/p/" <> pid.toText <> "/alerts", hxTarget_ "#alertsListContainer"] "‹ Back to alerts list"
+    a_ [class_ "border-y p-3 block cursor-pointer", hxGet_ $ "/p/" <> pid.toText <> "/monitors/alerts", hxTarget_ "#alertsListContainer"] "‹ Back to alerts list"
     div_ [class_ "p-3"] $ span_ "Alert details view not implemented"
 
 
@@ -185,7 +183,7 @@ if ('URLSearchParams' in window)
     call history.pushState(null, '', newRelativePathQuery)
 end
             |]
-        let editURI = "/p/" <> monitor.projectId.toText <> "/alerts/" <> monitor.id.toText
+        let editURI = "/p/" <> monitor.projectId.toText <> "/monitors/alerts/" <> monitor.id.toText
         td_
           [ class_ $ if isJust monitor.deactivatedAt then "line-through" else ""
           , hxTarget_ "#alertsListContainer"
@@ -204,7 +202,7 @@ end
           a_
             [ class_ "btn btn-ghost btn-xs"
             , hxTarget_ "#alertsListContainer"
-            , hxPost_ $ "/p/" <> monitor.projectId.toText <> "/alerts/" <> monitor.id.toText <> "/toggle_active"
+            , hxPost_ $ "/p/" <> monitor.projectId.toText <> "/monitors/alerts/" <> monitor.id.toText <> "/toggle_active"
             ]
             if isJust monitor.deactivatedAt then "reactivate" else "deactivate"
 

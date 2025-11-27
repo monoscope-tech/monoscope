@@ -33,7 +33,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (checkFreeTierExceeded, faSprite_)
+import Utils (checkFreeTierExceeded, faSprite_, toUriStr)
 
 
 -- | Types for unified monitor view
@@ -65,6 +65,7 @@ data UnifiedMonitorDetails
   , triggerDirection :: Text -- "above" or "below"
   , lastEvaluated :: Maybe UTCTime
   , alertLastTriggered :: Maybe UTCTime
+  , visualizationType :: Text
   }
 
 
@@ -180,6 +181,7 @@ toUnifiedMonitorItem pid currTime = alertToUnifiedItem pid
                   , triggerDirection = if alert.triggerLessThan then "below" else "above"
                   , lastEvaluated = Just alert.lastEvaluated
                   , alertLastTriggered = alert.alertLastTriggered
+                  , visualizationType = alert.visualizationType
                   }
             }
 
@@ -269,7 +271,11 @@ unifiedMonitorCard item = do
     -- Use unified overview route for both types
     detailsUrl = "/p/" <> item.projectId <> "/monitors/" <> item.monitorId <> "/overview"
 
-    editUrl = "/p/" <> item.projectId <> "/log_explorer/?alert=" <> item.monitorId
+    editUrl = case item.details of
+      AlertDetails{query, visualizationType} ->
+        "/p/" <> item.projectId <> "/log_explorer/?alert=" <> item.monitorId
+          <> "&query=" <> toUriStr query
+          <> "&viz_type=" <> visualizationType
 
     toggleUrl = "/p/" <> item.projectId <> "/monitors/alerts/" <> item.monitorId <> "/toggle_active"
 

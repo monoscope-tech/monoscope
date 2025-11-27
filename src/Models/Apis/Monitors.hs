@@ -86,6 +86,7 @@ data QueryMonitor = QueryMonitor
   , alertConfig :: MonitorAlertConfig
   , deactivatedAt :: Maybe UTCTime
   , deletedAt :: Maybe UTCTime
+  , visualizationType :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, NFData, ToRow)
@@ -111,6 +112,7 @@ data QueryMonitorEvaled = QueryMonitorEvaled
   , alertConfig :: MonitorAlertConfig
   , deactivatedAt :: Maybe UTCTime
   , deletedAt :: Maybe UTCTime
+  , visualizationType :: Text
   , evalResult :: Int
   }
   deriving stock (Generic, Show)
@@ -135,17 +137,18 @@ queryMonitorUpsert qm =
     , qm.thresholdSustainedForMins
     , qm.alertConfig
     , qm.checkIntervalMins
+    , qm.visualizationType
     )
   where
     q =
       [sql|
-    INSERT INTO monitors.query_monitors (id, project_id, alert_threshold, warning_threshold, log_query, 
-                  log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than, 
-                  threshold_sustained_for_mins, alert_config, check_interval_mins  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-          ON CONFLICT (id) DO UPDATE SET 
+    INSERT INTO monitors.query_monitors (id, project_id, alert_threshold, warning_threshold, log_query,
+                  log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
+                  threshold_sustained_for_mins, alert_config, check_interval_mins, visualization_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          ON CONFLICT (id) DO UPDATE SET
                   alert_threshold=EXCLUDED.alert_threshold,
                   warning_threshold=EXCLUDED.warning_threshold,
-                  log_query=EXCLUDED.log_query, 
+                  log_query=EXCLUDED.log_query,
                   log_query_as_sql=EXCLUDED.log_query_as_sql,
                   last_evaluated=EXCLUDED.last_evaluated,
                   warning_last_triggered=EXCLUDED.warning_last_triggered,
@@ -153,7 +156,8 @@ queryMonitorUpsert qm =
                   trigger_less_than=EXCLUDED.trigger_less_than,
                   threshold_sustained_for_mins=EXCLUDED.threshold_sustained_for_mins,
                   alert_config=EXCLUDED.alert_config,
-                  check_interval_mins=EXCLUDED.check_interval_mins;
+                  check_interval_mins=EXCLUDED.check_interval_mins,
+                  visualization_type=EXCLUDED.visualization_type;
     |]
 
 
@@ -168,10 +172,10 @@ queryMonitorsById ids
   where
     q =
       [sql|
-    SELECT id, created_at, updated_at, project_id, check_interval_mins, alert_threshold, warning_threshold, 
-        log_query, log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than, 
-        threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, eval(log_query_as_sql)
-      FROM monitors.query_monitors where id=ANY(?::UUID[]) 
+    SELECT id, created_at, updated_at, project_id, check_interval_mins, alert_threshold, warning_threshold,
+        log_query, log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
+        threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, visualization_type, eval(log_query_as_sql)
+      FROM monitors.query_monitors where id=ANY(?::UUID[])
     |]
 
 
