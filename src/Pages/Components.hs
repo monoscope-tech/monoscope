@@ -15,28 +15,18 @@ import Utils (faSprite_, onpointerdown_)
 
 
 statBox :: Maybe ProjectId -> Text -> Text -> Int -> Maybe Int -> Html ()
-statBox pid title helpInfo val bckupValM = do
-  let tl = getTargetPage title
-  let pidT = case pid of
-        Just p -> p.toText
-        Nothing -> ""
-  if not (T.null tl)
-    then do
-      a_ [href_ $ "/p/" <> pidT <> tl, class_ "col-span-1 p-5 card-round flex flex-row content-between justify-between"] do
-        div_ do
-          div_ [class_ "inline-block flex flex-row content-between"] do
-            span_ [class_ "font-bold text-textStrong text-2xl"] $ toHtml @Text $ fmt (commaizeF val)
-            maybe "" (\bVal -> small_ $ toHtml @Text $ fmt ("/" +| commaizeF bVal)) bckupValM
-          span_ [class_ "text-textWeak"] $ toHtml title
-        span_ [class_ "inline-block tooltip", term "data-tip" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 h-4"
-    else do
-      div_ [class_ "col-span-1 p-5 card-round col-span-1 flex flex-row content-between justify-between"] do
-        div_ do
-          div_ [class_ "inline-block flex flex-row content-between"] do
-            span_ [class_ "font-bold text-textStrong text-2xl"] $ toHtml @Text $ fmt (commaizeF val)
-            maybe "" (\bVal -> small_ $ toHtml @Text $ fmt ("/" +| commaizeF bVal)) bckupValM
-          span_ [class_ "text-textWeak"] $ toHtml title
-        span_ [class_ "inline-block tooltip", term "data-tip" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 h-4"
+statBox pid title helpInfo val bckupValM = wrapper do
+  div_ do
+    div_ [class_ "inline-block flex flex-row content-between"] do
+      span_ [class_ "font-bold text-textStrong text-2xl"] $ toHtml @Text $ fmt (commaizeF val)
+      maybe "" (\bVal -> small_ $ toHtml @Text $ fmt ("/" +| commaizeF bVal)) bckupValM
+    span_ [class_ "text-textWeak"] $ toHtml title
+  span_ [class_ "inline-block tooltip", term "data-tip" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 h-4"
+  where
+    tl = getTargetPage title
+    pidT = maybe "" (.toText) pid
+    wrapper = if T.null tl then div_ [class_ "col-span-1 p-5 card-round col-span-1 flex flex-row content-between justify-between"]
+              else a_ [href_ $ "/p/" <> pidT <> tl, class_ "col-span-1 p-5 card-round flex flex-row content-between justify-between"]
 
 
 statBox_ :: Maybe ProjectId -> Maybe (Text, Text, Text) -> Text -> Text -> Text -> Maybe Int -> Maybe Text -> Html ()

@@ -87,7 +87,6 @@ import Pages.S3 qualified as S3
 import Pages.Share qualified as Share
 import Pages.Telemetry qualified as Metrics
 import Pages.Telemetry qualified as Trace
-import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget qualified as Widget
 import Utils
 

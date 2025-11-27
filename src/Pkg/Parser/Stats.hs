@@ -21,7 +21,7 @@ module Pkg.Parser.Stats (
 import Data.Aeson qualified as AE
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
-import Pkg.Parser.Expr (Expr, Parser, Subject (..), ToQueryText (..), kqlTimespanToTimeBucket, pExpr, pSubject, sc, symbol)
+import Pkg.Parser.Expr (Expr, Parser, Subject (..), ToQueryText (..), kqlTimespanToTimeBucket, pExpr, pSubject)
 import Relude hiding (Sum, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, space, string)

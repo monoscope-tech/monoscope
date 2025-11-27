@@ -17,7 +17,6 @@ import Data.Map qualified as Map
 import Data.Map.Strict qualified as MapS
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale)
-import Data.Time.Clock (UTCTime)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (formatShow, iso8601Format)
 import Data.UUID qualified as UUID

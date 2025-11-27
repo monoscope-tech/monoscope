@@ -31,7 +31,6 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
-import Database.PostgreSQL.Simple.FromRow (field)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
