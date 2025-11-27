@@ -1,4 +1,4 @@
-module Pages.Monitors.AlertsSpec (spec) where
+module Pages.MonitorsSpec (spec) where
 
 import Data.Vector qualified as V
 import Models.Apis.Monitors
@@ -8,7 +8,7 @@ import Data.UUID qualified as UUID
 import Models.Projects.Projects qualified as Projects
 import Pkg.TestUtils
 
-import Pages.Monitors.Alerts qualified as Alerts
+import Pages.Monitors qualified as Alerts
 import Relude
 import Relude.Unsafe qualified as Unsafe
 

@@ -10,7 +10,7 @@ import Database.PostgreSQL.Transact qualified as PGT
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
-import Pages.Monitors.Alerts (AlertUpsertForm (..), convertToQueryMonitor)
+import Pages.Monitors (AlertUpsertForm (..), convertToQueryMonitor)
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import Relude

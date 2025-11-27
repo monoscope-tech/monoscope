@@ -38,7 +38,7 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users
 import NeatInterpolation
 import Network.HTTP.Types.URI qualified as URI
-import Pages.Anomalies.AnomalyList qualified as AnomalyList
+import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
@@ -986,7 +986,7 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
   redirectTo <-
     if project.paymentPlan == "ONBOARDING"
       then pure $ mkPath "/onboarding" ""
-      else mkPath "/dashboards/" <$> (maybe newDashboard pure =<< dbtToEff (DBT.queryOne q (pid, baseTemplate)))
+      else mkPath "/dashboards/" <$> (maybe newDashboard pure =<< dbtToEff (fmap (\(Only t) -> t) <$> DBT.queryOne q (pid, baseTemplate)))
   pure $ addHeader redirectTo NoContent
 
 

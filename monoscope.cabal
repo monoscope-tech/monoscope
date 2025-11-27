@@ -87,7 +87,7 @@ library
       Network.Wai.Middleware.Heartbeat
       Opentelemetry.OtlpMockValues
       Opentelemetry.OtlpServer
-      Pages.Anomalies.AnomalyList
+      Pages.Anomalies
       Pages.Api
       Pages.BodyWrapper
       Pages.Bots.Discord
@@ -101,15 +101,14 @@ library
       Pages.LemonSqueezy
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
-      Pages.Monitors.Alerts
+      Pages.Monitors
       Pages.Onboarding.Onboarding
       Pages.Projects
       Pages.Replay
       Pages.Reports
       Pages.S3
       Pages.Share
-      Pages.Telemetry.Metrics
-      Pages.Telemetry.Trace
+      Pages.Telemetry
       Pkg.AI
       Pkg.Components.ExternalHeadScripts
       Pkg.Components.ItemsList
@@ -430,12 +429,12 @@ test-suite integration-tests
       MonitoringSpec
       Opentelemetry.GrpcIngestionSpec
       Opentelemetry.OtlpServerSpec
-      Pages.Anomalies.AnomalyListSpec
+      Pages.AnomaliesSpec
       Pages.ApiSpec
       Pages.BusinessFlowsSpec
       Pages.Endpoints.ApiCatalogSpec
       Pages.LogExplorer.LogSpec
-      Pages.Monitors.AlertsSpec
+      Pages.MonitorsSpec
       Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
       Pages.ReportsSpec

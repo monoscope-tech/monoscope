@@ -348,8 +348,9 @@ runHourlyJob scheduledTime hour = do
   let oneHourAgo = addUTCTime (-3600) scheduledTime
   activeProjects <-
     dbtToEff
-      $ query
-        [sql| SELECT DISTINCT project_id 
+      $ V.map (\(Only pid) -> pid)
+      <$> query
+        [sql| SELECT DISTINCT project_id
               FROM otel_logs_and_spans ols
               WHERE ols.timestamp >= ?
                 AND ols.timestamp <= ? |]
@@ -485,7 +486,7 @@ processPatterns kind fieldName events pid scheduledTime since = do
   -- Only process and log if there are events to process (reduces noise in tests)
   Relude.when (V.length events > 0) $ do
     let qq = [text| select $fieldName from otel_logs_and_spans where project_id= ? AND timestamp >= now() - interval '1 hour' and $fieldName is not null GROUP BY $fieldName ORDER BY count(*) desc limit 20|]
-    existingPatterns <- dbtToEff $ query (Query $ encodeUtf8 qq) (pid)
+    existingPatterns <- dbtToEff $ V.map (\(Only p) -> p) <$> query (Query $ encodeUtf8 qq) (pid)
     let known = fmap (\p -> ("", p)) existingPatterns
         combined = known <> events
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree

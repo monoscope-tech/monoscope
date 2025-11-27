@@ -61,7 +61,7 @@ import Data.Vector qualified as V
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
-import Pages.Anomalies.AnomalyList qualified as AnomalyList
+import Pages.Anomalies qualified as AnomalyList
 import Pages.Api qualified as Api
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Discord qualified as Discord
@@ -75,7 +75,7 @@ import Pages.LemonSqueezy qualified as LemonSqueezy
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
 import Pages.LogExplorer.LogItem qualified as LogItem
-import Pages.Monitors.Alerts qualified as Alerts
+import Pages.Monitors qualified as Alerts
 import Pages.Onboarding.Onboarding qualified as Onboarding
 import Pages.Projects qualified as CreateProject
 import Pages.Projects qualified as Integrations
@@ -85,8 +85,8 @@ import Pages.Replay qualified as Replay
 import Pages.Reports qualified as Reports
 import Pages.S3 qualified as S3
 import Pages.Share qualified as Share
-import Pages.Telemetry.Metrics qualified as Metrics
-import Pages.Telemetry.Trace qualified as Trace
+import Pages.Telemetry qualified as Metrics
+import Pages.Telemetry qualified as Trace
 import Pkg.Components.ItemsList qualified as ItemsList
 import Pkg.Components.Widget qualified as Widget
 import Utils

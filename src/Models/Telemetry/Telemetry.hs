@@ -670,13 +670,13 @@ getMetricChartListData pid sourceM prefixM dateRange cursor = dbtToEff $ query (
 
 
 getMetricLabelValues :: DB :> es => Projects.ProjectId -> Text -> Text -> Eff es (V.Vector Text)
-getMetricLabelValues pid metricName labelName = dbtToEff $ query q (labelName, pid, metricName)
+getMetricLabelValues pid metricName labelName = dbtToEff $ V.map (\(Only t) -> t) <$> query q (labelName, pid, metricName)
   where
     q = [sql| SELECT DISTINCT attributes->>? FROM telemetry.metrics WHERE project_id = ? AND metric_name = ?|]
 
 
 getMetricServiceNames :: DB :> es => Projects.ProjectId -> Eff es (V.Vector Text)
-getMetricServiceNames pid = dbtToEff $ query q pid
+getMetricServiceNames pid = dbtToEff $ V.map (\(Only t) -> t) <$> query q pid
   where
     q =
       [sql| SELECT DISTINCT service_name FROM telemetry.metrics_meta WHERE project_id = ?|]

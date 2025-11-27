@@ -1,7 +1,7 @@
 
 {-# LANGUAGE PackageImports #-}
 
-module Pages.Anomalies.AnomalyListSpec (spec) where
+module Pages.AnomaliesSpec (spec) where
 
 import Control.Concurrent (threadDelay)
 import Data.Aeson (Value)
@@ -29,7 +29,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import Models.Users.Sessions (Session(..))
 import OddJobs.Job (Job (..))
-import Pages.Anomalies.AnomalyList qualified as AnomalyList
+import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
 import Pkg.Components.ItemsList qualified as ItemsList

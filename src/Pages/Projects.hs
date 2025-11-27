@@ -44,6 +44,7 @@ import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default (..))
 import Data.Effectful.UUID qualified as UUID
+import Data.UUID qualified as RealUUID
 import Data.Effectful.Wreq
 import Data.Effectful.Wreq qualified as W
 import Data.List.Unique (uniq)
@@ -69,7 +70,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
-import Network.Wreq (defaults, header, responseBody)
+import Network.Wreq (defaults, getWith, header, responseBody)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper)
 import Pages.Components (paymentPlanPicker)
@@ -95,7 +96,7 @@ import "base64" Data.ByteString.Base64 qualified as B64
 
 listProjectsGetH :: ATAuthCtx (RespHeaders ListProjectsGet)
 listProjectsGetH = do
-  (sess, project) <- Sessions.sessionAndProject (UUIDId UUID.nil)
+  (sess, project) <- Sessions.sessionAndProject (UUIDId RealUUID.nil)
   appCtx <- ask @AuthContext
   let bwconf =
         (def :: BWConfig)
@@ -640,8 +641,8 @@ createProjectFormToModel pid subId firstSubId orderId paymentPlan CreateProjectF
 createProjectFormV :: Monad m => Valor CreateProjectForm m CreateProjectFormError
 createProjectFormV =
   CreateProjectFormError
-    <$> check1 title (failIf ["name can't be empty"] T.null)
-    <*> check1 description Valor.pass
+    <$> check1 (.title) (failIf ["name can't be empty"] T.null)
+    <*> check1 (.description) Valor.pass
 
 
 projectOnboardingH :: ATAuthCtx (Headers '[Header "Location" Text] (PageCtx (Html ())))

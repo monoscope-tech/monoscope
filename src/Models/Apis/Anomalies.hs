@@ -278,14 +278,14 @@ acknowledgeAnomalies uid aids
       anomalyHashesResult <- query qGetHashes (Only aids) :: DBT IO (V.Vector (Only (V.Vector Text)))
       let allAnomalyHashes = V.concat $ V.toList $ V.map (\(Only hashes) -> hashes) anomalyHashesResult
       -- Update issues
-      _ <- query qIssues (uid, aids) :: DBT IO (V.Vector Text)
+      _ <- query qIssues (uid, aids) :: DBT IO (V.Vector (Only Text))
       -- Update anomalies - both directly referenced and those tracked by the issues
-      _ <- query q (uid, aids) :: DBT IO (V.Vector Text)
+      _ <- query q (uid, aids) :: DBT IO (V.Vector (Only Text))
       -- Also update anomalies referenced by the issues' anomaly_hashes arrays
       unless (V.null allAnomalyHashes) $ do
         _ <- execute qAnomaliesByHash (uid, allAnomalyHashes)
         pass
-      query q (uid, aids)
+      V.map (\(Only t) -> t) <$> query q (uid, aids)
   where
     qGetHashes = [sql| SELECT anomaly_hashes FROM apis.issues WHERE id=ANY(?::uuid[]) |]
     qIssues = [sql| update apis.issues set acknowledged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]

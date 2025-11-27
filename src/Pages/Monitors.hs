@@ -1,4 +1,4 @@
-module Pages.Monitors.Alerts (
+module Pages.Monitors (
   alertSingleGetH,
   convertToQueryMonitor,
   alertSingleToggleActiveH,

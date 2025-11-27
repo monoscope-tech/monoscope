@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-ambiguous-fields #-}
 
-module Pages.Anomalies.AnomalyList (
+module Pages.Anomalies (
   anomalyListGetH,
   anomalyBulkActionsPostH,
   escapedQueryPartial,
