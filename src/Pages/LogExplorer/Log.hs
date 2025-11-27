@@ -485,7 +485,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
                 input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
                 span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-3 items-center", data_ "tippy-content" "pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4 text-iconNeutral"
                 span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex  py-1 px-3 items-center", data_ "tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4 text-iconNeutral"
-              Components.timepicker_ (Just "log_explorer_form") currentRange
+              Components.timepicker_ (Just "log_explorer_form") currentRange Nothing
               Components.refreshButton_
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
               a_
@@ -1092,8 +1092,8 @@ alertConfigurationForm_ project alertM = do
                                      })
                                    end|]
                             ]
-                          ++ [required_ "" | req]
-                          ++ [value_ (maybe "" (show) vM) | isJust vM]
+                            ++ [required_ "" | req]
+                            ++ [value_ (maybe "" (show) vM) | isJust vM]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)

@@ -125,35 +125,38 @@ timePickerItems =
   ]
 
 
-timepicker_ :: Maybe Text -> Maybe (Text, Text) -> Html ()
-timepicker_ submitForm currentRange = do
+timepicker_ :: Maybe Text -> Maybe (Text, Text) -> Maybe Text -> Html ()
+timepicker_ submitForm currentRange targetIdM = do
+  let targetPr = fromMaybe "n" targetIdM
   fieldset_ [class_ "border border-strokeWeak p-0 inline-block rounded-lg overflow-hidden dash-variable text-sm shadow-xs -mt-1.5"] do
     legend_ [id_ "offsetIndicator", class_ "px-1 ml-2 text-xs text-textWeak"] "UTC+00"
-    input_ [type_ "hidden", id_ "since_input"]
-    input_ [type_ "hidden", id_ "custom_range_input"]
+    input_ [type_ "hidden", id_ $ targetPr <> "-since_input"]
+    input_ [type_ "hidden", id_ $ targetPr <> "-custom_range_input"]
 
     -- Trigger button using DaisyUI popover approach
     button_
-      [ term "popovertarget" "timepicker-popover"
-      , term "style" "anchor-name:--timepicker-anchor"
+      [ term "popovertarget" (targetPr <> "-timepicker-popover")
+      , term "style" $ "anchor-name:--" <> targetPr <> "-timepicker-anchor"
+      , term "popovertargetaction" "toggle"
+      , term "onclick" "event.stopPropagation()"
       , class_ "flex items-center gap-2 relative pt-0 p-2 text-textWeak cursor-pointer"
       ]
       do
         faSprite_ "calendar" "regular" "h-4 w-4 text-iconNeutral "
         let attrs = maybe [] (\(s, e) -> [term "data-start" s, term "data-end" e]) currentRange
-        span_ (attrs ++ [class_ "inline-block leading-none", id_ "currentRange"]) $ toHtml (maybe "Last Hour" (\(s, e) -> s <> if T.null e then "" else "-" <> e) currentRange)
+        span_ (attrs ++ [class_ "inline-block leading-none", id_ $ targetPr <> "-currentRange"]) $ toHtml (maybe "Last Hour" (\(s, e) -> s <> if T.null e then "" else "-" <> e) currentRange)
         faSprite_ "chevron-down" "regular" "h-3 w-3"
 
   -- DaisyUI popover contentd
   div_ [class_ "relative w-max bg-red-500"] do
     div_
       [ class_ "border dropdown dropdown-end menu w-96 rounded-box bg-bgOverlay shadow-lg"
-      , term "popover" ""
-      , id_ "timepicker-popover"
-      , term "style" "position-anchor:--timepicker-anchor"
+      , term "popover" "manual"
+      , id_ $ targetPr <> "-timepicker-popover"
+      , term "style" $ "position-anchor:--" <> targetPr <> "-timepicker-anchor"
       ]
       do
-        div_ [class_ "absolute top-0 left-0 z-50 hidden", id_ "timepickerSidebar", [__| on click halt|]] $ div_ [id_ "startTime", class_ "hidden"] ""
+        div_ [class_ "absolute top-0 left-0 z-50 hidden", id_ $ targetPr <> "-timepickerSidebar", [__| on click halt|]] $ div_ [id_ $ targetPr <> "-startTime", class_ "hidden"] ""
         ul_ [] do
           li_ [class_ "menu-title"] "Select Time Range"
           let action =
@@ -162,11 +165,11 @@ timepicker_ submitForm currentRange = do
                   (\fm -> [fmt|htmx.trigger("#{fm}", "submit")|])
                   submitForm
               onClickHandler =
-                [text|on click set #custom_range_input's value to my @data-value
-                    then set #currentRange's innerText to my @data-title
+                [text|on click set #$targetPr-custom_range_input's value to my @data-value
+                    then set #$targetPr-currentRange's innerText to my @data-title
                     then call window.setParams({since:@data-value, from:'', to:''})
                     then ${action}
-                    then call #timepicker-popover.hidePopover() |]
+                    then call #$targetPr-timepicker-popover.hidePopover() |]
               timePickerLink val title =
                 li_ $ a_
                   [ class_ "flex items-center justify-between hover:bg-base-200 rounded-lg px-3 py-2"
@@ -179,7 +182,7 @@ timepicker_ submitForm currentRange = do
                     span_ [class_ "text-xs text-base-content/60"] $ toHtml val
           mapM_ (uncurry timePickerLink) timePickerItems
           li_ $ a_
-            [ [__| on click toggle .hidden on #timepickerSidebar |]
+            [ term "_" [text| on click toggle .hidden on #$targetPr-timepickerSidebar |]
             ]
             do
               faSprite_ "calendar" "regular" "h-4 w-4 mr-2 text-iconNeutral"
@@ -188,8 +191,8 @@ timepicker_ submitForm currentRange = do
         -- Custom date range picker (hidden by default)
         let submitAction =
               maybe
-                "window.setParams({from: formatDate(start), to: formatDate(end), since: ''}, true); document.getElementById('timepicker-popover').hidePopover();"
-                (\fm -> [text|window.setParams({from: formatDate(start), to: formatDate(end), since: ''}); htmx.trigger("#${fm}", "submit"); document.getElementById('timepicker-popover').hidePopover();|])
+                "window.setParams({from: formatDate(start), to: formatDate(end), since: ''}, true); document.getElementById(`$targetPr-timepicker-popover`).hidePopover();"
+                (\fm -> [text|window.setParams({from: formatDate(start), to: formatDate(end), since: ''}); htmx.trigger("#${fm}", "submit"); document.getElementById(`$targetPr-timepicker-popover`).hidePopover();|])
                 submitForm
         script_
           [text|
@@ -198,15 +201,17 @@ timepicker_ submitForm currentRange = do
         document.addEventListener('DOMContentLoaded', ()=> {
           const offsetStr = getUTCOffset(); 
           document.getElementById('offsetIndicator').innerText = offsetStr;
-          const range = document.getElementById("currentRange");
+          const range = document.getElementById("$targetPr-currentRange");
           const start = range.dataset.start;
           const end = range.dataset.end;
           if(start && end) {
               range.innerText = `$${formatDateLocal(start)} - $${formatDateLocal(end)}`
             }
         })
-        window.picker = new easepick.create({
-          element: '#startTime',
+        console.log("Initializing timepicker for $targetPr-startTime");
+        if(!window["$targetPr-picker"]) {
+          window["$targetPr-picker"] = new easepick.create({
+          element: '#$targetPr-startTime',
           css: ['https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.css'],
           inline: true,
           plugins: ['RangePlugin', 'TimePlugin'],
@@ -215,12 +220,12 @@ timepicker_ submitForm currentRange = do
             if(e.target.classList.contains('easepick-wrapper')) {
               return;
             }
-            document.querySelector('#timepickerSidebar').classList.add('hidden');
+            document.querySelector('#$targetPr-timepickerSidebar').classList.add('hidden');
             return true;
           },
           setup(picker) {
             picker.on("clear", () => {
-              document.querySelector('#timepickerSidebar').classList.add('hidden');
+              document.querySelector('#$targetPr-timepickerSidebar').classList.add('hidden');
             });
             
             picker.on('select', ({ detail: { start, end } }) => {
@@ -230,12 +235,13 @@ timepicker_ submitForm currentRange = do
                 end = new Date();
                 }
               const formatDate = (date) => date.toISOString();
-              document.getElementById('custom_range_input').value = `$${start}/$${end}`;
-              document.getElementById('currentRange').innerText = `$${formatDateLocal(start)} - $${formatDateLocal(end)}`;
+              document.getElementById(`$targetPr-custom_range_input`).value = `$${start}/$${end}`;
+              document.getElementById(`$targetPr-currentRange`).innerText = `$${formatDateLocal(start)} - $${formatDateLocal(end)}`;
               ${submitAction}
             });
           },
         });
+          }
       })()
     |]
 
