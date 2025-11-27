@@ -24,8 +24,8 @@ import BackgroundJobs qualified
 import OddJobs.Job (Job (..))
 import Pages.LemonSqueezy qualified as LemonSqueezy
 import Pages.Onboarding.Onboarding qualified as Onboarding
-import Pages.Projects.CreateProject qualified as CreateProject
-import Pages.Projects.ManageMembers qualified as ManageMembers
+import Pages.Projects qualified as CreateProject
+import Pages.Projects qualified as ManageMembers
 import Pages.Replay qualified as Replay
 import Pages.S3 qualified as S3
 

@@ -9,7 +9,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper
-import Pages.Projects.ManageMembers qualified as ManageMembers
+import Pages.Projects qualified as ManageMembers
 import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe

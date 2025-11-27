@@ -6,9 +6,9 @@ import Data.Vector qualified as V
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper
-import Pages.Projects.CreateProject
-import Pages.Projects.CreateProject qualified as CreateProject
-import Pages.Projects.ListProjects qualified as ListProjects
+import Pages.Projects
+import Pages.Projects qualified as CreateProject
+import Pages.Projects qualified as ListProjects
 import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe

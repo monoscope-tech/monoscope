@@ -103,10 +103,7 @@ library
       Pages.LogExplorer.LogItem
       Pages.Monitors.Alerts
       Pages.Onboarding.Onboarding
-      Pages.Projects.CreateProject
-      Pages.Projects.Integrations
-      Pages.Projects.ListProjects
-      Pages.Projects.ManageMembers
+      Pages.Projects
       Pages.Replay
       Pages.Reports
       Pages.S3

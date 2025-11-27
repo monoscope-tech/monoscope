@@ -77,10 +77,10 @@ import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors.Alerts qualified as Alerts
 import Pages.Onboarding.Onboarding qualified as Onboarding
-import Pages.Projects.CreateProject qualified as CreateProject
-import Pages.Projects.Integrations qualified as Integrations
-import Pages.Projects.ListProjects qualified as ListProjects
-import Pages.Projects.ManageMembers qualified as ManageMembers
+import Pages.Projects qualified as CreateProject
+import Pages.Projects qualified as Integrations
+import Pages.Projects qualified as ListProjects
+import Pages.Projects qualified as ManageMembers
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as Reports
 import Pages.S3 qualified as S3
