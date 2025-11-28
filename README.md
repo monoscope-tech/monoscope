@@ -1,10 +1,6 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="/static/public/assets/svgs/logo_white.svg">
-  <source media="(prefers-color-scheme: light)" srcset="/static/public/assets/svgs/logo_black.svg">
-  <img src="/static/public/assets/svgs/logo_black.svg" alt="Monoscope Logo" width="250" />
-</picture>
+<img src="/docs/monoscope.svg" alt="Monoscope Logo" width="250" />
 
 ### Open-source observability platform with S3 storage
 
