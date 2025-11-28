@@ -44,6 +44,7 @@ alertForm =
     , timeWindow = Nothing
     , conditionType = Just "threshold_exceeded"
     , source = Nothing
+    , vizType = Nothing
     }
 
 

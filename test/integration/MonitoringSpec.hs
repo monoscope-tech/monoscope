@@ -46,6 +46,7 @@ spec = aroundAll withTestResources do
                 , timeWindow = Nothing
                 , conditionType = Nothing
                 , source = Nothing
+                , vizType = Nothing
                 }
       respC <- withPool tr.trPool $ Monitors.queryMonitorUpsert queryMonitor
       respC `shouldBe` 1

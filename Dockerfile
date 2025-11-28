@@ -26,9 +26,10 @@ RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/publi
 # Copy workbox config
 COPY workbox-config.js ./
 
-# Generate service worker after building assets
-RUN npx workbox generateSW workbox-config.js
 
+
+RUN npm install -g workbox-cli@6.5.4 \
+ && workbox generateSW workbox-config.js
 # Stage 2: Build Haskell application
 FROM haskell:9.12.2 AS haskell-builder
 
