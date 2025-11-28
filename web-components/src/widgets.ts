@@ -456,9 +456,10 @@ window.formatNumber = (n: number): string => {
   if (n >= 1_000_000_000) return `${Math.floor(n / 1_000_000_000)}.${Math.floor((n % 1_000_000_000) / 100_000_000)}B`;
   if (n >= 1_000_000) return `${Math.floor(n / 1_000_000)}.${Math.floor((n % 1_000_000) / 100_000)}M`;
   if (n >= 1_000) return `${Math.floor(n / 1_000)}.${Math.floor((n % 1_000) / 100)}K`;
+  if (n === null) return 'N/A';
 
   // Format decimals appropriately based on magnitude
-  if (!Number.isInteger(n)) {
+  if (!Number.isInteger(n) && !Number.isNaN(n)) {
     if (n >= 100) return Math.round(n).toString();
     if (n >= 10) return parseFloat(n.toFixed(1)).toString();
     return parseFloat(n.toFixed(2)).toString();

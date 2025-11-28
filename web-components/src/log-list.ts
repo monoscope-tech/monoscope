@@ -244,6 +244,7 @@ export class LogList extends LitElement {
           key: 'dataZoomSelect',
           dataZoomSelectActive: true,
         });
+        console.log('Bar chart initialized');
         this.barChart.on('datazoom', this.handleChartZoom);
       }
       if (this.lineChart) {
