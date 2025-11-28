@@ -65,9 +65,7 @@ library
       Models.Apis.Anomalies
       Models.Apis.Endpoints
       Models.Apis.Fields.Facets
-      Models.Apis.Fields.Query
       Models.Apis.Fields.Types
-      Models.Apis.Formats
       Models.Apis.Issues
       Models.Apis.Issues.Enhancement
       Models.Apis.Monitors

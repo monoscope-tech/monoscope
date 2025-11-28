@@ -425,6 +425,7 @@ export class LogList extends LitElement {
   };
 
   handleChartZoom = (params: { batch?: { startValue: string; endValue: string }[] }) => {
+    console.log('zooooooomiiiiiiiiiing');
     const zoom = params.batch ? params.batch[0] : undefined;
     if (!zoom) return;
     let startValue = zoom.startValue;
@@ -934,8 +935,8 @@ export class LogList extends LitElement {
         ? [...current, ...newData]
         : [...newData, ...current]
       : isRecentFetch
-        ? [...newData, ...current]
-        : [...current, ...newData];
+      ? [...newData, ...current]
+      : [...current, ...newData];
     return result;
   }
 
@@ -1216,16 +1217,13 @@ export class LogList extends LitElement {
         <table
           class="table-fixed ${this.wrapLines ? 'w-full' : 'w-max'} relative ctable table-pin-rows table-pin-cols text-sm"
           style=${Object.entries(
-            this.logsColumns.reduce(
-              (acc, column) => {
-                const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
-                if (width) {
-                  acc[`--col-${column}-width`] = `${width}px`;
-                }
-                return acc;
-              },
-              {} as Record<string, string>
-            )
+            this.logsColumns.reduce((acc, column) => {
+              const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
+              if (width) {
+                acc[`--col-${column}-width`] = `${width}px`;
+              }
+              return acc;
+            }, {} as Record<string, string>)
           )
             .map(([k, v]) => `${k}: ${v}`)
             .join('; ')}
@@ -1523,8 +1521,8 @@ export class LogList extends LitElement {
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
-            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
+          ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         return html`<div class=${clsx('flex w-full gap-1', this.wrapLines ? 'items-start' : 'items-center')}>
           ${this.view === 'tree'
             ? html`
@@ -1558,8 +1556,8 @@ export class LogList extends LitElement {
                         ${children}
                       </button>`
                     : depth === 0
-                      ? nothing
-                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                    ? nothing
+                    : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
                 </div>
               `
             : nothing}
@@ -1664,8 +1662,8 @@ export class LogList extends LitElement {
       this.isLiveStreaming
         ? html`<p class="h-5 leading-5 m-0">Live streaming latest data...</p>`
         : this.isFetchingRecent
-          ? html`<div class="loading loading-dots loading-md h-5"></div>`
-          : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
+        ? html`<div class="loading loading-dots loading-md h-5"></div>`
+        : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
     );
   };
 
@@ -1716,16 +1714,13 @@ export class LogList extends LitElement {
       const isNew = rowData.isNew;
 
       // Pre-calculate CSS custom properties for widths
-      const columnStyles = this.logsColumns.reduce(
-        (acc, column) => {
-          const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
-          if (width) {
-            acc[`--col-${column}-width`] = `${width}px`;
-          }
-          return acc;
-        },
-        {} as Record<string, string>
-      );
+      const columnStyles = this.logsColumns.reduce((acc, column) => {
+        const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
+        if (width) {
+          acc[`--col-${column}-width`] = `${width}px`;
+        }
+        return acc;
+      }, {} as Record<string, string>);
 
       const rowHtml = html`
         <tr
