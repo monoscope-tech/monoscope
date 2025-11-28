@@ -235,7 +235,7 @@ popularPricing pid lemonUrl isCurrent freeTierEnabled = do
             div_ [class_ "flex items-center gap-1 mt-4"] do
               div_ [class_ "flex items-end"] do
                 span_ [class_ "text-textStrong text-xl"] "$"
-                span_ [class_ "text-4xl text-textStrong", id_ "price"] "34"
+                span_ [class_ "text-4xl text-textStrong", id_ "price"] "29"
               div_ [class_ "flex flex-col text-textWeak text-sm"] do
                 span_ [class_ ""] "/per month"
             div_ [[__|on click halt|]] do
