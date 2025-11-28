@@ -498,11 +498,11 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds dateRange excludedSpanI
   let dateRangeStr = case dateRange of
         (Nothing, Just b) -> "AND timestamp BETWEEN '" <> fmtTime b <> "' AND NOW() "
         -- Include a 30 second buffer on either side to (assuming a first and last trace took 30s to catpure all spans/logs)
-        (Just a, Just b) -> "AND  timestamp BETWEEN '" <> fmtTime (addUTCTime (-30) a) <> "' AND '" <> fmtTime (addUTCTime 30 b) <> "'"
+        (Just a, Just b) -> "AND timestamp BETWEEN '" <> fmtTime (addUTCTime (-30) a) <> "' AND '" <> fmtTime (addUTCTime 30 b) <> "'"
         _ -> ""
       q =
         [text|SELECT json_build_array($r) FROM otel_logs_and_spans
-             WHERE project_id= ?  $dateRangeStr and  context___trace_id=Any(?) and parent_id IS NOT NULL AND id != ALL(?)
+             WHERE project_id= ?  $dateRangeStr and  context___trace_id=Any(?) and parent_id IS NOT NULL AND id::text != ALL(?)
              ORDER BY timestamp DESC;
            |]
   results <- dbtToEff $ V.fromList <$> DBT.query (Query $ encodeUtf8 q) (pid, traceIds, excludedSpanIds)

@@ -46,7 +46,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (checkFreeTierExceeded, faSprite_, formatUTC, getServiceColors, levelFillColor, listToIndexHashMap, lookupVecTextByKey, methodFillColor, onpointerdown_, prettyPrintCount, statusFillColorText)
+import Utils (checkFreeTierExceeded, faSprite_, formatUTC, getServiceColors, levelFillColor, listToIndexHashMap, lookupVecIntByKey, lookupVecTextByKey, methodFillColor, onpointerdown_, prettyPrintCount, statusFillColorText)
 
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
@@ -503,22 +503,30 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           curatedColNames = nubOrd $ curateCols summaryCols colNames
           colIdxMap = listToIndexHashMap colNames
           reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
-      -- reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
-      -- traceIds = V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
-      -- -- Extract IDs of spans that already have a parent_id (these are already child spans in our results)
-      -- alreadyLoadedChildSpanIds =
-      --   V.mapMaybe
-      --     ( \v -> case lookupVecTextByKey v colIdxMap "parent_id" of
-      --         Just parentId | not (T.null parentId) -> lookupVecTextByKey v colIdxMap "id"
-      --         _ -> Nothing
-      --     )
-      --     requestVecs
-      -- (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
+          reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
+          traceIds = V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
+          -- Extract IDs of spans that already have a parent_id (these are already child spans in our results)
+          alreadyLoadedChildSpanIds =
+            V.mapMaybe
+              ( \v -> case lookupVecTextByKey v colIdxMap "parent_id" of
+                  Just parentId | not (T.null parentId) -> lookupVecTextByKey v colIdxMap "id"
+                  Nothing -> do
+                    case lookupVecIntByKey v colIdxMap "duration" of -- exlude logs since they have not parent/child relationships
+                      0 -> lookupVecTextByKey v colIdxMap "id"
+                      _ -> Nothing
+                  _ -> Nothing
+              )
+              requestVecs
+          (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
 
+      childSpans <- case queryM' of
+        Nothing -> do
+          v <- RequestDumps.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD) alreadyLoadedChildSpanIds
+          pure v
+        _ -> pure V.empty
       let
-        finalVecs = requestVecs
+        finalVecs = requestVecs <> childSpans
         lastFM = reqLastCreatedAtM >>= textToUTC >>= (\t -> Just $ toText . iso8601Show $ addUTCTime (-0.001) t)
-
         nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
         resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
         recentLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
@@ -1090,8 +1098,8 @@ alertConfigurationForm_ project alertM = do
                                      })
                                    end|]
                             ]
-                          ++ [required_ "" | req]
-                          ++ [value_ (maybe "" (show) vM) | isJust vM]
+                            ++ [required_ "" | req]
+                            ++ [value_ (maybe "" (show) vM) | isJust vM]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)
