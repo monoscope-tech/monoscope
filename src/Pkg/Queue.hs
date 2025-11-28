@@ -164,6 +164,9 @@ publishJSONToKafka appCtx topicName jsonData attributes = checkpoint "publishJSO
         <> KP.extraProp "linger.ms" "5" -- Wait up to 5ms to batch messages
         <> KP.extraProp "request.timeout.ms" "30000" -- 30 second timeout
         <> KP.extraProp "delivery.timeout.ms" "120000" -- 2 minute total timeout
+        <> KP.extraProp "max.request.size" "52428800"
+        <> KP.extraProp "message.max.bytes" "52428800"
+        <> KP.extraProp "receive.message.max.bytes" "104857600"
         <> KP.logLevel KP.KafkaLogInfo
 
 
