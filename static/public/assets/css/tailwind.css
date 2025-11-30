@@ -291,6 +291,7 @@ body, :host {
   .dropdown summary {
     list-style: none;
   }
+
   .dropdown summary::-webkit-details-marker {
     display: none;
   }
@@ -645,6 +646,8 @@ code, pre, .code, .monospace {
 .badge-clickhouse {
   @apply bg-fillWeak text-textStrong border border-strokeWarning-strong;
 }
+
+.tagify {}
 
 @utility ctable {
   & :where(.table-pin-rows thead tr) {
@@ -1109,7 +1112,12 @@ code, pre, .code, .monospace {
 }
 
 /****** Tagify *****/
-.dash-variable .tagify {
+
+.modal > tags {
+    @apply border-strokeWeak;
+  }
+
+  .dash-variable .tagify {
   margin-top: -0.5rem;
   --tags-border-color: transparent;
   --tag-text-color: var(--color-textStrong);

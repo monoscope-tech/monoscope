@@ -1,9 +1,10 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction) where
+module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, SlackChannelsResponse (..), SlackChannel (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction) where
 
 import BackgroundJobs qualified as BgJobs
 import Control.Lens ((.~), (^.))
+import Data.Aeson (withObject)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as KEM
 import Data.Aeson.KeyMap qualified as KEMP
@@ -524,17 +525,17 @@ instance AE.FromJSON SlackEventPayload where
       "event_callback" ->
         EventCallback
           <$> v
-          AE..: "token"
+            AE..: "token"
           <*> v
-          AE..: "team_id"
+            AE..: "team_id"
           <*> v
-          AE..: "api_app_id"
+            AE..: "api_app_id"
           <*> v
-          AE..: "event"
+            AE..: "event"
           <*> v
-          AE..: "event_id"
+            AE..: "event_id"
           <*> v
-          AE..: "event_time"
+            AE..: "event_time"
       other -> fail $ "Unsupported Slack event type: " ++ show other
 
 
@@ -635,6 +636,43 @@ data SlackThreadedMessage = SlackThreadedMessage
   deriving (Generic, Show)
 
 
+-- | Channel representation (you can extend this)
+data SlackChannel = SlackChannel
+  { channelId :: Text
+  , channelName :: Text
+  }
+  deriving (Show)
+
+
+instance AE.FromJSON SlackChannel where
+  parseJSON = withObject "SlackChannel" $ \o -> do
+    cid <- o AE..: "id"
+    name <- o AE..: "name"
+    pure $ SlackChannel cid name
+
+
+data SlackChannelsResponse = SlackChannelsResponse
+  { ok :: Bool
+  , channels :: [SlackChannel]
+  }
+  deriving (Generic, Show)
+  deriving anyclass (AE.FromJSON)
+
+
+-- | Internal helper to call Slack API
+getSlackChannels :: HTTP :> es => Text -> Text -> Eff es (Maybe SlackChannelsResponse)
+getSlackChannels token team_id = do
+  let url = "https://slack.com/api/conversations.list"
+      opts =
+        defaults & header "Authorization" .~ ["Bearer " <> encodeUtf8 token] & Wreq.param "team_id" .~ [team_id]
+
+  r <- getWith opts url
+  let resBody = r ^. responseBody
+  case AE.eitherDecode resBody of
+    Right val -> return $ Just val
+    Left err -> return Nothing
+
+
 instance AE.FromJSON SlackThreadedMessage where
   parseJSON = AE.genericParseJSON AE.defaultOptions{AE.fieldLabelModifier = \f -> if f == "type_" then "type" else f}
 
@@ -672,7 +710,7 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-        <> [msgJson]
-        <> ["\n\nUser query: " <> question]
+          <> [msgJson]
+          <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
