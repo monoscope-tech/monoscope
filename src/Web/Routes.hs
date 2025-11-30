@@ -306,6 +306,9 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , -- Member management
     membersManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Get '[HTML] (RespHeaders ManageMembers.ManageMembers)
   , membersManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> QPT "onboarding" :> ReqBody '[FormUrlEncoded] ManageMembers.ManageMembersForm :> Post '[HTML] (RespHeaders ManageMembers.ManageMembers)
+  , teamsManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> QPT "what" :> Get '[HTML] (RespHeaders (Html ()))
+  , teamsManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> ReqBody '[JSON] ManageMembers.TeamForm :> Post '[HTML] (RespHeaders (Html ()))
+  , teamGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> Capture "teamHandle" Text :> Get '[HTML] (RespHeaders (Html ()))
   , manageSubscriptionGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_subscription" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Notifications
     notificationsUpdateChannelPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Post '[HTML] (RespHeaders Integrations.NotificationsUpdatePost)
@@ -481,6 +484,9 @@ projectsServer =
     , deleteProjectGet = CreateProject.deleteProjectGetH
     , membersManageGet = ManageMembers.manageMembersGetH
     , membersManagePost = ManageMembers.manageMembersPostH
+    , teamsManageGet = ManageMembers.manageTeamsGetH
+    , teamsManagePost = ManageMembers.manageTeamPostH
+    , teamGet = ManageMembers.teamGetH
     , manageSubscriptionGet = ManageMembers.manageSubGetH
     , onboading = Onboarding.onboardingGetH
     , onboardingInfoPost = Onboarding.onboardingInfoPostH

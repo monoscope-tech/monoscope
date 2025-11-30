@@ -649,6 +649,8 @@ code, pre, .code, .monospace {
   @apply bg-fillWeak text-textStrong border border-strokeWarning-strong;
 }
 
+.tagify {}
+
 @utility ctable {
   & :where(.table-pin-rows thead tr) {
     @apply sticky top-0 z-10 bg-bgBase;

@@ -7,9 +7,16 @@ module Models.Projects.ProjectMembers (
   selectActiveProjectMembers,
   updateProjectMembersPermissons,
   softDeleteProjectMembers,
+  createTeam,
+  updateTeam,
+  getTeams,
+  getTeamByHandle,
+  TeamVM (..),
+  Team (..),
 ) where
 
 import Control.Error (note)
+import Data.Aeson qualified as AE
 import Data.CaseInsensitive (CI)
 import Data.Default.Instances ()
 import Data.Time (ZonedTime)
@@ -25,10 +32,11 @@ import Database.PostgreSQL.Entity.Types (
   Schema,
   TableName,
  )
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (..), ToRow)
+import Database.PostgreSQL.Simple (FromRow, In, Only (Only), ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
+import Database.PostgreSQL.Simple.TypeInfo.Static (uuid)
 import Database.PostgreSQL.Transact (DBT, execute, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
 import Models.Projects.Projects qualified as Projects
@@ -114,6 +122,8 @@ data ProjectMemberVM = ProjectMemberVM
   , userId :: Users.UserId
   , permission :: Permissions
   , email :: CI Text
+  , first_name :: Text
+  , last_name :: Text
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (FromRow, NFData)
@@ -123,7 +133,7 @@ selectActiveProjectMembers :: Projects.ProjectId -> DBT IO (V.Vector ProjectMemb
 selectActiveProjectMembers = query q
   where
     q =
-      [sql| SELECT pm.id, pm.user_id, pm.permission,us.email  from projects.project_members pm
+      [sql| SELECT pm.id, pm.user_id, pm.permission,us.email, us.first_name, us.last_name from projects.project_members pm
                    JOIN users.users us ON (pm.user_id=us.id)
                    WHERE pm.project_id=?::uuid and pm.active=TRUE 
                    ORDER BY pm.created_at ASC;
@@ -148,3 +158,104 @@ softDeleteProjectMembers vals = void $ execute q (Only (V.fromList vals))
       [sql| UPDATE projects.project_members
             SET active = FALSE
             WHERE id = Any(?::uuid[]); |]
+
+
+createTeam :: Projects.ProjectId -> Text -> Text -> Text -> V.Vector Users.UserId -> V.Vector Text -> V.Vector Text -> V.Vector Text -> DBT IO Int64
+createTeam pid name description handle memberIds notifEmails slackChannels discordChannels = do
+  execute q (pid, name, description, handle, memberIds, notifEmails, slackChannels, discordChannels)
+  where
+    q =
+      [sql| INSERT INTO projects.teams
+               (project_id, name, description, handle, members, notify_emails, slack_channels, discord_channels)
+               VALUES (?,?,?,?,?::uuid[],?,?,?) |]
+
+
+updateTeam :: Projects.ProjectId -> UUID.UUID -> Text -> Text -> Text -> V.Vector Users.UserId -> V.Vector Text -> V.Vector Text -> V.Vector Text -> DBT IO Int64
+updateTeam pid tid name description handle memberIds notifEmails slackChannels discordChannels = do
+  execute q (name, description, handle, memberIds, notifEmails, slackChannels, discordChannels, pid, tid)
+  where
+    q =
+      [sql| UPDATE projects.teams
+               SET name = ?, description = ?, handle = ?, members = ?::uuid[], notify_emails = ?, slack_channels = ?, discord_channels = ?
+               WHERE project_id = ? AND id = ? |]
+
+
+data Team = Team
+  { id :: UUID.UUID
+  , name :: Text
+  , description :: Text
+  , handle :: Text
+  , members :: V.Vector Users.UserId
+  , notify_emails :: V.Vector Text
+  , slack_channels :: V.Vector Text
+  , discord_channels :: V.Vector Text
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (FromRow, NFData)
+
+
+getTeams :: Projects.ProjectId -> DBT IO (V.Vector Team)
+getTeams pid = query q (Only pid)
+  where
+    q =
+      [sql| SELECT id, name, description, handle, members, notify_emails, slack_channels, discord_channels
+            FROM projects.teams
+            WHERE project_id = ? |]
+
+
+data TeamVM = TeamVM
+  { id :: UUID.UUID
+  , name :: Text
+  , handle :: Text
+  , description :: Text
+  , notify_emails :: V.Vector Text
+  , slack_channels :: V.Vector Text
+  , discord_channels :: V.Vector Text
+  , members :: V.Vector TeamMemberVM
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (FromRow, NFData)
+
+
+data TeamMemberVM = TeamMemberVM
+  { memberId :: UUID.UUID
+  , memberEmail :: CI Text
+  , memberName :: Text
+  , memberAvatar :: Maybe Text
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (FromField, NFData)
+
+
+getTeamByHandle :: Projects.ProjectId -> Text -> DBT IO (V.Vector TeamVM)
+getTeamByHandle pid handle = query q (pid, handle)
+  where
+    q =
+      [sql|
+      SELECT 
+        t.id,
+        t.name,
+        t.handle,
+        t.description,
+        t.notify_emails,
+        t.slack_channels,
+        t.discord_channels,
+        COALESCE(
+          (
+            SELECT jsonb_agg(
+              jsonb_build_object(
+                'memberId', u.id,
+                'memberName', u.first_name <> ' ' <> u.last_name,
+                'memberEmail', u.email,
+                'memberAvatar', u.avatar
+              )
+            )
+            FROM unnest(t.members) AS mid
+            JOIN users.users u ON u.id = mid
+          ),
+          '[]'::jsonb
+        ) AS members
+      FROM teams t
+      WHERE t.project_id = ? 
+        AND t.handle = ?
+    |]
