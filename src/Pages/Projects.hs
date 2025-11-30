@@ -55,6 +55,7 @@ import Data.Effectful.Wreq qualified as W
 import Data.List.Unique (uniq)
 import Data.Pool (withResource)
 import Data.Text qualified as T
+import Data.Time
 import Data.UUID qualified as RealUUID
 import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
@@ -85,6 +86,7 @@ import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack (channels, getSlackChannels)
+import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Components (paymentPlanPicker)
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
@@ -98,7 +100,7 @@ import Servant.API.ResponseHeaders (Headers)
 import Servant.Server (err302, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, redirectCS)
-import Utils (faSprite_, insertIfNotExist, isDemoAndNotSudo, lookupValueText)
+import Utils (faSprite_, formatUTC, insertIfNotExist, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
 import "base64" Data.ByteString.Base64 qualified as B64
 
@@ -660,7 +662,7 @@ teamCard pid team whiteList channelWhiteList discordWhiteList = do
           when (not $ V.null team.notify_emails) do
             faSprite_ "envelope" "regular" "h-3.5 w-3.5"
       div_ [class_ "flex justify-between items-center text-textWeak text-xs mt-2"] do
-        toHtml $ "Created " <> "22-10-220"
+        toHtml $ "Created " <> (toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" team.created_at)
         div_ [class_ "inline-block flex -space-x-2"] do
           forM_ team.members $ \m -> do
             div_ [class_ "inline-block mx-0.5", term "data-tippy-content" (m.memberName)]
@@ -672,6 +674,22 @@ teamGetH pid handle = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   teamVm <- dbtToEff $ ProjectMembers.getTeamByHandle pid handle
+  projMembers <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
+  slackDataM <- Slack.getProjectSlackData pid
+  channels <- case slackDataM of
+    Just slackData -> do
+      channels' <- SlackP.getSlackChannels appCtx.env.slackBotToken slackData.teamId
+      case channels' of
+        Just chs -> return chs.channels
+        Nothing -> return []
+    Nothing -> return []
+
+  discordDataM <- Slack.getDiscordDataByProjectId pid
+  discordChannels <- case discordDataM of
+    Just discordData -> do
+      channels' <- Discord.getDiscordChannels appCtx.env.discordBotToken discordData.guildId
+      return channels'
+    Nothing -> return []
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
@@ -680,16 +698,69 @@ teamGetH pid handle = do
           , config = appCtx.config
           }
   case teamVm of
-    Just team -> addRespHeaders $ bodyWrapper bwconf $ teamPage pid team
+    Just team -> addRespHeaders $ bodyWrapper bwconf $ teamPage pid team projMembers channels discordChannels
     Nothing -> addRespHeaders $ bodyWrapper bwconf $ teamPageNF pid handle
 
 
-teamPage :: Projects.ProjectId -> ProjectMembers.TeamVM -> Html ()
-teamPage pid team = do
-  section_ [id_ "main-content", class_ "w-full py-16"] do
-    div_ [class_ "p-6 w-[606px] mx-auto"] do
-      h2_ [class_ "text-textStrong mb-4 text-xl font-semibold"] "Manage Team"
-      p_ [class_ "text-textWeak text-sm leading-tight"] "We'll email them instructions and a link to sign in"
+teamPage :: Projects.ProjectId -> ProjectMembers.TeamVM -> V.Vector ProjectMembers.ProjectMemberVM -> [Slack.SlackChannel] -> [Discord.DiscordChannel] -> Html ()
+teamPage pid team projMembers slackChannels discordChannels = do
+  section_ [id_ "main-content", class_ "w-full h-full"] do
+    div_ [class_ "flex h-full border-t border-strokeWeak"] do
+      div_ [class_ "p-4 w-4/12 space-y-6 mx-auto h-full overflow-y-auto"] do
+        div_ [class_ "flex items-center gap-3"] do
+          h2_ [class_ "text-xl font-semibold"] $ toHtml team.name
+          span_ [class_ "text-textWeak flex items-center gap-1 text-sm"] do
+            faSprite_ "copy" "regular" "w-3 h-3"
+            toHtml team.handle
+        div_ [] do
+          p_ [class_ "text-textWeak text-sm"] $ toHtml team.description
+        div_ [class_ "rounded-lg p-2 border border-strokeWeak"] do
+          span_ [class_ "text-sm flex items-center gap-2 font-semibold py-2"] do
+            faSprite_ "users" "regular" "h-4 w-4"
+            toHtml $ "Members"
+            span_ [class_ "text-textWeak"] $ ("(" <> show (V.length team.members) <> ")")
+
+          div_ [] do
+            forM_ team.members \m -> do
+              div_ [class_ "flex flex-col gap-1 py-3 border-t border-strokeWeak"] do
+                div_ [class_ "flex  gap-2 text-sm"] do
+                  img_ [src_ m.memberAvatar, class_ "w-5 h-5 rounded-full border border-strokeWeak"]
+                  span_ [] $ toHtml m.memberName
+                span_ [class_ "text-textWeak text-xs"] $ toHtml m.memberEmail
+
+        div_ [class_ "p-2 rounded-lg border border-strokeWeak"] do
+          span_ [class_ "text-sm flex items-center gap-2 py-2 font-semibold border-b border-strokeWeak"] do
+            faSprite_ "bell" "regular" "h-4 w-4"
+            "Notifications"
+          div_ [] do
+            div_ [class_ "flex flex-col gap-2 py-3 border-t border-strokeWeak"] do
+              div_ [class_ "flex items-center text-sm gap-2 font-medium"] do
+                faSprite_ "envelope" "regular" "h-4 w-4"
+                "Email addresses"
+              div_ [class_ "flex items-center gap-2 text-xs text-textWeak"] do
+                when (V.null team.notify_emails) $ span_ [] "No emails added"
+                forM_ team.notify_emails \e -> span_ [] $ toHtml e
+            div_ [class_ "flex flex-col gap-2 py-3 border-t border-strokeWeak"] do
+              div_ [class_ "flex items-center text-sm gap-2 font-medium"] do
+                faSprite_ "slack" "solid" "h-4 w-4"
+                "Slack channels"
+              div_ [class_ "flex items-center gap-2 text-xs text-textWeak"] do
+                when (V.null team.slack_channels) $ span_ [] "No slack channel configured"
+                forM_ team.slack_channels \e -> do
+                  let tar = maybe e (.channelName) $ find (\x -> x.channelId == e) slackChannels
+                  span_ [] $ toHtml tar
+            div_ [class_ "flex flex-col gap-2 py-3 border-t border-strokeWeak"] do
+              div_ [class_ "flex items-center text-sm gap-2 font-medium"] do
+                faSprite_ "discord" "solid" "h-4 w-4"
+                "Discord channels"
+              div_ [class_ "flex items-center gap-2 text-xs text-textWeak"] do
+                when (V.null team.discord_channels) $ span_ [] "No discord channel configured"
+                forM_ team.discord_channels \e -> do
+                  let tar = maybe e (.channelName) $ find (\x -> x.channelId == e) discordChannels
+                  span_ [] $ toHtml tar
+
+      div_ [class_ "h-full w-8/12 overflow-y-auto"] do
+        div_ [class_ "h-[1000px] w-full bg-red-500"] pass
 
 
 teamPageNF :: Projects.ProjectId -> Text -> Html ()
