@@ -437,7 +437,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   alertDM <- case alertM of
     Nothing -> return Nothing
     Just alertIdText -> case UUID.fromText alertIdText of
-      Just alertId -> Monitors.queryMonitorById (Monitors.QueryMonitorId alertId)
+      Just alertId -> dbtToEff $ Monitors.queryMonitorById (Monitors.QueryMonitorId alertId)
       Nothing -> return Nothing
 
   -- Use alert's visualization type if no vizType specified and alert is loaded

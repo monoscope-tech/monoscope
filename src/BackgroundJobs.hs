@@ -832,6 +832,7 @@ sendFallbackNotifications monitorE = do
   forM_ monitorE.alertConfig.emails \email -> emailQueryMonitorAlert monitorE email Nothing
   unless (null monitorE.alertConfig.slackChannels) $ sendSlackMessage monitorE.projectId [fmtTrim| 🤖 *Log Alert triggered for `{monitorE.alertConfig.title}`*|]
 
+-- Send notifications
 
 dispatchTeamNotifications :: ProjectMembers.Team -> Pkg.Mail.NotificationAlerts -> Projects.ProjectId -> Text -> (CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
 dispatchTeamNotifications team alert projectId projectTitle emailAction = do
