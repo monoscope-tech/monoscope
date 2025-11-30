@@ -13,6 +13,7 @@ module Models.Projects.ProjectMembers (
   getTeamByHandle,
   TeamVM (..),
   Team (..),
+  TeamMemberVM (..),
 ) where
 
 import Control.Error (note)
@@ -22,7 +23,7 @@ import Data.Default.Instances ()
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (query)
+import Database.PostgreSQL.Entity.DBT (query, queryOne)
 import Database.PostgreSQL.Entity.Types (
   CamelToSnake,
   Entity,
@@ -194,13 +195,32 @@ data Team = Team
   deriving anyclass (FromRow, NFData)
 
 
-getTeams :: Projects.ProjectId -> DBT IO (V.Vector Team)
+getTeams :: Projects.ProjectId -> DBT IO (V.Vector TeamVM)
 getTeams pid = query q (Only pid)
   where
     q =
-      [sql| SELECT id, name, description, handle, members, notify_emails, slack_channels, discord_channels
-            FROM projects.teams
-            WHERE project_id = ? |]
+      [sql|
+      SELECT 
+        t.id,
+        t.name,
+        t.handle,
+        t.description,
+        t.notify_emails,
+        t.slack_channels,
+        t.discord_channels,
+ARRAY(
+  SELECT jsonb_build_object(
+    'memberId', u.id,
+    'memberName', concat_ws(' ', u.first_name, u.last_name),
+    'memberEmail', u.email,
+    'memberAvatar', u.display_image_url
+  )
+  FROM unnest(t.members) AS mid
+  JOIN users.users u ON u.id = mid
+) AS members
+      FROM projects.teams t
+      WHERE t.project_id = ? 
+    |]
 
 
 data TeamVM = TeamVM
@@ -221,14 +241,24 @@ data TeamMemberVM = TeamMemberVM
   { memberId :: UUID.UUID
   , memberEmail :: CI Text
   , memberName :: Text
-  , memberAvatar :: Maybe Text
+  , memberAvatar :: Text
   }
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (FromField, NFData)
+  deriving anyclass (AE.FromJSON, NFData)
 
 
-getTeamByHandle :: Projects.ProjectId -> Text -> DBT IO (V.Vector TeamVM)
-getTeamByHandle pid handle = query q (pid, handle)
+instance FromField TeamMemberVM where
+  fromField f mdata =
+    case mdata of
+      Nothing -> returnError UnexpectedNull f ""
+      Just bs ->
+        case AE.eitherDecodeStrict' bs of
+          Right a -> pure a
+          Left err -> returnError ConversionFailed f ("Failed to parse JSON for TeamMemberVM: " <> err)
+
+
+getTeamByHandle :: Projects.ProjectId -> Text -> DBT IO (Maybe TeamVM)
+getTeamByHandle pid handle = queryOne q (pid, handle)
   where
     q =
       [sql|
@@ -240,22 +270,17 @@ getTeamByHandle pid handle = query q (pid, handle)
         t.notify_emails,
         t.slack_channels,
         t.discord_channels,
-        COALESCE(
-          (
-            SELECT jsonb_agg(
-              jsonb_build_object(
-                'memberId', u.id,
-                'memberName', u.first_name <> ' ' <> u.last_name,
-                'memberEmail', u.email,
-                'memberAvatar', u.avatar
-              )
-            )
-            FROM unnest(t.members) AS mid
-            JOIN users.users u ON u.id = mid
-          ),
-          '[]'::jsonb
-        ) AS members
-      FROM teams t
+ARRAY(
+  SELECT jsonb_build_object(
+    'memberId', u.id,
+    'memberName', concat_ws(' ', u.first_name, u.last_name),
+    'memberEmail', u.email,
+    'memberAvatar', u.display_image_url
+  )
+  FROM unnest(t.members) AS mid
+  JOIN users.users u ON u.id = mid
+) AS members
+      FROM projects.teams t
       WHERE t.project_id = ? 
         AND t.handle = ?
     |]
