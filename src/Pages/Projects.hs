@@ -759,8 +759,8 @@ teamPage pid team projMembers slackChannels discordChannels = do
                   let tar = maybe e (.channelName) $ find (\x -> x.channelId == e) discordChannels
                   span_ [] $ toHtml tar
 
-      div_ [class_ "h-full w-8/12 overflow-y-auto"] do
-        div_ [class_ "h-[1000px] w-full bg-red-500"] pass
+      div_ [class_ "h-full w-8/12 overflow-y-auto border-l p-2"] do
+        div_ [class_ "h-[1000px] w-full"] pass
 
 
 teamPageNF :: Projects.ProjectId -> Text -> Html ()
