@@ -20,7 +20,7 @@ import Control.Error (note)
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive (CI)
 import Data.Default.Instances ()
-import Data.Time (ZonedTime)
+import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (query, queryOne)
@@ -202,6 +202,8 @@ getTeams pid = query q (Only pid)
       [sql|
       SELECT 
         t.id,
+        t.created_at,
+        t.updated_at,
         t.name,
         t.handle,
         t.description,
@@ -225,6 +227,8 @@ ARRAY(
 
 data TeamVM = TeamVM
   { id :: UUID.UUID
+  , created_at :: UTCTime
+  , updated_at :: UTCTime
   , name :: Text
   , handle :: Text
   , description :: Text
@@ -239,7 +243,7 @@ data TeamVM = TeamVM
 
 data TeamMemberVM = TeamMemberVM
   { memberId :: UUID.UUID
-  , memberEmail :: CI Text
+  , memberEmail :: Text
   , memberName :: Text
   , memberAvatar :: Text
   }
@@ -264,6 +268,8 @@ getTeamByHandle pid handle = queryOne q (pid, handle)
       [sql|
       SELECT 
         t.id,
+        t.created_at,
+        t.updated_at,
         t.name,
         t.handle,
         t.description,
