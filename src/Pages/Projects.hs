@@ -74,7 +74,7 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Slack (SlackData, getDiscordDataByProjectId, getProjectSlackData)
 import Models.Apis.Slack qualified as Slack
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
-import Models.Projects.ProjectMembers (TeamVM (..))
+import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -603,9 +603,9 @@ manageTeamsGetH pid layoutM = do
       addRespHeaders $ bodyWrapper bwconf $ manageTeamsPage pid projMembers channels discordChannels teams
 
 
-manageTeamsPage :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberVM -> [SlackP.SlackChannel] -> [Discord.DiscordChannel] -> V.Vector ProjectMembers.Team -> Html ()
+manageTeamsPage :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberVM -> [SlackP.SlackChannel] -> [Discord.DiscordChannel] -> V.Vector ProjectMembers.TeamVM -> Html ()
 manageTeamsPage pid projMembers channels discordChannels teams = do
-  let whiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.id]) <$> projMembers
+  let whiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
   let channelWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]) <$> channels
   let discordWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]) <$> discordChannels
   section_ [id_ "main-content", class_ "w-full py-8"] do
@@ -622,24 +622,36 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
           faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
           input_ [type_ "text", placeholder_ "Search teams...", class_ ""]
         span_ [class_ "text-textWeak text-sm"] $ (show (V.length teams) <> " teams found")
-      div_ [class_ "mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"] $ mapM_ (\t -> teamCard pid t whiteList channelWhiteList discordWhiteList) (V.toList teams)
+      div_ [class_ "mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-4"] $ mapM_ (\t -> teamCard pid t whiteList channelWhiteList discordWhiteList) (V.toList teams)
 
 
-teamCard :: Projects.ProjectId -> ProjectMembers.Team -> Text -> Text -> Text -> Html ()
+teamCard :: Projects.ProjectId -> ProjectMembers.TeamVM -> Text -> Text -> Text -> Html ()
 teamCard pid team whiteList channelWhiteList discordWhiteList = do
-  a_ [href_ $ "/p/" <> pid.toText <> "/manage_teams/" <> team.handle, class_ "bg-base-100 border border-strokeWeak rounded-xl shadow-sm hover:shadow-md transition-shadow duration-200 overflow-hidden"] do
-    div_ [class_ "p-5 pb-3"] do
-      div_ [class_ "flex justify-between items-start mb-3"] do
-        div_ [class_ "flex-1 min-w-0"] do
-          h4_ [class_ "text-textStrong font-semibold text-lg"] $ toHtml team.name
-          p_ [class_ "text-textWeak text-sm mt-1 line-clamp-2"] $ toHtml team.description
+  div_ [class_ "border border-strokeWeak rounded-xl shadow-sm hover:shadow-md transition-shadow duration-200 overflow-hidden"] do
+    div_ [class_ "p-5 pb-3 flex flex-col gap-4"] do
+      div_ [class_ "flex justify-between center"] do
+        a_ [href_ $ "/p/" <> pid.toText <> "/manage_teams/" <> team.handle, class_ "flex items-center gap-4 min-w-0"] do
+          div_ [class_ "rounded-full border border-strokeWeak p-3"] do
+            span_ [class_ "text-xl font-bold"] "BS"
+          div_ [] do
+            h4_ [class_ "text-textStrong font-semibold"] $ toHtml team.name
+            span_ [class_ "text-textWeak text-sm"] $ toHtml team.handle
         label_ [class_ "btn btn-ghost btn-sm", Lucid.for_ (team.handle <> "-new-team-modal")] "Edit"
         input_ [type_ "checkbox", id_ (team.handle <> "-new-team-modal"), class_ "modal-toggle"]
         teamModal pid (Just team) whiteList channelWhiteList discordWhiteList
+      div_ [] do
+        p_ [class_ "text-textWeak text-sm mt-1 line-clamp-2"] $ toHtml team.description
       div_ [class_ "flex items-center justify-between text-sm text-textWeak"] do
         div_ [class_ "flex items-center gap-2"] do
-          faSprite_ "users" "regular" "h-3.5 w-3.5"
-          span_ [] $ toHtml $ (show $ V.length team.members) <> " members"
+          div_ [class_ "flex items-center gap-1", term "data-tippy-content" "Members"] do
+            faSprite_ "users" "regular" "h-3.5 w-3.5"
+            span_ [] $ toHtml $ show $ V.length team.members
+          div_ [class_ "flex items-center gap-1", term "data-tippy-content" "Dashboards"] do
+            faSprite_ "dashboard" "regular" "h-3 w-3"
+            span_ [] $ toHtml $ show $ V.length team.members
+          div_ [class_ "flex items-center gap-1", term "data-tippy-content" "Monitors"] do
+            faSprite_ "information" "regular" "h-3.5 w-3.5"
+            span_ [] $ toHtml $ show $ V.length team.members
         div_ [class_ "flex items-center gap-2"] do
           when (not $ V.null team.slack_channels) do
             faSprite_ "slack" "regular" "h-3.5 w-3.5"
@@ -647,6 +659,12 @@ teamCard pid team whiteList channelWhiteList discordWhiteList = do
             faSprite_ "discord" "regular" "h-3.5 w-3.5"
           when (not $ V.null team.notify_emails) do
             faSprite_ "envelope" "regular" "h-3.5 w-3.5"
+      div_ [class_ "flex justify-between items-center text-textWeak text-xs mt-2"] do
+        toHtml $ "Created " <> "22-10-220"
+        div_ [class_ "inline-block flex -space-x-2"] do
+          forM_ team.members $ \m -> do
+            div_ [class_ "inline-block mx-0.5", term "data-tippy-content" (m.memberName)]
+              $ img_ [class_ "inline-block h-6 w-6 rounded-full ", src_ m.memberAvatar, alt_ "User avatar"]
 
 
 teamGetH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -657,20 +675,29 @@ teamGetH pid handle = do
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
-          , pageTitle = "Manage teams"
+          , pageTitle = "Team details"
           , currProject = Just project
-          , isSettingsPage = True
           , config = appCtx.config
           }
-  addRespHeaders $ bodyWrapper bwconf $ teamPage pid
+  case teamVm of
+    Just team -> addRespHeaders $ bodyWrapper bwconf $ teamPage pid team
+    Nothing -> addRespHeaders $ bodyWrapper bwconf $ teamPageNF pid handle
 
 
-teamPage :: Projects.ProjectId -> Html ()
-teamPage pid = do
+teamPage :: Projects.ProjectId -> ProjectMembers.TeamVM -> Html ()
+teamPage pid team = do
   section_ [id_ "main-content", class_ "w-full py-16"] do
     div_ [class_ "p-6 w-[606px] mx-auto"] do
       h2_ [class_ "text-textStrong mb-4 text-xl font-semibold"] "Manage Team"
       p_ [class_ "text-textWeak text-sm leading-tight"] "We'll email them instructions and a link to sign in"
+
+
+teamPageNF :: Projects.ProjectId -> Text -> Html ()
+teamPageNF pid handle = do
+  section_ [id_ "main-content", class_ "w-full py-16"] do
+    div_ [class_ "p-6 w-[606px] mx-auto"] do
+      h2_ [class_ "text-textStrong mb-4 text-xl font-semibold"] $ "Team not found: " <> toHtml handle
+      p_ [class_ "text-textWeak text-sm leading-tight"] "We couldn't find the team you're looking for."
 
 
 manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ManageMembers)
@@ -1241,14 +1268,14 @@ data NotificationChannel
 
 
 -- Main Modal Component
-teamModal :: Projects.ProjectId -> Maybe ProjectMembers.Team -> Text -> Text -> Text -> Html ()
+teamModal :: Projects.ProjectId -> Maybe ProjectMembers.TeamVM -> Text -> Text -> Text -> Html ()
 teamModal pid team whiteList channelWhiteList discordWhiteList = do
   let name = maybe "" (.name) team
   let handle = maybe "" (.handle) team
   let description = maybe "" (.description) team
   let teamId = fmap (.id) team
   let prefix = maybe "n" (\x -> x.handle) team
-  let membersTags = decodeUtf8 $ AE.encode $ maybe [] (\t -> ((.toText) <$> t.members)) team
+  let membersTags = decodeUtf8 $ AE.encode $ maybe [] (\t -> ((\m -> UUID.toText m.memberId) <$> t.members)) team
   let notifEmails = decodeUtf8 $ AE.encode $ maybe [] (.notify_emails) team
   let slackChannels = decodeUtf8 $ AE.encode $ maybe [] (.slack_channels) team
   let discordChannels = decodeUtf8 $ AE.encode $ maybe [] (.discord_channels) team
@@ -1331,12 +1358,13 @@ var customTagTemplate = {
 var dropdown = {mapValueTo: 'name', searchKeys: ['name', 'value']}
   
 function getTagValues(prefix) {
-  return {
+  const val = {
     teamMembers: window[`$${prefix}-membersTagify`].value.map(item => item.value),
     notifEmails: window[`$${prefix}-notifEmailsTagify`].value.map(item => item.value),
     slackChannels: window[`$${prefix}-slackTagify`].value.map(item => item.value),
     discordChannels: window[`$${prefix}-discordTagify`].value.map(item => item.value)
   }
+  return val
 }
 
 // Initialize all Tagify instances
