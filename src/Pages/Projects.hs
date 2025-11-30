@@ -500,7 +500,7 @@ manageMembersPostH pid onboardingM form = do
 
       unless (null uAndPOldAndChanged)
         $ void
-          . dbtToEff
+        . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       whenJust (nonEmpty deletedUAndP)
@@ -843,14 +843,26 @@ data TeamForm = TeamForm
 instance AE.FromJSON TeamForm where
   parseJSON = AE.withObject "TeamForm" $ \o -> do
     TeamForm
-      <$> o AE..: "teamName"
-      <*> o AE..: "teamDescription"
-      <*> o AE..: "teamHandle"
-      <*> o AE..:? "teamMembers" AE..!= V.empty
-      <*> o AE..:? "notifEmails" AE..!= V.empty
-      <*> o AE..:? "slackChannels" AE..!= V.empty
-      <*> o AE..:? "discordChannels" AE..!= V.empty
-      <*> o AE..:? "teamId"
+      <$> o
+      AE..: "teamName"
+      <*> o
+      AE..: "teamDescription"
+      <*> o
+      AE..: "teamHandle"
+      <*> o
+      AE..:? "teamMembers"
+      AE..!= V.empty
+      <*> o
+      AE..:? "notifEmails"
+      AE..!= V.empty
+      <*> o
+      AE..:? "slackChannels"
+      AE..!= V.empty
+      <*> o
+      AE..:? "discordChannels"
+      AE..!= V.empty
+      <*> o
+      AE..:? "teamId"
 
 
 manageTeamPostH :: Projects.ProjectId -> TeamForm -> ATAuthCtx (RespHeaders (Html ()))
