@@ -8,8 +8,8 @@
     "tailwindcss": "^4.1.13"
   },
   "dependencies": {
-    "@opentelemetry/auto-instrumentations-node": "^0.50.0",
-    "@tailwindcss/cli": "^4.1.12",
+    "@opentelemetry/auto-instrumentations-node": "^0.67.2",
+    "@tailwindcss/cli": "^4.1.17",
     "ansi-up": "^1.0.0",
     "html2canvas": "^1.4.1",
     "workbox-cli": "^7.4.0"
