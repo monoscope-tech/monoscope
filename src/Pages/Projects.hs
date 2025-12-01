@@ -47,6 +47,7 @@ import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64
 import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
+import Data.Char (isAlphaNum, isDigit, isLower)
 import Data.Default (Default (..))
 import Data.Effectful.UUID (UUID)
 import Data.Effectful.UUID qualified as UUID
@@ -70,7 +71,7 @@ import GHC.Records (HasField (getField))
 import Lucid
 import Lucid (div_)
 import Lucid.Htmx
-import Lucid.Htmx (hxPost_)
+import Lucid.Htmx (hxPost_, hxSelect_, hxSwapOob_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Slack (SlackData, getDiscordDataByProjectId, getProjectSlackData)
 import Models.Apis.Slack qualified as Slack
@@ -99,7 +100,7 @@ import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers)
 import Servant.Server (err302, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, redirectCS)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, redirectCS)
 import Utils (faSprite_, formatUTC, insertIfNotExist, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
 import "base64" Data.ByteString.Base64 qualified as B64
@@ -495,12 +496,12 @@ manageMembersPostH pid onboardingM form = do
 
       unless (null uAndPOldAndChanged)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       unless (null deletedUAndP)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
@@ -532,41 +533,50 @@ instance AE.FromJSON TeamForm where
   parseJSON = AE.withObject "TeamForm" $ \o -> do
     TeamForm
       <$> o
-      AE..: "teamName"
+        AE..: "teamName"
       <*> o
-      AE..: "teamDescription"
+        AE..: "teamDescription"
       <*> o
-      AE..: "teamHandle"
+        AE..: "teamHandle"
       <*> o
-      AE..:? "teamMembers"
-      AE..!= V.empty
+        AE..:? "teamMembers"
+        AE..!= V.empty
       <*> o
-      AE..:? "notifEmails"
-      AE..!= V.empty
+        AE..:? "notifEmails"
+        AE..!= V.empty
       <*> o
-      AE..:? "slackChannels"
-      AE..!= V.empty
+        AE..:? "slackChannels"
+        AE..!= V.empty
       <*> o
-      AE..:? "discordChannels"
-      AE..!= V.empty
+        AE..:? "discordChannels"
+        AE..!= V.empty
       <*> o
-      AE..:? "teamId"
+        AE..:? "teamId"
 
 
-manageTeamPostH :: Projects.ProjectId -> TeamForm -> ATAuthCtx (RespHeaders (Html ()))
-manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers, notifEmails, slackChannels, discordChannels, teamId} = do
-  rs <- case teamId of
-    Just tid -> do
-      _ <- dbtToEff $ ProjectMembers.updateTeam pid tid teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels
-      addSuccessToast "Team updated successfully" Nothing
-      html <- manageTeamsGetH pid (Just "from_post")
-      return html
-    Nothing -> do
-      _ <- dbtToEff $ ProjectMembers.createTeam pid teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels
-      addSuccessToast "Team saved successfully" Nothing
-      html <- manageTeamsGetH pid (Just "from_post")
-      return html
-  return rs
+manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers, notifEmails, slackChannels, discordChannels, teamId} tmView = do
+  let res = validateTeamDetails teamName teamHandle
+  case res of
+    Right _ -> do
+      rs <- case teamId of
+        Just tid -> do
+          _ <- dbtToEff $ ProjectMembers.updateTeam pid tid teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels
+          addSuccessToast "Team updated successfully" Nothing
+          html <- case tmView of
+            Just _ -> teamGetH pid teamHandle (Just "main-page")
+            _ -> manageTeamsGetH pid (Just "from_post")
+          return html
+        Nothing -> do
+          _ <- dbtToEff $ ProjectMembers.createTeam pid teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels
+          addSuccessToast "Team saved successfully" Nothing
+          html <- manageTeamsGetH pid (Just "from_post")
+          return html
+      return rs
+    Left e -> do
+      addErrorToast e Nothing
+      addReswap ""
+      addRespHeaders $ span_ [] $ toHtml e
 
 
 manageTeamsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -618,18 +628,18 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
           p_ [class_ "text-textWeak text-sm"] "Manage your project teams and their access"
         label_ [class_ "btn btn-primary btn-sm", Lucid.for_ "n-new-team-modal"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Team")
         input_ [type_ "checkbox", id_ "n-new-team-modal", class_ "modal-toggle"]
-        teamModal pid Nothing whiteList channelWhiteList discordWhiteList
+        teamModal pid Nothing whiteList channelWhiteList discordWhiteList False
       div_ [class_ "flex items-center gap-4"] do
         label_ [class_ "input w-96"] do
           faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
-          input_ [type_ "text", placeholder_ "Search teams...", class_ ""]
+          input_ [type_ "text", placeholder_ "Search teams...", class_ "", [__| on input show .team_filterble in #teams_list_container when its textContent.toLowerCase() contains my value.toLowerCase() |]]
         span_ [class_ "text-textWeak text-sm"] $ (show (V.length teams) <> " teams found")
-      div_ [class_ "mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-4"] $ mapM_ (\t -> teamCard pid t whiteList channelWhiteList discordWhiteList) (V.toList teams)
+      div_ [class_ "mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-4", id_ "teams_list_container"] $ mapM_ (\t -> teamCard pid t whiteList channelWhiteList discordWhiteList) (V.toList teams)
 
 
 teamCard :: Projects.ProjectId -> ProjectMembers.TeamVM -> Text -> Text -> Text -> Html ()
 teamCard pid team whiteList channelWhiteList discordWhiteList = do
-  div_ [class_ "border border-strokeWeak rounded-xl shadow-sm hover:shadow-md transition-shadow duration-200 overflow-hidden"] do
+  div_ [class_ "border border-strokeWeak rounded-xl shadow-sm hover:shadow-md transition-shadow duration-200 overflow-hidden team_filterble"] do
     div_ [class_ "p-5 pb-3 flex flex-col gap-4"] do
       div_ [class_ "flex justify-between center"] do
         a_ [href_ $ "/p/" <> pid.toText <> "/manage_teams/" <> team.handle, class_ "flex items-center gap-4 min-w-0"] do
@@ -640,7 +650,7 @@ teamCard pid team whiteList channelWhiteList discordWhiteList = do
             span_ [class_ "text-textWeak text-sm"] $ toHtml team.handle
         label_ [class_ "btn btn-ghost btn-sm", Lucid.for_ (team.handle <> "-new-team-modal")] "Edit"
         input_ [type_ "checkbox", id_ (team.handle <> "-new-team-modal"), class_ "modal-toggle"]
-        teamModal pid (Just team) whiteList channelWhiteList discordWhiteList
+        teamModal pid (Just team) whiteList channelWhiteList discordWhiteList False
       div_ [] do
         p_ [class_ "text-textWeak text-sm mt-1 line-clamp-2"] $ toHtml team.description
       div_ [class_ "flex items-center justify-between text-sm text-textWeak"] do
@@ -669,8 +679,8 @@ teamCard pid team whiteList channelWhiteList discordWhiteList = do
               $ img_ [class_ "inline-block h-6 w-6 rounded-full ", src_ m.memberAvatar, alt_ "User avatar"]
 
 
-teamGetH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (Html ()))
-teamGetH pid handle = do
+teamGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+teamGetH pid handle layoutM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   teamVm <- dbtToEff $ ProjectMembers.getTeamByHandle pid handle
@@ -698,28 +708,36 @@ teamGetH pid handle = do
           , config = appCtx.config
           }
   case teamVm of
-    Just team -> addRespHeaders $ bodyWrapper bwconf $ teamPage pid team projMembers channels discordChannels
+    Just team -> case layoutM of
+      Just _ -> addRespHeaders $ teamPage pid team projMembers channels discordChannels
+      _ -> addRespHeaders $ bodyWrapper bwconf $ teamPage pid team projMembers channels discordChannels
     Nothing -> addRespHeaders $ bodyWrapper bwconf $ teamPageNF pid handle
 
 
 teamPage :: Projects.ProjectId -> ProjectMembers.TeamVM -> V.Vector ProjectMembers.ProjectMemberVM -> [Slack.SlackChannel] -> [Discord.DiscordChannel] -> Html ()
 teamPage pid team projMembers slackChannels discordChannels = do
+  let whiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
+  let channelWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]) <$> slackChannels
+  let discordWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]) <$> discordChannels
   section_ [id_ "main-content", class_ "w-full h-full"] do
     div_ [class_ "flex h-full border-t border-strokeWeak"] do
       div_ [class_ "p-4 w-4/12 space-y-6 mx-auto h-full overflow-y-auto"] do
-        div_ [class_ "flex items-center gap-3"] do
-          h2_ [class_ "text-xl font-semibold"] $ toHtml team.name
-          span_ [class_ "text-textWeak flex items-center gap-1 text-sm"] do
-            faSprite_ "copy" "regular" "w-3 h-3"
-            toHtml team.handle
         div_ [] do
-          p_ [class_ "text-textWeak text-sm"] $ toHtml team.description
+          div_ [class_ "flex items-center gap-3"] do
+            h2_ [class_ "text-xl font-semibold"] $ toHtml team.name
+            span_ [class_ "text-textWeak flex items-center gap-1 text-sm"] do
+              faSprite_ "copy" "regular" "w-3 h-3"
+              toHtml team.handle
+          p_ [class_ "text-textWeak mt-3 text-sm"] $ toHtml team.description
         div_ [class_ "rounded-lg p-2 border border-strokeWeak"] do
-          span_ [class_ "text-sm flex items-center gap-2 font-semibold py-2"] do
-            faSprite_ "users" "regular" "h-4 w-4"
-            toHtml $ "Members"
-            span_ [class_ "text-textWeak"] $ ("(" <> show (V.length team.members) <> ")")
-
+          div_ [class_ "flex items-center justify-between"] do
+            span_ [class_ "text-sm flex items-center gap-2 font-semibold py-2"] do
+              faSprite_ "users" "regular" "h-4 w-4"
+              toHtml $ "Members"
+              span_ [class_ "text-textWeak"] $ ("(" <> show (V.length team.members) <> ")")
+            label_ [class_ "btn border border-strokeWeak btn-xs", Lucid.for_ $ team.handle <> "-new-team-modal"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "Add")
+            input_ [type_ "checkbox", id_ $ team.handle <> "-new-team-modal", class_ "modal-toggle"]
+            teamModal pid (Just team) whiteList channelWhiteList discordWhiteList True
           div_ [] do
             forM_ team.members \m -> do
               div_ [class_ "flex flex-col gap-1 py-3 border-t border-strokeWeak"] do
@@ -729,9 +747,12 @@ teamPage pid team projMembers slackChannels discordChannels = do
                 span_ [class_ "text-textWeak text-xs"] $ toHtml m.memberEmail
 
         div_ [class_ "p-2 rounded-lg border border-strokeWeak"] do
-          span_ [class_ "text-sm flex items-center gap-2 py-2 font-semibold border-b border-strokeWeak"] do
-            faSprite_ "bell" "regular" "h-4 w-4"
-            "Notifications"
+          div_ [class_ "flex items-center justify-between"] do
+            span_ [class_ "text-sm flex items-center gap-2 py-2 font-semibold border-b border-strokeWeak"] do
+              faSprite_ "bell" "regular" "h-4 w-4"
+              "Notifications"
+            label_ [class_ "btn border border-strokeWeak btn-xs", Lucid.for_ $ team.handle <> "-new-team-modal"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "Add")
+
           div_ [] do
             div_ [class_ "flex flex-col gap-2 py-3 border-t border-strokeWeak"] do
               div_ [class_ "flex items-center text-sm gap-2 font-medium"] do
@@ -759,8 +780,42 @@ teamPage pid team projMembers slackChannels discordChannels = do
                   let tar = maybe e (.channelName) $ find (\x -> x.channelId == e) discordChannels
                   span_ [] $ toHtml tar
 
-      div_ [class_ "h-full w-8/12 overflow-y-auto border-l p-2"] do
-        div_ [class_ "h-[1000px] w-full"] pass
+      div_ [class_ "h-full w-8/12 overflow-y-auto p-2"] do
+        div_ [class_ "h-[1000px] w-full p-4 space-y-6"] do
+          monitorsSection
+          dashboardsSection
+
+
+monitorsSection :: Html ()
+monitorsSection = div_ [class_ "rounded-xl border border-strokeWeak shadow-sm overflow-x-hidden"] do
+  div_ [class_ "flex items-center justify-between w-full p-2"] do
+    h4_ [class_ "text-sm font-meidum"] "Monitors"
+    div_ [class_ "flex items-center gap-4"] do
+      label_ [class_ "input input-sm w-72"] do
+        faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
+        input_ [type_ "text", placeholder_ "Search monitors...", class_ ""]
+  div_ [class_ "p-3 border-t border-strokeWeak w-full"] do
+    emptySectionState "No monitors are currently linked to this team"
+
+
+dashboardsSection :: Html ()
+dashboardsSection = div_ [class_ "rounded-xl border border-strokeWeak overflow-x-hidden"] do
+  div_ [class_ "flex items-center justify-between w-full p-2"] do
+    h4_ [class_ "text-sm font-meidum"] "Dashboards"
+    div_ [class_ "flex items-center gap-4"] do
+      label_ [class_ "input input-sm w-72"] do
+        faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
+        input_ [type_ "text", placeholder_ "Search dashboards...", class_ ""]
+  div_ [class_ "p-3 border-t w-full border-strokeWeak"] do
+    emptySectionState "No dashboards are currently linked to this team"
+
+
+emptySectionState :: Text -> Html ()
+emptySectionState message =
+  div_ [class_ "flex flex-col items-center justify-center py-10 text-center text-textWeak gap-3"] do
+    faSprite_ "empty" "regular" "h-8 w-8 text-textWeak"
+    div_ [class_ "text-sm"] $ toHtml message
+    button_ [class_ "btn btn-primary btn-sm"] "Create dashboard"
 
 
 teamPageNF :: Projects.ProjectId -> Text -> Html ()
@@ -1339,8 +1394,8 @@ data NotificationChannel
 
 
 -- Main Modal Component
-teamModal :: Projects.ProjectId -> Maybe ProjectMembers.TeamVM -> Text -> Text -> Text -> Html ()
-teamModal pid team whiteList channelWhiteList discordWhiteList = do
+teamModal :: Projects.ProjectId -> Maybe ProjectMembers.TeamVM -> Text -> Text -> Text -> Bool -> Html ()
+teamModal pid team whiteList channelWhiteList discordWhiteList isInTeamView = do
   let name = maybe "" (.name) team
   let handle = maybe "" (.handle) team
   let description = maybe "" (.description) team
@@ -1354,7 +1409,7 @@ teamModal pid team whiteList channelWhiteList discordWhiteList = do
   div_ [class_ "modal", role_ "dialog", style_ "--color-base-100: var(--color-bgOverlay)"] $ do
     div_ [class_ "modal-box"] $ do
       form_
-        [ hxPost_ ""
+        [ hxPost_ $ "/p/" <> pid.toText <> "/manage_teams?" <> (if isInTeamView then "teamView=true" else "")
         , hxExt_ "json-enc"
         , hxVals_ [text|js:{...getTagValues(`$prefix`)}|]
         , hxTarget_ "#main-content"
@@ -1504,43 +1559,132 @@ window[`$prefix-membersTagify`].on("change", (e) => {
   |]
 
 
--- Team Details Section
 teamDetailsSection :: Text -> Text -> Text -> Html ()
 teamDetailsSection name handle description = do
+  let prefix = if T.null handle then "n" else handle
   div_ [class_ "space-y-4"] $ do
-    -- Team Name Field
     div_ [class_ "flex items-center w-full gap-2 justify-between"] do
       div_ [class_ "flex flex-col w-full gap-2"] $ do
         label_ [class_ "text-sm font-medium ", Lucid.for_ "team-name"] "Team Name"
         input_
           [ class_ "input w-full"
           , type_ "text"
-          , id_ "team-name"
+          , id_ $ prefix <> "-team-name"
           , name_ "teamName"
           , placeholder_ "e.g. Backend Team"
           , value_ name
           ]
+        span_ [id_ $ prefix <> "-team-name-error", class_ "text-xs text-red-500 h-4"] ""
 
       div_ [class_ "flex flex-col gap-2 w-full"] $ do
         label_ [class_ "text-sm font-medium ", Lucid.for_ "team-handle"] "Team Handle"
         input_
           [ class_ "input w-full"
           , type_ "text"
-          , id_ "team-handle"
+          , id_ $ prefix <> "-team-handle"
           , name_ "teamHandle"
           , placeholder_ "e.g. backend-team"
           , value_ handle
           ]
-    -- Description Field
+        span_ [id_ $ prefix <> "-team-handle-error", class_ "text-xs text-red-500 h-4"] ""
     div_ [class_ "flex flex-col gap-2"] $ do
       label_ [class_ "text-sm font-medium ", Lucid.for_ "team-description"] "Description"
       textarea_
         [ class_ "w-full p-2 min-h-[80px] input focus:outline-none focus:ring-2 focus:ring-ring resize-none"
-        , id_ "team-description"
+        , id_ $ prefix <> "-team-description"
         , name_ "teamDescription"
         , placeholder_ "What does this team do?"
         ]
         $ toHtml description
+  script_
+    [text|
+  
+document.addEventListener("DOMContentLoaded", () => {
+  const nameInput = document.getElementById("$prefix-team-name");
+  const handleInput = document.getElementById("$prefix-team-handle");
+
+  const nameError = document.getElementById("$prefix-team-name-error");
+  const handleError = document.getElementById("$prefix-team-handle-error");
+
+  let handleManuallyEdited = false;
+
+  handleInput.addEventListener("input", () => {
+    handleManuallyEdited = true;
+  });
+
+  nameInput.addEventListener("input", () => {
+    if (!handleManuallyEdited) {
+      const val = nameInput.value.toLowerCase().trim();
+      const generated = val
+        .replace(/[^a-z0-9\s-]/g, "")  // remove invalid chars
+        .replace(/\s+/g, "-")          // spaces → hyphens
+        .replace(/-{2,}/g, "-")        // collapse multiple hyphens
+        .replace(/^-+|-+$/g, "");      // trim hyphens
+
+      handleInput.value = generated;
+      showError(handleInput, handleError, validators.handle());
+    }
+    showError(nameInput, nameError, validators.name());
+  });
+
+  const validators = {
+    name() {
+      const val = nameInput.value.trim();
+      if (!val) return "Team name is required";
+      if (val.length < 3) return "Team name must be at least 3 characters";
+      if (!/^[\w\s-]+$/.test(val)) return "Invalid characters in team name";
+      return "";
+    },
+
+    handle() {
+      const val = handleInput.value.trim();
+      if (!val) return "Handle is required";
+      if (!/^[a-z][a-z0-9-]*$/.test(val))
+        return "Handle must be lowercase, no spaces, and start with a letter";
+      return "";
+    },
+  };
+
+  function showError(input, elem, msg) {
+    if (msg) {
+      input.classList.add("border-red-500");
+      elem.textContent = msg;
+    } else {
+      input.classList.remove("border-red-500");
+      elem.textContent = "";
+    }
+  }
+
+  nameInput.addEventListener("input", () =>
+    showError(nameInput, nameError, validators.name())
+  );
+  handleInput.addEventListener("input", () =>
+    showError(handleInput, handleError, validators.handle())
+  );
+
+  const form = nameInput.closest("form");
+  if (form) {
+    form.addEventListener("submit", (e) => {
+      const nameErr = validators.name();
+      const handleErr = validators.handle();
+
+      showError(nameInput, nameError, nameErr);
+      showError(handleInput, handleError, handleErr);
+
+      const firstInvalid =
+        nameErr ? nameInput :
+        handleErr ? handleInput : null;
+
+      if (firstInvalid) {
+        e.preventDefault();   
+        firstInvalid.scrollIntoView({ behavior: "smooth", block: "center" });
+        firstInvalid.focus();
+        return false
+      }
+    });
+  }
+});
+|]
 
 
 -- Notification Channels Section
