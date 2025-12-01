@@ -38,6 +38,7 @@ module Pages.Projects (
   manageTeamPostH,
   TeamForm (..),
   teamGetH,
+  ManageTeams,
 )
 where
 
@@ -552,7 +553,7 @@ instance AE.FromJSON TeamForm where
         AE..:? "teamId"
 
 
-manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
 manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers, notifEmails, slackChannels, discordChannels, teamId} tmView = do
   let res = validateTeamDetails teamName teamHandle
   case res of
@@ -574,10 +575,29 @@ manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers,
     Left e -> do
       addErrorToast e Nothing
       addReswap ""
-      addRespHeaders $ span_ [] $ toHtml e
+      addRespHeaders $ ManageTeamsPostError e
 
 
-manageTeamsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+data ManageTeams
+  = ManageTeamsGet (PageCtx (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [SlackP.SlackChannel], [Discord.DiscordChannel], (V.Vector ProjectMembers.TeamVM)))
+  | ManageTeamsGet' (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [SlackP.SlackChannel], [Discord.DiscordChannel], (V.Vector ProjectMembers.TeamVM))
+  | ManageTeamsPostError Text
+  | ManageTeamGet (PageCtx (Projects.ProjectId, ProjectMembers.TeamVM, V.Vector ProjectMembers.ProjectMemberVM, [Slack.SlackChannel], [Discord.DiscordChannel]))
+  | ManageTeamGet' (Projects.ProjectId, ProjectMembers.TeamVM, V.Vector ProjectMembers.ProjectMemberVM, [Slack.SlackChannel], [Discord.DiscordChannel])
+  | ManageTeamGetError (PageCtx (Projects.ProjectId, Text))
+
+
+instance ToHtml ManageTeams where
+  toHtml (ManageTeamsGet (PageCtx bwconf (pid, members, slackChannels, discordChannels, teams))) = toHtml $ PageCtx bwconf $ manageTeamsPage pid members slackChannels discordChannels teams
+  toHtml (ManageTeamsGet' ((pid, members, slackChannels, discordChannels, teams))) = toHtml $ manageTeamsPage pid members slackChannels discordChannels teams
+  toHtml (ManageTeamsPostError msg) = span_ [] $ ""
+  toHtml (ManageTeamGet (PageCtx bwconf (pid, team, members, slackChannels, discordChannels))) = toHtml $ PageCtx bwconf $ teamPage pid team members slackChannels discordChannels
+  toHtml (ManageTeamGet' (pid, team, members, slackChannels, discordChannels)) = toHtml $ teamPage pid team members slackChannels discordChannels
+  toHtml (ManageTeamGetError (PageCtx bwconf (pid, message))) = toHtml $ PageCtx bwconf $ teamPageNF pid message
+  toHtmlRaw = toHtml
+
+
+manageTeamsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
 manageTeamsGetH pid layoutM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -608,9 +628,9 @@ manageTeamsGetH pid layoutM = do
           }
   case layoutM of
     Just _ -> do
-      addRespHeaders $ manageTeamsPage pid projMembers channels discordChannels teams
+      addRespHeaders $ ManageTeamsGet' (pid, projMembers, channels, discordChannels, teams)
     _ -> do
-      addRespHeaders $ bodyWrapper bwconf $ manageTeamsPage pid projMembers channels discordChannels teams
+      addRespHeaders $ ManageTeamsGet $ (PageCtx bwconf (pid, projMembers, channels, discordChannels, teams))
 
 
 manageTeamsPage :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberVM -> [SlackP.SlackChannel] -> [Discord.DiscordChannel] -> V.Vector ProjectMembers.TeamVM -> Html ()
@@ -677,7 +697,7 @@ teamCard pid team whiteList channelWhiteList discordWhiteList = do
               $ img_ [class_ "inline-block h-6 w-6 rounded-full ", src_ m.memberAvatar, alt_ "User avatar"]
 
 
-teamGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+teamGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
 teamGetH pid handle layoutM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -707,9 +727,9 @@ teamGetH pid handle layoutM = do
           }
   case teamVm of
     Just team -> case layoutM of
-      Just _ -> addRespHeaders $ teamPage pid team projMembers channels discordChannels
-      _ -> addRespHeaders $ bodyWrapper bwconf $ teamPage pid team projMembers channels discordChannels
-    Nothing -> addRespHeaders $ bodyWrapper bwconf $ teamPageNF pid handle
+      Just _ -> addRespHeaders $ ManageTeamGet' (pid, team, projMembers, channels, discordChannels)
+      _ -> addRespHeaders $ ManageTeamGet (PageCtx bwconf (pid, team, projMembers, channels, discordChannels))
+    Nothing -> addRespHeaders $ ManageTeamGetError (PageCtx bwconf (pid, handle))
 
 
 teamPage :: Projects.ProjectId -> ProjectMembers.TeamVM -> V.Vector ProjectMembers.ProjectMemberVM -> [Slack.SlackChannel] -> [Discord.DiscordChannel] -> Html ()
