@@ -101,3 +101,36 @@ spec = aroundAll withTestResources do
         ManageMembers.ManageMembersPost p -> do
           "example@gmail.com" `shouldSatisfy` (`elem` (p & V.toList & map (.email)))
         _ -> fail "Expected ManageMembersPost response"
+
+  describe "Teams Creation, Update and Consumption" do
+   let team = ManageMembers.TeamForm {
+        teamName = "Hello", 
+        teamDescription = "", 
+        teamHandle = "hello", 
+        notifEmails = [], 
+        teamMembers = [], 
+        discordChannels = [],
+        slackChannels = [],
+        teamId = Nothing
+        }
+   it "Should create team" \tr -> do
+    (_, pg) <-
+        testServant tr $ ManageMembers.manageTeamPostH testPid team Nothing
+    case pg of 
+        ManageMembers.ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams) -> do
+            length teams `shouldBe` 1
+        _ -> fail "Expected ManageTeamsGet' response"
+   it "Should not create team with same handle" \tr -> do 
+    (_, pg) <-
+        testServant tr $ ManageMembers.manageTeamPostH testPid team Nothing
+    case pg of 
+        ManageMembers.ManageTeamsPostError message -> do
+            message `shouldBe` "Team handle already exists for this project."
+        _ -> fail "Expected ManageTeamsGet' response"
+   it "Should list and update teams" \tr -> do 
+    (_, pg) <-
+        testServant tr $ ManageMembers.manageTeamPostH testPid team Nothing
+    case pg of 
+        ManageMembers.ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams) -> do
+            length teams `shouldBe` 1
+        _ -> fail "Expected ManageTeamsGet' response"
