@@ -32,7 +32,7 @@
         }
       })
 
-      return JSON.stringify({ object, ...vals })
+      return JSON.stringify({ ...object, ...vals })
     },
   })
 })()
