@@ -13,7 +13,7 @@ jobs:
       contents: 'read'
       id-token: 'write'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: freckle/stack-cache-action@main
       # - uses: freckle/stack-action@v5
       - uses: haskell-actions/setup@v2
@@ -28,7 +28,7 @@ jobs:
           export OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)
           export OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)
       - name: Setup node env
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 18
       - run: npm install
@@ -43,7 +43,7 @@ jobs:
       - run: stack build --ghc-options "-O0"
       
       - name: Cache build artifacts
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             .stack-work
@@ -75,7 +75,7 @@ jobs:
       matrix:
         test-suite: [doctests, unit-tests, integration-tests]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: freckle/stack-cache-action@main
       - uses: haskell-actions/setup@v2
         with:
@@ -86,7 +86,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libssl-dev librdkafka-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev
       
       - name: Restore build artifacts
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             .stack-work
@@ -99,7 +99,7 @@ jobs:
       
       # Build CSS if not in cache
       - name: Setup node env
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 18
       
@@ -122,9 +122,9 @@ jobs:
     name: UI Tests
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup node env
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 18
       - name: Run UI tests
