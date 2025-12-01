@@ -657,7 +657,7 @@ teamCard pid team whiteList channelWhiteList discordWhiteList = do
             faSprite_ "users" "regular" "h-3.5 w-3.5"
             span_ [] $ toHtml $ show $ V.length team.members
           div_ [class_ "flex items-center gap-1", term "data-tippy-content" "Dashboards"] do
-            faSprite_ "dashboard" "regular" "h-3 w-3"
+            faSprite_ "chart-area" "regular" "h-3 w-3"
             span_ [] $ toHtml $ show $ V.length team.members
           div_ [class_ "flex items-center gap-1", term "data-tippy-content" "Monitors"] do
             faSprite_ "information" "regular" "h-3.5 w-3.5"
@@ -670,7 +670,7 @@ teamCard pid team whiteList channelWhiteList discordWhiteList = do
           when (not $ V.null team.notify_emails) do
             faSprite_ "envelope" "regular" "h-3.5 w-3.5"
       div_ [class_ "flex justify-between items-center text-textWeak text-xs mt-2"] do
-        toHtml $ "Created " <> (toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" team.created_at)
+        toHtml $ "Created " <> (toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S" team.created_at)
         div_ [class_ "inline-block flex -space-x-2"] do
           forM_ team.members $ \m -> do
             div_ [class_ "inline-block mx-0.5", term "data-tippy-content" (m.memberName)]
@@ -727,39 +727,38 @@ teamPage pid team projMembers slackChannels discordChannels = do
               faSprite_ "copy" "regular" "w-3 h-3"
               toHtml team.handle
           p_ [class_ "text-textWeak mt-3 text-sm"] $ toHtml team.description
-        div_ [class_ "rounded-lg p-2 border border-strokeWeak"] do
-          div_ [class_ "flex items-center justify-between"] do
-            span_ [class_ "text-sm flex items-center gap-2 font-semibold py-2"] do
-              faSprite_ "users" "regular" "h-4 w-4"
+        div_ [class_ "rounded-lg p-4 border border-strokeWeak"] do
+          div_ [class_ "flex items-center justify-between mb-2"] do
+            span_ [class_ "flex items-center gap-2 font-semibold py-2"] do
+              faSprite_ "users" "regular" "h-5 w-5"
               toHtml $ "Members"
               span_ [class_ "text-textWeak"] $ ("(" <> show (V.length team.members) <> ")")
-            label_ [class_ "btn border border-strokeWeak btn-xs", Lucid.for_ $ team.handle <> "-new-team-modal"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "Add")
+            label_ [class_ "btn btn-outline border border-strokeWeak btn-xs", Lucid.for_ $ team.handle <> "-new-team-modal"] (faSprite_ "plus" "regular" "h-3 w-3 mr-1" >> "Add")
             input_ [type_ "checkbox", id_ $ team.handle <> "-new-team-modal", class_ "modal-toggle"]
             teamModal pid (Just team) whiteList channelWhiteList discordWhiteList True
           div_ [] do
             forM_ team.members \m -> do
-              div_ [class_ "flex flex-col gap-1 py-3 border-t border-strokeWeak"] do
+              div_ [class_ "flex flex-col gap-1 py-3 "] do
                 div_ [class_ "flex  gap-2 text-sm"] do
                   img_ [src_ m.memberAvatar, class_ "w-5 h-5 rounded-full border border-strokeWeak"]
                   span_ [] $ toHtml m.memberName
                 span_ [class_ "text-textWeak text-xs"] $ toHtml m.memberEmail
 
-        div_ [class_ "p-2 rounded-lg border border-strokeWeak"] do
-          div_ [class_ "flex items-center justify-between"] do
-            span_ [class_ "text-sm flex items-center gap-2 py-2 font-semibold border-b border-strokeWeak"] do
-              faSprite_ "bell" "regular" "h-4 w-4"
+        div_ [class_ "p-4 rounded-lg border border-strokeWeak"] do
+          div_ [class_ "flex items-center justify-between mb-2"] do
+            span_ [class_ "flex items-center gap-2 py-2 font-semibold"] do
+              faSprite_ "bell" "regular" "h-5 w-5"
               "Notifications"
-            label_ [class_ "btn border border-strokeWeak btn-xs", Lucid.for_ $ team.handle <> "-new-team-modal"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "Add")
-
+            label_ [class_ "btn btn-outline border border-strokeWeak btn-xs", Lucid.for_ $ team.handle <> "-new-team-modal"] (faSprite_ "plus" "regular" "h-3 w-3 mr-1" >> "Add")
           div_ [] do
-            div_ [class_ "flex flex-col gap-2 py-3 border-t border-strokeWeak"] do
+            div_ [class_ "flex flex-col gap-2 py-3"] do
               div_ [class_ "flex items-center text-sm gap-2 font-medium"] do
                 faSprite_ "envelope" "regular" "h-4 w-4"
                 "Email addresses"
               div_ [class_ "flex items-center gap-2 text-xs text-textWeak"] do
                 when (V.null team.notify_emails) $ span_ [] "No emails added"
                 forM_ team.notify_emails \e -> span_ [] $ toHtml e
-            div_ [class_ "flex flex-col gap-2 py-3 border-t border-strokeWeak"] do
+            div_ [class_ "flex flex-col gap-2 py-3"] do
               div_ [class_ "flex items-center text-sm gap-2 font-medium"] do
                 faSprite_ "slack" "solid" "h-4 w-4"
                 "Slack channels"
@@ -768,7 +767,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
                 forM_ team.slack_channels \e -> do
                   let tar = maybe e (.channelName) $ find (\x -> x.channelId == e) slackChannels
                   span_ [] $ toHtml tar
-            div_ [class_ "flex flex-col gap-2 py-3 border-t border-strokeWeak"] do
+            div_ [class_ "flex flex-col gap-2 py-3"] do
               div_ [class_ "flex items-center text-sm gap-2 font-medium"] do
                 faSprite_ "discord" "solid" "h-4 w-4"
                 "Discord channels"
@@ -778,32 +777,50 @@ teamPage pid team projMembers slackChannels discordChannels = do
                   let tar = maybe e (.channelName) $ find (\x -> x.channelId == e) discordChannels
                   span_ [] $ toHtml tar
 
-      div_ [class_ "h-full w-8/12 overflow-y-auto p-2"] do
-        div_ [class_ "h-[1000px] w-full p-4 space-y-6"] do
+      div_ [class_ "h-full w-8/12 overflow-y-auto p-4"] do
+        div_ [class_ "h-[1000px] w-full space-y-6"] do
           monitorsSection
           dashboardsSection
 
 
 monitorsSection :: Html ()
 monitorsSection = div_ [class_ "rounded-xl border border-strokeWeak shadow-sm overflow-x-hidden"] do
-  div_ [class_ "flex items-center justify-between w-full p-2"] do
-    h4_ [class_ "text-sm font-meidum"] "Monitors"
-    div_ [class_ "flex items-center gap-4"] do
-      label_ [class_ "input input-sm w-72"] do
-        faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
-        input_ [type_ "text", placeholder_ "Search monitors...", class_ ""]
+  div_
+    [ class_ "flex items-center justify-between w-full p-2 hover:bg-fillWeaker cursor-pointer"
+    , [__|on click toggle .hidden on the next <div/> 
+           then toggle .rotate-270 on the first <button/> in me|]
+    ]
+    do
+      h4_ [class_ "text-sm font-meidum"] (faSprite_ "list-check" "regular" "h-4 w-4 mr-2" >> "Monitors")
+      div_ [class_ "flex items-center gap-4"] do
+        div_ [class_ "flex items-center gap-4"] do
+          label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
+            faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
+            input_ [type_ "text", placeholder_ "Search monitors...", class_ "", [__| on click halt|]]
+        button_ [class_ ""] do
+          faSprite_ "p-chevron-down" "regular" "h-4 w-4"
+
   div_ [class_ "p-3 border-t border-strokeWeak w-full"] do
     emptySectionState "No monitors are currently linked to this team"
 
 
 dashboardsSection :: Html ()
 dashboardsSection = div_ [class_ "rounded-xl border border-strokeWeak overflow-x-hidden"] do
-  div_ [class_ "flex items-center justify-between w-full p-2"] do
-    h4_ [class_ "text-sm font-meidum"] "Dashboards"
-    div_ [class_ "flex items-center gap-4"] do
-      label_ [class_ "input input-sm w-72"] do
-        faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
-        input_ [type_ "text", placeholder_ "Search dashboards...", class_ ""]
+  div_
+    [ class_ "flex items-center justify-between w-full p-2 hover:bg-fillWeaker cursor-pointer"
+    , [__|on click toggle .hidden on the next <div/>
+         then toggle .rotate-270 on the first <button/> in me
+    |]
+    ]
+    do
+      h4_ [class_ "text-sm font-meidum"] (faSprite_ "chart-area" "regular" "h-4 w-4 mr-2" >> "Dashboards")
+      div_ [class_ "flex items-center gap-4"] do
+        div_ [class_ "flex items-center gap-4"] do
+          label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
+            faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
+            input_ [type_ "text", placeholder_ "Search dashboards...", class_ "", [__| on click halt|]]
+        button_ [class_ ""] do
+          faSprite_ "p-chevron-down" "regular" "h-4 w-4"
   div_ [class_ "p-3 border-t w-full border-strokeWeak"] do
     emptySectionState "No dashboards are currently linked to this team"
 
@@ -1404,14 +1421,15 @@ teamModal pid team whiteList channelWhiteList discordWhiteList isInTeamView = do
   let slackChannels = decodeUtf8 $ AE.encode $ maybe [] (.slack_channels) team
   let discordChannels = decodeUtf8 $ AE.encode $ maybe [] (.discord_channels) team
 
-  div_ [class_ "modal", role_ "dialog", style_ "--color-base-100: var(--color-bgOverlay)"] $ do
-    div_ [class_ "modal-box"] $ do
+  div_ [class_ "modal", role_ "dialog", style_ "--color-base-100: var(--color-fillWeaker)"] $ do
+    div_ [class_ "modal-box max-w-max"] $ do
       form_
         [ hxPost_ $ "/p/" <> pid.toText <> "/manage_teams?" <> (if isInTeamView then "teamView=true" else "")
         , hxExt_ "json-enc"
         , hxVals_ [text|js:{...getTagValues(`$prefix`)}|]
         , hxTarget_ "#main-content"
         , hxSwap_ "outerHTML"
+        , class_ "w-[550px]"
         ]
         do
           div_ [class_ "px-2 max-h-[75vh] overflow-y-auto"] $ do

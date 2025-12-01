@@ -9,8 +9,8 @@
 .tagify {
   --tags-disabled-bg: #f1f1f1;
   --tags-border-color: var(--color-strokeWeak);
-  --tags-hover-border-color: #ccc;
-  --tags-focus-border-color: #3595f6;
+  --tags-hover-border-color: var(--color-strokeWeak);
+  --tags-focus-border-color: var(--color-strokeBrand-weak);
   --tag-border-radius: var(--radius-field);
   --tag-bg: var(--color-fillWeak);
   --tag-hover: var(--color-fillWeaker);
@@ -24,7 +24,7 @@
   --tag--max-width: 100%;
   --tag-hide-transition: 0.3s;
   --tag-remove-bg: rgba(211, 148, 148, 0.3);
-  --tag-remove-btn-color: black;
+  --tag-remove-btn-color: var(--color-textStrong);
   --tag-remove-btn-bg: none;
   --tag-remove-btn-bg--hover: #c77777;
   --input-color: inherit;
