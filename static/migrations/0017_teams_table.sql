@@ -13,8 +13,9 @@ CREATE TABLE IF NOT EXISTS projects.teams (
   phone_numbers TEXT[] DEFAULT '{}',
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  created_by UUID NOT NULL REFERENCES users.users(id) ON DELETE SET NULL,
+  deleted_at TIMESTAMP WITH TIME ZONE DEFAULT NULL,
   UNIQUE(project_id, handle)
 );
-
-
+SELECT manage_updated_at('projects.teams');
 COMMIT;

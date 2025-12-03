@@ -309,6 +309,7 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , teamsManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> QPT "what" :> Get '[HTML] (RespHeaders ManageMembers.ManageTeams)
   , teamsManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> ReqBody '[JSON] ManageMembers.TeamForm :> QPT "teamView" :> Post '[HTML] (RespHeaders ManageMembers.ManageTeams)
   , teamGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> Capture "teamHandle" Text :> QPT "layout" :> Get '[HTML] (RespHeaders ManageMembers.ManageTeams)
+  , teamDelete :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> Capture "teamHandle" Text :> QPT "from" :> Delete '[HTML] (RespHeaders ManageMembers.ManageTeams)
   , manageSubscriptionGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_subscription" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Notifications
     notificationsUpdateChannelPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Post '[HTML] (RespHeaders Integrations.NotificationsUpdatePost)
@@ -487,6 +488,7 @@ projectsServer =
     , teamsManageGet = ManageMembers.manageTeamsGetH
     , teamsManagePost = ManageMembers.manageTeamPostH
     , teamGet = ManageMembers.teamGetH
+    , teamDelete = ManageMembers.manageTeamDeleteH
     , manageSubscriptionGet = ManageMembers.manageSubGetH
     , onboading = Onboarding.onboardingGetH
     , onboardingInfoPost = Onboarding.onboardingInfoPostH

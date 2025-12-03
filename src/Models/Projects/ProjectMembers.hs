@@ -12,6 +12,7 @@ module Models.Projects.ProjectMembers (
   getTeams,
   getTeamByHandle,
   TeamVM (..),
+  deleteTeamByHandle,
   Team (..),
   TeamMemberVM (..),
 ) where
@@ -161,14 +162,14 @@ softDeleteProjectMembers vals = void $ execute q (Only (V.fromList vals))
             WHERE id = Any(?::uuid[]); |]
 
 
-createTeam :: Projects.ProjectId -> Text -> Text -> Text -> V.Vector Users.UserId -> V.Vector Text -> V.Vector Text -> V.Vector Text -> DBT IO Int64
-createTeam pid name description handle memberIds notifEmails slackChannels discordChannels = do
-  execute q (pid, name, description, handle, memberIds, notifEmails, slackChannels, discordChannels)
+createTeam :: Projects.ProjectId -> Users.UserId -> Text -> Text -> Text -> V.Vector Users.UserId -> V.Vector Text -> V.Vector Text -> V.Vector Text -> DBT IO Int64
+createTeam pid uid name description handle memberIds notifEmails slackChannels discordChannels = do
+  execute q (pid, uid, name, description, handle, memberIds, notifEmails, slackChannels, discordChannels)
   where
     q =
       [sql| INSERT INTO projects.teams
-               (project_id, name, description, handle, members, notify_emails, slack_channels, discord_channels)
-               VALUES (?,?,?,?,?::uuid[],?,?,?) |]
+               (project_id,created_by, name, description, handle, members, notify_emails, slack_channels, discord_channels)
+               VALUES (?,?, ?,?,?,?::uuid[],?,?,?) |]
 
 
 updateTeam :: Projects.ProjectId -> UUID.UUID -> Text -> Text -> Text -> V.Vector Users.UserId -> V.Vector Text -> V.Vector Text -> V.Vector Text -> DBT IO Int64
@@ -204,6 +205,7 @@ getTeams pid = query q (Only pid)
         t.id,
         t.created_at,
         t.updated_at,
+        t.created_by,
         t.name,
         t.handle,
         t.description,
@@ -221,7 +223,7 @@ ARRAY(
   JOIN users.users u ON u.id = mid
 ) AS members
       FROM projects.teams t
-      WHERE t.project_id = ? 
+      WHERE t.project_id = ?  AND t.deleted_at is null
     |]
 
 
@@ -229,6 +231,7 @@ data TeamVM = TeamVM
   { id :: UUID.UUID
   , created_at :: UTCTime
   , updated_at :: UTCTime
+  , created_by :: Users.UserId
   , name :: Text
   , handle :: Text
   , description :: Text
@@ -270,6 +273,7 @@ getTeamByHandle pid handle = queryOne q (pid, handle)
         t.id,
         t.created_at,
         t.updated_at,
+        t.created_by,
         t.name,
         t.handle,
         t.description,
@@ -289,4 +293,12 @@ ARRAY(
       FROM projects.teams t
       WHERE t.project_id = ? 
         AND t.handle = ?
+        AND t.deleted_at is null
     |]
+
+
+deleteTeamByHandle :: Projects.ProjectId -> Text -> DBT IO ()
+deleteTeamByHandle pid handle = void $ execute q (pid, handle)
+  where
+    q =
+      [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND handle = ? |]

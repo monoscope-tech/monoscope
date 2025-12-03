@@ -36,6 +36,7 @@ module Pages.Projects (
   pricingUpdateGetH,
   CreateProjectResp (..),
   manageTeamPostH,
+  manageTeamDeleteH,
   TeamForm (..),
   teamGetH,
   ManageTeams (..),
@@ -77,7 +78,7 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Slack (SlackData, getDiscordDataByProjectId, getProjectSlackData)
 import Models.Apis.Slack qualified as Slack
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
-import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
+import Models.Projects.ProjectMembers (ProjectMembers (ProjectMembers), TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -497,12 +498,12 @@ manageMembersPostH pid onboardingM form = do
 
       unless (null uAndPOldAndChanged)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       unless (null deletedUAndP)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
@@ -534,29 +535,32 @@ instance AE.FromJSON TeamForm where
   parseJSON = AE.withObject "TeamForm" $ \o -> do
     TeamForm
       <$> o
-      AE..: "teamName"
+        AE..: "teamName"
       <*> o
-      AE..: "teamDescription"
+        AE..: "teamDescription"
       <*> o
-      AE..: "teamHandle"
+        AE..: "teamHandle"
       <*> o
-      AE..:? "teamMembers"
-      AE..!= V.empty
+        AE..:? "teamMembers"
+        AE..!= V.empty
       <*> o
-      AE..:? "notifEmails"
-      AE..!= V.empty
+        AE..:? "notifEmails"
+        AE..!= V.empty
       <*> o
-      AE..:? "slackChannels"
-      AE..!= V.empty
+        AE..:? "slackChannels"
+        AE..!= V.empty
       <*> o
-      AE..:? "discordChannels"
-      AE..!= V.empty
+        AE..:? "discordChannels"
+        AE..!= V.empty
       <*> o
-      AE..:? "teamId"
+        AE..:? "teamId"
 
 
 manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
 manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers, notifEmails, slackChannels, discordChannels, teamId} tmView = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
+  let currUserId = sess.persistentSession.userId
   let res = validateTeamDetails teamName teamHandle
   case res of
     Right _ -> do
@@ -569,10 +573,16 @@ manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers,
             _ -> manageTeamsGetH pid (Just "from_post")
           return html
         Nothing -> do
-          _ <- dbtToEff $ ProjectMembers.createTeam pid teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels
-          addSuccessToast "Team saved successfully" Nothing
-          html <- manageTeamsGetH pid (Just "from_post")
-          return html
+          teamVM <- dbtToEff $ ProjectMembers.getTeamByHandle pid teamHandle
+          case teamVM of
+            Just _ -> do
+              addErrorToast "Team handle already exists" Nothing
+              addRespHeaders $ ManageTeamsPostError "Team handle already exists for this project."
+            _ -> do
+              _ <- dbtToEff $ ProjectMembers.createTeam pid currUserId teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels
+              addSuccessToast "Team saved successfully" Nothing
+              html <- manageTeamsGetH pid (Just "from_post")
+              return html
       return rs
     Left e -> do
       addErrorToast e Nothing
@@ -580,10 +590,34 @@ manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers,
       addRespHeaders $ ManageTeamsPostError e
 
 
+manageTeamDeleteH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
+manageTeamDeleteH pid handle listViewM = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  teamVm <- dbtToEff $ ProjectMembers.getTeamByHandle pid handle
+  case teamVm of
+    Just team -> do
+      let createdByThisUser = sess.user.id == team.created_by
+      case createdByThisUser of
+        True -> do
+          _ <- dbtToEff $ ProjectMembers.deleteTeamByHandle pid handle
+          case listViewM of
+            Just _ -> addRespHeaders $ ManageTeamsDelete
+            _ -> do
+              redirectCS ("/p/" <> pid.toText <> "/manage_teams")
+              addRespHeaders $ ManageTeamsDelete
+        _ -> do
+          addErrorToast "On team owner can delete team" Nothing
+          addRespHeaders $ ManageTeamsPostError "Only team owner can delete a team"
+    _ -> do
+      addErrorToast ("Team @" <> handle <> " not found") (Nothing)
+      addRespHeaders $ ManageTeamsPostError "Team not found"
+
+
 data ManageTeams
   = ManageTeamsGet (PageCtx (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [SlackP.SlackChannel], [Discord.DiscordChannel], (V.Vector ProjectMembers.TeamVM)))
   | ManageTeamsGet' (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [SlackP.SlackChannel], [Discord.DiscordChannel], (V.Vector ProjectMembers.TeamVM))
   | ManageTeamsPostError Text
+  | ManageTeamsDelete
   | ManageTeamGet (PageCtx (Projects.ProjectId, ProjectMembers.TeamVM, V.Vector ProjectMembers.ProjectMemberVM, [Slack.SlackChannel], [Discord.DiscordChannel]))
   | ManageTeamGet' (Projects.ProjectId, ProjectMembers.TeamVM, V.Vector ProjectMembers.ProjectMemberVM, [Slack.SlackChannel], [Discord.DiscordChannel])
   | ManageTeamGetError (PageCtx (Projects.ProjectId, Text))
@@ -593,6 +627,7 @@ instance ToHtml ManageTeams where
   toHtml (ManageTeamsGet (PageCtx bwconf (pid, members, slackChannels, discordChannels, teams))) = toHtml $ PageCtx bwconf $ manageTeamsPage pid members slackChannels discordChannels teams
   toHtml (ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams)) = toHtml $ manageTeamsPage pid members slackChannels discordChannels teams
   toHtml (ManageTeamsPostError msg) = span_ [] $ ""
+  toHtml (ManageTeamsDelete) = toHtml ""
   toHtml (ManageTeamGet (PageCtx bwconf (pid, team, members, slackChannels, discordChannels))) = toHtml $ PageCtx bwconf $ teamPage pid team members slackChannels discordChannels
   toHtml (ManageTeamGet' (pid, team, members, slackChannels, discordChannels)) = toHtml $ teamPage pid team members slackChannels discordChannels
   toHtml (ManageTeamGetError (PageCtx bwconf (pid, message))) = toHtml $ PageCtx bwconf $ teamPageNF pid message
