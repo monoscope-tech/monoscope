@@ -394,8 +394,8 @@ packages:
     git: https://github.com/google/proto-lens
     name: proto-lens
     pantry-tree:
-      sha256: 6726c34a41263cda7ab730b1af9936794d19c12a3f16027377f34b167b6559eb
-      size: 74962
+      sha256: c9e406e101f24228ebfb67389d580b0ffd5ef77e6fc5fe0059602ae9ac373193
+      size: 151068
     subdir: proto-lens
     version: 0.7.1.6
   original:
@@ -407,8 +407,8 @@ packages:
     git: https://github.com/google/proto-lens
     name: proto-lens-protobuf-types
     pantry-tree:
-      sha256: 66ece4f49e6e83481f4b8ee4ced702ca92175377b1cfb9edaa18d089e62814f2
-      size: 67707
+      sha256: 4aac38beb0b84a6b208357eb1d4df059ab83d0002f3153224c1aa49fc247ba57
+      size: 137756
     subdir: proto-lens-protobuf-types
     version: 0.7.2.2
   original:
