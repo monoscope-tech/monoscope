@@ -4,6 +4,7 @@ module Pages.Monitors.Testing (
   unifiedMonitorsGetH,
   unifiedMonitorOverviewH,
   statusBadge_,
+  teamAlertsGetH,
 )
 where
 
@@ -66,6 +67,17 @@ data UnifiedMonitorDetails
   , alertLastTriggered :: Maybe UTCTime
   , visualizationType :: Text
   }
+
+
+teamAlertsGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (ItemsList.ItemsRows UnifiedMonitorItem))
+teamAlertsGetH pid teamId = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
+  alerts <- dbtToEff $ Monitors.getAlertsByTeamHandle pid teamId
+  currTime <- Time.currentTime
+  let alerts' = V.map (toUnifiedMonitorItem pid currTime) alerts
+
+  addRespHeaders $ ItemsList.ItemsRows Nothing alerts'
 
 
 -- | Unified handler for monitors endpoint showing both alerts and multi-step monitors
