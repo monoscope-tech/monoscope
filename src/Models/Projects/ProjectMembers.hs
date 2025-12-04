@@ -13,6 +13,7 @@ module Models.Projects.ProjectMembers (
   getTeamByHandle,
   TeamVM (..),
   deleteTeamByHandle,
+  getTeamsById,
   Team (..),
   TeamMemberVM (..),
 ) where
@@ -41,6 +42,7 @@ import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.TypeInfo.Static (uuid)
 import Database.PostgreSQL.Transact (DBT, execute, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
+import Effectful.PostgreSQL.Transact.Effect (DB)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import Relude
@@ -302,3 +304,24 @@ deleteTeamByHandle pid handle = void $ execute q (pid, handle)
   where
     q =
       [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND handle = ? |]
+
+
+getTeamsById :: V.Vector UUID.UUID -> DBT IO (V.Vector Team)
+getTeamsById tids
+  | V.null tids = pure V.empty
+  | otherwise = query q (Only tids)
+  where
+    q =
+      [sql|
+      SELECT 
+        t.id,
+        t.name,
+        t.description,
+        t.handle,
+        t.members,
+        t.notify_emails,
+        t.slack_channels,
+        t.discord_channels
+      FROM projects.teams t
+      WHERE t.id=ANY(?::UUID[])
+    |]

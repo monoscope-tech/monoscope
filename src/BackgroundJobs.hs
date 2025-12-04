@@ -45,6 +45,7 @@ import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps (ATError (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Users qualified as Users
@@ -59,7 +60,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Reports qualified as RP
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Drain qualified as Drain
-import Pkg.Mail (NotificationAlerts (EndpointAlert, ReportAlert, RuntimeErrorAlert), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
+import Pkg.Mail (NotificationAlerts (..), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
@@ -347,12 +348,12 @@ runHourlyJob scheduledTime hour = do
   activeProjects <-
     dbtToEff
       $ V.map (\(Only pid) -> pid)
-      <$> query
-        [sql| SELECT DISTINCT project_id
+        <$> query
+          [sql| SELECT DISTINCT project_id
               FROM otel_logs_and_spans ols
               WHERE ols.timestamp >= ?
                 AND ols.timestamp <= ? |]
-        (oneHourAgo, scheduledTime)
+          (oneHourAgo, scheduledTime)
 
   -- Log count of projects to process
   Log.logInfo "Projects with new data in the last hour window" ("count", AE.toJSON $ length activeProjects)
@@ -768,31 +769,43 @@ handleQueryMonitorThreshold :: Monitors.QueryMonitorEvaled -> Bool -> ATBackgrou
 handleQueryMonitorThreshold monitorE isAlert = do
   Log.logTrace "Query Monitors Triggered " monitorE
   _ <- dbtToEff $ Monitors.updateQMonitorTriggeredState monitorE.id isAlert
+  project <- dbtToEff $ Projects.projectById monitorE.projectId
+  case project of
+    Nothing -> Log.logAttention "Project not found for Query Monitor Alert" ("project_id", monitorE.projectId.toText)
+    Just p -> do
+      teams <- dbtToEff $ ProjectMembers.getTeamsById monitorE.teams
+      let thresholdType = if monitorE.triggerLessThan then "below" else "above"
+          threshold = fromIntegral monitorE.alertThreshold
 
-  -- Create query alert issue
-  let thresholdType = if monitorE.triggerLessThan then "below" else "above"
-      threshold = fromIntegral monitorE.alertThreshold
+      issue <-
+        liftIO
+          $ Issues.createQueryAlertIssue
+            monitorE.projectId
+            (show monitorE.id)
+            monitorE.alertConfig.title
+            monitorE.logQuery
+            threshold
+            (fromIntegral monitorE.evalResult :: Double)
+            thresholdType
 
-  issue <-
-    liftIO
-      $ Issues.createQueryAlertIssue
-        monitorE.projectId
-        (show monitorE.id)
-        monitorE.alertConfig.title
-        monitorE.logQuery
-        threshold
-        (fromIntegral monitorE.evalResult :: Double)
-        thresholdType
+      dbtToEff $ Issues.insertIssue issue
 
-  dbtToEff $ Issues.insertIssue issue
+      let alert = MonitorsAlert{monitorTitle = monitorE.alertConfig.title, monitorUrl = ""}
+      if null teams
+        then do
+          Relude.when monitorE.alertConfig.emailAll do
+            users <- dbtToEff $ Projects.usersByProjectId monitorE.projectId
+            forM_ users \u -> emailQueryMonitorAlert monitorE u.email (Just u)
+          forM_ monitorE.alertConfig.emails \email -> emailQueryMonitorAlert monitorE email Nothing
+          unless (null monitorE.alertConfig.slackChannels) $ sendSlackMessage monitorE.projectId [fmtTrim| 🤖 *Log Alert triggered for `{monitorE.alertConfig.title}`*|]
+        else do
+          forM_ teams \team -> do
+            forM_ team.notify_emails \email -> emailQueryMonitorAlert monitorE (CI.mk email) Nothing
+            forM_ team.slack_channels \channel -> sendSlackAlert alert monitorE.projectId p.title
+            forM_ team.discord_channels \channel -> sendDiscordAlert alert monitorE.projectId p.title
 
-  -- Send notifications
-  Relude.when monitorE.alertConfig.emailAll do
-    users <- dbtToEff $ Projects.usersByProjectId monitorE.projectId
-    forM_ users \u -> emailQueryMonitorAlert monitorE u.email (Just u)
-  forM_ monitorE.alertConfig.emails \email -> emailQueryMonitorAlert monitorE email Nothing
-  unless (null monitorE.alertConfig.slackChannels) $ sendSlackMessage monitorE.projectId [fmtTrim| 🤖 *Log Alert triggered for `{monitorE.alertConfig.title}`*|]
 
+-- Send notifications
 
 -- way to get emails for company. for email all
 -- TODO: based on monitor send emails or slack

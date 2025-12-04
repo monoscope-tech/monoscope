@@ -115,6 +115,7 @@ data QueryMonitorEvaled = QueryMonitorEvaled
   , deactivatedAt :: Maybe UTCTime
   , deletedAt :: Maybe UTCTime
   , visualizationType :: Text
+  , teams :: V.Vector UUID.UUID
   , evalResult :: Int
   }
   deriving stock (Generic, Show)
@@ -178,7 +179,7 @@ queryMonitorsById ids
       [sql|
     SELECT id, created_at, updated_at, project_id, check_interval_mins, alert_threshold, warning_threshold,
         log_query, log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
-        threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, visualization_type, eval(log_query_as_sql)
+        threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, visualization_type, teams, eval(log_query_as_sql)
       FROM monitors.query_monitors where id=ANY(?::UUID[])
     |]
 
