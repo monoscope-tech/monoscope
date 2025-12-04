@@ -314,21 +314,21 @@ statusBadge_ isLarge status = do
 -- | Threshold box for alerts
 thresholdBox_ :: Int -> Maybe Int -> Text -> Html ()
 thresholdBox_ alert warning direction = do
-  div_ [class_ "flex gap-2 px-4 py-2 items-center border rounded-3xl"] do
+  div_ [class_ "flex gap-2 p-3 items-center border rounded-3xl"] do
     div_ [class_ "flex items-center gap-3"] do
       -- Direction indicator
       div_ [class_ "flex items-center gap-1"] do
-        faSprite_ (if direction == "above" then "arrow-up" else "arrow-down") "regular" "h-4 w-4"
+        -- faSprite_ (if direction == "above" then "arrow-down" else "arrow-down") "regular" "h-4 w-4"
         span_ [class_ "text-xs text-textWeak"] $ toHtml direction
       -- Alert threshold
-      div_ [class_ "text-center"] do
+      div_ [class_ "text-center flex items-center gap-2"] do
         div_ [class_ "text-textError font-medium"] $ show alert
-        small_ [class_ "block text-xs"] "Alert"
+        small_ [class_ "block text-xs text-textWeak"] "Alert"
       -- Warning threshold
       whenJust warning $ \w -> do
-        div_ [class_ "text-center"] do
+        div_ [class_ "text-center flex items-center gap-2"] do
           div_ [class_ "text-textWarning font-medium"] $ show w
-          small_ [class_ "block text-xs"] "Warning"
+          small_ [class_ "block text-xs text-textWeak"] "Warning"
 
 
 -- | Unified monitor overview handler that works for both alerts and collections
