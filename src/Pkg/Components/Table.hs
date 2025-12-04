@@ -44,6 +44,7 @@ import GHC.Records (HasField (getField))
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
+import Lucid.Svg (z)
 import Pages.Components (emptyState_)
 import PyF (fmt)
 import Relude

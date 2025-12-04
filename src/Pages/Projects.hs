@@ -1,4 +1,4 @@
--# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE PackageImports #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_GHC -Wno-ambiguous-fields #-}
@@ -75,7 +75,7 @@ import GHC.Records (HasField (getField))
 import Lucid
 import Lucid (Term (term), div_, href_)
 import Lucid.Htmx
-import Lucid.Htmx (hxPost_, hxSelect_, hxSwapOob_)
+import Lucid.Htmx (hxPost_, hxSelect_, hxSwapOob_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Slack (SlackData, getDiscordDataByProjectId, getProjectSlackData)
@@ -344,28 +344,6 @@ validateWhatsapp :: [Text] -> [Text] -> Either Text ()
 validateWhatsapp notificationsChannel numbers = if "phone" `elem` notificationsChannel && null numbers then Left "Provide at least one whatsapp number" else Right ()
 
 
-validateTeamDetails :: Text -> Text -> Either Text ()
-validateTeamDetails name handle = do
-  validateName name
-  validateHandle handle
-  pure ()
-  where
-    validNameChar c = isAlphaNum c || c == ' ' || c == '-' || c == '_'
-    validHandleChar c = isLower c || isDigit c || c == '-'
-    validateName n
-      | T.null n = Left "Team name is required"
-      | T.length n < 3 = Left "Team name must be at least 3 characters"
-      | not (T.all validNameChar n) =
-          Left "Invalid characters in team name"
-      | otherwise = Right ()
-    validateHandle h
-      | T.null h = Left "Handle is required"
-      | not (validHandleChar <$> T.unpack h & and) =
-          Left "Handle must be lowercase, no spaces, and hyphens only"
-      | not (isLower (T.head h)) = Left "Handle must start with a lowercase letter"
-      | otherwise = Right ()
-
-
 data IntegrationsConfig = IntegrationsConfig
   { session :: Sessions.PersistentSession
   , projectId :: Projects.ProjectId
@@ -524,7 +502,7 @@ manageMembersPostH pid onboardingM form = do
 
       unless (null uAndPOldAndChanged)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       whenJust (nonEmpty deletedUAndP)
@@ -921,16 +899,16 @@ newtype TBulkActionForm = TBulkActionForm
 
 
 manageTeamBulkActionH :: Projects.ProjectId -> Text -> TBulkActionForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
-manageTeamBulkActionH pid action TBulkActionForm{teamId} listViewM = do
+manageTeamBulkActionH pid action fm listViewM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   case action of
     "delete" -> do
-      teamVm <- dbtToEff $ ProjectMembers.getTeamsById pid $ V.fromList teamId
+      teamVm <- dbtToEff $ ProjectMembers.getTeamsById pid $ V.fromList fm.teamId
       let canDelete = all (\team -> Just sess.user.id == team.created_by) teamVm
       if canDelete
         then do
-          _ <- dbtToEff $ ProjectMembers.deleteTeams pid $ V.fromList teamId
+          _ <- dbtToEff $ ProjectMembers.deleteTeams pid $ V.fromList fm.teamId
           when (isNothing listViewM) do
             redirectCS ("/p/" <> pid.toText <> "/manage_teams")
           addRespHeaders ManageTeamsDelete
@@ -940,29 +918,6 @@ manageTeamBulkActionH pid action TBulkActionForm{teamId} listViewM = do
     _ -> do
       addErrorToast "Invalid action" Nothing
       addRespHeaders $ ManageTeamsPostError "Invalid action"
-
-
-manageTeamDeleteH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
-manageTeamDeleteH pid handle listViewM = do
-  (sess, project) <- Sessions.sessionAndProject pid
-  teamVm <- dbtToEff $ ProjectMembers.getTeamByHandle pid handle
-  case teamVm of
-    Just team -> do
-      let createdByThisUser = sess.user.id == team.created_by
-      case createdByThisUser of
-        True -> do
-          _ <- dbtToEff $ ProjectMembers.deleteTeamByHandle pid handle
-          case listViewM of
-            Just _ -> addRespHeaders $ ManageTeamsDelete
-            _ -> do
-              redirectCS ("/p/" <> pid.toText <> "/manage_teams")
-              addRespHeaders $ ManageTeamsDelete
-        _ -> do
-          addErrorToast "On team owner can delete team" Nothing
-          addRespHeaders $ ManageTeamsPostError "Only team owner can delete a team"
-    _ -> do
-      addErrorToast ("Team @" <> handle <> " not found") (Nothing)
-      addRespHeaders $ ManageTeamsPostError "Team not found"
 
 
 data ManageTeams
@@ -994,7 +949,7 @@ manageTeamsGetH pid layoutM = do
   slackDataM <- Slack.getProjectSlackData pid
   channels <- case slackDataM of
     Just slackData -> do
-      channels' <- SlackP.getSlackChannels appCtx.env.slackBotToken slackData.teamId
+      channels' <- Slack.getSlackChannels appCtx.env.slackBotToken slackData.teamId
       case channels' of
         Just chs -> return chs.channels
         Nothing -> return []
@@ -1104,7 +1059,7 @@ teamGetH pid handle layoutM = do
   slackDataM <- Slack.getProjectSlackData pid
   channels <- case slackDataM of
     Just slackData -> do
-      channels' <- SlackP.getSlackChannels appCtx.env.slackBotToken slackData.teamId
+      channels' <- Slack.getSlackChannels appCtx.env.slackBotToken slackData.teamId
       case channels' of
         Just chs -> return chs.channels
         Nothing -> return []

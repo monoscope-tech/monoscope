@@ -44,7 +44,6 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.TypeInfo.Static (uuid)
-import Database.PostgreSQL.Simple.TypeInfo.Static (uuid)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
@@ -436,11 +435,11 @@ deleteTeams pid tids
 
 
 getTeamsById :: Projects.ProjectId -> V.Vector UUID.UUID -> DBT IO (V.Vector Team)
-getTeamsById pid tids = if V.null tids then pure V.empty else query q (pid, tids)
+getTeamsById pid tids = if V.null tids then pure V.empty else query q (pid, tids) 
   where
     q =
       [sql|
-      SELECT
+      SELECT 
         t.id,
         t.name,
         t.description,
@@ -451,8 +450,7 @@ getTeamsById pid tids = if V.null tids then pure V.empty else query q (pid, tids
         t.updated_at,
         t.notify_emails,
         t.slack_channels,
-        t.discord_channels,
-        t.phone_numbers
+        t.discord_channels
       FROM projects.teams t
-      WHERE t.project_id = ? AND t.id = ANY(?::uuid[]) AND t.deleted_at IS NULL
+      WHERE t.project_id = ? AND t.id=ANY(?::UUID[]) AND t.deleted_at is null
     |]

@@ -190,7 +190,7 @@ anomalyDetailGetH pid issueId = do
 anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Maybe RequestDump.ATError -> UTCTime -> Html ()
 anomalyDetailPage pid issue tr otellogs errM now = do
   let spanRecs = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> otellogs
-      logs = V.filter (\xx -> xx.kind == Just "log") otellogs
+      -- logs = V.filter (\xx -> xx.kind == Just "log") otellogs
       issueId = UUID.toText issue.id.unUUIDId
   div_ [class_ "pt-2 mx-auto px-4 w-full flex flex-col gap-4 h-full overflow-auto"] do
     div_ [] do
@@ -225,7 +225,7 @@ anomalyDetailPage pid issue tr otellogs errM now = do
     -- Metrics Bar
     div_ [class_ "flex items-center justify-between mb-6"] do
       div_ [class_ "flex items-center gap-4"] do
-        statBox_ (Just pid) Nothing "Affected Requests" "How often the alert query is evaluated" (show issue.affectedRequests) Nothing Nothing
+        statBox_ (Just pid) Nothing "Affected Requests" "How the error occurred" (show issue.affectedRequests) Nothing Nothing
         statBox_ (Just pid) Nothing "Affected Clients" "Number of unique clients affected" (show issue.affectedClients) Nothing Nothing
       div_ [class_ "w-96 h-28 rounded-xl overflow-hidden border p-2 border-strokeWeak bg-fillWeaker"]
         $ Widget.widget_
@@ -326,17 +326,17 @@ anomalyDetailPage pid issue tr otellogs errM now = do
               div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
 
           div_ [id_ "log-content", class_ "hidden err-tab-content"] do
-            div_ [class_ "flex flex-col gap-4"] do
-              let tableCols = (\x -> Table.mkColumn x x) <$> ["Timestamp", "Severity", "Body"]
-                  mapRows x =
-                    Map.fromList
-                      [ ("Timestamp", CellText $ formatUTC x.timestamp)
-                      , ("Severity", CellText $ show x.severity)
-                      , ("Body", CellText $ show x.body)
-                      ]
-                  rows = V.toList $ V.map mapRows logs
-                  table = Table.defaultTable tableCols rows
-              Table.renderTable table
+            div_ [class_ "flex flex-col gap-4"] pass
+          --             let tableCols = (\x -> Table.mkColumn x x) <$> ["Timestamp", "Severity", "Body"]
+          --     mapRows x =
+          --       Map.fromList
+          --         [ ("Timestamp", CellText $ formatUTC x.timestamp)
+          --         , ("Severity", CellText $ show x.severity)
+          --         , ("Body", CellText $ show x.body)
+          --         ]
+          --     rows = V.toList $ V.map mapRows logs
+          --     table = Table.defaultTable tableCols rows
+          -- Table.renderTable table
 
           div_ [id_ "replay-content", class_ "hidden err-tab-content"] do
             div_ [class_ "flex flex-col gap-4"] do
@@ -882,7 +882,7 @@ anomalyAcknowledgeButton pid aid acked host = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
-        <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+          <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" "acknowledge issue"
     , hxGet_ acknowledgeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -898,7 +898,7 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
-        <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+          <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"

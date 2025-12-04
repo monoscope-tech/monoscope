@@ -8,6 +8,7 @@ module Pages.Monitors.Testing (
 )
 where
 
+import Control.Lens.Setter (passing)
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
@@ -37,6 +38,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Slack qualified as SlackP
+import Pages.Bots.Utils (Channel (channelId, channelName))
 import Pages.Components (statBox_)
 import Pkg.Components.Table (Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, simpleZeroState, withAttrs)
 import Pkg.Components.Widget (Widget (..))
@@ -461,7 +463,7 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM tableData =
       alertStats_ pid alert currTime
 
     -- Content tabs
-    tabbedSection_ "monitor-tabs" [("Query & Visualization", alertQueryTab_ pid alert), ("Execution History", monitorHistoryTab_ "Alert execution history"), ("Notifications", alertNotificationsTab_ alert)]
+    tabbedSection_ "monitor-tabs" [("Query & Visualization", alertQueryTab_ pid alert), ("Execution History", monitorHistoryTab_ "Alert execution history" tableData), ("Notifications", alertNotificationsTab_ alert teams)]
   where
     monitorHeader title isInactive subtitle = do
       div_ [class_ "flex flex-col gap-2"] do
@@ -507,32 +509,33 @@ tabbedSection_ containerId tabs = do
 -- | Shared history tab
 monitorHistoryTab_ :: Text -> (V.Vector (V.Vector AE.Value), [Text], Int) -> Html ()
 monitorHistoryTab_ description tableData = do
-  div_ [class_ "pt-2"] do
-    let (results, columnNames, _) = tableData
-        colIdxMap = listToIndexHashMap columnNames
-        prettyTime x = case parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" x :: Maybe UTCTime of
-          Just t -> Just $ toText $ formatTime defaultTimeLocale "%b %-d %Y, %-I:%M %p" t
-          Nothing -> Nothing
+  div_ [class_ "pt-2"] pass
 
-        timestampCell :: V.Vector AE.Value -> Html ()
-        timestampCell x = span_ [class_ "font-mono"] $ toHtml $ fromMaybe "" tme
-          where
-            tme = (prettyTime . toString) =<< lookupVecTextByKey x colIdxMap "timestamp"
-        alertStatusCell :: V.Vector AE.Value -> Html ()
-        alertStatusCell x = statusBadge $ fromMaybe "" $ lookupVecTextByKey x colIdxMap "status_message"
 
-        tableColumns = (\x -> Table.mkColumn x x) <$> ["Timestamp", "Status", "Value", "Duration"]
-        mapRow x =
-          Map.fromList
-            [ ("Timestamp", CellCustom $ timestampCell x)
-            , ("Status", CellCustom $ alertStatusCell x)
-            , ("Value", CellText $ show $ fromMaybe 0 $ lookupVecValueByKey x colIdxMap "body" >>= (`lookupValueInt` "value"))
-            , ("Duration", CellText $ toText $ getDurationNSMS $ fromIntegral $ lookupVecIntByKey x colIdxMap "duration")
-            ]
-        tableRows = mapRow <$> V.toList results
-        table = (Table.defaultTable tableColumns tableRows){tableClass = "border w-full border-strokeWeak h-[50vh] overflow-y-auto", tableId = Just "monitor-history-table"}
-    Table.renderTable table
+-- let (results, columnNames, _) = tableData
+--     colIdxMap = listToIndexHashMap columnNames
+--     prettyTime x = case parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" x :: Maybe UTCTime of
+--       Just t -> Just $ toText $ formatTime defaultTimeLocale "%b %-d %Y, %-I:%M %p" t
+--       Nothing -> Nothing
 
+--     timestampCell :: V.Vector AE.Value -> Html ()
+--     timestampCell x = span_ [class_ "font-mono"] $ toHtml $ fromMaybe "" tme
+--       where
+--         tme = (prettyTime . toString) =<< lookupVecTextByKey x colIdxMap "timestamp"
+--     alertStatusCell :: V.Vector AE.Value -> Html ()
+--     alertStatusCell x = statusBadge $ fromMaybe "" $ lookupVecTextByKey x colIdxMap "status_message"
+
+--     tableColumns = (\x -> Table.mkColumn x x) <$> ["Timestamp", "Status", "Value", "Duration"]
+--     mapRow x =
+--       Map.fromList
+--         [ ("Timestamp", CellCustom $ timestampCell x)
+--         , ("Status", CellCustom $ alertStatusCell x)
+--         , ("Value", CellText $ show $ fromMaybe 0 $ lookupVecValueByKey x colIdxMap "body" >>= (`lookupValueInt` "value"))
+--         , ("Duration", CellText $ toText $ getDurationNSMS $ fromIntegral $ lookupVecIntByKey x colIdxMap "duration")
+--         ]
+--     tableRows = mapRow <$> V.toList results
+--     table = (Table.defaultTable tableColumns tableRows){tableClass = "border w-full border-strokeWeak h-[50vh] overflow-y-auto", tableId = Just "monitor-history-table"}
+-- Table.renderTable table
 
 -- | Alert statistics boxes (copied from Alerts module for consolidation)
 alertStats_ :: Projects.ProjectId -> Monitors.QueryMonitorEvaled -> UTCTime -> Html ()

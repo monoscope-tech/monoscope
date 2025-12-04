@@ -8,7 +8,6 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact qualified as PGT
 import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Models.Projects.ProjectMembers ( TeamMemberVM (..), TeamVM (..))
 import Models.Projects.Projects qualified as Projects
 
 import Models.Users.Users (UserId (..))
@@ -21,8 +20,7 @@ import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec
-import Models.Users.Users (UserId(..))
-import Models.Users.Users qualified as Users
+
 
 testPid :: Projects.ProjectId
 testPid = Unsafe.fromJust $ UUIDId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"
