@@ -18,4 +18,7 @@ CREATE TABLE IF NOT EXISTS projects.teams (
   UNIQUE(project_id, handle)
 );
 SELECT manage_updated_at('projects.teams');
+
+ALTER TABLE monitors.query_monitors ADD COLUMN IF NOT EXISTS teams UUID[] DEFAULT '{}';
+
 COMMIT;

@@ -87,6 +87,7 @@ data QueryMonitor = QueryMonitor
   , deactivatedAt :: Maybe UTCTime
   , deletedAt :: Maybe UTCTime
   , visualizationType :: Text
+  , teams :: V.Vector UUID.UUID
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, NFData, ToRow)
@@ -138,13 +139,14 @@ queryMonitorUpsert qm =
     , qm.alertConfig
     , qm.checkIntervalMins
     , qm.visualizationType
+    , qm.teams
     )
   where
     q =
       [sql|
     INSERT INTO monitors.query_monitors (id, project_id, alert_threshold, warning_threshold, log_query,
                   log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
-                  threshold_sustained_for_mins, alert_config, check_interval_mins, visualization_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  threshold_sustained_for_mins, alert_config, check_interval_mins, visualization_type, teams) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::uuid[])
           ON CONFLICT (id) DO UPDATE SET
                   alert_threshold=EXCLUDED.alert_threshold,
                   warning_threshold=EXCLUDED.warning_threshold,
@@ -157,7 +159,8 @@ queryMonitorUpsert qm =
                   threshold_sustained_for_mins=EXCLUDED.threshold_sustained_for_mins,
                   alert_config=EXCLUDED.alert_config,
                   check_interval_mins=EXCLUDED.check_interval_mins,
-                  visualization_type=EXCLUDED.visualization_type;
+                  visualization_type=EXCLUDED.visualization_type,
+                  teams=EXCLUDED.teams
     |]
 
 

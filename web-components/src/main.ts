@@ -220,3 +220,12 @@ window.getVariable = (key: string) => {
   const params = new URLSearchParams(window.location.search);
   return params.get(`var-${key}`) || '';
 };
+
+window.createTagify = (selector: string, options: any = {}) => {
+  const defaultOptions = {
+    skipInvalid: true,
+    editTags: { clicks: 2, keepInvalid: false },
+    dropdown: { enabled: 1, fuzzySearch: true, position: 'text', caseSensitive: false },
+  };
+  return new (window as any).Tagify(document.querySelector(selector), { ...defaultOptions, ...options });
+};

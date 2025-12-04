@@ -58,6 +58,7 @@ data AlertUpsertForm = AlertUpsertForm
   , conditionType :: Maybe Text
   , source :: Maybe Text
   , vizType :: Maybe Text
+  , teams :: [UUID.UUID]
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -104,6 +105,7 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , deletedAt = Nothing
         , deactivatedAt = Nothing
         , visualizationType = fromMaybe "timeseries" alertForm.vizType
+        , teams = V.fromList alertForm.teams
         }
 
 

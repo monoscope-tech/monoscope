@@ -483,7 +483,7 @@ code, pre, .code, .monospace {
 }
 
 @utility badge-success {
-  @apply bg-fillSuccess-weak text-textSuccess font-medium;
+  @apply bg-fillSuccess-strong text-textSuccess font-medium;
 }
 
 @utility badge-error {
