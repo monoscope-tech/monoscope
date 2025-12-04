@@ -4,6 +4,7 @@ module Pages.Monitors.Testing (
   unifiedMonitorsGetH,
   unifiedMonitorOverviewH,
   statusBadge_,
+  teamAlertsGetH,
 )
 where
 
@@ -67,6 +68,17 @@ data UnifiedMonitorDetails
   , alertLastTriggered :: Maybe UTCTime
   , visualizationType :: Text
   }
+
+
+teamAlertsGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (ItemsList.ItemsRows UnifiedMonitorItem))
+teamAlertsGetH pid teamId = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
+  alerts <- dbtToEff $ Monitors.getAlertsByTeamHandle pid teamId
+  currTime <- Time.currentTime
+  let alerts' = V.map (toUnifiedMonitorItem pid currTime) alerts
+
+  addRespHeaders $ ItemsList.ItemsRows Nothing alerts'
 
 
 -- | Unified handler for monitors endpoint showing both alerts and multi-step monitors
@@ -203,7 +215,7 @@ unifiedMonitorCard item = do
     div_ [class_ "w-full flex flex-col gap-2 shrink-1"] do
       -- Title and tags row
       div_ [class_ "flex gap-10 items-center"] do
-        a_ [href_ detailsUrl, class_ "font-medium text-textStrong text-base hover:text-textBrand transition-colors"] $ toHtml $ if T.null item.title then "(Untitled)" else item.title
+        a_ [href_ detailsUrl, class_ "font-medium text-textStrong text-sm text-base hover:text-textBrand transition-colors"] $ toHtml $ if T.null item.title then "(Untitled)" else item.title
         div_ [class_ "flex gap-1 items-center text-sm"] do
           span_ [class_ "badge badge-sm badge-ghost"] $ toHtml typeLabel
           forM_ item.tags $ \tag -> do
@@ -239,7 +251,7 @@ unifiedMonitorCard item = do
       -- Actions
       div_ [class_ "flex gap-2 px-4 py-2 items-center rounded-3xl opacity-0 group-hover/card:opacity-100 transition-opacity"] do
         a_ [href_ editUrl, term "data-tippy-content" "Edit", class_ "hover:text-textBrand transition-colors"] do
-          faSprite_ "pen-to-square" "regular" "h-5 w-5"
+          faSprite_ "pen-to-square" "regular" "h-3.5 w-3.5"
         button_
           [ type_ "button"
           , term "data-tippy-content" $ if item.status `elem` ["Active", "Passing"] then "Deactivate" else "Activate"
@@ -249,7 +261,7 @@ unifiedMonitorCard item = do
           , hxSwap_ "outerHTML"
           ]
           do
-            faSprite_ (if item.status `elem` ["Active", "Passing"] then "pause" else "play") "regular" "h-5 w-5"
+            faSprite_ (if item.status `elem` ["Active", "Passing"] then "pause" else "play") "regular" "h-3.5 w-3.5"
   where
     (typeIcon, typeLabel, typeColorClass) = ("bell", "Alert", "bg-fillWarning-weak text-iconWarning")
 

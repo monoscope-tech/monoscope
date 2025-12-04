@@ -73,8 +73,9 @@ import GHC.Records (HasField (getField))
 import Lucid
 import Lucid (div_)
 import Lucid.Htmx
-import Lucid.Htmx (hxPost_, hxSelect_, hxSwapOob_)
+import Lucid.Htmx (hxPost_, hxSelect_, hxSwapOob_, hxTrigger_)
 import Lucid.Hyperscript (__)
+import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Slack (SlackData, getDiscordDataByProjectId, getProjectSlackData)
 import Models.Apis.Slack qualified as Slack
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
@@ -834,28 +835,30 @@ teamPage pid team projMembers slackChannels discordChannels = do
 
       div_ [class_ "h-full w-8/12 overflow-y-auto p-4"] do
         div_ [class_ "h-[1000px] w-full space-y-6"] do
-          monitorsSection
+          monitorsSection pid team.id
           dashboardsSection
 
 
-monitorsSection :: Html ()
-monitorsSection = div_ [class_ "rounded-xl border border-strokeWeak shadow-sm overflow-x-hidden"] do
+monitorsSection :: Projects.ProjectId -> UUID.UUID -> Html ()
+monitorsSection pid teamId = div_ [class_ "rounded-xl border border-strokeWeak shadow-sm overflow-x-hidden"] do
   div_
     [ class_ "flex items-center justify-between w-full p-2 hover:bg-fillWeaker cursor-pointer"
     , [__|on click toggle .hidden on the next <div/> 
            then toggle .rotate-270 on the first <button/> in me|]
     ]
     do
-      h4_ [class_ "text-sm font-meidum"] (faSprite_ "list-check" "regular" "h-4 w-4 mr-2" >> "Monitors")
+      h4_ [class_ "text-sm font-meidum"] (faSprite_ "list-check" "regular" "h-4 w-4 mr-2" >> "Alerts")
       div_ [class_ "flex items-center gap-4"] do
         div_ [class_ "flex items-center gap-4"] do
           label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
             faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
-            input_ [type_ "text", placeholder_ "Search monitors...", class_ "", [__| on click halt|]]
+            input_ [type_ "text", placeholder_ "Search alerts...", class_ "", [__| on click halt|]]
         button_ [class_ ""] do
           faSprite_ "p-chevron-down" "regular" "h-4 w-4"
 
-  div_ [class_ "p-3 border-t border-strokeWeak w-full"] do
+  div_ [class_ "p-3 border-t border-strokeWeak w-full max-h-96 overflow-y-auto", id_ "monitors-section"] do
+    a_ [hxGet_ ("/p/" <> pid.toText <> "/monitors/alerts/team/" <> UUID.toText teamId), hxTrigger_ "intersect once", hxTarget_ "#monitors-section", hxSwap_ "outerHTML"] ""
+    span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-sm"] ""
     emptySectionState "No monitors are currently linked to this team"
 
 

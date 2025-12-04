@@ -9,6 +9,7 @@ module Models.Apis.Monitors (
   MonitorAlertConfig (..),
   QueryMonitorId (..),
   updateQMonitorTriggeredState,
+  getAlertsByTeamHandle,
 ) where
 
 import Data.Aeson qualified as AE
@@ -205,3 +206,16 @@ monitorToggleActiveById id' = execute q (Only id')
 
 queryMonitorsAll :: Projects.ProjectId -> DBT IO (V.Vector QueryMonitor)
 queryMonitorsAll pid = selectManyByField @QueryMonitor [DAT.field| project_id |] pid
+
+
+getAlertsByTeamHandle :: Projects.ProjectId -> UUID.UUID -> DBT IO (V.Vector QueryMonitor)
+getAlertsByTeamHandle pid teamId = query q (pid, teamId)
+  where
+    q =
+      [sql|
+      SELECT qm.id, qm.created_at, qm.updated_at, qm.project_id, qm.check_interval_mins, qm.alert_threshold, qm.warning_threshold,
+        qm.log_query, qm.log_query_as_sql, qm.last_evaluated, qm.warning_last_triggered, qm.alert_last_triggered, qm.trigger_less_than,
+        qm.threshold_sustained_for_mins, qm.alert_config, qm.deactivated_at, qm.deleted_at, qm.visualization_type, qm.teams
+      FROM monitors.query_monitors qm
+      WHERE qm.project_id = ? AND ? = ANY(qm.teams)
+    |]
