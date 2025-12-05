@@ -101,7 +101,7 @@ sendSlackAlert alert pid pTitle = do
       ReportAlert{..} -> sendAlert slackData.channelId $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle slackData.channelId reportUrl allChartUrl errorChartUrl
       MonitorsAlert{..} ->
         sendAlert slackData.channelId
-          $ AE.object ["blocks" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("🤖 Alert triggered for `<" <> monitorUrl <> "|" <> monitorTitle <> ">`*")]]])]
+          $ AE.object ["blocks" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("🤖 Alert triggered for " <> monitorTitle)]]])]
   where
     sendAlert :: Notify.Notify :> es => Text -> AE.Value -> Eff es ()
     sendAlert channelId content =

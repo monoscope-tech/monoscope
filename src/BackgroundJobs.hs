@@ -349,12 +349,12 @@ runHourlyJob scheduledTime hour = do
   activeProjects <-
     dbtToEff
       $ V.map (\(Only pid) -> pid)
-      <$> query
-        [sql| SELECT DISTINCT project_id
+        <$> query
+          [sql| SELECT DISTINCT project_id
               FROM otel_logs_and_spans ols
               WHERE ols.timestamp >= ?
                 AND ols.timestamp <= ? |]
-        (oneHourAgo, scheduledTime)
+          (oneHourAgo, scheduledTime)
 
   -- Log count of projects to process
   Log.logInfo "Projects with new data in the last hour window" ("count", AE.toJSON $ length activeProjects)
