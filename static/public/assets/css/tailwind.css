@@ -953,12 +953,11 @@ code, pre, .code, .monospace {
     --fallback-bc: rgba(255 255 255 / 0.6);
   }
   .btn-primary {
-    @apply bg-fillBrand-strong hover:bg-fillBrand-strong text-textInverse-strong;
+    @apply bg-fillBrand-strong hover:bg-fillBrand-strong text-white;
   }
   
   [data-theme="dark"] .btn-primary {
-    background-color: var(--color-iconBrand);
-    @apply hover:opacity-90 text-textInverse-weak ring-1 ring-strokeBrand-weak;
+    @apply hover:opacity-90  ring-strokeBrand-weak;
   }
   .input, .select, .checkbox, .textarea {
     @apply shadow-none;

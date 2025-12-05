@@ -44,6 +44,8 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem (getServiceName)
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
+import Pkg.Components.Table (Table (..), TableColumn (..))
+import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
@@ -140,7 +142,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
               , value_ $ maybeToMonoid var.value
               ]
-            <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
+              <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
   const tagifyInstances = new Map();
@@ -356,7 +358,7 @@ processWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widgetBas
   forOf (#children . _Just . traverse) widget' $ \child ->
     processWidget pid now timeRange allParams
       $ child
-      & #_dashboardId %~ (<|> widget'._dashboardId)
+        & #_dashboardId %~ (<|> widget'._dashboardId)
 
 
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
@@ -366,11 +368,11 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
     let issuesVM = V.map (AnomalyList.IssueVM False True now "24h") issues
     pure
       $ widget
-      & #html
-        ?~ renderText
-          ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-              $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml)
-          )
+        & #html
+          ?~ renderText
+            ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
+                $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml)
+            )
   Widget.WTStat -> do
     stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure $ widget & #dataset ?~ def{Widget.source = AE.Null, Widget.value = stat.dataFloat}
@@ -380,8 +382,8 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
     -- Render the table with data server-side
     pure
       $ widget
-      & #html
-        ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
+        & #html
+          ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
   Widget.WTTraces -> do
     tracesD <- Charts.queryMetrics (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     let trIds = V.map V.last tracesD.dataText
@@ -398,21 +400,21 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
 
     pure
       $ widget
-      & #html
-        ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText grouped spansGrouped colorsJson)
+        & #html
+          ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText grouped spansGrouped colorsJson)
   _ -> do
     metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure
       $ widget
-      & #dataset
-        ?~ Widget.WidgetDataset
-          { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
-          , rowsPerMin = metricsD.rowsPerMin
-          , value = Just metricsD.rowsCount
-          , from = metricsD.from
-          , to = metricsD.to
-          , stats = metricsD.stats
-          }
+        & #dataset
+          ?~ Widget.WidgetDataset
+            { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
+            , rowsPerMin = metricsD.rowsPerMin
+            , value = Just metricsD.rowsCount
+            , from = metricsD.from
+            , to = metricsD.to
+            , stats = metricsD.stats
+            }
 
 
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
@@ -492,10 +494,10 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
       let newLayout =
             Just
               $ maybe def Relude.id orig.layout
-              & #x %~ (<|> item.x)
-              & #y %~ (<|> item.y)
-              & #w %~ (<|> item.w)
-              & #h %~ (<|> item.h)
+                & #x %~ (<|> item.x)
+                & #y %~ (<|> item.y)
+                & #w %~ (<|> item.w)
+                & #h %~ (<|> item.h)
       pure
         orig
           { Widget.layout = newLayout
@@ -668,7 +670,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
                     , class_ $ "hidden page-drawer-tab-" <> T.toLower tabName
                     , name_ $ wid <> "-drawer-tab"
                     ]
-                  <> [checked_ | isActive]
+                    <> [checked_ | isActive]
                 toHtml tabName
           mkTab "Overview" (effectiveActiveTab /= "edit")
           mkTab "Edit" (effectiveActiveTab == "edit")
@@ -841,50 +843,65 @@ dashboardsGet_ dg = do
           $ div_ [class_ "bg-[#1e9cff] px-5 py-8 rounded-xl aspect-square w-full flex items-center"]
           $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full", id_ "dItemPreview"]
 
-  div_ [id_ "itemsListPage", class_ "mx-auto px-6 pt-4 gap-8 w-full flex flex-col h-full overflow-hidden pb-2  group/pg"] do
-    div_ [class_ "flex"] $ label_ [class_ "input input-md flex-1 flex bg-fillWeaker border-strokeWeak shadow-none overflow-hidden items-center gap-2"] do
-      faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
-      input_
-        [ type_ "text"
-        , class_ "grow"
-        , placeholder_ "Search"
-        , [__|on keyup if the event's key is 'Escape' set my value to '' then trigger keyup
-                         else show <.itemListItem/> in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase() |]
-        ]
-
+  div_ [id_ "itemsListPage", class_ "mx-auto px-6 pt-8 gap-8 w-full flex flex-col h-full overflow-hidden pb-2  group/pg"] do
     when dg.embedded $ h3_ [class_ "text-lg font-normal"] "Select a dashboard below, and the widget will be copied there"
+    let tableCols = (\x -> (Table.mkColumn x x){columnActionable = x /= "dashboardId", columnWidth = if x == "Name" then Just "40%" else Nothing, columnCheckBox = x == "dashboardId"}) <$> ["dashboardId", "Name", "Created", "Teams", "Widgets", "Actions"]
+    let tableRows = (\x -> Map.fromList [("dashboardId", Table.CellCheckbox x.id.toText), ("Name", Table.CellText x.title), ("Created", Table.CellText $ toText $ formatTime defaultTimeLocale "%eth %b %Y" x.createdAt), ("Teams", Table.CellArray [Table.CellText "backend", Table.CellText "frontend"]), ("Widgets", Table.CellText $ maybe "0" (show . length . (.widgets)) $ loadDashboardFromVM x), ("Actions", Table.CellText "")]) <$> dg.dashboards
+    let table =
+          (Table.defaultTable tableCols (V.toList tableRows))
+            { tableClass = "border border-strokeWeak rounded-box"
+            , tableId = Just "dashboardsTable"
+            , tableHasSearch = True
+            , rowAction = Just $ \row -> do
+                let baseUrl = "/p/" <> dg.projectId.toText <> "/dashboards/"
+                    scrpt = case Map.lookup "dashboardId" row of
+                      Just (Table.CellCheckbox dashId) -> [text|on click go to url "$baseUrl$dashId"|]
+                      _ -> ""
+                 in scrpt
+            , tableActions =
+                Just
+                  $ [ button_ [class_ "flex items-center gap-2 btn btn-sm"] do
+                        faSprite_ "plus" "regular" "w-3 h-3"
+                        span_ "Add teams"
+                    , button_ [class_ "flex items-center gap-2 btn btn-sm text-textError"] do
+                        faSprite_ "trash" "regular" "w-3 h-3"
+                        span_ "Delete"
+                    ]
+            }
 
-    div_ [class_ $ "grid gap-5 " <> if dg.embedded then "grid-cols-1" else "grid-cols-2"] do
-      forM_ dg.dashboards \dashVM -> do
-        let dash = loadDashboardFromVM dashVM
-        let attrs =
-              if dg.embedded
-                then
-                  [ class_ "cursor-pointer"
-                  , hxPut_ ("/p/" <> dg.projectId.toText <> "/dashboards/" <> dashVM.id.toText)
-                  , hxVals_ "js:{...JSON.parse(document.getElementById(document.getElementById('dashboards-modal-widget-id').value + '_widgetEl').dataset.widget)}"
-                  , hxSwap_ "none"
-                  , hxExt_ "json-enc"
-                  ]
-                else [href_ ("/p/" <> dg.projectId.toText <> "/dashboards/" <> dashVM.id.toText)]
-        a_ ([class_ "rounded-xl border border-strokeWeak hover:border-strokeBrand-strong gap-3.5 p-4 bg-fillWeaker flex itemListItem group/i"] <> attrs) do
-          div_ [class_ "flex-1 space-y-2"] do
-            div_ [class_ "flex items-center gap-2"] do
-              span_ [class_ "group-hover/i:underline underline-offset-2"]
-                $ strong_ [class_ "font-medium"] (toHtml $ bool "Untitled" dashVM.title (dashVM.title /= ""))
-              span_ [class_ "leading-none", term "data-tippy-content" "This dashboard is currently your homepage."] do
-                when (isJust dashVM.homepageSince) $ faSprite_ "house" "regular" "w-4 h-4"
-            div_ [class_ "gap-2 flex items-center"] do
-              time_ [class_ "mr-2 text-textWeak", term "data-tippy-content" "Date of dashboard creation", datetime_ $ Utils.formatUTC dashVM.createdAt] $ toHtml $ formatTime defaultTimeLocale "%eth %b %Y" dashVM.createdAt
-              forM_ dashVM.tags (span_ [class_ "badge badge-neutral"] . toHtml @Text)
-          div_ [class_ "flex items-end justify-center gap-5"] do
-            button_ [class_ "leading-none", term "data-tippy-content" "click to star this dashboard"]
-              $ if isJust dashVM.starredSince
-                then faSprite_ "star" "solid" "w-5 h-5"
-                else faSprite_ "star" "regular" "w-5 h-5"
-            let widgetCount = maybe "0" (show . length . (.widgets)) dash
-            div_ [class_ "flex items-end gap-2", term "data-tippy-content" $ "There are " <> widgetCount <> " charts/widgets in this dashboard"] $ faSprite_ "chart-area" "regular" "w-5 h-5 text-iconNeutral" >> (span_ [class_ "leading-none"] . toHtml $ widgetCount)
+    div_ [class_ "w-full"] do
+      Table.renderTable table
 
+
+-- forM_ dg.dashboards \dashVM -> do
+--   let dash = loadDashboardFromVM dashVM
+--   let attrs =
+--         if dg.embedded
+--           then
+--             [ class_ "cursor-pointer"
+--             , hxPut_ ("/p/" <> dg.projectId.toText <> "/dashboards/" <> dashVM.id.toText)
+--             , hxVals_ "js:{...JSON.parse(document.getElementById(document.getElementById('dashboards-modal-widget-id').value + '_widgetEl').dataset.widget)}"
+--             , hxSwap_ "none"
+--             , hxExt_ "json-enc"
+--             ]
+--           else [href_ ("/p/" <> dg.projectId.toText <> "/dashboards/" <> dashVM.id.toText)]
+--   a_ ([class_ "rounded-xl border border-strokeWeak hover:border-strokeBrand-strong gap-3.5 p-4 bg-fillWeaker flex itemListItem group/i"] <> attrs) do
+--     div_ [class_ "flex-1 space-y-2"] do
+--       div_ [class_ "flex items-center gap-2"] do
+--         span_ [class_ "group-hover/i:underline underline-offset-2"]
+--           $ strong_ [class_ "font-medium"] (toHtml $ bool "Untitled" dashVM.title (dashVM.title /= ""))
+--         span_ [class_ "leading-none", term "data-tippy-content" "This dashboard is currently your homepage."] do
+--           when (isJust dashVM.homepageSince) $ faSprite_ "house" "regular" "w-4 h-4"
+--       div_ [class_ "gap-2 flex items-center"] do
+--         time_ [class_ "mr-2 text-textWeak", term "data-tippy-content" "Date of dashboard creation", datetime_ $ Utils.formatUTC dashVM.createdAt] $ toHtml $ formatTime defaultTimeLocale "%eth %b %Y" dashVM.createdAt
+--         forM_ dashVM.tags (span_ [class_ "badge badge-neutral"] . toHtml @Text)
+--     div_ [class_ "flex items-end justify-center gap-5"] do
+--       button_ [class_ "leading-none", term "data-tippy-content" "click to star this dashboard"]
+--         $ if isJust dashVM.starredSince
+--           then faSprite_ "star" "solid" "w-5 h-5"
+--           else faSprite_ "star" "regular" "w-5 h-5"
+--       let widgetCount = maybe "0" (show . length . (.widgets)) dash
+--       div_ [class_ "flex items-end gap-2", term "data-tippy-content" $ "There are " <> widgetCount <> " charts/widgets in this dashboard"] $ faSprite_ "chart-area" "regular" "w-5 h-5 text-iconNeutral" >> (span_ [class_ "leading-none"] . toHtml $ widgetCount)
 
 dashboardsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx DashboardsGet))
 dashboardsGetH pid embeddedM = do
@@ -909,7 +926,7 @@ dashboardsGetH pid embeddedM = do
               , pageTitle = "Dashboards"
               , freeTierExceeded = freeTierExceeded
               , config = appCtx.config
-              , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "leading-none rounded-xl shadow-sm p-3 cursor-pointer bg-fillBrand-strong text-white"] "New Dashboard"
+              , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn btn-primary text-white"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Dashboard")
               }
       addRespHeaders $ PageCtx bwconf $ DashboardsGet{dashboards, projectId = pid, embedded = False}
 

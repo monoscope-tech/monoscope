@@ -113,6 +113,7 @@ library
       Pkg.Components.ExternalHeadScripts
       Pkg.Components.ItemsList
       Pkg.Components.LogQueryBox
+      Pkg.Components.Table
       Pkg.Components.TimePicker
       Pkg.Components.Widget
       Pkg.ConvertKit
