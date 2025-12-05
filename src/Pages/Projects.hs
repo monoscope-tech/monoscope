@@ -499,12 +499,12 @@ manageMembersPostH pid onboardingM form = do
 
       unless (null uAndPOldAndChanged)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       unless (null deletedUAndP)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
@@ -536,25 +536,25 @@ instance AE.FromJSON TeamForm where
   parseJSON = AE.withObject "TeamForm" $ \o -> do
     TeamForm
       <$> o
-      AE..: "teamName"
+        AE..: "teamName"
       <*> o
-      AE..: "teamDescription"
+        AE..: "teamDescription"
       <*> o
-      AE..: "teamHandle"
+        AE..: "teamHandle"
       <*> o
-      AE..:? "teamMembers"
-      AE..!= V.empty
+        AE..:? "teamMembers"
+        AE..!= V.empty
       <*> o
-      AE..:? "notifEmails"
-      AE..!= V.empty
+        AE..:? "notifEmails"
+        AE..!= V.empty
       <*> o
-      AE..:? "slackChannels"
-      AE..!= V.empty
+        AE..:? "slackChannels"
+        AE..!= V.empty
       <*> o
-      AE..:? "discordChannels"
-      AE..!= V.empty
+        AE..:? "discordChannels"
+        AE..!= V.empty
       <*> o
-      AE..:? "teamId"
+        AE..:? "teamId"
 
 
 manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
@@ -836,9 +836,10 @@ teamPage pid team projMembers slackChannels discordChannels = do
                   span_ [] $ toHtml tar
 
       div_ [class_ "h-full w-8/12 overflow-y-auto p-4"] do
-        div_ [class_ "h-[1000px] w-full space-y-6"] do
+        div_ [class_ "w-full space-y-6"] do
           monitorsSection pid team.id
           dashboardsSection
+          servicesSection
 
 
 monitorsSection :: Projects.ProjectId -> UUID.UUID -> Html ()
@@ -849,7 +850,7 @@ monitorsSection pid teamId = div_ [class_ "rounded-xl border border-strokeWeak s
            then toggle .rotate-270 on the first <button/> in me|]
     ]
     do
-      h4_ [class_ "text-sm font-meidum"] (faSprite_ "list-check" "regular" "h-4 w-4 mr-2" >> "Alerts")
+      h4_ [class_ "text-sm font-medium"] (faSprite_ "list-check" "regular" "h-4 w-4 mr-2" >> "Alerts")
       div_ [class_ "flex items-center gap-4"] do
         div_ [class_ "flex items-center gap-4"] do
           label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
@@ -873,7 +874,7 @@ dashboardsSection = div_ [class_ "rounded-xl border border-strokeWeak overflow-x
     |]
     ]
     do
-      h4_ [class_ "text-sm font-meidum"] (faSprite_ "chart-area" "regular" "h-4 w-4 mr-2" >> "Dashboards")
+      h4_ [class_ "text-sm font-medium"] (faSprite_ "chart-area" "regular" "h-4 w-4 mr-2" >> "Dashboards")
       div_ [class_ "flex items-center gap-4"] do
         div_ [class_ "flex items-center gap-4"] do
           label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
@@ -883,6 +884,27 @@ dashboardsSection = div_ [class_ "rounded-xl border border-strokeWeak overflow-x
           faSprite_ "p-chevron-down" "regular" "h-4 w-4"
   div_ [class_ "p-3 border-t w-full border-strokeWeak"] do
     emptySectionState "No dashboards are currently linked to this team"
+
+
+servicesSection :: Html ()
+servicesSection = div_ [class_ "rounded-xl border border-strokeWeak overflow-x-hidden"] do
+  div_
+    [ class_ "flex items-center justify-between w-full p-2 hover:bg-fillWeaker cursor-pointer"
+    , [__|on click toggle .hidden on the next <div/>
+         then toggle .rotate-270 on the first <button/> in me
+    |]
+    ]
+    do
+      h4_ [class_ "text-sm font-medium"] (faSprite_ "server" "regular" "h-4 w-4 mr-2" >> "Services")
+      div_ [class_ "flex items-center gap-4"] do
+        div_ [class_ "flex items-center gap-4"] do
+          label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
+            faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
+            input_ [type_ "text", placeholder_ "Search services...", class_ "", [__| on click halt|]]
+        button_ [class_ ""] do
+          faSprite_ "p-chevron-down" "regular" "h-4 w-4"
+  div_ [class_ "p-3 border-t w-full border-strokeWeak"] do
+    emptySectionState "No services are currently linked to this team"
 
 
 emptySectionState :: Text -> Html ()
