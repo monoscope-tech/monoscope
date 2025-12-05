@@ -682,7 +682,7 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
         div_ [class_ "flex flex-col gap-2"] do
           h2_ [class_ "text-textStrong text-3xl font-semibold"] "Teams"
           p_ [class_ "text-textWeak text-sm"] "Manage your project teams and their access"
-        label_ [class_ "btn btn-primary btn-sm", Lucid.for_ "n-new-team-modal"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Team")
+        label_ [class_ "btn btn-primary btn-sm text-white", Lucid.for_ "n-new-team-modal"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Team")
         input_ [type_ "checkbox", id_ "n-new-team-modal", class_ "modal-toggle"]
         teamModal pid Nothing whiteList channelWhiteList discordWhiteList False
       div_ [class_ "flex items-center gap-4"] do
