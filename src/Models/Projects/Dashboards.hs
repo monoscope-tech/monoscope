@@ -1,4 +1,17 @@
-module Models.Projects.Dashboards (Dashboard (..), DashboardVM (..), DashboardId, readDashboardFile, Variable (..), VariableType (..), Tab (..), getDashboardById, readDashboardsFromDirectory, readDashboardEndpoint, replaceQueryVariables) where
+module Models.Projects.Dashboards (
+  Dashboard (..),
+  DashboardVM (..),
+  DashboardId,
+  readDashboardFile,
+  Variable (..),
+  VariableType (..),
+  Tab (..),
+  getDashboardById,
+  readDashboardsFromDirectory,
+  readDashboardEndpoint,
+  replaceQueryVariables,
+  deleteDashboardsByIds,
+) where
 
 import Control.Exception (try)
 import Control.Lens
@@ -18,6 +31,7 @@ import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField
+import Database.PostgreSQL.Simple.TypeInfo.Static (uuid)
 import Database.PostgreSQL.Simple.Types (Only (Only), Query (Query))
 import Database.PostgreSQL.Transact qualified as DBT
 import Deriving.Aeson qualified as DAE
@@ -162,3 +176,10 @@ getDashboardById :: DB :> es => Text -> Eff es (Maybe DashboardVM)
 getDashboardById did = dbtToEff $ DBT.queryOne (Query $ encodeUtf8 q) (Only did)
   where
     q = [text|SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title FROM projects.dashboards WHERE id = ?|]
+
+
+deleteDashboardsByIds :: DB :> es => Projects.ProjectId -> V.Vector DashboardId -> Eff es Int64
+deleteDashboardsByIds pid dids = do
+  dbtToEff $ DBT.execute (Query $ encodeUtf8 q) (pid, dids)
+  where
+    q = [text|DELETE FROM projects.dashboards WHERE project_id = ? AND id = ANY(?::uuid[])|]
