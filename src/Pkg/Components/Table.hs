@@ -36,6 +36,7 @@ data TableCell where
   CellEmpty :: TableCell
   CellCheckbox :: Text -> TableCell
   CellBadge :: Text -> TableCell
+  CellLink :: Text -> Text -> TableCell
 
 
 -- | Type alias for table row data using Map for efficient lookup
@@ -54,6 +55,7 @@ data Table = Table
   , tableEmptyMessage :: Maybe T.Text
   , tableCaption :: Maybe T.Text
   , rowAction :: Maybe (TableRow -> Text)
+  , tableShowHeader :: Bool
   }
 
 
@@ -85,6 +87,7 @@ defaultTable cols rows =
     , tableHasCheckboxes = True
     , tableActions = Nothing
     , rowAction = Nothing
+    , tableShowHeader = True
     }
 
 
@@ -110,7 +113,7 @@ renderTable tbl = form_ [class_ "group-pg"] do
   table_ (tableAttrs tbl) $ do
     whenJust (tableCaption tbl) $ \caption ->
       caption_ $ toHtml caption
-    thead_ [class_ "bg-fillWeaker"] do
+    thead_ [class_ $ "bg-fillWeaker " <> if not (tableShowHeader tbl) then "hidden" else ""] do
       tr_ do
         mapM_ (renderHeader tbl) (tableColumns tbl)
     tbody_
@@ -128,7 +131,8 @@ renderHeader :: Table -> TableColumn -> Html ()
 renderHeader tbl col =
   if col.columnCheckBox
     then
-      th_ [style_ "width: 40px;"]
+      when (tableShowHeader tbl)
+        $ th_ [style_ "width: 40px;"]
         $ input_
           [ type_ "checkbox"
           , class_ "checkbox checkbox-sm"
@@ -147,35 +151,39 @@ renderHeader tbl col =
 
 renderRow :: [TableColumn] -> Bool -> Table -> TableRow -> Html ()
 renderRow cols hasCheckboxes tbl rowData = do
+  tr_ [class_ ("searchable hover:bg-fillWeaker " <> (if isJust tbl.rowAction then "cursor-pointer" else ""))] do
+    mapM_ (renderCell rowData tbl) cols
+
+
+renderCell :: TableRow -> Table -> TableColumn -> Html ()
+renderCell rowData tbl col = do
   let actionAttr = case tbl.rowAction of
         Just actionFn ->
           let scr = actionFn rowData
            in [term "_" scr]
         Nothing -> ([] :: [Attribute])
-
-  tr_ [class_ ("searchable hover:bg-fillWeaker " <> (if isJust tbl.rowAction then "cursor-pointer" else ""))] do
-    mapM_ (renderCell rowData actionAttr) cols
-
-
-renderCell :: TableRow -> [Attribute] -> TableColumn -> Html ()
-renderCell rowData atrr col =
-  td_ (if col.columnActionable then atrr else []) $ case columnRender col of
-    Just renderFn -> renderFn cellValue
-    Nothing -> renderDefaultCell cellValue col.columnKey
+  unless (col.columnCheckBox && not col.columnActionable)
+    $ td_ (if col.columnActionable then actionAttr else [])
+    $ case columnRender col of
+      Just renderFn -> renderFn cellValue
+      Nothing -> renderDefaultCell cellValue col.columnKey tbl.tableHasCheckboxes
   where
     cellValue = Map.findWithDefault CellEmpty (columnKey col) rowData
 
 
-renderDefaultCell :: TableCell -> Text -> Html ()
-renderDefaultCell (CellText txt) _ = toHtml txt
-renderDefaultCell (CellArray arr) colkey =
-  div_ [class_ "flex flex-wrap gap-1"] $ mapM_ (\x -> renderDefaultCell x colkey) arr
-renderDefaultCell (CellCustom a) _ = toHtml a
-renderDefaultCell CellEmpty _ = ""
-renderDefaultCell (CellCheckbox val) colKey =
-  input_ [type_ "checkbox", name_ colKey, value_ val, class_ "checkbox checkbox-sm tr-checkbox"]
-renderDefaultCell (CellBadge val) _ =
+renderDefaultCell :: TableCell -> Text -> Bool -> Html ()
+renderDefaultCell (CellText txt) _ _ = toHtml txt
+renderDefaultCell (CellArray arr) colkey tblHasCheckboxes =
+  div_ [class_ "flex flex-wrap gap-1"] $ mapM_ (\x -> renderDefaultCell x colkey tblHasCheckboxes) arr
+renderDefaultCell (CellCustom a) _ _ = toHtml a
+renderDefaultCell CellEmpty _ _ = ""
+renderDefaultCell (CellCheckbox val) colKey xx =
+  when xx $ input_ [type_ "checkbox", name_ colKey, value_ val, class_ "checkbox checkbox-sm tr-checkbox"]
+renderDefaultCell (CellBadge val) _ _ =
   span_ [class_ "badge badge-sm badge-ghost"] $ toHtml val
+renderDefaultCell (CellLink url text) v xx =
+  a_ [href_ url, class_ "text-primary hover:underline"] do
+    renderDefaultCell (CellText text) v xx
 
 
 renderEmptyState :: Table -> Html ()

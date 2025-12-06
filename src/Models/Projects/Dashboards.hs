@@ -12,6 +12,7 @@ module Models.Projects.Dashboards (
   replaceQueryVariables,
   deleteDashboardsByIds,
   addTeamsToDashboards,
+  selectDashboardsByTeam,
 ) where
 
 import Control.Exception (try)
@@ -198,3 +199,10 @@ addTeamsToDashboards pid dids teamIds = do
       SET teams = array(SELECT unnest(coalesce(teams, '{}')::uuid[]) UNION SELECT unnest(?::uuid[]))
       WHERE project_id = ? AND id = ANY(?::uuid[])
     |]
+
+
+selectDashboardsByTeam :: DB :> es => Projects.ProjectId -> UUID.UUID -> Eff es [DashboardVM]
+selectDashboardsByTeam pid teamId = do
+  dbtToEff $ DBT.query (Query $ encodeUtf8 q) (pid, teamId)
+  where
+    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE project_id = ? AND teams @> ARRAY[?::uuid]|]
