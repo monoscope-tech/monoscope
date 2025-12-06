@@ -11,6 +11,7 @@ module Models.Projects.Dashboards (
   readDashboardEndpoint,
   replaceQueryVariables,
   deleteDashboardsByIds,
+  addTeamsToDashboards,
 ) where
 
 import Control.Exception (try)
@@ -18,6 +19,7 @@ import Control.Lens
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.Default
+import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
@@ -65,6 +67,7 @@ data DashboardVM = DashboardVM
   , homepageSince :: Maybe UTCTime
   , tags :: V.Vector Text
   , title :: Text
+  , teams :: V.Vector UUID.UUID
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
@@ -175,7 +178,7 @@ replaceQueryVariables pid mf mt allParams currentTime variable =
 getDashboardById :: DB :> es => Text -> Eff es (Maybe DashboardVM)
 getDashboardById did = dbtToEff $ DBT.queryOne (Query $ encodeUtf8 q) (Only did)
   where
-    q = [text|SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title FROM projects.dashboards WHERE id = ?|]
+    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE id = ?|]
 
 
 deleteDashboardsByIds :: DB :> es => Projects.ProjectId -> V.Vector DashboardId -> Eff es Int64
@@ -183,3 +186,15 @@ deleteDashboardsByIds pid dids = do
   dbtToEff $ DBT.execute (Query $ encodeUtf8 q) (pid, dids)
   where
     q = [text|DELETE FROM projects.dashboards WHERE project_id = ? AND id = ANY(?::uuid[])|]
+
+
+addTeamsToDashboards :: DB :> es => Projects.ProjectId -> V.Vector DashboardId -> V.Vector UUID.UUID -> Eff es Int64
+addTeamsToDashboards pid dids teamIds = do
+  dbtToEff $ DBT.execute (Query $ encodeUtf8 q) (teamIds, pid, dids)
+  where
+    q =
+      [text|
+      UPDATE projects.dashboards
+      SET teams = array(SELECT unnest(coalesce(teams, '{}')::uuid[]) UNION SELECT unnest(?::uuid[]))
+      WHERE project_id = ? AND id = ANY(?::uuid[])
+    |]

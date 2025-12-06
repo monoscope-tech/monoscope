@@ -54,6 +54,7 @@ import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxPatch_, hxPost_, hxPut_, hxS
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards qualified as Dashboards
+import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
@@ -796,6 +797,7 @@ data DashboardsGet = DashboardsGet
   { dashboards :: V.Vector Dashboards.DashboardVM
   , projectId :: Projects.ProjectId
   , embedded :: Bool -- Whether to render in embedded mode (for modals)
+  , teams :: V.Vector ManageMembers.Team
   }
   deriving (Generic, Show)
 
@@ -873,8 +875,17 @@ dashboardsGet_ dg = do
 
   div_ [id_ "itemsListPage", class_ "mx-auto px-6 pt-8 gap-8 w-full flex flex-col h-full overflow-hidden pb-2  group/pg"] do
     when dg.embedded $ h3_ [class_ "text-lg font-normal"] "Select a dashboard below, and the widget will be copied there"
-    let tableCols = (\x -> (Table.mkColumn x x){columnActionable = x /= "dashboardId", columnWidth = if x == "Name" then Just "40%" else Nothing, columnCheckBox = x == "dashboardId"}) <$> ["dashboardId", "Name", "Created", "Teams", "Widgets", "Actions"]
-    let tableRows = (\x -> Map.fromList [("dashboardId", Table.CellCheckbox x.id.toText), ("Name", Table.CellText x.title), ("Created", Table.CellText $ toText $ formatTime defaultTimeLocale "%eth %b %Y" x.createdAt), ("Teams", Table.CellArray [Table.CellText "backend", Table.CellText "frontend"]), ("Widgets", Table.CellText $ maybe "0" (show . length . (.widgets)) $ loadDashboardFromVM x), ("Actions", Table.CellText "")]) <$> dg.dashboards
+    let getTeams x = catMaybes $ (\xx -> find (\t -> t.id == xx) dg.teams) <$> V.toList x.teams
+    let mapRow x =
+          Map.fromList
+            [ ("dashboardId", CellCheckbox x.id.toText)
+            , ("Name", CellText x.title)
+            , ("Modified", CellText $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" x.updatedAt)
+            , ("Teams", CellArray $ (\x' -> CellBadge x'.handle) <$> getTeams x)
+            , ("Widgets", CellText $ maybe "0" (show . length . (.widgets)) $ loadDashboardFromVM x)
+            ]
+    let tableCols = (\x -> (Table.mkColumn x x){columnActionable = x /= "dashboardId", columnWidth = if x == "Name" then Just "40%" else Nothing, columnCheckBox = x == "dashboardId"}) <$> ["dashboardId", "Name", "Modified", "Teams", "Widgets"]
+    let tableRows = (\x -> mapRow x) <$> dg.dashboards
     let table =
           (Table.defaultTable tableCols (V.toList tableRows))
             { tableClass = "border border-strokeWeak rounded-box"
@@ -888,10 +899,8 @@ dashboardsGet_ dg = do
                  in scrpt
             , tableActions =
                 Just
-                  $ [ button_ [class_ "flex items-center gap-2 btn btn-sm"] do
-                        faSprite_ "plus" "regular" "w-3 h-3"
-                        span_ "Add teams"
-                    , button_ [class_ "flex items-center gap-2 btn btn-sm text-textError", hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/delete", hxSwap_ "none"] do
+                  $ [ addTeamsDrowndown_ dg.projectId dg.teams
+                    , button_ [class_ "flex items-center gap-2 btn btn-sm text-textError", type_ "button", hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/delete", hxSwap_ "none"] do
                         faSprite_ "trash" "regular" "w-3 h-3"
                         span_ "Delete"
                     ]
@@ -899,6 +908,21 @@ dashboardsGet_ dg = do
 
     div_ [class_ "w-full", id_ "dashboardsTableContainer"] do
       Table.renderTable table
+
+
+addTeamsDrowndown_ :: Projects.ProjectId -> V.Vector ManageMembers.Team -> Html ()
+addTeamsDrowndown_ pid teams = div_ [class_ "dropdown dropdown-end"] do
+  label_ [tabindex_ "0", role_ "button", class_ "flex items-center gap-2 btn btn-sm"] do
+    faSprite_ "plus" "regular" "w-3 h-3"
+    span_ "Add teams"
+  ul_ [tabindex_ "0", class_ "dropdown-content rounded w-52 px-0 py-3"] do
+    h6_ [class_ "font-medium mb-2 px-2"] "Add up to 5 teams"
+    forM_ teams \team -> do
+      li_ [class_ "p-0"] do
+        label_ [class_ "flex flex-row items-center gap-1 px-2 text-sm hover:bg-fillWeak"] do
+          input_ [type_ "checkbox", class_ "checkbox checkbox-xs", name_ "teamHandles", value_ $ UUID.toText team.id]
+          span_ [class_ "px-2 py-1"] $ toHtml team.handle
+    button_ [class_ "btn btn-primary btn-xs float-right", hxPost_ $ "/p/" <> pid.toText <> "/dashboards/bulk_action/add_teams", hxSwap_ "none"] "Add teams"
 
 
 -- forM_ dg.dashboards \dashVM -> do
@@ -937,13 +961,14 @@ dashboardsGetH pid embeddedM = do
   appCtx <- ask @AuthContext
   now <- Time.currentTime
   dashboards <- dbtToEff $ DBT.selectManyByField @Dashboards.DashboardVM [DBT.field| project_id |] pid
+  teams <- dbtToEff $ ManageMembers.getTeams pid
 
   -- Check if we're requesting in embedded mode (for modals, etc.)
   let embedded = embeddedM == Just "true" || embeddedM == Just "1" || embeddedM == Just "yes"
 
   if embedded
     then -- For embedded mode, use a minimal BWConfig that will still work with ToHtml instance
-      addRespHeaders $ PageCtx def $ DashboardsGet{dashboards, projectId = pid, embedded = True}
+      addRespHeaders $ PageCtx def $ DashboardsGet{dashboards, projectId = pid, embedded = True, teams}
     else do
       freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
 
@@ -956,11 +981,12 @@ dashboardsGetH pid embeddedM = do
               , config = appCtx.config
               , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn btn-primary text-white"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Dashboard")
               }
-      addRespHeaders $ PageCtx bwconf $ DashboardsGet{dashboards, projectId = pid, embedded = False}
+      addRespHeaders $ PageCtx bwconf $ DashboardsGet{dashboards, projectId = pid, embedded = False, teams}
 
 
-newtype DashboardForm = DashboardForm
+data DashboardForm = DashboardForm
   { file :: Text
+  , teams :: [UUID.UUID]
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -987,6 +1013,7 @@ dashboardsPostH pid form = do
       , homepageSince = Nothing
       , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
       , title = fromMaybe [] $ dashM >>= (.title)
+      , teams = V.fromList form.teams
       }
   redirectCS redirectURI
   addRespHeaders NoContent
@@ -1026,6 +1053,7 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
               , homepageSince = Nothing
               , tags = V.fromList tags
               , title = title
+              , teams = V.empty
               }
         pure did.toText
   redirectTo <-
@@ -1139,6 +1167,7 @@ dashboardDeleteH pid dashId = do
 
 data DashboardBulkActionForm = DashboardBulkActionForm
   { dashboardId :: [Dashboards.DashboardId]
+  , teamHandles :: [UUID.UUID]
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -1150,6 +1179,10 @@ dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
     "delete" -> do
       _ <- Dashboards.deleteDashboardsByIds pid $ V.fromList dashboardId
       addSuccessToast "Selected dashboards were deleted successfully" Nothing
+      addRespHeaders NoContent
+    "add_teams" -> do
+      _ <- Dashboards.addTeamsToDashboards pid (V.fromList dashboardId) (V.fromList teamHandles)
+      addSuccessToast "Teams added to selected dashboards successfully" Nothing
       addRespHeaders NoContent
     _ -> do
       addErrorToast "Invalid action" Nothing

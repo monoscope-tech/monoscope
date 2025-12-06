@@ -11,6 +11,7 @@ module Models.Projects.ProjectMembers (
   updateTeam,
   getTeams,
   getTeamByHandle,
+  getTeamsVM,
   TeamVM (..),
   deleteTeamByHandle,
   getTeamsById,
@@ -198,8 +199,19 @@ data Team = Team
   deriving anyclass (FromRow, NFData)
 
 
-getTeams :: Projects.ProjectId -> DBT IO (V.Vector TeamVM)
+getTeams :: Projects.ProjectId -> DBT IO (V.Vector Team)
 getTeams pid = query q (Only pid)
+  where
+    q =
+      [sql|
+      SELECT  t.id, t.name, t.description, t.handle, t.members, t.notify_emails, t.slack_channels, t.discord_channels
+       FROM projects.teams t
+       WHERE t.project_id = ? AND t.deleted_at is null
+    |]
+
+
+getTeamsVM :: Projects.ProjectId -> DBT IO (V.Vector TeamVM)
+getTeamsVM pid = query q (Only pid)
   where
     q =
       [sql|

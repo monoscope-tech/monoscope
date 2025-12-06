@@ -660,7 +660,7 @@ data ApiLogsPageData = ApiLogsPageData
   , patternsToSkip :: Int
   , targetPattern :: Maybe Text
   , project :: Projects.Project
-  , teams :: V.Vector ManageMembers.TeamVM
+  , teams :: V.Vector ManageMembers.Team
   }
 
 
@@ -962,7 +962,7 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
 
 
 -- | Render alert configuration form for creating log-based alerts
-alertConfigurationForm_ :: Projects.Project -> Maybe Monitors.QueryMonitor -> V.Vector ManageMembers.TeamVM -> Html ()
+alertConfigurationForm_ :: Projects.Project -> Maybe Monitors.QueryMonitor -> V.Vector ManageMembers.Team -> Html ()
 alertConfigurationForm_ project alertM teams = do
   let pid = project.id
       isByos = project.paymentPlan == "Bring your own storage"
