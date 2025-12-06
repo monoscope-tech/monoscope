@@ -189,6 +189,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardDuplicatePost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "duplicate" :> Post '[HTML] (RespHeaders NoContent)
   , dashboardDuplicateWidget :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "duplicate" :> Post '[HTML] (RespHeaders Widget.Widget)
   , dashboardWidgetExpandGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "expand" :> Get '[HTML] (RespHeaders (Html ()))
+  , dashboardBulkActionPost :: mode :- "p" :> ProjectId :> "dashboards" :> "bulk_action" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] Dashboards.DashboardBulkActionForm :> Post '[HTML] (RespHeaders NoContent)
   , -- API routes
     apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders Api.ApiGet)
   , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (RespHeaders Api.ApiMut)
@@ -390,6 +391,7 @@ cookieProtectedServer =
     , dashboardDuplicatePost = Dashboards.dashboardDuplicatePostH
     , dashboardDuplicateWidget = Dashboards.dashboardDuplicateWidgetPostH
     , dashboardWidgetExpandGet = Dashboards.dashboardWidgetExpandGetH
+    , dashboardBulkActionPost = Dashboards.dashboardBulkActionPostH
     , -- API handlers
       apiGet = Api.apiGetH
     , apiDelete = Api.apiDeleteH

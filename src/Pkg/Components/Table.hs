@@ -89,7 +89,7 @@ defaultTable cols rows =
 
 -- | Render a table to HTML
 renderTable :: Table -> Html ()
-renderTable tbl = div_ [class_ ""] do
+renderTable tbl = form_ [class_ "group-pg"] do
   div_ [class_ "flex items-center justify-between mb-4 gap-8"] do
     when tbl.tableHasSearch do
       div_ [class_ "flex gap-2 w-full shrink-1"] do
@@ -105,7 +105,7 @@ renderTable tbl = div_ [class_ ""] do
     div_ [class_ "flex items-center gap-2 w-max grow-1 shrink-0"] do
       whenJust tbl.tableActions
         $ \actions ->
-          div_ [class_ "flex gap-2"] $ mapM_ toHtml actions
+          div_ [class_ "flex gap-2 pointer-events-none opacity-50 cursor-not-allowed group-has-[.tr-checkbox:checked]/pg:opacity-100 group-has-[.tr-checkbox:checked]/pg:pointer-events-auto group-has-[.tr-checkbox:checked]/pg:cursor-pointer"] $ mapM_ toHtml actions
   table_ (tableAttrs tbl) $ do
     whenJust (tableCaption tbl) $ \caption ->
       caption_ $ toHtml caption
@@ -160,19 +160,19 @@ renderCell :: TableRow -> [Attribute] -> TableColumn -> Html ()
 renderCell rowData atrr col =
   td_ (if col.columnActionable then atrr else []) $ case columnRender col of
     Just renderFn -> renderFn cellValue
-    Nothing -> renderDefaultCell cellValue
+    Nothing -> renderDefaultCell cellValue col.columnKey
   where
     cellValue = Map.findWithDefault CellEmpty (columnKey col) rowData
 
 
-renderDefaultCell :: TableCell -> Html ()
-renderDefaultCell (CellText txt) = toHtml txt
-renderDefaultCell (CellArray arr) =
-  ul_ $ mapM_ (li_ . renderDefaultCell) arr
-renderDefaultCell (CellCustom a) = toHtml a
-renderDefaultCell CellEmpty = ""
-renderDefaultCell (CellCheckbox name) =
-  input_ [type_ "checkbox", name_ name, class_ "checkbox checkbox-sm tr-checkbox"]
+renderDefaultCell :: TableCell -> Text -> Html ()
+renderDefaultCell (CellText txt) _ = toHtml txt
+renderDefaultCell (CellArray arr) colkey =
+  ul_ $ mapM_ (\x -> li_ $ renderDefaultCell x colkey) arr
+renderDefaultCell (CellCustom a) _ = toHtml a
+renderDefaultCell CellEmpty _ = ""
+renderDefaultCell (CellCheckbox val) colKey =
+  input_ [type_ "checkbox", name_ colKey, value_ val, class_ "checkbox checkbox-sm tr-checkbox"]
 
 
 renderEmptyState :: Table -> Html ()

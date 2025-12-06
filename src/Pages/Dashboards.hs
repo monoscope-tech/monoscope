@@ -1,4 +1,26 @@
-module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..), dashboardWidgetPutH, dashboardWidgetReorderPatchH, WidgetReorderItem (..), dashboardDeleteH, dashboardRenamePatchH, DashboardRenameForm (..), dashboardDuplicatePostH, WidgetMoveForm (..), dashboardDuplicateWidgetPostH, dashboardWidgetExpandGetH, visTypes, processEagerWidget) where
+module Pages.Dashboards (
+  dashboardGetH,
+  entrypointRedirectGetH,
+  DashboardGet (..),
+  dashboardsGetH,
+  DashboardsGet (..),
+  dashboardsPostH,
+  DashboardForm (..),
+  dashboardWidgetPutH,
+  dashboardWidgetReorderPatchH,
+  WidgetReorderItem (..),
+  dashboardDeleteH,
+  dashboardRenamePatchH,
+  DashboardRenameForm (..),
+  dashboardDuplicatePostH,
+  WidgetMoveForm (..),
+  DashboardBulkActionForm (..),
+  dashboardDuplicateWidgetPostH,
+  dashboardWidgetExpandGetH,
+  visTypes,
+  processEagerWidget,
+  dashboardBulkActionPostH,
+) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -863,13 +885,13 @@ dashboardsGet_ dg = do
                   $ [ button_ [class_ "flex items-center gap-2 btn btn-sm"] do
                         faSprite_ "plus" "regular" "w-3 h-3"
                         span_ "Add teams"
-                    , button_ [class_ "flex items-center gap-2 btn btn-sm text-textError"] do
+                    , button_ [class_ "flex items-center gap-2 btn btn-sm text-textError", hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/delete", hxSwap_ "none"] do
                         faSprite_ "trash" "regular" "w-3 h-3"
                         span_ "Delete"
                     ]
             }
 
-    div_ [class_ "w-full"] do
+    div_ [class_ "w-full", id_ "dashboardsTableContainer"] do
       Table.renderTable table
 
 
@@ -1106,6 +1128,25 @@ dashboardDeleteH pid dashId = do
       let redirectURI = "/p/" <> pid.toText <> "/dashboards"
       redirectCS redirectURI
       addSuccessToast "Dashboard was deleted successfully" Nothing
+      addRespHeaders NoContent
+
+
+data DashboardBulkActionForm = DashboardBulkActionForm
+  { dashboardId :: [Dashboards.DashboardId]
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+dashboardBulkActionPostH :: Projects.ProjectId -> Text -> DashboardBulkActionForm -> ATAuthCtx (RespHeaders NoContent)
+dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
+  case action of
+    "delete" -> do
+      _ <- Dashboards.deleteDashboardsByIds pid $ V.fromList dashboardId
+      addSuccessToast "Selected dashboards were deleted successfully" Nothing
+      addRespHeaders NoContent
+    _ -> do
+      addErrorToast "Invalid action" Nothing
       addRespHeaders NoContent
 
 
