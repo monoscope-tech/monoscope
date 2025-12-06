@@ -661,7 +661,7 @@ data ApiLogsPageData = ApiLogsPageData
   , patternsToSkip :: Int
   , targetPattern :: Maybe Text
   , project :: Projects.Project
-  , teams :: V.Vector ManageMembers.TeamVM
+  , teams :: V.Vector ManageMembers.Team
   }
 
 
@@ -963,7 +963,7 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
 
 
 -- | Render alert configuration form for creating log-based alerts
-alertConfigurationForm_ :: Projects.Project -> Maybe Monitors.QueryMonitor -> V.Vector ManageMembers.TeamVM -> Html ()
+alertConfigurationForm_ :: Projects.Project -> Maybe Monitors.QueryMonitor -> V.Vector ManageMembers.Team -> Html ()
 alertConfigurationForm_ project alertM teams = do
   let pid = project.id
       isByos = project.paymentPlan == "Bring your own storage"
@@ -1106,8 +1106,8 @@ alertConfigurationForm_ project alertM teams = do
                                      })
                                    end|]
                             ]
-                          ++ [required_ "" | req]
-                          ++ [value_ (maybe "" (show) vM) | isJust vM]
+                            ++ [required_ "" | req]
+                            ++ [value_ (maybe "" (show) vM) | isJust vM]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)

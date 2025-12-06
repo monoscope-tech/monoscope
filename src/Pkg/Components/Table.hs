@@ -35,6 +35,7 @@ data TableCell where
   CellCustom :: ToHtml a => a -> TableCell
   CellEmpty :: TableCell
   CellCheckbox :: Text -> TableCell
+  CellBadge :: Text -> TableCell
 
 
 -- | Type alias for table row data using Map for efficient lookup
@@ -168,11 +169,13 @@ renderCell rowData atrr col =
 renderDefaultCell :: TableCell -> Text -> Html ()
 renderDefaultCell (CellText txt) _ = toHtml txt
 renderDefaultCell (CellArray arr) colkey =
-  ul_ $ mapM_ (\x -> li_ $ renderDefaultCell x colkey) arr
+  div_ [class_ "flex flex-wrap gap-1"] $ mapM_ (\x -> renderDefaultCell x colkey) arr
 renderDefaultCell (CellCustom a) _ = toHtml a
 renderDefaultCell CellEmpty _ = ""
 renderDefaultCell (CellCheckbox val) colKey =
   input_ [type_ "checkbox", name_ colKey, value_ val, class_ "checkbox checkbox-sm tr-checkbox"]
+renderDefaultCell (CellBadge val) _ =
+  span_ [class_ "badge badge-sm badge-ghost"] $ toHtml val
 
 
 renderEmptyState :: Table -> Html ()
