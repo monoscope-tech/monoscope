@@ -162,7 +162,7 @@ renderCell rowData tbl col = do
           let scr = actionFn rowData
            in [term "_" scr]
         Nothing -> ([] :: [Attribute])
-  unless (col.columnCheckBox && not col.columnActionable)
+  unless (col.columnCheckBox && not tbl.tableHasCheckboxes)
     $ td_ (if col.columnActionable then actionAttr else [])
     $ case columnRender col of
       Just renderFn -> renderFn cellValue
