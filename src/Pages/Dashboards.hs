@@ -873,8 +873,7 @@ dashboardsGet_ dg = do
           $ div_ [class_ "bg-[#1e9cff] px-5 py-8 rounded-xl aspect-square w-full flex items-center"]
           $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full", id_ "dItemPreview"]
 
-  div_ [id_ "itemsListPage", class_ "mx-auto px-6 pt-8 gap-8 w-full flex flex-col h-full overflow-hidden pb-2  group/pg"] do
-    when dg.embedded $ h3_ [class_ "text-lg font-normal"] "Select a dashboard below, and the widget will be copied there"
+  div_ [id_ "itemsListPage", class_ $ "mx-auto gap-8 w-full flex flex-col h-full overflow-hidden group/pg" <> if dg.embedded then "" else "pb-2 px-6 pt-8"] do
     let getTeams x = catMaybes $ (\xx -> find (\t -> t.id == xx) dg.teams) <$> V.toList x.teams
     let mapRow x =
           Map.fromList
@@ -890,7 +889,9 @@ dashboardsGet_ dg = do
           (Table.defaultTable tableCols (V.toList tableRows))
             { tableClass = "border border-strokeWeak rounded-box"
             , tableId = Just "dashboardsTable"
-            , tableHasSearch = True
+            , tableHasSearch = not dg.embedded
+            , tableShowHeader = not dg.embedded
+            , tableHasCheckboxes = not dg.embedded
             , rowAction = Just $ \row -> do
                 let baseUrl = "/p/" <> dg.projectId.toText <> "/dashboards/"
                     scrpt = case Map.lookup "dashboardId" row of
@@ -898,12 +899,15 @@ dashboardsGet_ dg = do
                       _ -> ""
                  in scrpt
             , tableActions =
-                Just
-                  $ [ addTeamsDrowndown_ dg.projectId dg.teams
-                    , button_ [class_ "flex items-center gap-2 btn btn-sm text-textError", type_ "button", hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/delete", hxSwap_ "none"] do
-                        faSprite_ "trash" "regular" "w-3 h-3"
-                        span_ "Delete"
-                    ]
+                if dg.embedded
+                  then Nothing
+                  else
+                    Just
+                      $ [ addTeamsDrowndown_ dg.projectId dg.teams
+                        , button_ [class_ "flex items-center gap-2 btn btn-sm text-textError", type_ "button", hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/delete", hxSwap_ "none"] do
+                            faSprite_ "trash" "regular" "w-3 h-3"
+                            span_ "Delete"
+                        ]
             }
 
     div_ [class_ "w-full", id_ "dashboardsTableContainer"] do
@@ -925,53 +929,26 @@ addTeamsDrowndown_ pid teams = div_ [class_ "dropdown dropdown-end"] do
     button_ [class_ "btn btn-primary btn-xs float-right", hxPost_ $ "/p/" <> pid.toText <> "/dashboards/bulk_action/add_teams", hxSwap_ "none"] "Add teams"
 
 
--- forM_ dg.dashboards \dashVM -> do
---   let dash = loadDashboardFromVM dashVM
---   let attrs =
---         if dg.embedded
---           then
---             [ class_ "cursor-pointer"
---             , hxPut_ ("/p/" <> dg.projectId.toText <> "/dashboards/" <> dashVM.id.toText)
---             , hxVals_ "js:{...JSON.parse(document.getElementById(document.getElementById('dashboards-modal-widget-id').value + '_widgetEl').dataset.widget)}"
---             , hxSwap_ "none"
---             , hxExt_ "json-enc"
---             ]
---           else [href_ ("/p/" <> dg.projectId.toText <> "/dashboards/" <> dashVM.id.toText)]
---   a_ ([class_ "rounded-xl border border-strokeWeak hover:border-strokeBrand-strong gap-3.5 p-4 bg-fillWeaker flex itemListItem group/i"] <> attrs) do
---     div_ [class_ "flex-1 space-y-2"] do
---       div_ [class_ "flex items-center gap-2"] do
---         span_ [class_ "group-hover/i:underline underline-offset-2"]
---           $ strong_ [class_ "font-medium"] (toHtml $ bool "Untitled" dashVM.title (dashVM.title /= ""))
---         span_ [class_ "leading-none", term "data-tippy-content" "This dashboard is currently your homepage."] do
---           when (isJust dashVM.homepageSince) $ faSprite_ "house" "regular" "w-4 h-4"
---       div_ [class_ "gap-2 flex items-center"] do
---         time_ [class_ "mr-2 text-textWeak", term "data-tippy-content" "Date of dashboard creation", datetime_ $ Utils.formatUTC dashVM.createdAt] $ toHtml $ formatTime defaultTimeLocale "%eth %b %Y" dashVM.createdAt
---         forM_ dashVM.tags (span_ [class_ "badge badge-neutral"] . toHtml @Text)
---     div_ [class_ "flex items-end justify-center gap-5"] do
---       button_ [class_ "leading-none", term "data-tippy-content" "click to star this dashboard"]
---         $ if isJust dashVM.starredSince
---           then faSprite_ "star" "solid" "w-5 h-5"
---           else faSprite_ "star" "regular" "w-5 h-5"
---       let widgetCount = maybe "0" (show . length . (.widgets)) dash
---       div_ [class_ "flex items-end gap-2", term "data-tippy-content" $ "There are " <> widgetCount <> " charts/widgets in this dashboard"] $ faSprite_ "chart-area" "regular" "w-5 h-5 text-iconNeutral" >> (span_ [class_ "leading-none"] . toHtml $ widgetCount)
-
-dashboardsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx DashboardsGet))
-dashboardsGetH pid embeddedM = do
+dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe UUID.UUID -> ATAuthCtx (RespHeaders (PageCtx DashboardsGet))
+dashboardsGetH pid embeddedM teamIdM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   now <- Time.currentTime
-  dashboards <- dbtToEff $ DBT.selectManyByField @Dashboards.DashboardVM [DBT.field| project_id |] pid
+  dashboards <- case teamIdM of
+    Just teamId -> do
+      ds <- Dashboards.selectDashboardsByTeam pid teamId
+      pure $ V.fromList ds
+    Nothing -> dbtToEff $ DBT.selectManyByField @Dashboards.DashboardVM [DBT.field| project_id |] pid
   teams <- dbtToEff $ ManageMembers.getTeams pid
 
   -- Check if we're requesting in embedded mode (for modals, etc.)
   let embedded = embeddedM == Just "true" || embeddedM == Just "1" || embeddedM == Just "yes"
 
-  if embedded
+  if embedded || isJust teamIdM
     then -- For embedded mode, use a minimal BWConfig that will still work with ToHtml instance
       addRespHeaders $ PageCtx def $ DashboardsGet{dashboards, projectId = pid, embedded = True, teams}
     else do
       freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
-
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess

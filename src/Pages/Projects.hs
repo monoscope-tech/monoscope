@@ -56,6 +56,7 @@ import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq
 import Data.Effectful.Wreq qualified as W
 import Data.List.Unique (uniq)
+import Data.Map qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time
@@ -71,7 +72,7 @@ import Effectful.Reader.Static (ask)
 import Fmt
 import GHC.Records (HasField (getField))
 import Lucid
-import Lucid (div_)
+import Lucid (Term (term), div_, href_)
 import Lucid.Htmx
 import Lucid.Htmx (hxPost_, hxSelect_, hxSwapOob_, hxTrigger_)
 import Lucid.Hyperscript (__)
@@ -93,6 +94,8 @@ import Pages.Bots.Slack (channels, getSlackChannels)
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Components (paymentPlanPicker)
+import Pkg.Components.Table (Table (..), TableCell (..), TableColumn (..))
+import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
 import Pkg.ConvertKit qualified as ConvertKit
 import Pkg.DeriveUtils (UUIDId (..))
@@ -677,7 +680,7 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
   let channelWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]) <$> channels
   let discordWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]) <$> discordChannels
   section_ [id_ "main-content", class_ "w-full py-8"] do
-    div_ [class_ "p-6"] do
+    div_ [class_ "p-6 w-full"] do
       div_ [class_ "mb-8 w-full flex items-center justify-between"] do
         div_ [class_ "flex flex-col gap-2"] do
           h2_ [class_ "text-textStrong text-3xl font-semibold"] "Teams"
@@ -685,54 +688,60 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
         label_ [class_ "btn btn-primary btn-sm text-white", Lucid.for_ "n-new-team-modal"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Team")
         input_ [type_ "checkbox", id_ "n-new-team-modal", class_ "modal-toggle"]
         teamModal pid Nothing whiteList channelWhiteList discordWhiteList False
-      div_ [class_ "flex items-center gap-4"] do
-        label_ [class_ "input w-96"] do
-          faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
-          input_ [type_ "text", placeholder_ "Search teams...", class_ "", [__| on input show .team_filterble in #teams_list_container when its textContent.toLowerCase() contains my value.toLowerCase() |]]
-        span_ [class_ "text-textWeak text-sm"] $ (show (V.length teams) <> " teams found")
-      div_ [class_ "mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-4", id_ "teams_list_container"] $ mapM_ (\t -> teamCard pid t whiteList channelWhiteList discordWhiteList) (V.toList teams)
+      let mapColumn x =
+            (Table.mkColumn x x)
+              { columnWidth = if x == "Name" then Just "60%" else if x == "Modified" then Just "20%" else Nothing
+              , columnCheckBox = x == "teamId"
+              , columnActionable = x == "Name"
+              }
+      let tableCols = (\x -> mapColumn x) <$> ["teamId", "Name", "Modified", "Members", "Notifications"]
+      let mapRow x =
+            Map.fromList
+              [ ("teamId", CellCheckbox $ UUID.toText x.id)
+              , ("Name", CellCustom $ nameCell pid x.name x.description x.handle)
+              , ("Modified", CellText $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" x.updated_at)
+              , ("Members", CellCustom $ memberCell x.members)
+              , ("Notifications", CellCustom $ notifsCell x)
+              ]
+          tableRows = (mapRow <$> V.toList teams)
+          table =
+            (Table.defaultTable tableCols tableRows)
+              { tableId = Just "teams_table"
+              , tableClass = "border rounded border-strokeWeak"
+              , tableHasSearch = True
+              , tableHasCheckboxes = True
+              }
+      div_ [class_ "w-full"] do
+        Table.renderTable table
 
 
-teamCard :: Projects.ProjectId -> ProjectMembers.TeamVM -> Text -> Text -> Text -> Html ()
-teamCard pid team whiteList channelWhiteList discordWhiteList = do
-  div_ [class_ "border border-strokeWeak rounded-xl shadow-sm hover:shadow-md transition-shadow duration-200 overflow-hidden team_filterble"] do
-    div_ [class_ "p-5 pb-3 flex flex-col gap-4"] do
-      div_ [class_ "flex justify-between center"] do
-        a_ [href_ $ "/p/" <> pid.toText <> "/manage_teams/" <> team.handle, class_ "flex items-center gap-4 min-w-0"] do
-          div_ [class_ "rounded-full border border-strokeWeak p-3"] do
-            span_ [class_ "text-xl font-bold"] "BS"
-          div_ [] do
-            h4_ [class_ "text-textStrong font-semibold"] $ toHtml team.name
-            span_ [class_ "text-textWeak text-sm"] $ toHtml team.handle
-        label_ [class_ "btn btn-ghost btn-sm", Lucid.for_ (team.handle <> "-new-team-modal")] "Edit"
-        input_ [type_ "checkbox", id_ (team.handle <> "-new-team-modal"), class_ "modal-toggle"]
-        teamModal pid (Just team) whiteList channelWhiteList discordWhiteList False
-      div_ [] do
-        p_ [class_ "text-textWeak text-sm mt-1 line-clamp-2"] $ toHtml team.description
-      div_ [class_ "flex items-center justify-between text-sm text-textWeak"] do
-        div_ [class_ "flex items-center gap-2"] do
-          div_ [class_ "flex items-center gap-1", term "data-tippy-content" "Members"] do
-            faSprite_ "users" "regular" "h-3.5 w-3.5"
-            span_ [] $ toHtml $ show $ V.length team.members
-          div_ [class_ "flex items-center gap-1", term "data-tippy-content" "Dashboards"] do
-            faSprite_ "chart-area" "regular" "h-3 w-3"
-            span_ [] $ toHtml $ show $ V.length team.members
-          div_ [class_ "flex items-center gap-1", term "data-tippy-content" "Monitors"] do
-            faSprite_ "information" "regular" "h-3.5 w-3.5"
-            span_ [] $ toHtml $ show $ V.length team.members
-        div_ [class_ "flex items-center gap-2"] do
-          when (not $ V.null team.slack_channels) do
-            faSprite_ "slack" "regular" "h-3.5 w-3.5"
-          when (not $ V.null team.discord_channels) do
-            faSprite_ "discord" "regular" "h-3.5 w-3.5"
-          when (not $ V.null team.notify_emails) do
-            faSprite_ "envelope" "regular" "h-3.5 w-3.5"
-      div_ [class_ "flex justify-between items-center text-textWeak text-xs mt-2"] do
-        toHtml $ "Created " <> (toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S" team.created_at)
-        div_ [class_ "inline-block flex -space-x-2"] do
-          forM_ team.members $ \m -> do
-            div_ [class_ "inline-block mx-0.5", term "data-tippy-content" (m.memberName)]
-              $ img_ [class_ "inline-block h-6 w-6 rounded-full ", src_ m.memberAvatar, alt_ "User avatar"]
+nameCell :: Projects.ProjectId -> Text -> Text -> Text -> Html ()
+nameCell pid name description handle = do
+  a_ [class_ "flex items-center gap-2", href_ ("/p/" <> pid.toText <> "/manage_teams/" <> handle)] do
+    span_ [class_ "text-textStrong font-medium"] $ toHtml name
+    span_ [class_ "text-textWeak text-sm overflow-ellipsis truncate "] $ toHtml description
+
+
+memberCell :: V.Vector ProjectMembers.TeamMemberVM -> Html ()
+memberCell members = do
+  div_ [class_ "inline-block flex -space-x-2"] do
+    forM_ members $ \m -> do
+      div_ [class_ "inline-block mx-0.5", term "data-tippy-content" (m.memberName)]
+        $ img_ [class_ "inline-block h-6 w-6 rounded-full border border-strokeWeak ", src_ m.memberAvatar, alt_ "User avatar"]
+
+
+notifsCell :: ProjectMembers.TeamVM -> Html ()
+notifsCell team = do
+  div_ [class_ "flex items-center gap-2"] do
+    when (not $ V.null team.slack_channels) do
+      div_ [term "data-tippy-content" "Slack"] do
+        faSprite_ "slack" "solid" "h-3.5 w-3.5"
+    when (not $ V.null team.discord_channels) do
+      div_ [term "data-tippy-content" "Discord"] do
+        faSprite_ "discord" "solid" "h-3.5 w-3.5"
+    when (not $ V.null team.notify_emails) do
+      div_ [term "data-tippy-content" "Email"] do
+        faSprite_ "envelope" "solid" "h-3.5 w-3.5"
 
 
 teamGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
@@ -838,12 +847,12 @@ teamPage pid team projMembers slackChannels discordChannels = do
       div_ [class_ "h-full w-8/12 overflow-y-auto p-4"] do
         div_ [class_ "w-full space-y-6"] do
           monitorsSection pid team.id
-          dashboardsSection
-          servicesSection
+          dashboardsSection pid team.id
+          servicesSection pid team.id
 
 
 monitorsSection :: Projects.ProjectId -> UUID.UUID -> Html ()
-monitorsSection pid teamId = div_ [class_ "rounded-xl border border-strokeWeak shadow-sm overflow-x-hidden"] do
+monitorsSection pid teamId = div_ [class_ "rounded-xl border border-strokeWeak overflow-x-hidden"] do
   div_
     [ class_ "flex items-center justify-between w-full p-2 hover:bg-fillWeaker cursor-pointer"
     , [__|on click toggle .hidden on the next <div/> 
@@ -865,10 +874,10 @@ monitorsSection pid teamId = div_ [class_ "rounded-xl border border-strokeWeak s
     emptySectionState "No monitors are currently linked to this team"
 
 
-dashboardsSection :: Html ()
-dashboardsSection = div_ [class_ "rounded-xl border border-strokeWeak overflow-x-hidden"] do
+dashboardsSection :: Projects.ProjectId -> UUID.UUID -> Html ()
+dashboardsSection pid teamId = div_ [class_ "rounded-xl border border-strokeWeak overflow-x-hidden"] do
   div_
-    [ class_ "flex items-center justify-between w-full p-2 hover:bg-fillWeaker cursor-pointer"
+    [ class_ "flex items-center justify-between w-full p-2 bg-fillWeaker cursor-pointer"
     , [__|on click toggle .hidden on the next <div/>
          then toggle .rotate-270 on the first <button/> in me
     |]
@@ -882,12 +891,14 @@ dashboardsSection = div_ [class_ "rounded-xl border border-strokeWeak overflow-x
             input_ [type_ "text", placeholder_ "Search dashboards...", class_ "", [__| on click halt|]]
         button_ [class_ ""] do
           faSprite_ "p-chevron-down" "regular" "h-4 w-4"
-  div_ [class_ "p-3 border-t w-full border-strokeWeak"] do
+  div_ [class_ "-mt-4 w-full max-h-96 overflow-y-auto", id_ "dashboards-section"] do
+    a_ [hxGet_ ("/p/" <> pid.toText <> "/dashboards/?teamId=" <> UUID.toText teamId), hxTrigger_ "intersect once", hxTarget_ "#dashboards-section", hxSwap_ "innerHTML"] ""
+    span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-sm"] ""
     emptySectionState "No dashboards are currently linked to this team"
 
 
-servicesSection :: Html ()
-servicesSection = div_ [class_ "rounded-xl border border-strokeWeak overflow-x-hidden"] do
+servicesSection :: Projects.ProjectId -> UUID.UUID -> Html ()
+servicesSection pid teamId = div_ [class_ "rounded-xl border border-strokeWeak overflow-x-hidden"] do
   div_
     [ class_ "flex items-center justify-between w-full p-2 hover:bg-fillWeaker cursor-pointer"
     , [__|on click toggle .hidden on the next <div/>
