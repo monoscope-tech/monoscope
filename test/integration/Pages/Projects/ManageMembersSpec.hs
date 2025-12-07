@@ -191,6 +191,48 @@ spec = aroundAll withTestResources do
             _ -> fail "Expected ManageTeamsGet' response"
         _ -> fail "Expected ManageTeamsGet' response"
 
+    it "Should not create a team with an empty name" \tr -> do
+      let invalidTeam = team{teamName = ""}
+      (_, pg) <- testServant tr $ ManageMembers.manageTeamPostH testPid invalidTeam Nothing
+      case pg of
+        ManageMembers.ManageTeamsPostError message -> do
+          message `shouldBe` "Team name is required"
+        _ -> fail "Expected ManageTeamsPostError response"
+
+    it "Should not create a team with an invalid handle" \tr -> do
+      let invalidTeam = team{teamHandle = "Invalid Handle!"}
+      (_, pg) <- testServant tr $ ManageMembers.manageTeamPostH testPid invalidTeam Nothing
+      case pg of
+        ManageMembers.ManageTeamsPostError message -> do
+          message `shouldBe` "Handle must be lowercase, no spaces, and hyphens only"
+        _ -> fail "Expected ManageTeamsPostError response"
+
+    it "Should update team notifications" \tr -> do
+      (_, pg) <- testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
+      case pg of
+        ManageMembers.ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams) -> do
+          let createdTeam = find (\t -> t.handle == "hello") teams
+          isJust createdTeam `shouldBe` True
+          let created = Unsafe.fromJust createdTeam
+          let updatedTeam =
+                team
+                  { teamId = Just created.id
+                  , notifEmails = ["team@example.com"]
+                  , slackChannels = ["slack-channel-id"]
+                  , discordChannels = ["discord-channel-id"]
+                  }
+          (_, pg') <- testServant tr $ ManageMembers.manageTeamPostH testPid updatedTeam Nothing
+          case pg' of
+            ManageMembers.ManageTeamsGet' (_, _, _, _, updatedTeams) -> do
+              let updated = find (\t -> t.handle == "hello") updatedTeams
+              isJust updated `shouldBe` True
+              let updatedTeam' = Unsafe.fromJust updated
+              updatedTeam'.notify_emails `shouldBe` ["team@example.com"]
+              updatedTeam'.slack_channels `shouldBe` ["slack-channel-id"]
+              updatedTeam'.discord_channels `shouldBe` ["discord-channel-id"]
+            _ -> fail "Expected ManageTeamsGet' response"
+        _ -> fail "Expected ManageTeamsGet' response"
+
     it "Should delete a team" \tr -> do
       (_, pg) <-
         testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
@@ -208,6 +250,34 @@ spec = aroundAll withTestResources do
               case pg'' of
                 ManageMembers.ManageTeamsGet' (_, _, _, _, teams'') -> do
                   V.length teams'' `shouldBe` 0
+                _ -> fail "Expected ManageTeamsGet' response"
+            _ -> fail "Expected ManageTeamsDelete response"
+        _ -> fail "Expected ManageTeamsGet' response"
+
+    it "Should handle bulk delete of teams" \tr -> do
+      -- Create multiple teams
+      let team1 = team{teamName = "Team 1", teamHandle = "team-1"}
+      let team2 = team{teamName = "Team 2", teamHandle = "team-2"}
+      (_, pg1) <- testServant tr $ ManageMembers.manageTeamPostH testPid team1 Nothing
+      (_, pg2) <- testServant tr $ ManageMembers.manageTeamPostH testPid team2 Nothing
+      case (pg1, pg2) of
+        (ManageMembers.ManageTeamsGet' (_, _, _, _, teams1), ManageMembers.ManageTeamsGet' (_, _, _, _, teams2)) -> do
+          let createdTeam1' = find (\t -> t.handle == "team-1") teams1
+          let createdTeam2' = find (\t -> t.handle == "team-2") teams2
+          isJust createdTeam1' `shouldBe` True
+          isJust createdTeam2' `shouldBe` True
+          let createdTeam1 = Unsafe.fromJust createdTeam1'
+          let createdTeam2 = Unsafe.fromJust createdTeam2'
+
+          let teamIds = [createdTeam1.id, createdTeam2.id]
+          let bulkActionForm = ManageMembers.TBulkActionForm{teamId = teamIds}
+          (_, pg') <- testServant tr $ ManageMembers.manageTeamBulkActionH testPid "delete" bulkActionForm Nothing
+          case pg' of
+            ManageMembers.ManageTeamsDelete -> do
+              (_, pg'') <- testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
+              case pg'' of
+                ManageMembers.ManageTeamsGet' (_, _, _, _, teams) -> do
+                  V.length teams `shouldBe` 0
                 _ -> fail "Expected ManageTeamsGet' response"
             _ -> fail "Expected ManageTeamsDelete response"
         _ -> fail "Expected ManageTeamsGet' response"
