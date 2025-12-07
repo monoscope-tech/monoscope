@@ -165,7 +165,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
               , value_ $ maybeToMonoid var.value
               ]
-            <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
+              <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
   const tagifyInstances = new Map();
@@ -381,7 +381,7 @@ processWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widgetBas
   forOf (#children . _Just . traverse) widget' $ \child ->
     processWidget pid now timeRange allParams
       $ child
-      & #_dashboardId %~ (<|> widget'._dashboardId)
+        & #_dashboardId %~ (<|> widget'._dashboardId)
 
 
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
@@ -391,11 +391,11 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
     let issuesVM = V.map (AnomalyList.IssueVM False True now "24h") issues
     pure
       $ widget
-      & #html
-        ?~ renderText
-          ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-              $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml)
-          )
+        & #html
+          ?~ renderText
+            ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
+                $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml)
+            )
   Widget.WTStat -> do
     stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure $ widget & #dataset ?~ def{Widget.source = AE.Null, Widget.value = stat.dataFloat}
@@ -405,8 +405,8 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
     -- Render the table with data server-side
     pure
       $ widget
-      & #html
-        ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
+        & #html
+          ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
   Widget.WTTraces -> do
     tracesD <- Charts.queryMetrics (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     let trIds = V.map V.last tracesD.dataText
@@ -423,21 +423,21 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
 
     pure
       $ widget
-      & #html
-        ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText grouped spansGrouped colorsJson)
+        & #html
+          ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText grouped spansGrouped colorsJson)
   _ -> do
     metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure
       $ widget
-      & #dataset
-        ?~ Widget.WidgetDataset
-          { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
-          , rowsPerMin = metricsD.rowsPerMin
-          , value = Just metricsD.rowsCount
-          , from = metricsD.from
-          , to = metricsD.to
-          , stats = metricsD.stats
-          }
+        & #dataset
+          ?~ Widget.WidgetDataset
+            { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
+            , rowsPerMin = metricsD.rowsPerMin
+            , value = Just metricsD.rowsCount
+            , from = metricsD.from
+            , to = metricsD.to
+            , stats = metricsD.stats
+            }
 
 
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
@@ -517,10 +517,10 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
       let newLayout =
             Just
               $ maybe def Relude.id orig.layout
-              & #x %~ (<|> item.x)
-              & #y %~ (<|> item.y)
-              & #w %~ (<|> item.w)
-              & #h %~ (<|> item.h)
+                & #x %~ (<|> item.x)
+                & #y %~ (<|> item.y)
+                & #w %~ (<|> item.w)
+                & #h %~ (<|> item.h)
       pure
         orig
           { Widget.layout = newLayout
@@ -693,7 +693,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
                     , class_ $ "hidden page-drawer-tab-" <> T.toLower tabName
                     , name_ $ wid <> "-drawer-tab"
                     ]
-                  <> [checked_ | isActive]
+                    <> [checked_ | isActive]
                 toHtml tabName
           mkTab "Overview" (effectiveActiveTab /= "edit")
           mkTab "Edit" (effectiveActiveTab == "edit")
@@ -804,7 +804,7 @@ instance ToHtml DashboardsGet where
 renderDashboardListItem :: Bool -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Html ()
 renderDashboardListItem checked tmplClass title value description icon prview = label_
   [ class_
-      [text| cursor-pointer group/it border border-transparent hover:bg-fillWeaker hover:border-strokeWeak rounded-lg flex p-1.5 gap-2 items-center
+      [text| cursor-pointer group/it text-sm border border-transparent hover:bg-fillWeaker hover:border-strokeWeak rounded-lg flex p-1.5 gap-2 items-center
       group-has-[input:checked]/it:bg-fillWeaker group-has-[input:checked]/it:border-strokeWeak dashboardListItem|]
   , term "data-title" title
   , term "data-description" $ maybeToMonoid description
@@ -824,48 +824,108 @@ renderDashboardListItem checked tmplClass title value description icon prview = 
   ]
   do
     input_ $ [class_ $ "hidden " <> tmplClass, type_ "radio", name_ "file", value_ value] <> [checked_ | checked]
-    span_ [class_ "p-1 px-2 bg-fillWeak rounded-md"] $ faSprite_ (fromMaybe "square-dashed" icon) "regular" "w-4 h-4"
+    span_ [class_ "p-1 px-2 bg-fillWeak rounded-md"] $ faSprite_ (fromMaybe "square-dashed" icon) "regular" "w-3 h-3"
     span_ [class_ "grow"] $ toHtml title
-    span_ [class_ "px-2 p-1 invisible group-has-[input:checked]/it:visible"] $ faSprite_ "chevron-right" "regular" "w-4 h-4"
+    span_ [class_ "px-2 p-1 invisible group-has-[input:checked]/it:visible"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
 
 
 dashboardsGet_ :: DashboardsGet -> Html ()
 dashboardsGet_ dg = do
   unless dg.embedded $ Components.modal_ "newDashboardMdl" "" $ form_
-    [ class_ "grid grid-cols-7 overflow-hidden h-full gap-4 group/md"
+    [ class_ "flex  h-[90vh] gap-4 group/md"
     , hxPost_ ""
+    , hxVals_ "js:{ teams: getSelectedTeams() }"
     ]
     do
-      div_ [class_ "col-span-2 space-y-4"] do
-        strong_ "Create dashboard"
-        label_ [class_ "input input-sm flex items-center "] do
-          faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
-          input_
-            [ type_ "text"
-            , class_ "grow pl-2"
-            , placeholder_ "Search"
-            , [__|
-              on keyup
-                if the event's key is 'Escape' set my value to '' then trigger keyup
-                else show <.dashboardListItem/> in #dashListItemParent when its textContent.toLowerCase() contains my value.toLowerCase() |]
-            ]
-          kbd_ [class_ "kbd kbd-sm"] "/"
-        div_ [class_ "space-y-1", id_ "dashListItemParent"] do
+      div_ [class_ "w-2/7 space-y-4 h-full flex flex-col"] do
+        div_ [class_ "flex flex-col gap-2 border-b pb-4"] do
+          strong_ "Create dashboard"
+          label_ [class_ "input input-sm flex items-center "] do
+            faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
+            input_
+              [ type_ "text"
+              , class_ "grow pl-2"
+              , placeholder_ "Search"
+              , [__|
+               on keyup
+                 if the event's key is 'Escape' set my value to '' then trigger keyup
+                 else show <.dashboardListItem/> in #dashListItemParent when its textContent.toLowerCase() contains my value.toLowerCase() |]
+              ]
+            kbd_ [class_ "kbd kbd-sm"] "/"
+        div_ [class_ "space-y-1 h-auto overflow-auto", id_ "dashListItemParent"] do
           renderDashboardListItem True "tmplRadio0" "Blank dashboard" "" (Just "Get started from a blank slate") (Just "cards-blank") Nothing
           iforM_ dashboardTemplates \idx dashTmpl -> do
             let tmplItemClass = "tmplRadio" <> show (idx + 1)
             renderDashboardListItem False tmplItemClass (maybeToMonoid dashTmpl.title) (maybeToMonoid dashTmpl.file) dashTmpl.description dashTmpl.icon dashTmpl.preview
 
-      div_ [class_ "col-span-5 px-3 py-5 divide-y h-full overflow-y-scroll "] do
-        div_ [class_ "flex gap-3 pb-5"] do
-          div_ $ div_ [class_ "p-2 bg-fillWeaker rounded-lg ", id_ "dItemIcon"] $ faSprite_ "cards-blank" "regular" "w-8 h-8"
-          div_ [class_ "flex-1"] do
-            strong_ [class_ "text-xl", id_ "dItemTitle"] "Custom Dashboard"
-            p_ [class_ "text-sm line-clamp-2 min-h-10", id_ "dItemDescription"] "Get started from a blank slate"
-          div_ [class_ "flex items-center justify-center shrink"] $ button_ [class_ "leading-none rounded-lg p-3 cursor-pointer bg-fillBrand-strong shadow-sm text-white", type_ "submit"] "Select template"
+      div_ [class_ "w-5/7 px-3 py-5 h-full overflow-y-scroll "] do
+        div_ [class_ "flex items-end justify-between gap-2"] do
+          div_ [class_ "flex items-center w-full justify-between gap-2"] do
+            label_ [class_ "flex flex-col gap-1 w-full"] do
+              span_ [class_ "text-sm font-medium"] "Dashboard name"
+              input_
+                [ type_ "text"
+                , class_ "input input-sm w-full shrink-1"
+                , placeholder_ "Dashboard Title"
+                , name_ "title"
+                , required_ "required"
+                ]
+            label_ [class_ "flex flex-col gap-1 w-full"] do
+              span_ [class_ "text-sm font-medium"] "Teams"
+              input_
+                [ type_ "text"
+                , class_ "input input-sm w-full shrink-1"
+                , id_ "teamHandlesInput"
+                , name_ "teams"
+                , placeholder_ "Add teams"
+                ]
+
+          div_ [class_ "flex items-center justify-center shrink"] $ button_ [class_ "btn btn-primary btn-sm", type_ "submit"] "Create"
+        div_ [class_ "py-2 border-b border-b-strokeWeak"] do
+          span_ [class_ "text-sm "] "Using "
+          span_ [class_ "text-sm font-medium", id_ "dItemTitle"] "Custom Dashboard"
+          span_ [class_ "text-sm "] " template"
+          p_ [class_ "text-xs text-textWeak w-full overflow-ellipsis truncate", id_ "dItemDescription"] "Get started from a blank slate"
         div_ [class_ "pt-5"]
-          $ div_ [class_ "bg-[#1e9cff] px-5 py-8 rounded-xl aspect-square w-full flex items-center"]
-          $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full", id_ "dItemPreview"]
+          $ div_ [class_ "bg-fillBrand-strong px-2 py-4 rounded-xl w-full flex items-center"]
+          $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full rounded overflow-hidden", id_ "dItemPreview"]
+        let teamList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> dg.teams
+        script_
+          [text| 
+              function createTagify(selector, options = {}) {
+                 const defaultOptions = {
+                   skipInvalid: true,
+                   editTags: {clicks: 2, keepInvalid: false},
+                   dropdown: { enabled: 0, fuzzySearch: true, position: 'text', caseSensitive: false, mapValueTo: 'name', searchKeys: ['name', 'value'] },
+                 };
+                 return new Tagify(document.querySelector(selector), { ...defaultOptions, ...options });
+               }
+                   
+              const tagify = createTagify('#teamHandlesInput', {
+                  tagTextProp: 'name',
+                  whitelist: $teamList,
+                  template: {
+                    tag: function(tagData) {
+                      return `<tag title="${tagData.value || tagData.email}"
+                                  contenteditable='false'
+                                  spellcheck='false'
+                                  tabIndex="-1"
+                                  class="${this.settings.classNames.tag} ${tagData.class || ''}"
+                                  ${this.getAttributes(tagData)}>
+                          <x title='' class="${this.settings.classNames.tagX}" role='button' aria-label='remove tag'></x>
+                          <div>
+                              <span class="${this.settings.classNames.tagText}">${tagData.name}</span>
+                          </div>
+                      </tag>`;
+                    },
+                    dropdownItemNoMatch: (data) => `No suggestion found for: ${data.value}`
+                 }
+                });
+
+              const getSelectedTeams = () => {
+                return tagify.value.map(item => item.value);
+              }
+        |]
 
   div_ [id_ "itemsListPage", class_ $ "mx-auto gap-8 w-full flex flex-col h-full overflow-hidden group/pg" <> if dg.embedded then "" else "pb-2 px-6 pt-8"] do
     let getTeams x = catMaybes $ (\xx -> find (\t -> t.id == xx) dg.teams) <$> V.toList x.teams
@@ -958,6 +1018,7 @@ dashboardsGetH pid embeddedM teamIdM = do
 data DashboardForm = DashboardForm
   { file :: Text
   , teams :: [UUID.UUID]
+  , title :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -970,22 +1031,22 @@ dashboardsPostH pid form = do
   did <- UUIDId <$> UUID.genUUID
   let dashM = find (\dashboard -> dashboard.file == Just form.file) dashboardTemplates
   let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> did.toText
-  dbtToEff
-    $ DBT.insert @Dashboards.DashboardVM
-    $ Dashboards.DashboardVM
-      { id = did
-      , projectId = pid
-      , createdAt = now
-      , updatedAt = now
-      , createdBy = sess.user.id
-      , baseTemplate = if form.file == "" then Nothing else Just form.file
-      , schema = Nothing
-      , starredSince = Nothing
-      , homepageSince = Nothing
-      , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
-      , title = fromMaybe [] $ dashM >>= (.title)
-      , teams = V.fromList form.teams
-      }
+  let dbd =
+        Dashboards.DashboardVM
+          { id = did
+          , projectId = pid
+          , createdAt = now
+          , updatedAt = now
+          , createdBy = sess.user.id
+          , baseTemplate = if form.file == "" then Nothing else Just form.file
+          , schema = Nothing
+          , starredSince = Nothing
+          , homepageSince = Nothing
+          , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
+          , title = form.title
+          , teams = V.fromList form.teams
+          }
+  _ <- Dashboards.insert dbd
   redirectCS redirectURI
   addRespHeaders NoContent
 
