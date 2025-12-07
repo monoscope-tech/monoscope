@@ -348,12 +348,12 @@ runHourlyJob scheduledTime hour = do
   activeProjects <-
     dbtToEff
       $ V.map (\(Only pid) -> pid)
-      <$> query
-        [sql| SELECT DISTINCT project_id
+        <$> query
+          [sql| SELECT DISTINCT project_id
               FROM otel_logs_and_spans ols
               WHERE ols.timestamp >= ?
                 AND ols.timestamp <= ? |]
-        (oneHourAgo, scheduledTime)
+          (oneHourAgo, scheduledTime)
 
   -- Log count of projects to process
   Log.logInfo "Projects with new data in the last hour window" ("count", AE.toJSON $ length activeProjects)
@@ -773,7 +773,7 @@ handleQueryMonitorThreshold monitorE isAlert = do
   case project of
     Nothing -> Log.logAttention "Project not found for Query Monitor Alert" ("project_id", monitorE.projectId.toText)
     Just p -> do
-      teams <- dbtToEff $ ProjectMembers.getTeamsById monitorE.teams
+      teams <- dbtToEff $ ProjectMembers.getTeamsById monitorE.projectId monitorE.teams
       let thresholdType = if monitorE.triggerLessThan then "below" else "above"
           threshold = fromIntegral monitorE.alertThreshold
 
