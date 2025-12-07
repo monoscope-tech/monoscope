@@ -289,8 +289,8 @@ INSERT INTO apis.issues (
   affected_requests, affected_clients, error_rate,
   recommended_action, migration_complexity,
   issue_data, request_payloads, response_payloads,
-  llm_enhanced_at, llm_enhancement_version
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  llm_enhanced_at, llm_enhancement_version, first_trace_id, recent_trace_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (project_id, endpoint_hash)
   WHERE issue_type = 'api_change'
     AND acknowledged_at IS NULL
@@ -300,7 +300,9 @@ DO UPDATE SET
   updated_at = EXCLUDED.updated_at,
   affected_requests = issues.affected_requests + EXCLUDED.affected_requests,
   affected_clients = GREATEST(issues.affected_clients, EXCLUDED.affected_clients),
-  issue_data = issues.issue_data || EXCLUDED.issue_data
+  issue_data = issues.issue_data || EXCLUDED.issue_data,
+  first_trace_id = COALESCE(issues.first_trace_id, EXCLUDED.first_trace_id),
+  recent_trace_id = EXCLUDED.recent_trace_id
     |]
 
 
@@ -493,7 +495,7 @@ createRuntimeExceptionIssue projectId atError = do
       , acknowledgedBy = Nothing
       , archivedAt = Nothing
       , title = atError.rootErrorType <> ": " <> T.take 100 atError.message
-      , service = Anomalies.detectService Nothing atError.requestPath
+      , service = fromMaybe (Anomalies.detectService Nothing atError.requestPath) atError.serviceName
       , critical = True
       , severity = "critical"
       , affectedRequests = 1

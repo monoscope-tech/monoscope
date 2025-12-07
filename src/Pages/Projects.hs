@@ -1,4 +1,4 @@
-{-# LANGUAGE NamedFieldPuns #-}
+-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE PackageImports #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_GHC -Wno-ambiguous-fields #-}
@@ -75,7 +75,7 @@ import GHC.Records (HasField (getField))
 import Lucid
 import Lucid (Term (term), div_, href_)
 import Lucid.Htmx
-import Lucid.Htmx (hxPost_, hxSelect_, hxSwapOob_, hxTrigger_)
+import Lucid.Htmx (hxPost_, hxSelect_, hxSwapOob_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Slack (SlackData, getDiscordDataByProjectId, getProjectSlackData)
@@ -342,6 +342,28 @@ validateSlack pid notificationsChannel =
 
 validateWhatsapp :: [Text] -> [Text] -> Either Text ()
 validateWhatsapp notificationsChannel numbers = if "phone" `elem` notificationsChannel && null numbers then Left "Provide at least one whatsapp number" else Right ()
+
+
+validateTeamDetails :: Text -> Text -> Either Text ()
+validateTeamDetails name handle = do
+  validateName name
+  validateHandle handle
+  pure ()
+  where
+    validNameChar c = isAlphaNum c || c == ' ' || c == '-' || c == '_'
+    validHandleChar c = isLower c || isDigit c || c == '-'
+    validateName n
+      | T.null n = Left "Team name is required"
+      | T.length n < 3 = Left "Team name must be at least 3 characters"
+      | not (T.all validNameChar n) =
+          Left "Invalid characters in team name"
+      | otherwise = Right ()
+    validateHandle h
+      | T.null h = Left "Handle is required"
+      | not (validHandleChar <$> T.unpack h & and) =
+          Left "Handle must be lowercase, no spaces, and hyphens only"
+      | not (isLower (T.head h)) = Left "Handle must start with a lowercase letter"
+      | otherwise = Right ()
 
 
 data IntegrationsConfig = IntegrationsConfig
@@ -838,70 +860,60 @@ data TeamForm = TeamForm
   , notifEmails :: V.Vector Text
   , slackChannels :: V.Vector Text
   , discordChannels :: V.Vector Text
+  , phoneNumbers :: V.Vector Text
   , teamId :: Maybe UUID.UUID
   }
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (FromForm)
-instance AE.FromJSON TeamForm where
-  parseJSON = AE.withObject "TeamForm" $ \o -> do
-    TeamForm
-      <$> o
-      AE..: "teamName"
-      <*> o
-      AE..: "teamDescription"
-      <*> o
-      AE..: "teamHandle"
-      <*> o
-      AE..:? "teamMembers"
-      AE..!= V.empty
-      <*> o
-      AE..:? "notifEmails"
-      AE..!= V.empty
-      <*> o
-      AE..:? "slackChannels"
-      AE..!= V.empty
-      <*> o
-      AE..:? "discordChannels"
-      AE..!= V.empty
-      <*> o
-      AE..:? "teamId"
+  deriving anyclass (AE.FromJSON, FromForm)
+
+
+validateTeamDetails :: Text -> Text -> V.Vector Text -> Either Text ()
+validateTeamDetails name handle notifEmails = validateName name >> validateHandle handle >> forM_ notifEmails validateEmail
+  where
+    validateName n
+      | T.null (T.strip n) = Left "Team name is required"
+      | T.length (T.strip n) < 3 = Left "Team name must be at least 3 characters"
+      | T.length n > 100 = Left "Team name must be less than 100 characters"
+      | not $ T.all (\c -> isAlphaNum c || c `elem` [' ', '-', '_']) n = Left "Invalid characters in team name"
+      | otherwise = pass
+    validateHandle h
+      | T.null h = Left "Handle is required"
+      | T.length h < 3 = Left "Handle must be at least 3 characters"
+      | T.length h > 50 = Left "Handle must be less than 50 characters"
+      | not $ all (\c -> isLower c || isDigit c || c == '-') (toString h) = Left "Handle must be lowercase, no spaces, and hyphens only"
+      | not (isLower (T.head h)) = Left "Handle must start with a lowercase letter"
+      | otherwise = pass
+    validateEmail email = case T.splitOn "@" email of
+      [localPart, domain] | not (T.null localPart) && not (T.null domain) && T.elem '.' domain -> pass
+      _ -> Left $ "Invalid email format: " <> email
 
 
 manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
-manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers, notifEmails, slackChannels, discordChannels, teamId} tmView = do
-  (sess, project) <- Sessions.sessionAndProject pid
-  appCtx <- ask @AuthContext
+manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers, notifEmails, slackChannels, discordChannels, phoneNumbers, teamId} tmView = do
+  (sess, _) <- Sessions.sessionAndProject pid
   let currUserId = sess.persistentSession.userId
-  let res = validateTeamDetails teamName teamHandle
-  case res of
-    Right _ -> do
-      rs <- case teamId of
-        Just tid -> do
-          _ <- dbtToEff $ ProjectMembers.updateTeam pid tid teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels
-          addSuccessToast "Team updated successfully" Nothing
-          html <- case tmView of
-            Just _ -> teamGetH pid teamHandle (Just "main-page")
-            _ -> manageTeamsGetH pid (Just "from_post")
-          return html
-        Nothing -> do
-          teamVM <- dbtToEff $ ProjectMembers.getTeamByHandle pid teamHandle
-          case teamVM of
-            Just _ -> do
-              addErrorToast "Team handle already exists" Nothing
-              addRespHeaders $ ManageTeamsPostError "Team handle already exists for this project."
-            _ -> do
-              _ <- dbtToEff $ ProjectMembers.createTeam pid currUserId teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels
-              addSuccessToast "Team saved successfully" Nothing
-              html <- manageTeamsGetH pid (Just "from_post")
-              return html
-      return rs
-    Left e -> do
-      addErrorToast e Nothing
-      addReswap ""
-      addRespHeaders $ ManageTeamsPostError e
+  userPermission <- dbtToEff $ ProjectMembers.getUserPermission pid currUserId
+  projMembers <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
+  let validMemberIds = V.map (.userId) projMembers
+      invalidMembers = V.filter (`V.notElem` validMemberIds) teamMembers
+      teamDetails = ProjectMembers.TeamDetails teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels phoneNumbers
+      validationErr msg = addErrorToast msg Nothing >> addRespHeaders (ManageTeamsPostError msg)
+  case (userPermission == Just ProjectMembers.PAdmin, V.null invalidMembers, validateTeamDetails teamName teamHandle notifEmails, teamId) of
+    (False, _, _, _) -> validationErr "Only admins can create or update teams"
+    (_, False, _, _) -> validationErr "Some team members are not project members"
+    (_, _, Left e, _) -> addErrorToast e Nothing >> addReswap "" >> addRespHeaders (ManageTeamsPostError e)
+    (_, _, _, Just tid) -> do
+      _ <- dbtToEff $ ProjectMembers.updateTeam pid tid teamDetails
+      addSuccessToast "Team updated successfully" Nothing
+      maybe (manageTeamsGetH pid (Just "from_post")) (\_ -> teamGetH pid teamHandle (Just "main-page")) tmView
+    (_, _, _, Nothing) -> do
+      rowsAffected <- dbtToEff $ ProjectMembers.createTeam pid currUserId teamDetails
+      if rowsAffected > 0
+        then addSuccessToast "Team saved successfully" Nothing >> manageTeamsGetH pid (Just "from_post")
+        else validationErr "Team handle already exists for this project."
 
 
-data TBulkActionForm = TBulkActionForm
+newtype TBulkActionForm = TBulkActionForm
   { teamId :: [UUID.UUID]
   }
   deriving stock (Eq, Generic, Show)
@@ -915,38 +927,59 @@ manageTeamBulkActionH pid action TBulkActionForm{teamId} listViewM = do
   case action of
     "delete" -> do
       teamVm <- dbtToEff $ ProjectMembers.getTeamsById pid $ V.fromList teamId
-      let canDelete = all (\team -> sess.user.id == team.created_by) teamVm
-      case canDelete of
-        True -> do
+      let canDelete = all (\team -> Just sess.user.id == team.created_by) teamVm
+      if canDelete
+        then do
           _ <- dbtToEff $ ProjectMembers.deleteTeams pid $ V.fromList teamId
-          case listViewM of
-            Just _ -> addRespHeaders $ ManageTeamsDelete
-            _ -> do
-              redirectCS ("/p/" <> pid.toText <> "/manage_teams")
-              addRespHeaders $ ManageTeamsDelete
-        _ -> do
-          addErrorToast ("You may only delete teams you own") (Nothing)
+          when (isNothing listViewM) do
+            redirectCS ("/p/" <> pid.toText <> "/manage_teams")
+          addRespHeaders ManageTeamsDelete
+        else do
+          addErrorToast "You may only delete teams you own" Nothing
           addRespHeaders $ ManageTeamsPostError "You may only delete teams you own"
     _ -> do
       addErrorToast "Invalid action" Nothing
       addRespHeaders $ ManageTeamsPostError "Invalid action"
 
 
+manageTeamDeleteH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
+manageTeamDeleteH pid handle listViewM = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  teamVm <- dbtToEff $ ProjectMembers.getTeamByHandle pid handle
+  case teamVm of
+    Just team -> do
+      let createdByThisUser = sess.user.id == team.created_by
+      case createdByThisUser of
+        True -> do
+          _ <- dbtToEff $ ProjectMembers.deleteTeamByHandle pid handle
+          case listViewM of
+            Just _ -> addRespHeaders $ ManageTeamsDelete
+            _ -> do
+              redirectCS ("/p/" <> pid.toText <> "/manage_teams")
+              addRespHeaders $ ManageTeamsDelete
+        _ -> do
+          addErrorToast "On team owner can delete team" Nothing
+          addRespHeaders $ ManageTeamsPostError "Only team owner can delete a team"
+    _ -> do
+      addErrorToast ("Team @" <> handle <> " not found") (Nothing)
+      addRespHeaders $ ManageTeamsPostError "Team not found"
+
+
 data ManageTeams
-  = ManageTeamsGet (PageCtx (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [SlackP.SlackChannel], [Discord.DiscordChannel], (V.Vector ProjectMembers.TeamVM)))
-  | ManageTeamsGet' (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [SlackP.SlackChannel], [Discord.DiscordChannel], (V.Vector ProjectMembers.TeamVM))
+  = ManageTeamsGet (PageCtx (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel], V.Vector ProjectMembers.TeamVM))
+  | ManageTeamsGet' (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel], V.Vector ProjectMembers.TeamVM)
   | ManageTeamsPostError Text
   | ManageTeamsDelete
-  | ManageTeamGet (PageCtx (Projects.ProjectId, ProjectMembers.TeamVM, V.Vector ProjectMembers.ProjectMemberVM, [Slack.SlackChannel], [Discord.DiscordChannel]))
-  | ManageTeamGet' (Projects.ProjectId, ProjectMembers.TeamVM, V.Vector ProjectMembers.ProjectMemberVM, [Slack.SlackChannel], [Discord.DiscordChannel])
+  | ManageTeamGet (PageCtx (Projects.ProjectId, ProjectMembers.TeamVM, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel]))
+  | ManageTeamGet' (Projects.ProjectId, ProjectMembers.TeamVM, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel])
   | ManageTeamGetError (PageCtx (Projects.ProjectId, Text))
 
 
 instance ToHtml ManageTeams where
   toHtml (ManageTeamsGet (PageCtx bwconf (pid, members, slackChannels, discordChannels, teams))) = toHtml $ PageCtx bwconf $ manageTeamsPage pid members slackChannels discordChannels teams
   toHtml (ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams)) = toHtml $ manageTeamsPage pid members slackChannels discordChannels teams
-  toHtml (ManageTeamsPostError msg) = span_ [] $ ""
-  toHtml (ManageTeamsDelete) = toHtml ""
+  toHtml (ManageTeamsPostError msg) = span_ [] ""
+  toHtml ManageTeamsDelete = toHtml ""
   toHtml (ManageTeamGet (PageCtx bwconf (pid, team, members, slackChannels, discordChannels))) = toHtml $ PageCtx bwconf $ teamPage pid team members slackChannels discordChannels
   toHtml (ManageTeamGet' (pid, team, members, slackChannels, discordChannels)) = toHtml $ teamPage pid team members slackChannels discordChannels
   toHtml (ManageTeamGetError (PageCtx bwconf (pid, message))) = toHtml $ PageCtx bwconf $ teamPageNF pid message
@@ -969,9 +1002,7 @@ manageTeamsGetH pid layoutM = do
 
   discordDataM <- Slack.getDiscordDataByProjectId pid
   discordChannels <- case discordDataM of
-    Just discordData -> do
-      channels' <- Discord.getDiscordChannels appCtx.env.discordBotToken discordData.guildId
-      return channels'
+    Just discordData -> Discord.getDiscordChannels appCtx.env.discordBotToken discordData.guildId
     Nothing -> return []
   teams <- dbtToEff $ ProjectMembers.getTeamsVM pid
   let bwconf =
@@ -986,10 +1017,10 @@ manageTeamsGetH pid layoutM = do
     Just _ -> do
       addRespHeaders $ ManageTeamsGet' (pid, projMembers, channels, discordChannels, teams)
     _ -> do
-      addRespHeaders $ ManageTeamsGet $ (PageCtx bwconf (pid, projMembers, channels, discordChannels, teams))
+      addRespHeaders $ ManageTeamsGet (PageCtx bwconf (pid, projMembers, channels, discordChannels, teams))
 
 
-manageTeamsPage :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberVM -> [SlackP.SlackChannel] -> [Discord.DiscordChannel] -> V.Vector ProjectMembers.TeamVM -> Html ()
+manageTeamsPage :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberVM -> [BotUtils.Channel] -> [BotUtils.Channel] -> V.Vector ProjectMembers.TeamVM -> Html ()
 manageTeamsPage pid projMembers channels discordChannels teams = do
   let whiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
   let channelWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]) <$> channels
@@ -1003,37 +1034,36 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
         label_ [class_ "btn btn-primary btn-sm text-white", Lucid.for_ "n-new-team-modal"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Team")
         input_ [type_ "checkbox", id_ "n-new-team-modal", class_ "modal-toggle"]
         teamModal pid Nothing whiteList channelWhiteList discordWhiteList False
-      let mapColumn x =
-            (Table.mkColumn x x)
-              { columnWidth = if x == "Name" then Just "60%" else if x == "Modified" then Just "20%" else Nothing
-              , columnCheckBox = x == "teamId"
-              , columnActionable = x == "Name"
-              }
-      let tableCols = (\x -> mapColumn x) <$> ["teamId", "Name", "Modified", "Members", "Notifications"]
-      let mapRow x =
-            Map.fromList
-              [ ("teamId", CellCheckbox $ UUID.toText x.id)
-              , ("Name", CellCustom $ nameCell pid x.name x.description x.handle)
-              , ("Modified", CellText $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" x.updated_at)
-              , ("Members", CellCustom $ memberCell x.members)
-              , ("Notifications", CellCustom $ notifsCell x)
-              ]
-          tableRows = (mapRow <$> V.toList teams)
-          table =
-            (Table.defaultTable tableCols tableRows)
-              { tableId = Just "teams_table"
-              , tableClass = "border rounded border-strokeWeak"
-              , tableHasSearch = True
-              , tableHasCheckboxes = True
-              , tableActions =
-                  Just
-                    $ [ button_ [class_ "flex items-center gap-2 btn btn-sm text-textError", type_ "button", hxPost_ $ "/p/" <> pid.toText <> "/manage_teams/bulk_action/delete", hxSwap_ "none"] do
-                          faSprite_ "trash" "regular" "w-3 h-3"
-                          "Delete"
-                      ]
+      let renderTeamCheckboxCol team = input_ [term "aria-label" "Select Team", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "teamId", value_ $ UUID.toText team.id]
+      let renderTeamNameCol team = nameCell pid team.name team.description team.handle
+      let renderModifiedCol team = toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" team.updated_at
+      let renderMembersCol team = memberCell team.members
+      let renderNotificationsCol = notifsCell
+
+      let tableCols =
+            [ Table.col "" renderTeamCheckboxCol & Table.withAttrs [class_ "w-8"]
+            , Table.col "Name" renderTeamNameCol & Table.withAttrs [class_ "flex-1"]
+            , Table.col "Modified" renderModifiedCol & Table.withAttrs [class_ "w-36"]
+            , Table.col "Members" renderMembersCol & Table.withAttrs [class_ "w-48"]
+            , Table.col "Notifications" renderNotificationsCol & Table.withAttrs [class_ "w-32"]
+            ]
+
+      let table =
+            Table
+              { config = def{Table.elemID = "teams_table"}
+              , columns = tableCols
+              , rows = teams
+              , features =
+                  def
+                    { Table.rowId = Just \team -> UUID.toText team.id
+                    , Table.bulkActions =
+                        [ Table.BulkAction{icon = Just "trash", title = "Delete", uri = "/p/" <> pid.toText <> "/manage_teams/bulk_action/delete"}
+                        ]
+                    , Table.search = Just Table.ClientSide
+                    }
               }
       div_ [class_ "w-full"] do
-        Table.renderTable table
+        toHtml table
 
 
 nameCell :: Projects.ProjectId -> Text -> Text -> Text -> Html ()
@@ -1047,20 +1077,20 @@ memberCell :: V.Vector ProjectMembers.TeamMemberVM -> Html ()
 memberCell members = do
   div_ [class_ "inline-block flex -space-x-2"] do
     forM_ members $ \m -> do
-      div_ [class_ "inline-block mx-0.5", term "data-tippy-content" (m.memberName)]
+      div_ [class_ "inline-block mx-0.5", term "data-tippy-content" m.memberName]
         $ img_ [class_ "inline-block h-6 w-6 rounded-full border border-strokeWeak ", src_ m.memberAvatar, alt_ "User avatar"]
 
 
 notifsCell :: ProjectMembers.TeamVM -> Html ()
 notifsCell team = do
   div_ [class_ "flex items-center gap-2"] do
-    when (not $ V.null team.slack_channels) do
+    unless (V.null team.slack_channels) do
       div_ [term "data-tippy-content" "Slack"] do
         faSprite_ "slack" "solid" "h-3.5 w-3.5"
-    when (not $ V.null team.discord_channels) do
+    unless (V.null team.discord_channels) do
       div_ [term "data-tippy-content" "Discord"] do
         faSprite_ "discord" "solid" "h-3.5 w-3.5"
-    when (not $ V.null team.notify_emails) do
+    unless (V.null team.notify_emails) do
       div_ [term "data-tippy-content" "Email"] do
         faSprite_ "envelope" "solid" "h-3.5 w-3.5"
 
@@ -1082,9 +1112,7 @@ teamGetH pid handle layoutM = do
 
   discordDataM <- Slack.getDiscordDataByProjectId pid
   discordChannels <- case discordDataM of
-    Just discordData -> do
-      channels' <- Discord.getDiscordChannels appCtx.env.discordBotToken discordData.guildId
-      return channels'
+    Just discordData -> Discord.getDiscordChannels appCtx.env.discordBotToken discordData.guildId
     Nothing -> return []
   let bwconf =
         (def :: BWConfig)
@@ -1100,7 +1128,7 @@ teamGetH pid handle layoutM = do
     Nothing -> addRespHeaders $ ManageTeamGetError (PageCtx bwconf (pid, handle))
 
 
-teamPage :: Projects.ProjectId -> ProjectMembers.TeamVM -> V.Vector ProjectMembers.ProjectMemberVM -> [Slack.SlackChannel] -> [Discord.DiscordChannel] -> Html ()
+teamPage :: Projects.ProjectId -> ProjectMembers.TeamVM -> V.Vector ProjectMembers.ProjectMemberVM -> [BotUtils.Channel] -> [BotUtils.Channel] -> Html ()
 teamPage pid team projMembers slackChannels discordChannels = do
   let whiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
   let channelWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]) <$> slackChannels
@@ -1119,8 +1147,8 @@ teamPage pid team projMembers slackChannels discordChannels = do
           div_ [class_ "flex items-center justify-between mb-2"] do
             span_ [class_ "flex items-center gap-2 font-semibold py-2"] do
               faSprite_ "users" "regular" "h-5 w-5"
-              toHtml $ "Members"
-              span_ [class_ "text-textWeak"] $ ("(" <> show (V.length team.members) <> ")")
+              toHtml "Members"
+              span_ [class_ "text-textWeak"] ("(" <> show (V.length team.members) <> ")")
             label_ [class_ "btn btn-outline border border-strokeWeak btn-xs", Lucid.for_ $ team.handle <> "-new-team-modal"] (faSprite_ "plus" "regular" "h-3 w-3 mr-1" >> "Add")
             input_ [type_ "checkbox", id_ $ team.handle <> "-new-team-modal", class_ "modal-toggle"]
             teamModal pid (Just team) whiteList channelWhiteList discordWhiteList True
@@ -1145,7 +1173,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
                 "Email addresses"
               div_ [class_ "flex items-center gap-2 text-xs text-textWeak"] do
                 when (V.null team.notify_emails) $ span_ [] "No emails added"
-                forM_ team.notify_emails \e -> span_ [] $ toHtml e
+                forM_ team.notify_emails (span_ [] . toHtml)
             div_ [class_ "flex flex-col gap-2 py-3"] do
               div_ [class_ "flex items-center text-sm gap-2 font-medium"] do
                 faSprite_ "slack" "solid" "h-4 w-4"
@@ -1165,11 +1193,10 @@ teamPage pid team projMembers slackChannels discordChannels = do
                   let tar = maybe e (.channelName) $ find (\x -> x.channelId == e) discordChannels
                   span_ [] $ toHtml tar
 
-      div_ [class_ "h-full w-8/12 overflow-y-auto p-4"] do
-        div_ [class_ "w-full space-y-6"] do
-          monitorsSection pid team.id
-          dashboardsSection pid team.id
-          servicesSection pid team.id
+      div_ [class_ "h-full w-8/12 overflow-y-auto p-4 space-y-6"] do
+        monitorsSection pid team.id
+        dashboardsSection pid team.id
+        servicesSection pid team.id
 
 
 monitorsSection :: Projects.ProjectId -> UUID.UUID -> Html ()
@@ -1182,10 +1209,9 @@ monitorsSection pid teamId = div_ [class_ "rounded-xl border border-strokeWeak o
     do
       h4_ [class_ "text-sm font-medium"] (faSprite_ "list-check" "regular" "h-4 w-4 mr-2" >> "Alerts")
       div_ [class_ "flex items-center gap-4"] do
-        div_ [class_ "flex items-center gap-4"] do
-          label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
-            faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
-            input_ [type_ "text", placeholder_ "Search alerts...", class_ "", [__| on click halt|]]
+        label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
+          faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
+          input_ [type_ "text", placeholder_ "Search alerts...", class_ "", [__| on click halt|]]
         button_ [class_ ""] do
           faSprite_ "p-chevron-down" "regular" "h-4 w-4"
 
@@ -1206,10 +1232,9 @@ dashboardsSection pid teamId = div_ [class_ "rounded-xl border border-strokeWeak
     do
       h4_ [class_ "text-sm font-medium"] (faSprite_ "chart-area" "regular" "h-4 w-4 mr-2" >> "Dashboards")
       div_ [class_ "flex items-center gap-4"] do
-        div_ [class_ "flex items-center gap-4"] do
-          label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
-            faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
-            input_ [type_ "text", placeholder_ "Search dashboards...", class_ "", [__| on click halt|]]
+        label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
+          faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
+          input_ [type_ "text", placeholder_ "Search dashboards...", class_ "", [__| on click halt|]]
         button_ [class_ ""] do
           faSprite_ "p-chevron-down" "regular" "h-4 w-4"
   div_ [class_ "-mt-4 w-full max-h-96 overflow-y-auto", id_ "dashboards-section"] do
@@ -1229,10 +1254,9 @@ servicesSection pid teamId = div_ [class_ "rounded-xl border border-strokeWeak o
     do
       h4_ [class_ "text-sm font-medium"] (faSprite_ "server" "regular" "h-4 w-4 mr-2" >> "Services")
       div_ [class_ "flex items-center gap-4"] do
-        div_ [class_ "flex items-center gap-4"] do
-          label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
-            faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
-            input_ [type_ "text", placeholder_ "Search services...", class_ "", [__| on click halt|]]
+        label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
+          faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
+          input_ [type_ "text", placeholder_ "Search services...", class_ "", [__| on click halt|]]
         button_ [class_ ""] do
           faSprite_ "p-chevron-down" "regular" "h-4 w-4"
   div_ [class_ "p-3 border-t w-full border-strokeWeak"] do

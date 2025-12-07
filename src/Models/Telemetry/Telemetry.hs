@@ -485,7 +485,7 @@ getTraceDetails pid trId tme = listToMaybe <$> PG.query (Query $ encodeUtf8 q) (
               COUNT(context->>'span_id') AS total_spans,
               ARRAY_REMOVE(ARRAY_AGG(DISTINCT jsonb_extract_path_text(resource, 'service.name')), NULL) AS service_names
             FROM otel_logs_and_spans
-            WHERE  project_id = ? AND timestamp BETWEEN $startTime AND $endTime AND context___trace_id = ?
+            WHERE  project_id = ? AND timestamp $tmeRange AND context___trace_id = ?
             GROUP BY context___trace_id;
         |]
 
@@ -509,7 +509,7 @@ getSpanRecordsByTraceId pid trId tme = PG.query (Query $ encodeUtf8 q) (pid.toTe
       [text|
       SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
                   hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date::timestamptz
-              FROM otel_logs_and_spans where project_id=? and timestamp >= $start AND timestamp <= $end and context___trace_id=? ORDER BY start_time ASC;
+              FROM otel_logs_and_spans where project_id=? and timestamp $tmeRange and context___trace_id=? ORDER BY start_time ASC;
     |]
 
 
@@ -1052,7 +1052,7 @@ extractATError spanObj (AE.Object o) = do
         Just (AE.Object tel) ->
           KEM.lookup "sdk" tel
             >>= ( \case
-                    AE.Object sdkObj -> KEM.lookup "name" sdkObj >>= asText
+                    AE.Object sdkObj -> KEM.lookup "language" sdkObj >>= asText
                     _ -> Nothing
                 )
         _ -> Nothing

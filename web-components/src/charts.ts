@@ -42,7 +42,7 @@ type ItemsWithStyle = Pick<FlameGraphItem, 'name' | 'hasErrors' | 'spanId'> & {
   value: [number, number, number, string, number];
 };
 
-export function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Record<string, string>) {
+function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Record<string, string>) {
   const filterJson = (json: FlameGraphItem | FlameGraphItem[], id: string | null = null): FlameGraphItem[] => {
     if (id == null) {
       if (Array.isArray(json)) return json;
@@ -231,6 +231,8 @@ export function flameGraphChart(data: FlameGraphItem[], renderAt: string, colors
   });
 }
 
+window.flameGraphChart = flameGraphChart;
+
 function modifySpansForFlameGraph(data: FlameGraphItem[]) {
   const spans = buildHierachy(structuredClone(data));
   return spans;
@@ -337,12 +339,14 @@ type WaterfallItem = {
   children: WaterfallItem[];
 };
 
-export function waterFallGraphChart(fData: WaterfallItem[], renderAt: string, serviceColors: Record<string, string>) {
+function waterFallGraphChart(fData: WaterfallItem[], renderAt: string, serviceColors: Record<string, string>) {
   const { min, max } = getMinMax(fData);
   const maxDuration = max - min;
   generateTimeIntervals(maxDuration, 'waterfall-time-container-' + renderAt);
   buildWaterfall(fData, renderAt, serviceColors, min, maxDuration);
 }
+
+window.waterFallGraphChart = waterFallGraphChart;
 
 function buildWaterfall(spans: WaterfallItem[], target: string, serviceColors: Record<string, string>, start: number, maxDuration: number) {
   const container = document.querySelector('#ba' + target);

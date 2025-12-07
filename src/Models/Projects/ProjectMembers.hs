@@ -44,6 +44,7 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.TypeInfo.Static (uuid)
+import Database.PostgreSQL.Simple.TypeInfo.Static (uuid)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
@@ -379,30 +380,28 @@ getTeamsById pid tids = if V.null tids then pure [] else PG.query q (pid, tids)
     |]
 
 
-deleteTeamByHandle :: Projects.ProjectId -> Text -> DBT IO ()
-deleteTeamByHandle pid handle = void $ execute q (pid, handle)
+deleteTeamByHandle :: DB es => Projects.ProjectId -> Text -> Eff es ()
+deleteTeamByHandle pid handle = void $ PG.execute q (pid, handle)
   where
     q =
       [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND handle = ? |]
 
 
-deleteTeams :: Projects.ProjectId -> V.Vector UUID.UUID -> DBT IO ()
+deleteTeams :: DB es => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es ()
 deleteTeams pid tids
-  | V.null tids = pure ()
-  | otherwise = void $ execute q (pid, tids)
+  | V.null tids = pass
+  | otherwise = void $ PG.execute q (pid, tids)
   where
     q =
-      [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND id=ANY(?::UUID[]) |]
+      [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND id = ANY(?::uuid[]) |]
 
 
-getTeamsById :: Projects.ProjectId -> V.Vector UUID.UUID -> DBT IO (V.Vector Team)
-getTeamsById pid tids
-  | V.null tids = pure V.empty
-  | otherwise = query q (pid, tids)
+getTeamsById :: DB es => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es [Team]
+getTeamsById pid tids = if V.null tids then pure [] else PG.query q (pid, tids)
   where
     q =
       [sql|
-      SELECT 
+      SELECT
         t.id,
         t.name,
         t.description,
@@ -413,7 +412,47 @@ getTeamsById pid tids
         t.updated_at,
         t.notify_emails,
         t.slack_channels,
-        t.discord_channels
+        t.discord_channels,
+        t.phone_numbers
       FROM projects.teams t
-      WHERE t.project_id = ? AND t.id=ANY(?::UUID[]) AND t.deleted_at is null
+      WHERE t.project_id = ? AND t.id = ANY(?::uuid[]) AND t.deleted_at IS NULL
+    |]
+
+
+deleteTeamByHandle :: Projects.ProjectId -> Text -> DBT IO ()
+deleteTeamByHandle pid handle = void $ execute q (pid, handle)
+  where
+    q =
+      [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND handle = ? |]
+
+
+deleteTeams :: Projects.ProjectId -> V.Vector UUID.UUID -> DBT IO ()
+deleteTeams pid tids
+  | V.null tids = pure () 
+  | otherwise = void $ execute q (pid, tids)
+  where
+    q =
+      [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND id=ANY(?::UUID[]) |]
+
+
+getTeamsById :: Projects.ProjectId -> V.Vector UUID.UUID -> DBT IO (V.Vector Team)
+getTeamsById pid tids = if V.null tids then pure V.empty else query q (pid, tids)
+  where
+    q =
+      [sql|
+      SELECT
+        t.id,
+        t.name,
+        t.description,
+        t.handle,
+        t.members,
+        t.created_by,
+        t.created_at,
+        t.updated_at,
+        t.notify_emails,
+        t.slack_channels,
+        t.discord_channels,
+        t.phone_numbers
+      FROM projects.teams t
+      WHERE t.project_id = ? AND t.id = ANY(?::uuid[]) AND t.deleted_at IS NULL
     |]

@@ -255,10 +255,7 @@ body, :host {
 }
 
 @layer custom {
-  /* Badge component - solid filled badges */
-  .badge {
-    @apply inline-flex items-center justify-center rounded-md border border-transparent px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-textInverse-strong shadow-sm;
-  }
+
   /* Badge component - outline badges */
   .badge-outline {
     @apply inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1;
@@ -436,6 +433,10 @@ code, pre, .code, .monospace {
   /* } */
   @apply rounded-sm;
 }
+  /* Badge component - solid filled badges */
+@utility badge {
+    @apply inline-flex items-center justify-center rounded-md border border-transparent px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-textInverse-strong shadow-sm;
+  }
 @utility btn-indigo {
   @apply ml-3 text-textInverse-strong bg-fillBrand-strong hover:bg-fillBrand-strong focus:ring-strokeFocus;
 }

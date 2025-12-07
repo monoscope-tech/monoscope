@@ -440,6 +440,7 @@ test-suite integration-tests
       Pages.LogExplorer.LogSpec
       Pages.MonitorsSpec
       Pages.Projects.ManageMembersSpec
+      Pages.DashboardsSpec
       Pages.Projects.ProjectsSpec
       Pages.ReportsSpec
       Pages.ShareSpec
@@ -480,6 +481,72 @@ test-suite integration-tests
   build-tool-depends:
       hspec-discover:hspec-discover
     , proto-lens-protoc:proto-lens-protoc
+  build-depends:
+      aeson
+    , aeson-qq
+    , base
+    , base64
+    , cache
+    , clock
+    , data-default
+    , effectful
+    , generic-lens
+    , grapesy
+    , hs-opentelemetry-instrumentation-auto
+    , hspec
+    , lens
+    , monoscope
+    , odd-jobs
+    , pg-entity
+    , pg-transact
+    , postgresql-simple
+    , proto-lens
+    , relude >=1.2.0.0
+    , resource-pool
+    , servant
+    , servant-htmx
+    , servant-server
+    , time
+    , uuid
+    , vector
+  default-language: GHC2021
+
+test-suite monoscope-test
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  hs-source-dirs:
+      test
+  default-extensions:
+      BlockArguments
+      DataKinds
+      DerivingVia
+      DeriveAnyClass
+      DerivingStrategies
+      DuplicateRecordFields
+      ExplicitNamespaces
+      ExtendedDefaultRules
+      LambdaCase
+      MultiWayIf
+      NoImplicitPrelude
+      OverloadedLabels
+      OverloadedLists
+      OverloadedRecordDot
+      OverloadedStrings
+      PatternSynonyms
+      QuasiQuotes
+      RoleAnnotations
+      UndecidableInstances
+      TypeFamilies
+      RecordWildCards
+      TemplateHaskell
+      AllowAmbiguousTypes
+      TupleSections
+      ViewPatterns
+      DeriveGeneric
+      BangPatterns
+  ghc-options: -fwrite-ide-info -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-error=ambiguous-fields -threaded -rtsopts -with-rtsopts=-N
+  build-tool-depends:
+      proto-lens-protoc:proto-lens-protoc
   build-depends:
       aeson
     , aeson-qq
