@@ -45,6 +45,7 @@ alertForm =
     , conditionType = Just "threshold_exceeded"
     , source = Nothing
     , vizType = Nothing
+    , teams = []
     }
 
 
