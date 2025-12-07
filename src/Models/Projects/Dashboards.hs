@@ -12,6 +12,7 @@ module Models.Projects.Dashboards (
   replaceQueryVariables,
   deleteDashboardsByIds,
   addTeamsToDashboards,
+  insert,
   selectDashboardsByTeam,
 ) where
 
@@ -133,6 +134,29 @@ data Tab = Tab
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Tab
+
+
+insert :: DB :> es => DashboardVM -> Eff es Int64
+insert dashboardVM = do
+  dbtToEff $ DBT.execute (Query $ encodeUtf8 q) params
+  where
+    q =
+      [text| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::uuid[]) |]
+    params =
+      ( dashboardVM.id
+      , dashboardVM.projectId
+      , dashboardVM.createdAt
+      , dashboardVM.updatedAt
+      , dashboardVM.createdBy
+      , dashboardVM.baseTemplate
+      , dashboardVM.schema
+      , dashboardVM.starredSince
+      , dashboardVM.homepageSince
+      , dashboardVM.tags
+      , dashboardVM.title
+      , dashboardVM.teams
+      )
 
 
 readDashboardsFromDirectory :: FilePath -> Q Exp
