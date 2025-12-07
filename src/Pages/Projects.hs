@@ -36,10 +36,11 @@ module Pages.Projects (
   pricingUpdateGetH,
   CreateProjectResp (..),
   manageTeamPostH,
-  manageTeamDeleteH,
+  manageTeamBulkActionH,
   TeamForm (..),
   teamGetH,
   ManageTeams (..),
+  TBulkActionForm,
 )
 where
 
@@ -500,12 +501,12 @@ manageMembersPostH pid onboardingM form = do
 
       unless (null uAndPOldAndChanged)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       unless (null deletedUAndP)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
@@ -537,25 +538,25 @@ instance AE.FromJSON TeamForm where
   parseJSON = AE.withObject "TeamForm" $ \o -> do
     TeamForm
       <$> o
-      AE..: "teamName"
+        AE..: "teamName"
       <*> o
-      AE..: "teamDescription"
+        AE..: "teamDescription"
       <*> o
-      AE..: "teamHandle"
+        AE..: "teamHandle"
       <*> o
-      AE..:? "teamMembers"
-      AE..!= V.empty
+        AE..:? "teamMembers"
+        AE..!= V.empty
       <*> o
-      AE..:? "notifEmails"
-      AE..!= V.empty
+        AE..:? "notifEmails"
+        AE..!= V.empty
       <*> o
-      AE..:? "slackChannels"
-      AE..!= V.empty
+        AE..:? "slackChannels"
+        AE..!= V.empty
       <*> o
-      AE..:? "discordChannels"
-      AE..!= V.empty
+        AE..:? "discordChannels"
+        AE..!= V.empty
       <*> o
-      AE..:? "teamId"
+        AE..:? "teamId"
 
 
 manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
@@ -592,27 +593,35 @@ manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers,
       addRespHeaders $ ManageTeamsPostError e
 
 
-manageTeamDeleteH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
-manageTeamDeleteH pid handle listViewM = do
+data TBulkActionForm = TBulkActionForm
+  { teamId :: [UUID.UUID]
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (FromForm)
+
+
+manageTeamBulkActionH :: Projects.ProjectId -> Text -> TBulkActionForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
+manageTeamBulkActionH pid action TBulkActionForm{teamId} listViewM = do
   (sess, project) <- Sessions.sessionAndProject pid
-  teamVm <- dbtToEff $ ProjectMembers.getTeamByHandle pid handle
-  case teamVm of
-    Just team -> do
-      let createdByThisUser = sess.user.id == team.created_by
-      case createdByThisUser of
+  appCtx <- ask @AuthContext
+  case action of
+    "delete" -> do
+      teamVm <- dbtToEff $ ProjectMembers.getTeamsById pid $ V.fromList teamId
+      let canDelete = all (\team -> sess.user.id == team.created_by) teamVm
+      case canDelete of
         True -> do
-          _ <- dbtToEff $ ProjectMembers.deleteTeamByHandle pid handle
+          _ <- dbtToEff $ ProjectMembers.deleteTeams pid $ V.fromList teamId
           case listViewM of
             Just _ -> addRespHeaders $ ManageTeamsDelete
             _ -> do
               redirectCS ("/p/" <> pid.toText <> "/manage_teams")
               addRespHeaders $ ManageTeamsDelete
         _ -> do
-          addErrorToast "On team owner can delete team" Nothing
-          addRespHeaders $ ManageTeamsPostError "Only team owner can delete a team"
+          addErrorToast ("You may only delete teams you own") (Nothing)
+          addRespHeaders $ ManageTeamsPostError "You may only delete teams you own"
     _ -> do
-      addErrorToast ("Team @" <> handle <> " not found") (Nothing)
-      addRespHeaders $ ManageTeamsPostError "Team not found"
+      addErrorToast "Invalid action" Nothing
+      addRespHeaders $ ManageTeamsPostError "Invalid action"
 
 
 data ManageTeams
@@ -708,6 +717,12 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
               , tableClass = "border rounded border-strokeWeak"
               , tableHasSearch = True
               , tableHasCheckboxes = True
+              , tableActions =
+                  Just
+                    $ [ button_ [class_ "flex items-center gap-2 btn btn-sm text-textError", type_ "button", hxPost_ $ "/p/" <> pid.toText <> "/manage_teams/bulk_action/delete", hxSwap_ "none"] do
+                          faSprite_ "trash" "regular" "w-3 h-3"
+                          "Delete"
+                      ]
               }
       div_ [class_ "w-full"] do
         Table.renderTable table

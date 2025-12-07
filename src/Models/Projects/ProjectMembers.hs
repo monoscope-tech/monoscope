@@ -14,6 +14,7 @@ module Models.Projects.ProjectMembers (
   getTeamsVM,
   TeamVM (..),
   deleteTeamByHandle,
+  deleteTeams,
   getTeamsById,
   Team (..),
   TeamMemberVM (..),
@@ -191,6 +192,9 @@ data Team = Team
   , description :: Text
   , handle :: Text
   , members :: V.Vector Users.UserId
+  , created_by :: Users.UserId
+  , created_at :: UTCTime
+  , updated_at :: UTCTime
   , notify_emails :: V.Vector Text
   , slack_channels :: V.Vector Text
   , discord_channels :: V.Vector Text
@@ -204,7 +208,7 @@ getTeams pid = query q (Only pid)
   where
     q =
       [sql|
-      SELECT  t.id, t.name, t.description, t.handle, t.members, t.notify_emails, t.slack_channels, t.discord_channels
+      SELECT  t.id, t.name, t.description, t.handle, t.members, t.created_by, t.created_at, t.updated_at, t.notify_emails, t.slack_channels, t.discord_channels
        FROM projects.teams t
        WHERE t.project_id = ? AND t.deleted_at is null
     |]
@@ -318,10 +322,19 @@ deleteTeamByHandle pid handle = void $ execute q (pid, handle)
       [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND handle = ? |]
 
 
-getTeamsById :: V.Vector UUID.UUID -> DBT IO (V.Vector Team)
-getTeamsById tids
+deleteTeams :: Projects.ProjectId -> V.Vector UUID.UUID -> DBT IO ()
+deleteTeams pid tids
+  | V.null tids = pure ()
+  | otherwise = void $ execute q (pid, tids)
+  where
+    q =
+      [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND id=ANY(?::UUID[]) |]
+
+
+getTeamsById :: Projects.ProjectId -> V.Vector UUID.UUID -> DBT IO (V.Vector Team)
+getTeamsById pid tids
   | V.null tids = pure V.empty
-  | otherwise = query q (Only tids)
+  | otherwise = query q (pid, tids)
   where
     q =
       [sql|
@@ -331,9 +344,12 @@ getTeamsById tids
         t.description,
         t.handle,
         t.members,
+        t.created_by,
+        t.created_at,
+        t.updated_at,
         t.notify_emails,
         t.slack_channels,
         t.discord_channels
       FROM projects.teams t
-      WHERE t.id=ANY(?::UUID[])
+      WHERE t.project_id = ? AND t.id=ANY(?::UUID[]) AND t.deleted_at is null
     |]
