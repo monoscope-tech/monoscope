@@ -40,7 +40,7 @@ module Pages.Projects (
   TeamForm (..),
   teamGetH,
   ManageTeams (..),
-  TBulkActionForm,
+  TBulkActionForm (..),
 )
 where
 
@@ -501,12 +501,12 @@ manageMembersPostH pid onboardingM form = do
 
       unless (null uAndPOldAndChanged)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       unless (null deletedUAndP)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
@@ -538,25 +538,25 @@ instance AE.FromJSON TeamForm where
   parseJSON = AE.withObject "TeamForm" $ \o -> do
     TeamForm
       <$> o
-      AE..: "teamName"
+        AE..: "teamName"
       <*> o
-      AE..: "teamDescription"
+        AE..: "teamDescription"
       <*> o
-      AE..: "teamHandle"
+        AE..: "teamHandle"
       <*> o
-      AE..:? "teamMembers"
-      AE..!= V.empty
+        AE..:? "teamMembers"
+        AE..!= V.empty
       <*> o
-      AE..:? "notifEmails"
-      AE..!= V.empty
+        AE..:? "notifEmails"
+        AE..!= V.empty
       <*> o
-      AE..:? "slackChannels"
-      AE..!= V.empty
+        AE..:? "slackChannels"
+        AE..!= V.empty
       <*> o
-      AE..:? "discordChannels"
-      AE..!= V.empty
+        AE..:? "discordChannels"
+        AE..!= V.empty
       <*> o
-      AE..:? "teamId"
+        AE..:? "teamId"
 
 
 manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
@@ -567,14 +567,13 @@ manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers,
   let res = validateTeamDetails teamName teamHandle
   case res of
     Right _ -> do
-      rs <- case teamId of
+      case teamId of
         Just tid -> do
           _ <- dbtToEff $ ProjectMembers.updateTeam pid tid teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels
           addSuccessToast "Team updated successfully" Nothing
-          html <- case tmView of
+          case tmView of
             Just _ -> teamGetH pid teamHandle (Just "main-page")
             _ -> manageTeamsGetH pid (Just "from_post")
-          return html
         Nothing -> do
           teamVM <- dbtToEff $ ProjectMembers.getTeamByHandle pid teamHandle
           case teamVM of
@@ -584,16 +583,14 @@ manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers,
             _ -> do
               _ <- dbtToEff $ ProjectMembers.createTeam pid currUserId teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels
               addSuccessToast "Team saved successfully" Nothing
-              html <- manageTeamsGetH pid (Just "from_post")
-              return html
-      return rs
+              manageTeamsGetH pid (Just "from_post")
     Left e -> do
       addErrorToast e Nothing
       addReswap ""
       addRespHeaders $ ManageTeamsPostError e
 
 
-data TBulkActionForm = TBulkActionForm
+newtype TBulkActionForm = TBulkActionForm
   { teamId :: [UUID.UUID]
   }
   deriving stock (Eq, Generic, Show)
@@ -612,12 +609,12 @@ manageTeamBulkActionH pid action TBulkActionForm{teamId} listViewM = do
         True -> do
           _ <- dbtToEff $ ProjectMembers.deleteTeams pid $ V.fromList teamId
           case listViewM of
-            Just _ -> addRespHeaders $ ManageTeamsDelete
+            Just _ -> addRespHeaders ManageTeamsDelete
             _ -> do
               redirectCS ("/p/" <> pid.toText <> "/manage_teams")
-              addRespHeaders $ ManageTeamsDelete
+              addRespHeaders ManageTeamsDelete
         _ -> do
-          addErrorToast ("You may only delete teams you own") (Nothing)
+          addErrorToast "You may only delete teams you own" Nothing
           addRespHeaders $ ManageTeamsPostError "You may only delete teams you own"
     _ -> do
       addErrorToast "Invalid action" Nothing
@@ -638,7 +635,7 @@ instance ToHtml ManageTeams where
   toHtml (ManageTeamsGet (PageCtx bwconf (pid, members, slackChannels, discordChannels, teams))) = toHtml $ PageCtx bwconf $ manageTeamsPage pid members slackChannels discordChannels teams
   toHtml (ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams)) = toHtml $ manageTeamsPage pid members slackChannels discordChannels teams
   toHtml (ManageTeamsPostError msg) = span_ [] $ ""
-  toHtml (ManageTeamsDelete) = toHtml ""
+  toHtml ManageTeamsDelete = toHtml ""
   toHtml (ManageTeamGet (PageCtx bwconf (pid, team, members, slackChannels, discordChannels))) = toHtml $ PageCtx bwconf $ teamPage pid team members slackChannels discordChannels
   toHtml (ManageTeamGet' (pid, team, members, slackChannels, discordChannels)) = toHtml $ teamPage pid team members slackChannels discordChannels
   toHtml (ManageTeamGetError (PageCtx bwconf (pid, message))) = toHtml $ PageCtx bwconf $ teamPageNF pid message
@@ -661,9 +658,7 @@ manageTeamsGetH pid layoutM = do
 
   discordDataM <- Slack.getDiscordDataByProjectId pid
   discordChannels <- case discordDataM of
-    Just discordData -> do
-      channels' <- Discord.getDiscordChannels appCtx.env.discordBotToken discordData.guildId
-      return channels'
+    Just discordData -> Discord.getDiscordChannels appCtx.env.discordBotToken discordData.guildId
     Nothing -> return []
   teams <- dbtToEff $ ProjectMembers.getTeamsVM pid
   let bwconf =
@@ -678,7 +673,7 @@ manageTeamsGetH pid layoutM = do
     Just _ -> do
       addRespHeaders $ ManageTeamsGet' (pid, projMembers, channels, discordChannels, teams)
     _ -> do
-      addRespHeaders $ ManageTeamsGet $ (PageCtx bwconf (pid, projMembers, channels, discordChannels, teams))
+      addRespHeaders $ ManageTeamsGet (PageCtx bwconf (pid, projMembers, channels, discordChannels, teams))
 
 
 manageTeamsPage :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberVM -> [SlackP.SlackChannel] -> [Discord.DiscordChannel] -> V.Vector ProjectMembers.TeamVM -> Html ()
@@ -739,20 +734,20 @@ memberCell :: V.Vector ProjectMembers.TeamMemberVM -> Html ()
 memberCell members = do
   div_ [class_ "inline-block flex -space-x-2"] do
     forM_ members $ \m -> do
-      div_ [class_ "inline-block mx-0.5", term "data-tippy-content" (m.memberName)]
+      div_ [class_ "inline-block mx-0.5", term "data-tippy-content" m.memberName]
         $ img_ [class_ "inline-block h-6 w-6 rounded-full border border-strokeWeak ", src_ m.memberAvatar, alt_ "User avatar"]
 
 
 notifsCell :: ProjectMembers.TeamVM -> Html ()
 notifsCell team = do
   div_ [class_ "flex items-center gap-2"] do
-    when (not $ V.null team.slack_channels) do
+    unless (V.null team.slack_channels) do
       div_ [term "data-tippy-content" "Slack"] do
         faSprite_ "slack" "solid" "h-3.5 w-3.5"
-    when (not $ V.null team.discord_channels) do
+    unless (V.null team.discord_channels) do
       div_ [term "data-tippy-content" "Discord"] do
         faSprite_ "discord" "solid" "h-3.5 w-3.5"
-    when (not $ V.null team.notify_emails) do
+    unless (V.null team.notify_emails) do
       div_ [term "data-tippy-content" "Email"] do
         faSprite_ "envelope" "solid" "h-3.5 w-3.5"
 
@@ -774,9 +769,7 @@ teamGetH pid handle layoutM = do
 
   discordDataM <- Slack.getDiscordDataByProjectId pid
   discordChannels <- case discordDataM of
-    Just discordData -> do
-      channels' <- Discord.getDiscordChannels appCtx.env.discordBotToken discordData.guildId
-      return channels'
+    Just discordData -> Discord.getDiscordChannels appCtx.env.discordBotToken discordData.guildId
     Nothing -> return []
   let bwconf =
         (def :: BWConfig)

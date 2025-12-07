@@ -6,8 +6,8 @@ import Data.HashMap.Strict qualified as HashMap
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Transact qualified as PGT
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Transact qualified as PGT
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Pages.Monitors (AlertUpsertForm (..), convertToQueryMonitor)
@@ -47,6 +47,7 @@ spec = aroundAll withTestResources do
                 , conditionType = Nothing
                 , source = Nothing
                 , vizType = Nothing
+                , teams = []
                 }
       respC <- withPool tr.trPool $ Monitors.queryMonitorUpsert queryMonitor
       respC `shouldBe` 1
