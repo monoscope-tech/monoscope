@@ -15,6 +15,8 @@ module Pages.Dashboards (
   dashboardDuplicatePostH,
   WidgetMoveForm (..),
   DashboardBulkActionForm (..),
+  DashboardRes (..),
+  DashboardsGetD (..),
   dashboardDuplicateWidgetPostH,
   dashboardWidgetExpandGetH,
   visTypes,
@@ -165,7 +167,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
               , value_ $ maybeToMonoid var.value
               ]
-            <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
+              <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
   const tagifyInstances = new Map();
@@ -381,7 +383,7 @@ processWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widgetBas
   forOf (#children . _Just . traverse) widget' $ \child ->
     processWidget pid now timeRange allParams
       $ child
-      & #_dashboardId %~ (<|> widget'._dashboardId)
+        & #_dashboardId %~ (<|> widget'._dashboardId)
 
 
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
@@ -391,11 +393,11 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
     let issuesVM = V.map (AnomalyList.IssueVM False True now "24h") issues
     pure
       $ widget
-      & #html
-        ?~ renderText
-          ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-              $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml)
-          )
+        & #html
+          ?~ renderText
+            ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
+                $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml)
+            )
   Widget.WTStat -> do
     stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure $ widget & #dataset ?~ def{Widget.source = AE.Null, Widget.value = stat.dataFloat}
@@ -405,8 +407,8 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
     -- Render the table with data server-side
     pure
       $ widget
-      & #html
-        ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
+        & #html
+          ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
   Widget.WTTraces -> do
     tracesD <- Charts.queryMetrics (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     let trIds = V.map V.last tracesD.dataText
@@ -423,21 +425,21 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
 
     pure
       $ widget
-      & #html
-        ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText grouped spansGrouped colorsJson)
+        & #html
+          ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText grouped spansGrouped colorsJson)
   _ -> do
     metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure
       $ widget
-      & #dataset
-        ?~ Widget.WidgetDataset
-          { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
-          , rowsPerMin = metricsD.rowsPerMin
-          , value = Just metricsD.rowsCount
-          , from = metricsD.from
-          , to = metricsD.to
-          , stats = metricsD.stats
-          }
+        & #dataset
+          ?~ Widget.WidgetDataset
+            { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
+            , rowsPerMin = metricsD.rowsPerMin
+            , value = Just metricsD.rowsCount
+            , from = metricsD.from
+            , to = metricsD.to
+            , stats = metricsD.stats
+            }
 
 
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
@@ -517,10 +519,10 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
       let newLayout =
             Just
               $ maybe def Relude.id orig.layout
-              & #x %~ (<|> item.x)
-              & #y %~ (<|> item.y)
-              & #w %~ (<|> item.w)
-              & #h %~ (<|> item.h)
+                & #x %~ (<|> item.x)
+                & #y %~ (<|> item.y)
+                & #w %~ (<|> item.w)
+                & #h %~ (<|> item.h)
       pure
         orig
           { Widget.layout = newLayout
@@ -693,7 +695,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
                     , class_ $ "hidden page-drawer-tab-" <> T.toLower tabName
                     , name_ $ wid <> "-drawer-tab"
                     ]
-                  <> [checked_ | isActive]
+                    <> [checked_ | isActive]
                 toHtml tabName
           mkTab "Overview" (effectiveActiveTab /= "edit")
           mkTab "Edit" (effectiveActiveTab == "edit")
@@ -787,17 +789,22 @@ newWidget_ pid currentRange = widgetViewerEditor_ pid Nothing currentRange Nothi
 -- Dashboard List
 --
 
-data DashboardsGet = DashboardsGet
+data DashboardsGetD = DashboardsGetD
   { dashboards :: V.Vector Dashboards.DashboardVM
   , projectId :: Projects.ProjectId
   , embedded :: Bool -- Whether to render in embedded mode (for modals)
   , teams :: V.Vector ManageMembers.Team
   }
   deriving (Generic, Show)
+data DashboardsGet
+  = DashboardsGet (PageCtx DashboardsGetD)
+  | DashboardsGetSlim DashboardsGetD
+  deriving (Generic, Show)
 
 
 instance ToHtml DashboardsGet where
-  toHtml dash = toHtml $ dashboardsGet_ dash
+  toHtml (DashboardsGet (PageCtx pc dg)) = toHtml $ PageCtx pc $ dashboardsGet_ dg
+  toHtml (DashboardsGetSlim dash) = toHtml $ dashboardsGet_ dash
   toHtmlRaw = toHtml
 
 
@@ -829,7 +836,7 @@ renderDashboardListItem checked tmplClass title value description icon prview = 
     span_ [class_ "px-2 p-1 invisible group-has-[input:checked]/it:visible"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
 
 
-dashboardsGet_ :: DashboardsGet -> Html ()
+dashboardsGet_ :: DashboardsGetD -> Html ()
 dashboardsGet_ dg = do
   unless dg.embedded $ Components.modal_ "newDashboardMdl" "" $ form_
     [ class_ "flex  h-[90vh] gap-4 group/md"
@@ -938,7 +945,7 @@ dashboardsGet_ dg = do
             , ("Widgets", CellText $ maybe "0" (show . length . (.widgets)) $ loadDashboardFromVM x)
             ]
     let tableCols = (\x -> (Table.mkColumn x x){columnActionable = x /= "dashboardId", columnWidth = if x == "Name" then Just "40%" else Nothing, columnCheckBox = x == "dashboardId"}) <$> ["dashboardId", "Name", "Modified", "Teams", "Widgets"]
-    let tableRows = (\x -> mapRow x) <$> dg.dashboards
+    let tableRows = mapRow <$> dg.dashboards
     let table =
           (Table.defaultTable tableCols (V.toList tableRows))
             { tableClass = "border border-strokeWeak rounded-box"
@@ -983,7 +990,7 @@ addTeamsDrowndown_ pid teams = div_ [class_ "dropdown dropdown-end"] do
     button_ [class_ "btn btn-primary btn-xs float-right", hxPost_ $ "/p/" <> pid.toText <> "/dashboards/bulk_action/add_teams", hxSwap_ "none"] "Add teams"
 
 
-dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe UUID.UUID -> ATAuthCtx (RespHeaders (PageCtx DashboardsGet))
+dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe UUID.UUID -> ATAuthCtx (RespHeaders DashboardsGet)
 dashboardsGetH pid embeddedM teamIdM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -1000,7 +1007,8 @@ dashboardsGetH pid embeddedM teamIdM = do
 
   if embedded || isJust teamIdM
     then -- For embedded mode, use a minimal BWConfig that will still work with ToHtml instance
-      addRespHeaders $ PageCtx def $ DashboardsGet{dashboards, projectId = pid, embedded = True, teams}
+      addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded = True, teams}
+    -- PageCtx def $ DashboardsGetD{dashboards, projectId = pid, embedded = True, teams}
     else do
       freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
       let bwconf =
@@ -1012,7 +1020,17 @@ dashboardsGetH pid embeddedM teamIdM = do
               , config = appCtx.config
               , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn btn-primary text-white"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Dashboard")
               }
-      addRespHeaders $ PageCtx bwconf $ DashboardsGet{dashboards, projectId = pid, embedded = False, teams}
+      addRespHeaders $ DashboardsGet (PageCtx bwconf $ DashboardsGetD{dashboards, projectId = pid, embedded = False, teams})
+
+
+data DashboardRes = DashboardNoContent | DashboardPostError Text
+  deriving (Generic, Show)
+
+
+instance ToHtml DashboardRes where
+  toHtml DashboardNoContent = ""
+  toHtml (DashboardPostError msg) = div_ [class_ "text-textError"] $ toHtml msg
+  toHtmlRaw = toHtml
 
 
 data DashboardForm = DashboardForm
@@ -1024,31 +1042,36 @@ data DashboardForm = DashboardForm
   deriving anyclass (FromForm)
 
 
-dashboardsPostH :: Projects.ProjectId -> DashboardForm -> ATAuthCtx (RespHeaders NoContent)
+dashboardsPostH :: Projects.ProjectId -> DashboardForm -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardsPostH pid form = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
   did <- UUIDId <$> UUID.genUUID
-  let dashM = find (\dashboard -> dashboard.file == Just form.file) dashboardTemplates
-  let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> did.toText
-  let dbd =
-        Dashboards.DashboardVM
-          { id = did
-          , projectId = pid
-          , createdAt = now
-          , updatedAt = now
-          , createdBy = sess.user.id
-          , baseTemplate = if form.file == "" then Nothing else Just form.file
-          , schema = Nothing
-          , starredSince = Nothing
-          , homepageSince = Nothing
-          , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
-          , title = form.title
-          , teams = V.fromList form.teams
-          }
-  _ <- Dashboards.insert dbd
-  redirectCS redirectURI
-  addRespHeaders NoContent
+  if form.title == ""
+    then do
+      addErrorToast "Dashboard title is required" Nothing
+      addRespHeaders $ DashboardPostError "Dashboard title is required"
+    else do
+      let dashM = find (\dashboard -> dashboard.file == Just form.file) dashboardTemplates
+      let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> did.toText
+      let dbd =
+            Dashboards.DashboardVM
+              { id = did
+              , projectId = pid
+              , createdAt = now
+              , updatedAt = now
+              , createdBy = sess.user.id
+              , baseTemplate = if form.file == "" then Nothing else Just form.file
+              , schema = Nothing
+              , starredSince = Nothing
+              , homepageSince = Nothing
+              , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
+              , title = form.title
+              , teams = V.fromList form.teams
+              }
+      _ <- Dashboards.insert dbd
+      redirectCS redirectURI
+      addRespHeaders DashboardNoContent
 
 
 -- -- Template Haskell splice to generate the list of dashboards by reading the dashboards folder in filesystem
@@ -1114,11 +1137,13 @@ newtype DashboardRenameForm = DashboardRenameForm
 
 -- | Handler for renaming a dashboard.
 -- It updates the title of the specified dashboard.
-dashboardRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardRenameForm -> ATAuthCtx (RespHeaders (Html ()))
+dashboardRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardRenameForm -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardRenamePatchH pid dashId form = do
   mDashboard <- dbtToEff $ DBT.selectOneByField @Dashboards.DashboardVM [DBT.field| id |] (Only dashId)
   case mDashboard of
-    Nothing -> throwError $ err404{errBody = "Dashboard not found or does not belong to this project"}
+    Nothing -> do
+      addErrorToast "Dashboard not found or does not belong to this project" Nothing
+      addRespHeaders $ DashboardPostError "Dashboard not found or does not belong to this project"
     Just dashVM -> do
       _ <- dbtToEff $ DBT.updateFieldsBy @Dashboards.DashboardVM [[DBT.field| title |]] ([DBT.field| id |], dashId) (Only form.title)
 
@@ -1134,17 +1159,18 @@ dashboardRenamePatchH pid dashId form = do
 
       addSuccessToast "Dashboard renamed successfully" Nothing
       addTriggerEvent "closeModal" ""
-      addRespHeaders (toHtml form.title)
+      addRespHeaders DashboardNoContent
 
 
 -- | Handler for duplicating a dashboard.
 -- It creates a new dashboard with the same content but with "(Copy)" appended to the title.
-dashboardDuplicatePostH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders NoContent)
+dashboardDuplicatePostH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardDuplicatePostH pid dashId = do
   mDashboard <- dbtToEff $ DBT.selectOneByField @Dashboards.DashboardVM [DBT.field| id |] (Only dashId)
-
   case mDashboard of
-    Nothing -> throwError $ err404{errBody = "Dashboard not found or does not belong to this project"}
+    Nothing -> do
+      addErrorToast "Dashboard not found or does not belong to this project" Nothing
+      addRespHeaders $ DashboardPostError "Dashboard not found or does not belong to this project"
     Just dashVM -> do
       (sess, _) <- Sessions.sessionAndProject pid
       now <- Time.currentTime
@@ -1177,13 +1203,13 @@ dashboardDuplicatePostH pid dashId = do
       let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> newDashId.toText
       redirectCS redirectURI
       addSuccessToast "Dashboard was duplicated successfully" Nothing
-      addRespHeaders NoContent
+      addRespHeaders DashboardNoContent
 
 
 -- | Handler for deleting a dashboard.
 -- It verifies the dashboard exists and belongs to the project before deletion.
 -- After deletion, redirects to the dashboard list page.
-dashboardDeleteH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders NoContent)
+dashboardDeleteH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardDeleteH pid dashId = do
   mDashboard <- dbtToEff $ DBT.selectOneByField @Dashboards.DashboardVM [DBT.field| id |] (Only dashId)
   case mDashboard of
@@ -1194,7 +1220,7 @@ dashboardDeleteH pid dashId = do
       let redirectURI = "/p/" <> pid.toText <> "/dashboards"
       redirectCS redirectURI
       addSuccessToast "Dashboard was deleted successfully" Nothing
-      addRespHeaders NoContent
+      addRespHeaders DashboardNoContent
 
 
 data DashboardBulkActionForm = DashboardBulkActionForm

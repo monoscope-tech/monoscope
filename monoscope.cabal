@@ -437,6 +437,7 @@ test-suite integration-tests
       Pages.LogExplorer.LogSpec
       Pages.MonitorsSpec
       Pages.Projects.ManageMembersSpec
+      Pages.DashboardsSpec
       Pages.Projects.ProjectsSpec
       Pages.ReportsSpec
       Pages.ShareSpec
