@@ -14,13 +14,17 @@ jobs:
       id-token: 'write'
     steps:
       - uses: actions/checkout@v4
-      - uses: freckle/stack-cache-action@main
-      # - uses: freckle/stack-action@v5
-      - uses: haskell-actions/setup@v2
+      # Cache Haskell dependencies
+      - name: Cache Haskell dependencies
+        uses: actions/cache@v4
         with:
-          ghc-version: 9.12.2
-          enable-stack: true
-          stack-version: 'latest'
+          path: |
+            ~/.cabal/store
+            dist-newstyle
+          key: ${{ runner.os }}-test-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
+          restore-keys: |
+            ${{ runner.os }}-test-
+
       - name: Install OpenSSL, protoc and snappy
         run: sudo apt-get update && sudo apt-get install -y libssl-dev librdkafka-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev # or "brew install openssl" for macOS
       - name: Set OpenSSL Paths
@@ -39,84 +43,42 @@ jobs:
           npm install
           npm run build
 
-      - run: stack --no-terminal build --dependencies-only
-      - run: stack build --ghc-options "-O0"
-      
-      - name: Cache build artifacts
-        uses: actions/cache@v3
-        with:
-          path: |
-            .stack-work
-            ~/.stack
-            static/public/assets/css/tailwind.min.css
-            web-components/dist
-          key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml', 'package.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-stack-
-
-  test:
-    name: Test ${{ matrix.test-suite }}
-    needs: build
-    runs-on: ubuntu-24.04
-    services:
-      postgres:
-        image: timescale/timescaledb-ha:pg16-all
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: monoscope
-        options: >-
-          --health-cmd="pg_isready -U postgres"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-        ports:
-          - 5432:5432
-    strategy:
-      matrix:
-        test-suite: [doctests, unit-tests, integration-tests]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: freckle/stack-cache-action@main
-      - uses: haskell-actions/setup@v2
-        with:
-          ghc-version: 9.12.2
-          enable-stack: true
-          stack-version: 'latest'
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev librdkafka-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev
-      
-      - name: Restore build artifacts
-        uses: actions/cache@v3
-        with:
-          path: |
-            .stack-work
-            ~/.stack
-            static/public/assets/css/tailwind.min.css
-            web-components/dist
-          key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml', 'package.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-stack-
-      
-      # Build CSS if not in cache
-      - name: Setup node env
-        uses: actions/setup-node@v4
-        with:
-          node-version: 18
-      
-      - name: Build CSS if missing
+      - name: Generate required static files
         run: |
-          if [ ! -f static/public/assets/css/tailwind.min.css ]; then
-            echo "CSS file missing, building..."
-            npm install
-            npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
-          else
-            echo "CSS file found in cache"
-          fi
-          
-      - name: Run ${{ matrix.test-suite }}
+          # Create directories if they don't exist
+          mkdir -p static/public/assets/css
+          mkdir -p static/public/assets/web-components/dist/js
+          mkdir -p static/public/assets/web-components/dist/css
+
+          # Install dependencies and build Tailwind CSS
+          npm install
+          npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
+
+          # Build web components
+          cd web-components
+          npm install
+          NODE_ENV=production npx vite build --mode production --sourcemap false
+          cd ..
+
+      - name: Update cabal index
+        run: cabal update
+
+      - name: Configure project
+        run: cabal configure --enable-tests --enable-benchmarks --ghc-options="-O0 -j8"
+
+      - name: Build dependencies
+        run: cabal build --only-dependencies all -j4
+
+      - name: Build ${{ matrix.test }}
+        run: cabal build ${{ matrix.test }} -j4
+
+      - name: Run ${{ matrix.test }}
         env:
           USE_EXTERNAL_DB: true
-        run: stack test :${{ matrix.test-suite }}
+        run: |
+          echo "::group::Running ${{ matrix.test }}"
+          cabal test ${{ matrix.test }} --ghc-options="-O0 -j8" --test-show-details=direct
+          echo "::endgroup::"
 
   ui-tests:
     name: UI Tests
