@@ -46,6 +46,8 @@ jobs:
             - Performance considerations
             - Security concerns
             - Test coverage
+            - Code succinctness is a priority, and we enable many GHC extensions that should be leveraged to write concise and succinct code so codebase doesn't grow so fast. 
+            - Using the packages we have in the project is always prefered to reimplementing functions or expressions where we could have called a function from a package in our package list, or a popular maintained package from the ecosystem.
 
             Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
 
