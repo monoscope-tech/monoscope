@@ -104,8 +104,19 @@ callOpenAIAPI fullPrompt apiKey = do
           , OpenAI.callbacks = []
           , OpenAI.baseUrl = Nothing
           }
-  -- Use langchain-hs to generate response with default model
-  result <- liftIO $ LLMCore.generate openAI fullPrompt Nothing
+      -- Create chat completion parameters with model name
+      userMessage =
+        OpenAIV1.User
+          { OpenAIV1.content = V.fromList [OpenAIV1.Text{OpenAIV1.text = fullPrompt}]
+          , OpenAIV1.name = Nothing
+          }
+      params =
+        OpenAIV1._CreateChatCompletion
+          { OpenAIV1.model = "gpt-4o-mini"
+          , OpenAIV1.messages = V.fromList [userMessage]
+          }
+  -- Use langchain-hs to generate response
+  result <- liftIO $ LLMCore.generate openAI fullPrompt (Just params)
   case result of
     Left err -> pure $ Left $ "LLM Error: " <> show err
     Right response -> pure $ Right response
