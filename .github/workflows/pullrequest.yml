@@ -164,9 +164,27 @@ jobs:
   lint:
     name: Lint (hlint)
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: haskell-actions/hlint-setup@v2
+      - name: Run hlint and apply refactorings
+        id: hlint
+        run: |
+          hlint src/ --refactor --refactor-options="--inplace" || true
+      - name: Commit and push refactorings
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          if [[ -n $(git status -s) ]]; then
+            git add -A
+            git commit -m "Apply hlint refactorings"
+            git push
+          fi
       - uses: haskell-actions/hlint-run@v2
         with:
           path: src/
