@@ -207,8 +207,7 @@ getDashboardById did = dbtToEff $ DBT.queryOne (Query $ encodeUtf8 q) (Only did)
 
 
 deleteDashboardsByIds :: DB :> es => Projects.ProjectId -> V.Vector DashboardId -> Eff es Int64
-deleteDashboardsByIds pid dids = do
-  dbtToEff $ DBT.execute (Query $ encodeUtf8 q) (pid, dids)
+deleteDashboardsByIds pid dids = dbtToEff $ DBT.execute (Query $ encodeUtf8 q) (pid, dids)
   where
     q = [text|DELETE FROM projects.dashboards WHERE project_id = ? AND id = ANY(?::uuid[])|]
 
