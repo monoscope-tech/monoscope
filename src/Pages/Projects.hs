@@ -503,12 +503,12 @@ manageMembersPostH pid onboardingM form = do
 
       unless (null uAndPOldAndChanged)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       unless (null deletedUAndP)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
@@ -540,25 +540,25 @@ instance AE.FromJSON TeamForm where
   parseJSON = AE.withObject "TeamForm" $ \o -> do
     TeamForm
       <$> o
-      AE..: "teamName"
+        AE..: "teamName"
       <*> o
-      AE..: "teamDescription"
+        AE..: "teamDescription"
       <*> o
-      AE..: "teamHandle"
+        AE..: "teamHandle"
       <*> o
-      AE..:? "teamMembers"
-      AE..!= V.empty
+        AE..:? "teamMembers"
+        AE..!= V.empty
       <*> o
-      AE..:? "notifEmails"
-      AE..!= V.empty
+        AE..:? "notifEmails"
+        AE..!= V.empty
       <*> o
-      AE..:? "slackChannels"
-      AE..!= V.empty
+        AE..:? "slackChannels"
+        AE..!= V.empty
       <*> o
-      AE..:? "discordChannels"
-      AE..!= V.empty
+        AE..:? "discordChannels"
+        AE..!= V.empty
       <*> o
-      AE..:? "teamId"
+        AE..:? "teamId"
 
 
 manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
@@ -567,26 +567,24 @@ manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers,
   appCtx <- ask @AuthContext
   let currUserId = sess.persistentSession.userId
   let res = validateTeamDetails teamName teamHandle
-  case res of
-    Right _ -> do
-      case teamId of
-        Just tid -> do
-          _ <- dbtToEff $ ProjectMembers.updateTeam pid tid teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels
-          addSuccessToast "Team updated successfully" Nothing
-          case tmView of
-            Just _ -> teamGetH pid teamHandle (Just "main-page")
-            _ -> manageTeamsGetH pid (Just "from_post")
-        Nothing -> do
-          teamVM <- dbtToEff $ ProjectMembers.getTeamByHandle pid teamHandle
-          case teamVM of
-            Just _ -> do
-              addErrorToast "Team handle already exists" Nothing
-              addRespHeaders $ ManageTeamsPostError "Team handle already exists for this project."
-            _ -> do
-              _ <- dbtToEff $ ProjectMembers.createTeam pid currUserId teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels
-              addSuccessToast "Team saved successfully" Nothing
-              manageTeamsGetH pid (Just "from_post")
-    Left e -> do
+  case (res, teamId) of
+    (Right _, Just tid) -> do
+      _ <- dbtToEff $ ProjectMembers.updateTeam pid tid teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels
+      addSuccessToast "Team updated successfully" Nothing
+      case tmView of
+        Just _ -> teamGetH pid teamHandle (Just "main-page")
+        _ -> manageTeamsGetH pid (Just "from_post")
+    (Right _, Nothing) -> do
+      teamVM <- dbtToEff $ ProjectMembers.getTeamByHandle pid teamHandle
+      case teamVM of
+        Just _ -> do
+          addErrorToast "Team handle already exists" Nothing
+          addRespHeaders $ ManageTeamsPostError "Team handle already exists for this project."
+        _ -> do
+          _ <- dbtToEff $ ProjectMembers.createTeam pid currUserId teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels
+          addSuccessToast "Team saved successfully" Nothing
+          manageTeamsGetH pid (Just "from_post")
+    (Left e, _) -> do
       addErrorToast e Nothing
       addReswap ""
       addRespHeaders $ ManageTeamsPostError e
@@ -607,15 +605,13 @@ manageTeamBulkActionH pid action TBulkActionForm{teamId} listViewM = do
     "delete" -> do
       teamVm <- dbtToEff $ ProjectMembers.getTeamsById pid $ V.fromList teamId
       let canDelete = all (\team -> sess.user.id == team.created_by) teamVm
-      case canDelete of
-        True -> do
+      if canDelete
+        then do
           _ <- dbtToEff $ ProjectMembers.deleteTeams pid $ V.fromList teamId
-          case listViewM of
-            Just _ -> addRespHeaders ManageTeamsDelete
-            _ -> do
-              redirectCS ("/p/" <> pid.toText <> "/manage_teams")
-              addRespHeaders ManageTeamsDelete
-        _ -> do
+          when (isNothing listViewM) do
+            redirectCS ("/p/" <> pid.toText <> "/manage_teams")
+          addRespHeaders ManageTeamsDelete
+        else do
           addErrorToast "You may only delete teams you own" Nothing
           addRespHeaders $ ManageTeamsPostError "You may only delete teams you own"
     _ -> do
@@ -852,11 +848,10 @@ teamPage pid team projMembers slackChannels discordChannels = do
                   let tar = maybe e (.channelName) $ find (\x -> x.channelId == e) discordChannels
                   span_ [] $ toHtml tar
 
-      div_ [class_ "h-full w-8/12 overflow-y-auto p-4"] do
-        div_ [class_ "w-full space-y-6"] do
-          monitorsSection pid team.id
-          dashboardsSection pid team.id
-          servicesSection pid team.id
+      div_ [class_ "h-full w-8/12 overflow-y-auto p-4 space-y-6"] do
+        monitorsSection pid team.id
+        dashboardsSection pid team.id
+        servicesSection pid team.id
 
 
 monitorsSection :: Projects.ProjectId -> UUID.UUID -> Html ()
@@ -869,10 +864,9 @@ monitorsSection pid teamId = div_ [class_ "rounded-xl border border-strokeWeak o
     do
       h4_ [class_ "text-sm font-medium"] (faSprite_ "list-check" "regular" "h-4 w-4 mr-2" >> "Alerts")
       div_ [class_ "flex items-center gap-4"] do
-        div_ [class_ "flex items-center gap-4"] do
-          label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
-            faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
-            input_ [type_ "text", placeholder_ "Search alerts...", class_ "", [__| on click halt|]]
+        label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
+          faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
+          input_ [type_ "text", placeholder_ "Search alerts...", class_ "", [__| on click halt|]]
         button_ [class_ ""] do
           faSprite_ "p-chevron-down" "regular" "h-4 w-4"
 
@@ -893,10 +887,9 @@ dashboardsSection pid teamId = div_ [class_ "rounded-xl border border-strokeWeak
     do
       h4_ [class_ "text-sm font-medium"] (faSprite_ "chart-area" "regular" "h-4 w-4 mr-2" >> "Dashboards")
       div_ [class_ "flex items-center gap-4"] do
-        div_ [class_ "flex items-center gap-4"] do
-          label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
-            faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
-            input_ [type_ "text", placeholder_ "Search dashboards...", class_ "", [__| on click halt|]]
+        label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
+          faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
+          input_ [type_ "text", placeholder_ "Search dashboards...", class_ "", [__| on click halt|]]
         button_ [class_ ""] do
           faSprite_ "p-chevron-down" "regular" "h-4 w-4"
   div_ [class_ "-mt-4 w-full max-h-96 overflow-y-auto", id_ "dashboards-section"] do
@@ -916,10 +909,9 @@ servicesSection pid teamId = div_ [class_ "rounded-xl border border-strokeWeak o
     do
       h4_ [class_ "text-sm font-medium"] (faSprite_ "server" "regular" "h-4 w-4 mr-2" >> "Services")
       div_ [class_ "flex items-center gap-4"] do
-        div_ [class_ "flex items-center gap-4"] do
-          label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
-            faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
-            input_ [type_ "text", placeholder_ "Search services...", class_ "", [__| on click halt|]]
+        label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
+          faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
+          input_ [type_ "text", placeholder_ "Search services...", class_ "", [__| on click halt|]]
         button_ [class_ ""] do
           faSprite_ "p-chevron-down" "regular" "h-4 w-4"
   div_ [class_ "p-3 border-t w-full border-strokeWeak"] do
@@ -1530,11 +1522,11 @@ teamModal pid team whiteList channelWhiteList discordWhiteList isInTeamView = do
         , hxVals_ [text|js:{...getTagValues(`$prefix`)}|]
         , hxTarget_ "#main-content"
         , hxSwap_ "outerHTML"
-        , class_ "w-[550px]"
+        , class_ "w-xl"
         ]
         do
           div_ [class_ "px-2 max-h-[75vh] overflow-y-auto"] $ do
-            whenJust teamId $ \tid -> do
+            whenJust teamId $ \tid ->
               input_
                 [ type_ "hidden"
                 , id_ $ prefix <> "-team-id"
