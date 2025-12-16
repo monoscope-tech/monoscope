@@ -43,21 +43,26 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
   let catalogTable =
         Table
           { config = def{elemID = "anomalyListForm"}
-          , columns =
-              [ col "" renderCatalogCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8"]
-              , col "Dependency" (renderCatalogMainCol pid requestType) & withAttrs [class_ "space-y-3 grow"]
-              , col "Events" renderCatalogEventsCol & withAttrs [class_ "w-36 flex items-center justify-center"]
-              , col "Activity" renderCatalogChartCol & withAttrs [class_ "flex items-center justify-center"]
-              ]
+          , columns = catalogColumns pid requestType
           , rows = hostsVM
           , features =
               def
-                { bulkActions =
+                { rowId = Just \(HostEventsVM _ he _ _) -> he.host
+                , bulkActions =
                     [ BulkAction{icon = Just "check", title = "acknowledge", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowledge"}
                     , BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
                     ]
                 , search = Just $ SearchConfig{serverSide = False, viaQueryParam = Nothing}
-                , sort = Just $ SortConfig{current = sortV, currentURL = currentURL}
+                , sort =
+                    Just
+                      $ SortConfig
+                        { current = sortV
+                        , currentURL = currentURL
+                        , options =
+                            [ ("Latest", "Most recently accessed", "events")
+                            , ("Alphabetical", "Sort by dependency name", "name")
+                            ]
+                        }
                 , pagination = Just $ PaginationConfig{nextUrl = nextFetchUrl, trigger = Both}
                 , zeroState =
                     Just
@@ -81,32 +86,28 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Incoming", role_ "tab", class_ $ "tab h-auto! " <> if requestType == "Incoming" then "tab-active text-textStrong" else ""] "Incoming"
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Outgoing", role_ "tab", class_ $ "tab h-auto! " <> if requestType == "Outgoing" then "tab-active text-textStrong" else ""] "Outgoing"
           }
-  let catalogCols =
-        [ col "" renderCatalogCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8"]
-        , col "Dependency" (renderCatalogMainCol pid requestType) & withAttrs [class_ "space-y-3 grow"]
-        , col "Events" renderCatalogEventsCol & withAttrs [class_ "w-36 flex items-center justify-center"]
-        , col "Activity" renderCatalogChartCol & withAttrs [class_ "flex items-center justify-center"]
-        ]
   case skipM of
-    Just _ -> addRespHeaders $ CatalogListRows $ TableRows nextFetchUrl catalogCols hostsVM
+    Just _ -> addRespHeaders $ CatalogListRows $ TableRows nextFetchUrl (catalogColumns pid requestType) hostsVM
     _ -> addRespHeaders $ CatalogListPage $ PageCtx bwconf catalogTable
 
 
 data HostEventsVM = HostEventsVM Projects.ProjectId Endpoints.HostEvents Text Text
 
 
+catalogColumns :: Projects.ProjectId -> Text -> [Column HostEventsVM]
+catalogColumns pid requestType =
+  [ col "" renderCatalogCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8"]
+  , col "Dependency" (renderCatalogMainCol pid requestType) & withAttrs [class_ "space-y-3 grow"]
+  , col "Events" renderCatalogEventsCol & withAttrs [class_ "w-36 flex items-center justify-center"]
+  , col "Activity" renderCatalogChartCol & withAttrs [class_ "flex items-center justify-center"]
+  ]
+
+
 instance ToHtml HostEventsVM where
   toHtml vm@(HostEventsVM pid _ _ requestType) =
-    let columns :: [Column HostEventsVM]
-        columns =
-          [ col "" renderCatalogCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8"]
-          , col "Dependency" (renderCatalogMainCol pid requestType) & withAttrs [class_ "space-y-3 grow"]
-          , col "Events" renderCatalogEventsCol & withAttrs [class_ "w-36 flex items-center justify-center"]
-          , col "Activity" renderCatalogChartCol & withAttrs [class_ "flex items-center justify-center"]
-          ]
-     in div_ [class_ "flex py-4 gap-8 items-center itemsListItem"] do
-          forM_ columns \c ->
-            div_ c.attrs $ toHtmlRaw $ c.render vm
+    div_ [class_ "flex py-4 gap-8 items-center itemsListItem"] do
+      forM_ (catalogColumns pid requestType) \c ->
+        div_ c.attrs $ toHtmlRaw $ c.render vm
   toHtmlRaw = toHtml
 
 
@@ -218,21 +219,26 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
   let endpointsTable =
         Table
           { config = def{elemID = "anomalyListForm"}
-          , columns =
-              [ col "" renderEndpointCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8 justify-center items-center"]
-              , col "Endpoint" (renderEndpointMainCol pid) & withAttrs [class_ "space-y-3 grow"]
-              , col "Events" renderEndpointEventsCol & withAttrs [class_ "w-36 flex items-center justify-center"]
-              , col "Activity" renderEndpointChartCol & withAttrs [class_ "flex items-center justify-center w-60 h-10"]
-              ]
+          , columns = endpointColumns pid
           , rows = endpReqVM
           , features =
               def
-                { bulkActions =
-                    [ BulkAction{icon = Just "check", title = "acknowlege", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
+                { rowId = Just \(EnpReqStatsVM _ _ enp) -> enp.endpointHash
+                , bulkActions =
+                    [ BulkAction{icon = Just "check", title = "acknowledge", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowledge"}
                     , BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
                     ]
                 , search = Just $ SearchConfig{serverSide = True, viaQueryParam = Just currentURL}
-                , sort = Just $ SortConfig{current = fromMaybe "events" sortM, currentURL = currentURL}
+                , sort =
+                    Just
+                      $ SortConfig
+                        { current = fromMaybe "events" sortM
+                        , currentURL = currentURL
+                        , options =
+                            [ ("Most Active", "Most requests", "events")
+                            , ("Alphabetical", "Sort by endpoint path", "name")
+                            ]
+                        }
                 , pagination = Just $ PaginationConfig{nextUrl = Just nextFetchUrl, trigger = Both}
                 , zeroState =
                     Just
@@ -248,15 +254,9 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                     Nothing -> "Endpoints"
                 }
           }
-  let endpointCols =
-        [ col "" renderEndpointCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8 justify-center items-center"]
-        , col "Endpoint" (renderEndpointMainCol pid) & withAttrs [class_ "space-y-3 grow"]
-        , col "Events" renderEndpointEventsCol & withAttrs [class_ "w-36 flex items-center justify-center"]
-        , col "Activity" renderEndpointChartCol & withAttrs [class_ "flex items-center justify-center w-60 h-10"]
-        ]
   case (loadMoreM, searchM) of
-    (Just _, _) -> addRespHeaders $ EndpointsListRows $ TableRows (Just nextFetchUrl) endpointCols endpReqVM
-    (_, Just _) -> addRespHeaders $ EndpointsListRows $ TableRows (Just nextFetchUrl) endpointCols endpReqVM
+    (Just _, _) -> addRespHeaders $ EndpointsListRows $ TableRows (Just nextFetchUrl) (endpointColumns pid) endpReqVM
+    (_, Just _) -> addRespHeaders $ EndpointsListRows $ TableRows (Just nextFetchUrl) (endpointColumns pid) endpReqVM
     _ -> addRespHeaders $ EndpointsListPage $ PageCtx bwconf endpointsTable
 
 
@@ -264,26 +264,28 @@ data EnpReqStatsVM = EnpReqStatsVM Bool UTCTime Endpoints.EndpointRequestStats
   deriving stock (Show)
 
 
+endpointColumns :: Projects.ProjectId -> [Column EnpReqStatsVM]
+endpointColumns pid =
+  [ col "" renderEndpointCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8 justify-center items-center"]
+  , col "Endpoint" (renderEndpointMainCol pid) & withAttrs [class_ "space-y-3 grow"]
+  , col "Events" renderEndpointEventsCol & withAttrs [class_ "w-36 flex items-center justify-center"]
+  , col "Activity" renderEndpointChartCol & withAttrs [class_ "flex items-center justify-center w-60 h-10"]
+  ]
+
+
 instance ToHtml EnpReqStatsVM where
   {-# INLINE toHtml #-}
   toHtml vm@(EnpReqStatsVM _ _ enp) =
-    let columns :: [Column EnpReqStatsVM]
-        columns =
-          [ col "" renderEndpointCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8 justify-center items-center"]
-          , col "Endpoint" (renderEndpointMainCol enp.projectId) & withAttrs [class_ "space-y-3 grow"]
-          , col "Events" renderEndpointEventsCol & withAttrs [class_ "w-36 flex items-center justify-center"]
-          , col "Activity" renderEndpointChartCol & withAttrs [class_ "flex items-center justify-center w-60 h-10"]
-          ]
-     in div_ [class_ "flex py-4 gap-8 items-center endpoint_item itemsListItem"] do
-          forM_ columns \c ->
-            div_ c.attrs $ toHtmlRaw $ c.render vm
+    div_ [class_ "flex py-4 gap-8 items-center endpoint_item itemsListItem"] do
+      forM_ (endpointColumns enp.projectId) \c ->
+        div_ c.attrs $ toHtmlRaw $ c.render vm
   toHtmlRaw = toHtml
 
 
 renderEndpointCheckboxCol :: EnpReqStatsVM -> Html ()
-renderEndpointCheckboxCol (EnpReqStatsVM _ _ _) = do
+renderEndpointCheckboxCol (EnpReqStatsVM _ _ enp) = do
   a_ [class_ $ endpointAccentColor True True <> " w-2 h-full"] ""
-  input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "anomalyId", value_ ""]
+  input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "endpointHash", value_ enp.endpointHash]
 
 
 renderEndpointEventsCol :: EnpReqStatsVM -> Html ()

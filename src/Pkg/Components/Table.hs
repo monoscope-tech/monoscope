@@ -147,6 +147,7 @@ data TabFilterOpt = TabFilterOpt
 data SortConfig = SortConfig
   { current :: Text
   , currentURL :: Text
+  , options :: [(Text, Text, Text)]  -- (title, description, identifier)
   }
 
 
@@ -201,10 +202,10 @@ instance Default Config where
       { tableClasses = "table table-zebra table-sm w-full relative"
       , thClasses = "text-left bg-bgRaised sticky top-0"
       , tdClasses = "px-6 py-4"
-      , containerClasses = "w-full mx-auto px-6 pt-4 space-y-4 pb-16 overflow-y-scroll h-full" -- Match ItemsList's scrollable container
+      , containerClasses = "w-full mx-auto px-6 pt-4 space-y-4 pb-16 overflow-y-scroll h-full"
       , showHeader = True
       , elemID = "tableContainer"
-      , renderAsTable = False -- Default to list mode for ItemsList compatibility
+      , renderAsTable = False
       }
 
 
@@ -224,6 +225,7 @@ instance ToHtml (TableRows a) where
   toHtmlRaw (TableRows nextUrl columns rows) = toHtmlRaw $ renderTableRows nextUrl columns rows
 
 
+{-# INLINE renderTableRows #-}
 renderTableRows :: Maybe Text -> [Column a] -> V.Vector a -> Html ()
 renderTableRows nextUrl columns rows = do
   V.forM_ rows \row ->
@@ -231,17 +233,16 @@ renderTableRows nextUrl columns rows = do
       forM_ columns \col ->
         div_ col.attrs $ col.render row
   whenJust nextUrl \url ->
-    when (V.length rows > 9)
-      $ a_
-        [ class_ "cursor-pointer flex justify-center items-center p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center"
-        , hxTrigger_ "click, intersect once"
-        , hxSwap_ "outerHTML"
-        , hxGet_ url
-        , hxIndicator_ "#rowsIndicator"
-        ]
-        do
-          "Load more"
-          span_ [id_ "rowsIndicator", class_ "ml-2 htmx-indicator loading loading-dots loading-md"] ""
+    a_
+      [ class_ "cursor-pointer flex justify-center items-center p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center"
+      , hxTrigger_ "click, intersect once"
+      , hxSwap_ "outerHTML"
+      , hxGet_ url
+      , hxIndicator_ "#rowsIndicator"
+      ]
+      do
+        "Load more"
+        span_ [id_ "rowsIndicator", class_ "ml-2 htmx-indicator loading loading-dots loading-md"] ""
 
 
 -- Tab Filter ToHtml
@@ -300,6 +301,7 @@ renderRows tbl =
 
 
 -- List mode: render columns in a flex container (no table wrapper/headers)
+{-# INLINE renderListRow #-}
 renderListRow :: Table a -> a -> Html ()
 renderListRow tbl row =
   div_ (rowAttrs <> [class_ "flex gap-8 items-start itemsListItem"]) do
@@ -310,6 +312,7 @@ renderListRow tbl row =
 
 
 -- Table mode: render as table rows with columns
+{-# INLINE renderTableRow #-}
 renderTableRow :: Table a -> a -> Html ()
 renderTableRow tbl row =
   tr_ (rowAttrs <> linkHandler) do
@@ -323,16 +326,16 @@ renderTableRow tbl row =
               , name_ "itemId"
               , value_ $ getId row
               ]
-            <> [checked_ | isSelected]
+              <> [checked_ | isSelected]
 
     forM_ tbl.columns \col ->
       td_ (col.attrs <> colAttrs col)
         $ col.render row
   where
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
-    linkHandler = [] -- TODO: add link handler for table mode
+    linkHandler = maybe [] (\getLink -> [class_ "cursor-pointer", hxGet_ (getLink row), hxPushUrl_ "true"]) tbl.features.rowLink
     isSelected = maybe False (\f -> f row) tbl.features.selectRow
-    colAttrs col = maybe [] (const [class_ $ maybeToMonoid col.align]) col.align
+    colAttrs col = foldMap (\a -> [class_ a]) col.align
 
 
 renderToolbar :: Table a -> Html ()
@@ -391,14 +394,9 @@ renderSearch cfg =
 
 renderSortMenu :: SortConfig -> Html ()
 renderSortMenu sortCfg = do
-  let sortMenu =
-        [ ("First Seen", "First time the issue occured", "first_seen")
-        , ("Last Seen", "Last time the issue occured", "last_seen")
-        , ("Events", "Number of events", "events")
-        ]
-          :: [(Text, Text, Text)]
   let currentURL' = deleteParam "sort" sortCfg.currentURL
-  let currentSortTitle = maybe "First Seen" (\(t, _, _) -> t) $ find (\(_, _, identifier) -> identifier == sortCfg.current) sortMenu
+  let defaultSort = maybe "" (\(_, _, i) -> i) (listToMaybe sortCfg.options)
+  let currentSortTitle = maybe sortCfg.current (\(t, _, _) -> t) $ find (\(_, _, identifier) -> identifier == sortCfg.current) sortCfg.options
 
   div_ [class_ "dropdown dropdown-end inline-block"] do
     a_ [class_ "btn btn-sm shadow-none text-sm font-medium bg-fillWeaker border text-textWeak border-strokeWeak", tabindex_ "0"] do
@@ -412,8 +410,8 @@ renderSortMenu sortCfg = do
       , tabindex_ "0"
       ]
       do
-        sortMenu & mapM_ \(title, desc, identifier) -> do
-          let isActive = sortCfg.current == identifier || (sortCfg.current == "" && identifier == "first_seen")
+        sortCfg.options & mapM_ \(title, desc, identifier) -> do
+          let isActive = sortCfg.current == identifier || (sortCfg.current == "" && identifier == defaultSort)
           a_
             [ class_ $ "block flex flex-row px-3 py-2 hover:bg-fillBrand-weak rounded-md cursor-pointer " <> (if isActive then " text-textBrand " else "")
             , href_ $ currentURL' <> "&sort=" <> identifier

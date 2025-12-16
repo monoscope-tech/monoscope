@@ -106,7 +106,8 @@ unifiedMonitorsGetH pid filterTM sinceM = do
           , rows = allItems
           , features =
               def
-                { search = Just $ SearchConfig{serverSide = False, viaQueryParam = Nothing}
+                { rowId = Just \item -> item.monitorId
+                , search = Just $ SearchConfig{serverSide = False, viaQueryParam = Nothing}
                 , zeroState =
                     Just
                       $ ZeroState

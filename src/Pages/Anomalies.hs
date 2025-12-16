@@ -4,14 +4,14 @@ module Pages.Anomalies (
   anomalyListGetH,
   anomalyBulkActionsPostH,
   escapedQueryPartial,
-  acknowlegeAnomalyGetH,
-  unAcknowlegeAnomalyGetH,
+  acknowledgeAnomalyGetH,
+  unAcknowledgeAnomalyGetH,
   archiveAnomalyGetH,
   unArchiveAnomalyGetH,
   anomalyListSlider,
   AnomalyBulkForm (..),
   AnomalyListGet (..),
-  anomalyAcknowlegeButton,
+  anomalyAcknowledgeButton,
   anomalyArchiveButton,
   AnomalyAction (..),
   IssueVM (..),
@@ -63,8 +63,8 @@ newtype AnomalyBulkForm = AnomalyBulk
   deriving anyclass (FromForm)
 
 
-acknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> Maybe Text -> ATAuthCtx (RespHeaders AnomalyAction)
-acknowlegeAnomalyGetH pid aid hostM = do
+acknowledgeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> Maybe Text -> ATAuthCtx (RespHeaders AnomalyAction)
+acknowledgeAnomalyGetH pid aid hostM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   -- Convert to Issues.IssueId for new system
@@ -78,10 +78,10 @@ acknowlegeAnomalyGetH pid aid hostM = do
   addRespHeaders $ Acknowlege pid (UUIDId aid.unUUIDId) True
 
 
-unAcknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
-unAcknowlegeAnomalyGetH pid aid = do
+unAcknowledgeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
+unAcknowledgeAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
-  let q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
+  let q = [sql| update apis.anomalies set acknowledged_by=null, acknowledged_at=null where id=? |]
   let qI = [sql| update apis.issues set acknowledged_by=null, acknowledged_at=null where id=? |]
   _ <- dbtToEff $ execute qI (Only aid)
   _ <- dbtToEff $ execute q (Only aid)
@@ -115,7 +115,7 @@ data AnomalyAction
 
 
 instance ToHtml AnomalyAction where
-  toHtml (Acknowlege pid aid is_ack) = toHtml $ anomalyAcknowlegeButton pid aid is_ack ""
+  toHtml (Acknowlege pid aid is_ack) = toHtml $ anomalyAcknowledgeButton pid aid is_ack ""
   toHtml (Archive pid aid is_arch) = toHtml $ anomalyArchiveButton pid aid is_arch
   toHtml Bulk = ""
   toHtmlRaw = toHtml
@@ -133,7 +133,7 @@ anomalyBulkActionsPostH pid action items = do
       addRespHeaders Bulk
     else do
       _ <- case action of
-        "acknowlege" -> do
+        "acknowledge" -> do
           v <- dbtToEff $ Anomalies.acknowledgeAnomalies sess.user.id (V.fromList items.anomalyId)
           _ <- dbtToEff $ Anomalies.acknowlegeCascade sess.user.id v
           pass
@@ -185,22 +185,27 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
   let issuesTable =
         Table
           { config = def{elemID = "anomalyListForm"}
-          , columns =
-              [ col "" renderIssueCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8 items-center justify-center"]
-              , col "Issue" (renderIssueMainCol pid) & withAttrs [class_ "flex-1 min-w-0"]
-              , col "Events" renderIssueEventsCol & withAttrs [class_ "w-36 flex items-start justify-center"]
-              , col "Activity" renderIssueChartCol & withAttrs [class_ "flex items-start justify-center"]
-              ]
+          , columns = issueColumns pid
           , rows = issuesVM
           , features =
               def
                 { rowId = Just \(IssueVM _ _ _ _ issue) -> Issues.issueIdText issue.id
                 , bulkActions =
-                    [ BulkAction{icon = Just "check", title = "acknowlege", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
+                    [ BulkAction{icon = Just "check", title = "acknowledge", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowledge"}
                     , BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
                     ]
                 , search = Just $ SearchConfig{serverSide = False, viaQueryParam = Nothing}
-                , sort = Just $ SortConfig{current = fromMaybe "events" sortM, currentURL = currentURL}
+                , sort =
+                    Just
+                      $ SortConfig
+                        { current = fromMaybe "events" sortM
+                        , currentURL = currentURL
+                        , options =
+                            [ ("First Seen", "First time the issue occured", "first_seen")
+                            , ("Last Seen", "Last time the issue occured", "last_seen")
+                            , ("Events", "Number of events", "events")
+                            ]
+                        }
                 , pagination = Just $ PaginationConfig{nextUrl = nextFetchUrl, trigger = Both}
                 , zeroState =
                     Just
@@ -234,15 +239,9 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
                       ]
                   }
           }
-  let issueColumns =
-        [ col "" renderIssueCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8 items-center justify-center"]
-        , col "Issue" (renderIssueMainCol pid) & withAttrs [class_ "flex-1 min-w-0"]
-        , col "Events" renderIssueEventsCol & withAttrs [class_ "w-36 flex items-start justify-center"]
-        , col "Activity" renderIssueChartCol & withAttrs [class_ "flex items-start justify-center"]
-        ]
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
     (Just "slider", Just "true", _, _) -> ALSlider currTime pid endpointM (Just $ V.map (IssueVM True False currTime filterV) issues)
-    (_, _, _, Just "true") -> ALRows $ TableRows nextFetchUrl issueColumns issuesVM -- For load more - only rows
+    (_, _, _, Just "true") -> ALRows $ TableRows nextFetchUrl (issueColumns pid) issuesVM -- For load more - only rows
     _ -> ALPage $ PageCtx bwconf issuesTable
 
 
@@ -318,23 +317,25 @@ data IssueVM = IssueVM Bool Bool UTCTime Text Issues.IssueL
   deriving stock (Show)
 
 
+issueColumns :: Projects.ProjectId -> [Column IssueVM]
+issueColumns pid =
+  [ col "" renderIssueCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8 items-center justify-center"]
+  , col "Issue" (renderIssueMainCol pid) & withAttrs [class_ "flex-1 min-w-0"]
+  , col "Events" renderIssueEventsCol & withAttrs [class_ "w-36 flex items-start justify-center"]
+  , col "Activity" renderIssueChartCol & withAttrs [class_ "flex items-start justify-center"]
+  ]
+
+
 instance ToHtml IssueVM where
   {-# INLINE toHtml #-}
   toHtml vm@(IssueVM hideByDefault _ _ _ issue) =
-    let columns :: [Column IssueVM]
-        columns =
-          [ col "" renderIssueCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8 items-center justify-center"]
-          , col "Issue" (renderIssueMainCol issue.projectId) & withAttrs [class_ "flex-1 min-w-0"]
-          , col "Events" renderIssueEventsCol & withAttrs [class_ "w-36 flex items-start justify-center"]
-          , col "Activity" renderIssueChartCol & withAttrs [class_ "flex items-start justify-center"]
-          ]
-     in div_
-          [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "card-round" else "px-0.5 py-4"
-          , style_ (if hideByDefault then "display:none" else "")
-          ]
-          do
-            forM_ columns \c ->
-              div_ c.attrs $ toHtmlRaw $ c.render vm
+    div_
+      [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "card-round" else "px-0.5 py-4"
+      , style_ (if hideByDefault then "display:none" else "")
+      ]
+      do
+        forM_ (issueColumns issue.projectId) \c ->
+          div_ c.attrs $ toHtmlRaw $ c.render vm
   toHtmlRaw = toHtml
 
 
@@ -513,13 +514,13 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
 
       -- Acknowledge button
       let isAcknowledged = isJust issue.acknowledgedAt
-      let acknowledgeEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/" <> Issues.issueIdText issue.id <> if isAcknowledged then "/unacknowlege" else "/acknowlege"
+      let acknowledgeEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/" <> Issues.issueIdText issue.id <> if isAcknowledged then "/unacknowledge" else "/acknowledge"
       button_
         [ class_
             $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
-            <> if isAcknowledged
-              then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80"
-              else "bg-fillPrimary text-textInverse-strong hover:bg-fillPrimary/90"
+              <> if isAcknowledged
+                then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80"
+                else "bg-fillPrimary text-textInverse-strong hover:bg-fillPrimary/90"
         , hxGet_ acknowledgeEndpoint
         , hxSwap_ "outerHTML"
         , hxTarget_ "closest .itemsListItem"
@@ -534,9 +535,9 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
       button_
         [ class_
             $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
-            <> if isArchived
-              then "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak hover:bg-fillWarning-weak/80"
-              else "border border-strokeWeak text-textStrong hover:bg-fillWeak"
+              <> if isArchived
+                then "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak hover:bg-fillWarning-weak/80"
+                else "border border-strokeWeak text-textStrong hover:bg-fillWeak"
         , hxGet_ archiveEndpoint
         , hxSwap_ "outerHTML"
         , hxTarget_ "closest .itemsListItem"
@@ -727,15 +728,15 @@ renderFieldChange fieldChange =
                 toHtml $ fromMaybe "" fieldChange.newValue
 
 
-anomalyAcknowlegeButton :: Projects.ProjectId -> Issues.IssueId -> Bool -> Text -> Html ()
-anomalyAcknowlegeButton pid aid acked host = do
-  let acknowlegeAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Issues.issueIdText aid <> if acked then "/unacknowlege" else "/acknowlege?host=" <> host
+anomalyAcknowledgeButton :: Projects.ProjectId -> Issues.IssueId -> Bool -> Text -> Html ()
+anomalyAcknowledgeButton pid aid acked host = do
+  let acknowledgeAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Issues.issueIdText aid <> if acked then "/unacknowledge" else "/acknowledge?host=" <> host
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
-        <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
-    , term "data-tippy-content" "acknowlege issue"
-    , hxGet_ acknowlegeAnomalyEndpoint
+          <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+    , term "data-tippy-content" "acknowledge issue"
+    , hxGet_ acknowledgeAnomalyEndpoint
     , hxSwap_ "outerHTML"
     ]
     do
@@ -749,7 +750,7 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
-        <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+          <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"

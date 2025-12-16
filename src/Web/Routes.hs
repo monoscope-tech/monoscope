@@ -433,8 +433,8 @@ logExplorerServer pid =
 anomaliesServer :: Projects.ProjectId -> Servant.ServerT AnomaliesRoutes ATAuthCtx
 anomaliesServer pid =
   AnomaliesRoutes'
-    { acknowlegeGet = AnomalyList.acknowlegeAnomalyGetH pid
-    , unAcknowlegeGet = AnomalyList.unAcknowlegeAnomalyGetH pid
+    { acknowlegeGet = AnomalyList.acknowledgeAnomalyGetH pid
+    , unAcknowlegeGet = AnomalyList.unAcknowledgeAnomalyGetH pid
     , archiveGet = AnomalyList.archiveAnomalyGetH pid
     , unarchiveGet = AnomalyList.unArchiveAnomalyGetH pid
     , bulkActionsPost = AnomalyList.anomalyBulkActionsPostH pid
