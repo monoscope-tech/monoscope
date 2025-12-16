@@ -1545,8 +1545,9 @@ services appLogger appCtx tp =
   fromMethods
     $ RawMethod (traceServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf TS.TraceService "export"))
     $ RawMethod (logsServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf LS.LogsService "export"))
-    $ RawMethod (metricsServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf MS.MetricsService "export"))
-    NoMoreMethods
+    $ RawMethod
+      (metricsServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf MS.MetricsService "export"))
+      NoMoreMethods
 
 
 type instance RequestMetadata (Protobuf TS.TraceService "export") = OtlpRequestMetadata

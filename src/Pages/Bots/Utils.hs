@@ -188,5 +188,6 @@ installedSuccess botPlatform = do
                     div_ [class_ "flex items-center space-x-2 mb-3"] do
                       span_ [class_ "font-mono bg-fillSuccess-weak text-textSuccess px-3 py-1 rounded-lg font-semibold"] "/here"
                       span_ [class_ "bg-fillSuccess-strong text-white text-xs px-2 py-1 rounded-full"] "Alerts"
-                    p_ [class_ "text-textStrong text-sm"]
+                    p_
+                      [class_ "text-textStrong text-sm"]
                       "Set up this channel to receive automated error reports, weekly summaries, and daily performance alerts."

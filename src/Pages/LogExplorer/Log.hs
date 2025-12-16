@@ -724,17 +724,19 @@ apiLogsPage page = do
               Just "patterns" -> (WTTimeseriesLine, patternTarget <> " != null | summarize count(*) by bin_auto(timestamp), " <> patternTarget, nm <> " patterns")
               _ -> (WTTimeseries, "summarize count(*) by bin_auto(timestamp), status_code", "All traces")
         Widget.widget_ $ (def :: Widget.Widget){Widget.wType = tp, Widget.query = Just query, Widget.unit = Just "rows", Widget.title = Just title, Widget.hideLegend = Just True, Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True, Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
-        unless (page.vizType == Just "patterns") $ Widget.widget_ $ (def :: Widget.Widget)
-          { Widget.wType = WTTimeseriesLine
-          , Widget.standalone = Just True
-          , Widget.title = Just "Latency percentiles"
-          , Widget.hideSubtitle = Just True
-          , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
-          , Widget.summarizeBy = Just Widget.SBMax
-          , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
-          , Widget.sql =
-              Just
-                [text| SELECT timeB::integer, quantiles[idx] AS quantile, COALESCE(values[idx], 0)::float AS value
+        unless (page.vizType == Just "patterns")
+          $ Widget.widget_
+          $ (def :: Widget.Widget)
+            { Widget.wType = WTTimeseriesLine
+            , Widget.standalone = Just True
+            , Widget.title = Just "Latency percentiles"
+            , Widget.hideSubtitle = Just True
+            , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
+            , Widget.summarizeBy = Just Widget.SBMax
+            , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
+            , Widget.sql =
+                Just
+                  [text| SELECT timeB::integer, quantiles[idx] AS quantile, COALESCE(values[idx], 0)::float AS value
                             FROM ( SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS timeB,
                                     ARRAY[
                                       COALESCE(approx_percentile(0.50, percentile_agg(duration))::float, 0)::float,
@@ -751,10 +753,10 @@ apiLogsPage page = do
                             ) s
                             CROSS JOIN (VALUES (1), (2), (3), (4)) AS t(idx)
                             WHERE values[idx] IS NOT NULL; |]
-          , Widget.unit = Just "ns"
-          , Widget.hideLegend = Just True
-          , Widget._projectId = Just page.pid
-          }
+            , Widget.unit = Just "ns"
+            , Widget.hideLegend = Just True
+            , Widget._projectId = Just page.pid
+            }
     whenJust page.patterns \patternsData ->
       div_ [class_ "overflow-y-auto max-h-96 border border-strokeWeak rounded mt-3"] do
         patternList patternsData page.pid page.patternsToSkip False page.targetPattern

@@ -210,7 +210,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
                             , ("Events", "Number of events", "events")
                             ]
                         }
-                , pagination = (, "both") <$> nextFetchUrl
+                , pagination = (,"both") <$> nextFetchUrl
                 , zeroState =
                     Just
                       $ ZeroState

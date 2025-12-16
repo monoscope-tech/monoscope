@@ -340,7 +340,7 @@ reportsPage pid reports nextUrl daily weekly =
             , hxTrigger_ "intersect once"
             ]
             $ div_ [class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"] do
-                span_ [class_ "loading loading-dots text-sm text-textWeak"] pass
+              span_ [class_ "loading loading-dots text-sm text-textWeak"] pass
 
 
 -- div_ [class_ "w-5 bg-gray-200"] ""
@@ -359,12 +359,12 @@ reportListItems pid reports nextUrl =
             , hxSwap_ "innerHTML"
             ]
             $ div_ [class_ "flex flex-col grow gap-4"] do
-                div_ [class_ "flex items-center w-full justify-between gap-2"] do
-                  div_ [class_ $ (if isWeeklyData then "bg-fillBrand-weak" else "bg-fillWeak") <> " text-xs font-medium px-2.5 py-1 rounded-full capitalize"] $ toHtml report.reportType <> " report"
-                  faSprite_ "chevron-right" "regular" "w-3 h-3"
-                h4_ [class_ "font-medium text-sm flex items-center gap-2"] do
-                  faSprite_ "calendar" "regular" "w-4 h-4"
-                  toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
+              div_ [class_ "flex items-center w-full justify-between gap-2"] do
+                div_ [class_ $ (if isWeeklyData then "bg-fillBrand-weak" else "bg-fillWeak") <> " text-xs font-medium px-2.5 py-1 rounded-full capitalize"] $ toHtml report.reportType <> " report"
+                faSprite_ "chevron-right" "regular" "w-3 h-3"
+              h4_ [class_ "font-medium text-sm flex items-center gap-2"] do
+                faSprite_ "calendar" "regular" "w-4 h-4"
+                toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
     whenJust nextUrl \url ->
       a_ [class_ "w-full cursor-pointer block p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center mb-4", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] "LOAD MORE"
 

@@ -539,7 +539,7 @@ processOneMinuteErrors scheduledTime pid = do
   -- we can increase the window to account for time spent on kafka
   -- use two minutes for now before use a better solution
   Relude.when ctx.config.enableEventsTableUpdates $ do
-    let oneMinuteAgo = addUTCTime (- (60 * 2)) scheduledTime
+    let oneMinuteAgo = addUTCTime (-(60 * 2)) scheduledTime
     processErrorsPaginated oneMinuteAgo 0
   where
     processErrorsPaginated :: UTCTime -> Int -> ATBackgroundCtx ()
