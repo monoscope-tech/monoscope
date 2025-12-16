@@ -90,6 +90,7 @@ library
       Pages.Api
       Pages.BodyWrapper
       Pages.Bots.Discord
+      Pages.Bots.Github
       Pages.Bots.Slack
       Pages.Bots.Utils
       Pages.Bots.Whatsapp
