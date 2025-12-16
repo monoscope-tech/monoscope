@@ -198,7 +198,7 @@ jobs:
       - name: Setup node env
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
       - name: Run UI tests
         run: |
           cd web-components
