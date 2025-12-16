@@ -7,26 +7,16 @@ module Pkg.Components.Table (
   Column (..),
   Config (..),
   Features (..),
+  SearchMode (..),
   BulkAction (..),
-  SearchConfig (..),
   TabFilter (..),
   TabFilterOpt (..),
   SortConfig (..),
-  PaginationConfig (..),
-  LoadTrigger (..),
   ZeroState (..),
-  HtmxConfig (..),
-  Formatter (..),
-  ColumnType (..),
-  ProgressConfig (..),
-  ProgressType (..),
-  ProgressVariant (..),
   col,
   withSort,
   withAttrs,
   withAlign,
-  withFormatter,
-  withProgress,
 ) where
 
 import Data.Default (Default (..))
@@ -49,7 +39,6 @@ data Column a where
        , attrs :: [Attribute]
        , sortField :: Maybe Text
        , align :: Maybe Text
-       , format :: Maybe Formatter
        }
     -> Column a
 
@@ -68,19 +57,20 @@ type role TableRows nominal
 data TableRows a = TableRows (Maybe Text) [Column a] (V.Vector a) -- nextUrl, columns, rows
 
 
+data SearchMode = ClientSide | ServerSide Text
+
 data Features a = Features
   { rowLink :: Maybe (a -> Text)
   , rowId :: Maybe (a -> Text)
   , rowAttrs :: Maybe (a -> [Attribute])
   , selectRow :: Maybe (a -> Bool)
   , bulkActions :: [BulkAction]
-  , search :: Maybe SearchConfig
+  , search :: Maybe SearchMode
   , tabs :: Maybe TabFilter
   , sort :: Maybe SortConfig
-  , pagination :: Maybe PaginationConfig
+  , pagination :: Maybe (Text, Text) -- (nextUrl, trigger: "click" | "intersect" | "both")
   , zeroState :: Maybe ZeroState
   , header :: Maybe (Html ())
-  , htmx :: Maybe HtmxConfig
   }
 
 
@@ -97,37 +87,10 @@ data Config = Config
 
 -- Supporting Types
 
-data Formatter = Formatter
-  { columnType :: Maybe ColumnType
-  , unit :: Maybe Text
-  , progress :: Maybe ProgressConfig
-  , link :: Maybe (Text -> Text)
-  }
-
-
-data ColumnType = CTNumber | CTDuration | CTText
-
-
-data ProgressConfig = ProgressConfig
-  { progressType :: ProgressType
-  , variant :: ProgressVariant
-  }
-
-
-data ProgressType = ColumnPercent | ValuePercent
-data ProgressVariant = PVDefault | PVError | PVWarning | PVSuccess
-
-
 data BulkAction = BulkAction
   { icon :: Maybe Text
   , title :: Text
   , uri :: Text
-  }
-
-
-data SearchConfig = SearchConfig
-  { serverSide :: Bool
-  , viaQueryParam :: Maybe Text
   }
 
 
@@ -151,28 +114,12 @@ data SortConfig = SortConfig
   }
 
 
-data PaginationConfig = PaginationConfig
-  { nextUrl :: Maybe Text
-  , trigger :: LoadTrigger
-  }
-
-
-data LoadTrigger = OnClick | OnIntersect | Both
-
-
 data ZeroState = ZeroState
   { icon :: Text
   , title :: Text
   , description :: Text
   , actionText :: Text
   , destination :: Either Text Text
-  }
-
-
-data HtmxConfig = HtmxConfig
-  { trigger :: Text
-  , target :: Text
-  , swap :: Text
   }
 
 
@@ -192,7 +139,6 @@ instance Default (Features a) where
       , pagination = Nothing
       , zeroState = Nothing
       , header = Nothing
-      , htmx = Nothing
       }
 
 
@@ -211,7 +157,7 @@ instance Default Config where
 
 -- ToHtml Instance
 
-instance ToHtml a => ToHtml (Table a) where
+instance ToHtml (Table a) where
   {-# INLINE toHtml #-}
   toHtml tbl = toHtmlRaw $ renderTable tbl
   {-# INLINE toHtmlRaw #-}
@@ -233,7 +179,7 @@ renderTableRows nextUrl columns rows = do
       forM_ columns \col ->
         div_ col.attrs $ col.render row
   whenJust nextUrl \url ->
-    renderPaginationLink url Both
+    renderPaginationLink url "both"
 
 
 -- Tab Filter ToHtml
@@ -255,7 +201,7 @@ instance ToHtml TabFilter where
 
 -- Core Rendering Functions
 
-renderTable :: ToHtml a => Table a -> Html ()
+renderTable :: Table a -> Html ()
 renderTable tbl = div_ [class_ tbl.config.containerClasses, id_ $ tbl.config.elemID <> "_page"] do
   whenJust tbl.features.header id
   whenJust tbl.features.search renderSearch
@@ -281,7 +227,7 @@ renderTable tbl = div_ [class_ tbl.config.containerClasses, id_ $ tbl.config.ele
               span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
             div_ [id_ "rowsContainer", class_ "divide-y"] do
               renderRows tbl
-              whenJust tbl.features.pagination renderPagination
+              whenJust tbl.features.pagination \(url, trigger) -> renderPaginationLink url trigger
 
 
 renderRows :: Table a -> Html ()
@@ -355,12 +301,12 @@ renderToolbar tbl =
       whenJust tbl.features.sort renderSortMenu
 
 
-renderSearch :: SearchConfig -> Html ()
-renderSearch cfg =
+renderSearch :: SearchMode -> Html ()
+renderSearch searchMode =
   label_ [class_ "input input-sm flex w-full h-10 bg-fillWeak border border-strokeStrong shadow-none overflow-hidden items-center gap-2"] do
     faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
-    case cfg.viaQueryParam of
-      Just param ->
+    case searchMode of
+      ServerSide url ->
         input_
           [ type_ "text"
           , class_ "grow"
@@ -368,12 +314,12 @@ renderSearch cfg =
           , id_ "search_box"
           , placeholder_ "Search"
           , hxTrigger_ "keyup changed delay:500ms"
-          , hxGet_ param
+          , hxGet_ url
           , hxTarget_ "#rowsContainer"
           , hxSwap_ "innerHTML"
           , hxIndicator_ "#searchIndicator"
           ]
-      Nothing ->
+      ClientSide ->
         input_
           [ type_ "text"
           , class_ "grow"
@@ -421,14 +367,14 @@ renderSortMenu sortCfg = do
 
 
 -- Helper function for rendering pagination link
-renderPaginationLink :: Text -> LoadTrigger -> Html ()
+renderPaginationLink :: Text -> Text -> Html ()
 renderPaginationLink url trigger =
   a_
     [ class_ "cursor-pointer flex justify-center items-center p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center min-h-[2.5rem]"
     , hxTrigger_ $ case trigger of
-        OnClick -> "click"
-        OnIntersect -> "intersect once"
-        Both -> "click, intersect once"
+        "click" -> "click"
+        "intersect" -> "intersect once"
+        _ -> "click, intersect once" -- "both" or default
     , hxSwap_ "outerHTML"
     , hxGet_ url
     , hxIndicator_ "#rowsIndicator"
@@ -438,8 +384,6 @@ renderPaginationLink url trigger =
       span_ [id_ "rowsIndicator", class_ "ml-2 htmx-indicator loading loading-dots loading-md inline-block"] ""
 
 
-renderPagination :: PaginationConfig -> Html ()
-renderPagination cfg = whenJust cfg.nextUrl \url -> renderPaginationLink url cfg.trigger
 
 
 renderZeroState :: ZeroState -> Html ()
@@ -460,7 +404,6 @@ col name render =
     , attrs = []
     , sortField = Nothing
     , align = Nothing
-    , format = Nothing
     }
 
 
@@ -474,11 +417,3 @@ withAttrs as column = column{attrs = as}
 
 withAlign :: Text -> Column a -> Column a
 withAlign a column = column{align = Just a}
-
-
-withFormatter :: Formatter -> Column a -> Column a
-withFormatter f column = column{format = Just f}
-
-
-withProgress :: ProgressConfig -> Column a -> Column a
-withProgress p column = column{format = Just $ Formatter Nothing Nothing (Just p) Nothing}

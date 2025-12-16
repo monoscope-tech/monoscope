@@ -25,7 +25,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (statBox_)
-import Pkg.Components.Table (Config (..), Features (..), SearchConfig (..), TabFilter (..), TabFilterOpt (..), Table (..), ZeroState (..), col, withAttrs)
+import Pkg.Components.Table (Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
@@ -109,7 +109,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
           , rows = allItems
           , features =
               def
-                { search = Just $ SearchConfig{serverSide = False, viaQueryParam = Nothing}
+                { search = Just ClientSide
                 , zeroState =
                     Just
                       $ ZeroState

@@ -13,7 +13,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), LoadTrigger (..), PaginationConfig (..), SearchConfig (..), SortConfig (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
+import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), SearchMode (..), SortConfig (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.Widget (WidgetAxis (..))
 import Pkg.Components.Widget qualified as Widget
 import PyF qualified
@@ -55,7 +55,7 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
                     [ BulkAction{icon = Just "check", title = "acknowledge", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowledge"}
                     , BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
                     ]
-                , search = Just $ SearchConfig{serverSide = False, viaQueryParam = Nothing}
+                , search = Just ClientSide
                 , sort =
                     Just
                       $ SortConfig
@@ -66,7 +66,7 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
                             , ("Alphabetical", "Sort by dependency name", "name")
                             ]
                         }
-                , pagination = Just $ PaginationConfig{nextUrl = nextFetchUrl, trigger = Both}
+                , pagination = (\url -> (url, "both")) <$> nextFetchUrl
                 , zeroState =
                     Just
                       $ ZeroState
@@ -106,12 +106,6 @@ catalogColumns pid requestType =
   ]
 
 
-instance ToHtml HostEventsVM where
-  toHtml vm@(HostEventsVM pid _ _ requestType) =
-    div_ [class_ "flex py-4 gap-8 items-center itemsListItem"] do
-      forM_ (catalogColumns pid requestType) \c ->
-        div_ c.attrs $ toHtmlRaw $ c.render vm
-  toHtmlRaw = toHtml
 
 
 renderCatalogCheckboxCol :: HostEventsVM -> Html ()
@@ -234,7 +228,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                     [ BulkAction{icon = Just "check", title = "acknowledge", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowledge"}
                     , BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
                     ]
-                , search = Just $ SearchConfig{serverSide = True, viaQueryParam = Just currentURL}
+                , search = Just (ServerSide currentURL)
                 , sort =
                     Just
                       $ SortConfig
@@ -245,7 +239,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                             , ("Alphabetical", "Sort by endpoint path", "name")
                             ]
                         }
-                , pagination = Just $ PaginationConfig{nextUrl = nextFetchUrl, trigger = Both}
+                , pagination = (\url -> (url, "both")) <$> nextFetchUrl
                 , zeroState =
                     Just
                       $ ZeroState
@@ -279,13 +273,6 @@ endpointColumns pid =
   ]
 
 
-instance ToHtml EnpReqStatsVM where
-  {-# INLINE toHtml #-}
-  toHtml vm@(EnpReqStatsVM _ _ enp) =
-    div_ [class_ "flex py-4 gap-8 items-center endpoint_item itemsListItem"] do
-      forM_ (endpointColumns enp.projectId) \c ->
-        div_ c.attrs $ toHtmlRaw $ c.render vm
-  toHtmlRaw = toHtml
 
 
 renderEndpointCheckboxCol :: EnpReqStatsVM -> Html ()

@@ -15,6 +15,7 @@ module Pages.Anomalies (
   anomalyArchiveButton,
   AnomalyAction (..),
   IssueVM (..),
+  issueColumns,
 )
 where
 
@@ -44,7 +45,7 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users (User (id))
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), LoadTrigger (..), PaginationConfig (..), SearchConfig (..), SortConfig (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
+import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), SearchMode (..), SortConfig (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
@@ -197,7 +198,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
                     [ BulkAction{icon = Just "check", title = "acknowledge", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowledge"}
                     , BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
                     ]
-                , search = Just $ SearchConfig{serverSide = False, viaQueryParam = Nothing}
+                , search = Just ClientSide
                 , sort =
                     Just
                       $ SortConfig
@@ -209,7 +210,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
                             , ("Events", "Number of events", "events")
                             ]
                         }
-                , pagination = Just $ PaginationConfig{nextUrl = nextFetchUrl, trigger = Both}
+                , pagination = (\url -> (url, "both")) <$> nextFetchUrl
                 , zeroState =
                     Just
                       $ ZeroState
@@ -306,7 +307,17 @@ anomalyListSlider currTime _ _ (Just issues) = do
       [ class_ "parent-slider"
       , [__|init setAnomalySliderPag() then show #{$anomalyIds[$currentAnomaly]} |]
       ]
-      $ mapM_ toHtml issues
+      $ V.mapM_ renderIssueForSlider issues
+  where
+    renderIssueForSlider vm@(IssueVM hideByDefault _ _ _ issue) =
+      div_
+        [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "card-round" else "px-0.5 py-4"
+        , style_ (if hideByDefault then "display:none" else "")
+        , id_ $ Issues.issueIdText issue.id
+        ]
+        do
+          forM_ (issueColumns issue.projectId) \c ->
+            div_ c.attrs $ c.render vm
 
 
 -- anomalyAccentColor isAcknowleged isArchived
@@ -329,17 +340,6 @@ issueColumns pid =
   ]
 
 
-instance ToHtml IssueVM where
-  {-# INLINE toHtml #-}
-  toHtml vm@(IssueVM hideByDefault _ _ _ issue) =
-    div_
-      [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "card-round" else "px-0.5 py-4"
-      , style_ (if hideByDefault then "display:none" else "")
-      ]
-      do
-        forM_ (issueColumns issue.projectId) \c ->
-          div_ c.attrs $ toHtmlRaw $ c.render vm
-  toHtmlRaw = toHtml
 
 
 renderIssueCheckboxCol :: IssueVM -> Html ()
