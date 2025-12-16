@@ -102,12 +102,14 @@ unifiedMonitorsGetH pid filterTM sinceM = do
   let monitorsTable =
         Table
           { config = def{elemID = "monitorsListForm"}
-          , columns = [col "" (renderMonitorCard pid) & withAttrs [class_ "w-full"]]
+          , columns =
+              [ col "" renderMonitorIcon & withAttrs [class_ "shrink-0"]
+              , col "" (renderMonitorContent pid) & withAttrs [class_ "w-full"]
+              ]
           , rows = allItems
           , features =
               def
-                { rowId = Just \item -> item.monitorId
-                , search = Just $ SearchConfig{serverSide = False, viaQueryParam = Nothing}
+                { search = Just $ SearchConfig{serverSide = False, viaQueryParam = Nothing}
                 , zeroState =
                     Just
                       $ ZeroState
@@ -183,22 +185,18 @@ toUnifiedMonitorItem pid currTime = alertToUnifiedItem pid
             }
 
 
-instance ToHtml UnifiedMonitorItem where
-  toHtml item = toHtmlRaw item
-  toHtmlRaw item =
-    div_ [class_ "border-b flex p-4 gap-4 itemsListItem hover:bg-fillWeak transition-colors group/card"]
-      $ toHtmlRaw
-      $ renderMonitorCard undefined item
-
-
--- | Render monitor card content for use in Table columns
-renderMonitorCard :: Projects.ProjectId -> UnifiedMonitorItem -> Html ()
-renderMonitorCard _ item = do
-  -- Monitor type indicator
+-- | Render monitor icon column
+renderMonitorIcon :: UnifiedMonitorItem -> Html ()
+renderMonitorIcon item = do
   div_ [class_ "mt-2 shrink-0"] do
     div_ [class_ $ "w-10 h-10 rounded-lg flex items-center justify-center " <> typeColorClass] do
       faSprite_ typeIcon "regular" "h-5 w-5"
+  where
+    (typeIcon, _, typeColorClass) = ("bell", "Alert", "bg-fillWarning-weak text-iconWarning")
 
+-- | Render monitor content column
+renderMonitorContent :: Projects.ProjectId -> UnifiedMonitorItem -> Html ()
+renderMonitorContent _ item = do
   div_ [class_ "w-full flex flex-col gap-2 shrink-1"] do
     -- Title and tags row
     div_ [class_ "flex gap-10 items-center"] do
@@ -265,7 +263,7 @@ renderMonitorCard _ item = do
             do
               faSprite_ (if item.status `elem` ["Active", "Passing"] then "pause" else "play") "regular" "h-5 w-5"
   where
-    (typeIcon, typeLabel, typeColorClass) = ("bell", "Alert", "bg-fillWarning-weak text-iconWarning")
+    (_, typeLabel, _) = ("bell", "Alert", "bg-fillWarning-weak text-iconWarning")
 
     -- Use unified overview route for both types
     detailsUrl = "/p/" <> item.projectId <> "/monitors/" <> item.monitorId <> "/overview"
@@ -282,6 +280,14 @@ renderMonitorCard _ item = do
           <> visualizationType
 
     toggleUrl = "/p/" <> item.projectId <> "/monitors/alerts/" <> item.monitorId <> "/toggle_active"
+
+
+instance ToHtml UnifiedMonitorItem where
+  toHtml item = toHtmlRaw item
+  toHtmlRaw item =
+    div_ [class_ "border-b flex p-4 gap-4 itemsListItem hover:bg-fillWeak transition-colors group/card"] do
+      toHtmlRaw $ renderMonitorIcon item
+      toHtmlRaw $ renderMonitorContent undefined item
 
 
 -- | Shared status badge component used across monitors

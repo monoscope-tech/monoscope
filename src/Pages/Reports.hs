@@ -180,7 +180,9 @@ reportsGetH pid page hxRequest hxBoosted = do
 
   reports <- dbtToEff $ Reports.reportHistoryByProject pid pg
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
-  let nextUrl = "/p/" <> pid.toText <> "/reports?page=" <> show (pg + 1)
+  let nextUrl = if V.length reports < 20
+        then Nothing
+        else Just $ "/p/" <> pid.toText <> "/reports?page=" <> show (pg + 1)
   case (hxRequest, hxBoosted) of
     (Just "true", Nothing) -> addRespHeaders $ ReportsGetList pid reports nextUrl
     _ -> do
@@ -196,8 +198,8 @@ reportsGetH pid page hxRequest hxBoosted = do
 
 
 data ReportsGet
-  = ReportsGetMain (PageCtx (Projects.ProjectId, V.Vector Reports.ReportListItem, Text, Bool, Bool))
-  | ReportsGetList Projects.ProjectId (V.Vector Reports.ReportListItem) Text
+  = ReportsGetMain (PageCtx (Projects.ProjectId, V.Vector Reports.ReportListItem, Maybe Text, Bool, Bool))
+  | ReportsGetList Projects.ProjectId (V.Vector Reports.ReportListItem) (Maybe Text)
   | ReportsGetSingle (PageCtx (Projects.ProjectId, Maybe Reports.Report))
   | ReportsGetSingle' (Projects.ProjectId, Maybe Reports.Report)
 
@@ -314,7 +316,7 @@ singleReportPage pid report =
         h3_ [] "Report Not Found"
 
 
-reportsPage :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Text -> Bool -> Bool -> Html ()
+reportsPage :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Maybe Text -> Bool -> Bool -> Html ()
 reportsPage pid reports nextUrl daily weekly =
   div_ [class_ "flex flex-row h-full w-full border-t"] do
     when (V.null reports) do
@@ -344,7 +346,7 @@ reportsPage pid reports nextUrl daily weekly =
 
 -- div_ [class_ "w-5 bg-gray-200"] ""
 
-reportListItems :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Text -> Html ()
+reportListItems :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Maybe Text -> Html ()
 reportListItems pid reports nextUrl =
   div_ [class_ "space-y-4 w-full"] do
     forM_ reports $ \report -> do
@@ -365,8 +367,8 @@ reportListItems pid reports nextUrl =
                 h4_ [class_ "font-medium text-sm flex items-center gap-2"] do
                   faSprite_ "calendar" "regular" "w-4 h-4"
                   toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
-    unless (length reports < 20) $ do
-      a_ [class_ "w-full cursor-pointer block p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center mb-4", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextUrl] "LOAD MORE"
+    whenJust nextUrl \url ->
+      a_ [class_ "w-full cursor-pointer block p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center mb-4", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] "LOAD MORE"
 
 
 renderEndpointRow :: PerformanceReport -> Html ()

@@ -295,7 +295,7 @@ renderRows tbl =
 {-# INLINE renderListRow #-}
 renderListRow :: Table a -> a -> Html ()
 renderListRow tbl row =
-  div_ (rowAttrs <> [class_ "flex gap-8 items-start itemsListItem"]) do
+  div_ (rowAttrs <> [class_ "flex gap-8 items-start itemsListItem py-3"]) do
     forM_ tbl.columns \col -> div_ col.attrs $ col.render row
   where
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
@@ -424,7 +424,7 @@ renderSortMenu sortCfg = do
 renderPaginationLink :: Text -> LoadTrigger -> Html ()
 renderPaginationLink url trigger =
   a_
-    [ class_ "cursor-pointer flex justify-center items-center p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center"
+    [ class_ "cursor-pointer flex justify-center items-center p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center min-h-[2.5rem]"
     , hxTrigger_ $ case trigger of
         OnClick -> "click"
         OnIntersect -> "intersect once"
@@ -434,8 +434,8 @@ renderPaginationLink url trigger =
     , hxIndicator_ "#rowsIndicator"
     ]
     do
-      "Load more"
-      span_ [id_ "rowsIndicator", class_ "ml-2 htmx-indicator loading loading-dots loading-md"] ""
+      span_ [class_ "inline-block"] "Load more"
+      span_ [id_ "rowsIndicator", class_ "ml-2 htmx-indicator loading loading-dots loading-md inline-block"] ""
 
 
 renderPagination :: PaginationConfig -> Html ()

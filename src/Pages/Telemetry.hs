@@ -60,8 +60,8 @@ data MetricTree = MetricTree
 
 data MetricsOverViewGet
   = MetricsOVDataPointMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricDataPoint))
-  | MetricsOVChartsMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, V.Vector Text, Text, Text, Text))
-  | MetricsOVChartsPaginated (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, Text, Text)
+  | MetricsOVChartsMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, V.Vector Text, Text, Text, Maybe Text))
+  | MetricsOVChartsPaginated (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, Text, Maybe Text)
 
 
 instance ToHtml MetricsOverViewGet where
@@ -155,7 +155,9 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
           sinceQ = maybe "" ("&since=" <>) sinceM
           prfixQ = maybe "" ("&prefix=" <>) prefixM
           cursorQ = "&cursor=" <> show (cursor + 20)
-      let nextFetchUrl = "/p/" <> pid.toText <> "/metrics?tab=charts" <> sourceQ <> fromQ <> toQ <> sinceQ <> prfixQ <> cursorQ
+          nextFetchUrl = if V.length metricList < 20
+            then Nothing
+            else Just $ "/p/" <> pid.toText <> "/metrics?tab=charts" <> sourceQ <> fromQ <> toQ <> sinceQ <> prfixQ <> cursorQ
       serviceNames <- Telemetry.getMetricServiceNames pid
       if cursor == 0
         then do
@@ -233,7 +235,7 @@ overViewTabs pid tab = do
       a_ [onclick_ "window.setQueryParamAndReload('tab', 'datapoints')", role_ "tab", class_ $ "tab py-1.5 h-auto!  " <> if tab == "datapoints" then "tab-active" else ""] "Datapoints"
 
 
-chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> V.Vector Text -> Text -> Text -> Text -> Html ()
+chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> V.Vector Text -> Text -> Text -> Maybe Text -> Html ()
 chartsPage pid metricList sources source mFilter nextUrl = do
   div_ [class_ "flex flex-col gap-6 px-6 h-[calc(100%-60px)] overflow-y-scroll"] $ do
     overViewTabs pid "charts"
@@ -279,7 +281,7 @@ chartsPage pid metricList sources source mFilter nextUrl = do
           $ chartList pid source metricList nextUrl
 
 
-chartList :: Projects.ProjectId -> Text -> V.Vector Telemetry.MetricChartListData -> Text -> Html ()
+chartList :: Projects.ProjectId -> Text -> V.Vector Telemetry.MetricChartListData -> Maybe Text -> Html ()
 chartList pid source metricList nextUrl = do
   forM_ metricList $ \metric -> do
     div_ [class_ "w-full flex flex-col gap-2 metric_filterble"] do
@@ -305,8 +307,8 @@ chartList pid source metricList nextUrl = do
           , Widget._projectId = Just pid
           , Widget.expandBtnFn = Just expandBtn
           }
-  when (length metricList > 19)
-    $ a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ nextUrl] pass
+  whenJust nextUrl \url ->
+    a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ url] pass
 
 
 dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Html ()

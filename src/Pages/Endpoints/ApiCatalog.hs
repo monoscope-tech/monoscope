@@ -38,7 +38,9 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
   currTime <- Time.currentTime
 
   let currentURL = "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=" <> requestType
-      nextFetchUrl = Just $ currentURL <> "&skip=" <> maybe "20" (\x -> show $ 20 + x) skipM
+      nextFetchUrl = if V.length hostsAndEvents < 20
+        then Nothing
+        else Just $ currentURL <> "&skip=" <> maybe "20" (\x -> show $ 20 + x) skipM
   let hostsVM = V.map (\host -> HostEventsVM pid host filterV requestType) hostsAndEvents
   let catalogTable =
         Table
@@ -213,9 +215,11 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                   }
           }
 
-  let nextFetchUrl = currentURL <> "&page=" <> show (page + 1) <> "&load_more=true"
   currTime <- Time.currentTime
   let endpReqVM = V.map (EnpReqStatsVM False currTime) endpointStats
+      nextFetchUrl = if V.length endpointStats < 30
+        then Nothing
+        else Just $ currentURL <> "&page=" <> show (page + 1) <> "&load_more=true"
   let endpointsTable =
         Table
           { config = def{elemID = "anomalyListForm"}
@@ -239,7 +243,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                             , ("Alphabetical", "Sort by endpoint path", "name")
                             ]
                         }
-                , pagination = Just $ PaginationConfig{nextUrl = Just nextFetchUrl, trigger = Both}
+                , pagination = Just $ PaginationConfig{nextUrl = nextFetchUrl, trigger = Both}
                 , zeroState =
                     Just
                       $ ZeroState
@@ -249,14 +253,14 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                         , actionText = "Read the setup guide"
                         , destination = Right "https://monoscope.tech/docs/sdks/"
                         }
-                , header = Just case hostM of
+                , header = Just $ div_ [class_ "mb-4"] $ case hostM of
                     Just h -> span_ [] "Endpoints for dependency: " >> span_ [class_ "text-textBrand font-bold"] (toHtml h)
                     Nothing -> "Endpoints"
                 }
           }
   case (loadMoreM, searchM) of
-    (Just _, _) -> addRespHeaders $ EndpointsListRows $ TableRows (Just nextFetchUrl) (endpointColumns pid) endpReqVM
-    (_, Just _) -> addRespHeaders $ EndpointsListRows $ TableRows (Just nextFetchUrl) (endpointColumns pid) endpReqVM
+    (Just _, _) -> addRespHeaders $ EndpointsListRows $ TableRows nextFetchUrl (endpointColumns pid) endpReqVM
+    (_, Just _) -> addRespHeaders $ EndpointsListRows $ TableRows nextFetchUrl (endpointColumns pid) endpReqVM
     _ -> addRespHeaders $ EndpointsListPage $ PageCtx bwconf endpointsTable
 
 
