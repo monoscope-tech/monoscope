@@ -23,4 +23,8 @@ ALTER TABLE monitors.query_monitors ADD COLUMN IF NOT EXISTS teams UUID[] DEFAUL
 
 ALTER TABLE projects.dashboards ADD COLUMN IF NOT EXISTS teams UUID[] DEFAULT '{}';
 
+CREATE INDEX idx_teams_project_id ON projects.teams(project_id) WHERE deleted_at IS NULL;
+CREATE INDEX idx_teams_handle ON projects.teams(project_id, handle) WHERE deleted_at IS NULL;
+CREATE INDEX idx_teams_members_gin ON projects.teams USING GIN(members);
+
 COMMIT;

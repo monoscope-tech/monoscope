@@ -349,12 +349,12 @@ runHourlyJob scheduledTime hour = do
   activeProjects <-
     dbtToEff
       $ V.map (\(Only pid) -> pid)
-      <$> query
-        [sql| SELECT DISTINCT project_id
+        <$> query
+          [sql| SELECT DISTINCT project_id
               FROM otel_logs_and_spans ols
               WHERE ols.timestamp >= ?
                 AND ols.timestamp <= ? |]
-        (oneHourAgo, scheduledTime)
+          (oneHourAgo, scheduledTime)
 
   -- Log count of projects to process
   Log.logInfo "Projects with new data in the last hour window" ("count", AE.toJSON $ length activeProjects)
@@ -632,7 +632,7 @@ processProjectErrors pid errors = do
     -- Process a single error - the error already has requestMethod and requestPath
     -- set by getAllATErrors if it was extracted from span context
     processError :: RequestDumps.ATError -> (RequestDumps.ATError, Query, [DBField])
-    processError err = RequestMessages.processErrors pid Nothing Nothing Nothing err
+    processError = RequestMessages.processErrors pid Nothing Nothing Nothing
 
 
 -- | Deduplicate a vector of items by their hash field using HashMap for O(n) performance
@@ -665,7 +665,7 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
   !spanIds <- V.replicateM (V.length spans) UUID.genUUID
 
   -- Process each span to extract entities (pure computation)
-  let !results = V.zipWith (\spn spanId -> processSpanToEntities projectCacheVal spn spanId) spans spanIds
+  let !results = V.zipWith (processSpanToEntities projectCacheVal) spans spanIds
 
   -- Unzip and deduplicate extracted entities using HashMap for O(n) performance
   let !(endpoints, shapes, fields, formats, spanUpdates) = V.unzip5 results
@@ -771,39 +771,37 @@ handleQueryMonitorThreshold monitorE isAlert = do
   Log.logTrace "Query Monitors Triggered " monitorE
   _ <- dbtToEff $ Monitors.updateQMonitorTriggeredState monitorE.id isAlert
   project <- dbtToEff $ Projects.projectById monitorE.projectId
-  case project of
-    Nothing -> Log.logAttention "Project not found for Query Monitor Alert" ("project_id", monitorE.projectId.toText)
-    Just p -> do
-      teams <- dbtToEff $ ProjectMembers.getTeamsById monitorE.projectId monitorE.teams
-      let thresholdType = if monitorE.triggerLessThan then "below" else "above"
-          threshold = fromIntegral monitorE.alertThreshold
+  whenJustM (dbtToEff $ Projects.projectById monitorE.projectId) \p -> do
+    teams <- dbtToEff $ ProjectMembers.getTeamsById monitorE.projectId monitorE.teams
+    let thresholdType = if monitorE.triggerLessThan then "below" else "above"
+        threshold = fromIntegral monitorE.alertThreshold
 
-      issue <-
-        liftIO
-          $ Issues.createQueryAlertIssue
-            monitorE.projectId
-            (show monitorE.id)
-            monitorE.alertConfig.title
-            monitorE.logQuery
-            threshold
-            (fromIntegral monitorE.evalResult :: Double)
-            thresholdType
+    issue <-
+      liftIO
+        $ Issues.createQueryAlertIssue
+          monitorE.projectId
+          (show monitorE.id)
+          monitorE.alertConfig.title
+          monitorE.logQuery
+          threshold
+          (fromIntegral monitorE.evalResult :: Double)
+          thresholdType
 
-      dbtToEff $ Issues.insertIssue issue
+    dbtToEff $ Issues.insertIssue issue
 
-      let alert = MonitorsAlert{monitorTitle = monitorE.alertConfig.title, monitorUrl = ""}
-      if null teams
-        then do
-          Relude.when monitorE.alertConfig.emailAll do
-            users <- dbtToEff $ Projects.usersByProjectId monitorE.projectId
-            forM_ users \u -> emailQueryMonitorAlert monitorE u.email (Just u)
-          forM_ monitorE.alertConfig.emails \email -> emailQueryMonitorAlert monitorE email Nothing
-          unless (null monitorE.alertConfig.slackChannels) $ sendSlackMessage monitorE.projectId [fmtTrim| 🤖 *Log Alert triggered for `{monitorE.alertConfig.title}`*|]
-        else do
-          forM_ teams \team -> do
-            forM_ team.notify_emails \email -> emailQueryMonitorAlert monitorE (CI.mk email) Nothing
-            forM_ team.slack_channels \channel -> sendSlackAlert alert monitorE.projectId p.title
-            forM_ team.discord_channels \channel -> sendDiscordAlert alert monitorE.projectId p.title
+    let alert = MonitorsAlert{monitorTitle = monitorE.alertConfig.title, monitorUrl = ""}
+    if null teams
+      then do
+        Relude.when monitorE.alertConfig.emailAll do
+          users <- dbtToEff $ Projects.usersByProjectId monitorE.projectId
+          forM_ users \u -> emailQueryMonitorAlert monitorE u.email (Just u)
+        forM_ monitorE.alertConfig.emails \email -> emailQueryMonitorAlert monitorE email Nothing
+        unless (null monitorE.alertConfig.slackChannels) $ sendSlackMessage monitorE.projectId [fmtTrim| 🤖 *Log Alert triggered for `{monitorE.alertConfig.title}`*|]
+      else do
+        forM_ teams \team -> do
+          forM_ team.notify_emails \email -> emailQueryMonitorAlert monitorE (CI.mk email) Nothing
+          forM_ team.slack_channels (sendSlackAlert alert monitorE.projectId p.title . Just)
+          forM_ team.discord_channels (sendDiscordAlert alert monitorE.projectId p.title . Just)
 
 
 -- Send notifications
@@ -829,16 +827,16 @@ getSpanTypeStats :: V.Vector (Text, Int, Int) -> V.Vector (Text, Int, Int) -> V.
 getSpanTypeStats current prev =
   let
     spanTypes =
-      nub $ V.toList (V.map (\(t, _, _) -> t) current <> V.map (\(t, _, _) -> t) prev)
+      ordNub $ V.toList (V.map (\(t, _, _) -> t) current <> V.map (\(t, _, _) -> t) prev)
     getStats t =
       let
-        evtCount = fromMaybe 0 $ V.find (\(st, _, _) -> st == t) current <&> (\(_, c, _) -> c)
-        prevEvtCount = fromMaybe 0 $ V.find (\(st, _, _) -> st == t) prev <&> (\(_, c, _) -> c)
+        evtCount = maybe 0 (\(_, c, _) -> c) (V.find (\(st, _, _) -> st == t) current)
+        prevEvtCount = maybe 0 (\(_, c, _) -> c) (V.find (\(st, _, _) -> st == t) prev)
         evtChange' = if prevEvtCount == 0 then 0.00 :: Double else fromIntegral (evtCount - prevEvtCount) / fromIntegral prevEvtCount * 100
         evtChange = fromIntegral (round (evtChange' * 100)) / 100
         -- average duration
-        avgDuration = fromMaybe 0 $ V.find (\(st, _, _) -> st == t) current <&> (\(_, _, d) -> d)
-        prevAvgDuration = fromMaybe 0 $ V.find (\(st, _, _) -> st == t) prev <&> (\(_, _, d) -> d)
+        avgDuration = maybe 0 (\(_, _, d) -> d) (V.find (\(st, _, _) -> st == t) current)
+        prevAvgDuration = maybe 0 (\(_, _, d) -> d) (V.find (\(st, _, _) -> st == t) prev)
         durationChange' = if prevAvgDuration == 0 then 0.00 :: Double else fromIntegral (avgDuration - prevAvgDuration) / fromIntegral prevAvgDuration * 100
         durationChange = fromIntegral (round (durationChange' * 100)) / 100
        in
@@ -914,7 +912,7 @@ sendReportForProject pid rType = do
     let parseQ q =
           let qAST = Unsafe.fromRight [] (parseQueryToAST q)
               sqlQueryComponents =
-                (defSqlQueryCfg (pid) currentTime (parseMaybe pSource =<< Nothing) Nothing)
+                (defSqlQueryCfg pid currentTime Nothing Nothing)
                   { dateRange = (Just startTime, Just currentTime)
                   }
               (_, qc) = queryASTToComponents sqlQueryComponents qAST
@@ -923,7 +921,7 @@ sendReportForProject pid rType = do
     chartDataEvents <- liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "| summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx
     chartDataErrors <- liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx
 
-    anomalies <- dbtToEff $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just $ (startTime, currentTime))
+    anomalies <- dbtToEff $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime))
 
     let anomalies' = (\x -> (x.id, x.title, x.critical, x.severity, x.issueType)) <$> anomalies
 
@@ -955,15 +953,15 @@ sendReportForProject pid rType = do
           currentTimeTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" currentTime
           reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
           chartShotUrl = ctx.env.chartShotUrl <> "?t=bar&p=" <> pid.toText <> "&from=" <> stmTxt <> "&to=" <> currentTimeTxt
-          allQ = chartShotUrl <> "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 "summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
-          errQ = chartShotUrl <> "&theme=roma" <> "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 "status_code == \"ERROR\" | summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
+          allQ = chartShotUrl <> "&q=" <> decodeUtf8 (urlEncode True (encodeUtf8 "summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
+          errQ = chartShotUrl <> "&theme=roma" <> "&q=" <> decodeUtf8 (urlEncode True (encodeUtf8 "status_code == \"ERROR\" | summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
           alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents stats reportUrl allQ errQ
 
       Relude.when pr.weeklyNotif $ forM_ pr.notificationsChannel \case
         Projects.NDiscord -> do
-          sendDiscordAlert alert pid pr.title
+          sendDiscordAlert alert pid pr.title Nothing
         Projects.NSlack -> do
-          sendSlackAlert alert pid pr.title
+          sendSlackAlert alert pid pr.title Nothing
         Projects.NPhone -> do
           sendWhatsAppAlert alert pid pr.title pr.whatsappNumbers
         _ -> do
@@ -975,14 +973,14 @@ sendReportForProject pid rType = do
                   userEmail = CI.original user.email
                   anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies'
                   perf_count = V.length endpointPerformance
-                  perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else ((\(u, m, p, d, dc, req, cc) -> AE.object ["host" AE..= u, "urlPath" AE..= p, "method" AE..= m, "averageLatency" AE..= d, "latencyChange" AE..= dc]) <$> V.take 10 endpointPerformance)
+                  perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else (\(u, m, p, d, dc, req, cc) -> AE.object ["host" AE..= u, "urlPath" AE..= p, "method" AE..= m, "averageLatency" AE..= d, "latencyChange" AE..= dc]) <$> V.take 10 endpointPerformance
                   rp_url = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
                   dayEnd = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone currentTime))
                   sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentTime
                   sevenDaysAgoZonedTime = utcToZonedTime timeZone sevenDaysAgoUTCTime
                   dayStart = show $ localDay (zonedTimeToLocalTime sevenDaysAgoZonedTime)
                   freeTierLimitExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
-                  slowQueriesCount = V.length $ slowDbQueries
+                  slowQueriesCount = V.length slowDbQueries
                   slowQueriesList = if slowQueriesCount == 0 then [AE.object ["message" AE..= "No slow queries detected."]] else (\(x, y, z) -> AE.object ["statement" AE..= x, "latency" AE..= z, "total" AE..= y]) <$> slowDbQueries
                   totalAnomalies = length anomalies'
                   (errTotal, apiTotal, qTotal) = foldl (\(e, a, m) (_, _, _, _, t) -> (e + if t == Issues.RuntimeException then 1 else 0, a + if t == Issues.APIChange then 1 else 0, m + if t == Issues.QueryAlert then 1 else 0)) (0, 0, 0) anomalies'
@@ -1071,12 +1069,12 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
         pass
 
       -- Send notifications
-      Relude.when (project.errorAlerts) do
+      Relude.when project.errorAlerts do
         forM_ project.notificationsChannel \case
           Projects.NSlack ->
-            forM_ errors \err -> do sendSlackAlert (RuntimeErrorAlert err.errorData) pid project.title
+            forM_ errors \err -> do sendSlackAlert (RuntimeErrorAlert err.errorData) pid project.title Nothing
           Projects.NDiscord ->
-            forM_ errors \err -> do sendDiscordAlert (RuntimeErrorAlert err.errorData) pid project.title
+            forM_ errors \err -> do sendDiscordAlert (RuntimeErrorAlert err.errorData) pid project.title Nothing
           Projects.NPhone ->
             forM_ errors \err -> do
               sendWhatsAppAlert (RuntimeErrorAlert err.errorData) pid project.title project.whatsappNumbers
@@ -1177,8 +1175,8 @@ processAPIChangeAnomalies pid targetHashes = do
       let alert = EndpointAlert project.title (V.fromList endpointInfo) (fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes)
 
       forM_ project.notificationsChannel \case
-        Projects.NSlack -> sendSlackAlert alert pid project.title
-        Projects.NDiscord -> sendDiscordAlert alert pid project.title
+        Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
+        Projects.NDiscord -> sendDiscordAlert alert pid project.title Nothing
         Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
         Projects.NEmail -> do
           forM_ users \u -> do

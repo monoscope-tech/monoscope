@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, SlackChannelsResponse (..), SlackChannel (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction) where
+module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction) where
 
 import BackgroundJobs qualified as BgJobs
 import Control.Lens ((.~), (^.))
@@ -39,7 +39,7 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
-import Pages.Bots.Utils (BotResponse (..), BotType (..), contentTypeHeader, handleTableResponse)
+import Pages.Bots.Utils (BotResponse (..), BotType (..), Channel, contentTypeHeader, handleTableResponse)
 import Pkg.AI (callOpenAIAPI, systemPrompt)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..))
@@ -525,17 +525,17 @@ instance AE.FromJSON SlackEventPayload where
       "event_callback" ->
         EventCallback
           <$> v
-          AE..: "token"
+            AE..: "token"
           <*> v
-          AE..: "team_id"
+            AE..: "team_id"
           <*> v
-          AE..: "api_app_id"
+            AE..: "api_app_id"
           <*> v
-          AE..: "event"
+            AE..: "event"
           <*> v
-          AE..: "event_id"
+            AE..: "event_id"
           <*> v
-          AE..: "event_time"
+            AE..: "event_time"
       other -> fail $ "Unsupported Slack event type: " ++ show other
 
 
@@ -636,24 +636,9 @@ data SlackThreadedMessage = SlackThreadedMessage
   deriving (Generic, Show)
 
 
--- | Channel representation (you can extend this)
-data SlackChannel = SlackChannel
-  { channelId :: Text
-  , channelName :: Text
-  }
-  deriving (Show)
-
-
-instance AE.FromJSON SlackChannel where
-  parseJSON = withObject "SlackChannel" $ \o -> do
-    cid <- o AE..: "id"
-    name <- o AE..: "name"
-    pure $ SlackChannel cid name
-
-
 data SlackChannelsResponse = SlackChannelsResponse
   { ok :: Bool
-  , channels :: [SlackChannel]
+  , channels :: [Channel]
   }
   deriving (Generic, Show)
   deriving anyclass (AE.FromJSON)
@@ -710,7 +695,7 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-        <> [msgJson]
-        <> ["\n\nUser query: " <> question]
+          <> [msgJson]
+          <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt

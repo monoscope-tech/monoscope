@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports #-}
 
-module Pages.Bots.Discord (linkDiscordGetH, discordInteractionsH, getDiscordChannels, DiscordChannel (..), DiscordInteraction) where
+module Pages.Bots.Discord (linkDiscordGetH, discordInteractionsH, getDiscordChannels, DiscordInteraction) where
 
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
@@ -35,7 +35,7 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Pages.Bots.Utils (BotResponse (..), BotType (..), authHeader, chartImageUrl, contentTypeHeader, handleTableResponse)
+import Pages.Bots.Utils (BotResponse (..), BotType (..), Channel, authHeader, chartImageUrl, contentTypeHeader, handleTableResponse)
 import Pkg.AI (callOpenAIAPI, systemPrompt)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
@@ -117,7 +117,7 @@ data DiscordInteraction = Interaction
   , data_i :: Maybe InteractionData
   , channel_id :: Maybe Text
   , guild_id :: Maybe Text
-  , channel :: Maybe Channel
+  , channel :: Maybe Channel'
   }
   deriving (Generic, Show)
 
@@ -135,7 +135,7 @@ data ThreadMetadata = ThreadMetadata
 instance AE.FromJSON ThreadMetadata
 
 
-data Channel = Channel
+data Channel' = Channel'
   { id :: Text
   , name :: Text
   , guild_id :: Maybe Text
@@ -147,7 +147,7 @@ data Channel = Channel
   deriving (Generic, Show)
 
 
-instance AE.FromJSON Channel where
+instance AE.FromJSON Channel' where
   parseJSON = AE.genericParseJSON AE.defaultOptions{AE.fieldLabelModifier = \f -> if f == "type_" then "type" else f}
 
 
@@ -176,17 +176,17 @@ instance AE.FromJSON InteractionData where
       Just 3 ->
         MessageComponentData
           <$> v
-          AE..: "component_type"
+            AE..: "component_type"
           <*> v
-          AE..: "custom_id"
+            AE..: "custom_id"
           <*> v
-          AE..: "values"
+            AE..: "values"
       _ ->
         CommandData
           <$> v
-          AE..: "name"
+            AE..: "name"
           <*> v
-          AE..:? "options"
+            AE..:? "options"
 
 
 data InteractionOption = InteractionOption
@@ -197,34 +197,13 @@ data InteractionOption = InteractionOption
   deriving anyclass (AE.FromJSON)
 
 
-data DiscordChannel = DiscordChannel
-  { channelId :: Text
-  , channelName :: Text
-  , channelType :: Int
-  }
-  deriving (Show)
-
-
-instance AE.FromJSON DiscordChannel where
-  parseJSON = AE.withObject "DiscordChannel" $ \o ->
-    DiscordChannel
-      <$> o
-      AE..: "id"
-      <*> o
-      AE..: "name"
-      <*> o
-      AE..: "type"
-
-
-getDiscordChannels :: HTTP :> es => Text -> Text -> Eff es [DiscordChannel]
+getDiscordChannels :: HTTP :> es => Text -> Text -> Eff es [Channel]
 getDiscordChannels token guildId = do
-  let url = "https://discord.com/api/v10/guilds/" <> T.unpack guildId <> "/channels"
+  let url = "https://discord.com/api/v10/guilds/" <> toString guildId <> "/channels"
       opts = defaults & header "Authorization" .~ ["Bot " <> encodeUtf8 token]
   r <- getWith opts url
   let body = r ^. responseBody
-  case AE.eitherDecode body of
-    Left err -> return []
-    Right chs -> return chs
+  pure $ fromRight [] $ AE.eitherDecode body
 
 
 discordInteractionsH :: BS.ByteString -> Maybe BS.ByteString -> Maybe BS.ByteString -> ATBaseCtx AE.Value
@@ -408,8 +387,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-        <> [msgJson]
-        <> ["\n\nUser query: " <> question]
+          <> [msgJson]
+          <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
@@ -458,7 +437,7 @@ getThreadStarterMessage :: HTTP :> es => DiscordInteraction -> Text -> Eff es (M
 getThreadStarterMessage interaction botToken = do
   case interaction.channel_id of
     Just channelId -> case interaction.channel of
-      Just Channel{type_ = 11, parent_id = Just pId} -> do
+      Just Channel'{type_ = 11, parent_id = Just pId} -> do
         let baseUrl = "https://discord.com/api/v10/channels/"
             url = toString $ baseUrl <> channelId <> "/messages?limit=50"
             starterMessageUrl = toString $ baseUrl <> pId <> "/messages/" <> channelId

@@ -1,4 +1,4 @@
-module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), chartImageUrl, authHeader, contentTypeHeader) where
+module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), chartImageUrl, authHeader, contentTypeHeader) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -8,6 +8,7 @@ import Data.Text qualified as T
 import Data.Time qualified as Time
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
+import Deriving.Aeson qualified as DAE
 import Lucid
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
@@ -188,5 +189,15 @@ installedSuccess botPlatform = do
                     div_ [class_ "flex items-center space-x-2 mb-3"] do
                       span_ [class_ "font-mono bg-fillSuccess-weak text-textSuccess px-3 py-1 rounded-lg font-semibold"] "/here"
                       span_ [class_ "bg-fillSuccess-strong text-white text-xs px-2 py-1 rounded-full"] "Alerts"
-                    p_ [class_ "text-textStrong text-sm"]
-                      $ "Set up this channel to receive automated error reports, weekly summaries, and daily performance alerts."
+                    p_ [class_ "text-textStrong text-sm"] "Set up this channel to receive automated error reports, weekly summaries, and daily performance alerts."
+
+
+data Channel = Channel
+  { channelName :: Text
+  , channelId :: Text
+  , channelType :: Maybe Int
+  }
+  deriving (Generic, Show)
+  deriving
+    (AE.FromJSON, AE.ToJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "channel", DAE.CamelToSnake]] Channel
