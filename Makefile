@@ -105,7 +105,7 @@ timescaledb-docker-tmp:
 		    -c max_connections=200"
 
 update-service-worker:
-	npx workbox generateSW workbox-config.js
+	npx workbox generateSW config/workbox-config.js
 
 show-os-arch:
 	@echo "OS and Architecture: $(OS_ARCH)"

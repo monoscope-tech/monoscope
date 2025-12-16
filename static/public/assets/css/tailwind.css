@@ -7,7 +7,7 @@
 
 @layer base, utilities, custom;
 
-@config '../../../../tailwind.config.js';
+@config '../../../../config/tailwind.config.js';
 @plugin "@tailwindcss/typography";
 @plugin "daisyui" {
   themes:

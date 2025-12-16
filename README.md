@@ -267,7 +267,7 @@ Real-time metrics and performance monitoring with AI-powered insights.
 - [Getting Started Guide](docs/getting-started.md)
 - [Configuration](docs/configuration.md)
 - [Kubernetes Guide](docs/kubernetes.md)
-- [Development Guide](DEVELOPMENT.md)
+- [Development Guide](docs/DEVELOPMENT.md)
 
 <br/>
 
