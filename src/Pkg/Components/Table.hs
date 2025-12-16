@@ -178,10 +178,8 @@ renderTableRows :: Maybe Text -> [Column a] -> V.Vector a -> Html ()
 renderTableRows nextUrl columns rows = do
   V.forM_ rows \row ->
     div_ [class_ "flex gap-8 items-start itemsListItem"] do
-      forM_ columns \col ->
-        div_ col.attrs $ col.render row
-  whenJust nextUrl \url ->
-    renderPaginationLink url "both"
+      forM_ columns \c -> div_ c.attrs $ c.render row
+  whenJust nextUrl \url -> renderPaginationLink url "both"
 
 
 -- Tab Filter ToHtml
@@ -242,9 +240,7 @@ renderRows tbl =
 -- List mode: render columns in a flex container (no table wrapper/headers)
 {-# INLINE renderListRow #-}
 renderListRow :: Table a -> a -> Html ()
-renderListRow tbl row =
-  div_ (rowAttrs <> [class_ "flex gap-8 items-start itemsListItem py-3"]) do
-    forM_ tbl.columns \col -> div_ col.attrs $ col.render row
+renderListRow tbl row = div_ (rowAttrs <> [class_ "flex gap-8 items-start itemsListItem py-3"]) $ forM_ tbl.columns \c -> div_ c.attrs $ c.render row
   where
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
 
@@ -266,9 +262,7 @@ renderTableRow tbl row =
               ]
             <> [checked_ | isSelected]
 
-    forM_ tbl.columns \col ->
-      td_ (col.attrs <> colAttrs col)
-        $ col.render row
+    forM_ tbl.columns \c -> td_ (c.attrs <> colAttrs c) $ c.render row
   where
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
     linkHandler = maybe [] (\getLink -> [class_ "cursor-pointer", hxGet_ (getLink row), hxPushUrl_ "true"]) tbl.features.rowLink
