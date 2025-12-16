@@ -571,7 +571,7 @@ flamegraphGetH pid trId shapeViewM = do
               <$> spanRecords
       pure spansJson
     Nothing -> do
-      let spansJson = (getSpanJson Nothing) <$> spanRecords
+      let spansJson = getSpanJson Nothing <$> spanRecords
       pure spansJson
   let spjson = decodeUtf8 $ AE.encode sp
   addRespHeaders $ do

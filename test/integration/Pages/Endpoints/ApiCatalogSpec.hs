@@ -107,7 +107,7 @@ spec = aroundAll withTestResources do
       
       case projectExists of
         [(Only 0)] -> error $ "Demo project with ID " <> show testPid <> " does not exist in database"
-        _ -> pure ()
+        _ -> pass
       
       msgs <- prepareTestMessages
       processMessagesAndBackgroundJobs tr msgs
@@ -119,10 +119,10 @@ spec = aroundAll withTestResources do
       |] () :: IO (V.Vector (Only Int))
       
       case allSpansCount of
-        [(Only totalCount)] -> if totalCount == 0 
+        [(Only totalCount)] -> if totalCount == 0
           then error "No spans at all in otel_logs_and_spans table"
-          else pure ()
-        _ -> pure ()
+          else pass
+        _ -> pass
       
       -- Debug: Check if spans were actually inserted for our project
       spanCount <- withPool tr.trPool $ DBT.query [sql|
@@ -132,9 +132,9 @@ spec = aroundAll withTestResources do
       |] (Only testPid) :: IO (V.Vector (Only Int))
       
       case spanCount of
-        [(Only count)] -> if count == 0 
+        [(Only count)] -> if count == 0
           then error $ "No spans found in otel_logs_and_spans table after processing messages for project " <> show testPid
-          else pure ()
+          else pass
         _ -> error "Unexpected span count result"
       
       verifyEndpointsCreated tr

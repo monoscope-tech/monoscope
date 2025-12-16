@@ -80,7 +80,7 @@ whatsappIncomingPostH val = do
         Just dashboardVM -> do
           dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString $ fromMaybe "_overview.yaml" dashboardVM.baseTemplate)
           whenJust dashboardM $ \dashboard -> do
-            let widgetM = find (\w -> (fromMaybe "Untitled-" w.title) == widget) dashboard.widgets
+            let widgetM = find (\w -> fromMaybe "Untitled-" w.title == widget) dashboard.widgets
             whenJust widgetM $ \w -> do
               now <- Time.currentTime
               let widgetQuery = "&widget=" <> decodeUtf8 (urlEncode True (toStrict $ AE.encode $ AE.toJSON w))
@@ -165,9 +165,9 @@ getBotContent question query query_url opts =
 
 
 getWhatsappList :: Text -> Text -> V.Vector (Text, Text) -> Int -> AE.Value
-getWhatsappList typ body vals' skip = AE.object $ ["1" AE..= body] ++ vars
+getWhatsappList typ body vals' skip = AE.object $ ("1" AE..= body) : vars
   where
-    vals = V.map (\(k, v) -> (T.take 24 k, v)) (V.drop skip vals')
+    vals = V.map (first (T.take 24)) (V.drop skip vals')
     paddedVals =
       let missing = 3 - V.length vals
           duplicates' = if V.length vals == 1 then V.replicate missing (V.head vals) else V.take missing vals
@@ -236,7 +236,7 @@ instance FromForm TwilioWhatsAppMessage where
       parseOptional key = case lookupMaybe key f of
         Right v -> pure v
         _ -> pure Nothing
-      parseFieldDefault key def = case (lookupMaybe key f) of
+      parseFieldDefault key def = case lookupMaybe key f of
         Right v -> pure $ maybe def (fromMaybe def . readMaybeText) v
         Left e -> fail $ toString e
       parseOptionalBool key = case lookupMaybe key f of

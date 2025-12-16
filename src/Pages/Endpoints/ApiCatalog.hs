@@ -63,7 +63,7 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
                             , ("Alphabetical", "Sort by dependency name", "name")
                             ]
                         }
-                , pagination = (\url -> (url, "both")) <$> nextFetchUrl
+                , pagination = (, "both") <$> nextFetchUrl
                 , zeroState =
                     Just
                       $ ZeroState
@@ -231,7 +231,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                             , ("Alphabetical", "Sort by endpoint path", "name")
                             ]
                         }
-                , pagination = (\url -> (url, "both")) <$> nextFetchUrl
+                , pagination = (, "both") <$> nextFetchUrl
                 , zeroState =
                     Just
                       $ ZeroState

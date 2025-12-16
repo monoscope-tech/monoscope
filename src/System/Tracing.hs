@@ -74,4 +74,4 @@ runTracing tp = interpret $ \env -> \case
 
 
 withSpan_ :: Tracing :> es => Text -> [(Text, Attribute)] -> Eff es a -> Eff es a
-withSpan_ name attrs action = withSpan name attrs $ \_ -> action
+withSpan_ name attrs action = withSpan name attrs $ const action

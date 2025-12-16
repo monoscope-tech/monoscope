@@ -474,7 +474,7 @@ getTraceDetails pid trId tme = dbtToEff $ queryOne (Query $ encodeUtf8 q) (pid.t
   where
     (startTime, endTime) = case tme of
       Nothing -> ("now() - interval '1 day'", "now()")
-      Just ts -> ("'" <> (formatUTC $ addUTCTime (-60 * 5) ts) <> "'", "'" <> (formatUTC $ addUTCTime (60 * 5) ts) <> "'")
+      Just ts -> ("'" <> formatUTC (addUTCTime (-(60 * 5)) ts) <> "'", "'" <> formatUTC (addUTCTime (60 * 5) ts) <> "'")
     q = do
       [text| SELECT
               context___trace_id,
@@ -504,7 +504,7 @@ getSpanRecordsByTraceId pid trId tme = do
   where
     (start, end) = case tme of
       Nothing -> ("now() - interval '1 day'", "now()")
-      Just ts -> ("'" <> (formatUTC $ addUTCTime (-60 * 5) ts) <> "'", "'" <> (formatUTC $ addUTCTime (60 * 5) ts) <> "'")
+      Just ts -> ("'" <> formatUTC (addUTCTime (-(60 * 5)) ts) <> "'", "'" <> formatUTC (addUTCTime (60 * 5) ts) <> "'")
     q =
       [text|
       SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
@@ -829,7 +829,7 @@ bulkInsertOtelLogsAndSpansTF records = do
     retryTimefusion 0 recs = labeled @"timefusion" @DB $ bulkInsertOtelLogsAndSpans recs
     retryTimefusion n recs = do
       tryAny (labeled @"timefusion" @DB $ bulkInsertOtelLogsAndSpans recs) >>= \case
-        Left e | "Connection refused" `T.isInfixOf` T.pack (show e) -> do
+        Left e | "Connection refused" `T.isInfixOf` show e -> do
           Log.logAttention "Retrying bulkInsertOtelLogsAndSpans" $ AE.object [("remaining_retries", show n), ("error", show e)]
           threadDelay (1000000 * (4 - n))
           retryTimefusion (n - 1) recs
@@ -1081,7 +1081,7 @@ extractATError spanObj (AE.Object o) = do
       , message = msg
       , rootErrorMessage = msg
       , stackTrace = stack
-      , hash = Just (toXXHash (spanObj.project_id <> fromMaybe "" serviceName <> fromMaybe "" spanObj.name <> typ <> (replaceAllFormats $ msg <> stack)))
+      , hash = Just (toXXHash (spanObj.project_id <> fromMaybe "" serviceName <> fromMaybe "" spanObj.name <> typ <> replaceAllFormats (msg <> stack)))
       , technology = Nothing
       , serviceName = serviceName
       , requestMethod = method

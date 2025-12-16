@@ -179,7 +179,7 @@ renderTableRows nextUrl columns rows = do
   V.forM_ rows \row ->
     div_ [class_ "flex gap-8 items-start itemsListItem"] do
       forM_ columns \c -> div_ c.attrs $ c.render row
-  whenJust nextUrl \url -> renderPaginationLink url "both"
+  whenJust nextUrl (`renderPaginationLink` "both")
 
 
 -- Tab Filter ToHtml
@@ -227,7 +227,7 @@ renderTable tbl = div_ [class_ tbl.config.containerClasses, id_ $ tbl.config.ele
               span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
             div_ [id_ "rowsContainer", class_ "divide-y"] do
               renderRows tbl
-              whenJust tbl.features.pagination \(url, trigger) -> renderPaginationLink url trigger
+              whenJust tbl.features.pagination $ uncurry renderPaginationLink
 
 
 renderRows :: Table a -> Html ()

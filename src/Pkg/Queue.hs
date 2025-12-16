@@ -82,8 +82,8 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
                   result <- try $ fn (catMaybes msgsB64) (maybeToMonoid firstAttrs)
                   case result of
                     Left (e :: SomeException) -> do
-                      addEvent sp "batch.failed" [("error", OA.toAttribute $ T.pack (show e))]
-                      setStatus sp (Error $ T.pack $ show e)
+                      addEvent sp "batch.failed" [("error", OA.toAttribute $ toText $ show e)]
+                      setStatus sp (Error $ toText $ show e)
                       throwIO e -- Re-throw so outer tryAny catches it
                     Right ids -> do
                       addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids))]
@@ -238,8 +238,8 @@ kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
                       result <- try $ fn allRecords attributes
                       case result of
                         Left (e :: SomeException) -> do
-                          addEvent sp "batch.failed" [("error", OA.toAttribute $ T.pack (show e))]
-                          setStatus sp (Error $ T.pack $ show e)
+                          addEvent sp "batch.failed" [("error", OA.toAttribute $ toText $ show e)]
+                          setStatus sp (Error $ toText $ show e)
                           throwIO e -- Re-throw so outer tryAny catches it
                         Right ids -> do
                           addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids))]
@@ -315,7 +315,7 @@ publishToDeadLetterQueue appCtx messages attributes errorReason = do
               , ("failed-at", toText $ show currentTime)
               ]
     _ <- publishJSONToKafka appCtx deadLetterTopic (BC.unpack msgData) deadLetterAttrs
-    pure ()
+    pass
 
 
 -- | Check if exception is unrecoverable and should be discarded

@@ -127,7 +127,7 @@ updateOrCreateLevelOne levelOnes targetCount firstToken tokensVec logId logConte
           updatedLevelOnes = levelOnes V.// [(index, updatedLevel)]
        in (updatedLevelOnes, wasUpdated)
     Nothing ->
-      let newLogGroup = createLogGroup tokensVec (T.unwords $ V.toList tokensVec) logId now
+      let newLogGroup = createLogGroup tokensVec (unwords $ V.toList tokensVec) logId now
           newLevelTwo = DrainLevelTwo{firstToken = firstToken, logGroups = V.singleton newLogGroup}
           newLevelOne = DrainLevelOne{tokenCount = targetCount, nodes = V.singleton newLevelTwo}
           updatedLevelOnes = V.cons newLevelOne levelOnes
@@ -144,7 +144,7 @@ updateOrCreateLevelTwo levelTwos targetToken tokensVec logId logContent now conf
           updatedLevelTwos = levelTwos V.// [(index, updatedLevel)]
        in (updatedLevelTwos, wasUpdated)
     Nothing ->
-      let newLogGroup = createLogGroup tokensVec (T.unwords $ V.toList tokensVec) logId now
+      let newLogGroup = createLogGroup tokensVec (unwords $ V.toList tokensVec) logId now
           newLevelTwo = DrainLevelTwo{firstToken = targetToken, logGroups = V.singleton newLogGroup}
           updatedLevelTwos = V.cons newLevelTwo levelTwos
        in (updatedLevelTwos, False)
@@ -181,11 +181,11 @@ updateOrCreateLogGroup logGroups tokensVec logId logContent now config =
       if V.length logGroups >= maxLogGroups config
         then
           let victimIdx = leastRecentlyUsedIndex logGroups
-              newGroup = createLogGroup tokensVec (T.unwords $ V.toList tokensVec) logId now
+              newGroup = createLogGroup tokensVec (unwords $ V.toList tokensVec) logId now
               updatedGroups = logGroups V.// [(victimIdx, newGroup)]
            in (updatedGroups, False)
         else
-          let newGroup = createLogGroup tokensVec (T.unwords $ V.toList tokensVec) logId now
+          let newGroup = createLogGroup tokensVec (unwords $ V.toList tokensVec) logId now
               updatedGroups = V.cons newGroup logGroups
            in (updatedGroups, False)
 
@@ -217,7 +217,7 @@ updateLogGroupWithTemplate :: LogGroup -> V.Vector Text -> Text -> Text -> UTCTi
 updateLogGroupWithTemplate group' newTemplate logId originalLog now =
   group'
     { template = newTemplate
-    , templateStr = T.unwords $ V.toList newTemplate
+    , templateStr = unwords $ V.toList newTemplate
     , logIds = V.cons logId (logIds group')
     , frequency = frequency group' + 1
     , lastSeen = now
@@ -246,7 +246,7 @@ tokenizeJsonLike txt
     go t
       | T.null t = []
       | T.head t `elem` ['{', '}', '[', ']', ',', ':'] =
-          let c = T.singleton (T.head t)
+          let c = one (T.head t)
            in c : go (T.tail t)
       | T.head t == '"' =
           let (quoted, rest) = T.breakOn "\"" (T.tail t)
@@ -264,4 +264,4 @@ generateDrainTokens content =
   let replaced = replaceAllFormats content
    in if looksLikeJson replaced
         then V.fromList (tokenizeJsonLike replaced)
-        else V.fromList $ T.words replaced
+        else V.fromList $ words replaced

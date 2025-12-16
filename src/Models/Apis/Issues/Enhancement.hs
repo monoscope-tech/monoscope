@@ -81,7 +81,7 @@ generateEnhancedDescription authCtx issue = do
       case response' of
         Left e -> pure $ Left e
         Right (response, _) -> do
-          let lines' = T.lines response
+          let lines' = lines response
               description = fromMaybe "" $ viaNonEmpty head lines'
               recommendedAction = fromMaybe "Review the changes and update your integration accordingly." $ lines' !!? 1
               complexity = fromMaybe "medium" $ lines' !!? 2
@@ -268,12 +268,12 @@ classifyIssueCriticality authCtx issue = do
       case r of
         Left e -> pure $ Left e
         Right (response, _) -> do
-          let lines' = T.lines $ response
+          let lines' = lines response
           case lines' of
             [criticalStr, breakingStr, incrementalStr] -> do
               let isCritical = T.toLower criticalStr == "critical"
-                  breakingCount = fromMaybe 0 $ readMaybe $ T.unpack breakingStr
-                  incrementalCount = fromMaybe 0 $ readMaybe $ T.unpack incrementalStr
+                  breakingCount = fromMaybe 0 $ readMaybe $ toString breakingStr
+                  incrementalCount = fromMaybe 0 $ readMaybe $ toString incrementalStr
               pure $ Right (isCritical, breakingCount, incrementalCount)
             _ -> pure $ Left "Invalid response format from LLM"
 
@@ -326,5 +326,8 @@ buildCriticalityPrompt issue =
 -- | Update issue classification in database
 updateIssueClassification :: Issues.IssueId -> Bool -> Int -> Int -> PTR.DBT IO ()
 updateIssueClassification issueId isCritical breakingCount incrementalCount = do
-  let severity = if isCritical then "critical" else if breakingCount > 0 then "warning" else "info"
+  let severity
+        | isCritical = "critical"
+        | breakingCount > 0 = "warning"
+        | otherwise = "info"
   Issues.updateIssueCriticality issueId isCritical severity

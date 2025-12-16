@@ -284,7 +284,7 @@ renderMonitorContent _ item = do
 
 
 instance ToHtml UnifiedMonitorItem where
-  toHtml item = toHtmlRaw item
+  toHtml = toHtmlRaw
   toHtmlRaw item =
     div_ [class_ "border-b flex p-4 gap-4 itemsListItem hover:bg-fillWeak transition-colors group/card"] do
       toHtmlRaw $ renderMonitorIcon item
@@ -383,7 +383,7 @@ unifiedOverviewPage pid alert currTime = do
   section_ [class_ "pt-2 mx-auto px-14 w-full flex flex-col gap-4 h-full"] do
     -- Header section
     div_ [class_ "flex justify-between items-center"] do
-      monitorHeader (alert.alertConfig.title) (isJust alert.deactivatedAt) ("Severity: " <> alert.alertConfig.severity)
+      monitorHeader alert.alertConfig.title (isJust alert.deactivatedAt) ("Severity: " <> alert.alertConfig.severity)
 
       -- Action buttons
       div_ [class_ "flex gap-2"] do
@@ -407,7 +407,7 @@ unifiedOverviewPage pid alert currTime = do
       alertStats_ pid alert currTime
 
     -- Content tabs
-    tabbedSection_ "monitor-tabs" $ [("Query & Visualization", alertQueryTab_ pid alert), ("Execution History", monitorHistoryTab_ "Alert execution history"), ("Notifications", alertNotificationsTab_ alert)]
+    tabbedSection_ "monitor-tabs" [("Query & Visualization", alertQueryTab_ pid alert), ("Execution History", monitorHistoryTab_ "Alert execution history"), ("Notifications", alertNotificationsTab_ alert)]
   where
     monitorHeader title isInactive subtitle = do
       div_ [class_ "flex flex-col gap-2"] do

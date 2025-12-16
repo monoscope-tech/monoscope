@@ -427,14 +427,14 @@ calculateAutoBinWidth (Just startTime, Just endTime) _ =
           | otherwise -> "1 day"
 calculateAutoBinWidth (Nothing, Just endTime) currentTime =
   -- If no start time, assume 14 days ago (same as default date range)
-  let startTime = addUTCTime (-14 * 24 * 60 * 60) currentTime
+  let startTime = addUTCTime (-(14 * 24 * 60 * 60)) currentTime
    in calculateAutoBinWidth (Just startTime, Just endTime) currentTime
 calculateAutoBinWidth (Just startTime, Nothing) currentTime =
   -- If no end time, use current time
   calculateAutoBinWidth (Just startTime, Just currentTime) currentTime
 calculateAutoBinWidth (Nothing, Nothing) currentTime =
   -- Default to 14 days range if no date range specified
-  let startTime = addUTCTime (-14 * 24 * 60 * 60) currentTime
+  let startTime = addUTCTime (-(14 * 24 * 60 * 60)) currentTime
    in calculateAutoBinWidth (Just startTime, Just currentTime) currentTime
 
 
