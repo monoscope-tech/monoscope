@@ -147,7 +147,7 @@ data TabFilterOpt = TabFilterOpt
 data SortConfig = SortConfig
   { current :: Text
   , currentURL :: Text
-  , options :: [(Text, Text, Text)]  -- (title, description, identifier)
+  , options :: [(Text, Text, Text)] -- (title, description, identifier)
   }
 
 
@@ -326,7 +326,7 @@ renderTableRow tbl row =
               , name_ "itemId"
               , value_ $ getId row
               ]
-              <> [checked_ | isSelected]
+            <> [checked_ | isSelected]
 
     forM_ tbl.columns \col ->
       td_ (col.attrs <> colAttrs col)
