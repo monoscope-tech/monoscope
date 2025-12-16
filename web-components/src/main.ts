@@ -224,8 +224,34 @@ window.getVariable = (key: string) => {
 window.createTagify = (selector: string, options: any = {}) => {
   const defaultOptions = {
     skipInvalid: true,
+    templates: {
+      tag: window.tagifyTemplateFunc,
+      dropdownItemNoMatch: (data: any) => `No suggestion found for: ${data.value}`,
+    },
     editTags: { clicks: 2, keepInvalid: false },
-    dropdown: { enabled: 1, fuzzySearch: true, position: 'text', caseSensitive: false },
+    dropdown: {
+      enabled: 0,
+      maxItems: 50,
+      fuzzySearch: true,
+      position: 'text',
+      caseSensitive: false,
+      mapValueTo: 'value',
+      searchKeys: ['value', 'name'],
+    },
   };
   return new (window as any).Tagify(document.querySelector(selector), { ...defaultOptions, ...options });
 };
+
+function tagifyTemplateFunc(tagData: any) {
+  return `<tag title="${tagData.value || tagData.email}"
+               contenteditable='false'
+               spellcheck='false'
+               tabIndex="-1"
+               class="${this.settings.classNames.tag} ${tagData.class || ''}"
+               ${this.getAttributes(tagData)}>
+                <x title='' class="${this.settings.classNames.tagX}" role='button' aria-label='remove tag'></x>
+                <div><span class="${this.settings.classNames.tagText}">${tagData.name || tagData.value || tagData}</span></div>
+       </tag>`;
+}
+
+(window as any).tagifyTemplateFunc = tagifyTemplateFunc;
