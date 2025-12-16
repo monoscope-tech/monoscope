@@ -106,8 +106,6 @@ catalogColumns pid requestType =
   ]
 
 
-
-
 renderCatalogCheckboxCol :: HostEventsVM -> Html ()
 renderCatalogCheckboxCol (HostEventsVM _ he _ _) = do
   a_ [class_ "w-2 h-full"] ""
@@ -271,8 +269,6 @@ endpointColumns pid =
   , col "Events" renderEndpointEventsCol & withAttrs [class_ "w-36 flex items-center justify-center"]
   , col "Activity" renderEndpointChartCol & withAttrs [class_ "flex items-center justify-center w-60 h-10"]
   ]
-
-
 
 
 renderEndpointCheckboxCol :: EnpReqStatsVM -> Html ()

@@ -340,8 +340,6 @@ issueColumns pid =
   ]
 
 
-
-
 renderIssueCheckboxCol :: IssueVM -> Html ()
 renderIssueCheckboxCol (IssueVM hideByDefault isWidget _ _ issue) =
   unless isWidget do

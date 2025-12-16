@@ -371,14 +371,14 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
         ?~ renderText
           ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
               $ forM_ issuesVM \vm@(AnomalyList.IssueVM hideByDefault _ _ _ issue) ->
-                  div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] do
-                    div_
-                      [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "card-round" else "px-0.5 py-4"
-                      , style_ (if hideByDefault then "display:none" else "")
-                      ]
-                      do
-                        forM_ (AnomalyList.issueColumns issue.projectId) \(Table.Column _ render attrs _ _) ->
-                          div_ attrs $ render vm
+                div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] do
+                  div_
+                    [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "card-round" else "px-0.5 py-4"
+                    , style_ (if hideByDefault then "display:none" else "")
+                    ]
+                    do
+                      forM_ (AnomalyList.issueColumns issue.projectId) \(Table.Column _ render attrs _ _) ->
+                        div_ attrs $ render vm
           )
   Widget.WTStat -> do
     stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams

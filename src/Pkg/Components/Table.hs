@@ -59,6 +59,7 @@ data TableRows a = TableRows (Maybe Text) [Column a] (V.Vector a) -- nextUrl, co
 
 data SearchMode = ClientSide | ServerSide Text
 
+
 data Features a = Features
   { rowLink :: Maybe (a -> Text)
   , rowId :: Maybe (a -> Text)
@@ -382,8 +383,6 @@ renderPaginationLink url trigger =
     do
       span_ [class_ "inline-block"] "Load more"
       span_ [id_ "rowsIndicator", class_ "ml-2 htmx-indicator loading loading-dots loading-md inline-block"] ""
-
-
 
 
 renderZeroState :: ZeroState -> Html ()
