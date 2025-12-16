@@ -43,15 +43,15 @@ import Utils (deleteParam, faSprite_)
 
 type role Column nominal
 data Column a where
-  Column ::
-    { name :: Text
-    , render :: a -> Html ()
-    , attrs :: [Attribute]
-    , sortField :: Maybe Text
-    , align :: Maybe Text
-    , format :: Maybe Formatter
-    } ->
-    Column a
+  Column
+    :: { name :: Text
+       , render :: a -> Html ()
+       , attrs :: [Attribute]
+       , sortField :: Maybe Text
+       , align :: Maybe Text
+       , format :: Maybe Formatter
+       }
+    -> Column a
 
 
 type role Table nominal
@@ -65,7 +65,7 @@ data Table a = Table
 
 -- TableRows for pagination - only renders rows + pagination link
 type role TableRows nominal
-data TableRows a = TableRows (Maybe Text) [Column a] (V.Vector a)  -- nextUrl, columns, rows
+data TableRows a = TableRows (Maybe Text) [Column a] (V.Vector a) -- nextUrl, columns, rows
 
 
 data Features a = Features
@@ -91,7 +91,7 @@ data Config = Config
   , containerClasses :: Text
   , showHeader :: Bool
   , elemID :: Text
-  , renderAsTable :: Bool  -- True for table mode, False for list mode
+  , renderAsTable :: Bool -- True for table mode, False for list mode
   }
 
 
@@ -201,10 +201,10 @@ instance Default Config where
       { tableClasses = "table table-zebra table-sm w-full relative"
       , thClasses = "text-left bg-bgRaised sticky top-0"
       , tdClasses = "px-6 py-4"
-      , containerClasses = "w-full mx-auto px-6 pt-4 space-y-4 pb-16 overflow-y-scroll h-full"  -- Match ItemsList's scrollable container
+      , containerClasses = "w-full mx-auto px-6 pt-4 space-y-4 pb-16 overflow-y-scroll h-full" -- Match ItemsList's scrollable container
       , showHeader = True
       , elemID = "tableContainer"
-      , renderAsTable = False  -- Default to list mode for ItemsList compatibility
+      , renderAsTable = False -- Default to list mode for ItemsList compatibility
       }
 
 
@@ -271,23 +271,25 @@ renderTable tbl = div_ [class_ tbl.config.containerClasses, id_ $ tbl.config.ele
   div_
     [ class_ "grid card-round overflow-hidden my-0 group/grid"
     , id_ $ tbl.config.elemID <> "_grid"
-    ] do
-    form_
-      [ class_ "flex flex-col divide-y w-full"
-      , id_ tbl.config.elemID
-      , onkeydown_ "return event.key != 'Enter';"
-      ] do
-      when (isJust tbl.features.rowId || isJust tbl.features.sort)
-        $ renderToolbar tbl
+    ]
+    do
+      form_
+        [ class_ "flex flex-col divide-y w-full"
+        , id_ tbl.config.elemID
+        , onkeydown_ "return event.key != 'Enter';"
+        ]
+        do
+          when (isJust tbl.features.rowId || isJust tbl.features.sort)
+            $ renderToolbar tbl
 
-      when (V.null tbl.rows) $ whenJust tbl.features.zeroState renderZeroState
+          when (V.null tbl.rows) $ whenJust tbl.features.zeroState renderZeroState
 
-      div_ [class_ "w-full flex-col"] do
-        whenJust tbl.features.search \_ ->
-          span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
-        div_ [id_ "rowsContainer", class_ "divide-y"] do
-          renderRows tbl
-          whenJust tbl.features.pagination renderPagination
+          div_ [class_ "w-full flex-col"] do
+            whenJust tbl.features.search \_ ->
+              span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
+            div_ [id_ "rowsContainer", class_ "divide-y"] do
+              renderRows tbl
+              whenJust tbl.features.pagination renderPagination
 
 
 renderRows :: Table a -> Html ()
@@ -393,8 +395,8 @@ renderSortMenu sortCfg = do
         [ ("First Seen", "First time the issue occured", "first_seen")
         , ("Last Seen", "Last time the issue occured", "last_seen")
         , ("Events", "Number of events", "events")
-        ] ::
-          [(Text, Text, Text)]
+        ]
+          :: [(Text, Text, Text)]
   let currentURL' = deleteParam "sort" sortCfg.currentURL
   let currentSortTitle = maybe "First Seen" (\(t, _, _) -> t) $ find (\(_, _, identifier) -> identifier == sortCfg.current) sortMenu
 

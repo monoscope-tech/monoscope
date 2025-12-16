@@ -25,7 +25,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (statBox_)
-import Pkg.Components.Table (TabFilter (..), TabFilterOpt (..), Table (..), Features (..), Config (..), SearchConfig (..), ZeroState (..), col, withAttrs)
+import Pkg.Components.Table (Config (..), Features (..), SearchConfig (..), TabFilter (..), TabFilterOpt (..), Table (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
@@ -184,8 +184,10 @@ toUnifiedMonitorItem pid currTime = alertToUnifiedItem pid
 
 instance ToHtml UnifiedMonitorItem where
   toHtml item = toHtmlRaw item
-  toHtmlRaw item = div_ [class_ "border-b flex p-4 gap-4 itemsListItem hover:bg-fillWeak transition-colors group/card"] $
-    toHtmlRaw $ renderMonitorCard undefined item
+  toHtmlRaw item =
+    div_ [class_ "border-b flex p-4 gap-4 itemsListItem hover:bg-fillWeak transition-colors group/card"]
+      $ toHtmlRaw
+      $ renderMonitorCard undefined item
 
 
 -- | Render monitor card content for use in Table columns

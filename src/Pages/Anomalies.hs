@@ -44,7 +44,7 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users (User (id))
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pkg.Components.Table (TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), Features (..), Config (..), BulkAction (..), SearchConfig (..), SortConfig (..), PaginationConfig (..), LoadTrigger (..), ZeroState (..), Column (..), col, withAttrs)
+import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), LoadTrigger (..), PaginationConfig (..), SearchConfig (..), SortConfig (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
@@ -242,7 +242,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
         ]
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
     (Just "slider", Just "true", _, _) -> ALSlider currTime pid endpointM (Just $ V.map (IssueVM True False currTime filterV) issues)
-    (_, _, _, Just "true") -> ALRows $ TableRows nextFetchUrl issueColumns issuesVM  -- For load more - only rows
+    (_, _, _, Just "true") -> ALRows $ TableRows nextFetchUrl issueColumns issuesVM -- For load more - only rows
     _ -> ALPage $ PageCtx bwconf issuesTable
 
 
@@ -376,174 +376,174 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
   let timeSinceString = prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
 
   do
-      -- Title and badges row
-      div_ [class_ $ "flex gap-3 mb-3 flex-wrap " <> if isWidget then "flex-col" else " items-center "] do
-        h3_ [class_ "text-textStrong text-base"] $ toHtml issue.title
+    -- Title and badges row
+    div_ [class_ $ "flex gap-3 mb-3 flex-wrap " <> if isWidget then "flex-col" else " items-center "] do
+      h3_ [class_ "text-textStrong text-base"] $ toHtml issue.title
 
-        -- Issue type badge
-        div_ [class_ "flex items-center gap-2"] do
-          -- Type badge
-          case issue.issueType of
-            Issues.RuntimeException ->
-              span_ [class_ "badge bg-fillError-strong"] do
-                faSprite_ "triangle-alert" "regular" "w-3 h-3"
-                "ERROR"
-            Issues.QueryAlert ->
-              span_ [class_ "badge bg-fillWarning-strong"] do
-                faSprite_ "zap" "regular" "w-3 h-3"
-                "ALERT"
-            Issues.APIChange ->
-              if issue.critical
-                then span_ [class_ "badge bg-fillError-strong"] do
-                  faSprite_ "exclamation-triangle" "regular" "w-3 h-3"
-                  "BREAKING"
-                else span_ [class_ "badge bg-fillInformation-strong"] do
-                  faSprite_ "info" "regular" "w-3 h-3 mr-0.5"
-                  "Incremental"
+      -- Issue type badge
+      div_ [class_ "flex items-center gap-2"] do
+        -- Type badge
+        case issue.issueType of
+          Issues.RuntimeException ->
+            span_ [class_ "badge bg-fillError-strong"] do
+              faSprite_ "triangle-alert" "regular" "w-3 h-3"
+              "ERROR"
+          Issues.QueryAlert ->
+            span_ [class_ "badge bg-fillWarning-strong"] do
+              faSprite_ "zap" "regular" "w-3 h-3"
+              "ALERT"
+          Issues.APIChange ->
+            if issue.critical
+              then span_ [class_ "badge bg-fillError-strong"] do
+                faSprite_ "exclamation-triangle" "regular" "w-3 h-3"
+                "BREAKING"
+              else span_ [class_ "badge bg-fillInformation-strong"] do
+                faSprite_ "info" "regular" "w-3 h-3 mr-0.5"
+                "Incremental"
 
-          -- Severity badge
-          case issue.severity of
-            "critical" -> span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
-            "warning" -> span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "WARNING"
-            _ -> pass
+        -- Severity badge
+        case issue.severity of
+          "critical" -> span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
+          "warning" -> span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "WARNING"
+          _ -> pass
 
-      -- Metadata row (method, endpoint, service, time)
-      div_ [class_ "flex items-center gap-4 text-sm text-textWeak mb-3 flex-wrap"] do
-        -- Method and endpoint (for API changes)
-        when (issue.issueType == Issues.APIChange) do
-          case AE.fromJSON (getAeson issue.issueData) of
-            AE.Success (apiData :: Issues.APIChangeData) -> do
-              div_ [class_ "flex items-center gap-2"] do
-                span_ [class_ $ "badge " <> methodFillColor apiData.endpointMethod] $ toHtml apiData.endpointMethod
-                -- Endpoint path
-                span_ [class_ "font-mono bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml apiData.endpointPath
-            _ -> pass
-
-        -- Service badge
-        span_ [class_ "flex items-center gap-1"] do
-          div_ [class_ "w-3 h-3 bg-fillYellow rounded-sm"] ""
-          span_ [class_ "text-textStrong"] $ toHtml issue.service
-
-        -- Time since
-        span_ [class_ "text-textWeak"] $ toHtml timeSinceString
-
-      -- Statistics row (only for API changes)
+    -- Metadata row (method, endpoint, service, time)
+    div_ [class_ "flex items-center gap-4 text-sm text-textWeak mb-3 flex-wrap"] do
+      -- Method and endpoint (for API changes)
       when (issue.issueType == Issues.APIChange) do
-        let requestChanges = getAeson issue.requestPayloads :: [Anomalies.PayloadChange]
-        let responseChanges = getAeson issue.responsePayloads :: [Anomalies.PayloadChange]
-        let allChanges = requestChanges ++ responseChanges
-        let breakingChanges = length $ filter (\c -> c.changeType == Anomalies.Breaking) allChanges
-        let incrementalChanges = length $ filter (\c -> c.changeType == Anomalies.Incremental) allChanges
-        let totalChanges = length allChanges
-        let affectedRequests = if null requestChanges then length responseChanges else if null responseChanges then length requestChanges else length requestChanges + length responseChanges
+        case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (apiData :: Issues.APIChangeData) -> do
+            div_ [class_ "flex items-center gap-2"] do
+              span_ [class_ $ "badge " <> methodFillColor apiData.endpointMethod] $ toHtml apiData.endpointMethod
+              -- Endpoint path
+              span_ [class_ "font-mono bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml apiData.endpointPath
+          _ -> pass
 
-        div_ [class_ "flex items-center gap-4 text-sm mb-4 p-3 bg-fillWeak rounded-lg"] do
-          span_ [class_ "text-textWeak"] do
-            strong_ [class_ "text-textStrong"] $ toHtml $ show totalChanges
-            " total changes"
+      -- Service badge
+      span_ [class_ "flex items-center gap-1"] do
+        div_ [class_ "w-3 h-3 bg-fillYellow rounded-sm"] ""
+        span_ [class_ "text-textStrong"] $ toHtml issue.service
 
-          div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+      -- Time since
+      span_ [class_ "text-textWeak"] $ toHtml timeSinceString
 
-          span_ [class_ "text-textWeak"] do
-            strong_ [class_ "text-fillError-strong"] $ toHtml $ show breakingChanges
-            " breaking"
-            when (breakingChanges > 0 && totalChanges > 0) do
-              span_ [class_ "text-xs ml-1 bg-fillError-weak text-fillError-strong px-1.5 py-0.5 rounded"] do
-                toHtml $ show (round (fromIntegral breakingChanges / fromIntegral totalChanges * 100 :: Float) :: Int) <> "%"
+    -- Statistics row (only for API changes)
+    when (issue.issueType == Issues.APIChange) do
+      let requestChanges = getAeson issue.requestPayloads :: [Anomalies.PayloadChange]
+      let responseChanges = getAeson issue.responsePayloads :: [Anomalies.PayloadChange]
+      let allChanges = requestChanges ++ responseChanges
+      let breakingChanges = length $ filter (\c -> c.changeType == Anomalies.Breaking) allChanges
+      let incrementalChanges = length $ filter (\c -> c.changeType == Anomalies.Incremental) allChanges
+      let totalChanges = length allChanges
+      let affectedRequests = if null requestChanges then length responseChanges else if null responseChanges then length requestChanges else length requestChanges + length responseChanges
 
-          div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+      div_ [class_ "flex items-center gap-4 text-sm mb-4 p-3 bg-fillWeak rounded-lg"] do
+        span_ [class_ "text-textWeak"] do
+          strong_ [class_ "text-textStrong"] $ toHtml $ show totalChanges
+          " total changes"
 
-          span_ [class_ "text-textWeak"] do
-            strong_ [class_ "text-fillSuccess-strong"] $ toHtml $ show incrementalChanges
-            " incremental"
+        div_ [class_ "w-px h-4 bg-strokeWeak"] ""
 
-          div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+        span_ [class_ "text-textWeak"] do
+          strong_ [class_ "text-fillError-strong"] $ toHtml $ show breakingChanges
+          " breaking"
+          when (breakingChanges > 0 && totalChanges > 0) do
+            span_ [class_ "text-xs ml-1 bg-fillError-weak text-fillError-strong px-1.5 py-0.5 rounded"] do
+              toHtml $ show (round (fromIntegral breakingChanges / fromIntegral totalChanges * 100 :: Float) :: Int) <> "%"
 
-          span_ [class_ "text-textWeak"] do
-            strong_ [class_ "text-textBrand"] $ toHtml $ show affectedRequests
-            " payloads affected"
+        div_ [class_ "w-px h-4 bg-strokeWeak"] ""
 
-      -- Stack trace for runtime exceptions or Query for alerts
-      case issue.issueType of
-        Issues.RuntimeException -> do
-          case AE.fromJSON (getAeson issue.issueData) of
-            AE.Success (exceptionData :: Issues.RuntimeExceptionData) -> do
-              div_ [class_ "border border-strokeError-weak rounded-lg group/er mb-4"] do
-                label_ [class_ "text-sm text-textWeak font semibold rounded-lg p-2 flex gap-2 items-center"] do
-                  faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.err-input:checked]/er:rotate-90"
-                  "Stack trace"
-                  input_ [class_ "err-input w-0 h-0 opacity-0", type_ "checkbox"]
-                div_ [class_ "bg-fillError-weak p-4 overflow-x-scroll hidden group-has-[.err-input:checked]/er:block text-sm font-mono text-fillError-strong"] do
-                  pre_ [class_ "whitespace-pre-wrap "] $ toHtml exceptionData.stackTrace
-            _ -> pass
-        Issues.QueryAlert -> do
-          case AE.fromJSON (getAeson issue.issueData) of
-            AE.Success (alertData :: Issues.QueryAlertData) -> do
-              div_ [class_ "mb-4"] do
-                span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
-                div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"]
-                  $ toHtml alertData.queryExpression
-            _ -> pass
-        _ -> pass
+        span_ [class_ "text-textWeak"] do
+          strong_ [class_ "text-fillSuccess-strong"] $ toHtml $ show incrementalChanges
+          " incremental"
 
-      -- Recommended action
-      div_ [class_ "border-l-4 border-strokeBrand pl-4 mb-4"] do
-        p_ [class_ "text-sm text-textStrong leading-relaxed"] $ toHtml issue.recommendedAction
+        div_ [class_ "w-px h-4 bg-strokeWeak"] ""
 
-      -- Collapsible payload changes (only for API changes)
-      when (issue.issueType == Issues.APIChange) do
-        details_ [class_ "group mb-4"] do
-          summary_ [class_ "inline-flex items-center cursor-pointer whitespace-nowrap text-sm font-medium transition-all rounded-md gap-1.5 text-textBrand hover:text-textBrand/80 list-none"] do
-            faSprite_ "chevron-right" "regular" "h-4 w-4 mr-1 transition-transform group-open:rotate-90"
-            "View detailed payload changes"
+        span_ [class_ "text-textWeak"] do
+          strong_ [class_ "text-textBrand"] $ toHtml $ show affectedRequests
+          " payloads affected"
 
-          -- Payload details content
-          div_ [class_ "mt-4 border border-strokeWeak rounded-lg overflow-hidden bg-bgRaised"] do
-            renderPayloadChanges issue
+    -- Stack trace for runtime exceptions or Query for alerts
+    case issue.issueType of
+      Issues.RuntimeException -> do
+        case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (exceptionData :: Issues.RuntimeExceptionData) -> do
+            div_ [class_ "border border-strokeError-weak rounded-lg group/er mb-4"] do
+              label_ [class_ "text-sm text-textWeak font semibold rounded-lg p-2 flex gap-2 items-center"] do
+                faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.err-input:checked]/er:rotate-90"
+                "Stack trace"
+                input_ [class_ "err-input w-0 h-0 opacity-0", type_ "checkbox"]
+              div_ [class_ "bg-fillError-weak p-4 overflow-x-scroll hidden group-has-[.err-input:checked]/er:block text-sm font-mono text-fillError-strong"] do
+                pre_ [class_ "whitespace-pre-wrap "] $ toHtml exceptionData.stackTrace
+          _ -> pass
+      Issues.QueryAlert -> do
+        case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (alertData :: Issues.QueryAlertData) -> do
+            div_ [class_ "mb-4"] do
+              span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
+              div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"]
+                $ toHtml alertData.queryExpression
+          _ -> pass
+      _ -> pass
 
-      -- Action buttons
-      div_ [class_ "flex items-center gap-3 mt-4 pt-4 border-t border-strokeWeak"] do
-        button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 text-textBrand hover:text-textBrand/80 hover:bg-fillBrand-weak"] do
-          faSprite_ "eye" "regular" "w-4 h-4"
-          span_ [class_ "leading-none"] "view related logs"
+    -- Recommended action
+    div_ [class_ "border-l-4 border-strokeBrand pl-4 mb-4"] do
+      p_ [class_ "text-sm text-textStrong leading-relaxed"] $ toHtml issue.recommendedAction
 
-        button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-textBrand border-strokeBrand-strong hover:bg-fillBrand-weak"] do
-          faSprite_ "code" "regular" "w-4 h-4"
-          span_ [class_ "leading-none"] "View Full Schema"
+    -- Collapsible payload changes (only for API changes)
+    when (issue.issueType == Issues.APIChange) do
+      details_ [class_ "group mb-4"] do
+        summary_ [class_ "inline-flex items-center cursor-pointer whitespace-nowrap text-sm font-medium transition-all rounded-md gap-1.5 text-textBrand hover:text-textBrand/80 list-none"] do
+          faSprite_ "chevron-right" "regular" "h-4 w-4 mr-1 transition-transform group-open:rotate-90"
+          "View detailed payload changes"
 
-        -- Acknowledge button
-        let isAcknowledged = isJust issue.acknowledgedAt
-        let acknowledgeEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/" <> Issues.issueIdText issue.id <> if isAcknowledged then "/unacknowlege" else "/acknowlege"
-        button_
-          [ class_
-              $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
-              <> if isAcknowledged
-                then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80"
-                else "bg-fillPrimary text-textInverse-strong hover:bg-fillPrimary/90"
-          , hxGet_ acknowledgeEndpoint
-          , hxSwap_ "outerHTML"
-          , hxTarget_ "closest .itemsListItem"
-          ]
-          do
-            faSprite_ "check" "regular" "w-4 h-4"
-            span_ [class_ "leading-none"] $ if isAcknowledged then "Acknowledged" else "Acknowledge"
+        -- Payload details content
+        div_ [class_ "mt-4 border border-strokeWeak rounded-lg overflow-hidden bg-bgRaised"] do
+          renderPayloadChanges issue
 
-        -- Archive button
-        let isArchived = isJust issue.archivedAt
-        let archiveEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/" <> Issues.issueIdText issue.id <> if isArchived then "/unarchive" else "/archive"
-        button_
-          [ class_
-              $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
-              <> if isArchived
-                then "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak hover:bg-fillWarning-weak/80"
-                else "border border-strokeWeak text-textStrong hover:bg-fillWeak"
-          , hxGet_ archiveEndpoint
-          , hxSwap_ "outerHTML"
-          , hxTarget_ "closest .itemsListItem"
-          ]
-          do
-            faSprite_ "archive" "regular" "w-4 h-4"
-            span_ [class_ "leading-none"] $ if isArchived then "Unarchive" else "Archive"
+    -- Action buttons
+    div_ [class_ "flex items-center gap-3 mt-4 pt-4 border-t border-strokeWeak"] do
+      button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 text-textBrand hover:text-textBrand/80 hover:bg-fillBrand-weak"] do
+        faSprite_ "eye" "regular" "w-4 h-4"
+        span_ [class_ "leading-none"] "view related logs"
+
+      button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-textBrand border-strokeBrand-strong hover:bg-fillBrand-weak"] do
+        faSprite_ "code" "regular" "w-4 h-4"
+        span_ [class_ "leading-none"] "View Full Schema"
+
+      -- Acknowledge button
+      let isAcknowledged = isJust issue.acknowledgedAt
+      let acknowledgeEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/" <> Issues.issueIdText issue.id <> if isAcknowledged then "/unacknowlege" else "/acknowlege"
+      button_
+        [ class_
+            $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
+            <> if isAcknowledged
+              then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80"
+              else "bg-fillPrimary text-textInverse-strong hover:bg-fillPrimary/90"
+        , hxGet_ acknowledgeEndpoint
+        , hxSwap_ "outerHTML"
+        , hxTarget_ "closest .itemsListItem"
+        ]
+        do
+          faSprite_ "check" "regular" "w-4 h-4"
+          span_ [class_ "leading-none"] $ if isAcknowledged then "Acknowledged" else "Acknowledge"
+
+      -- Archive button
+      let isArchived = isJust issue.archivedAt
+      let archiveEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/" <> Issues.issueIdText issue.id <> if isArchived then "/unarchive" else "/archive"
+      button_
+        [ class_
+            $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
+            <> if isArchived
+              then "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak hover:bg-fillWarning-weak/80"
+              else "border border-strokeWeak text-textStrong hover:bg-fillWeak"
+        , hxGet_ archiveEndpoint
+        , hxSwap_ "outerHTML"
+        , hxTarget_ "closest .itemsListItem"
+        ]
+        do
+          faSprite_ "archive" "regular" "w-4 h-4"
+          span_ [class_ "leading-none"] $ if isArchived then "Unarchive" else "Archive"
 
 
 -- Render payload changes section

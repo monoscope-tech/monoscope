@@ -13,7 +13,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pkg.Components.Table (TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), Features (..), Config (..), BulkAction (..), SearchConfig (..), SortConfig (..), PaginationConfig (..), LoadTrigger (..), ZeroState (..), Column (..), col, withAttrs)
+import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), LoadTrigger (..), PaginationConfig (..), SearchConfig (..), SortConfig (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.Widget (WidgetAxis (..))
 import Pkg.Components.Widget qualified as Widget
 import PyF qualified
