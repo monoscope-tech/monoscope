@@ -44,6 +44,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem (getServiceName)
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
+import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
@@ -369,7 +370,14 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
       & #html
         ?~ renderText
           ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-              $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml)
+              $ forM_ issuesVM \vm@(AnomalyList.IssueVM hideByDefault _ _ _ issue) ->
+                div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] do
+                  Table.renderRowWithColumns
+                    [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "card-round" else "px-0.5 py-4"
+                    , style_ (if hideByDefault then "display:none" else "")
+                    ]
+                    (AnomalyList.issueColumns issue.projectId)
+                    vm
           )
   Widget.WTStat -> do
     stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams

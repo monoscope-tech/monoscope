@@ -1,4 +1,4 @@
-module Pages.Endpoints.ApiCatalog (apiCatalogH, HostEventsVM (..), endpointListGetH, renderEndpoint, CatalogList (..), EndpointRequestStatsVM (..), EnpReqStatsVM (..)) where
+module Pages.Endpoints.ApiCatalog (apiCatalogH, HostEventsVM (..), endpointListGetH, CatalogList (..), EndpointRequestStatsVM (..), EnpReqStatsVM (..)) where
 
 import Data.Default (def)
 import Data.Text qualified as T
@@ -13,8 +13,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pkg.Components.ItemsList (TabFilter (..), TabFilterOpt (..))
-import Pkg.Components.ItemsList qualified as ItemsList
+import Pkg.Components.Table (Column (..), Config (..), Features (..), SearchMode (..), SortConfig (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.Widget (WidgetAxis (..))
 import Pkg.Components.Widget qualified as Widget
 import PyF qualified
@@ -39,32 +38,42 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
   currTime <- Time.currentTime
 
   let currentURL = "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=" <> requestType
-      nextFetchUrl = Just $ currentURL <> "&skip=" <> maybe "20" (\x -> show $ 20 + x) skipM
-
-  let listCfg =
-        ItemsList.ItemsListCfg
-          { projectId = pid
-          , sort = Just $ ItemsList.SortCfg{current = sortV}
-          , filter = Just filterV
-          , currentURL = currentURL
-          , currTime
-          , bulkActions =
-              [ ItemsList.BulkAction{icon = Just "check", title = "acknowledge", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowledge"}
-              , ItemsList.BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
-              ]
-          , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
-          , nextFetchUrl
-          , heading = Nothing
-          , zeroState =
-              Just
-                $ ItemsList.ZeroState
-                  { icon = "empty-set"
-                  , title = "No " <> requestType <> " Requests Monitored."
-                  , description = "You're currently not monitoring your " <> T.toLower requestType <> " integrations."
-                  , actionText = "See monitoring guide"
-                  , destination = Right "https://monoscope.tech/docs/sdks/nodejs/expressjs/#monitoring-axios-requests"
-                  }
-          , elemID = "anomalyListForm"
+      nextFetchUrl =
+        if V.length hostsAndEvents < 20
+          then Nothing
+          else Just $ currentURL <> "&skip=" <> maybe "20" (\x -> show $ 20 + x) skipM
+  let hostsVM = V.map (\host -> HostEventsVM pid host filterV requestType) hostsAndEvents
+  let catalogTable =
+        Table
+          { config = def{elemID = "anomalyListForm"}
+          , columns = catalogColumns pid requestType
+          , rows = hostsVM
+          , features =
+              def
+                { rowId = Just \(HostEventsVM _ he _ _) -> he.host
+                , bulkActions = [] -- No bulk actions for dependencies
+                , search = Just ClientSide
+                , sort =
+                    Just
+                      $ SortConfig
+                        { current = sortV
+                        , currentURL = currentURL
+                        , options =
+                            [ ("Latest", "Most recently accessed", "events")
+                            , ("Alphabetical", "Sort by dependency name", "name")
+                            ]
+                        }
+                , pagination = (\url -> (url, "both")) <$> nextFetchUrl
+                , zeroState =
+                    Just
+                      $ ZeroState
+                        { icon = "empty-set"
+                        , title = "No " <> requestType <> " Requests Monitored."
+                        , description = "You're currently not monitoring your " <> T.toLower requestType <> " integrations."
+                        , actionText = "See monitoring guide"
+                        , destination = Right "https://monoscope.tech/docs/sdks/nodejs/expressjs/#monitoring-axios-requests"
+                        }
+                }
           }
 
   let bwconf =
@@ -78,61 +87,68 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Outgoing", role_ "tab", class_ $ "tab h-auto! " <> if requestType == "Outgoing" then "tab-active text-textStrong" else ""] "Outgoing"
           }
   case skipM of
-    Just _ -> addRespHeaders $ CatalogListRows $ ItemsList.ItemsRows nextFetchUrl $ V.map (\host -> HostEventsVM pid host filterV requestType) hostsAndEvents
-    _ -> addRespHeaders $ CatalogListPage $ PageCtx bwconf (ItemsList.ItemsPage listCfg $ V.map (\host -> HostEventsVM pid host filterV requestType) hostsAndEvents)
+    Just _ -> addRespHeaders $ CatalogListRows $ TableRows nextFetchUrl (catalogColumns pid requestType) hostsVM
+    _ -> addRespHeaders $ CatalogListPage $ PageCtx bwconf catalogTable
 
 
 data HostEventsVM = HostEventsVM Projects.ProjectId Endpoints.HostEvents Text Text
 
 
-data CatalogList = CatalogListPage (PageCtx (ItemsList.ItemsPage HostEventsVM)) | CatalogListRows (ItemsList.ItemsRows HostEventsVM)
+catalogColumns :: Projects.ProjectId -> Text -> [Column HostEventsVM]
+catalogColumns pid requestType =
+  [ col "" renderCatalogCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8"]
+  , col "Dependency" (renderCatalogMainCol pid requestType) & withAttrs [class_ "space-y-3 grow"]
+  , col "Events" renderCatalogEventsCol & withAttrs [class_ "w-36 flex items-center justify-center"]
+  , col "Activity" renderCatalogChartCol & withAttrs [class_ "flex items-center justify-center"]
+  ]
+
+
+renderCatalogCheckboxCol :: HostEventsVM -> Html ()
+renderCatalogCheckboxCol (HostEventsVM _ he _ _) = do
+  a_ [class_ "w-2 h-full"] ""
+  input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "hostId", value_ he.host]
+
+
+renderCatalogEventsCol :: HostEventsVM -> Html ()
+renderCatalogEventsCol (HostEventsVM _ he _ _) =
+  span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14 days"]
+    $ toHtml @String
+    $ fmt (commaizeF he.eventCount)
+
+
+renderCatalogChartCol :: HostEventsVM -> Html ()
+renderCatalogChartCol (HostEventsVM pid he _ _) =
+  div_ [class_ "w-56 h-12 px-3"]
+    $ Widget.widget_
+    $ (def :: Widget.Widget)
+      { Widget.standalone = Just True
+      , Widget.title = Just he.host
+      , Widget.wType = Widget.WTTimeseries
+      , Widget.showTooltip = Just False
+      , Widget.naked = Just True
+      , Widget.xAxis = Just (def{Widget.showAxisLabel = Just False})
+      , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
+      , Widget.query = Just $ "attributes.http.host==\"" <> he.host <> "\" | summarize count(*) by bin_auto(timestamp)"
+      , Widget._projectId = Just pid
+      , Widget.hideLegend = Just True
+      }
+
+
+renderCatalogMainCol :: Projects.ProjectId -> Text -> HostEventsVM -> Html ()
+renderCatalogMainCol pid requestType (HostEventsVM _ he _ _) =
+  div_ [class_ "space-x-3"] do
+    a_ [class_ "inline-block font-bold space-x-2"] $ do
+      a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> he.host <> "&request_type=" <> requestType, class_ " hover:text-textWeak"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" he.host)
+      a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=attributes.net.host.name%3D%3D" <> "\"" <> he.host <> "\"", class_ "text-textBrand hover:text-textWeak text-xs"] "View logs"
+
+
+data CatalogList = CatalogListPage (PageCtx (Table HostEventsVM)) | CatalogListRows (TableRows HostEventsVM)
 
 
 instance ToHtml CatalogList where
   toHtml (CatalogListPage pg) = toHtml pg
   toHtml (CatalogListRows r) = toHtml r
   toHtmlRaw = toHtml
-
-
-instance ToHtml HostEventsVM where
-  toHtml :: Monad m => HostEventsVM -> HtmlT m ()
-  toHtml (HostEventsVM pid he timeFilter requestType) = toHtmlRaw $ renderapiCatalog pid he timeFilter requestType
-  toHtmlRaw :: Monad m => HostEventsVM -> HtmlT m ()
-  toHtmlRaw = toHtml
-
-
-renderapiCatalog :: Projects.ProjectId -> Endpoints.HostEvents -> Text -> Text -> Html ()
-renderapiCatalog pid host timeFilter requestType = div_ [class_ "flex py-4 gap-8 items-center itemsListItem"] do
-  div_ [class_ "h-4 flex space-x-3 w-8 "] do
-    a_ [class_ "w-2 h-full"] ""
-    input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "hostId", value_ host.host]
-
-  div_ [class_ "space-y-3 grow"] do
-    div_ [class_ "space-x-3"] do
-      a_ [class_ "inline-block font-bold space-x-2"] $ do
-        a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host <> "&request_type=" <> requestType, class_ " hover:text-textWeak"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
-        a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=attributes.net.host.name%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-textBrand hover:text-textWeak text-xs"] "View logs"
-
-  div_ [class_ "w-36 flex items-center justify-center"]
-    $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14 days"]
-    $ toHtml @String
-    $ fmt (commaizeF host.eventCount)
-
-  div_ [class_ "flex items-center justify-center "] do
-    div_ [class_ "w-56 h-12 px-3"]
-      $ Widget.widget_
-      $ (def :: Widget.Widget)
-        { Widget.standalone = Just True
-        , Widget.title = Just host.host
-        , Widget.wType = Widget.WTTimeseries
-        , Widget.showTooltip = Just False
-        , Widget.naked = Just True
-        , Widget.xAxis = Just (def{Widget.showAxisLabel = Just False})
-        , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
-        , Widget.query = Just $ "attributes.http.host==\"" <> host.host <> "\" | summarize count(*) by bin_auto(timestamp)"
-        , Widget._projectId = Just pid
-        , Widget.hideLegend = Just True
-        }
 
 
 endpointListGetH
@@ -189,55 +205,111 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                   }
           }
 
-  let nextFetchUrl = currentURL <> "&page=" <> show (page + 1) <> "&load_more=true"
   currTime <- Time.currentTime
   let endpReqVM = V.map (EnpReqStatsVM False currTime) endpointStats
+      nextFetchUrl =
+        if V.length endpointStats < 30
+          then Nothing
+          else Just $ currentURL <> "&page=" <> show (page + 1) <> "&load_more=true"
+  let endpointsTable =
+        Table
+          { config = def{elemID = "anomalyListForm"}
+          , columns = endpointColumns pid
+          , rows = endpReqVM
+          , features =
+              def
+                { rowId = Just \(EnpReqStatsVM _ _ enp) -> enp.endpointHash
+                , bulkActions = [] -- No bulk actions for endpoints
+                , search = Just (ServerSide currentURL)
+                , sort =
+                    Just
+                      $ SortConfig
+                        { current = fromMaybe "events" sortM
+                        , currentURL = currentURL
+                        , options =
+                            [ ("Most Active", "Most requests", "events")
+                            , ("Alphabetical", "Sort by endpoint path", "name")
+                            ]
+                        }
+                , pagination = (\url -> (url, "both")) <$> nextFetchUrl
+                , zeroState =
+                    Just
+                      $ ZeroState
+                        { icon = "empty-set"
+                        , title = "Waiting for events"
+                        , description = "You're currently not sending any data to monoscope from your backends yet."
+                        , actionText = "Read the setup guide"
+                        , destination = Right "https://monoscope.tech/docs/sdks/"
+                        }
+                , header = Just $ div_ [class_ "mb-4"] $ case hostM of
+                    Just h -> span_ [] "Endpoints for dependency: " >> span_ [class_ "text-textBrand font-bold"] (toHtml h)
+                    Nothing -> "Endpoints"
+                }
+          }
   case (loadMoreM, searchM) of
-    (Just _, _) -> addRespHeaders $ EndpointsListRows $ ItemsList.ItemsRows (Just nextFetchUrl) endpReqVM
-    (_, Just _) -> addRespHeaders $ EndpointsListRows $ ItemsList.ItemsRows (Just nextFetchUrl) endpReqVM
-    _ -> do
-      let listCfg =
-            ItemsList.ItemsListCfg
-              { projectId = pid
-              , nextFetchUrl = Just nextFetchUrl
-              , sort = Just ItemsList.SortCfg{current = fromMaybe "events" sortM}
-              , filter = Nothing
-              , bulkActions =
-                  [ ItemsList.BulkAction{icon = Just "check", title = "acknowlege", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
-                  , ItemsList.BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
-                  ]
-              , heading = Just case hostM of
-                  Just h -> span_ [] "Endpoints for dependency: " >> span_ [class_ "text-textBrand font-bold"] (toHtml h)
-                  Nothing -> "Endpoints"
-              , search = Just $ ItemsList.SearchCfg{viaQueryParam = Just (maybeToMonoid searchM)}
-              , zeroState =
-                  Just
-                    $ ItemsList.ZeroState
-                      { icon = "empty-set"
-                      , title = "Waiting for events"
-                      , description = "You're currently not sending any data to monoscope from your backends yet."
-                      , actionText = "Read the setup guide"
-                      , destination = Right "https://monoscope.tech/docs/sdks/"
-                      }
-              , elemID = "anomalyListForm"
-              , ..
-              }
-      addRespHeaders $ EndpointsListPage $ PageCtx bwconf (ItemsList.ItemsPage listCfg endpReqVM)
+    (Just _, _) -> addRespHeaders $ EndpointsListRows $ TableRows nextFetchUrl (endpointColumns pid) endpReqVM
+    (_, Just _) -> addRespHeaders $ EndpointsListRows $ TableRows nextFetchUrl (endpointColumns pid) endpReqVM
+    _ -> addRespHeaders $ EndpointsListPage $ PageCtx bwconf endpointsTable
 
 
 data EnpReqStatsVM = EnpReqStatsVM Bool UTCTime Endpoints.EndpointRequestStats
   deriving stock (Show)
 
 
-instance ToHtml EnpReqStatsVM where
-  {-# INLINE toHtml #-}
-  toHtml (EnpReqStatsVM hideByDefault currTime enp) = toHtmlRaw $ renderEndpoint hideByDefault currTime enp
-  toHtmlRaw = toHtml
+endpointColumns :: Projects.ProjectId -> [Column EnpReqStatsVM]
+endpointColumns pid =
+  [ col "" renderEndpointCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8 justify-center items-center"]
+  , col "Endpoint" (renderEndpointMainCol pid) & withAttrs [class_ "space-y-3 grow"]
+  , col "Events" renderEndpointEventsCol & withAttrs [class_ "w-36 flex items-center justify-center"]
+  , col "Activity" renderEndpointChartCol & withAttrs [class_ "flex items-center justify-center w-60 h-10"]
+  ]
+
+
+renderEndpointCheckboxCol :: EnpReqStatsVM -> Html ()
+renderEndpointCheckboxCol (EnpReqStatsVM _ _ enp) = do
+  a_ [class_ $ endpointAccentColor True True <> " w-2 h-full"] ""
+  input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "endpointHash", value_ enp.endpointHash]
+
+
+renderEndpointEventsCol :: EnpReqStatsVM -> Html ()
+renderEndpointEventsCol (EnpReqStatsVM _ _ enp) =
+  span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"]
+    $ toHtml @String
+    $ fmt
+    $ commaizeF enp.totalRequests
+
+
+renderEndpointChartCol :: EnpReqStatsVM -> Html ()
+renderEndpointChartCol (EnpReqStatsVM _ _ enp) =
+  div_ [class_ "w-56 h-12 px-3"]
+    $ Widget.widget_
+    $ (def :: Widget.Widget)
+      { Widget.standalone = Just True
+      , Widget.wType = Widget.WTTimeseries
+      , Widget.id = Just enp.endpointHash
+      , Widget.title = Just enp.endpointHash
+      , Widget.showTooltip = Just False
+      , Widget.naked = Just True
+      , Widget.xAxis = Just (def{showAxisLabel = Just False})
+      , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
+      , Widget.query = Just $ "endpoint_hash==\"" <> enp.endpointHash <> "\" | summarize count(*) by bin(timestamp, 1h), status_code"
+      , Widget._projectId = Just enp.projectId
+      , Widget.hideLegend = Just True
+      }
+
+
+renderEndpointMainCol :: Projects.ProjectId -> EnpReqStatsVM -> Html ()
+renderEndpointMainCol pid (EnpReqStatsVM _ _ enp) =
+  div_ [class_ "space-x-3"] do
+    a_ [class_ "inline-block font-bold text-textError space-x-2", href_ ("/p/" <> pid.toText <> "/endpoints/details?var-endpointHash=" <> enp.endpointHash <> "&var-host=" <> enp.host)] $ do
+      span_ [class_ $ "endpoint endpoint-" <> T.toLower enp.method, data_ "enp-urlMethod" enp.method] $ toHtml enp.method
+      span_ [class_ " inconsolata text-base text-textStrong", data_ "enp-urlPath" enp.urlPath] $ toHtml $ if T.null enp.urlPath then "/" else T.take 150 enp.urlPath
+    a_ [class_ "text-textBrand  hover:text-textStrong", href_ ("/p/" <> pid.toText <> "/log_explorer?query=" <> "attributes.http.route==\"" <> enp.urlPath <> "\"")] "View logs"
 
 
 data EndpointRequestStatsVM
-  = EndpointsListPage (PageCtx (ItemsList.ItemsPage EnpReqStatsVM))
-  | EndpointsListRows (ItemsList.ItemsRows EnpReqStatsVM)
+  = EndpointsListPage (PageCtx (Table EnpReqStatsVM))
+  | EndpointsListRows (TableRows EnpReqStatsVM)
 
 
 instance ToHtml EndpointRequestStatsVM where
@@ -252,35 +324,3 @@ endpointAccentColor :: Bool -> Bool -> Text
 endpointAccentColor _ True = "bg-fillWeaker"
 endpointAccentColor True False = "bg-fillSuccess-weak"
 endpointAccentColor False False = "bg-fillError-strong"
-
-
-renderEndpoint :: Bool -> UTCTime -> Endpoints.EndpointRequestStats -> Html ()
-renderEndpoint activePage currTime enp = do
-  div_ [class_ "flex py-4 gap-8 items-center endpoint_item itemsListItem"] do
-    div_ [class_ "h-4 flex space-x-3 w-8 justify-center items-center"] do
-      a_ [class_ $ endpointAccentColor True {- isJust enp.acknowlegedAt -} True {- isJust enp.archivedAt -} <> " w-2 h-full"] ""
-      let anomalyId = ""
-      input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "anomalyId", value_ anomalyId]
-    div_ [class_ "space-y-3 grow"] do
-      div_ [class_ "space-x-3"] do
-        a_ [class_ "inline-block font-bold text-textError space-x-2", href_ ("/p/" <> enp.projectId.toText <> "/endpoints/details?var-endpointHash=" <> enp.endpointHash <> "&var-host=" <> enp.host)] $ do
-          span_ [class_ $ "endpoint endpoint-" <> T.toLower enp.method, data_ "enp-urlMethod" enp.method] $ toHtml enp.method
-          span_ [class_ " inconsolata text-base text-textStrong", data_ "enp-urlPath" enp.urlPath] $ toHtml $ if T.null enp.urlPath then "/" else T.take 150 enp.urlPath
-        a_ [class_ "text-textBrand  hover:text-textStrong", href_ ("/p/" <> enp.projectId.toText <> "/log_explorer?query=" <> "attributes.http.route==\"" <> enp.urlPath <> "\"")] "View logs"
-    div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml @String $ fmt $ commaizeF enp.totalRequests
-    div_ [class_ "flex items-center justify-center w-60 h-10"]
-      $ div_ [class_ "w-56 h-12 px-3"]
-      $ Widget.widget_
-      $ (def :: Widget.Widget)
-        { Widget.standalone = Just True
-        , Widget.wType = Widget.WTTimeseries
-        , Widget.id = Just enp.endpointHash
-        , Widget.title = Just enp.endpointHash
-        , Widget.showTooltip = Just False
-        , Widget.naked = Just True
-        , Widget.xAxis = Just (def{showAxisLabel = Just False})
-        , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
-        , Widget.query = Just $ "endpoint_hash==\"" <> enp.endpointHash <> "\" | summarize count(*) by bin(timestamp, 1h), status_code"
-        , Widget._projectId = Just enp.projectId
-        , Widget.hideLegend = Just True
-        }

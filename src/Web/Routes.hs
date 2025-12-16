@@ -88,7 +88,7 @@ import Pages.S3 qualified as S3
 import Pages.Share qualified as Share
 import Pages.Telemetry qualified as Metrics
 import Pages.Telemetry qualified as Trace
-import Pkg.Components.ItemsList qualified as ItemsList
+import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget qualified as Widget
 import Utils
 
@@ -277,7 +277,7 @@ type MonitorsRoutes = NamedRoutes MonitorsRoutes'
 
 type MonitorsRoutes' :: Type -> Type
 data MonitorsRoutes' mode = MonitorsRoutes'
-  { listGet :: mode :- QueryParam "filter" Text :> QueryParam "since" Text :> Get '[HTML] (RespHeaders (PageCtx (ItemsList.ItemsPage Testing.UnifiedMonitorItem)))
+  { listGet :: mode :- QueryParam "filter" Text :> QueryParam "since" Text :> Get '[HTML] (RespHeaders (PageCtx (Table.Table Testing.UnifiedMonitorItem)))
   , overviewGet :: mode :- Capture "monitor_id" Text :> "overview" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , alertUpsertPost :: mode :- "alerts" :> ReqBody '[FormUrlEncoded] Alerts.AlertUpsertForm :> Post '[HTML] (RespHeaders Alerts.Alert)
   , alertSingleGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Get '[HTML] (RespHeaders Alerts.Alert)
@@ -433,8 +433,8 @@ logExplorerServer pid =
 anomaliesServer :: Projects.ProjectId -> Servant.ServerT AnomaliesRoutes ATAuthCtx
 anomaliesServer pid =
   AnomaliesRoutes'
-    { acknowlegeGet = AnomalyList.acknowlegeAnomalyGetH pid
-    , unAcknowlegeGet = AnomalyList.unAcknowlegeAnomalyGetH pid
+    { acknowlegeGet = AnomalyList.acknowledgeAnomalyGetH pid
+    , unAcknowlegeGet = AnomalyList.unAcknowledgeAnomalyGetH pid
     , archiveGet = AnomalyList.archiveAnomalyGetH pid
     , unarchiveGet = AnomalyList.unArchiveAnomalyGetH pid
     , bulkActionsPost = AnomalyList.anomalyBulkActionsPostH pid

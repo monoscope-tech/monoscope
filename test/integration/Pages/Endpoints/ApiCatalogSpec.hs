@@ -25,7 +25,7 @@ import OddJobs.Job (Job (..))
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
-import Pkg.Components.ItemsList qualified as ItemsList
+import Pkg.Components.Table qualified as Table
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import BackgroundJobs (processFiveMinuteSpans, processBackgroundJob, processOneMinuteErrors)
@@ -46,7 +46,7 @@ getEndpointStats tr filterParam hostM = do
   (_, resp) <- testServant tr $
     ApiCatalog.endpointListGetH testPid Nothing Nothing filterParam hostM Nothing Nothing Nothing Nothing Nothing Nothing Nothing
   case resp of
-    ApiCatalog.EndpointsListPage (PageCtx _ (ItemsList.ItemsPage _ enpList)) -> pure enpList
+    ApiCatalog.EndpointsListPage (PageCtx _ tbl) -> pure tbl.rows
     _ -> error "Unexpected response from endpointListGetH"
 
 -- Helper function to verify endpoint creation
@@ -90,11 +90,11 @@ spec :: Spec
 spec = aroundAll withTestResources do
   describe "API Catalog and Endpoints" do
     it "returns empty list when no data exists" \tr -> do
-      (_, catalogList) <- testServant tr $ 
+      (_, catalogList) <- testServant tr $
           ApiCatalog.apiCatalogH testPid Nothing Nothing Nothing Nothing
       case catalogList of
-        ApiCatalog.CatalogListPage (PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents)) -> 
-          length hostsAndEvents `shouldBe` 0
+        ApiCatalog.CatalogListPage (PageCtx _ tbl) ->
+          length tbl.rows `shouldBe` 0
         _ -> expectationFailure "Expected CatalogListPage"
 
     it "creates endpoints from processed spans" \tr -> do
@@ -140,11 +140,11 @@ spec = aroundAll withTestResources do
       verifyEndpointsCreated tr
 
     it "returns hosts list after processing messages" \tr -> do
-      (_, catalogList) <- testServant tr $ 
+      (_, catalogList) <- testServant tr $
           ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing
       case catalogList of
-        ApiCatalog.CatalogListPage (PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents)) ->
-          length hostsAndEvents `shouldBe` 2
+        ApiCatalog.CatalogListPage (PageCtx _ tbl) ->
+          length tbl.rows `shouldBe` 2
         _ -> expectationFailure "Expected CatalogListPage"
 
     it "creates anomalies automatically via database triggers" \tr -> do
