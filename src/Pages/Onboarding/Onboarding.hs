@@ -356,7 +356,7 @@ onboardingConfPostH pid form = do
 
 onboardingCompleteBody :: Projects.ProjectId -> Html ()
 onboardingCompleteBody pid = do
-  div_ [class_ "w-[550px] h-full flex items-center mx-auto relative"] $ do
+  div_ [class_ "w-xl h-full flex items-center mx-auto relative"] $ do
     canvas_ [id_ "drawing_canvas", class_ "absolute top-0 left-0  w-full"] pass
     div_ [class_ "flex-col gap-4 flex w-full p-14 my-auto border border-weak rounded-2xl"] $ do
       div_ [class_ "p-3 bg-fillSuccess-weak rounded-full w-max border-strokeSuccess-weak gap-2 inline-flex"]
@@ -508,11 +508,11 @@ integrationsPage pid apikey =
   div_ [class_ "w-full flex h-screen overflow-hidden group/pg"] do
     div_ [class_ "w-1/2 bg-bgRaised h-full flex flex-col"] do
       div_ [class_ "pt-[156px] px-12 flex-shrink-0"]
-        $ div_ [class_ "max-w-[550px]"]
+        $ div_ [class_ "max-w-xl"]
         $ stepIndicator 4 "Instrument your apps or servers"
         $ "/p/"
-        <> pid.toText
-        <> "/onboarding?step=NotifChannel"
+          <> pid.toText
+          <> "/onboarding?step=NotifChannel"
       div_ [class_ "flex-col w-full gap-4 flex mt-4 px-12 overflow-y-auto flex-grow"] do
         p_ [class_ "text-textWeak leading-relaxed"] do
           "Send Logs, Metrics or Traces. Select an item below for instructions. "
@@ -628,7 +628,7 @@ integrationsPage pid apikey =
                           , hxSelect_ "#mainArticle"
                           , hxIndicator_ $ "#fw-indicator-" <> lang
                           ]
-                        <> [checked_ | idx == 0]
+                          <> [checked_ | idx == 0]
                       unless (T.null fwIcon) $ img_ [class_ "h-5 w-5", src_ $ "https://monoscope.tech/assets/img/framework-logos/" <> fwIcon]
                       span_ $ toHtml fwName
 
@@ -675,8 +675,8 @@ integrationsPage pid apikey =
                 $ code_
                 $ toHtml
                 $ "telemetrygen traces --otlp-endpoint localhost:4317 \\\n  --otlp-insecure \\\n  --otlp-header 'Authorization=\"Bearer "
-                <> apikey
-                <> "\"' \\\n  --traces 10 \\\n  --duration 5s"
+                  <> apikey
+                  <> "\"' \\\n  --traces 10 \\\n  --duration 5s"
               button_
                 [ class_ "absolute top-2 right-2 px-3 py-1 text-xs bg-fillBrand-strong rounded text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90"
                 , type_ "button"
@@ -796,7 +796,7 @@ formField labelText inputType inputName inputId inputValue = do
 
 notifChannelsWithUrls :: Text -> Text -> Projects.ProjectId -> Text -> V.Vector Text -> Bool -> Bool -> Html ()
 notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack = do
-  div_ [class_ "w-[550px] mx-auto mt-[156px] mb-10"] $ do
+  div_ [class_ "w-xl mx-auto mt-[156px] mb-10"] $ do
     div_ [id_ "inviteModalContainer"] pass
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       stepIndicator 3 "How should we notify you about issues?" $ "/p/" <> pid.toText <> "/onboarding?step=Survey"
@@ -847,7 +847,7 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
 
 onboardingInfoBody :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Html ()
 onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
-  div_ [class_ "w-[550px] mx-auto mt-[156px]"] $ do
+  div_ [class_ "w-xl mx-auto mt-[156px]"] $ do
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       stepIndicator 1 "Tell us a little bit about you" ""
       form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/info", hxIndicator_ "#loadingIndicator"] $ do
@@ -861,7 +861,7 @@ onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
 
 onboardingConfigBody :: Projects.ProjectId -> Text -> [Text] -> Html ()
 onboardingConfigBody pid loca func = do
-  div_ [class_ "w-[550px] mx-auto mt-[156px]"] $ do
+  div_ [class_ "w-xl mx-auto mt-[156px]"] $ do
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       stepIndicator 2 "Let's configure your project" $ "/p/" <> pid.toText <> "/onboarding?step=Info"
       form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/survey", hxIndicator_ "#loadingIndicator"] $ do
