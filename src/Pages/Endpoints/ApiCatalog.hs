@@ -38,9 +38,10 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
   currTime <- Time.currentTime
 
   let currentURL = "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=" <> requestType
-      nextFetchUrl = if V.length hostsAndEvents < 20
-        then Nothing
-        else Just $ currentURL <> "&skip=" <> maybe "20" (\x -> show $ 20 + x) skipM
+      nextFetchUrl =
+        if V.length hostsAndEvents < 20
+          then Nothing
+          else Just $ currentURL <> "&skip=" <> maybe "20" (\x -> show $ 20 + x) skipM
   let hostsVM = V.map (\host -> HostEventsVM pid host filterV requestType) hostsAndEvents
   let catalogTable =
         Table
@@ -217,9 +218,10 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
 
   currTime <- Time.currentTime
   let endpReqVM = V.map (EnpReqStatsVM False currTime) endpointStats
-      nextFetchUrl = if V.length endpointStats < 30
-        then Nothing
-        else Just $ currentURL <> "&page=" <> show (page + 1) <> "&load_more=true"
+      nextFetchUrl =
+        if V.length endpointStats < 30
+          then Nothing
+          else Just $ currentURL <> "&page=" <> show (page + 1) <> "&load_more=true"
   let endpointsTable =
         Table
           { config = def{elemID = "anomalyListForm"}

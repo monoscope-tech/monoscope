@@ -180,9 +180,10 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
   let currentURL = mconcat ["/p/", pid.toText, "/anomalies?layout=", fromMaybe "false" layoutM, "&ackd=", show ackd, "&archived=", show archived]
       nextFetchUrl = case layoutM of
         Just "slider" -> Nothing
-        _ -> if V.length issues < fLimit
-          then Nothing
-          else Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)
+        _ ->
+          if V.length issues < fLimit
+            then Nothing
+            else Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)
   let issuesVM = V.map (IssueVM False False currTime filterV) issues
   let issuesTable =
         Table

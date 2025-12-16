@@ -155,9 +155,10 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
           sinceQ = maybe "" ("&since=" <>) sinceM
           prfixQ = maybe "" ("&prefix=" <>) prefixM
           cursorQ = "&cursor=" <> show (cursor + 20)
-          nextFetchUrl = if V.length metricList < 20
-            then Nothing
-            else Just $ "/p/" <> pid.toText <> "/metrics?tab=charts" <> sourceQ <> fromQ <> toQ <> sinceQ <> prfixQ <> cursorQ
+          nextFetchUrl =
+            if V.length metricList < 20
+              then Nothing
+              else Just $ "/p/" <> pid.toText <> "/metrics?tab=charts" <> sourceQ <> fromQ <> toQ <> sinceQ <> prfixQ <> cursorQ
       serviceNames <- Telemetry.getMetricServiceNames pid
       if cursor == 0
         then do

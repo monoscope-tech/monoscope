@@ -180,9 +180,10 @@ reportsGetH pid page hxRequest hxBoosted = do
 
   reports <- dbtToEff $ Reports.reportHistoryByProject pid pg
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
-  let nextUrl = if V.length reports < 20
-        then Nothing
-        else Just $ "/p/" <> pid.toText <> "/reports?page=" <> show (pg + 1)
+  let nextUrl =
+        if V.length reports < 20
+          then Nothing
+          else Just $ "/p/" <> pid.toText <> "/reports?page=" <> show (pg + 1)
   case (hxRequest, hxBoosted) of
     (Just "true", Nothing) -> addRespHeaders $ ReportsGetList pid reports nextUrl
     _ -> do

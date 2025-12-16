@@ -194,6 +194,7 @@ renderMonitorIcon item = do
   where
     (typeIcon, _, typeColorClass) = ("bell", "Alert", "bg-fillWarning-weak text-iconWarning")
 
+
 -- | Render monitor content column
 renderMonitorContent :: Projects.ProjectId -> UnifiedMonitorItem -> Html ()
 renderMonitorContent _ item = do
