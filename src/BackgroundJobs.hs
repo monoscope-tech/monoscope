@@ -154,7 +154,7 @@ processBackgroundJob :: Config.AuthContext -> Job -> BgJobs -> ATBackgroundCtx (
 processBackgroundJob authCtx job bgJob =
   case bgJob of
     GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
-    QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds
+    QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds authCtx
     NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} -> newAnomalyJob projectId createdAt anomalyType anomalyAction (V.fromList targetHashes)
     InviteUserToProject userId projectId reciever projectTitle' -> do
       userM <- Users.userById userId
@@ -748,25 +748,25 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
   pass
 
 
-queryMonitorsTriggered :: V.Vector Monitors.QueryMonitorId -> ATBackgroundCtx ()
-queryMonitorsTriggered queryMonitorIds = do
+queryMonitorsTriggered :: V.Vector Monitors.QueryMonitorId -> Config.AuthContext -> ATBackgroundCtx ()
+queryMonitorsTriggered queryMonitorIds authCtx = do
   monitorsEvaled <- dbtToEff $ Monitors.queryMonitorsById queryMonitorIds
   forM_ monitorsEvaled \monitorE ->
     if (monitorE.triggerLessThan && monitorE.evalResult >= monitorE.alertThreshold)
       || (not monitorE.triggerLessThan && monitorE.evalResult <= monitorE.alertThreshold)
-      then handleQueryMonitorThreshold monitorE True
+      then handleQueryMonitorThreshold monitorE True authCtx.config.hostUrl
       else do
         if Just True
           == ( monitorE.warningThreshold <&> \warningThreshold ->
                  (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
                    || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
              )
-          then handleQueryMonitorThreshold monitorE False
+          then handleQueryMonitorThreshold monitorE False authCtx.config.hostUrl
           else pass
 
 
-handleQueryMonitorThreshold :: Monitors.QueryMonitorEvaled -> Bool -> ATBackgroundCtx ()
-handleQueryMonitorThreshold monitorE isAlert = do
+handleQueryMonitorThreshold :: Monitors.QueryMonitorEvaled -> Bool -> Text -> ATBackgroundCtx ()
+handleQueryMonitorThreshold monitorE isAlert hostUrl = do
   Log.logTrace "Query Monitors Triggered " monitorE
   _ <- dbtToEff $ Monitors.updateQMonitorTriggeredState monitorE.id isAlert
   project <- dbtToEff $ Projects.projectById monitorE.projectId
@@ -788,7 +788,7 @@ handleQueryMonitorThreshold monitorE isAlert = do
 
     dbtToEff $ Issues.insertIssue issue
 
-    let alert = MonitorsAlert{monitorTitle = monitorE.alertConfig.title, monitorUrl = ""}
+    let alert = MonitorsAlert{monitorTitle = monitorE.alertConfig.title, monitorUrl = hostUrl <> "/p/" <> monitorE.projectId.toText <> "/anomalies/" <> issue.id.toText}
     if null teams
       then do
         Relude.when monitorE.alertConfig.emailAll do
