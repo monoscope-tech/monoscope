@@ -14,45 +14,62 @@ jobs:
       id-token: 'write'
     steps:
       - uses: actions/checkout@v4
-      - uses: freckle/stack-cache-action@main
-      # - uses: freckle/stack-action@v5
+
+      - name: Install system dependencies
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: libssl-dev librdkafka-dev libgrpc-dev protobuf-compiler libsnappy-dev libpq-dev libldap2-dev libsasl2-dev liblz4-dev libzstd-dev pkg-config
+          version: 1.0
+
+      - name: Set OpenSSL environment variables
+        run: |
+          echo "OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)" >> $GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)" >> $GITHUB_ENV
+
       - uses: haskell-actions/setup@v2
         with:
           ghc-version: 9.12.2
-          enable-stack: true
-          stack-version: 'latest'
-      - name: Install OpenSSL, protoc and snappy
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev librdkafka-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev # or "brew install openssl" for macOS
-      - name: Set OpenSSL Paths
-        run: |
-          export OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)
-          export OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)
+          cabal-version: 'latest'
+      - name: Cache Haskell dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cabal/store
+            dist-newstyle
+          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
+          restore-keys: |
+            ${{ runner.os }}-cabal-
+
       - name: Setup node env
         uses: actions/setup-node@v4
         with:
           node-version: 18
-      - run: npm install
-      - run: npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
-      - name: Build web-components
+
+      - name: Generate required static files
         run: |
+          mkdir -p static/public/assets/css
+          mkdir -p static/public/assets/web-components/dist/js
+          mkdir -p static/public/assets/web-components/dist/css
+
+          npm install
+          npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
+
           cd web-components
           npm install
-          npm run build
+          NODE_ENV=production npx vite build --mode production --sourcemap false
+          cd ..
 
-      - run: stack --no-terminal build --dependencies-only
-      - run: stack build --ghc-options "-O0"
-      
-      - name: Cache build artifacts
-        uses: actions/cache@v3
-        with:
-          path: |
-            .stack-work
-            ~/.stack
-            static/public/assets/css/tailwind.min.css
-            web-components/dist
-          key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml', 'package.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-stack-
+      - name: Update cabal index
+        run: cabal update
+
+      - name: Configure project
+        run: cabal configure --enable-tests --enable-benchmarks --ghc-options="-O0 -j8"
+
+      - name: Build dependencies
+        run: cabal build --only-dependencies all -j4
+
+      - name: Build project
+        run: cabal build all -j4
 
   test:
     name: Test ${{ matrix.test-suite }}
@@ -73,62 +90,82 @@ jobs:
         ports:
           - 5432:5432
     strategy:
+      fail-fast: false
       matrix:
         test-suite: [doctests, unit-tests, integration-tests]
     steps:
       - uses: actions/checkout@v4
-      - uses: freckle/stack-cache-action@main
+
+      - name: Install system dependencies
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: libssl-dev librdkafka-dev libgrpc-dev protobuf-compiler libsnappy-dev libpq-dev libldap2-dev libsasl2-dev liblz4-dev libzstd-dev pkg-config
+          version: 1.0
+
+      - name: Set OpenSSL environment variables
+        run: |
+          echo "OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)" >> $GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)" >> $GITHUB_ENV
+
       - uses: haskell-actions/setup@v2
         with:
           ghc-version: 9.12.2
-          enable-stack: true
-          stack-version: 'latest'
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev librdkafka-dev libgrpc-dev>=1.55 protobuf-compiler libsnappy-dev
-      
-      - name: Restore build artifacts
-        uses: actions/cache@v3
+          cabal-version: 'latest'
+
+      - name: Cache Haskell dependencies
+        uses: actions/cache@v4
         with:
           path: |
-            .stack-work
-            ~/.stack
-            static/public/assets/css/tailwind.min.css
-            web-components/dist
-          key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml', 'package.yaml') }}
+            ~/.cabal/store
+            dist-newstyle
+          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
           restore-keys: |
-            ${{ runner.os }}-stack-
-      
-      # Build CSS if not in cache
+            ${{ runner.os }}-cabal-
+
       - name: Setup node env
         uses: actions/setup-node@v4
         with:
           node-version: 18
-      
-      - name: Build CSS if missing
+
+      - name: Generate required static files
         run: |
-          if [ ! -f static/public/assets/css/tailwind.min.css ]; then
-            echo "CSS file missing, building..."
-            npm install
-            npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
-          else
-            echo "CSS file found in cache"
-          fi
-          
+          mkdir -p static/public/assets/css
+          mkdir -p static/public/assets/web-components/dist/js
+          mkdir -p static/public/assets/web-components/dist/css
+
+          npm install
+          npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
+
+          cd web-components
+          npm install
+          NODE_ENV=production npx vite build --mode production --sourcemap false
+          cd ..
+
+      - name: Update cabal index
+        run: cabal update
+
+      - name: Configure project
+        run: cabal configure --enable-tests --enable-benchmarks --ghc-options="-O0 -j8"
+
+      - name: Build dependencies
+        run: cabal build --only-dependencies all -j4
+
+      - name: Build ${{ matrix.test-suite }}
+        run: cabal build ${{ matrix.test-suite }} -j4
+
       - name: Run ${{ matrix.test-suite }}
         env:
           USE_EXTERNAL_DB: true
-        run: stack test :${{ matrix.test-suite }}
+        run: |
+          echo "::group::Running ${{ matrix.test-suite }}"
+          cabal test ${{ matrix.test-suite }} --ghc-options="-O0 -j8" --test-show-details=direct
+          echo "::endgroup::"
 
   lint:
     name: Lint (hlint)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: haskell-actions/setup@v2
-        with:
-          ghc-version: 9.12.2
-          enable-stack: true
-          stack-version: 'latest'
       - uses: haskell-actions/hlint-setup@v2
       - uses: haskell-actions/hlint-run@v2
         with:
