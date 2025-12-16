@@ -64,12 +64,17 @@ data NotificationAlerts
       }
 
 
-sendDiscordAlert :: (DB :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Eff es ()
-sendDiscordAlert alert pid pTitle = do
+sendDiscordAlert :: (DB :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es ()
+sendDiscordAlert alert pid pTitle channelIdM' = do
   appCtx <- ask @Config.AuthContext
-  discordDataM <- getDiscordDataByProjectId pid
-  whenJust discordDataM \discordData -> do
-    let send = sendAlert discordData.notifsChannelId
+  channelIdM <- case channelIdM' of
+    Just d -> pure $ Just d
+    Nothing -> do
+      discordDataM <- getDiscordDataByProjectId pid
+      pure $ discordDataM >>= (\x -> x.notifsChannelId)
+
+  whenJust channelIdM \cid -> do
+    let send = sendAlert (Just cid)
     let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
     case alert of
       RuntimeErrorAlert a -> send $ discordErrorAlert a pTitle projectUrl
@@ -88,19 +93,23 @@ sendDiscordAlert alert pid pTitle = do
         Notify.sendNotification $ Notify.discordNotification cid content
 
 
-sendSlackAlert :: (DB :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Eff es ()
-sendSlackAlert alert pid pTitle = do
+sendSlackAlert :: (DB :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es ()
+sendSlackAlert alert pid pTitle channelM = do
   appCtx <- ask @Config.AuthContext
-  slackDataM <- getProjectSlackData pid
-  whenJust slackDataM \slackData -> do
+  channelIdM <- case channelM of
+    Just c -> pure $ Just c
+    Nothing -> do
+      slackDataM <- getProjectSlackData pid
+      pure $ slackDataM >>= (\x -> Just x.channelId)
+  whenJust channelIdM \cid -> do
     let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
     case alert of
-      RuntimeErrorAlert a -> sendAlert slackData.channelId $ slackErrorAlert a pTitle slackData.channelId projectUrl
-      EndpointAlert{..} -> sendAlert slackData.channelId $ slackNewEndpointsAlert project endpoints slackData.channelId endpointHash projectUrl
+      RuntimeErrorAlert a -> sendAlert cid $ slackErrorAlert a pTitle cid projectUrl
+      EndpointAlert{..} -> sendAlert cid $ slackNewEndpointsAlert project endpoints cid endpointHash projectUrl
       ShapeAlert -> pass
-      ReportAlert{..} -> sendAlert slackData.channelId $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle slackData.channelId reportUrl allChartUrl errorChartUrl
+      ReportAlert{..} -> sendAlert cid $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle cid reportUrl allChartUrl errorChartUrl
       MonitorsAlert{..} ->
-        sendAlert slackData.channelId
+        sendAlert cid
           $ AE.object ["blocks" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("🤖 Alert triggered for " <> monitorTitle)]]])]
   where
     sendAlert :: Notify.Notify :> es => Text -> AE.Value -> Eff es ()

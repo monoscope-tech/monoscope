@@ -219,7 +219,7 @@ addTeamsToDashboards pid dids teamIds = do
     q =
       [text|
       UPDATE projects.dashboards
-      SET teams = array(SELECT unnest(coalesce(teams, '{}')::uuid[]) UNION SELECT unnest(?::uuid[]))
+      SET teams = teams || ?::uuid[] 
       WHERE project_id = ? AND id = ANY(?::uuid[])
     |]
 

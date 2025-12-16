@@ -39,11 +39,13 @@ import Database.PostgreSQL.Entity.Types (
  )
 import Database.PostgreSQL.Simple (FromRow, In, Only (Only), ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.TypeInfo.Static (uuid)
 import Database.PostgreSQL.Transact (DBT, execute, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
+import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
@@ -157,8 +159,7 @@ updateProjectMembersPermissons vals = void $ executeMany q vals
 
 
 softDeleteProjectMembers :: [UUID.UUID] -> DBT IO ()
-softDeleteProjectMembers [] = pass
-softDeleteProjectMembers vals = void $ execute q (Only (V.fromList vals))
+softDeleteProjectMembers vals = unless (null vals) $ void $ execute q (Only $ V.fromList vals)
   where
     q =
       [sql| UPDATE projects.project_members
@@ -167,8 +168,7 @@ softDeleteProjectMembers vals = void $ execute q (Only (V.fromList vals))
 
 
 createTeam :: Projects.ProjectId -> Users.UserId -> Text -> Text -> Text -> V.Vector Users.UserId -> V.Vector Text -> V.Vector Text -> V.Vector Text -> DBT IO Int64
-createTeam pid uid name description handle memberIds notifEmails slackChannels discordChannels = do
-  execute q (pid, uid, name, description, handle, memberIds, notifEmails, slackChannels, discordChannels)
+createTeam pid uid name description handle memberIds notifEmails slackChannels discordChannels = execute q (pid, uid, name, description, handle, memberIds, notifEmails, slackChannels, discordChannels)
   where
     q =
       [sql| INSERT INTO projects.teams
@@ -270,16 +270,7 @@ data TeamMemberVM = TeamMemberVM
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, NFData)
-
-
-instance FromField TeamMemberVM where
-  fromField f mdata =
-    case mdata of
-      Nothing -> returnError UnexpectedNull f ""
-      Just bs ->
-        case AE.eitherDecodeStrict' bs of
-          Right a -> pure a
-          Left err -> returnError ConversionFailed f ("Failed to parse JSON for TeamMemberVM: " <> err)
+  deriving (FromField) via Aeson TeamMemberVM
 
 
 getTeamByHandle :: Projects.ProjectId -> Text -> DBT IO (Maybe TeamVM)
@@ -332,9 +323,7 @@ deleteTeams pid tids
 
 
 getTeamsById :: Projects.ProjectId -> V.Vector UUID.UUID -> DBT IO (V.Vector Team)
-getTeamsById pid tids
-  | V.null tids = pure V.empty
-  | otherwise = query q (pid, tids)
+getTeamsById pid tids = if V.null tids then pure V.empty else query q (pid, tids)
   where
     q =
       [sql|

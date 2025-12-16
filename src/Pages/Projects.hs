@@ -94,6 +94,7 @@ import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack (channels, getSlackChannels)
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Slack qualified as SlackP
+import Pages.Bots.Utils qualified as BotUtils
 import Pages.Components (paymentPlanPicker)
 import Pkg.Components.Table (Table (..), TableCell (..), TableColumn (..))
 import Pkg.Components.Table qualified as Table
@@ -503,12 +504,12 @@ manageMembersPostH pid onboardingM form = do
 
       unless (null uAndPOldAndChanged)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       unless (null deletedUAndP)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
@@ -540,25 +541,25 @@ instance AE.FromJSON TeamForm where
   parseJSON = AE.withObject "TeamForm" $ \o -> do
     TeamForm
       <$> o
-      AE..: "teamName"
+        AE..: "teamName"
       <*> o
-      AE..: "teamDescription"
+        AE..: "teamDescription"
       <*> o
-      AE..: "teamHandle"
+        AE..: "teamHandle"
       <*> o
-      AE..:? "teamMembers"
-      AE..!= V.empty
+        AE..:? "teamMembers"
+        AE..!= V.empty
       <*> o
-      AE..:? "notifEmails"
-      AE..!= V.empty
+        AE..:? "notifEmails"
+        AE..!= V.empty
       <*> o
-      AE..:? "slackChannels"
-      AE..!= V.empty
+        AE..:? "slackChannels"
+        AE..!= V.empty
       <*> o
-      AE..:? "discordChannels"
-      AE..!= V.empty
+        AE..:? "discordChannels"
+        AE..!= V.empty
       <*> o
-      AE..:? "teamId"
+        AE..:? "teamId"
 
 
 manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
@@ -620,12 +621,12 @@ manageTeamBulkActionH pid action TBulkActionForm{teamId} listViewM = do
 
 
 data ManageTeams
-  = ManageTeamsGet (PageCtx (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [SlackP.SlackChannel], [Discord.DiscordChannel], (V.Vector ProjectMembers.TeamVM)))
-  | ManageTeamsGet' (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [SlackP.SlackChannel], [Discord.DiscordChannel], (V.Vector ProjectMembers.TeamVM))
+  = ManageTeamsGet (PageCtx (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel], (V.Vector ProjectMembers.TeamVM)))
+  | ManageTeamsGet' (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel], (V.Vector ProjectMembers.TeamVM))
   | ManageTeamsPostError Text
   | ManageTeamsDelete
-  | ManageTeamGet (PageCtx (Projects.ProjectId, ProjectMembers.TeamVM, V.Vector ProjectMembers.ProjectMemberVM, [Slack.SlackChannel], [Discord.DiscordChannel]))
-  | ManageTeamGet' (Projects.ProjectId, ProjectMembers.TeamVM, V.Vector ProjectMembers.ProjectMemberVM, [Slack.SlackChannel], [Discord.DiscordChannel])
+  | ManageTeamGet (PageCtx (Projects.ProjectId, ProjectMembers.TeamVM, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel]))
+  | ManageTeamGet' (Projects.ProjectId, ProjectMembers.TeamVM, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel])
   | ManageTeamGetError (PageCtx (Projects.ProjectId, Text))
 
 
@@ -674,7 +675,7 @@ manageTeamsGetH pid layoutM = do
       addRespHeaders $ ManageTeamsGet (PageCtx bwconf (pid, projMembers, channels, discordChannels, teams))
 
 
-manageTeamsPage :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberVM -> [SlackP.SlackChannel] -> [Discord.DiscordChannel] -> V.Vector ProjectMembers.TeamVM -> Html ()
+manageTeamsPage :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberVM -> [BotUtils.Channel] -> [BotUtils.Channel] -> V.Vector ProjectMembers.TeamVM -> Html ()
 manageTeamsPage pid projMembers channels discordChannels teams = do
   let whiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
   let channelWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]) <$> channels
@@ -783,7 +784,7 @@ teamGetH pid handle layoutM = do
     Nothing -> addRespHeaders $ ManageTeamGetError (PageCtx bwconf (pid, handle))
 
 
-teamPage :: Projects.ProjectId -> ProjectMembers.TeamVM -> V.Vector ProjectMembers.ProjectMemberVM -> [Slack.SlackChannel] -> [Discord.DiscordChannel] -> Html ()
+teamPage :: Projects.ProjectId -> ProjectMembers.TeamVM -> V.Vector ProjectMembers.ProjectMemberVM -> [BotUtils.Channel] -> [BotUtils.Channel] -> Html ()
 teamPage pid team projMembers slackChannels discordChannels = do
   let whiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
   let channelWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]) <$> slackChannels

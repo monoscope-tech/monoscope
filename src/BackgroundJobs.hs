@@ -348,12 +348,12 @@ runHourlyJob scheduledTime hour = do
   activeProjects <-
     dbtToEff
       $ V.map (\(Only pid) -> pid)
-      <$> query
-        [sql| SELECT DISTINCT project_id
+        <$> query
+          [sql| SELECT DISTINCT project_id
               FROM otel_logs_and_spans ols
               WHERE ols.timestamp >= ?
                 AND ols.timestamp <= ? |]
-        (oneHourAgo, scheduledTime)
+          (oneHourAgo, scheduledTime)
 
   -- Log count of projects to process
   Log.logInfo "Projects with new data in the last hour window" ("count", AE.toJSON $ length activeProjects)
@@ -770,39 +770,37 @@ handleQueryMonitorThreshold monitorE isAlert = do
   Log.logTrace "Query Monitors Triggered " monitorE
   _ <- dbtToEff $ Monitors.updateQMonitorTriggeredState monitorE.id isAlert
   project <- dbtToEff $ Projects.projectById monitorE.projectId
-  case project of
-    Nothing -> Log.logAttention "Project not found for Query Monitor Alert" ("project_id", monitorE.projectId.toText)
-    Just p -> do
-      teams <- dbtToEff $ ProjectMembers.getTeamsById monitorE.projectId monitorE.teams
-      let thresholdType = if monitorE.triggerLessThan then "below" else "above"
-          threshold = fromIntegral monitorE.alertThreshold
+  whenJustM (dbtToEff $ Projects.projectById monitorE.projectId) \p -> do
+    teams <- dbtToEff $ ProjectMembers.getTeamsById monitorE.projectId monitorE.teams
+    let thresholdType = if monitorE.triggerLessThan then "below" else "above"
+        threshold = fromIntegral monitorE.alertThreshold
 
-      issue <-
-        liftIO
-          $ Issues.createQueryAlertIssue
-            monitorE.projectId
-            (show monitorE.id)
-            monitorE.alertConfig.title
-            monitorE.logQuery
-            threshold
-            (fromIntegral monitorE.evalResult :: Double)
-            thresholdType
+    issue <-
+      liftIO
+        $ Issues.createQueryAlertIssue
+          monitorE.projectId
+          (show monitorE.id)
+          monitorE.alertConfig.title
+          monitorE.logQuery
+          threshold
+          (fromIntegral monitorE.evalResult :: Double)
+          thresholdType
 
-      dbtToEff $ Issues.insertIssue issue
+    dbtToEff $ Issues.insertIssue issue
 
-      let alert = MonitorsAlert{monitorTitle = monitorE.alertConfig.title, monitorUrl = ""}
-      if null teams
-        then do
-          Relude.when monitorE.alertConfig.emailAll do
-            users <- dbtToEff $ Projects.usersByProjectId monitorE.projectId
-            forM_ users \u -> emailQueryMonitorAlert monitorE u.email (Just u)
-          forM_ monitorE.alertConfig.emails \email -> emailQueryMonitorAlert monitorE email Nothing
-          unless (null monitorE.alertConfig.slackChannels) $ sendSlackMessage monitorE.projectId [fmtTrim| 🤖 *Log Alert triggered for `{monitorE.alertConfig.title}`*|]
-        else do
-          forM_ teams \team -> do
-            forM_ team.notify_emails \email -> emailQueryMonitorAlert monitorE (CI.mk email) Nothing
-            forM_ team.slack_channels \channel -> sendSlackAlert alert monitorE.projectId p.title
-            forM_ team.discord_channels \channel -> sendDiscordAlert alert monitorE.projectId p.title
+    let alert = MonitorsAlert{monitorTitle = monitorE.alertConfig.title, monitorUrl = ""}
+    if null teams
+      then do
+        Relude.when monitorE.alertConfig.emailAll do
+          users <- dbtToEff $ Projects.usersByProjectId monitorE.projectId
+          forM_ users \u -> emailQueryMonitorAlert monitorE u.email (Just u)
+        forM_ monitorE.alertConfig.emails \email -> emailQueryMonitorAlert monitorE email Nothing
+        unless (null monitorE.alertConfig.slackChannels) $ sendSlackMessage monitorE.projectId [fmtTrim| 🤖 *Log Alert triggered for `{monitorE.alertConfig.title}`*|]
+      else do
+        forM_ teams \team -> do
+          forM_ team.notify_emails \email -> emailQueryMonitorAlert monitorE (CI.mk email) Nothing
+          forM_ team.slack_channels (sendSlackAlert alert monitorE.projectId p.title . Just)
+          forM_ team.discord_channels (sendDiscordAlert alert monitorE.projectId p.title . Just)
 
 
 -- Send notifications
@@ -960,9 +958,9 @@ sendReportForProject pid rType = do
 
       Relude.when pr.weeklyNotif $ forM_ pr.notificationsChannel \case
         Projects.NDiscord -> do
-          sendDiscordAlert alert pid pr.title
+          sendDiscordAlert alert pid pr.title Nothing
         Projects.NSlack -> do
-          sendSlackAlert alert pid pr.title
+          sendSlackAlert alert pid pr.title Nothing
         Projects.NPhone -> do
           sendWhatsAppAlert alert pid pr.title pr.whatsappNumbers
         _ -> do
@@ -1073,9 +1071,9 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
       Relude.when project.errorAlerts do
         forM_ project.notificationsChannel \case
           Projects.NSlack ->
-            forM_ errors \err -> do sendSlackAlert (RuntimeErrorAlert err.errorData) pid project.title
+            forM_ errors \err -> do sendSlackAlert (RuntimeErrorAlert err.errorData) pid project.title Nothing
           Projects.NDiscord ->
-            forM_ errors \err -> do sendDiscordAlert (RuntimeErrorAlert err.errorData) pid project.title
+            forM_ errors \err -> do sendDiscordAlert (RuntimeErrorAlert err.errorData) pid project.title Nothing
           Projects.NPhone ->
             forM_ errors \err -> do
               sendWhatsAppAlert (RuntimeErrorAlert err.errorData) pid project.title project.whatsappNumbers
@@ -1176,8 +1174,8 @@ processAPIChangeAnomalies pid targetHashes = do
       let alert = EndpointAlert project.title (V.fromList endpointInfo) (fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes)
 
       forM_ project.notificationsChannel \case
-        Projects.NSlack -> sendSlackAlert alert pid project.title
-        Projects.NDiscord -> sendDiscordAlert alert pid project.title
+        Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
+        Projects.NDiscord -> sendDiscordAlert alert pid project.title Nothing
         Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
         Projects.NEmail -> do
           forM_ users \u -> do
