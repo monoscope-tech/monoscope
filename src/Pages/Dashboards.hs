@@ -166,25 +166,17 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
               , value_ $ maybeToMonoid var.value
               ]
-            <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
+              <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
   const tagifyInstances = new Map();
   document.querySelectorAll('.tagify-select-input').forEach(input => {
-    const tgfy = new Tagify(input, {
+    const tgfy = createTagify(input, {
       whitelist: JSON.parse(input.dataset.whitelistjson || "[]"),
       enforceWhitelist: true,
       tagTextProp: 'name',
       mode: input.dataset.mode || "",
-      dropdown: { 
-        enabled: 0,
-        mapValueTo: "name",
-        highlightFirst: true,
-        searchKeys: ["name", "value"],
-        placeAbove: false,
-        maxItems: 50
-      },
-    })
+    });
     
     const inputKey = input.getAttribute('name') || input.id;
     tagifyInstances.set(inputKey, tgfy);
@@ -382,7 +374,7 @@ processWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widgetBas
   forOf (#children . _Just . traverse) widget' $ \child ->
     processWidget pid now timeRange allParams
       $ child
-      & #_dashboardId %~ (<|> widget'._dashboardId)
+        & #_dashboardId %~ (<|> widget'._dashboardId)
 
 
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
@@ -413,8 +405,8 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
     -- Render the table with data server-side
     pure
       $ widget
-      & #html
-        ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
+        & #html
+          ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
   Widget.WTTraces -> do
     tracesD <- Charts.queryMetrics (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     let trIds = V.map V.last tracesD.dataText
@@ -431,21 +423,21 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
 
     pure
       $ widget
-      & #html
-        ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText grouped spansGrouped colorsJson)
+        & #html
+          ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText grouped spansGrouped colorsJson)
   _ -> do
     metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure
       $ widget
-      & #dataset
-        ?~ Widget.WidgetDataset
-          { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
-          , rowsPerMin = metricsD.rowsPerMin
-          , value = Just metricsD.rowsCount
-          , from = metricsD.from
-          , to = metricsD.to
-          , stats = metricsD.stats
-          }
+        & #dataset
+          ?~ Widget.WidgetDataset
+            { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
+            , rowsPerMin = metricsD.rowsPerMin
+            , value = Just metricsD.rowsCount
+            , from = metricsD.from
+            , to = metricsD.to
+            , stats = metricsD.stats
+            }
 
 
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
@@ -525,10 +517,10 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
       let newLayout =
             Just
               $ maybe def Relude.id orig.layout
-              & #x %~ (<|> item.x)
-              & #y %~ (<|> item.y)
-              & #w %~ (<|> item.w)
-              & #h %~ (<|> item.h)
+                & #x %~ (<|> item.x)
+                & #y %~ (<|> item.y)
+                & #w %~ (<|> item.w)
+                & #h %~ (<|> item.h)
       pure
         orig
           { Widget.layout = newLayout
@@ -701,7 +693,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
                     , class_ $ "hidden page-drawer-tab-" <> T.toLower tabName
                     , name_ $ wid <> "-drawer-tab"
                     ]
-                  <> [checked_ | isActive]
+                    <> [checked_ | isActive]
                 toHtml tabName
           mkTab "Overview" (effectiveActiveTab /= "edit")
           mkTab "Edit" (effectiveActiveTab == "edit")
@@ -905,39 +897,12 @@ dashboardsGet_ dg = do
         let teamList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> dg.teams
         script_
           [text| 
-              function createTagify(selector, options = {}) {
-                 const defaultOptions = {
-                   skipInvalid: true,
-                   editTags: {clicks: 2, keepInvalid: false},
-                   dropdown: { enabled: 0, fuzzySearch: true, position: 'text', caseSensitive: false, mapValueTo: 'name', searchKeys: ['name', 'value'] },
-                 };
-                 return new Tagify(document.querySelector(selector), { ...defaultOptions, ...options });
-               }
-                   
-              const tagify = createTagify('#teamHandlesInput', {
-                  tagTextProp: 'name',
-                  whitelist: $teamList,
-                  template: {
-                    tag: function(tagData) {
-                      return `<tag title="${tagData.value || tagData.email}"
-                                  contenteditable='false'
-                                  spellcheck='false'
-                                  tabIndex="-1"
-                                  class="${this.settings.classNames.tag} ${tagData.class || ''}"
-                                  ${this.getAttributes(tagData)}>
-                          <x title='' class="${this.settings.classNames.tagX}" role='button' aria-label='remove tag'></x>
-                          <div>
-                              <span class="${this.settings.classNames.tagText}">${tagData.name}</span>
-                          </div>
-                      </tag>`;
-                    },
-                    dropdownItemNoMatch: (data) => `No suggestion found for: ${data.value}`
-                 }
-                });
-
-              const getSelectedTeams = () => {
+              window.addEventListener('DOMContentLoaded', (event) => {
+                const tagify = createTagify('#teamHandlesInput', {tagTextProp: 'name',whitelist: $teamList,});
+              }); 
+            const getSelectedTeams = () => {
                 return tagify.value.map(item => item.value);
-              }
+            }   
         |]
 
   div_ [id_ "itemsListPage", class_ $ "mx-auto gap-8 w-full flex flex-col h-full overflow-hidden group/pg" <> if dg.embedded then "" else "pb-2 px-6 pt-8"] do

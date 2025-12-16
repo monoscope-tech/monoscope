@@ -73,7 +73,7 @@ import Effectful.Reader.Static (ask)
 import Fmt
 import GHC.Records (HasField (getField))
 import Lucid
-import Lucid (Term (term), div_, href_)
+import Lucid (Term (term), div_, href_, min_, pattern_, required_)
 import Lucid.Htmx
 import Lucid.Htmx (hxPost_, hxSelect_, hxSwapOob_, hxTrigger_)
 import Lucid.Hyperscript (__)
@@ -1537,8 +1537,7 @@ teamModal pid team whiteList channelWhiteList discordWhiteList isInTeamView = do
               h2_ [class_ "text-lg font-semibold  flex items-center gap-2"] do
                 faSprite_ "users" "solid" "w-4 h-4 "
                 toHtml $ if isJust team then "Edit Team " <> name else "Create Team"
-              p_ [class_ "text-sm text-textWeak"]
-                $ "Manage team details, members, and notification channels"
+              p_ [class_ "text-sm text-textWeak"] "Manage team details, members, and notification channels"
             div_ [class_ "flex-1 overflow-y-auto space-y-8 mt-4"] $ do
               teamDetailsSection name handle description
               div_ [class_ "pb-2 space-y-4"] $ do
@@ -1556,42 +1555,11 @@ teamModal pid team whiteList channelWhiteList discordWhiteList isInTeamView = do
                     pass
               notificationChannelsSection prefix
           div_ [class_ "modal-action"] $ do
-            label_ [Lucid.for_ (prefix <> "-new-team-modal"), class_ "btn btn-sm btn-outline", type_ "button"]
-              $ "Cancel"
-            button_ [class_ "btn btn-sm btn-primary ml-4", type_ "submit"]
-              $ "Save Team"
+            label_ [Lucid.for_ (prefix <> "-new-team-modal"), class_ "btn btn-sm btn-outline", type_ "button"] "Cancel"
+            button_ [class_ "btn btn-sm btn-primary ml-4", type_ "submit"] "Save Team"
     label_ [class_ "modal-backdrop", Lucid.for_ (prefix <> "-new-team-modal")] "Close"
   script_
     [text|
-  // Factory function for creating Tagify instances
-function createTagify(selector, options = {}) {
-  const defaultOptions = {
-    skipInvalid: true,
-    editTags: {clicks: 2, keepInvalid: false},
-    dropdown: { enabled: 1,fuzzySearch: true, position: 'text', caseSensitive: false}
-  };
-  return new Tagify(document.querySelector(selector), { ...defaultOptions, ...options });
-}
-
-var customTagTemplate = {
-  tag: function(tagData) {
-    return `<tag title="${tagData.value || tagData.email}"
-                contenteditable='false'
-                spellcheck='false'
-                tabIndex="-1"
-                class="${this.settings.classNames.tag} ${tagData.class || ''}"
-                ${this.getAttributes(tagData)}>
-        <x title='' class="${this.settings.classNames.tagX}" role='button' aria-label='remove tag'></x>
-        <div>
-            <span class="${this.settings.classNames.tagText}">${tagData.name}</span>
-        </div>
-    </tag>`;
-  },
-  dropdownItemNoMatch: (data) => `No suggestion found for: ${data.value}`
-};
-
-var dropdown = {mapValueTo: 'name', searchKeys: ['name', 'value']}
-  
 function getTagValues(prefix) {
   const val = {
     teamMembers: window[`$${prefix}-membersTagify`].value.map(item => item.value),
@@ -1601,14 +1569,12 @@ function getTagValues(prefix) {
   }
   return val
 }
-
-// Initialize all Tagify instances
+  window.addEventListener('DOMContentLoaded', (event) => {
+  
 window[`$prefix-membersTagify`] = createTagify('#$prefix-team-members-input', {
   enforceWhitelist: true,
   whitelist: $whiteList,
   placeholder: "Add member",
-  dropdown,
-  templates: customTagTemplate
 });
 
 var existingMembers = $membersTags
@@ -1624,14 +1590,10 @@ window[`$prefix-membersTagify`].addTags(memberTags)
 window[`$prefix-notifEmailsTagify`] = createTagify('#$prefix-notif-emails-input', { placeholder: "Add email"});
 window[`$prefix-notifEmailsTagify`].addTags($notifEmails)
 
-
-
 window[`$prefix-slackTagify`] = createTagify('#$prefix-slack-channels-input', {
   enforceWhitelist: true,
   whitelist: $channelWhiteList,
   placeholder: "Add Slack channel",
-  dropdown,
-  templates: customTagTemplate
 });
 
 var slackChannels = $slackChannels 
@@ -1648,8 +1610,6 @@ window[`$prefix-discordTagify`] = createTagify('#$prefix-discord-channels-input'
   enforceWhitelist: true,
   whitelist: $discordWhiteList,
   placeholder: "Add Discord channel",
-  dropdown,
-  templates: customTagTemplate
 });
 
 var discordChannels = $discordChannels 
@@ -1665,6 +1625,7 @@ window[`$prefix-discordTagify`].addTags(discordChannelTags)
 window[`$prefix-membersTagify`].on("change", (e) => {
   window[`$prefix-notifEmailsTagify`].settings.whitelist = window[`$prefix-membersTagify`].value.map(item => item.email);
 });
+      });
   |]
 
 
@@ -1674,7 +1635,7 @@ teamDetailsSection name handle description = do
   div_ [class_ "space-y-4"] $ do
     div_ [class_ "flex items-center w-full gap-2 justify-between"] do
       div_ [class_ "flex flex-col w-full gap-2"] $ do
-        label_ [class_ "text-sm font-medium ", Lucid.for_ "team-name"] "Team Name"
+        label_ [class_ "text-sm font-medium ", Lucid.for_ "team-name", required_ "true"] "Team Name"
         input_
           [ class_ "input w-full"
           , type_ "text"
@@ -1694,6 +1655,10 @@ teamDetailsSection name handle description = do
           , name_ "teamHandle"
           , placeholder_ "e.g. backend-team"
           , value_ handle
+          , required_ "true"
+          , min_ "3"
+          , max_ "30"
+          , pattern_ "^[a-z][a-z0-9-]*$"
           ]
         span_ [id_ $ prefix <> "-team-handle-error", class_ "text-xs text-red-500 h-4"] ""
     div_ [class_ "flex flex-col gap-2"] $ do
@@ -1711,10 +1676,6 @@ teamDetailsSection name handle description = do
 document.addEventListener("DOMContentLoaded", () => {
   const nameInput = document.getElementById("$prefix-team-name");
   const handleInput = document.getElementById("$prefix-team-handle");
-
-  const nameError = document.getElementById("$prefix-team-name-error");
-  const handleError = document.getElementById("$prefix-team-handle-error");
-
   let handleManuallyEdited = false;
 
   handleInput.addEventListener("input", () => {
@@ -1728,70 +1689,12 @@ document.addEventListener("DOMContentLoaded", () => {
         .replace(/[^a-z0-9\s-]/g, "")  // remove invalid chars
         .replace(/\s+/g, "-")          // spaces → hyphens
         .replace(/-{2,}/g, "-")        // collapse multiple hyphens
-        .replace(/^-+|-+$/g, "");      // trim hyphens
-
+        .replace(/^-+|-+$/g, "");      // trim hyphens 
       handleInput.value = generated;
       showError(handleInput, handleError, validators.handle());
     }
-    showError(nameInput, nameError, validators.name());
   });
 
-  const validators = {
-    name() {
-      const val = nameInput.value.trim();
-      if (!val) return "Team name is required";
-      if (val.length < 3) return "Team name must be at least 3 characters";
-      if (!/^[\w\s-]+$/.test(val)) return "Invalid characters in team name";
-      return "";
-    },
-
-    handle() {
-      const val = handleInput.value.trim();
-      if (!val) return "Handle is required";
-      if (!/^[a-z][a-z0-9-]*$/.test(val))
-        return "Handle must be lowercase, no spaces, and start with a letter";
-      return "";
-    },
-  };
-
-  function showError(input, elem, msg) {
-    if (msg) {
-      input.classList.add("border-red-500");
-      elem.textContent = msg;
-    } else {
-      input.classList.remove("border-red-500");
-      elem.textContent = "";
-    }
-  }
-
-  nameInput.addEventListener("input", () =>
-    showError(nameInput, nameError, validators.name())
-  );
-  handleInput.addEventListener("input", () =>
-    showError(handleInput, handleError, validators.handle())
-  );
-
-  const form = nameInput.closest("form");
-  if (form) {
-    form.addEventListener("submit", (e) => {
-      const nameErr = validators.name();
-      const handleErr = validators.handle();
-
-      showError(nameInput, nameError, nameErr);
-      showError(handleInput, handleError, handleErr);
-
-      const firstInvalid =
-        nameErr ? nameInput :
-        handleErr ? handleInput : null;
-
-      if (firstInvalid) {
-        e.preventDefault();   
-        firstInvalid.scrollIntoView({ behavior: "smooth", block: "center" });
-        firstInvalid.focus();
-        return false
-      }
-    });
-  }
 });
 |]
 
@@ -1805,7 +1708,6 @@ notificationChannelsSection prefix = do
       channelBlock "Email addresses" (prefix <> "-notif-emails-input") "Add email addresses" "notifEmails" "envelope"
       channelBlock "Slack Channels" (prefix <> "-slack-channels-input") "Add slack channels" "slackChannels" "slack"
       channelBlock "Discord Channels" (prefix <> "-discord-channels-input") "Add channels" "discordChannels" "discord"
-      channelBlock "WhatsApp Numbers" (prefix <> "-notif-whatsapp-numbers-input") "Add numbers" "notifWhatsAppNumbers" "whatsapp"
 
 
 -- Reusable helper

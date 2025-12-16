@@ -1216,41 +1216,16 @@ alertConfigurationForm_ project alertM teams = do
                     Just am -> (\tId -> AE.object ["name" AE..= teamName tId teams, "value" AE..= tId]) <$> am.teams
               script_
                 [text|
-                  function createTagify(selector, options = {}) {
-                     const defaultOptions = {
-                       skipInvalid: true,
-                       editTags: {clicks: 2, keepInvalid: false},
-                       dropdown: { enabled: 0, fuzzySearch: true, position: 'text', caseSensitive: false, mapValueTo: 'name', searchKeys: ['name', 'value'] },
-                     };
-                     return new Tagify(document.querySelector(selector), { ...defaultOptions, ...options });
-                   }
-                   
-                  const tagify = createTagify('#alert-form textarea[name="teams"]', {
+                window.addEventListener('DOMContentLoaded', () => {
+                      const tagify = createTagify('#alert-form textarea[name="teams"]', {
                       tagTextProp: 'name',
                       whitelist: $teamList,
-                      template: {
-                        tag: function(tagData) {
-                          return `<tag title="${tagData.value || tagData.email}"
-                                      contenteditable='false'
-                                      spellcheck='false'
-                                      tabIndex="-1"
-                                      class="${this.settings.classNames.tag} ${tagData.class || ''}"
-                                      ${this.getAttributes(tagData)}>
-                              <x title='' class="${this.settings.classNames.tagX}" role='button' aria-label='remove tag'></x>
-                              <div>
-                                  <span class="${this.settings.classNames.tagText}">${tagData.name}</span>
-                              </div>
-                          </tag>`;
-                        },
-                        dropdownItemNoMatch: (data) => `No suggestion found for: ${data.value}`
-                     }
                     });
-
                   tagify.addTags($existingTeams);
-
-                  const getSelectedTeams = () => {
+                })
+                const getSelectedTeams = () => {
                     return tagify.value.map(item => item.value);
-                  }
+                }
               |]
 
               -- Recipients checkbox with better spacing
