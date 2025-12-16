@@ -45,7 +45,7 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users (User (id))
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), SearchMode (..), SortConfig (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
+import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), SearchMode (..), SortConfig (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, renderRowWithColumns, withAttrs)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
@@ -310,14 +310,13 @@ anomalyListSlider currTime _ _ (Just issues) = do
       $ V.mapM_ renderIssueForSlider issues
   where
     renderIssueForSlider vm@(IssueVM hideByDefault _ _ _ issue) =
-      div_
+      renderRowWithColumns
         [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "card-round" else "px-0.5 py-4"
         , style_ (if hideByDefault then "display:none" else "")
         , id_ $ Issues.issueIdText issue.id
         ]
-        do
-          forM_ (issueColumns issue.projectId) \c ->
-            div_ c.attrs $ c.render vm
+        (issueColumns issue.projectId)
+        vm
 
 
 -- anomalyAccentColor isAcknowleged isArchived
@@ -437,7 +436,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
       let breakingChanges = length $ filter (\c -> c.changeType == Anomalies.Breaking) allChanges
       let incrementalChanges = length $ filter (\c -> c.changeType == Anomalies.Incremental) allChanges
       let totalChanges = length allChanges
-      let affectedRequests = if null requestChanges then length responseChanges else if null responseChanges then length requestChanges else length requestChanges + length responseChanges
+      let affectedRequests = length requestChanges + length responseChanges
 
       div_ [class_ "flex items-center gap-4 text-sm mb-4 p-3 bg-fillWeak rounded-lg"] do
         span_ [class_ "text-textWeak"] do

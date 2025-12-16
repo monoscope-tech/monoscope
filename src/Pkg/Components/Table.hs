@@ -17,6 +17,7 @@ module Pkg.Components.Table (
   withSort,
   withAttrs,
   withAlign,
+  renderRowWithColumns,
 ) where
 
 import Data.Default (Default (..))
@@ -416,3 +417,11 @@ withAttrs as column = column{attrs = as}
 
 withAlign :: Text -> Column a -> Column a
 withAlign a column = column{align = Just a}
+
+
+-- Helper to render a row using columns
+renderRowWithColumns :: [Attribute] -> [Column a] -> a -> Html ()
+renderRowWithColumns attrs columns row =
+  div_ attrs do
+    forM_ columns \c ->
+      div_ c.attrs $ c.render row

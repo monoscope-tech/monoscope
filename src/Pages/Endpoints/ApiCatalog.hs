@@ -13,7 +13,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), SearchMode (..), SortConfig (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
+import Pkg.Components.Table (Column (..), Config (..), Features (..), SearchMode (..), SortConfig (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.Widget (WidgetAxis (..))
 import Pkg.Components.Widget qualified as Widget
 import PyF qualified
@@ -51,10 +51,7 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
           , features =
               def
                 { rowId = Just \(HostEventsVM _ he _ _) -> he.host
-                , bulkActions =
-                    [ BulkAction{icon = Just "check", title = "acknowledge", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowledge"}
-                    , BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
-                    ]
+                , bulkActions = [] -- No bulk actions for dependencies
                 , search = Just ClientSide
                 , sort =
                     Just
@@ -222,10 +219,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
           , features =
               def
                 { rowId = Just \(EnpReqStatsVM _ _ enp) -> enp.endpointHash
-                , bulkActions =
-                    [ BulkAction{icon = Just "check", title = "acknowledge", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowledge"}
-                    , BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
-                    ]
+                , bulkActions = [] -- No bulk actions for endpoints
                 , search = Just (ServerSide currentURL)
                 , sort =
                     Just
