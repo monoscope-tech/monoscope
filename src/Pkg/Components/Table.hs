@@ -273,7 +273,7 @@ renderTableRow tbl row =
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
     linkHandler = maybe [] (\getLink -> [class_ "cursor-pointer", hxGet_ (getLink row), hxPushUrl_ "true"]) tbl.features.rowLink
     isSelected = maybe False (\f -> f row) tbl.features.selectRow
-    colAttrs col = foldMap (\a -> [class_ a]) col.align
+    colAttrs c = foldMap (\a -> [class_ a]) c.align
 
 
 renderToolbar :: Table a -> Html ()

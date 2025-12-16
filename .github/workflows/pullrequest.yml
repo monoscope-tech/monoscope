@@ -57,6 +57,7 @@ jobs:
   test:
     name: Test ${{ matrix.test-suite }}
     needs: build
+    if: always()
     runs-on: ubuntu-24.04
     services:
       postgres:
@@ -117,6 +118,22 @@ jobs:
         env:
           USE_EXTERNAL_DB: true
         run: stack test :${{ matrix.test-suite }}
+
+  lint:
+    name: Lint (hlint)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: 9.12.2
+          enable-stack: true
+          stack-version: 'latest'
+      - uses: haskell-actions/hlint-setup@v2
+      - uses: haskell-actions/hlint-run@v2
+        with:
+          path: src/
+          fail-on: warning
 
   ui-tests:
     name: UI Tests
