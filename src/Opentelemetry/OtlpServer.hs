@@ -28,9 +28,9 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
+import Data.Char (isDigit)
 import Data.Effectful.UUID (UUIDEff)
 import Data.HashMap.Strict qualified as HashMap
-import Data.IORef qualified as IORef
 import Data.List qualified as L
 import Data.List.Extra (chunksOf)
 import Data.Map qualified as Map
@@ -88,7 +88,7 @@ import "base64" Data.ByteString.Base64 qualified as B64
 
 
 -- | Custom request metadata for OTLP services containing optional API key from Authorization header
-data OtlpRequestMetadata = OtlpRequestMetadata
+newtype OtlpRequestMetadata = OtlpRequestMetadata
   { otlpApiKey :: Maybe Text
   }
   deriving (Eq, Show)
@@ -121,15 +121,15 @@ instance ParseMetadata OtlpRequestMetadata where
 -- | Global error counters for common parsing errors (wire type, UTF-8, etc)
 wireTypeErrorsRef :: IORef (HashMap Text (Int, AE.Value))
 {-# NOINLINE wireTypeErrorsRef #-}
-wireTypeErrorsRef = unsafePerformIO $ IORef.newIORef HashMap.empty
+wireTypeErrorsRef = unsafePerformIO $ newIORef HashMap.empty
 
 
 -- | Initialize periodic error logging
 initPeriodicErrorLogging :: Logger -> IO ()
 initPeriodicErrorLogging logger = void $ forkIO $ forever $ do
   threadDelay (60 * 1000000) -- 60 seconds
-  errors <- IORef.atomicModifyIORef' wireTypeErrorsRef (\m -> (HashMap.empty, m))
-  when (not $ HashMap.null errors) $ do
+  errors <- atomicModifyIORef' wireTypeErrorsRef (HashMap.empty,)
+  unless (HashMap.null errors) $ do
     let totalErrors = sum $ map fst $ HashMap.elems errors
         errorDetails =
           AE.object
@@ -444,7 +444,7 @@ processList msgs !attrs = checkpoint "processList" $ do
                         projectCache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
                           mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
                           pure $ fromMaybe defaultProjectCache mpjCache
-                        let !projectCaches = HashMap.singleton pid projectCache
+                        let !projectCaches = one (pid, projectCache)
                             !metrics = convertResourceMetricsToMetricRecords fallbackTime projectCaches pid resourceMetrics
                         pure (ackId, V.fromList metrics)
                       Nothing -> checkpoint "processList:metrics:missing-project-info" $ do
@@ -516,8 +516,8 @@ parseConnectionString connStr =
            in if T.null host
                 then []
                 else
-                  [("server.address", AE.String host)]
-                    ++ [("server.port", AE.String portNum) | let portNum = T.takeWhile (\c -> c >= '0' && c <= '9') portPart, not (T.null portNum)]
+                  ("server.address", AE.String host)
+                    : [("server.port", AE.String portNum) | let portNum = T.takeWhile isDigit portPart, not (T.null portNum)]
     _ -> []
 
 
@@ -660,9 +660,9 @@ migrateHttpSemanticConventions !keyVals =
     -- - db.elasticsearch.path_parts.*: Transformed to db.operation.parameter.* preserving key suffix
     -- - http.method + http.request.method_original (when "_OTHER"): Special handling to use original method value
     specialFields =
-      (if HashMap.member "db.connection_string" kvMap then ["db.connection_string"] else [])
-        ++ (if isJust httpTargetM then ["http.target"] else []) -- Always exclude http.target when it exists
-        ++ (if HashMap.member "db.redis.database_index" kvMap then ["db.redis.database_index"] else [])
+      ["db.connection_string" | HashMap.member "db.connection_string" kvMap]
+        ++ ["http.target" | isJust httpTargetM] -- Always exclude http.target when it exists
+        ++ ["db.redis.database_index" | HashMap.member "db.redis.database_index" kvMap]
         ++ filter ("db.elasticsearch.path_parts." `T.isPrefixOf`) (map fst keyVals)
         ++ (if httpMethodM == Just (AE.String "_OTHER") && isJust methodOriginalM then ["http.method", "http.request.method_original"] else [])
 
@@ -682,7 +682,7 @@ migrateHttpSemanticConventions !keyVals =
 
     -- Handle db.redis.database_index special case (convert to string for db.namespace)
     migrateRedisIndex = case HashMap.lookup "db.redis.database_index" kvMap of
-      Just (AE.Number n) -> [("db.namespace", AE.String (T.pack $ show (round n :: Int)))]
+      Just (AE.Number n) -> [("db.namespace", AE.String (show (round n :: Int)))]
       _ -> []
 
     -- Handle the special case of http.target -> url.path and url.query
@@ -729,7 +729,7 @@ recordProtoError prefix err msg logFn = do
         | "Unexpected end of input" `L.isInfixOf` err = Just (prefix <> ":unexpected_eof_error")
         | otherwise = Nothing
   case categorize of
-    Just errorKey -> liftIO $ IORef.atomicModifyIORef' wireTypeErrorsRef $ \m ->
+    Just errorKey -> liftIO $ atomicModifyIORef' wireTypeErrorsRef $ \m ->
       let updateFn Nothing = Just (1, errorInfo)
           updateFn (Just (count, example)) = Just (count + 1, example)
        in (HashMap.alter updateFn errorKey m, ())
@@ -877,7 +877,7 @@ convertResourceLogsToOtelLogs !fallbackTime !projectCaches !pids resourceLogs =
 
 filterEmptyEvents :: OtelLogsAndSpans -> Bool
 filterEmptyEvents x =
-  not (T.null (fromMaybe "" x.name) && isAesonTextEmpty x.body && isAesonTextEmpty x.attributes && isAesonTextEmpty x.resource && T.null (fromMaybe "" (x.parent_id)))
+  not (T.null (fromMaybe "" x.name) && isAesonTextEmpty x.body && isAesonTextEmpty x.attributes && isAesonTextEmpty x.resource && T.null (fromMaybe "" x.parent_id))
 
 
 -- | Convert ScopeLogs to OtelLogsAndSpans
@@ -1444,7 +1444,7 @@ processMetricsRequest metadataApiKey req = do
       projectCache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
         mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
         pure $ fromMaybe defaultProjectCache mpjCache
-      let !projectCaches = HashMap.singleton pid projectCache
+      let !projectCaches = one (pid, projectCache)
           !metricRecords = convertResourceMetricsToMetricRecords currentTime projectCaches pid resourceMetrics
 
       Log.logInfo
@@ -1545,8 +1545,9 @@ services appLogger appCtx tp =
   fromMethods
     $ RawMethod (traceServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf TS.TraceService "export"))
     $ RawMethod (logsServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf LS.LogsService "export"))
-    $ RawMethod (metricsServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf MS.MetricsService "export"))
-    $ NoMoreMethods
+    $ RawMethod
+      (metricsServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf MS.MetricsService "export"))
+      NoMoreMethods
 
 
 type instance RequestMetadata (Protobuf TS.TraceService "export") = OtlpRequestMetadata

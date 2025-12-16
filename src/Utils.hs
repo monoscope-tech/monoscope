@@ -48,8 +48,7 @@ module Utils (
 )
 where
 
-import Data.Aeson
-import Data.Aeson qualified as AE
+import Data.Aeson as AE
 import Data.Aeson.Extra.Merge (lodashMerge)
 import Data.Aeson.Key (fromText)
 import Data.Aeson.Key qualified as AEK
@@ -359,14 +358,15 @@ lookupVecTextByKey vec colIdxMap key = HM.lookup key colIdxMap >>= lookupVecText
 
 lookupVecBoolByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Bool
 lookupVecBoolByKey vec colIdxMap key =
-  case HM.lookup key colIdxMap
-    >>= ( \i ->
-            case vec V.!? i of
-              Just (AE.Bool b) -> Just b
-              _ -> Nothing
-        ) of
-    Just result -> result
-    Nothing -> False
+  fromMaybe
+    False
+    ( HM.lookup key colIdxMap
+        >>= ( \i ->
+                case vec V.!? i of
+                  Just (AE.Bool b) -> Just b
+                  _ -> Nothing
+            )
+    )
 
 
 lookupVecIntByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Int
@@ -688,13 +688,13 @@ messageKeys =
 
 
 extractMessageFromLog :: Value -> Maybe T.Text
-extractMessageFromLog (Object obj) =
+extractMessageFromLog (AE.Object obj) =
   listToMaybe [v | key <- messageKeys, Just v <- [extractValue key obj]]
   where
     extractValue :: T.Text -> Object -> Maybe T.Text
     extractValue key km = case Data.Aeson.KeyMap.lookup (fromText key) km of
-      Just (String s) -> Just s
-      Just val -> Just (T.pack $ show val)
+      Just (AE.String s) -> Just s
+      Just val -> Just (toText $ show val)
       Nothing -> Nothing
 extractMessageFromLog _ = Nothing
 

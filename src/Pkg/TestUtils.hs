@@ -183,7 +183,7 @@ withExternalDBSetup f = do
 
   -- Generate unique test database name using UUID (replace hyphens with underscores)
   uuid <- nextRandom
-  let testDbName = "monoscope_test_" <> T.replace "-" "_" (T.pack $ show uuid)
+  let testDbName = "monoscope_test_" <> T.replace "-" "_" (show uuid)
 
   -- Create test database from template
   masterConn <- connectPostgreSQL masterConnStr
@@ -245,7 +245,7 @@ ensureTemplateDatabase masterConnStr templateDbName = do
             ()
             :: IO [Only Bool]
 
-        needsUpdate' <- case markerExists of
+        case markerExists of
           [Only True] -> do
             checksums <-
               query
@@ -255,13 +255,11 @@ ensureTemplateDatabase masterConnStr templateDbName = do
                 :: IO [Only Text]
             close templateConn
             pure $ case checksums of
-              [Only checksum] -> checksum /= T.pack migrationChecksum
+              [Only checksum] -> checksum /= toText migrationChecksum
               _ -> True
           _ -> do
             close templateConn
             pure True
-
-        pure needsUpdate'
       else pure True
 
   when needsUpdate $ do
@@ -290,7 +288,7 @@ ensureTemplateDatabase masterConnStr templateDbName = do
           masterConn
           (Query $ encodeUtf8 $ "DROP DATABASE IF EXISTS " <> templateDbName)
           ()
-      pure ()
+      pass
 
     -- Create fresh template database
     _ <-
@@ -333,7 +331,7 @@ ensureTemplateDatabase masterConnStr templateDbName = do
       execute
         templateConn
         "INSERT INTO template_db_info (migration_checksum) VALUES (?)"
-        (Only $ T.pack migrationChecksum)
+        (Only $ toText migrationChecksum)
 
     close templateConn
 
@@ -343,7 +341,7 @@ ensureTemplateDatabase masterConnStr templateDbName = do
         masterConn
         (Query $ encodeUtf8 $ "ALTER DATABASE " <> templateDbName <> " is_template = true")
         ()
-    pure ()
+    pass
 
   close masterConn
 
@@ -388,7 +386,7 @@ testSessionHeader pool = do
         (Only testProjectId)
 
   tp <- liftIO getGlobalTracerProvider
-  logger <- liftIO $ Log.mkLogger "test" (\_ -> pure ())
+  logger <- liftIO $ Log.mkLogger "test" (const pass)
   runTestEffect pool logger tp (Auth.sessionByID (Just pSessId) "requestID" True "light" Nothing False)
     & liftIO
     <&> fromRightShow
@@ -400,7 +398,7 @@ refreshSession pool sessionHeaders = do
   let session = Servant.getResponse sessionHeaders
       pSessId = session.sessionId
   tp <- liftIO getGlobalTracerProvider
-  logger <- liftIO $ Log.mkLogger "test" (\_ -> pure ())
+  logger <- liftIO $ Log.mkLogger "test" (const pass)
   runTestEffect pool logger tp (Auth.sessionByID (Just pSessId) "requestID" session.isSidebarClosed session.theme Nothing False)
     & liftIO
     <&> fromRightShow
@@ -663,10 +661,9 @@ convert val = case AE.fromJSON val of
 getPendingBackgroundJobs :: AuthContext -> IO (V.Vector (Job, BackgroundJobs.BgJobs))
 getPendingBackgroundJobs authCtx = do
   jobs <- withPool authCtx.pool getBackgroundJobs
-  jobsWithParsed <- V.forM jobs \job -> do
+  V.forM jobs \job -> do
     bgJob <- BackgroundJobs.throwParsePayload job
     pure (job, bgJob)
-  pure jobsWithParsed
 
 
 -- | Log background jobs info for debugging (respects LOG_LEVEL)

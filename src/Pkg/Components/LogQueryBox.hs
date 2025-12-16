@@ -189,8 +189,8 @@ logQueryBox_ config = do
           visualizationTabs_ config.vizType config.updateUrl config.targetWidgetPreview config.alert
           div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:block"] do
             select_ [class_ "select select-sm max-w-[100px]", value_ $ fromMaybe "" config.patternSelected, onchange_ "(function(event){window.setQueryParamAndReload('pattern_target', event.target.value)}(event))"] do
-              option_ ([value_ "log_pattern"] ++ [selected_ "" | config.patternSelected == Just "log_body" || isNothing config.patternSelected]) "Log body"
-              option_ ([value_ "summary_pattern"] ++ [selected_ "" | config.patternSelected == Just "summary_pattern"]) "Event summary"
+              option_ (value_ "log_pattern" : [selected_ "" | config.patternSelected == Just "log_body" || isNothing config.patternSelected]) "Log body"
+              option_ (value_ "summary_pattern" : [selected_ "" | config.patternSelected == Just "summary_pattern"]) "Event summary"
           span_ [class_ "text-textDisabled mx-2 text-xs"] "|"
           termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
 
@@ -340,7 +340,7 @@ queryLibItem_ isRecent qli =
     ]
     do
       -- Main content area
-      div_ [class_ "pr-8", onclick_ $ "document.getElementById('filterElement').handleAddQuery(JSON.parse(this.closest('.query-item').dataset.query))"] do
+      div_ [class_ "pr-8", onclick_ "document.getElementById('filterElement').handleAddQuery(JSON.parse(this.closest('.query-item').dataset.query))"] do
         div_ [class_ "flex items-baseline gap-2 mb-1"] do
           whenJust qli.title (\title -> span_ [class_ "font-medium text-sm"] $ toHtml title <> " •")
           small_ [class_ "text-textWeak text-xs whitespace-nowrap"]
@@ -354,14 +354,14 @@ queryLibItem_ isRecent qli =
           [ type_ "button"
           , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
           , term "data-tippy-content" "Run this query"
-          , onclick_ $ "event.preventDefault(); document.getElementById('filterElement').handleAddQuery(this.closest('.query-item').dataset.query, true)"
+          , onclick_ "event.preventDefault(); document.getElementById('filterElement').handleAddQuery(this.closest('.query-item').dataset.query, true)"
           ]
           $ faSprite_ "play" "regular" "h-3 w-3"
         button_
           [ type_ "button"
           , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
           , term "data-tippy-content" "Copy query to clipboard"
-          , onclick_ $ "event.preventDefault(); navigator.clipboard.writeText(this.closest('.query-item').dataset.query).then(() => { document.body.dispatchEvent(new CustomEvent('successToast', {detail: {value: ['Query copied to clipboard']}})); })"
+          , onclick_ "event.preventDefault(); navigator.clipboard.writeText(this.closest('.query-item').dataset.query).then(() => { document.body.dispatchEvent(new CustomEvent('successToast', {detail: {value: ['Query copied to clipboard']}})); })"
           ]
           $ faSprite_ "copy" "regular" "h-3 w-3"
         when qli.byMe do

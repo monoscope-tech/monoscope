@@ -274,7 +274,7 @@ discordInteractionsH rawBody signatureM timestampM = do
                     Just dashboardVM -> do
                       dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString $ fromMaybe "_overview.yaml" dashboardVM.baseTemplate)
                       whenJust dashboardM $ \dashboard -> do
-                        let widgetM = find (\w -> (fromMaybe "Untitled-" w.title) == widget) dashboard.widgets
+                        let widgetM = find (\w -> fromMaybe "Untitled-" w.title == widget) dashboard.widgets
                         whenJust widgetM $ \w -> do
                           now <- Time.currentTime
                           let widgetQuery = "&widget=" <> decodeUtf8 (urlEncode True (toStrict $ AE.encode $ AE.toJSON w))
@@ -461,7 +461,7 @@ getBotContent question query query_url chartOptions baseUrl now =
                     AE..= AE.Array
                       ( V.fromList
                           [ AE.object ["type" AE..= 10, "content" AE..= ("### " <> question)]
-                          , AE.object ["type" AE..= 12, "items" AE..= AE.Array (V.singleton $ AE.object ["media" AE..= AE.object ["url" AE..= (chartImageUrl chartOptions baseUrl now)]])]
+                          , AE.object ["type" AE..= 12, "items" AE..= AE.Array (V.singleton $ AE.object ["media" AE..= AE.object ["url" AE..= chartImageUrl chartOptions baseUrl now]])]
                           , AE.object ["type" AE..= 10, "content" AE..= ("**Query used:** " <> query)]
                           , AE.object ["type" AE..= 1, "components" AE..= AE.Array (V.fromList [AE.object ["type" AE..= 2, "label" AE..= "Open explorer", "url" AE..= query_url, "style" AE..= 5]])]
                           ]

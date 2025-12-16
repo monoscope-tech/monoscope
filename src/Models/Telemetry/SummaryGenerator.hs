@@ -8,10 +8,8 @@ module Models.Telemetry.SummaryGenerator (
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AE
 import Data.Aeson.KeyMap qualified as AE
-import Data.ByteString.Lazy qualified as BSL
 import Data.Map qualified as Map
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Data.Vector qualified as V
 import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), Severity (..), SeverityLevel (..), atMapInt, atMapText)
 import Pkg.DeriveUtils (unAesonTextMaybe)
@@ -47,7 +45,7 @@ generateLogSummary otel =
     resourceFallback = case unAesonTextMaybe otel.resource of
       Just res
         | not (Map.null res) ->
-            let resText = TE.decodeUtf8 $ BSL.toStrict $ AE.encode res
+            let resText = decodeUtf8 (AE.encode res)
                 truncated =
                   if T.length resText > 500
                     then T.take 497 resText <> "..."
@@ -86,16 +84,16 @@ generateLogSummary otel =
             Just (AE.String txt) -> Just txt
             Just (AE.Object obj) -> case extractMessageFromLog (AE.Object obj) of
               Just v -> Just v
-              _ -> Just $ TE.decodeUtf8 $ BSL.toStrict $ AE.encode obj
+              _ -> Just $ decodeUtf8 (AE.encode obj)
             Just val -> case val of
               AE.Null -> Nothing
-              _ -> Just $ T.take 200 $ T.pack $ show val
+              _ -> Just $ T.take 200 $ toText $ show val
             Nothing -> Nothing
         , -- Attributes (limited to avoid excessive length)
           case unAesonTextMaybe otel.attributes of
             Just attrs
               | not (Map.null attrs) ->
-                  let attrText = TE.decodeUtf8 $ BSL.toStrict $ AE.encode attrs
+                  let attrText = decodeUtf8 (AE.encode attrs)
                       -- Limit attributes to 500 characters
                       truncated =
                         if T.length attrText > 500
@@ -162,13 +160,13 @@ generateSpanSummary otel =
                                   -- Fall back to PID
                                   case Map.lookup "pid" procMap of
                                     Just (AE.Number n) ->
-                                      Just $ "process;neutral⇒PID " <> T.pack (show (round n :: Int))
+                                      Just $ "process;neutral⇒PID " <> toText (show (round n :: Int))
                                     _ -> Nothing
                         _ ->
                           -- No executable, try PID
                           case Map.lookup "pid" procMap of
                             Just (AE.Number n) ->
-                              Just $ "process;neutral⇒PID " <> T.pack (show (round n :: Int))
+                              Just $ "process;neutral⇒PID " <> toText (show (round n :: Int))
                             _ -> Nothing
                 _ -> Nothing
             _ -> Nothing
@@ -176,13 +174,13 @@ generateSpanSummary otel =
           unAesonTextMaybe otel.resource
             >>= atMapText "service.name"
             . Just
-            <&> (\name -> "service;neutral⇒" <> name)
+            <&> ("service;neutral⇒" <>)
         , -- Resource attributes
           case unAesonTextMaybe otel.resource of
             Just attrs
               | not (Map.null attrs) ->
                   let filtered = Map.filterWithKey (\k _ -> k /= "process") attrs
-                      attrText = TE.decodeUtf8 $ BSL.toStrict $ AE.encode filtered
+                      attrText = decodeUtf8 (AE.encode filtered)
                       truncated =
                         if T.length attrText > 300
                           then T.take 297 attrText <> "..."
@@ -229,7 +227,7 @@ generateSpanSummary otel =
         ++
         -- 2. HTTP Status code (comes before method)
         [ case atMapInt "http.response.status_code" (unAesonTextMaybe otel.attributes) of
-            Just code -> Just $ "status_code;" <> statusCodeStyle code <> "⇒" <> T.pack (show code)
+            Just code -> Just $ "status_code;" <> statusCodeStyle code <> "⇒" <> toText (show code)
             _ -> Nothing
         ]
         ++
@@ -296,7 +294,7 @@ generateSpanSummary otel =
         [ case unAesonTextMaybe otel.attributes of
             Just attrs
               | not (Map.null attrs) ->
-                  let attrText = TE.decodeUtf8 $ BSL.toStrict $ AE.encode attrs
+                  let attrText = decodeUtf8 (AE.encode attrs)
                       -- Limit attributes to 500 characters
                       truncated =
                         if T.length attrText > 500
@@ -354,7 +352,7 @@ generateSpanSummary otel =
               Nothing
         ]
    in
-    V.fromList $ elements
+    V.fromList elements
 
 
 statusCodeStyle :: Int -> T.Text

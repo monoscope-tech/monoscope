@@ -9,7 +9,7 @@ import Data.Effectful.Wreq qualified as Wreq
 import Data.Generics.Labels ()
 import Data.HashMap.Lazy qualified as HM
 import Data.HashMap.Lazy qualified as M
-import Data.List qualified as List
+import Data.List qualified as L
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
@@ -90,13 +90,13 @@ dashboardPage_ pid dashId dash dashVM allParams = do
   when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-fillWeaker px-6 py-2 gap-4 items-center flex-wrap"] do
     -- Tabs section (on the left)
     whenJust dash.tabs \tabs -> do
-      let activeTabIdx = fromMaybe 0 $ readMaybe . toString =<< join (List.lookup "tab" allParams)
+      let activeTabIdx = fromMaybe 0 $ readMaybe . toString =<< join (L.lookup "tab" allParams)
       div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline"] do
         forM_ (zip [0 ..] tabs) \(idx, tab) -> do
           let tabId = "dashboard-tab-" <> dashId.toText <> "-" <> show idx
           label_
             [ role_ "tab"
-            , class_ $ "tab group flex items-center gap-2 has-[:checked]:tab-active"
+            , class_ "tab group flex items-center gap-2 has-[:checked]:tab-active"
             ]
             do
               input_
@@ -200,7 +200,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
 
     |]
   section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-5 pb-6 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-20 group/pg", id_ "dashboardPage"] do
-    let activeTabIdx = fromMaybe 0 $ readMaybe . toString =<< join (List.lookup "tab" allParams)
+    let activeTabIdx = fromMaybe 0 $ readMaybe . toString =<< join (L.lookup "tab" allParams)
     case dash.tabs of
       Just tabs -> do
         -- Tab system with CSS-based switching
