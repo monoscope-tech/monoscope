@@ -44,8 +44,7 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users (User (id))
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pkg.Components.ItemsList (TabFilter (..), TabFilterOpt (..))
-import Pkg.Components.ItemsList qualified as ItemsList
+import Pkg.Components.Table (TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), Features (..), Config (..), BulkAction (..), SearchConfig (..), SortConfig (..), PaginationConfig (..), LoadTrigger (..), ZeroState (..), Column (..), col, withAttrs)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
@@ -182,29 +181,37 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
       nextFetchUrl = case layoutM of
         Just "slider" -> Nothing
         _ -> Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)
-  let listCfg =
-        ItemsList.ItemsListCfg
-          { projectId = pid
-          , nextFetchUrl
-          , sort = Just $ ItemsList.SortCfg{current = fromMaybe "events" sortM}
-          , filter = timeFilter
-          , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing} -- FIXME: search actual db
-          , heading = Nothing
-          , bulkActions =
-              [ ItemsList.BulkAction{icon = Just "check", title = "acknowlege", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
-              , ItemsList.BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
+  let issuesVM = V.map (IssueVM False False currTime filterV) issues
+  let issuesTable =
+        Table
+          { config = def{elemID = "anomalyListForm"}
+          , columns =
+              [ col "" renderIssueCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8 items-center justify-center"]
+              , col "Issue" (renderIssueMainCol pid) & withAttrs [class_ "flex-1 min-w-0"]
+              , col "Events" renderIssueEventsCol & withAttrs [class_ "w-36 flex items-start justify-center"]
+              , col "Activity" renderIssueChartCol & withAttrs [class_ "flex items-start justify-center"]
               ]
-          , zeroState =
-              Just
-                $ ItemsList.ZeroState
-                  { icon = "empty-set"
-                  , title = "No Issues Or Errors."
-                  , description = "Start monitoring errors that happened during a request."
-                  , actionText = "Error reporting guide"
-                  , destination = Right "https://monoscope.tech/docs/sdks/nodejs/expressjs/#reporting-errors-to-apitoolkit"
-                  }
-          , elemID = "anomalyListForm"
-          , ..
+          , rows = issuesVM
+          , features =
+              def
+                { rowId = Just \(IssueVM _ _ _ _ issue) -> Issues.issueIdText issue.id
+                , bulkActions =
+                    [ BulkAction{icon = Just "check", title = "acknowlege", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowlege"}
+                    , BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
+                    ]
+                , search = Just $ SearchConfig{serverSide = False, viaQueryParam = Nothing}
+                , sort = Just $ SortConfig{current = fromMaybe "events" sortM, currentURL = currentURL}
+                , pagination = Just $ PaginationConfig{nextUrl = nextFetchUrl, trigger = Both}
+                , zeroState =
+                    Just
+                      $ ZeroState
+                        { icon = "empty-set"
+                        , title = "No Issues Or Errors."
+                        , description = "Start monitoring errors that happened during a request."
+                        , actionText = "Error reporting guide"
+                        , destination = Right "https://monoscope.tech/docs/sdks/nodejs/expressjs/#reporting-errors-to-apitoolkit"
+                        }
+                }
           }
   let bwconf =
         (def :: BWConfig)
@@ -227,23 +234,28 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
                       ]
                   }
           }
-      issuesVM = V.map (IssueVM False False currTime filterV) issues
+  let issueColumns =
+        [ col "" renderIssueCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8 items-center justify-center"]
+        , col "Issue" (renderIssueMainCol pid) & withAttrs [class_ "flex-1 min-w-0"]
+        , col "Events" renderIssueEventsCol & withAttrs [class_ "w-36 flex items-start justify-center"]
+        , col "Activity" renderIssueChartCol & withAttrs [class_ "flex items-start justify-center"]
+        ]
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
     (Just "slider", Just "true", _, _) -> ALSlider currTime pid endpointM (Just $ V.map (IssueVM True False currTime filterV) issues)
-    (_, _, _, Just "true") -> ALItemsRows $ ItemsList.ItemsRows nextFetchUrl issuesVM
-    _ -> ALItemsPage $ PageCtx bwconf (ItemsList.ItemsPage listCfg issuesVM)
+    (_, _, _, Just "true") -> ALRows $ TableRows nextFetchUrl issueColumns issuesVM  -- For load more - only rows
+    _ -> ALPage $ PageCtx bwconf issuesTable
 
 
 data AnomalyListGet
-  = ALItemsPage (PageCtx (ItemsList.ItemsPage IssueVM))
-  | ALItemsRows (ItemsList.ItemsRows IssueVM)
+  = ALPage (PageCtx (Table IssueVM))
+  | ALRows (TableRows IssueVM)
   | ALSlider UTCTime Projects.ProjectId (Maybe Endpoints.EndpointId) (Maybe (V.Vector IssueVM))
 
 
 instance ToHtml AnomalyListGet where
   toHtml (ALSlider utcTime pid eid issue) = toHtmlRaw $ anomalyListSlider utcTime pid eid issue
-  toHtml (ALItemsPage pg) = toHtml pg
-  toHtml (ALItemsRows rows) = toHtml rows
+  toHtml (ALPage pg) = toHtml pg
+  toHtml (ALRows rows) = toHtml rows
   toHtmlRaw = toHtml
 
 
@@ -308,24 +320,62 @@ data IssueVM = IssueVM Bool Bool UTCTime Text Issues.IssueL
 
 instance ToHtml IssueVM where
   {-# INLINE toHtml #-}
-  toHtml (IssueVM hideByDefault isWidget currTime timeFilter issue) = toHtmlRaw $ renderIssue hideByDefault currTime timeFilter issue isWidget
+  toHtml vm@(IssueVM hideByDefault _ _ _ issue) =
+    let columns :: [Column IssueVM]
+        columns =
+          [ col "" renderIssueCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8 items-center justify-center"]
+          , col "Issue" (renderIssueMainCol issue.projectId) & withAttrs [class_ "flex-1 min-w-0"]
+          , col "Events" renderIssueEventsCol & withAttrs [class_ "w-36 flex items-start justify-center"]
+          , col "Activity" renderIssueChartCol & withAttrs [class_ "flex items-start justify-center"]
+          ]
+     in div_
+          [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "card-round" else "px-0.5 py-4"
+          , style_ (if hideByDefault then "display:none" else "")
+          ]
+          do
+            forM_ columns \c ->
+              div_ c.attrs $ toHtmlRaw $ c.render vm
   toHtmlRaw = toHtml
 
 
-renderIssue :: Bool -> UTCTime -> Text -> Issues.IssueL -> Bool -> Html ()
-renderIssue hideByDefault currTime timeFilter issue isWidget = do
-  let issueId = Issues.issueIdText issue.id
+renderIssueCheckboxCol :: IssueVM -> Html ()
+renderIssueCheckboxCol (IssueVM hideByDefault isWidget _ _ issue) =
+  unless isWidget do
+    a_ [class_ $ anomalyAccentColor (isJust issue.acknowledgedAt) (isJust issue.archivedAt) <> " w-2 h-full"] ""
+    input_ [term "aria-label" "Select Issue", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "anomalyId", value_ $ Issues.issueIdText issue.id]
+
+
+renderIssueEventsCol :: IssueVM -> Html ()
+renderIssueEventsCol (IssueVM _ isWidget _ _ issue) =
+  unless isWidget
+    $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Issue in the last 14days"]
+    $ show issue.eventCount
+
+
+renderIssueChartCol :: IssueVM -> Html ()
+renderIssueChartCol (IssueVM _ _ _ _ issue) =
+  div_ [class_ "w-56 h-12 px-3"]
+    $ Widget.widget_
+    $ (def :: Widget.Widget)
+      { Widget.standalone = Just True
+      , Widget.id = Just $ Issues.issueIdText issue.id
+      , Widget.wType = Widget.WTTimeseries
+      , Widget.title = Just $ Issues.issueIdText issue.id
+      , Widget.showTooltip = Just False
+      , Widget.naked = Just True
+      , Widget.xAxis = Just (def{Widget.showAxisLabel = Just False})
+      , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
+      , Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin(timestamp, 1h)"
+      , Widget._projectId = Just issue.projectId
+      , Widget.hideLegend = Just True
+      }
+
+
+renderIssueMainCol :: Projects.ProjectId -> IssueVM -> Html ()
+renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue) = do
   let timeSinceString = prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
 
-  div_ [class_ $ "flex gap-8 items-start itemsListItem " <> if isWidget then "p-3 " else "px-0.5 py-4 " <> if hideByDefault then "card-round" else "", style_ (if hideByDefault then "display:none" else "")] do
-    -- Checkbox and accent color
-    unless isWidget
-      $ div_ [class_ $ "h-4 flex space-x-3 w-8 items-center justify-center " <> if hideByDefault then "hidden" else ""] do
-        a_ [class_ $ anomalyAccentColor (isJust issue.acknowledgedAt) (isJust issue.archivedAt) <> " w-2 h-full"] ""
-        input_ [term "aria-label" "Select Issue", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "anomalyId", value_ issueId]
-
-    -- Main section with title, badges, and metadata
-    div_ [class_ "flex-1 min-w-0"] do
+  do
       -- Title and badges row
       div_ [class_ $ "flex gap-3 mb-3 flex-wrap " <> if isWidget then "flex-col" else " items-center "] do
         h3_ [class_ "text-textStrong text-base"] $ toHtml issue.title
@@ -494,30 +544,6 @@ renderIssue hideByDefault currTime timeFilter issue isWidget = do
           do
             faSprite_ "archive" "regular" "w-4 h-4"
             span_ [class_ "leading-none"] $ if isArchived then "Unarchive" else "Archive"
-
-    -- Events count
-    unless isWidget
-      $ div_ [class_ "w-36 flex items-start justify-center"]
-      $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Issue in the last 14days"]
-      $ show issue.eventCount
-
-    -- Chart widget
-    div_ [class_ "flex items-start justify-center "]
-      $ div_ [class_ "w-56 h-12 px-3"]
-      $ Widget.widget_
-      $ (def :: Widget.Widget)
-        { Widget.standalone = Just True
-        , Widget.id = Just issueId
-        , Widget.wType = Widget.WTTimeseries
-        , Widget.title = Just issueId
-        , Widget.showTooltip = Just False
-        , Widget.naked = Just True
-        , Widget.xAxis = Just (def{Widget.showAxisLabel = Just False})
-        , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
-        , Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin(timestamp, 1h)"
-        , Widget._projectId = Just issue.projectId
-        , Widget.hideLegend = Just True
-        }
 
 
 -- Render payload changes section

@@ -33,7 +33,7 @@ import OddJobs.Job (Job (..))
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
-import Pkg.Components.ItemsList qualified as ItemsList
+import Pkg.Components.Table qualified as Table
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import BackgroundJobs (processFiveMinuteSpans, processBackgroundJob, processOneMinuteErrors)
@@ -52,10 +52,10 @@ testPid = UUIDId UUID.nil
 -- Helper function to get anomalies from API
 getAnomalies :: TestResources -> IO (V.Vector AnomalyList.IssueVM)
 getAnomalies tr = do
-  (_, pg) <- testServant tr $ 
+  (_, pg) <- testServant tr $
     AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
   case pg of
-    AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> pure anomalies
+    AnomalyList.ALPage (PageCtx _ tbl) -> pure tbl.rows
     _ -> error "Unexpected response from anomaly list"
 
 
@@ -67,8 +67,8 @@ spec = aroundAll withTestResources do
         testServant tr $ AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
       case pg of
-        AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do
-          length anomalies `shouldBe` 0
+        AnomalyList.ALPage (PageCtx _ tbl) -> do
+          length tbl.rows `shouldBe` 0
         _ -> error "Unexpected response"
 
     it "should create endpoint anomalies (not visible in anomaly list)" \tr -> do
@@ -237,16 +237,16 @@ spec = aroundAll withTestResources do
       length anomalies `shouldSatisfy` (> 0)
 
     it "should get acknowledged anomalies" \tr -> do
-      (_, pg) <- testServant tr $ 
+      (_, pg) <- testServant tr $
         AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowledged") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case pg of
-        AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do
+        AnomalyList.ALPage (PageCtx _ tbl) -> do
           -- Acknowledged anomalies should include API changes
-          let acknowledgedApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
-          
+          let acknowledgedApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.APIChange) tbl.rows
+
           -- We acknowledged at least one API change issue in the previous test
-          length acknowledgedApiChangeIssues `shouldSatisfy` (>= 1) 
-          length anomalies `shouldSatisfy` (> 0)
+          length acknowledgedApiChangeIssues `shouldSatisfy` (>= 1)
+          length tbl.rows `shouldSatisfy` (> 0)
         _ -> error "Unexpected response"
 
 
