@@ -36,7 +36,7 @@ import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Pages.Components (emptyState_)
 import Relude
-import Utils (deleteParam, faSprite_)
+import Utils (deleteParam, faSprite_, toUriStr)
 
 
 -- Core Types
@@ -233,16 +233,7 @@ renderTableRows nextUrl columns rows = do
       forM_ columns \col ->
         div_ col.attrs $ col.render row
   whenJust nextUrl \url ->
-    a_
-      [ class_ "cursor-pointer flex justify-center items-center p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center"
-      , hxTrigger_ "click, intersect once"
-      , hxSwap_ "outerHTML"
-      , hxGet_ url
-      , hxIndicator_ "#rowsIndicator"
-      ]
-      do
-        "Load more"
-        span_ [id_ "rowsIndicator", class_ "ml-2 htmx-indicator loading loading-dots loading-md"] ""
+    renderPaginationLink url Both
 
 
 -- Tab Filter ToHtml
@@ -253,7 +244,7 @@ instance ToHtml TabFilter where
     let uri = deleteParam "filter" tf.currentURL
     forM_ tf.options \opt ->
       a_
-        [ href_ $ uri <> "&filter=" <> opt.name
+        [ href_ $ uri <> "&filter=" <> toUriStr opt.name
         , role_ "tab"
         , class_ $ "tab h-auto! " <> if opt.name == tf.current then "tab-active text-textStrong" else ""
         ]
@@ -305,8 +296,7 @@ renderRows tbl =
 renderListRow :: Table a -> a -> Html ()
 renderListRow tbl row =
   div_ (rowAttrs <> [class_ "flex gap-8 items-start itemsListItem"]) do
-    forM_ tbl.columns \col ->
-      div_ col.attrs $ col.render row
+    forM_ tbl.columns \col -> div_ col.attrs $ col.render row
   where
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
 
@@ -326,7 +316,7 @@ renderTableRow tbl row =
               , name_ "itemId"
               , value_ $ getId row
               ]
-            <> [checked_ | isSelected]
+              <> [checked_ | isSelected]
 
     forM_ tbl.columns \col ->
       td_ (col.attrs <> colAttrs col)
@@ -414,7 +404,7 @@ renderSortMenu sortCfg = do
           let isActive = sortCfg.current == identifier || (sortCfg.current == "" && identifier == defaultSort)
           a_
             [ class_ $ "block flex flex-row px-3 py-2 hover:bg-fillBrand-weak rounded-md cursor-pointer " <> (if isActive then " text-textBrand " else "")
-            , href_ $ currentURL' <> "&sort=" <> identifier
+            , href_ $ currentURL' <> "&sort=" <> toUriStr identifier
             , hxIndicator_ "#sortLoader"
             ]
             do
@@ -430,11 +420,12 @@ renderSortMenu sortCfg = do
     ""
 
 
-renderPagination :: PaginationConfig -> Html ()
-renderPagination cfg = whenJust cfg.nextUrl \url ->
+-- Helper function for rendering pagination link
+renderPaginationLink :: Text -> LoadTrigger -> Html ()
+renderPaginationLink url trigger =
   a_
     [ class_ "cursor-pointer flex justify-center items-center p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center"
-    , hxTrigger_ $ case cfg.trigger of
+    , hxTrigger_ $ case trigger of
         OnClick -> "click"
         OnIntersect -> "intersect once"
         Both -> "click, intersect once"
@@ -445,6 +436,10 @@ renderPagination cfg = whenJust cfg.nextUrl \url ->
     do
       "Load more"
       span_ [id_ "rowsIndicator", class_ "ml-2 htmx-indicator loading loading-dots loading-md"] ""
+
+
+renderPagination :: PaginationConfig -> Html ()
+renderPagination cfg = whenJust cfg.nextUrl \url -> renderPaginationLink url cfg.trigger
 
 
 renderZeroState :: ZeroState -> Html ()
