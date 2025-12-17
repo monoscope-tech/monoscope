@@ -207,11 +207,9 @@ getDiscordChannels token guildId = do
   case AE.eitherDecode body of
     Right val -> return val
     Left err -> do
-      Log.logAttention ("Error decoding Slack channels response: " <> toText err) ()
+      Log.logAttention ("Error decoding discord channels response: " <> toText err) ()
       return []
 
-
--- pure $ fromRight [] $ AE.eitherDecode body
 
 discordInteractionsH :: BS.ByteString -> Maybe BS.ByteString -> Maybe BS.ByteString -> ATBaseCtx AE.Value
 discordInteractionsH rawBody signatureM timestampM = do
