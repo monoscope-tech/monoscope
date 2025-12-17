@@ -176,17 +176,17 @@ instance AE.FromJSON InteractionData where
       Just 3 ->
         MessageComponentData
           <$> v
-            AE..: "component_type"
+          AE..: "component_type"
           <*> v
-            AE..: "custom_id"
+          AE..: "custom_id"
           <*> v
-            AE..: "values"
+          AE..: "values"
       _ ->
         CommandData
           <$> v
-            AE..: "name"
+          AE..: "name"
           <*> v
-            AE..:? "options"
+          AE..:? "options"
 
 
 data InteractionOption = InteractionOption
@@ -387,8 +387,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-          <> [msgJson]
-          <> ["\n\nUser query: " <> question]
+        <> [msgJson]
+        <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
