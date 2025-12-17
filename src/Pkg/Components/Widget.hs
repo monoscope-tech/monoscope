@@ -247,13 +247,13 @@ renderWidgetHeader :: Widget -> Text -> Maybe Text -> Maybe Text -> Maybe Text -
 renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ $ "leading-none flex justify-between items-center  " <> bool "grid-stack-handle" "" (widget.standalone == Just True), id_ $ wId <> "_header"] do
   when (widget._centerTitle == Just True) $ div_ ""
   div_ [class_ "inline-flex gap-3 items-center group/h"] do
-    span_ [class_ "text-sm flex items-center gap-1"] do
+    span_ [class_ "text-sm text-textWeak flex items-center gap-1"] do
       unless (widget.standalone == Just True) $ span_ [class_ "hidden group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
       whenJust widget.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
       toHtml $ maybeToMonoid title
-    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none " <> if isJust valueM then "" else "hidden", id_ $ wId <> "Value"]
+    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none text-textWeak " <> if isJust valueM then "" else "hidden", id_ $ wId <> "Value"]
       $ whenJust valueM toHtml
-    span_ [class_ $ "text-textWeak widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] $ toHtml $ maybeToMonoid subValueM
+    span_ [class_ $ "text-textDisabled widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
     span_ [class_ "hidden", id_ $ wId <> "_loader"] $ Utils.faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
   div_ [class_ "text-iconNeutral flex items-center"] do
