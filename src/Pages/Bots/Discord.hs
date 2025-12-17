@@ -198,14 +198,20 @@ data InteractionOption = InteractionOption
   deriving anyclass (AE.FromJSON)
 
 
-getDiscordChannels :: HTTP :> es => Text -> Text -> Eff es [Channel]
+getDiscordChannels :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Eff es [Channel]
 getDiscordChannels token guildId = do
   let url = "https://discord.com/api/v10/guilds/" <> toString guildId <> "/channels"
       opts = defaults & header "Authorization" .~ ["Bot " <> encodeUtf8 token]
   r <- getWith opts url
   let body = r ^. responseBody
-  pure $ fromRight [] $ AE.eitherDecode body
+  case AE.eitherDecode body of
+    Right val -> return val
+    Left err -> do
+      Log.logAttention ("Error decoding Slack channels response: " <> toText err) ()
+      return []
 
+
+-- pure $ fromRight [] $ AE.eitherDecode body
 
 discordInteractionsH :: BS.ByteString -> Maybe BS.ByteString -> Maybe BS.ByteString -> ATBaseCtx AE.Value
 discordInteractionsH rawBody signatureM timestampM = do

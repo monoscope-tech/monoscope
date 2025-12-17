@@ -644,7 +644,6 @@ data SlackChannelsResponse = SlackChannelsResponse
   deriving anyclass (AE.FromJSON)
 
 
--- | Internal helper to call Slack API
 getSlackChannels :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Eff es (Maybe SlackChannelsResponse)
 getSlackChannels token team_id = do
   let url = "https://slack.com/api/conversations.list"
