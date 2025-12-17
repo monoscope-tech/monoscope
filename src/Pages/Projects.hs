@@ -354,7 +354,7 @@ integrationsBody IntegrationsConfig{..} = do
             renderNotificationOption "Email Notifications" "Receive project updates via email" "email" Projects.NEmail notifChannel (faSprite_ "envelope" "solid" "h-6 w-6") ""
             renderNotificationOption "Slack" "Send notifications to Slack channels" "slack" Projects.NSlack notifChannel (faSprite_ "slack" "solid" "h-6 w-6") (renderSlackIntegration envConfig "" slackData)
             renderNotificationOption "Discord" "Send notifications to Discord servers" "discord" Projects.NDiscord notifChannel (faSprite_ "discord" "solid" "h-6 w-6") (renderDiscordIntegration envConfig "")
-            renderNotificationOption "WhatsApp" "Send notificataoin via WhatsApp" "phone" Projects.NPhone notifChannel (faSprite_ "whatsapp" "solid" "h-6 w-6") renderWhatsappIntegration
+            renderNotificationOption "WhatsApp" "Send notification via WhatsApp" "phone" Projects.NPhone notifChannel (faSprite_ "whatsapp" "solid" "h-6 w-6") renderWhatsappIntegration
             button_ [class_ "btn btn-primary w-max", [__| on click htmx.trigger("#notifsForm", "submit")|]] "Save Selections"
   let tgs = decodeUtf8 $ AE.encode $ V.toList phones
   script_
@@ -480,12 +480,12 @@ manageMembersPostH pid onboardingM form = do
 
       unless (null uAndPOldAndChanged)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       unless (null deletedUAndP)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid

@@ -160,19 +160,23 @@ runNotifyProduction = interpret $ \_ -> \case
     SlackNotification SlackData{..} -> do
       appCtx <- ask @Config.AuthContext
       let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> appCtx.config.slackBotToken]
-      let messageF = case message of
-            AE.Object obj -> AE.Object $ AEK.insert "channel" (AE.String channelId) obj
-            _ -> message
-      re <- liftIO $ postWith opts "https://slack.com/api/chat.postMessage" messageF
-      -- log if error
-      unless (statusIsSuccessful (re ^. responseStatus))
-        $ Log.logAttention "Slack notification failed" (channelId, show $ re ^. responseStatus)
-      pass
+      case message of
+        AE.Object obj -> do
+          let msg = AE.Object $ AEK.insert "channel" (AE.String channelId) obj
+          re <- liftIO $ postWith opts "https://slack.com/api/chat.postMessage" msg
+          unless (statusIsSuccessful (re ^. responseStatus))
+            $ Log.logAttention "Slack notification failed" (channelId, show $ re ^. responseStatus)
+          pass
+        _ -> do
+          Log.logAttention "Slack notification message is not an object" (channelId, show message)
+          pass
     DiscordNotification DiscordData{..} -> do
       appCtx <- ask @Config.AuthContext
       let url = toString $ "https://discord.com/api/v10/channels/" <> channelId <> "/messages"
       let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bot " <> appCtx.config.discordBotToken]
-      _ <- liftIO $ postWith opts url content
+      re <- liftIO $ postWith opts url content
+      unless (statusIsSuccessful (re ^. responseStatus))
+        $ Log.logAttention "Discord notification failed" (channelId, show $ re ^. responseStatus)
       pass
     WhatsAppNotification WhatsAppData{template, to, contentVariables} -> do
       appCtx <- ask @Config.AuthContext
