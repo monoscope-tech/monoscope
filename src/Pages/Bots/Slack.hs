@@ -4,7 +4,6 @@ module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slac
 
 import BackgroundJobs qualified as BgJobs
 import Control.Lens ((.~), (^.))
-import Data.Aeson (withObject)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as KEM
 import Data.Aeson.KeyMap qualified as KEMP
@@ -28,6 +27,7 @@ import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.Concurrent (forkIO)
 import Effectful.Error.Static (throwError)
+import Effectful.Log qualified as Log
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
@@ -525,17 +525,17 @@ instance AE.FromJSON SlackEventPayload where
       "event_callback" ->
         EventCallback
           <$> v
-          AE..: "token"
+            AE..: "token"
           <*> v
-          AE..: "team_id"
+            AE..: "team_id"
           <*> v
-          AE..: "api_app_id"
+            AE..: "api_app_id"
           <*> v
-          AE..: "event"
+            AE..: "event"
           <*> v
-          AE..: "event_id"
+            AE..: "event_id"
           <*> v
-          AE..: "event_time"
+            AE..: "event_time"
       other -> fail $ "Unsupported Slack event type: " ++ show other
 
 
@@ -645,7 +645,7 @@ data SlackChannelsResponse = SlackChannelsResponse
 
 
 -- | Internal helper to call Slack API
-getSlackChannels :: HTTP :> es => Text -> Text -> Eff es (Maybe SlackChannelsResponse)
+getSlackChannels :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Eff es (Maybe SlackChannelsResponse)
 getSlackChannels token team_id = do
   let url = "https://slack.com/api/conversations.list"
       opts =
@@ -655,7 +655,9 @@ getSlackChannels token team_id = do
   let resBody = r ^. responseBody
   case AE.eitherDecode resBody of
     Right val -> return $ Just val
-    Left err -> return Nothing
+    Left err -> do
+      Log.logAttention ("Error decoding Slack channels response: " <> toText err) ()
+      return Nothing
 
 
 instance AE.FromJSON SlackThreadedMessage where
@@ -695,7 +697,7 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-        <> [msgJson]
-        <> ["\n\nUser query: " <> question]
+          <> [msgJson]
+          <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt

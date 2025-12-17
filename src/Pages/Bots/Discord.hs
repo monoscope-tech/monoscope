@@ -29,6 +29,7 @@ import Data.Effectful.Wreq (
  )
 import Data.Time qualified as Time
 import Effectful (Eff, type (:>))
+import Effectful.Log qualified as Log
 import Effectful.Time qualified as Time
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Dashboards qualified as Dashboards
@@ -433,7 +434,7 @@ data DiscordMessage = DiscordMessage
   deriving anyclass (AE.FromJSON)
 
 
-getThreadStarterMessage :: HTTP :> es => DiscordInteraction -> Text -> Eff es (Maybe [DiscordMessage])
+getThreadStarterMessage :: (HTTP :> es, Log.Log :> es) => DiscordInteraction -> Text -> Eff es (Maybe [DiscordMessage])
 getThreadStarterMessage interaction botToken = do
   case interaction.channel_id of
     Just channelId -> case interaction.channel of
@@ -446,6 +447,7 @@ getThreadStarterMessage interaction botToken = do
         response' <- getWith opts starterMessageUrl
         case AE.eitherDecode (response ^. responseBody) of
           Left err -> do
+            Log.logAttention ("Error decoding Discord thread messages: " <> toText err) ()
             return Nothing
           Right messages -> do
             case AE.eitherDecode (response' ^. responseBody) of
