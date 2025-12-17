@@ -243,7 +243,19 @@ integrationsSettingsGetH pid = do
   slackInfo <- getProjectSlackData pid
 
   let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations", isSettingsPage = True, config = appCtx.config}
-  addRespHeaders $ bodyWrapper bwconf $ integrationsBody sess.persistentSession pid appCtx.config True createProj (Just project.notificationsChannel) project.whatsappNumbers slackInfo
+  addRespHeaders
+    $ bodyWrapper bwconf
+    $ integrationsBody
+      IntegrationsConfig
+        { session = sess.persistentSession
+        , projectId = pid
+        , envConfig = appCtx.env
+        , isUpdate = True
+        , createForm = createProj
+        , notifChannel = Just project.notificationsChannel
+        , phones = project.whatsappNumbers
+        , slackData = slackInfo
+        }
 
 
 data NotifListForm = NotifListForm
@@ -310,11 +322,23 @@ validateWhatsapp :: [Text] -> [Text] -> Either Text ()
 validateWhatsapp notificationsChannel numbers = if "phone" `elem` notificationsChannel && null numbers then Left "Provide at least one whatsapp number" else Right ()
 
 
-integrationsBody :: Sessions.PersistentSession -> Projects.ProjectId -> EnvConfig -> Bool -> CreateProjectForm -> Maybe (V.Vector Projects.NotificationChannel) -> V.Vector Text -> Maybe SlackData -> Html ()
-integrationsBody sess pid' envCfg isUpdate cp notifChannel phones slackData = do
+data IntegrationsConfig = IntegrationsConfig
+  { session :: Sessions.PersistentSession
+  , projectId :: Projects.ProjectId
+  , envConfig :: EnvConfig
+  , isUpdate :: Bool
+  , createForm :: CreateProjectForm
+  , notifChannel :: Maybe (V.Vector Projects.NotificationChannel)
+  , phones :: V.Vector Text
+  , slackData :: Maybe SlackData
+  }
+
+
+integrationsBody :: IntegrationsConfig -> Html ()
+integrationsBody IntegrationsConfig{..} = do
   section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6 overflow-y-scroll h-full"] do
     div_ [class_ "mx-auto", style_ "max-width:1000px"] do
-      let pid = pid'.toText
+      let pid = projectId.toText
       div_
         [ class_ "mt-10"
         , hxPost_ [text|/p/$pid/notifications-channels|]
@@ -328,8 +352,8 @@ integrationsBody sess pid' envCfg isUpdate cp notifChannel phones slackData = do
           div_ [class_ "flex flex-col gap-4"] do
             p_ [] "Select channels to receive updates on this project."
             renderNotificationOption "Email Notifications" "Receive project updates via email" "email" Projects.NEmail notifChannel (faSprite_ "envelope" "solid" "h-6 w-6") ""
-            renderNotificationOption "Slack" "Send notifications to Slack channels" "slack" Projects.NSlack notifChannel (faSprite_ "slack" "solid" "h-6 w-6") (renderSlackIntegration envCfg "" slackData)
-            renderNotificationOption "Discord" "Send notifications to Discord servers" "discord" Projects.NDiscord notifChannel (faSprite_ "discord" "solid" "h-6 w-6") (renderDiscordIntegration envCfg "")
+            renderNotificationOption "Slack" "Send notifications to Slack channels" "slack" Projects.NSlack notifChannel (faSprite_ "slack" "solid" "h-6 w-6") (renderSlackIntegration envConfig "" slackData)
+            renderNotificationOption "Discord" "Send notifications to Discord servers" "discord" Projects.NDiscord notifChannel (faSprite_ "discord" "solid" "h-6 w-6") (renderDiscordIntegration envConfig "")
             renderNotificationOption "WhatsApp" "Send notificataoin via WhatsApp" "phone" Projects.NPhone notifChannel (faSprite_ "whatsapp" "solid" "h-6 w-6") renderWhatsappIntegration
             button_ [class_ "btn btn-primary w-max", [__| on click htmx.trigger("#notifsForm", "submit")|]] "Save Selections"
   let tgs = decodeUtf8 $ AE.encode $ V.toList phones
@@ -456,12 +480,12 @@ manageMembersPostH pid onboardingM form = do
 
       unless (null uAndPOldAndChanged)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       unless (null deletedUAndP)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid

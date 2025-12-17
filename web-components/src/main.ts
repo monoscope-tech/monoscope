@@ -126,10 +126,14 @@ window.getTimeRange = function () {
     }
     return { since: params().since, from: params().from, to: params().to };
   }
+
+  const fromInput = document.querySelector('input[name="from"]') as HTMLInputElement | null;
+  const toInput = document.querySelector('input[name="to"]') as HTMLInputElement | null;
+
   return {
     since: '',
-    from: document.querySelector('input[name="from"]')?.value || '',
-    to: document.querySelector('input[name="to"]')?.value || '',
+    from: fromInput ? fromInput.value || '' : '',
+    to: toInput ? toInput.value || '' : '',
   };
 };
 

@@ -34,6 +34,7 @@ module Data.Effectful.Notify (
 ) where
 
 import Control.Lens ((.~))
+import Control.Lens.Getter ((^.))
 import Control.Lens.Setter ((?~))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
@@ -43,7 +44,8 @@ import Effectful.Dispatch.Dynamic
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Effectful.TH
-import Network.Wreq (FormParam ((:=)), auth, basicAuth, defaults, header, postWith)
+import Network.HTTP.Types (statusIsSuccessful)
+import Network.Wreq (FormParam ((:=)), auth, basicAuth, defaults, header, postWith, responseStatus)
 import Relude hiding (Reader, State, ask, get, modify, put, runState)
 import System.Config qualified as Config
 import System.Logging qualified as Log
@@ -127,7 +129,7 @@ whatsappNotification template to contentVariables =
 
 
 -- Production interpreter
-runNotifyProduction :: (IOE :> es, Reader Config.AuthContext :> es) => Eff (Notify ': es) a -> Eff es a
+runNotifyProduction :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => Eff (Notify ': es) a -> Eff es a
 runNotifyProduction = interpret $ \_ -> \case
   SendNotification notification -> case notification of
     EmailNotification EmailData{..} -> do
@@ -159,9 +161,12 @@ runNotifyProduction = interpret $ \_ -> \case
       appCtx <- ask @Config.AuthContext
       let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> appCtx.config.slackBotToken]
       let messageF = case message of
-            AE.Object obj -> AE.Object $ obj <> (AEK.fromList [("channel", AE.String channelId)])
+            AE.Object obj -> AE.Object $ AEK.insert "channel" (AE.String channelId) obj
             _ -> message
-      _ <- liftIO $ postWith opts "https://slack.com/api/chat.postMessage" messageF
+      re <- liftIO $ postWith opts "https://slack.com/api/chat.postMessage" messageF
+      -- log if error
+      unless (statusIsSuccessful (re ^. responseStatus))
+        $ Log.logAttention "Slack notification failed" (channelId, show $ re ^. responseStatus)
       pass
     DiscordNotification DiscordData{..} -> do
       appCtx <- ask @Config.AuthContext

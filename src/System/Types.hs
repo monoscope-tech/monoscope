@@ -212,7 +212,7 @@ type RespHeaders =
      ]
 
 
-addRespHeaders :: (State.State HXRedirectDest :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es) => a -> Eff es (RespHeaders a)
+addRespHeaders :: (State.State HXRedirectDest :> es, State.State HXReswap :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es) => a -> Eff es (RespHeaders a)
 addRespHeaders resp = do
   triggerEvents <- State.get @TriggerEvents
   redirectDest <- State.get @HXRedirectDest
