@@ -207,7 +207,7 @@ unifiedMonitorCard :: UnifiedMonitorItem -> Html ()
 unifiedMonitorCard item = do
   div_ [class_ "border-b flex p-4 gap-4 itemsListItem hover:bg-fillWeak transition-colors group/card"] do
     -- Monitor type indicator
-    div_ [class_ "mt-2 shrink-0"] do
+    div_ [class_ "mt-2 pl-4 shrink-0"] do
       div_ [class_ $ "w-10 h-10 rounded-lg flex items-center justify-center " <> typeColorClass] do
         faSprite_ typeIcon "regular" "h-5 w-5"
 

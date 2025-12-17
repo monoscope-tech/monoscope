@@ -35,6 +35,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Free up disk space
+      - name: Free Disk Space
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          echo "Disk space after cleanup:"
+          df -h
+
       # Install and cache system dependencies
       - name: Install system dependencies
         uses: awalsh128/cache-apt-pkgs-action@latest
@@ -58,10 +71,12 @@ jobs:
         with:
           path: |
             ~/.cabal/store
-            dist-newstyle
-          key: ${{ runner.os }}-test-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
+            dist-newstyle/build
+            dist-newstyle/cache
+          key: ${{ runner.os }}-${{ matrix.test }}-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
           restore-keys: |
-            ${{ runner.os }}-test-
+            ${{ runner.os }}-${{ matrix.test }}-
+            ${{ runner.os }}-
 
       - name: Setup Node.js
         uses: actions/setup-node@v3
