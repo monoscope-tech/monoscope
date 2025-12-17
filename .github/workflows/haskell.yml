@@ -71,10 +71,12 @@ jobs:
         with:
           path: |
             ~/.cabal/store
-            dist-newstyle
-          key: ${{ runner.os }}-test-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
+            dist-newstyle/build
+            dist-newstyle/cache
+          key: ${{ runner.os }}-${{ matrix.test }}-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
           restore-keys: |
-            ${{ runner.os }}-test-
+            ${{ runner.os }}-${{ matrix.test }}-
+            ${{ runner.os }}-
 
       - name: Setup Node.js
         uses: actions/setup-node@v3
@@ -106,18 +108,6 @@ jobs:
 
       - name: Build dependencies
         run: cabal build --only-dependencies all -j4
-
-      - name: Clean up build artifacts
-        run: |
-          echo "Disk space before cleanup:"
-          df -h
-          # Remove intermediate build files, keep only the built libraries
-          find dist-newstyle -type f -name "*.o" -delete
-          find dist-newstyle -type f -name "*.hi" -delete
-          find dist-newstyle -type f -name "*.dyn_o" -delete
-          find dist-newstyle -type f -name "*.dyn_hi" -delete
-          echo "Disk space after cleanup:"
-          df -h
 
       - name: Build ${{ matrix.test }}
         run: cabal build ${{ matrix.test }} -j4
