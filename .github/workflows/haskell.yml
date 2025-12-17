@@ -92,7 +92,7 @@ jobs:
           
           # Install dependencies and build Tailwind CSS
           npm install
-          npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
+          npx @tailwindcss/cli -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
           
           # Build web components
           cd web-components

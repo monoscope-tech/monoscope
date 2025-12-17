@@ -20,7 +20,7 @@ COPY web-components ./web-components
 COPY src ./src
 
 # Build assets
-RUN npx tailwindcss -c ./config/tailwind.config.js -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify && \
+RUN npx @tailwindcss/cli -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify && \
   cd web-components && NODE_ENV=production npx vite build --mode production --sourcemap false
 
 # Copy workbox config
