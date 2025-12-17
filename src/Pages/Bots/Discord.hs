@@ -117,7 +117,7 @@ data DiscordInteraction = Interaction
   , data_i :: Maybe InteractionData
   , channel_id :: Maybe Text
   , guild_id :: Maybe Text
-  , channel :: Maybe Channel'
+  , channel :: Maybe DiscordThreadChannel
   }
   deriving (Generic, Show)
 
@@ -135,7 +135,7 @@ data ThreadMetadata = ThreadMetadata
 instance AE.FromJSON ThreadMetadata
 
 
-data Channel' = Channel'
+data DiscordThreadChannel = DiscordThreadChannel
   { id :: Text
   , name :: Text
   , guild_id :: Maybe Text
@@ -147,7 +147,7 @@ data Channel' = Channel'
   deriving (Generic, Show)
 
 
-instance AE.FromJSON Channel' where
+instance AE.FromJSON DiscordThreadChannel where
   parseJSON = AE.genericParseJSON AE.defaultOptions{AE.fieldLabelModifier = \f -> if f == "type_" then "type" else f}
 
 
@@ -176,17 +176,17 @@ instance AE.FromJSON InteractionData where
       Just 3 ->
         MessageComponentData
           <$> v
-          AE..: "component_type"
+            AE..: "component_type"
           <*> v
-          AE..: "custom_id"
+            AE..: "custom_id"
           <*> v
-          AE..: "values"
+            AE..: "values"
       _ ->
         CommandData
           <$> v
-          AE..: "name"
+            AE..: "name"
           <*> v
-          AE..:? "options"
+            AE..:? "options"
 
 
 data InteractionOption = InteractionOption
@@ -387,8 +387,8 @@ threadsPrompt msgs question = prompt
           , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
           , "\nPrevious thread messages in json:\n"
           ]
-        <> [msgJson]
-        <> ["\n\nUser query: " <> question]
+          <> [msgJson]
+          <> ["\n\nUser query: " <> question]
 
     prompt = systemPrompt <> threadPrompt
 
@@ -437,7 +437,7 @@ getThreadStarterMessage :: HTTP :> es => DiscordInteraction -> Text -> Eff es (M
 getThreadStarterMessage interaction botToken = do
   case interaction.channel_id of
     Just channelId -> case interaction.channel of
-      Just Channel'{type_ = 11, parent_id = Just pId} -> do
+      Just DiscordThreadChannel{type_ = 11, parent_id = Just pId} -> do
         let baseUrl = "https://discord.com/api/v10/channels/"
             url = toString $ baseUrl <> channelId <> "/messages?limit=50"
             starterMessageUrl = toString $ baseUrl <> pId <> "/messages/" <> channelId

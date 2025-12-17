@@ -401,7 +401,7 @@ modal_ modalId btnTrigger contentHtml = do
           on closeModal from body set my.checked to false end
       |]
     ]
-  div_ [class_ "modal w-screen", role_ "dialog", style_ "--color-base-100: var(--color-fillWeaker)"] do
+  div_ [class_ "modal w-screen", role_ "dialog"] do
     label_ [class_ "modal-backdrop", Lucid.for_ modalId] ""
     div_ [class_ "modal-box w-auto flex flex-col gap-5 max-w-5xl"] do
       label_ [Lucid.for_ modalId, class_ "btn btn-sm btn-circle btn-ghost absolute right-2 top-2"] "✕"
