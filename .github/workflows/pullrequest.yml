@@ -52,7 +52,7 @@ jobs:
           mkdir -p static/public/assets/web-components/dist/css
 
           npm install
-          npx @tailwindcss/cli -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
+          npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
 
           cd web-components
           npm install
@@ -134,7 +134,7 @@ jobs:
           mkdir -p static/public/assets/web-components/dist/css
 
           npm install
-          npx @tailwindcss/cli -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
+          npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
 
           cd web-components
           npm install
