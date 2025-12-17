@@ -373,7 +373,7 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
               $ forM_ issuesVM \vm@(AnomalyList.IssueVM hideByDefault _ _ _ issue) ->
                 div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] do
                   Table.renderRowWithColumns
-                    [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "card-round" else "px-0.5 py-4"
+                    [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "surface-raised rounded-2xl" else "px-0.5 py-4"
                     , style_ (if hideByDefault then "display:none" else "")
                     ]
                     (AnomalyList.issueColumns issue.projectId)
