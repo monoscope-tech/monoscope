@@ -234,7 +234,7 @@ widgetHelper_ w' = case w.wType of
     gridStackHandleClass = if w._isNested == Just True then "nested-grid-stack-handle" else "grid-stack-handle"
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w)), ("h", (.h))]
     attrs = concat [maybe [] (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= layoutField) | (name, layoutField) <- layoutFields]
-    paddingBtm = if w.standalone == Just True then "" else bool " pb-8 " " standalone pb-4 " (w._isNested == Just True)
+    paddingBtm = if w.standalone == Just True then "" else if w._isNested == Just True && w.wType `elem` [WTTimeseriesStat, WTStat] then "" else bool " pb-8 " " standalone pb-4 " (w._isNested == Just True)
     -- Serialize the widget to JSON for easy copying
     widgetJson = decodeUtf8 $ fromLazy $ AE.encode w
     gridItem_ =
@@ -535,15 +535,16 @@ renderChart widget = do
   div_ [class_ "gap-0.5 flex flex-col h-full justify-end "] do
     unless (widget.naked == Just True || widget.wType `elem` [WTTimeseriesStat, WTStat])
       $ renderWidgetHeader widget chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True)
-    div_ [class_ $ "flex-1 flex " <> bool "" gridStackHandleClass isStat] do
+    div_ [class_ $ "flex-1 flex min-h-0 " <> bool "" gridStackHandleClass isStat] do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
+            <> bool "min-h-0 " "" isStat
             <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
         , id_ $ chartId <> "_bordered"
         ]
         do
-          when isStat $ div_ [class_ "px-3 py-3 flex-1 flex flex-col justify-end "] do
+          when isStat $ div_ [class_ $ "px-3 flex flex-col " <> bool "py-3 " "py-2 " (widget._isNested == Just True)] do
             div_ [class_ "flex flex-col gap-1"] do
               strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"]
                 $ whenJust valueM toHtml
@@ -551,7 +552,7 @@ renderChart widget = do
                 whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
                 toHtml $ maybeToMonoid widget.title
                 Utils.faSprite_ "circle-info" "regular" "w-4 h-4 text-iconNeutral"
-          unless (widget.wType == WTStat) $ div_ [class_ $ "h-full w-full flex-1 " <> bool "p-3" "" (isStat || widget.naked == Just True)] do
+          unless (widget.wType == WTStat) $ div_ [class_ $ "h-0 max-h-full overflow-hidden w-full flex-1 min-h-0 "] do
             div_ [class_ "h-full w-full", id_ $ maybeToMonoid widget.id] ""
             let theme = fromMaybe "default" widget.theme
             let echartOpt = decodeUtf8 $ AE.encode $ widgetToECharts widget

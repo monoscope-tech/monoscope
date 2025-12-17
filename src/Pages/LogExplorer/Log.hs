@@ -81,8 +81,6 @@ renderFacets facetSummary = do
       rootFacets :: [(Text, Text, Text -> Text)]
       rootFacets =
         [ ("level", "Log Level", levelColorFn)
-        , ("kind", "Kind", const "")
-        , ("name", "Operation Name", const "")
         ,
           ( "status_code"
           , "Status Code"
@@ -93,6 +91,8 @@ renderFacets facetSummary = do
               _ -> "bg-fillStrong"
           )
         , ("resource___service___name", "Service", const "")
+        , ("name", "Operation Name", const "")
+        , ("kind", "Kind", const "")
         , ("resource___service___version", "Service Version", const "")
         , ("attributes___http___request___method", "HTTP Method", methodColorFn)
         , ("attributes___http___response___status_code", "HTTP Status", statusColorFn)
@@ -232,7 +232,7 @@ renderFacets facetSummary = do
         div_ [class_ "facets-container mt-1 max-h-0 overflow-hidden peer-checked:max-h-[2000px] transition-[max-height] duration-300"] do
           forM_ (zip [0 ..] facetDisplays) \(idx, (key, displayName, colorFn)) ->
             whenJust (HM.lookup key facetMap) \values -> do
-              let shouldBeExpanded = sectionName == "Common Filters" && idx < 4
+              let shouldBeExpanded = sectionName == "Common Filters" && idx < 5
               label_ [class_ "facet-section border-t border-strokeWeak group/facet block contain-[layout_style]"] do
                 input_ $ [type_ "checkbox", class_ "hidden", id_ $ "facet-toggle-" <> key] ++ [checked_ | shouldBeExpanded]
                 -- Facet header with actions
@@ -763,7 +763,7 @@ apiLogsPage page = do
     unless (page.vizType == Just "patterns")
       $ div_ [class_ "flex h-full gap-3.5 overflow-y-hidden", id_ "facets_and_loglist"] do
         -- FACETS
-        div_ [class_ "w-68 will-change-[width] contain-[layout_style] text-sm shrink-0 flex flex-col h-full overflow-y-scroll gap-2 group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden ", id_ "facets-container"] do
+        div_ [class_ "w-68 will-change-[width] contain-[layout_style] text-sm text-textWeak shrink-0 flex flex-col h-full overflow-y-scroll gap-2 group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden ", id_ "facets-container"] do
           div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
             span_ [class_ "absolute inset-y-0 left-3 flex items-center", Aria.hidden_ "true"]
               $ faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
@@ -789,7 +789,7 @@ apiLogsPage page = do
         div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
           -- Filters and row count header
           div_ [class_ "flex gap-2  pt-1 text-sm -mb-6 z-10 w-max bg-bgBase"] do
-            label_ [class_ "gap-1 flex items-center cursor-pointer"] do
+            label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak"] do
               faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
               span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
               span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"

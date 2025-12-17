@@ -1229,7 +1229,7 @@ export class LogList extends LitElement {
             .join('; ')}
         >
           <thead class="z-10 sticky top-0 isolate">
-            <tr class="text-textStrong border-b flex min-w-0 relative font-medium isolate">
+            <tr class="text-textWeak border-b flex min-w-0 relative font-medium isolate">
               ${isInitialLoading
                 ? html`
                     ${[...Array(6)].map(
