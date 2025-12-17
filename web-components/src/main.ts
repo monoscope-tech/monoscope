@@ -12,26 +12,26 @@
 
 // HTMX extension to forward current page query parameters to GET requests
 (window as any).htmx.defineExtension('forward-page-params', {
-  onEvent: function(name: string, evt: any) {
-    if (name === "htmx:configRequest") {
+  onEvent: function (name: string, evt: any) {
+    if (name === 'htmx:configRequest') {
       // Only process GET requests
       if (evt.detail.verb === 'get') {
         const url = new URL(evt.detail.path, window.location.origin);
         const currentParams = new URLSearchParams(window.location.search);
-        
+
         // Forward all current page params to the request URL
         currentParams.forEach((value: string, key: string) => {
           if (!url.searchParams.has(key)) {
             url.searchParams.set(key, value);
           }
         });
-        
+
         // Update the path with merged parameters
         evt.detail.path = url.pathname + url.search;
       }
     }
     return true;
-  }
+  },
 });
 
 // Attach functions to the window object
@@ -126,6 +126,11 @@ window.getTimeRange = function () {
     }
     return { since: params().since, from: params().from, to: params().to };
   }
+  return {
+    since: '',
+    from: document.querySelector('input[name="from"]')?.value || '',
+    to: document.querySelector('input[name="to"]')?.value || '',
+  };
 };
 
 window.setParams = (
@@ -196,11 +201,11 @@ window.updateUrlState = updateUrlState;
 window.setVariable = (key: string, value: string) => {
   // Find the variable tablist element by its data attribute or id
   const varElement = document.querySelector(`[data-variable="${key}"], #var-${key}`) as HTMLInputElement | HTMLSelectElement;
-  
+
   if (varElement) {
     // Update the element's value
     varElement.value = value;
-    
+
     // Trigger change event to update URL and notify other components
     varElement.dispatchEvent(new Event('change', { bubbles: true }));
   } else {
@@ -215,3 +220,38 @@ window.getVariable = (key: string) => {
   const params = new URLSearchParams(window.location.search);
   return params.get(`var-${key}`) || '';
 };
+
+window.createTagify = (selector: string, options: any = {}) => {
+  const defaultOptions = {
+    skipInvalid: true,
+    templates: {
+      tag: window.tagifyTemplateFunc,
+      dropdownItemNoMatch: (data: any) => `No suggestion found for: ${data.value}`,
+    },
+    editTags: { clicks: 2, keepInvalid: false },
+    dropdown: {
+      enabled: 0,
+      maxItems: 50,
+      fuzzySearch: true,
+      position: 'text',
+      caseSensitive: false,
+      mapValueTo: 'value',
+      searchKeys: ['value', 'name'],
+    },
+  };
+  return new (window as any).Tagify(document.querySelector(selector), { ...defaultOptions, ...options });
+};
+
+function tagifyTemplateFunc(tagData: any) {
+  return `<tag title="${tagData.value || tagData.email}"
+               contenteditable='false'
+               spellcheck='false'
+               tabIndex="-1"
+               class="${this.settings.classNames.tag} ${tagData.class || ''}"
+               ${this.getAttributes(tagData)}>
+                <x title='' class="${this.settings.classNames.tagX}" role='button' aria-label='remove tag'></x>
+                <div><span class="${this.settings.classNames.tagText}">${tagData.name || tagData.value || tagData}</span></div>
+       </tag>`;
+}
+
+(window as any).tagifyTemplateFunc = tagifyTemplateFunc;

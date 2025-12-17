@@ -263,7 +263,9 @@ body, :host {
   .badge-outline {
     @apply inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1;
   }
-
+  .badge-ghost {
+    @apply inline-flex items-center justify-center rounded-md  px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-textWeak;
+  }
   .tab-not-active {
     --tab-color: var(--fallback-bc, oklch(var(--bc) / 0.5));
     --tab-bg: transparent;
@@ -291,6 +293,7 @@ body, :host {
   .dropdown summary {
     list-style: none;
   }
+
   .dropdown summary::-webkit-details-marker {
     display: none;
   }
@@ -482,7 +485,7 @@ code, pre, .code, .monospace {
 }
 
 @utility badge-success {
-  @apply bg-fillSuccess-weak text-textSuccess font-medium;
+  @apply bg-fillSuccess-strong text-textSuccess font-medium;
 }
 
 @utility badge-error {
@@ -645,6 +648,8 @@ code, pre, .code, .monospace {
 .badge-clickhouse {
   @apply bg-fillWeak text-textStrong border border-strokeWarning-strong;
 }
+
+.tagify {}
 
 @utility ctable {
   & :where(.table-pin-rows thead tr) {
@@ -972,12 +977,11 @@ code, pre, .code, .monospace {
     --fallback-bc: rgba(255 255 255 / 0.6);
   }
   .btn-primary {
-    @apply bg-fillBrand-strong hover:bg-fillBrand-strong text-textInverse-strong;
+    @apply bg-fillBrand-strong hover:bg-fillBrand-strong text-white;
   }
   
   [data-theme="dark"] .btn-primary {
-    background-color: var(--color-iconBrand);
-    @apply hover:opacity-90 text-textInverse-weak ring-1 ring-strokeBrand-weak;
+    @apply hover:opacity-90  ring-strokeBrand-weak;
   }
   .input, .select, .checkbox, .textarea {
     @apply shadow-none;
@@ -1131,7 +1135,12 @@ code, pre, .code, .monospace {
 }
 
 /****** Tagify *****/
-.dash-variable .tagify {
+
+.modal > tags {
+    @apply border-strokeWeak;
+  }
+
+  .dash-variable .tagify {
   margin-top: -0.5rem;
   --tags-border-color: transparent;
   --tag-text-color: var(--color-textStrong);

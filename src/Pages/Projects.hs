@@ -243,7 +243,7 @@ integrationsSettingsGetH pid = do
   slackInfo <- getProjectSlackData pid
 
   let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations", isSettingsPage = True, config = appCtx.config}
-  addRespHeaders $ bodyWrapper bwconf $ integrationsBody sess.persistentSession appCtx.config True createProj (Just project.notificationsChannel) project.whatsappNumbers slackInfo
+  addRespHeaders $ bodyWrapper bwconf $ integrationsBody sess.persistentSession pid appCtx.config True createProj (Just project.notificationsChannel) project.whatsappNumbers slackInfo
 
 
 data NotifListForm = NotifListForm
@@ -310,11 +310,11 @@ validateWhatsapp :: [Text] -> [Text] -> Either Text ()
 validateWhatsapp notificationsChannel numbers = if "phone" `elem` notificationsChannel && null numbers then Left "Provide at least one whatsapp number" else Right ()
 
 
-integrationsBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> Maybe (V.Vector Projects.NotificationChannel) -> V.Vector Text -> Maybe SlackData -> Html ()
-integrationsBody sess envCfg isUpdate cp notifChannel phones slackData = do
+integrationsBody :: Sessions.PersistentSession -> Projects.ProjectId -> EnvConfig -> Bool -> CreateProjectForm -> Maybe (V.Vector Projects.NotificationChannel) -> V.Vector Text -> Maybe SlackData -> Html ()
+integrationsBody sess pid' envCfg isUpdate cp notifChannel phones slackData = do
   section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6 overflow-y-scroll h-full"] do
     div_ [class_ "mx-auto", style_ "max-width:1000px"] do
-      let pid = cp.title -- Using title as pid placeholder, will be fixed
+      let pid = pid'.toText
       div_
         [ class_ "mt-10"
         , hxPost_ [text|/p/$pid/notifications-channels|]
@@ -456,12 +456,12 @@ manageMembersPostH pid onboardingM form = do
 
       unless (null uAndPOldAndChanged)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       unless (null deletedUAndP)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
