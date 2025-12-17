@@ -35,6 +35,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Free up disk space
+      - name: Free Disk Space
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          echo "Disk space after cleanup:"
+          df -h
+
       # Install and cache system dependencies
       - name: Install system dependencies
         uses: awalsh128/cache-apt-pkgs-action@latest
@@ -93,6 +106,18 @@ jobs:
 
       - name: Build dependencies
         run: cabal build --only-dependencies all -j4
+
+      - name: Clean up build artifacts
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+          # Remove intermediate build files, keep only the built libraries
+          find dist-newstyle -type f -name "*.o" -delete
+          find dist-newstyle -type f -name "*.hi" -delete
+          find dist-newstyle -type f -name "*.dyn_o" -delete
+          find dist-newstyle -type f -name "*.dyn_hi" -delete
+          echo "Disk space after cleanup:"
+          df -h
 
       - name: Build ${{ matrix.test }}
         run: cabal build ${{ matrix.test }} -j4
