@@ -708,6 +708,10 @@ code, pre, .code, .monospace {
     /*overflow-hidden;*/
   }
 
+  .surface-raised {
+    @apply bg-bgRaised border border-strokeWeak rounded-xl shadow-sm;
+  }
+
   :root {
     --fallback-b2: var(--color-fillWeak); /* bg-fillWeak*/
     --tab-color: var(--color-textWeak); /* tab text color textWeak */
