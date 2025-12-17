@@ -242,7 +242,6 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
     let defaultVizType = fromMaybe (if alert then "timeseries" else "logs") vizTypeM
         containerSelector = fromMaybe "visualization-widget-container" widgetContainerId
         showEmojis = isJust widgetContainerId -- Only show emojis in widget mode, not in log explorer
-
     forM_ visTypes $ \(icon, label, vizType, emoji) -> do
       label_
         [ term "data-value" vizType
