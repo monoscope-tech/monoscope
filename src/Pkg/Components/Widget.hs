@@ -375,7 +375,7 @@ renderTraceTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-            <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
+            <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
         , id_ $ tableId <> "_bordered"
         ]
         do
@@ -438,7 +438,7 @@ renderTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-            <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
+            <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
         , id_ $ tableId <> "_bordered"
         ]
         do
@@ -539,7 +539,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+            <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
         , id_ $ chartId <> "_bordered"
         ]
         do
