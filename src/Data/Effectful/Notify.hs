@@ -36,6 +36,7 @@ module Data.Effectful.Notify (
 import Control.Lens ((.~))
 import Control.Lens.Setter ((?~))
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.QQ (aesonQQ)
 import Effectful
 import Effectful.Dispatch.Dynamic
@@ -59,7 +60,7 @@ data EmailData = EmailData
 
 
 data SlackData = SlackData
-  { webhookUrl :: Text
+  { channelId :: Text
   , message :: AE.Value
   }
   deriving stock (Eq, Generic, Show)
@@ -111,7 +112,7 @@ emailNotification receiver templateOptions subjectMessage =
 
 
 slackNotification :: Text -> AE.Value -> Notification
-slackNotification webhookUrl message =
+slackNotification channelId message =
   SlackNotification SlackData{..}
 
 
@@ -155,8 +156,12 @@ runNotifyProduction = interpret $ \_ -> \case
       _ <- liftIO $ postWith opts url payload
       pass
     SlackNotification SlackData{..} -> do
-      let opts = defaults & header "Content-Type" .~ ["application/json"]
-      _ <- liftIO $ postWith opts (toString webhookUrl) message
+      appCtx <- ask @Config.AuthContext
+      let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> appCtx.config.slackBotToken]
+      let messageF = case message of
+            AE.Object obj -> AE.Object $ obj <> (AEK.fromList [("channel", AE.String channelId)])
+            _ -> message
+      _ <- liftIO $ postWith opts "https://slack.com/api/chat.postMessage" messageF
       pass
     DiscordNotification DiscordData{..} -> do
       appCtx <- ask @Config.AuthContext
@@ -196,7 +201,7 @@ runNotifyTest eff = do
                   EmailNotification emailData ->
                     ("Email" :: Text, emailData.receiver, fmap fst emailData.templateOptions)
                   SlackNotification slackData ->
-                    ("Slack" :: Text, slackData.webhookUrl, Nothing :: Maybe Text)
+                    ("Slack" :: Text, slackData.channelId, Nothing :: Maybe Text)
                   DiscordNotification discordData ->
                     ("Discord" :: Text, discordData.channelId, Nothing :: Maybe Text)
                   WhatsAppNotification whatsappData ->

@@ -272,8 +272,8 @@ ensureTemplateDatabase masterConnStr templateDbName = do
           ( Query
               $ encodeUtf8
               $ "DO $$ BEGIN  PERFORM pg_terminate_backend(pid) FROM pg_stat_activity  WHERE datname = '"
-              <> templateDbName
-              <> "' AND pid <> pg_backend_pid(); END $$;"
+                <> templateDbName
+                <> "' AND pid <> pg_backend_pid(); END $$;"
           )
           ()
 
@@ -438,9 +438,9 @@ runTestBackgroundWithLogger logger appCtx process = do
           Data.Effectful.Notify.EmailNotification emailData ->
             ("Email" :: Text, Data.Effectful.Notify.receiver emailData, fmap fst (Data.Effectful.Notify.templateOptions emailData))
           Data.Effectful.Notify.SlackNotification slackData ->
-            ("Slack" :: Text, Data.Effectful.Notify.webhookUrl slackData, Nothing :: Maybe Text)
+            ("Slack" :: Text, slackData.channelId, Nothing :: Maybe Text)
           Data.Effectful.Notify.DiscordNotification discordData ->
-            ("Discord" :: Text, Data.Effectful.Notify.channelId discordData, Nothing :: Maybe Text)
+            ("Discord" :: Text, discordData.channelId, Nothing :: Maybe Text)
           Data.Effectful.Notify.WhatsAppNotification whatsappData ->
             ("WhatsApp" :: Text, Data.Effectful.Notify.to whatsappData, Just (Data.Effectful.Notify.template whatsappData))
     Log.logInfo "Notification" notifInfo

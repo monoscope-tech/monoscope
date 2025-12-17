@@ -1,5 +1,6 @@
 module Pages.BusinessFlowsSpec (spec) where
 
+import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as BL
@@ -13,22 +14,21 @@ import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Connection, Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
-import Pages.BodyWrapper (PageCtx (..))
-import Pkg.DeriveUtils (UUIDId (..))
-import Pkg.TestUtils
-import Relude
-import Servant.API (ResponseHeader(..), lookupResponseHeader)
-import Servant.Server qualified as ServantS
-import Test.Hspec
-import Servant.Htmx
-import BackgroundJobs qualified
 import OddJobs.Job (Job (..))
+import Pages.BodyWrapper (PageCtx (..))
 import Pages.LemonSqueezy qualified as LemonSqueezy
 import Pages.Onboarding.Onboarding qualified as Onboarding
 import Pages.Projects qualified as CreateProject
 import Pages.Projects qualified as ManageMembers
 import Pages.Replay qualified as Replay
 import Pages.S3 qualified as S3
+import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.TestUtils
+import Relude
+import Servant.API (ResponseHeader (..), lookupResponseHeader)
+import Servant.Htmx
+import Servant.Server qualified as ServantS
+import Test.Hspec
 
 
 -- Test context that includes both test resources and a dynamically created project
@@ -36,6 +36,7 @@ data TestContext = TestContext
   { tcResources :: TestResources
   , tcProjectId :: Projects.ProjectId
   }
+
 
 -- Create a new project for testing and provide it along with test resources
 withTestProject :: (TestContext -> IO ()) -> IO ()
@@ -65,7 +66,7 @@ spec = aroundAll withTestProject do
 
   describe "LemonSqueezy Billing" do
     lemonSqueezyWebhookTests
-    -- billingUsageTests
+  -- billingUsageTests
 
   describe "Replay Session Recording" do
     replayTests
@@ -177,8 +178,8 @@ settingsTests = do
   it "should update alert configurations via POST and persist changes" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     let updateForm =
           CreateProject.CreateProjectForm
-            { title = "ACME Corp"  -- Update project title
-            , description = ""  -- Keep empty description
+            { title = "ACME Corp" -- Update project title
+            , description = "" -- Keep empty description
             , emails = []
             , permissions = []
             , timeZone = "America/New_York"
@@ -217,31 +218,31 @@ settingsTests = do
     (_, _result) <- testServant tr $ CreateProject.deleteProjectGetH testPid
     pass
 
-    -- TODO: after creating the projects and verifying them on the onboarding forms again, 
-    -- please verify the settings pages contain the same data. Eg 
-    -- /p/<pid>/settings renders project Title, Timezone, descrioption and these alert configurations. 
-    --  Alert Configuration
-    -- Manage your notification preferences
-    --
-    -- Receive new endpoint alerts
-    -- Get notified when new API endpoints are detected
-    --
-    -- Receive runtime error alerts
-    -- Receive immediate notifications for system errors
-    --
-    -- Receive weekly reports alerts
-    -- Get a summary of your project activity every week
-    --
-    -- Receive daily reports alerts
-    -- Receive daily summaries of your project metrics
-    --
-    -- So, assert the initial setate of the settings based on the data that was set during the onboarding, via the Get endpoints. Then update the forms via
-    -- post, and hit Get again to ensure that the updates worked. 
-    --
-    -- Also do this succinctly for the other settings endpoints: Manage members, billing, integrations, your s3 bucket, delte project page can test just
-    -- deleting the project. Which i think marks a project as deleted and prevents sending emails and notifications and other actions. we should test the
-    -- actions.
 
+-- TODO: after creating the projects and verifying them on the onboarding forms again,
+-- please verify the settings pages contain the same data. Eg
+-- /p/<pid>/settings renders project Title, Timezone, descrioption and these alert configurations.
+--  Alert Configuration
+-- Manage your notification preferences
+--
+-- Receive new endpoint alerts
+-- Get notified when new API endpoints are detected
+--
+-- Receive runtime error alerts
+-- Receive immediate notifications for system errors
+--
+-- Receive weekly reports alerts
+-- Get a summary of your project activity every week
+--
+-- Receive daily reports alerts
+-- Receive daily summaries of your project metrics
+--
+-- So, assert the initial setate of the settings based on the data that was set during the onboarding, via the Get endpoints. Then update the forms via
+-- post, and hit Get again to ensure that the updates worked.
+--
+-- Also do this succinctly for the other settings endpoints: Manage members, billing, integrations, your s3 bucket, delte project page can test just
+-- deleting the project. Which i think marks a project as deleted and prevents sending emails and notifications and other actions. we should test the
+-- actions.
 
 -- | LemonSqueezy Webhook Tests - Table-driven testing for all webhook events
 lemonSqueezyWebhookTests :: SpecWith TestContext
@@ -256,7 +257,8 @@ lemonSqueezyWebhookTests = do
 
 webhookTestCases :: [(Text, String, Projects.ProjectId -> LemonSqueezy.WebhookData, Projects.ProjectId -> Pool Connection -> IO () -> IO ())]
 webhookTestCases =
-  [ ( "subscription_created"
+  [
+    ( "subscription_created"
     , "should create subscription on subscription_created event"
     , createWebhookPayload "subscription_created"
     , \testPid pool callWebhook -> do
@@ -266,7 +268,8 @@ webhookTestCases =
           [Only (count :: Int)] -> count `shouldBe` 1
           _ -> fail "Failed to query subscriptions"
     )
-  , ( "subscription_cancelled"
+  ,
+    ( "subscription_cancelled"
     , "should downgrade to free on subscription_cancelled event"
     , createWebhookPayload "subscription_cancelled"
     , \testPid pool callWebhook -> do
@@ -274,7 +277,8 @@ webhookTestCases =
         _ <- callWebhook
         verifyPaymentPlan pool testPid "FREE"
     )
-  , ( "subscription_resumed"
+  ,
+    ( "subscription_resumed"
     , "should upgrade to paid on subscription_resumed event"
     , createWebhookPayload "subscription_resumed"
     , \testPid pool callWebhook -> do
@@ -285,7 +289,8 @@ webhookTestCases =
           Just (Only (plan :: Text)) -> plan `shouldNotBe` "FREE"
           _ -> fail "Failed to query payment plan"
     )
-  , ( "subscription_expired"
+  ,
+    ( "subscription_expired"
     , "should downgrade to free on subscription_expired event"
     , createWebhookPayload "subscription_expired"
     , \testPid pool callWebhook -> do
@@ -372,7 +377,6 @@ billingUsageTests = do
     case result of
       LemonSqueezy.BillingGet (PageCtx _ (_, totalReqs, _, _, _, _, _, _, _)) -> do
         totalReqs `shouldBe` 5 -- Should count the 5 spans we ingested
-
   it "should handle cycle boundaries correctly" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     currentTime <- liftIO getCurrentTime
     let cycleStart = addUTCTime (-40 * 24 * 60 * 60) currentTime -- 40 days ago (more than a month)
@@ -467,21 +471,21 @@ s3ConfigTests = do
     it "PENDING: Requires Minio setup" $ \_ -> do
       -- TODO: Re-enable when Minio is set up
       pendingWith "S3 validation tests require Minio to be configured"
-    -- forM_ s3ValidationCases $ \(testDesc, s3Form, shouldSucceed) ->
-    --   it testDesc $ \tr -> do
-    --     result <- testServant tr $ S3.brings3PostH testPid s3Form
+  -- forM_ s3ValidationCases $ \(testDesc, s3Form, shouldSucceed) ->
+  --   it testDesc $ \tr -> do
+  --     result <- testServant tr $ S3.brings3PostH testPid s3Form
 
-    --     -- Check if S3 config was saved based on success expectation
-    --     savedConfigM <-
-    --       DBT.withPool tr.trPool
-    --         $ DBT.queryOne [sql|SELECT s3_bucket FROM projects.projects WHERE id = ?|] (Only testPid)
-    --     let savedConfig = fmap fromOnly savedConfigM
+  --     -- Check if S3 config was saved based on success expectation
+  --     savedConfigM <-
+  --       DBT.withPool tr.trPool
+  --         $ DBT.queryOne [sql|SELECT s3_bucket FROM projects.projects WHERE id = ?|] (Only testPid)
+  --     let savedConfig = fmap fromOnly savedConfigM
 
-    --     case (shouldSucceed, savedConfig) of
-    --       (True, Just (Just (_ :: Projects.ProjectS3Bucket))) -> pass -- Success case
-    --       (False, Just (Nothing :: Maybe Projects.ProjectS3Bucket)) -> pass -- Failure case (no config saved)
-    --       (False, Nothing) -> fail "Project not found"
-    --       _ -> pure () -- Other cases - validation might fail but that's ok for invalid credentials
+  --     case (shouldSucceed, savedConfig) of
+  --       (True, Just (Just (_ :: Projects.ProjectS3Bucket))) -> pass -- Success case
+  --       (False, Just (Nothing :: Maybe Projects.ProjectS3Bucket)) -> pass -- Failure case (no config saved)
+  --       (False, Nothing) -> fail "Project not found"
+  --       _ -> pure () -- Other cases - validation might fail but that's ok for invalid credentials
 
   it "should remove S3 configuration" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     -- First add an S3 config
@@ -517,7 +521,8 @@ s3ConfigTests = do
 -- | Test cases for S3 validation
 s3ValidationCases :: [(String, Projects.ProjectS3Bucket, Bool)]
 s3ValidationCases =
-  [ ( "should reject invalid credentials"
+  [
+    ( "should reject invalid credentials"
     , Projects.ProjectS3Bucket
         { accessKey = "invalid-key"
         , secretKey = "invalid-secret"
@@ -527,7 +532,8 @@ s3ValidationCases =
         }
     , False
     )
-  , ( "should reject missing bucket"
+  ,
+    ( "should reject missing bucket"
     , Projects.ProjectS3Bucket
         { accessKey = "test-key"
         , secretKey = "test-secret"
@@ -537,7 +543,8 @@ s3ValidationCases =
         }
     , False
     )
-  , ( "should handle custom endpoints"
+  ,
+    ( "should handle custom endpoints"
     , Projects.ProjectS3Bucket
         { accessKey = "test-key"
         , secretKey = "test-secret"

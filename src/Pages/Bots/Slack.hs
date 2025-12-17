@@ -1,9 +1,10 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction) where
+module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction) where
 
 import BackgroundJobs qualified as BgJobs
 import Control.Lens ((.~), (^.))
+import Data.Aeson (withObject)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as KEM
 import Data.Aeson.KeyMap qualified as KEMP
@@ -38,7 +39,7 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
-import Pages.Bots.Utils (BotResponse (..), BotType (..), contentTypeHeader, handleTableResponse)
+import Pages.Bots.Utils (BotResponse (..), BotType (..), Channel, contentTypeHeader, handleTableResponse)
 import Pkg.AI (callOpenAIAPI, systemPrompt)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..))
@@ -633,6 +634,28 @@ data SlackThreadedMessage = SlackThreadedMessage
   , ts :: Text
   }
   deriving (Generic, Show)
+
+
+data SlackChannelsResponse = SlackChannelsResponse
+  { ok :: Bool
+  , channels :: [Channel]
+  }
+  deriving (Generic, Show)
+  deriving anyclass (AE.FromJSON)
+
+
+-- | Internal helper to call Slack API
+getSlackChannels :: HTTP :> es => Text -> Text -> Eff es (Maybe SlackChannelsResponse)
+getSlackChannels token team_id = do
+  let url = "https://slack.com/api/conversations.list"
+      opts =
+        defaults & header "Authorization" .~ ["Bearer " <> encodeUtf8 token] & Wreq.param "team_id" .~ [team_id]
+
+  r <- getWith opts url
+  let resBody = r ^. responseBody
+  case AE.eitherDecode resBody of
+    Right val -> return $ Just val
+    Left err -> return Nothing
 
 
 instance AE.FromJSON SlackThreadedMessage where
