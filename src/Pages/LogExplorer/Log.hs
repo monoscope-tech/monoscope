@@ -436,7 +436,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   alertDM <- case alertM of
     Nothing -> return Nothing
     Just alertIdText -> case UUID.fromText alertIdText of
-      Just alertId -> do dbtToEff $ Monitors.queryMonitorById (Monitors.QueryMonitorId alertId)
+      Just alertId -> dbtToEff $ Monitors.queryMonitorById (Monitors.QueryMonitorId alertId)
       Nothing -> return Nothing
 
   -- Use alert's visualization type if no vizType specified and alert is loaded
@@ -1105,8 +1105,8 @@ alertConfigurationForm_ project alertM teams = do
                                      })
                                    end|]
                             ]
-                          ++ [required_ "" | req]
-                          ++ [value_ (maybe "" show vM) | isJust vM]
+                            ++ [required_ "" | req]
+                            ++ [value_ (maybe "" show vM) | isJust vM]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)
