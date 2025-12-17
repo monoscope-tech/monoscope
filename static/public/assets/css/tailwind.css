@@ -201,17 +201,17 @@
   prefersdark: true;
   color-scheme: 'dark';
   --color-base-100: var(--color-bgBase);
-  --color-base-200: oklch(18% 0.02 263);
-  --color-base-300: oklch(20% 0.02 263);
-  --color-base-content: oklch(85% 0.02 263);
-  --color-primary: rgb(0 104 255);
-  --color-primary-content: oklch(85% 0.02 263);
+  --color-base-200: oklch(20% 0.022 263);
+  --color-base-300: oklch(22% 0.022 263);
+  --color-base-content: oklch(88% 0.020 263);
+  --color-primary: rgb(59 130 246);
+  --color-primary-content: oklch(88% 0.020 263);
   --color-secondary: var(--color-textBrand);
-  --color-secondary-content: oklch(78% 0.018 263);
+  --color-secondary-content: oklch(78% 0.020 263);
   --color-accent: rgba(255 255 255 / 0.03);
-  --color-accent-content: rgb(0 104 255);
+  --color-accent-content: rgb(59 130 246);
   --color-neutral: rgba(255 255 255 / 0.06);
-  --color-neutral-content: oklch(85% 0.02 263);
+  --color-neutral-content: oklch(88% 0.020 263);
   --color-info: oklch(75.5% 0.098 241);
   --color-info-content: oklch(75.5% 0.098 241);
   --color-success: oklch(75.3% 0.092 162);
@@ -319,11 +319,11 @@ body, :host {
   [data-theme="dark"] .skeleton-shimmer {
     --skeleton-highlight: rgba(26, 116, 168, 0.2);
   }
-  
+
   .skeleton-wave {
     animation-delay: calc(var(--row-index) * 0.1s);
   }
-  
+
   .skeleton-glow {
     box-shadow: 0 0 10px rgba(26, 116, 168, 0.1);
   }
@@ -522,7 +522,7 @@ code, pre, .code, .monospace {
 }
 
 @utility badge-neutral {
-  @apply bg-fillWeak text-textStrong;
+  @apply !bg-fillWeaker !text-textStrong;
 }
 
 @utility badge-info {
@@ -703,9 +703,31 @@ code, pre, .code, .monospace {
 }
 
 @layer custom {
-  .card-round {
-    @apply bg-bgBase border border-strokeWeak rounded-2xl;
-    /*overflow-hidden;*/
+  .surface-raised {
+    @apply bg-fillWeaker border border-strokeWeak rounded-xl;
+    background: linear-gradient(135deg,
+      oklch(from var(--color-fillWeaker) calc(l + 0.008) c h) 0%,
+      var(--color-fillWeaker) 50%,
+      oklch(from var(--color-fillWeaker) calc(l - 0.004) c h) 100%
+    );
+    box-shadow:
+      inset 0 1px 0 0 oklch(from var(--color-fillWeaker) calc(l + 0.04) c h),
+      inset 0 -1px 0 0 oklch(from var(--color-fillWeaker) calc(l - 0.02) c h),
+      0 2px 8px -2px rgba(0 0 0 / 0.08),
+      0 4px 12px -4px rgba(0 0 0 / 0.04);
+  }
+
+  [data-theme="dark"] .surface-raised {
+    background: linear-gradient(135deg,
+      oklch(from var(--color-fillWeaker) calc(l + 0.012) c h) 0%,
+      var(--color-fillWeaker) 50%,
+      oklch(from var(--color-fillWeaker) calc(l - 0.006) c h) 100%
+    );
+    box-shadow:
+      inset 0 1px 0 0 rgba(255 255 255 / 0.08),
+      inset 0 -1px 0 0 rgba(0 0 0 / 0.4),
+      0 2px 8px -2px rgba(0 0 0 / 0.4),
+      0 4px 12px -4px rgba(0 0 0 / 0.3);
   }
 
   :root {
@@ -878,7 +900,7 @@ code, pre, .code, .monospace {
     --color-fillStrong: rgb(255 255 255);
     --color-fillError-strong: oklch(77.2% 0.126 21);
     --color-fillError-weak: rgba(255 156 156 / 0.08);
-    --color-fillHover: rgba(255 255 255 / 0.06);
+    --color-fillHover: rgba(255 255 255 / 0.08);
     --color-fillInformation-strong: oklch(75.5% 0.098 241);
     --color-fillInformation-weak: rgba(126 192 229 / 0.08);
     --color-fillInverseDisabled: rgba(0 17 102 / 0.1);
@@ -931,22 +953,22 @@ code, pre, .code, .monospace {
     --color-strokeWeak: rgba(255 255 255 / 0.08);
 
     /* Text colors - Dark theme */
-    --color-textBrand: oklch(70% 0.15 241);
-    --color-textDisabled: oklch(60% 0.01 263);
+    --color-textBrand: oklch(75% 0.14 241);
+    --color-textDisabled: rgba(255 255 255 / 0.35);
     --color-textError: oklch(77.2% 0.126 21);
-    --color-textInformation: oklch(75.5% 0.098 241);
-    --color-textInverseDisabled: oklch(45% 0.008 263);
-    --color-textInverse-strong: oklch(20% 0.015 263);
-    --color-textInverse-weak: oklch(35% 0.012 263);
-    --color-textStrong: oklch(85% 0.02 263);
-    --color-textSuccess: oklch(75.3% 0.092 162);
+    --color-textInformation: oklch(78% 0.095 241);
+    --color-textInverseDisabled: rgba(0 17 102 / 0.1);
+    --color-textInverse-strong: rgba(0 6 38 / 0.9);
+    --color-textInverse-weak: rgba(0 8 51 / 0.65);
+    --color-textStrong: oklch(85% 0.010 263);
+    --color-textSuccess: oklch(78% 0.088 162);
     --color-textWarning: oklch(79.5% 0.106 92);
-    --color-textWeak: oklch(70% 0.015 263);
+    --color-textWeak: oklch(78% 0.010 263);
 
     /* Update fallback colors for dark mode */
     --fallback-b2: rgba(255 255 255 / 0.06);
-    --tab-color: oklch(70% 0.015 263);
-    --fallback-pc: oklch(95% 0.015 263);
+    --tab-color: oklch(78% 0.010 263);
+    --fallback-pc: oklch(95% 0.010 263);
     --fallback-bc: rgba(255 255 255 / 0.6);
   }
   .btn-primary {

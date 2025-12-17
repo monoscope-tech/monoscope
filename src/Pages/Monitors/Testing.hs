@@ -188,7 +188,7 @@ toUnifiedMonitorItem pid currTime = alertToUnifiedItem pid
 -- | Render monitor icon column
 renderMonitorIcon :: UnifiedMonitorItem -> Html ()
 renderMonitorIcon item = do
-  div_ [class_ "mt-2 shrink-0"] do
+  div_ [class_ "mt-2 pl-4 shrink-0"] do
     div_ [class_ $ "w-10 h-10 rounded-lg flex items-center justify-center " <> typeColorClass] do
       faSprite_ typeIcon "regular" "h-5 w-5"
   where

@@ -167,7 +167,7 @@ listProjectsBody sessM projects demoProject showDemoProject = do
 
 projectCard_ :: Projects.Project' -> Html ()
 projectCard_ project = do
-  div_ [class_ "bg-base-100 border border-strokeWeak rounded-xl shadow-sm hover:shadow-md transition-shadow duration-200 overflow-hidden group"] do
+  div_ [class_ "surface-raised hover:shadow-md transition-shadow duration-200 overflow-hidden group"] do
     a_ [href_ ("/p/" <> project.id.toText), class_ "block"] do
       div_ [class_ "p-5 pb-3"] do
         div_ [class_ "flex justify-between items-start mb-3"] do

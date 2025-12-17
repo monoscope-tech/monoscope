@@ -207,7 +207,7 @@ renderTable tbl = div_ [class_ tbl.config.containerClasses, id_ $ tbl.config.ele
   whenJust tbl.features.search renderSearch
 
   div_
-    [ class_ "grid card-round overflow-hidden my-0 group/grid"
+    [ class_ "grid surface-raised overflow-hidden my-0 group/grid"
     , id_ $ tbl.config.elemID <> "_grid"
     ]
     do
