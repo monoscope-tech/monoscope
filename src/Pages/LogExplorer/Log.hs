@@ -443,7 +443,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   let effectiveVizType = vizTypeM <|> ((.visualizationType) <$> alertDM)
 
   -- Skip table load on initial page load unless it's a JSON request
-  let shouldSkipLoad = layoutM == Nothing && hxRequestM == Nothing && jsonM /= Just "true" || effectiveVizType == Just "patterns"
+  let shouldSkipLoad = isNothing layoutM && isNothing hxRequestM && jsonM /= Just "true" || effectiveVizType == Just "patterns"
       fetchLogs =
         if authCtx.env.enableTimefusionReads
           then labeled @"timefusion" @DB $ RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
@@ -499,7 +499,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
               Components.refreshButton_
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
               a_
-                [href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ $ "tab h-auto! tab-active text-textStrong"]
+                [href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! tab-active text-textStrong"]
                 "Events"
               a_ [href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! "] "Metrics"
           }
@@ -527,20 +527,18 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
 
       childSpans <- case queryM' of
-        Nothing -> do
-          v <- RequestDumps.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD) alreadyLoadedChildSpanIds
-          pure v
+        Nothing -> RequestDumps.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD) alreadyLoadedChildSpanIds
         _ -> pure V.empty
       let
         finalVecs = requestVecs <> childSpans
-        lastFM = reqLastCreatedAtM >>= textToUTC >>= (\t -> Just $ toText . iso8601Show $ addUTCTime (-0.001) t)
+        lastFM = reqLastCreatedAtM >>= textToUTC >>= Just . toText . iso8601Show . addUTCTime (-0.001)
         nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
         resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
         recentLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
 
         serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
         colors = getServiceColors (V.catMaybes serviceNames)
-        patternsToSkip = (fromMaybe 0 skipM + (maybe 0 (V.length) patterns))
+        patternsToSkip = fromMaybe 0 skipM + maybe 0 V.length patterns
         page =
           ApiLogsPageData
             { pid
@@ -597,7 +595,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
 
 textToUTC :: Text -> Maybe UTCTime
-textToUTC = iso8601ParseM . T.unpack
+textToUTC = iso8601ParseM . toString
 
 
 data LogsGet
@@ -747,22 +745,22 @@ apiLogsPage page = do
             , Widget.sql =
                 Just
                   [text| SELECT timeB::integer, quantiles[idx] AS quantile, COALESCE(values[idx], 0)::float AS value
-                              FROM ( SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS timeB,
-                                      ARRAY[
-                                        COALESCE(approx_percentile(0.50, percentile_agg(duration))::float, 0)::float,
-                                        COALESCE(approx_percentile(0.75, percentile_agg(duration))::float, 0)::float,
-                                        COALESCE(approx_percentile(0.90, percentile_agg(duration))::float, 0)::float,
-                                        COALESCE(approx_percentile(0.95, percentile_agg(duration))::float, 0)::float
-                                      ] AS values,
-                                      ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
-                                FROM otel_logs_and_spans
-                                WHERE project_id='{{project_id}}' AND duration IS NOT NULL
-                                  {{time_filter}} {{query_ast_filters}}
-                                GROUP BY timeB
-                                HAVING COUNT(*) > 0
-                              ) s
-                              CROSS JOIN (VALUES (1), (2), (3), (4)) AS t(idx)
-                              WHERE values[idx] IS NOT NULL; |]
+                            FROM ( SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS timeB,
+                                    ARRAY[
+                                      COALESCE(approx_percentile(0.50, percentile_agg(duration))::float, 0)::float,
+                                      COALESCE(approx_percentile(0.75, percentile_agg(duration))::float, 0)::float,
+                                      COALESCE(approx_percentile(0.90, percentile_agg(duration))::float, 0)::float,
+                                      COALESCE(approx_percentile(0.95, percentile_agg(duration))::float, 0)::float
+                                    ] AS values,
+                                    ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
+                              FROM otel_logs_and_spans
+                              WHERE project_id='{{project_id}}' AND duration IS NOT NULL
+                                {{time_filter}} {{query_ast_filters}}
+                              GROUP BY timeB
+                              HAVING COUNT(*) > 0
+                            ) s
+                            CROSS JOIN (VALUES (1), (2), (3), (4)) AS t(idx)
+                            WHERE values[idx] IS NOT NULL; |]
             , Widget.unit = Just "ns"
             , Widget.hideLegend = Just True
             , Widget._projectId = Just page.pid
@@ -806,7 +804,7 @@ apiLogsPage page = do
               "filters"
               input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked); setTimeout(() => { const editor = document.getElementById('filterElement'); if (editor && editor.refreshLayout) editor.refreshLayout(); }, 200);"]
               script_
-                $ [text|
+                [text|
               document.getElementById('toggle-filters').checked = localStorage.getItem('toggle-filter-checked') === 'true';
               // Ensure editor layout is correct on initial load
               setTimeout(() => {
@@ -1057,7 +1055,7 @@ alertConfigurationForm_ project alertM teams = do
                   do
                     forM_
                       (zip timeOpts [False, False, True, False, False, False, False, False, False, False])
-                      \((m, l), sel) -> option_ ([value_ (show m <> "m")] ++ [selected_ "" | sel]) ("the last " <> l)
+                      \((m, l), sel) -> option_ (value_ (show m <> "m") : [selected_ "" | sel]) ("the last " <> l)
 
               -- Condition type
               fieldset_ [class_ "fieldset flex-1"] do
@@ -1074,7 +1072,7 @@ alertConfigurationForm_ project alertM teams = do
                   do
                     -- option_ [value_ "matches_changed"] "the query's results change"
                     option_ ([value_ "threshold_exceeded"] <> [selected_ "" | maybe True (\x -> x.alertThreshold > 0 && isJust x.warningThreshold) alertM]) "threshold is exceeded"
-                    option_ ([value_ "has_matches"] <> [selected_ "" | maybe False (\x -> x.alertThreshold == 0 && isNothing x.warningThreshold) alertM]) $ "the query has any results"
+                    option_ ([value_ "has_matches"] <> [selected_ "" | maybe False (\x -> x.alertThreshold == 0 && isNothing x.warningThreshold) alertM]) "the query has any results"
 
           -- Thresholds (collapsible, only visible when threshold_exceeded is selected)
           div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden", id_ "thresholds"] do
@@ -1108,17 +1106,17 @@ alertConfigurationForm_ project alertM teams = do
                                    end|]
                             ]
                           ++ [required_ "" | req]
-                          ++ [value_ (maybe "" (show) vM) | isJust vM]
+                          ++ [value_ (maybe "" show vM) | isJust vM]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)
-                thresholdInput "warningThreshold" "bg-fillWarning-strong" "Warning threshold" False (maybe Nothing (.warningThreshold) alertM)
+                thresholdInput "warningThreshold" "bg-fillWarning-strong" "Warning threshold" False ((.warningThreshold) =<< alertM)
 
                 fieldset_ [class_ "fieldset flex-1"] do
                   label_ [class_ "label text-xs font-medium mb-1"] "Trigger condition"
                   select_ [name_ "direction", class_ "select select-sm"] do
-                    option_ ([value_ "above"] ++ [selected_ "" | maybe True (not . (.triggerLessThan)) alertM]) "Above threshold"
-                    option_ ([value_ "below"] ++ [selected_ "" | maybe False (.triggerLessThan) alertM]) "Below threshold"
+                    option_ (value_ "above" : [selected_ "" | maybe True (not . (.triggerLessThan)) alertM]) "Above threshold"
+                    option_ (value_ "below" : [selected_ "" | maybe False (.triggerLessThan) alertM]) "Below threshold"
 
               -- Info banner (more compact)
               div_ [class_ "flex items-start gap-2 p-2.5 bg-bgAlternate rounded-lg mt-3 hidden"] do
@@ -1183,7 +1181,7 @@ alertConfigurationForm_ project alertM teams = do
                       span_ [] "Renotify every"
                     select_ [class_ "select select-sm w-28 ml-2", name_ "notifyAfter", id_ "notifyAfterInterval"]
                       $ forM_ (zip ["10m", "20m", "30m", "1h", "6h", "24h"] ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"])
-                      $ \(v, t) -> option_ ([value_ v] ++ [selected_ "" | v == "30m"]) (toHtml t)
+                      $ \(v, t) -> option_ (value_ v : [selected_ "" | v == "30m"]) (toHtml t)
 
                   -- Stop after option
                   div_ [class_ "flex items-center"] do
@@ -1331,7 +1329,7 @@ renderPattern (template, count) total pid =
       $ Widget.widget_
       $ (def :: Widget.Widget)
         { Widget.wType = WTTimeseries
-        , Widget.query = Just $ "kind == \"log\" | summarize count() by bin_auto(timestamp)"
+        , Widget.query = Just "kind == \"log\" | summarize count() by bin_auto(timestamp)"
         , Widget.naked = Just True
         , Widget.xAxis = Just (def{showAxisLabel = Just False})
         , Widget.yAxis = Just (def{showAxisLabel = Just False})

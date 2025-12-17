@@ -8,7 +8,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.Effectful.UUID qualified as UUID
 import Data.Either qualified as Unsafe
 import Data.HashMap.Strict qualified as HM
-import Data.List (foldl, nub)
+import Data.List as L (foldl)
 import Data.List.Extra (chunksOf, groupBy)
 import Data.Map.Lazy qualified as Map
 import Data.Pool (withResource)
@@ -71,7 +71,6 @@ import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, runBackground)
-import Text.Megaparsec (parseMaybe)
 import UnliftIO.Exception (finally, try)
 import Utils (DBField)
 
@@ -117,7 +116,7 @@ sendMessageToDiscord msg webhookUrl = do
 
 -- | Get the constructor name of a BgJobs value
 jobTypeName :: BgJobs -> Text
-jobTypeName bgJob = T.takeWhile (/= ' ') $ T.pack $ show bgJob
+jobTypeName bgJob = T.takeWhile (/= ' ') $ toText $ show bgJob
 
 
 jobsRunner :: Logger -> Config.AuthContext -> TracerProvider -> Job -> IO ()
@@ -143,8 +142,8 @@ jobsRunner logger authCtx tp job = Relude.when authCtx.config.enableBackgroundJo
         case result of
           Left (e :: SomeException) -> do
             Log.logAttention "Background job failed" (show e)
-            addEvent sp "job.failed" [("error", OA.toAttribute $ T.pack (show e))]
-            setStatus sp (Error $ T.pack $ show e)
+            addEvent sp "job.failed" [("error", OA.toAttribute $ toText $ show e)]
+            setStatus sp (Error $ toText $ show e)
           Right _ -> do
             addEvent sp "job.completed" []
             setStatus sp Ok
@@ -250,7 +249,7 @@ processBackgroundJob authCtx job bgJob =
             liftIO $ withResource authCtx.jobsPool \conn -> do
               -- background job to cleanup demo project
               Relude.when (dayOfWeek currentDay == Monday) do
-                void $ createJob conn "background_jobs" $ BackgroundJobs.CleanupDemoProject
+                void $ createJob conn "background_jobs" BackgroundJobs.CleanupDemoProject
               forM_ [0 .. 23] \hour -> do
                 -- Schedule each hourly job to run at the appropriate hour
                 let scheduledTime = addUTCTime (fromIntegral $ hour * 3600) currentTime
@@ -392,8 +391,8 @@ generateOtelFacetsBatch projectIds timestamp = do
           result <- try $ Facets.generateAndSaveFacets (UUIDId $ Unsafe.fromJust $ UUID.fromText pid) "otel_logs_and_spans" Facets.facetColumns 50 timestamp
           case result of
             Left (e :: SomeException) -> do
-              addEvent sp "facet_generation.failed" [("error", OA.toAttribute $ T.pack (show e))]
-              setStatus sp (Error $ T.pack $ show e)
+              addEvent sp "facet_generation.failed" [("error", OA.toAttribute $ toText $ show e)]
+              setStatus sp (Error $ toText $ show e)
               pure $ Left (pid, show e)
             Right _ -> do
               addEvent sp "facet_generation.completed" []
@@ -486,8 +485,8 @@ processPatterns kind fieldName events pid scheduledTime since = do
   -- Only process and log if there are events to process (reduces noise in tests)
   Relude.when (V.length events > 0) $ do
     let qq = [text| select $fieldName from otel_logs_and_spans where project_id= ? AND timestamp >= now() - interval '1 hour' and $fieldName is not null GROUP BY $fieldName ORDER BY count(*) desc limit 20|]
-    existingPatterns <- dbtToEff $ V.map (\(Only p) -> p) <$> query (Query $ encodeUtf8 qq) (pid)
-    let known = fmap (\p -> ("", p)) existingPatterns
+    existingPatterns <- dbtToEff $ V.map (\(Only p) -> p) <$> query (Query $ encodeUtf8 qq) pid
+    let known = fmap ("",) existingPatterns
         combined = known <> events
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
         newPatterns = Drain.getAllLogGroups drainTree
@@ -541,7 +540,7 @@ processOneMinuteErrors scheduledTime pid = do
   -- we can increase the window to account for time spent on kafka
   -- use two minutes for now before use a better solution
   Relude.when ctx.config.enableEventsTableUpdates $ do
-    let oneMinuteAgo = addUTCTime (-60 * 2) scheduledTime
+    let oneMinuteAgo = addUTCTime (-(60 * 2)) scheduledTime
     processErrorsPaginated oneMinuteAgo 0
   where
     processErrorsPaginated :: UTCTime -> Int -> ATBackgroundCtx ()
@@ -983,7 +982,7 @@ sendReportForProject pid rType = do
                   slowQueriesCount = V.length slowDbQueries
                   slowQueriesList = if slowQueriesCount == 0 then [AE.object ["message" AE..= "No slow queries detected."]] else (\(x, y, z) -> AE.object ["statement" AE..= x, "latency" AE..= z, "total" AE..= y]) <$> slowDbQueries
                   totalAnomalies = length anomalies'
-                  (errTotal, apiTotal, qTotal) = foldl (\(e, a, m) (_, _, _, _, t) -> (e + if t == Issues.RuntimeException then 1 else 0, a + if t == Issues.APIChange then 1 else 0, m + if t == Issues.QueryAlert then 1 else 0)) (0, 0, 0) anomalies'
+                  (errTotal, apiTotal, qTotal) = L.foldl (\(e, a, m) (_, _, _, _, t) -> (e + if t == Issues.RuntimeException then 1 else 0, a + if t == Issues.APIChange then 1 else 0, m + if t == Issues.QueryAlert then 1 else 0)) (0, 0, 0) anomalies'
                   runtimeErrorsBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral errTotal / fromIntegral totalAnomalies) * 99
                   apiChangesBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral apiTotal / fromIntegral totalAnomalies) * 99
                   alertIssuesBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral qTotal / fromIntegral totalAnomalies) * 99

@@ -57,7 +57,7 @@ handleTableResponse target tableAsVecE envCfg projectId query =
       let (requestVecs, colNames, resultCount) = tableAsVec
           colIdxMap = listToIndexHashMap colNames
           tableData = recsVecToTableData requestVecs colIdxMap
-          url' = envCfg.hostUrl <> "p/" <> projectId.toText <> "/log_explorer?query=" <> (decodeUtf8 $ urlEncode True $ encodeUtf8 query)
+          url' = envCfg.hostUrl <> "p/" <> projectId.toText <> "/log_explorer?query=" <> decodeUtf8 (urlEncode True $ encodeUtf8 query)
           explorerLink = "[Open in log explorer](" <> url' <> ")"
           content = "**Total events (" <> show resultCount <> ")**\n**Query used:** " <> query <> "\n\n" <> tableData <> "\n"
        in case target of
@@ -83,7 +83,7 @@ handleTableResponse target tableAsVecE envCfg projectId query =
                 ]
 
 
-recsVecToTableData :: V.Vector (V.Vector AE.Value) -> (HashMap Text Int) -> Text
+recsVecToTableData :: V.Vector (V.Vector AE.Value) -> HashMap Text Int -> Text
 recsVecToTableData recsVec colIdxMap =
   formatSpans
     $ map
@@ -189,7 +189,9 @@ installedSuccess botPlatform = do
                     div_ [class_ "flex items-center space-x-2 mb-3"] do
                       span_ [class_ "font-mono bg-fillSuccess-weak text-textSuccess px-3 py-1 rounded-lg font-semibold"] "/here"
                       span_ [class_ "bg-fillSuccess-strong text-white text-xs px-2 py-1 rounded-full"] "Alerts"
-                    p_ [class_ "text-textStrong text-sm"] "Set up this channel to receive automated error reports, weekly summaries, and daily performance alerts."
+                    p_
+                      [class_ "text-textStrong text-sm"]
+                      "Set up this channel to receive automated error reports, weekly summaries, and daily performance alerts."
 
 
 data Channel = Channel

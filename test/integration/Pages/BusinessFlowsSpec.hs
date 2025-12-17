@@ -308,7 +308,7 @@ setupProjectWithSubscription pool testPid plan = do
     currentZonedTime <- liftIO getZonedTime
     Projects.addSubscription $ Projects.LemonSub subId currentZonedTime currentZonedTime testPid.toText 12345 67890 111 "Test Plan" "test@example.com"
   _ <- DBT.withPool pool $ DBT.execute [sql|UPDATE projects.projects SET payment_plan = ?, order_id = '67890', sub_id = '12345', first_sub_item_id = '111' WHERE id = ?|] (plan, testPid)
-  pure ()
+  pass
 
 
 verifyPaymentPlan :: Pool Connection -> Projects.ProjectId -> Text -> IO ()

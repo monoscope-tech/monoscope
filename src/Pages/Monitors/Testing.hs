@@ -26,8 +26,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (statBox_)
-import Pkg.Components.ItemsList (TabFilter (..), TabFilterOpt (..))
-import Pkg.Components.ItemsList qualified as ItemsList
+import Pkg.Components.Table (Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
@@ -86,7 +85,7 @@ unifiedMonitorsGetH
   :: Projects.ProjectId
   -> Maybe Text -- filter
   -> Maybe Text -- since
-  -> ATAuthCtx (RespHeaders (PageCtx (ItemsList.ItemsPage UnifiedMonitorItem)))
+  -> ATAuthCtx (RespHeaders (PageCtx (Table UnifiedMonitorItem)))
 unifiedMonitorsGetH pid filterTM sinceM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -112,28 +111,28 @@ unifiedMonitorsGetH pid filterTM sinceM = do
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
 
   let currentURL = "/p/" <> pid.toText <> "/monitors?"
-  let listCfg =
-        ItemsList.ItemsListCfg
-          { projectId = pid
-          , sort = Nothing
-          , currentURL
-          , currTime
-          , filter = sinceM
-          , nextFetchUrl = Nothing
-          , search = Just $ ItemsList.SearchCfg{viaQueryParam = Nothing}
-          , heading = Nothing
-          , bulkActions = []
-          , zeroState =
-              Just
-                $ ItemsList.ZeroState
-                  { icon = "empty-set"
-                  , title = "No monitors configured yet"
-                  , description = "Create alerts"
-                  , actionText = "Create alert"
-                  , destination =
-                      Left $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"
-                  }
-          , elemID = "monitorsListForm"
+  let monitorsTable =
+        Table
+          { config = def{elemID = "monitorsListForm"}
+          , columns =
+              [ col "" renderMonitorIcon & withAttrs [class_ "shrink-0"]
+              , col "" (renderMonitorContent pid) & withAttrs [class_ "w-full"]
+              ]
+          , rows = allItems
+          , features =
+              def
+                { search = Just ClientSide
+                , zeroState =
+                    Just
+                      $ ZeroState
+                        { icon = "empty-set"
+                        , title = "No monitors configured yet"
+                        , description = "Create alerts"
+                        , actionText = "Create alert"
+                        , destination =
+                            Left $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"
+                        }
+                }
           }
 
   let bwconf =
@@ -162,7 +161,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
                   }
           }
 
-  addRespHeaders $ PageCtx bwconf (ItemsList.ItemsPage listCfg allItems)
+  addRespHeaders $ PageCtx bwconf monitorsTable
 
 
 -- | Convert any monitor to unified item using a more generic approach
@@ -206,7 +205,7 @@ instance ToHtml UnifiedMonitorItem where
 -- | Render unified monitor card
 unifiedMonitorCard :: UnifiedMonitorItem -> Html ()
 unifiedMonitorCard item = do
-  div_ [class_ "border-b flex p-4 gap-4 itemsListItem hover:bg-fillWeak transition-colors group/card relative"] do
+  div_ [class_ "border-b flex p-4 gap-4 itemsListItem hover:bg-fillWeak transition-colors group/card"] do
     -- Monitor type indicator
     div_ [class_ "mt-2 shrink-0"] do
       div_ [class_ $ "w-10 h-10 rounded-lg flex items-center justify-center " <> typeColorClass] do
@@ -215,55 +214,70 @@ unifiedMonitorCard item = do
     div_ [class_ "w-full flex flex-col gap-2 shrink-1"] do
       -- Title and tags row
       div_ [class_ "flex gap-10 items-center"] do
-        a_ [href_ detailsUrl, class_ "font-medium text-textStrong text-sm text-base hover:text-textBrand transition-colors"] $ toHtml $ if T.null item.title then "(Untitled)" else item.title
+        a_ [href_ detailsUrl, class_ "font-medium text-textStrong text-base hover:text-textBrand transition-colors"] $ toHtml $ if T.null item.title then "(Untitled)" else item.title
         div_ [class_ "flex gap-1 items-center text-sm"] do
+          -- Monitor type badge
           span_ [class_ "badge badge-sm badge-ghost"] $ toHtml typeLabel
+          -- Tags
           forM_ item.tags $ \tag -> do
             span_ [class_ "badge badge-sm badge-blue"] $ toHtml tag
-      div_ [class_ "flex w-full justify-between items-center"] do
-        div_ [class_ "flex gap-2 items-center"] do
-          case item.details of
-            AlertDetails{query} -> do
-              span_ [class_ "text-sm text-textWeak p-1.5 font-mono truncate bg-fillWeak rounded"] $ toHtml query
-        -- Type-specific details
-        case item.details of
-          AlertDetails{alertThreshold, warningThreshold, triggerDirection} ->
-            thresholdBox_ alertThreshold warningThreshold triggerDirection
 
       -- Details row
       div_ [class_ "w-full flex"] do
-        div_ [class_ "flex flex-col gap-6"] do
+        div_ [class_ "flex flex-col gap-6 w-1/3"] do
+          -- Hosts or query preview
+          div_ [class_ "flex gap-2 items-center w-full"] do
+            case item.details of
+              AlertDetails{query} -> do
+                span_ [class_ "text-sm text-textWeak p-1 bg-fillWeak font-mono truncate", term "data-tippy-content" query] $ toHtml $ T.take 50 query
+
           -- Status and schedule
           div_ [class_ "flex gap-4 w-full items-center"] do
             statusBadge item.status
             div_ [class_ "flex items-center shrink-0 gap-1"] do
               faSprite_ "clock" "regular" "h-4 w-4"
-              span_ [class_ "shrink-0 text-sm text-textWeak"] $ toHtml item.schedule
+              span_ [class_ "shrink-0 text-sm"] $ toHtml item.schedule
 
-            div_ [class_ "flex gap-1.5 items-center", term "data-tippy-content" "Last run"] do
-              faSprite_ "play" "regular" "h-4 w-4 fill-none"
-              span_ [class_ "text-sm text-textWeak"] do
-                case item.lastRun of
-                  Just t -> toHtml $ prettyTimeAuto item.createdAt t
-                  Nothing -> "Never"
+        div_ [class_ "w-2/3 flex justify-between gap-10 items-center"] do
+          div_ [class_ "flex gap-6 items-center"] do
+            -- Created date
+            div_ [class_ "flex gap-1.5 items-center"] do
+              faSprite_ "calendar" "regular" "h-6 w-6 fill-none"
+              div_ [class_ "flex flex-col"] do
+                span_ [class_ "text-textWeak text-xs"] "Created"
+                span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ prettyTimeAuto item.now item.createdAt
 
-    div_ [class_ "hidden group-hover/card:block absolute right-2 top-2 flex justify-between gap-10 items-center"] do
-      -- Actions
-      div_ [class_ "flex gap-2 px-4 py-2 items-center rounded-3xl opacity-0 group-hover/card:opacity-100 transition-opacity"] do
-        a_ [href_ editUrl, term "data-tippy-content" "Edit", class_ "hover:text-textBrand transition-colors"] do
-          faSprite_ "pen-to-square" "regular" "h-3.5 w-3.5"
-        button_
-          [ type_ "button"
-          , term "data-tippy-content" $ if item.status `elem` ["Active", "Passing"] then "Deactivate" else "Activate"
-          , class_ "hover:text-textBrand transition-colors"
-          , hxPost_ toggleUrl
-          , hxTarget_ "closest .itemsListItem"
-          , hxSwap_ "outerHTML"
-          ]
-          do
-            faSprite_ (if item.status `elem` ["Active", "Passing"] then "pause" else "play") "regular" "h-3.5 w-3.5"
+            -- Last run
+            div_ [class_ "flex gap-1.5 items-center"] do
+              faSprite_ "play" "regular" "h-6 w-6 fill-none text-iconNeutral"
+              div_ [class_ "flex flex-col"] do
+                span_ [class_ "text-textWeak text-xs"] "Last run"
+                span_ [class_ "text-sm font-medium text-textStrong"] do
+                  case item.lastRun of
+                    Just t -> toHtml $ prettyTimeAuto item.createdAt t
+                    Nothing -> "Never"
+
+          -- Type-specific details
+          case item.details of
+            AlertDetails{alertThreshold, warningThreshold, triggerDirection} ->
+              thresholdBox_ alertThreshold warningThreshold triggerDirection
+
+          -- Actions
+          div_ [class_ "flex gap-2 px-4 py-2 items-center rounded-3xl opacity-0 group-hover/card:opacity-100 transition-opacity"] do
+            a_ [href_ editUrl, term "data-tippy-content" "Edit", class_ "hover:text-textBrand transition-colors"] do
+              faSprite_ "pen-to-square" "regular" "h-5 w-5"
+            button_
+              [ type_ "button"
+              , term "data-tippy-content" $ if item.status `elem` ["Active", "Passing"] then "Deactivate" else "Activate"
+              , class_ "hover:text-textBrand transition-colors"
+              , hxPost_ toggleUrl
+              , hxTarget_ "closest .itemsListItem"
+              , hxSwap_ "outerHTML"
+              ]
+              do
+                faSprite_ (if item.status `elem` ["Active", "Passing"] then "pause" else "play") "regular" "h-5 w-5"
   where
-    (typeIcon, typeLabel, typeColorClass) = ("bell", "Alert", "bg-fillWarning-weak text-iconWarning")
+    (_, typeLabel, _) = ("bell", "Alert", "bg-fillWarning-weak text-iconWarning")
 
     -- Use unified overview route for both types
     detailsUrl = "/p/" <> item.projectId <> "/monitors/" <> item.monitorId <> "/overview"
@@ -280,6 +294,14 @@ unifiedMonitorCard item = do
           <> visualizationType
 
     toggleUrl = "/p/" <> item.projectId <> "/monitors/alerts/" <> item.monitorId <> "/toggle_active"
+
+
+instance ToHtml UnifiedMonitorItem where
+  toHtml = toHtmlRaw
+  toHtmlRaw item =
+    div_ [class_ "border-b flex p-4 gap-4 itemsListItem hover:bg-fillWeak transition-colors group/card"] do
+      toHtmlRaw $ renderMonitorIcon item
+      toHtmlRaw $ renderMonitorContent undefined item
 
 
 -- | Shared status badge component used across monitors
@@ -374,7 +396,7 @@ unifiedOverviewPage pid alert currTime = do
   section_ [class_ "pt-2 mx-auto px-14 w-full flex flex-col gap-4 h-full"] do
     -- Header section
     div_ [class_ "flex justify-between items-center"] do
-      monitorHeader (alert.alertConfig.title) (isJust alert.deactivatedAt) ("Severity: " <> alert.alertConfig.severity)
+      monitorHeader alert.alertConfig.title (isJust alert.deactivatedAt) ("Severity: " <> alert.alertConfig.severity)
 
       -- Action buttons
       div_ [class_ "flex gap-2"] do
@@ -398,7 +420,7 @@ unifiedOverviewPage pid alert currTime = do
       alertStats_ pid alert currTime
 
     -- Content tabs
-    tabbedSection_ "monitor-tabs" $ [("Query & Visualization", alertQueryTab_ pid alert), ("Execution History", monitorHistoryTab_ "Alert execution history"), ("Notifications", alertNotificationsTab_ alert)]
+    tabbedSection_ "monitor-tabs" [("Query & Visualization", alertQueryTab_ pid alert), ("Execution History", monitorHistoryTab_ "Alert execution history"), ("Notifications", alertNotificationsTab_ alert)]
   where
     monitorHeader title isInactive subtitle = do
       div_ [class_ "flex flex-col gap-2"] do

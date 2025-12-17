@@ -15,7 +15,7 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Default (def)
-import Data.List (foldl)
+import Data.List qualified as L (foldl)
 import Data.Text qualified as T
 import Data.Time (defaultTimeLocale, formatTime)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
@@ -125,15 +125,14 @@ buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStats
         , "errors" AE..= AE.object ["total" AE..= totalErrors, "change" AE..= eventsChange]
         , "spanTypeStats" AE..= spanStatsDiff
         , "slowDbQueries" AE..= slowDbQueries'
-        , "errorDataset" AE..= (getDataset chartErr)
-        , "eventsDataset" AE..= (getDataset chartEv)
+        , "errorDataset" AE..= getDataset chartErr
+        , "eventsDataset" AE..= getDataset chartEv
         , "issues" AE..= ((\(i, t, c, s, tp) -> IssueStat i t c s tp) <$> issues)
         ]
 
 
 getAnomaliesEmailTemplate :: V.Vector (Issues.IssueId, Text, Bool, Text, Issues.IssueType) -> V.Vector AE.Value
-getAnomaliesEmailTemplate issues =
-  V.map (\(i, t, c, s, tp) -> AE.object ["id" AE..= i, "title" AE..= t, "critical" AE..= c, "severity" AE..= s, "issueType" AE..= tp]) issues
+getAnomaliesEmailTemplate = V.map (\(i, t, c, s, tp) -> AE.object ["id" AE..= i, "title" AE..= t, "critical" AE..= c, "severity" AE..= s, "issueType" AE..= tp])
 
 
 reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders ReportsPost)
@@ -180,7 +179,10 @@ reportsGetH pid page hxRequest hxBoosted = do
 
   reports <- dbtToEff $ Reports.reportHistoryByProject pid pg
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
-  let nextUrl = "/p/" <> pid.toText <> "/reports?page=" <> show (pg + 1)
+  let nextUrl =
+        if V.length reports < 20
+          then Nothing
+          else Just $ "/p/" <> pid.toText <> "/reports?page=" <> show (pg + 1)
   case (hxRequest, hxBoosted) of
     (Just "true", Nothing) -> addRespHeaders $ ReportsGetList pid reports nextUrl
     _ -> do
@@ -196,8 +198,8 @@ reportsGetH pid page hxRequest hxBoosted = do
 
 
 data ReportsGet
-  = ReportsGetMain (PageCtx (Projects.ProjectId, V.Vector Reports.ReportListItem, Text, Bool, Bool))
-  | ReportsGetList Projects.ProjectId (V.Vector Reports.ReportListItem) Text
+  = ReportsGetMain (PageCtx (Projects.ProjectId, V.Vector Reports.ReportListItem, Maybe Text, Bool, Bool))
+  | ReportsGetList Projects.ProjectId (V.Vector Reports.ReportListItem) (Maybe Text)
   | ReportsGetSingle (PageCtx (Projects.ProjectId, Maybe Reports.Report))
   | ReportsGetSingle' (Projects.ProjectId, Maybe Reports.Report)
 
@@ -226,7 +228,7 @@ singleReportPage pid report =
               let r = AE.eitherDecode (AE.encode report'.reportJson) :: Either String ReportData
               case r of
                 Left err -> do
-                  pre_ [class_ "text-textError"] $ toHtml $ "Error parsing report data: " <> T.pack err
+                  pre_ [class_ "text-textError"] $ toHtml $ "Error parsing report data: " <> toText err
                 Right _ -> pass
               case rep_json of
                 Just v -> do
@@ -272,7 +274,7 @@ singleReportPage pid report =
                             span_ [class_ "h-3 w-3 rounded bg-yellow-500"] pass
                             span_ [class_ "text-xs"] "Monitor alerts"
                         let totalAnomalies = length v.issues
-                            (errTotal, apiTotal, qTotal) = foldl (\(e, a, m) x -> (e + if x.issueType == Issues.RuntimeException then 1 else 0, a + if x.issueType == Issues.APIChange then 1 else 0, m + if x.issueType == Issues.QueryAlert then 1 else 0)) (0, 0, 0) v.issues
+                            (errTotal, apiTotal, qTotal) = L.foldl (\(e, a, m) x -> (e + if x.issueType == Issues.RuntimeException then 1 else 0, a + if x.issueType == Issues.APIChange then 1 else 0, m + if x.issueType == Issues.QueryAlert then 1 else 0)) (0, 0, 0) v.issues
                         div_ [class_ "w-full h-3 rounded overflow-x-hidden bg-fillWeak"] do
                           when (totalAnomalies > 0) do
                             div_ [class_ "h-full bg-fillError-strong", style_ $ "width: " <> show (errTotal `div` totalAnomalies * 100) <> "%"] pass
@@ -314,7 +316,7 @@ singleReportPage pid report =
         h3_ [] "Report Not Found"
 
 
-reportsPage :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Text -> Bool -> Bool -> Html ()
+reportsPage :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Maybe Text -> Bool -> Bool -> Html ()
 reportsPage pid reports nextUrl daily weekly =
   div_ [class_ "flex flex-row h-full w-full border-t"] do
     when (V.null reports) do
@@ -337,42 +339,40 @@ reportsPage pid reports nextUrl daily weekly =
             , hxSwap_ "innerHTML"
             , hxTrigger_ "intersect once"
             ]
-            do
-              div_ [class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"] do
-                span_ [class_ "loading loading-dots text-sm text-textWeak"] pass
+            $ div_ [class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"] do
+              span_ [class_ "loading loading-dots text-sm text-textWeak"] pass
 
 
 -- div_ [class_ "w-5 bg-gray-200"] ""
 
-reportListItems :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Text -> Html ()
+reportListItems :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Maybe Text -> Html ()
 reportListItems pid reports nextUrl =
   div_ [class_ "space-y-4 w-full"] do
     forM_ reports $ \report -> do
       let isWeeklyData = report.reportType == "weekly"
       div_ [class_ "w-full flex flex-col border border-strokeWeak rounded-lg cursor-pointer hover:bg-fillWeaker"] do
-        div_ [class_ $ "w-full"] do
+        div_ [class_ "w-full"] do
           a_
             [ class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"
             , hxGet_ $ "/p/" <> pid.toText <> "/reports/" <> report.id.toText
             , hxTarget_ "#detailSidebar"
             , hxSwap_ "innerHTML"
             ]
-            do
-              div_ [class_ "flex flex-col grow gap-4"] do
-                div_ [class_ "flex items-center w-full justify-between gap-2"] do
-                  div_ [class_ $ (if isWeeklyData then "bg-fillBrand-weak" else "bg-fillWeak") <> " text-xs font-medium px-2.5 py-1 rounded-full capitalize"] $ toHtml report.reportType <> " report"
-                  faSprite_ "chevron-right" "regular" "w-3 h-3"
-                h4_ [class_ "font-medium text-sm flex items-center gap-2"] do
-                  faSprite_ "calendar" "regular" "w-4 h-4"
-                  toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
-    unless (length reports < 20) $ do
-      a_ [class_ "w-full cursor-pointer block p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center mb-4", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextUrl] "LOAD MORE"
+            $ div_ [class_ "flex flex-col grow gap-4"] do
+              div_ [class_ "flex items-center w-full justify-between gap-2"] do
+                div_ [class_ $ (if isWeeklyData then "bg-fillBrand-weak" else "bg-fillWeak") <> " text-xs font-medium px-2.5 py-1 rounded-full capitalize"] $ toHtml report.reportType <> " report"
+                faSprite_ "chevron-right" "regular" "w-3 h-3"
+              h4_ [class_ "font-medium text-sm flex items-center gap-2"] do
+                faSprite_ "calendar" "regular" "w-4 h-4"
+                toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
+    whenJust nextUrl \url ->
+      a_ [class_ "w-full cursor-pointer block p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center mb-4", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] "LOAD MORE"
 
 
 renderEndpointRow :: PerformanceReport -> Html ()
 renderEndpointRow endpoint = tr_ [class_ ""] do
   td_ [class_ "p-2 text-textWeak w-96 flex gap-4 items-center "] do
-    span_ [class_ $ "cbadge-sm badge-" <> endpoint.method] $ toHtml $ endpoint.method
+    span_ [class_ $ "cbadge-sm badge-" <> endpoint.method] $ toHtml endpoint.method
     span_ [class_ "flex-shrink-0 text-textStrong"] $ toHtml endpoint.urlPath
   td_ [class_ "p-2"] $ toHtml $ prettyPrintCount endpoint.requestCount
   td_ [class_ $ "p-2 " <> if endpoint.requestDiffPct < 0 then "text-textError" else "text-textSuccess"] $ toHtml $ show endpoint.requestDiffPct <> "%"
@@ -397,22 +397,22 @@ categoryCard category total avDur changeDur changeCount = do
     div_ [class_ "flex items-center gap-1"] $ do
       faSprite_ (getFaSprite category) "regular" "w-3 h-3"
       h3_ [class_ "text-sm text-textStrong "] $ toHtml category
-    span_ [class_ "h-4 w-[2px] bg-fillWeak"] $ pass
+    span_ [class_ "h-4 w-[2px] bg-fillWeak"] pass
     div_ [class_ "flex w-full items-center"] $ do
       div_ [class_ "flex w-24 flex-col items-center", term "data-tippy-content" "Total events"] $ do
-        span_ [class_ "w-12 border-t border-t-strokeWeak self-end"] $ pass
-        span_ [class_ "h-4 w-[2px] bg-fillWeak"] $ pass
+        span_ [class_ "w-12 border-t border-t-strokeWeak self-end"] pass
+        span_ [class_ "h-4 w-[2px] bg-fillWeak"] pass
         div_ [class_ "text-sm text-textStrong"] $ toHtml (prettyPrintCount (fromIntegral total))
         div_ [class_ $ "flex items-center gap-1 text-xs mt-1" <> (if changeCount < 0 then " text-textError" else " text-textSuccess")] $ do
           faSprite_ (if changeCount < 0 then "trending-down" else "trending-up") "regular" "w-3 h-3"
-          span_ [] $ toHtml $ (show changeCount) <> "%"
+          span_ [] $ toHtml $ show changeCount <> "%"
       div_ [class_ "flex w-24 flex-col items-center", term "data-tippy-content" "Average duration"] $ do
-        span_ [class_ "w-12 border-t border-t-strokeWeak self-start"] $ pass
-        span_ [class_ "h-4 w-[2px] bg-fillWeak"] $ pass
+        span_ [class_ "w-12 border-t border-t-strokeWeak self-start"] pass
+        span_ [class_ "h-4 w-[2px] bg-fillWeak"] pass
         div_ [class_ "text-sm text-textStrong"] $ toHtml (getDurationNSMS $ round avDur)
         div_ [class_ $ "flex items-center gap-1 text-xs mt-1" <> (if changeDur < 0 then " text-textSuccess" else " text-textError")] $ do
           faSprite_ (if changeDur < 0 then "trending-down" else "trending-up") "regular" "w-3 h-3"
-          span_ [] $ toHtml $ (show changeDur) <> "%"
+          span_ [] $ toHtml $ show changeDur <> "%"
 
 
 getFaSprite :: Text -> Text

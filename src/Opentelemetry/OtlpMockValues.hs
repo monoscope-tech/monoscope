@@ -1,5 +1,3 @@
-{-# LANGUAGE PackageImports #-}
-
 module Opentelemetry.OtlpMockValues (
   createOtelLogAtTime,
   createOtelSpanAtTime,
