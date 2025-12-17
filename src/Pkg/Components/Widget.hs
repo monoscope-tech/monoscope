@@ -33,12 +33,12 @@ import Web.HttpApiData (FromHttpApiData, parseQueryParam)
 
 -- Generic instance for parsing JSON arrays from form data
 instance AE.FromJSON a => FromHttpApiData [a] where
-  parseQueryParam = first T.pack . AE.eitherDecodeStrict . encodeUtf8
+  parseQueryParam = first toText . AE.eitherDecodeStrict . encodeUtf8
 
 
 -- Generic instance for parsing JSON values from form data
 instance {-# OVERLAPPABLE #-} AE.FromJSON a => FromHttpApiData a where
-  parseQueryParam = first T.pack . AE.eitherDecodeStrict . encodeUtf8
+  parseQueryParam = first toText . AE.eitherDecodeStrict . encodeUtf8
 
 
 data Query = Query
@@ -214,9 +214,9 @@ widget_ = widgetHelper_
 
 widgetHelper_ :: Widget -> Html ()
 widgetHelper_ w' = case w.wType of
-  WTAnomalies -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] do
-    renderWidgetHeader w (maybeToMonoid w.id) w.title Nothing Nothing Nothing (Just ("View all", "/p/" <> maybeToMonoid (w._projectId <&> (.toText)) <> "/anomalies")) (w.hideSubtitle == Just True)
-    whenJust w.html toHtmlRaw
+  WTAnomalies -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ div_ [class_ "gap-0.5 flex flex-col h-full"] do
+    unless (w.naked == Just True) $ renderWidgetHeader w (maybeToMonoid w.id) w.title Nothing Nothing Nothing (Just ("View all", "/p/" <> maybeToMonoid (w._projectId <&> (.toText)) <> "/anomalies")) (w.hideSubtitle == Just True)
+    div_ [class_ "flex-1 flex min-h-0"] $ div_ [class_ $ "h-full w-full " <> if w.naked == Just True then "" else "surface-raised rounded-2xl", id_ $ maybeToMonoid w.id <> "_bordered"] $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
   WTGroup -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ div_ [class_ "h-full flex flex-col gap-4"] do
     div_ [class_ $ "group/h gap-1 leading-none flex justify-between items-center " <> gridStackHandleClass] do
       div_ [class_ "inline-flex gap-1 items-center"] do
@@ -375,14 +375,14 @@ renderTraceTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-            <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
+            <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
         , id_ $ tableId <> "_bordered"
         ]
         do
           -- Single scrollable table container
           div_
             [ class_ "h-full overflow-auto p-3"
-            , hxGet_ $ "/p/" <> fromMaybe "" (widget._projectId <&> (.toText)) <> "/widget?widgetJSON=" <> decodeUtf8 (urlEncode True widgetJson)
+            , hxGet_ $ "/p/" <> maybe "" (.toText) widget._projectId <> "/widget?widgetJSON=" <> decodeUtf8 (urlEncode True widgetJson)
             , hxTrigger_ "load"
             , hxTarget_ $ "#" <> tableId
             , hxSelect_ $ "#" <> tableId
@@ -401,10 +401,10 @@ renderTraceTable widget = do
                       -- Table header
                       thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
                         tr_ [] do
-                          forM_ (zip (["Resource", "Span name", "Duration", "Latency breakdown"]) [0 ..]) \(col, idx) ->
+                          forM_ (zip ["Resource", "Span name", "Duration", "Latency breakdown"] [0 ..]) \(col, idx) ->
                             th_
-                              [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group "
-                              , onclick_ $ "window.sortTable('" <> tableId <> "', " <> T.pack (show idx) <> ", this)"
+                              [ class_ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group "
+                              , onclick_ $ "window.sortTable('" <> tableId <> "', " <> show idx <> ", this)"
                               , data_ "sort-direction" "none"
                               ]
                               do
@@ -438,14 +438,14 @@ renderTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-            <> if widget.naked == Just True then "" else "rounded-2xl border border-strokeWeak bg-fillWeaker"
+            <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
         , id_ $ tableId <> "_bordered"
         ]
         do
           -- Single scrollable table container
           div_
             [ class_ "h-full overflow-auto p-3"
-            , hxGet_ $ "/p/" <> fromMaybe "" (widget._projectId <&> (.toText)) <> "/widget?widgetJSON=" <> widgetJson
+            , hxGet_ $ "/p/" <> maybe "" (.toText) widget._projectId <> "/widget?widgetJSON=" <> widgetJson
             , hxTrigger_ "load, update-query from:window"
             , hxTarget_ $ "#" <> tableId
             , hxSelect_ $ "#" <> tableId
@@ -468,7 +468,7 @@ renderTable widget = do
                           forM_ (zip (fromMaybe [] widget.columns) [0 ..]) \(col, idx) ->
                             th_
                               [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" col.align
-                              , onclick_ $ "window.sortTable('" <> tableId <> "', " <> T.pack (show idx) <> ", this)"
+                              , onclick_ $ "window.sortTable('" <> tableId <> "', " <> show idx <> ", this)"
                               , data_ "sort-direction" "none"
                               ]
                               do
@@ -539,7 +539,7 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-            <> if widget.naked == Just True then "" else " rounded-2xl border border-strokeWeak bg-fillWeaker"
+            <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
         , id_ $ chartId <> "_bordered"
         ]
         do
@@ -850,7 +850,7 @@ renderTableWithDataAndParams widget dataRows params = do
         forM_ (zip columns [0 ..]) \(col, idx) -> do
           th_
             [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" col.align
-            , onclick_ $ "window.sortTable('" <> tableId <> "', " <> T.pack (show idx) <> ", this)"
+            , onclick_ $ "window.sortTable('" <> tableId <> "', " <> show idx <> ", this)"
             , data_ "sort-direction" "none"
             ]
             do
@@ -913,14 +913,14 @@ renderTraceDataTable widget dataRows spGroup spansGrouped colorsJson = do
     tbody_ [] do
       forM_ (V.toList dataRows) \row -> do
         let val = V.last row
-        let cdrn = (fromMaybe [] $ HM.lookup val spGroup)
+        let cdrn = fromMaybe [] $ HM.lookup val spGroup
         let spansJson =
               ( \x ->
-                  let targ = find (\(n, _, _) -> n == x.spanName) (cdrn)
+                  let targ = find (\(n, _, _) -> n == x.spanName) cdrn
                    in getSpanJson targ x
               )
-                <$> (fromMaybe [] $ HM.lookup val spansGrouped)
-        let spjson = (decodeUtf8 $ fromLazy $ AE.encode spansJson)
+                <$> fromMaybe [] (HM.lookup val spansGrouped)
+        let spjson = decodeUtf8 $ fromLazy $ AE.encode spansJson
         let clcFun = [text|on click toggle .hidden on the next <tr/> then call flameGraphChart($spjson, "$val", $colorsJson)|]
         tr_ [term "_" clcFun, class_ "cursor-pointer"] do
           forM_ (zip columns [0 ..]) \(col, idx) -> do
@@ -969,7 +969,7 @@ renderFlameGraph trId = do
 
 renderLatencyBreakdown :: [(Text, Int, Int)] -> Html ()
 renderLatencyBreakdown groups = do
-  div_ [class_ "flex h-5 overflow-hidden relative bg-fillWeak rounded", style_ $ "width:150px"] $ do
+  div_ [class_ "flex h-5 overflow-hidden relative bg-fillWeak rounded", style_ "width:150px"] $ do
     let totalDur = sum (map (\(_, d, _) -> fromIntegral d) groups) :: Double
     let colors = getServiceColors $ V.fromList (fmap (\(n, _, _) -> n) groups)
     mapM_ (renderGroup totalDur colors) (zip [0 ..] groups)
@@ -983,7 +983,7 @@ renderLatencyBreakdown groups = do
               then 0.0
               else (sum (map (\(_, d, _) -> fromIntegral d) (take i groups)) / totalDur) * barWidth
           color = fromMaybe "bg-black" $ HM.lookup name colors
-          tooltip = name <> ": " <> T.pack (show (dur `div` 1000000)) <> " ms"
+          tooltip = name <> ": " <> show (dur `div` 1000000) <> " ms"
       div_ [class_ ("h-full absolute top-0 border  " <> color), title_ tooltip, style_ $ "width:" <> show width <> "px;" <> "left:" <> show left <> "px;"] pass
 
 
@@ -999,7 +999,7 @@ calculateMaxValues columns dataRows =
     [ (col.field, maxVal)
     | (col, idx) <- zip columns [0 ..]
     , col.progress == Just "column_percent"
-    , let values = V.mapMaybe (\row -> row V.!? idx >>= readMaybe . T.unpack) dataRows
+    , let values = V.mapMaybe (\row -> row V.!? idx >>= readMaybe . toString) dataRows
     , let maxVal = if V.null values then 0 else V.maximum values
     ]
 
@@ -1017,7 +1017,7 @@ renderProgressCell col value maxValues valueWidths = do
       toHtml formattedValue
 
     -- Calculate progress percentage
-    let numValue = fromMaybe 0 $ readMaybe (T.unpack value) :: Double
+    let numValue = fromMaybe 0 $ readMaybe (toString value) :: Double
     let percentage = case col.progress of
           Just "value_percent" -> min 100 (max 0 numValue)
           Just "column_percent" -> case M.lookup col.field maxValues of
@@ -1027,7 +1027,7 @@ renderProgressCell col value maxValues valueWidths = do
 
     -- Render progress bar
     let progressClass = "progress w-12 ml-2 " <> getProgressVariantClass col.progressVariant
-    progress_ [class_ progressClass, value_ (T.pack $ show percentage), max_ "100"] ""
+    progress_ [class_ progressClass, value_ (show percentage), max_ "100"] ""
 
 
 -- Get progress bar variant class
@@ -1043,16 +1043,16 @@ getProgressVariantClass variant = case variant of
 formatColumnValue :: TableColumn -> Text -> Text
 formatColumnValue col value = case col.columnType of
   Just "number" ->
-    case readMaybe (T.unpack value) :: Maybe Double of
+    case readMaybe (toString value) :: Maybe Double of
       Just n ->
         let formatted =
               if n < 100 && n /= fromIntegral (round n :: Int)
-                then T.pack $ printf "%.2g" n -- Keep significant digits for small numbers
+                then toText (printf "%.2g" n :: String) -- Keep significant digits for small numbers
                 else prettyPrintCount (round n) -- Use pretty print for larger numbers
          in formatted <> foldMap (" " <>) col.unit
       Nothing -> value <> foldMap (" " <>) col.unit
   Just "duration" ->
-    case readMaybe (T.unpack value) :: Maybe Double of
+    case readMaybe (toString value) :: Maybe Double of
       Just v -> toText $ getDurationNSMS (fromIntegral (round v :: Int))
       Nothing -> value <> foldMap (" " <>) col.unit
   _ -> value <> foldMap (" " <>) col.unit

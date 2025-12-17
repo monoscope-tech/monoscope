@@ -260,7 +260,7 @@ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDow
           ( V.fromList
               [ AE.object ["type" AE..= 10, "content" AE..= ("## 📊 " <> (if reportType == "weekly" then "Weekly" else "Daily") <> " Report for " <> project)]
               , AE.object ["type" AE..= 10, "content" AE..= ("**From:** " <> T.take 10 startTime <> "  **To:** " <> T.take 10 endTime)]
-              , AE.object ["type" AE..= 10, "content" AE..= ("Total Events: **" <> show totalEvents <> "**" <> (T.replicate 28 "  ") <> " Total Errors: **" <> show totalErrors <> "**")]
+              , AE.object ["type" AE..= 10, "content" AE..= ("Total Events: **" <> show totalEvents <> "**" <> T.replicate 28 "  " <> " Total Errors: **" <> show totalErrors <> "**")]
               , AE.object
                   [ "type" AE..= 12
                   , "items"

@@ -27,8 +27,8 @@ statBox pid title helpInfo val bckupValM = wrapper do
     pidT = maybe "" (.toText) pid
     wrapper =
       if T.null tl
-        then div_ [class_ "col-span-1 p-5 card-round col-span-1 flex flex-row content-between justify-between"]
-        else a_ [href_ $ "/p/" <> pidT <> tl, class_ "col-span-1 p-5 card-round flex flex-row content-between justify-between"]
+        then div_ [class_ "col-span-1 p-5 surface-raised rounded-2xl col-span-1 flex flex-row content-between justify-between"]
+        else a_ [href_ $ "/p/" <> pidT <> tl, class_ "col-span-1 p-5 surface-raised rounded-2xl flex flex-row content-between justify-between"]
 
 
 statBox_ :: Maybe ProjectId -> Maybe (Text, Text, Text) -> Text -> Text -> Text -> Maybe Int -> Maybe Text -> Html ()
@@ -91,13 +91,10 @@ dateTime t endTM = do
 
 paymentPlanPicker :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
 paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicAuthEnabled = do
-  let gridCols =
-        if basicAuthEnabled
-          then "grid-cols-1"
-          else
-            if freePricingEnabled
-              then "grid-cols-3"
-              else "grid-cols-2"
+  let gridCols
+        | basicAuthEnabled = "grid-cols-1"
+        | freePricingEnabled = "grid-cols-3"
+        | otherwise = "grid-cols-2"
   div_ [class_ "flex flex-col gap-8 w-full"] do
     div_ [class_ "flex flex-col gap-2 w-full"] do
       div_ [class_ "flex items-center justify-between w-full gap-4"] do
@@ -108,8 +105,8 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
       div_ [class_ $ "grid gap-8 w-full " <> gridCols] do
         when basicAuthEnabled $ openSourcePricing pid (currentPlan == "Open Source")
         when (freePricingEnabled && not basicAuthEnabled) $ freePricing pid (currentPlan == "Free")
-        when (not basicAuthEnabled) $ popularPricing pid lemonUrl (currentPlan == "Bring nothing") freePricingEnabled
-        when (not basicAuthEnabled) $ systemsPricing pid criticalUrl (currentPlan == "Bring your own storage")
+        unless basicAuthEnabled $ popularPricing pid lemonUrl (currentPlan == "Bring nothing") freePricingEnabled
+        unless basicAuthEnabled $ systemsPricing pid criticalUrl (currentPlan == "Bring your own storage")
     script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
     script_
       [text|
@@ -347,7 +344,7 @@ openSourcePricing pid isCurrent = do
               ( [ class_ $ "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg " <> if isCurrent then "bg-fillDisabled cursor-not-allowed border-0 text-textInverse-strong" else "bg-green-700 hover:bg-green-600 text-white"
                 , type_ "submit"
                 ]
-                  <> if isCurrent then [disabled_ "disabled"] else []
+                  <> [disabled_ "disabled" | isCurrent]
               )
               do
                 if isCurrent then "Current plan" else "Continue with Open Source"
