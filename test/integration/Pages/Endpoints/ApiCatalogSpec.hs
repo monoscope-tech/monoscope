@@ -25,7 +25,7 @@ import OddJobs.Job (Job (..))
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
-import Pkg.Components.ItemsList qualified as ItemsList
+import Pkg.Components.Table qualified as Table
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import BackgroundJobs (processFiveMinuteSpans, processBackgroundJob, processOneMinuteErrors)
@@ -46,7 +46,7 @@ getEndpointStats tr filterParam hostM = do
   (_, resp) <- testServant tr $
     ApiCatalog.endpointListGetH testPid Nothing Nothing filterParam hostM Nothing Nothing Nothing Nothing Nothing Nothing Nothing
   case resp of
-    ApiCatalog.EndpointsListPage (PageCtx _ (ItemsList.ItemsPage _ enpList)) -> pure enpList
+    ApiCatalog.EndpointsListPage (PageCtx _ tbl) -> pure tbl.rows
     _ -> error "Unexpected response from endpointListGetH"
 
 -- Helper function to verify endpoint creation
@@ -90,11 +90,11 @@ spec :: Spec
 spec = aroundAll withTestResources do
   describe "API Catalog and Endpoints" do
     it "returns empty list when no data exists" \tr -> do
-      (_, catalogList) <- testServant tr $ 
+      (_, catalogList) <- testServant tr $
           ApiCatalog.apiCatalogH testPid Nothing Nothing Nothing Nothing
       case catalogList of
-        ApiCatalog.CatalogListPage (PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents)) -> 
-          length hostsAndEvents `shouldBe` 0
+        ApiCatalog.CatalogListPage (PageCtx _ tbl) ->
+          length tbl.rows `shouldBe` 0
         _ -> expectationFailure "Expected CatalogListPage"
 
     it "creates endpoints from processed spans" \tr -> do
@@ -107,7 +107,7 @@ spec = aroundAll withTestResources do
       
       case projectExists of
         [(Only 0)] -> error $ "Demo project with ID " <> show testPid <> " does not exist in database"
-        _ -> pure ()
+        _ -> pass
       
       msgs <- prepareTestMessages
       processMessagesAndBackgroundJobs tr msgs
@@ -119,10 +119,10 @@ spec = aroundAll withTestResources do
       |] () :: IO (V.Vector (Only Int))
       
       case allSpansCount of
-        [(Only totalCount)] -> if totalCount == 0 
+        [(Only totalCount)] -> if totalCount == 0
           then error "No spans at all in otel_logs_and_spans table"
-          else pure ()
-        _ -> pure ()
+          else pass
+        _ -> pass
       
       -- Debug: Check if spans were actually inserted for our project
       spanCount <- withPool tr.trPool $ DBT.query [sql|
@@ -132,19 +132,19 @@ spec = aroundAll withTestResources do
       |] (Only testPid) :: IO (V.Vector (Only Int))
       
       case spanCount of
-        [(Only count)] -> if count == 0 
+        [(Only count)] -> if count == 0
           then error $ "No spans found in otel_logs_and_spans table after processing messages for project " <> show testPid
-          else pure ()
+          else pass
         _ -> error "Unexpected span count result"
       
       verifyEndpointsCreated tr
 
     it "returns hosts list after processing messages" \tr -> do
-      (_, catalogList) <- testServant tr $ 
+      (_, catalogList) <- testServant tr $
           ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing
       case catalogList of
-        ApiCatalog.CatalogListPage (PageCtx _ (ItemsList.ItemsPage _ hostsAndEvents)) ->
-          length hostsAndEvents `shouldBe` 2
+        ApiCatalog.CatalogListPage (PageCtx _ tbl) ->
+          length tbl.rows `shouldBe` 2
         _ -> expectationFailure "Expected CatalogListPage"
 
     it "creates anomalies automatically via database triggers" \tr -> do

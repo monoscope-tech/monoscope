@@ -2,7 +2,7 @@
 import { params } from './main';
 import { getSeriesColor } from './colorMapping';
 const DEFAULT_BACKGROUND_STYLE = { color: 'rgba(240,248,255, 0.4)' };
-const DARK_BACKGROUND_STYLE = { color: 'rgba(40, 40, 40, 0.15)' };
+const DARK_BACKGROUND_STYLE = { color: 'rgba(30, 38, 52, 0.18)' };
 const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
 const DEFAULT_PALETTE = ['#1A74A8', '#067A57CC', '#EE6666', '#FAC858', '#73C0DE', '#3BA272', '#FC8452', '#9A60B4', '#ea7ccc'];
@@ -291,6 +291,9 @@ const chartWidget = (widgetData: WidGetData) => {
   opt.tooltip.borderColor = styles.tooltipBorderColor || (isDarkMode ? '#555' : '#ccc');
   opt.tooltip.borderWidth = 1;
 
+  // Set chart background color to transparent (inherits from container)
+  opt.backgroundColor = 'transparent';
+
   // Override server's background style with theme-appropriate one
   if (opt.series?.[0]?.backgroundStyle) {
     opt.series[0].backgroundStyle = isDarkMode ? DARK_BACKGROUND_STYLE : DEFAULT_BACKGROUND_STYLE;
@@ -322,9 +325,9 @@ const chartWidget = (widgetData: WidGetData) => {
     const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
     chart.showLoading({
       text: 'Loading...',
-      color: isDarkMode ? '#1A74A8' : '#1A74A8',
+      color: isDarkMode ? '#3B82F6' : '#1A74A8',
       textColor: isDarkMode ? '#e0e0e0' : '#333',
-      maskColor: isDarkMode ? 'rgba(30, 30, 30, 0.8)' : 'rgba(255, 255, 255, 0.8)',
+      maskColor: isDarkMode ? 'rgba(25, 30, 42, 0.85)' : 'rgba(255, 255, 255, 0.8)',
       zlevel: 0,
     });
     new IntersectionObserver(
@@ -423,6 +426,9 @@ const chartWidget = (widgetData: WidGetData) => {
         opt.tooltip.textStyle.color = styles.tooltipTextColor || (isDarkMode ? '#e0e0e0' : '#333');
         opt.tooltip.borderColor = styles.tooltipBorderColor || (isDarkMode ? '#555' : '#ccc');
         opt.tooltip.borderWidth = 1;
+
+        // Set chart background color to transparent
+        opt.backgroundColor = 'transparent';
 
         // Update background style for series
         if (opt.series?.[0]) {

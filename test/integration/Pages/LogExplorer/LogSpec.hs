@@ -178,7 +178,7 @@ spec = aroundAll withTestResources do
           -- Should return results because invalid query is ignored
           resultCount `shouldSatisfy` (>= 1)
           V.length requestVecs `shouldSatisfy` (>= 1)
-        Log.LogsGetErrorSimple _ -> pure ()  -- Also acceptable
+        Log.LogsGetErrorSimple _ -> pass  -- Also acceptable
         _ -> error "Expected JSON response or error"
 
     it "should handle malformed query operators" \tr -> do
@@ -190,7 +190,7 @@ spec = aroundAll withTestResources do
         Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount -> do
           V.length requestVecs `shouldBe` 0
           resultCount `shouldBe` 0
-        Log.LogsGetErrorSimple _ -> pure ()
+        Log.LogsGetErrorSimple _ -> pass
         _ -> error "Expected JSON response or error"
 
   describe "Pagination" do

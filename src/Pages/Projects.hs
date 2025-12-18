@@ -156,7 +156,7 @@ listProjectsBody sessM projects demoProject showDemoProject = do
       h2_ [class_ "text-textStrong text-3xl font-semibold"] "Projects"
       a_ [class_ "btn btn-primary btn-sm", href_ "/p/new"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Project")
 
-    when (not $ V.null projects) $ div_ [class_ "mb-12"] do
+    unless (V.null projects) $ div_ [class_ "mb-12"] do
       h3_ [class_ "text-textWeak text-lg font-medium mb-4"] "Your Projects"
       div_ [class_ "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"] $ mapM_ projectCard_ $ V.toList projects
 
@@ -167,7 +167,7 @@ listProjectsBody sessM projects demoProject showDemoProject = do
 
 projectCard_ :: Projects.Project' -> Html ()
 projectCard_ project = do
-  div_ [class_ "bg-base-100 border border-strokeWeak rounded-xl shadow-sm hover:shadow-md transition-shadow duration-200 overflow-hidden group"] do
+  div_ [class_ "surface-raised hover:shadow-md transition-shadow duration-200 overflow-hidden group"] do
     a_ [href_ ("/p/" <> project.id.toText), class_ "block"] do
       div_ [class_ "p-5 pb-3"] do
         div_ [class_ "flex justify-between items-start mb-3"] do
@@ -181,7 +181,7 @@ projectCard_ project = do
             faSprite_ "calendar" "regular" "h-3.5 w-3.5"
             time_ [datetime_ $ fmt $ dateDashF project.createdAt] $ toHtml @Text $ fmt $ dateDashF project.createdAt
 
-          when (not $ V.null project.usersDisplayImages) do
+          unless (V.null project.usersDisplayImages) do
             div_ [class_ "flex -space-x-2"] do
               project.usersDisplayImages & V.toList & take 3 & mapM_ \imgSrc ->
                 img_ [class_ "inline-block h-6 w-6 rounded-full ring-2 ring-base-100", src_ imgSrc, alt_ "User avatar"]

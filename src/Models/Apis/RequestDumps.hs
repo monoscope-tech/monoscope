@@ -426,7 +426,7 @@ fieldValueToJson (FText t) = AE.String t
 fieldValueToJson (FInt i) = AE.Number (fromIntegral i)
 fieldValueToJson (FDouble d) = AE.Number (realToFrac d)
 fieldValueToJson (FBool b) = AE.Bool b
-fieldValueToJson (FTime t) = AE.String (T.pack $ iso8601Show t)
+fieldValueToJson (FTime t) = AE.String (toText $ iso8601Show t)
 fieldValueToJson (FUUID u) = AE.String (UUID.toText u)
 fieldValueToJson (FJson v) = v
 fieldValueToJson FNull = AE.Null
@@ -479,7 +479,7 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
         , "target_spans" AE..= fromMaybe "" targetSpansM
         , "time_range_from" AE..= fmap (toText . iso8601Show) (fst dateRange)
         , "time_range_to" AE..= fmap (toText . iso8601Show) (snd dateRange)
-        , "current_time_used_for_defaults" AE..= (toText $ iso8601Show now)
+        , "current_time_used_for_defaults" AE..= toText (iso8601Show now)
         ]
     )
 
@@ -520,11 +520,10 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
   now <- Time.currentTime
   let (_, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now sourceM Nothing){dateRange}) queryAST
       pidTxt = pid.toText
-      whereCondition = fromMaybe [text|project_id=${pidTxt}|] $ queryComponents.whereClause
+      whereCondition = fromMaybe [text|project_id=${pidTxt}|] queryComponents.whereClause
       target = fromMaybe "log_pattern" targetM
       q = [text|select $target, count(*) as p_count from otel_logs_and_spans where project_id='${pidTxt}' and ${whereCondition} and $target is not null GROUP BY $target ORDER BY p_count desc offset ? limit 15;|]
-  v <- dbtToEff $ query (Query $ encodeUtf8 q) (Only skip)
-  pure v
+  dbtToEff $ query (Query $ encodeUtf8 q) (Only skip)
 
 
 queryCount :: DB :> es => Text -> Eff es (Maybe (Only Int))
@@ -541,6 +540,6 @@ getLastSevenDaysTotalRequest = getRequestCountForInterval "7 days"
 
 getRequestCountForInterval :: Text -> Projects.ProjectId -> DBT IO Int
 getRequestCountForInterval interval pid = do
-  fromMaybe 0 . fmap (\(Only c) -> c) <$> queryOne q (pid, interval)
+  maybe 0 (\(Only c) -> c) <$> queryOne q (pid, interval)
   where
     q = [sql| SELECT count(*) FROM otel_logs_and_spans WHERE project_id=? AND timestamp > NOW() - interval ?;|]
