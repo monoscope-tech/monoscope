@@ -771,45 +771,65 @@ handleQueryMonitorThreshold monitorE isAlert hostUrl = do
   _ <- dbtToEff $ Monitors.updateQMonitorTriggeredState monitorE.id isAlert
   whenJustM (dbtToEff $ Projects.projectById monitorE.projectId) \p -> do
     teams <- dbtToEff $ ProjectMembers.getTeamsById monitorE.projectId monitorE.teams
+    logMissingTeams monitorE teams
+    issue <- createAndInsertIssue monitorE hostUrl
+    let alert = buildMonitorAlert monitorE issue hostUrl
+    sendNotifications monitorE teams p alert
 
-    -- Log if configured teams are missing (deleted or invalid)
-    Relude.when (not (V.null monitorE.teams) && V.null teams) do
-      Log.logAttention
-        "Monitor configured with teams but none found (possibly deleted)"
-        (monitorE.id, monitorE.projectId, V.length monitorE.teams)
-    Relude.when (not (V.null monitorE.teams) && V.length teams < V.length monitorE.teams) do
-      Log.logAttention
-        "Some monitor teams not found (possibly deleted)"
-        (monitorE.id, monitorE.projectId, "expected" :: Text, V.length monitorE.teams, "found" :: Text, V.length teams)
 
-    let thresholdType = if monitorE.triggerLessThan then "below" else "above"
-        threshold = fromIntegral monitorE.alertThreshold
+logMissingTeams :: Monitors.QueryMonitorEvaled -> V.Vector ProjectMembers.Team -> ATBackgroundCtx ()
+logMissingTeams monitorE teams = do
+  Relude.when (not (V.null monitorE.teams) && V.null teams) $
+    Log.logAttention "Monitor configured with teams but none found (possibly deleted)"
+      (monitorE.id, monitorE.projectId, V.length monitorE.teams)
+  Relude.when (not (V.null monitorE.teams) && V.length teams < V.length monitorE.teams) $
+    Log.logAttention "Some monitor teams not found (possibly deleted)"
+      (monitorE.id, monitorE.projectId, "expected" :: Text, V.length monitorE.teams, "found" :: Text, V.length teams)
 
-    issue <-
-      liftIO
-        $ Issues.createQueryAlertIssue
-          monitorE.projectId
-          (show monitorE.id)
-          monitorE.alertConfig.title
-          monitorE.logQuery
-          threshold
-          (fromIntegral monitorE.evalResult :: Double)
-          thresholdType
 
-    dbtToEff $ Issues.insertIssue issue
+createAndInsertIssue :: Monitors.QueryMonitorEvaled -> Text -> ATBackgroundCtx Issues.Issue
+createAndInsertIssue monitorE hostUrl = do
+  let (thresholdType, threshold) = calculateThreshold monitorE
+  issue <- liftIO $ Issues.createQueryAlertIssue
+    monitorE.projectId
+    (show monitorE.id)
+    monitorE.alertConfig.title
+    monitorE.logQuery
+    threshold
+    (fromIntegral monitorE.evalResult :: Double)
+    thresholdType
+  dbtToEff $ Issues.insertIssue issue
+  pure issue
 
-    let alert = MonitorsAlert{monitorTitle = monitorE.alertConfig.title, monitorUrl = hostUrl <> "/p/" <> monitorE.projectId.toText <> "/anomalies/" <> issue.id.toText}
 
-    -- Send team notifications (no-op when teams is empty)
-    for_ teams \team -> dispatchTeamNotifications team alert monitorE.projectId p.title (emailQueryMonitorAlert monitorE)
+calculateThreshold :: Monitors.QueryMonitorEvaled -> (Text, Double)
+calculateThreshold monitorE =
+  ( if monitorE.triggerLessThan then "below" else "above"
+  , fromIntegral monitorE.alertThreshold
+  )
 
-    -- Fallback notifications when no teams configured or all teams deleted
-    Relude.when (V.null teams) do
-      Relude.when monitorE.alertConfig.emailAll do
-        users <- dbtToEff $ Projects.usersByProjectId monitorE.projectId
-        forM_ users \u -> emailQueryMonitorAlert monitorE u.email (Just u)
-      forM_ monitorE.alertConfig.emails \email -> emailQueryMonitorAlert monitorE email Nothing
-      unless (null monitorE.alertConfig.slackChannels) $ sendSlackMessage monitorE.projectId [fmtTrim| 🤖 *Log Alert triggered for `{monitorE.alertConfig.title}`*|]
+
+buildMonitorAlert :: Monitors.QueryMonitorEvaled -> Issues.Issue -> Text -> Pkg.Mail.NotificationAlerts
+buildMonitorAlert monitorE issue hostUrl =
+  MonitorsAlert
+    { monitorTitle = monitorE.alertConfig.title
+    , monitorUrl = hostUrl <> "/p/" <> monitorE.projectId.toText <> "/anomalies/" <> issue.id.toText
+    }
+
+
+sendNotifications :: Monitors.QueryMonitorEvaled -> V.Vector ProjectMembers.Team -> Projects.Project -> Pkg.Mail.NotificationAlerts -> ATBackgroundCtx ()
+sendNotifications monitorE teams p alert = do
+  for_ teams \team -> dispatchTeamNotifications team alert monitorE.projectId p.title (emailQueryMonitorAlert monitorE)
+  Relude.when (V.null teams) $ sendFallbackNotifications monitorE
+
+
+sendFallbackNotifications :: Monitors.QueryMonitorEvaled -> ATBackgroundCtx ()
+sendFallbackNotifications monitorE = do
+  Relude.when monitorE.alertConfig.emailAll do
+    users <- dbtToEff $ Projects.usersByProjectId monitorE.projectId
+    forM_ users \u -> emailQueryMonitorAlert monitorE u.email (Just u)
+  forM_ monitorE.alertConfig.emails \email -> emailQueryMonitorAlert monitorE email Nothing
+  unless (null monitorE.alertConfig.slackChannels) $ sendSlackMessage monitorE.projectId [fmtTrim| 🤖 *Log Alert triggered for `{monitorE.alertConfig.title}`*|]
 
 
 dispatchTeamNotifications :: ProjectMembers.Team -> Pkg.Mail.NotificationAlerts -> Projects.ProjectId -> Text -> (CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()) -> ATBackgroundCtx ()

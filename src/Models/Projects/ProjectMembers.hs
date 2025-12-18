@@ -171,7 +171,7 @@ updateProjectMembersPermissons vals = void $ executeMany q vals
 
 
 softDeleteProjectMembers :: NonEmpty UUID.UUID -> DBT IO ()
-softDeleteProjectMembers vals = void $ execute q (Only $ V.fromList $ toList vals)
+softDeleteProjectMembers = void . execute q . Only . V.fromList . toList
   where
     q =
       [sql| UPDATE projects.project_members
