@@ -779,25 +779,29 @@ handleQueryMonitorThreshold monitorE isAlert hostUrl = do
 
 logMissingTeams :: Monitors.QueryMonitorEvaled -> V.Vector ProjectMembers.Team -> ATBackgroundCtx ()
 logMissingTeams monitorE teams = do
-  Relude.when (not (V.null monitorE.teams) && V.null teams) $
-    Log.logAttention "Monitor configured with teams but none found (possibly deleted)"
+  Relude.when (not (V.null monitorE.teams) && V.null teams)
+    $ Log.logAttention
+      "Monitor configured with teams but none found (possibly deleted)"
       (monitorE.id, monitorE.projectId, V.length monitorE.teams)
-  Relude.when (not (V.null monitorE.teams) && V.length teams < V.length monitorE.teams) $
-    Log.logAttention "Some monitor teams not found (possibly deleted)"
+  Relude.when (not (V.null monitorE.teams) && V.length teams < V.length monitorE.teams)
+    $ Log.logAttention
+      "Some monitor teams not found (possibly deleted)"
       (monitorE.id, monitorE.projectId, "expected" :: Text, V.length monitorE.teams, "found" :: Text, V.length teams)
 
 
 createAndInsertIssue :: Monitors.QueryMonitorEvaled -> Text -> ATBackgroundCtx Issues.Issue
 createAndInsertIssue monitorE hostUrl = do
   let (thresholdType, threshold) = calculateThreshold monitorE
-  issue <- liftIO $ Issues.createQueryAlertIssue
-    monitorE.projectId
-    (show monitorE.id)
-    monitorE.alertConfig.title
-    monitorE.logQuery
-    threshold
-    (fromIntegral monitorE.evalResult :: Double)
-    thresholdType
+  issue <-
+    liftIO
+      $ Issues.createQueryAlertIssue
+        monitorE.projectId
+        (show monitorE.id)
+        monitorE.alertConfig.title
+        monitorE.logQuery
+        threshold
+        (fromIntegral monitorE.evalResult :: Double)
+        thresholdType
   dbtToEff $ Issues.insertIssue issue
   pure issue
 
