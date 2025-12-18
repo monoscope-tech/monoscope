@@ -934,7 +934,7 @@ dashboardsGet_ dg = do
 
     let table =
           Table
-            { config = def{Table.elemID = "dashboardsTable", Table.showHeader = not dg.embedded}
+            { config = def{Table.elemID = "dashboardsTable", Table.showHeader = not dg.embedded, Table.addPadding = not dg.embedded}
             , columns = tableCols
             , rows = dg.dashboards
             , features =

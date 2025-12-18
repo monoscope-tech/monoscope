@@ -113,7 +113,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
   let currentURL = "/p/" <> pid.toText <> "/monitors?"
   let monitorsTable =
         Table
-          { config = def{elemID = "monitorsListForm"}
+          { config = def{elemID = "monitorsListForm", addPadding = True}
           , columns =
               [ col "" renderMonitorIcon & withAttrs [class_ "shrink-0"]
               , col "" (renderMonitorContent pid) & withAttrs [class_ "w-full"]

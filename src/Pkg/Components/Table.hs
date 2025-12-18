@@ -84,6 +84,7 @@ data Config = Config
   , showHeader :: Bool
   , elemID :: Text
   , renderAsTable :: Bool -- True for table mode, False for list mode
+  , addPadding :: Bool -- When True, wraps table in div with px-6 pt-4 pb-2 padding
   }
 
 
@@ -154,6 +155,7 @@ instance Default Config where
       , showHeader = True
       , elemID = "tableContainer"
       , renderAsTable = False
+      , addPadding = False
       }
 
 
@@ -202,32 +204,36 @@ instance ToHtml TabFilter where
 -- Core Rendering Functions
 
 renderTable :: Table a -> Html ()
-renderTable tbl = div_ [class_ tbl.config.containerClasses, id_ $ tbl.config.elemID <> "_page"] do
-  whenJust tbl.features.header id
-  whenJust tbl.features.search renderSearch
+renderTable tbl =
+  let tableContent = div_ [class_ tbl.config.containerClasses, id_ $ tbl.config.elemID <> "_page"] do
+        whenJust tbl.features.header id
+        whenJust tbl.features.search renderSearch
 
-  div_
-    [ class_ "grid surface-raised overflow-hidden my-0 group/grid"
-    , id_ $ tbl.config.elemID <> "_grid"
-    ]
-    do
-      form_
-        [ class_ "flex flex-col divide-y w-full"
-        , id_ tbl.config.elemID
-        , onkeydown_ "return event.key != 'Enter';"
-        ]
-        do
-          when (isJust tbl.features.rowId || isJust tbl.features.sort)
-            $ renderToolbar tbl
+        div_
+          [ class_ "grid surface-raised overflow-hidden my-0 group/grid"
+          , id_ $ tbl.config.elemID <> "_grid"
+          ]
+          do
+            form_
+              [ class_ "flex flex-col divide-y w-full"
+              , id_ tbl.config.elemID
+              , onkeydown_ "return event.key != 'Enter';"
+              ]
+              do
+                when (isJust tbl.features.rowId || isJust tbl.features.sort)
+                  $ renderToolbar tbl
 
-          when (V.null tbl.rows) $ whenJust tbl.features.zeroState renderZeroState
+                when (V.null tbl.rows) $ whenJust tbl.features.zeroState renderZeroState
 
-          div_ [class_ "w-full flex-col"] do
-            whenJust tbl.features.search \_ ->
-              span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
-            div_ [id_ "rowsContainer", class_ "divide-y"] do
-              renderRows tbl
-              whenJust tbl.features.pagination $ uncurry renderPaginationLink
+                div_ [class_ "w-full flex-col"] do
+                  whenJust tbl.features.search \_ ->
+                    span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
+                  div_ [id_ "rowsContainer", class_ "divide-y"] do
+                    renderRows tbl
+                    whenJust tbl.features.pagination $ uncurry renderPaginationLink
+   in if tbl.config.addPadding
+        then div_ [class_ "px-6 pt-4 pb-2"] tableContent
+        else tableContent
 
 
 renderRows :: Table a -> Html ()

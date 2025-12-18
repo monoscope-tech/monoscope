@@ -45,7 +45,7 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
   let hostsVM = V.map (\host -> HostEventsVM pid host filterV requestType) hostsAndEvents
   let catalogTable =
         Table
-          { config = def{elemID = "anomalyListForm"}
+          { config = def{elemID = "anomalyListForm", addPadding = True}
           , columns = catalogColumns pid requestType
           , rows = hostsVM
           , features =
