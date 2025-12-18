@@ -276,7 +276,7 @@ renderTableRow tbl row =
               , name_ "itemId"
               , value_ $ getId row
               ]
-              <> [checked_ | isSelected]
+            <> [checked_ | isSelected]
 
     forM_ tbl.columns \c -> td_ (c.attrs <> colAttrs c) $ c.render row
   where
