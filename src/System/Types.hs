@@ -14,7 +14,6 @@ module System.Types (
   addSuccessToast,
   addErrorToast,
   addWidgetJSON,
-  addReswap,
   HXRedirectDest,
   XWidgetJSON,
   TriggerEvents,
@@ -75,7 +74,6 @@ newtype WidgetJSON = WidgetJSON {unWidgetJSON :: Text}
 
 
 type XWidgetJSON = Maybe WidgetJSON
-type HXReswap = Maybe Text
 
 
 type CommonWebEffects =
@@ -208,20 +206,17 @@ type RespHeaders =
     '[ HXTriggerAfterSettle
      , HXRedirect
      , Header "X-Widget-JSON" Text
-     , Header "HX-Reswap" Text
      ]
 
 
-addRespHeaders :: (State.State HXRedirectDest :> es, State.State HXReswap :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es) => a -> Eff es (RespHeaders a)
+addRespHeaders :: (State.State HXRedirectDest :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es) => a -> Eff es (RespHeaders a)
 addRespHeaders resp = do
   triggerEvents <- State.get @TriggerEvents
   redirectDest <- State.get @HXRedirectDest
   widgetJSON <- State.get @XWidgetJSON
-  reswap <- State.get @HXReswap
   pure
     $ addHeader (decodeUtf8 $ AE.encode triggerEvents)
     $ maybe noHeader addHeader redirectDest
-    $ maybe noHeader addHeader reswap
     $ maybe noHeader (\w -> addHeader w.unWidgetJSON) widgetJSON resp
 
 
@@ -244,10 +239,6 @@ addToast toastType title descM = addTriggerEvent "triggerToast" $ AE.toJSON $ [t
 
 addSuccessToast :: State.State TriggerEvents :> es => Text -> Maybe Text -> Eff es ()
 addSuccessToast = addToast "success"
-
-
-addReswap :: State.State HXReswap :> es => Text -> Eff es ()
-addReswap x = State.modify $ \_ -> Just x
 
 
 addErrorToast :: (IOE :> es, Log :> es, State.State TriggerEvents :> es) => Text -> Maybe Text -> Eff es ()
