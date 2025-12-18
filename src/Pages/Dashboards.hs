@@ -9,7 +9,7 @@ import Data.Effectful.Wreq qualified as Wreq
 import Data.Generics.Labels ()
 import Data.HashMap.Lazy qualified as HM
 import Data.HashMap.Lazy qualified as M
-import Data.List qualified as List
+import Data.List qualified as L
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
@@ -44,6 +44,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem (getServiceName)
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
+import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
@@ -89,13 +90,13 @@ dashboardPage_ pid dashId dash dashVM allParams = do
   when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-fillWeaker px-6 py-2 gap-4 items-center flex-wrap"] do
     -- Tabs section (on the left)
     whenJust dash.tabs \tabs -> do
-      let activeTabIdx = fromMaybe 0 $ readMaybe . toString =<< join (List.lookup "tab" allParams)
+      let activeTabIdx = fromMaybe 0 $ readMaybe . toString =<< join (L.lookup "tab" allParams)
       div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline"] do
         forM_ (zip [0 ..] tabs) \(idx, tab) -> do
           let tabId = "dashboard-tab-" <> dashId.toText <> "-" <> show idx
           label_
             [ role_ "tab"
-            , class_ $ "tab group flex items-center gap-2 has-[:checked]:tab-active"
+            , class_ "tab group flex items-center gap-2 has-[:checked]:tab-active"
             ]
             do
               input_
@@ -199,7 +200,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
 
     |]
   section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-5 pb-6 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-20 group/pg", id_ "dashboardPage"] do
-    let activeTabIdx = fromMaybe 0 $ readMaybe . toString =<< join (List.lookup "tab" allParams)
+    let activeTabIdx = fromMaybe 0 $ readMaybe . toString =<< join (L.lookup "tab" allParams)
     case dash.tabs of
       Just tabs -> do
         -- Tab system with CSS-based switching
@@ -369,7 +370,14 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
       & #html
         ?~ renderText
           ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-              $ forM_ issuesVM (div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] . toHtml)
+              $ forM_ issuesVM \vm@(AnomalyList.IssueVM hideByDefault _ _ _ issue) ->
+                div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] do
+                  Table.renderRowWithColumns
+                    [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "surface-raised rounded-2xl" else "px-0.5 py-4"
+                    , style_ (if hideByDefault then "display:none" else "")
+                    ]
+                    (AnomalyList.issueColumns issue.projectId)
+                    vm
           )
   Widget.WTStat -> do
     stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams

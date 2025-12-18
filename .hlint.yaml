@@ -5,8 +5,9 @@
   - {name: Data.Text.Lazy, as: TL, importStyle: qualified, qualifiedStyle: post, asRequired: true}
   - {name: Data.ByteString, as: BS, importStyle: qualified, qualifiedStyle: post, asRequired: true}
   - {name: Data.Map, as: Map, importStyle: qualified, qualifiedStyle: post, asRequired: true}
-  - {name: Data.List, as: L, importStyle: qualified, qualifiedStyle: post, asRequired: true}
-  - {name: Data.Aeson, as: AE, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  # Commented out because some modules need pre-qualified imports for these
+  # - {name: Data.List, as: L, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  # - {name: Data.Aeson, as: AE, importStyle: qualified, qualifiedStyle: post, asRequired: true}
   # - {name: Data.Set, as: S, importStyle: qualified, qualifiedStyle: post, asRequired: true}
   # - {name: Data.Sequence, as: Seq, importStyle: qualified, qualifiedStyle: post, asRequired: true}
   # - {name: Data.HashMap.Strict, as: HM, importStyle: qualified, qualifiedStyle: post, asRequired: true}

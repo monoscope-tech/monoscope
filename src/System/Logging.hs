@@ -72,7 +72,7 @@ runLog
   -> Log.LogLevel
   -> Eff (Log ': es) a
   -> Eff es a
-runLog envTxt logger minLogLevel = Log.runLog ("[AT]-" <> envTxt) logger minLogLevel
+runLog envTxt = Log.runLog ("[AT]-" <> envTxt)
 
 
 makeLogger :: IOE :> es => LoggingDestination -> (Logger -> Eff es a) -> Eff es a
@@ -120,10 +120,10 @@ logWithTrace level msg fields = do
         ]
   -- Convert fields to JSON value and merge with trace fields
   let fieldsValue = AE.toJSON fields
-      traceFieldsKeyMap = AEKM.fromList $ map (\(k, v) -> (AEK.fromText k, v)) traceFields
+      traceFieldsKeyMap = AEKM.fromList $ map (first AEK.fromText) traceFields
       mergedObject = case fieldsValue of
         AE.Object obj -> AE.Object $ obj <> traceFieldsKeyMap
-        _ -> AE.object $ (AEK.fromText "data", fieldsValue) : map (\(k, v) -> (AEK.fromText k, v)) traceFields
+        _ -> AE.object $ (AEK.fromText "data", fieldsValue) : map (first AEK.fromText) traceFields
   Log.logMessage level msg mergedObject
 
 

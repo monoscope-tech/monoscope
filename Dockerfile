@@ -13,7 +13,7 @@ RUN --mount=type=cache,target=/root/.npm \
   cd web-components && npm ci --prefer-offline --no-audit
 
 # Copy source files
-COPY tailwind.config.js ./
+COPY config/tailwind.config.js ./config/
 COPY static ./static
 COPY web-components ./web-components
 # Copy Haskell source files for Tailwind CSS scanning
@@ -24,12 +24,12 @@ RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/publi
   cd web-components && NODE_ENV=production npx vite build --mode production --sourcemap false
 
 # Copy workbox config
-COPY workbox-config.js ./
+COPY config/workbox-config.js ./config/
 
 
 
 RUN npm install -g workbox-cli@6.5.4 \
- && workbox generateSW workbox-config.js
+ && workbox generateSW config/workbox-config.js
 # Stage 2: Build Haskell application
 FROM haskell:9.12.2 AS haskell-builder
 

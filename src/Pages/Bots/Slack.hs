@@ -139,7 +139,7 @@ slackInteractionsH interaction = do
     "/dashboard" -> do
       dashboards <- getDashboardsForSlack interaction.team_id
       when (null dashboards) $ throwError err400{errBody = "No dashboards found for this project"}
-      _ <- triggerSlackModal authCtx.env.slackBotToken "open" $ (AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= (dashboardView interaction.channel_id $ V.fromList [(dashboardViewOne dashboards)])])
+      _ <- triggerSlackModal authCtx.env.slackBotToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView interaction.channel_id (V.fromList [dashboardViewOne dashboards])]
       pure $ AE.object ["text" AE..= "modal opened", "replace_original" AE..= True, "delete_original" AE..= True]
     _ -> do
       slackDataM <- dbtToEff $ getSlackDataByTeamId interaction.team_id
@@ -189,7 +189,7 @@ slackInteractionsH interaction = do
       pass
 
 
-data SlackActionForm = SlackActionForm {payload :: Text}
+newtype SlackActionForm = SlackActionForm {payload :: Text}
   deriving (Generic, Show)
   deriving anyclass (AE.FromJSON, FromForm)
 
@@ -325,7 +325,7 @@ slackActionsH action = do
         let widgets = V.fromList $ (\w -> (fromMaybe "Untitled-" w.title, fromMaybe "Untitled-" w.title)) <$> dashboard.widgets
             channelId = fromMaybe "" $ viaNonEmpty head $ T.splitOn "___" slackAction.view.private_metadata
             pMeta = channelId <> "___" <> dashboardVM.projectId.toText <> "___" <> fromMaybe "" dashboardVM.baseTemplate
-        _ <- triggerSlackModal authCtx.env.slackBotToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= (dashboardView pMeta $ V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets])]
+        _ <- triggerSlackModal authCtx.env.slackBotToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView pMeta (V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets])]
         pass
       pure $ AE.object ["text" AE..= ("Selected dashboard: " <> show dashboardText), "replace_original" AE..= True, "delete_original" AE..= True]
 
@@ -340,7 +340,7 @@ slackActionsH action = do
       dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString baseTemplate)
       whenJust dashboardM $ \dashboard -> do
         let widgets = V.fromList $ (\w -> (fromMaybe "Untitled-" w.title, fromMaybe "Untitled-" w.title)) <$> dashboard.widgets
-            widget = find (\w -> (fromMaybe "Untitled-" w.title) == widgetTitle) dashboard.widgets
+            widget = find (\w -> fromMaybe "Untitled-" w.title == widgetTitle) dashboard.widgets
         whenJust widget $ \w -> do
           now <- Time.currentTime
           let widgetQuery = "&widget=" <> toUriStr (decodeUtf8 $ AE.encode $ AE.toJSON w)
@@ -410,7 +410,7 @@ getBotContent question query query_url chartOptions baseUrl now =
         [ AE.object
             [ "color" AE..= "#0068ff"
             , "title" AE..= question
-            , "markdown_in" AE..= (AE.Array $ V.fromList ["text"])
+            , "markdown_in" AE..= AE.Array (V.fromList ["text"])
             , "title_link" AE..= query_url
             , "image_url" AE..= chartImageUrl chartOptions baseUrl now
             , "fields" AE..= AE.Array (V.fromList [AE.object ["title" AE..= "Query used", "value" AE..= query]])

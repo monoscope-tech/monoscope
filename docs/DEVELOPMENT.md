@@ -220,7 +220,7 @@ When fixing failing tests:
 To build the service worker:
 
 ```bash
-workbox generateSW workbox-config.js
+workbox generateSW config/workbox-config.js
 ```
 
 ## Google Cloud Configuration (Optional)

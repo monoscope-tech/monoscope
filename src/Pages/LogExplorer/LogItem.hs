@@ -186,8 +186,8 @@ spanBadge :: Projects.ProjectId -> Text -> Text -> Text -> Html ()
 spanBadge pid path val key = do
   div_
     [ class_ "relative"
-    , term "data-field-path" $ path
-    , term "data-field-value" $ "\"" <> (T.dropAround isSpace $ fromMaybe val (viaNonEmpty last (T.splitOn ":" val))) <> "\""
+    , term "data-field-path" path
+    , term "data-field-value" $ "\"" <> T.dropAround isSpace (fromMaybe val (viaNonEmpty last (T.splitOn ":" val))) <> "\""
     ]
     do
       button_
@@ -311,7 +311,7 @@ expandedItemView pid item aptSp leftM rightM = do
         let item_id = item.id
         let eventType = if isLog then "log" else "span"
         button_
-          [ class_ $ "cursor-pointer flex items-center gap-2"
+          [ class_ "cursor-pointer flex items-center gap-2"
           , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> item_id <> "/" <> createdAt <> "?event_type=" <> eventType
           , hxSwap_ "innerHTML"
           , hxTarget_ "#copy_share_link"

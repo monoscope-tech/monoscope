@@ -1,6 +1,11 @@
 // This file will be executed before running tests
 import { beforeAll, vi } from 'vitest';
 
+// Mock CSS.escape for Monaco Editor's CSS class name generation
+(globalThis as any).CSS = {
+  escape: (str: string) => str.replace(/[!"#$%&'()*+,.\/:;<=>?@[\\\]^`{|}~]/g, '\\$&')
+};
+
 // Mock window.matchMedia for Monaco theme detection (must be set early, before Monaco loads)
 Object.defineProperty(window, 'matchMedia', {
   writable: true,

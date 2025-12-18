@@ -21,7 +21,7 @@ data ChatLLMResponse = ChatLLMResponse
 
 -- | Effectful version that uses the LLM effect (supports caching)
 callOpenAIAPIEff :: ELLM.LLM :> es => Text -> Text -> Eff es (Either Text Text)
-callOpenAIAPIEff fullPrompt apiKey = ELLM.callLLM fullPrompt apiKey
+callOpenAIAPIEff = ELLM.callLLM
 
 
 getNormalTupleReponse :: Text -> Either Text (Text, Maybe Text)

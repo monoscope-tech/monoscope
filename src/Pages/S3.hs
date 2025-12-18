@@ -114,7 +114,7 @@ bringS3Page pid s3BucketM = div_ [class_ "space-y-6 mx-auto w-full max-w-5xl px-
               faSprite_ "circle-xmark" "regular" "h-6 w-6 text-textWeak"
         span_ [class_ "text-textStrong text-2xl font-semibold"] "Remove bucket?"
         span_ [class_ "text-textWeak text-sm font-semibold"] "Removing bucket will result in the loss of all data associated with it on your dashboard"
-        button_ [class_ "btn mt-4 bg-fillError-strong text-white", hxDelete_ $ "", hxSwap_ "innerHtml", hxTarget_ "#connectedInd"] "Remove"
+        button_ [class_ "btn mt-4 bg-fillError-strong text-white", hxDelete_ "", hxSwap_ "innerHtml", hxTarget_ "#connectedInd"] "Remove"
       label_ [class_ "modal-backdrop", Lucid.for_ "remove-modal"] "Close"
 
 

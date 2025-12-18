@@ -8,7 +8,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.Effectful.UUID qualified as UUID
 import Data.Either qualified as Unsafe
 import Data.HashMap.Strict qualified as HM
-import Data.List (foldl, nub)
+import Data.List as L (foldl)
 import Data.List.Extra (chunksOf, groupBy)
 import Data.Map.Lazy qualified as Map
 import Data.Pool (withResource)
@@ -70,7 +70,6 @@ import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, runBackground)
-import Text.Megaparsec (parseMaybe)
 import UnliftIO.Exception (finally, try)
 import Utils (DBField)
 
@@ -116,7 +115,7 @@ sendMessageToDiscord msg webhookUrl = do
 
 -- | Get the constructor name of a BgJobs value
 jobTypeName :: BgJobs -> Text
-jobTypeName bgJob = T.takeWhile (/= ' ') $ T.pack $ show bgJob
+jobTypeName bgJob = T.takeWhile (/= ' ') $ toText $ show bgJob
 
 
 jobsRunner :: Logger -> Config.AuthContext -> TracerProvider -> Job -> IO ()
@@ -142,8 +141,8 @@ jobsRunner logger authCtx tp job = Relude.when authCtx.config.enableBackgroundJo
         case result of
           Left (e :: SomeException) -> do
             Log.logAttention "Background job failed" (show e)
-            addEvent sp "job.failed" [("error", OA.toAttribute $ T.pack (show e))]
-            setStatus sp (Error $ T.pack $ show e)
+            addEvent sp "job.failed" [("error", OA.toAttribute $ toText $ show e)]
+            setStatus sp (Error $ toText $ show e)
           Right _ -> do
             addEvent sp "job.completed" []
             setStatus sp Ok
@@ -249,7 +248,7 @@ processBackgroundJob authCtx job bgJob =
             liftIO $ withResource authCtx.jobsPool \conn -> do
               -- background job to cleanup demo project
               Relude.when (dayOfWeek currentDay == Monday) do
-                void $ createJob conn "background_jobs" $ BackgroundJobs.CleanupDemoProject
+                void $ createJob conn "background_jobs" BackgroundJobs.CleanupDemoProject
               forM_ [0 .. 23] \hour -> do
                 -- Schedule each hourly job to run at the appropriate hour
                 let scheduledTime = addUTCTime (fromIntegral $ hour * 3600) currentTime
@@ -391,8 +390,8 @@ generateOtelFacetsBatch projectIds timestamp = do
           result <- try $ Facets.generateAndSaveFacets (UUIDId $ Unsafe.fromJust $ UUID.fromText pid) "otel_logs_and_spans" Facets.facetColumns 50 timestamp
           case result of
             Left (e :: SomeException) -> do
-              addEvent sp "facet_generation.failed" [("error", OA.toAttribute $ T.pack (show e))]
-              setStatus sp (Error $ T.pack $ show e)
+              addEvent sp "facet_generation.failed" [("error", OA.toAttribute $ toText $ show e)]
+              setStatus sp (Error $ toText $ show e)
               pure $ Left (pid, show e)
             Right _ -> do
               addEvent sp "facet_generation.completed" []
@@ -485,8 +484,8 @@ processPatterns kind fieldName events pid scheduledTime since = do
   -- Only process and log if there are events to process (reduces noise in tests)
   Relude.when (V.length events > 0) $ do
     let qq = [text| select $fieldName from otel_logs_and_spans where project_id= ? AND timestamp >= now() - interval '1 hour' and $fieldName is not null GROUP BY $fieldName ORDER BY count(*) desc limit 20|]
-    existingPatterns <- dbtToEff $ V.map (\(Only p) -> p) <$> query (Query $ encodeUtf8 qq) (pid)
-    let known = fmap (\p -> ("", p)) existingPatterns
+    existingPatterns <- dbtToEff $ V.map (\(Only p) -> p) <$> query (Query $ encodeUtf8 qq) pid
+    let known = fmap ("",) existingPatterns
         combined = known <> events
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
         newPatterns = Drain.getAllLogGroups drainTree
@@ -540,7 +539,7 @@ processOneMinuteErrors scheduledTime pid = do
   -- we can increase the window to account for time spent on kafka
   -- use two minutes for now before use a better solution
   Relude.when ctx.config.enableEventsTableUpdates $ do
-    let oneMinuteAgo = addUTCTime (-60 * 2) scheduledTime
+    let oneMinuteAgo = addUTCTime (-(60 * 2)) scheduledTime
     processErrorsPaginated oneMinuteAgo 0
   where
     processErrorsPaginated :: UTCTime -> Int -> ATBackgroundCtx ()
@@ -631,7 +630,7 @@ processProjectErrors pid errors = do
     -- Process a single error - the error already has requestMethod and requestPath
     -- set by getAllATErrors if it was extracted from span context
     processError :: RequestDumps.ATError -> (RequestDumps.ATError, Query, [DBField])
-    processError err = RequestMessages.processErrors pid Nothing Nothing Nothing err
+    processError = RequestMessages.processErrors pid Nothing Nothing Nothing
 
 
 -- | Deduplicate a vector of items by their hash field using HashMap for O(n) performance
@@ -664,7 +663,7 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
   !spanIds <- V.replicateM (V.length spans) UUID.genUUID
 
   -- Process each span to extract entities (pure computation)
-  let !results = V.zipWith (\spn spanId -> processSpanToEntities projectCacheVal spn spanId) spans spanIds
+  let !results = V.zipWith (processSpanToEntities projectCacheVal) spans spanIds
 
   -- Unzip and deduplicate extracted entities using HashMap for O(n) performance
   let !(endpoints, shapes, fields, formats, spanUpdates) = V.unzip5 results
@@ -816,16 +815,16 @@ getSpanTypeStats :: V.Vector (Text, Int, Int) -> V.Vector (Text, Int, Int) -> V.
 getSpanTypeStats current prev =
   let
     spanTypes =
-      nub $ V.toList (V.map (\(t, _, _) -> t) current <> V.map (\(t, _, _) -> t) prev)
+      ordNub $ V.toList (V.map (\(t, _, _) -> t) current <> V.map (\(t, _, _) -> t) prev)
     getStats t =
       let
-        evtCount = fromMaybe 0 $ V.find (\(st, _, _) -> st == t) current <&> (\(_, c, _) -> c)
-        prevEvtCount = fromMaybe 0 $ V.find (\(st, _, _) -> st == t) prev <&> (\(_, c, _) -> c)
+        evtCount = maybe 0 (\(_, c, _) -> c) (V.find (\(st, _, _) -> st == t) current)
+        prevEvtCount = maybe 0 (\(_, c, _) -> c) (V.find (\(st, _, _) -> st == t) prev)
         evtChange' = if prevEvtCount == 0 then 0.00 :: Double else fromIntegral (evtCount - prevEvtCount) / fromIntegral prevEvtCount * 100
         evtChange = fromIntegral (round (evtChange' * 100)) / 100
         -- average duration
-        avgDuration = fromMaybe 0 $ V.find (\(st, _, _) -> st == t) current <&> (\(_, _, d) -> d)
-        prevAvgDuration = fromMaybe 0 $ V.find (\(st, _, _) -> st == t) prev <&> (\(_, _, d) -> d)
+        avgDuration = maybe 0 (\(_, _, d) -> d) (V.find (\(st, _, _) -> st == t) current)
+        prevAvgDuration = maybe 0 (\(_, _, d) -> d) (V.find (\(st, _, _) -> st == t) prev)
         durationChange' = if prevAvgDuration == 0 then 0.00 :: Double else fromIntegral (avgDuration - prevAvgDuration) / fromIntegral prevAvgDuration * 100
         durationChange = fromIntegral (round (durationChange' * 100)) / 100
        in
@@ -901,7 +900,7 @@ sendReportForProject pid rType = do
     let parseQ q =
           let qAST = Unsafe.fromRight [] (parseQueryToAST q)
               sqlQueryComponents =
-                (defSqlQueryCfg (pid) currentTime (parseMaybe pSource =<< Nothing) Nothing)
+                (defSqlQueryCfg pid currentTime Nothing Nothing)
                   { dateRange = (Just startTime, Just currentTime)
                   }
               (_, qc) = queryASTToComponents sqlQueryComponents qAST
@@ -910,7 +909,7 @@ sendReportForProject pid rType = do
     chartDataEvents <- liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "| summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx
     chartDataErrors <- liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx
 
-    anomalies <- dbtToEff $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just $ (startTime, currentTime))
+    anomalies <- dbtToEff $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime))
 
     let anomalies' = (\x -> (x.id, x.title, x.critical, x.severity, x.issueType)) <$> anomalies
 
@@ -942,8 +941,8 @@ sendReportForProject pid rType = do
           currentTimeTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" currentTime
           reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
           chartShotUrl = ctx.env.chartShotUrl <> "?t=bar&p=" <> pid.toText <> "&from=" <> stmTxt <> "&to=" <> currentTimeTxt
-          allQ = chartShotUrl <> "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 "summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
-          errQ = chartShotUrl <> "&theme=roma" <> "&q=" <> (decodeUtf8 $ urlEncode True (encodeUtf8 "status_code == \"ERROR\" | summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
+          allQ = chartShotUrl <> "&q=" <> decodeUtf8 (urlEncode True (encodeUtf8 "summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
+          errQ = chartShotUrl <> "&theme=roma" <> "&q=" <> decodeUtf8 (urlEncode True (encodeUtf8 "status_code == \"ERROR\" | summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
           alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents stats reportUrl allQ errQ
 
       Relude.when pr.weeklyNotif $ forM_ pr.notificationsChannel \case
@@ -962,17 +961,17 @@ sendReportForProject pid rType = do
                   userEmail = CI.original user.email
                   anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies'
                   perf_count = V.length endpointPerformance
-                  perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else ((\(u, m, p, d, dc, req, cc) -> AE.object ["host" AE..= u, "urlPath" AE..= p, "method" AE..= m, "averageLatency" AE..= d, "latencyChange" AE..= dc]) <$> V.take 10 endpointPerformance)
+                  perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else (\(u, m, p, d, dc, req, cc) -> AE.object ["host" AE..= u, "urlPath" AE..= p, "method" AE..= m, "averageLatency" AE..= d, "latencyChange" AE..= dc]) <$> V.take 10 endpointPerformance
                   rp_url = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
                   dayEnd = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone currentTime))
                   sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentTime
                   sevenDaysAgoZonedTime = utcToZonedTime timeZone sevenDaysAgoUTCTime
                   dayStart = show $ localDay (zonedTimeToLocalTime sevenDaysAgoZonedTime)
                   freeTierLimitExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
-                  slowQueriesCount = V.length $ slowDbQueries
+                  slowQueriesCount = V.length slowDbQueries
                   slowQueriesList = if slowQueriesCount == 0 then [AE.object ["message" AE..= "No slow queries detected."]] else (\(x, y, z) -> AE.object ["statement" AE..= x, "latency" AE..= z, "total" AE..= y]) <$> slowDbQueries
                   totalAnomalies = length anomalies'
-                  (errTotal, apiTotal, qTotal) = foldl (\(e, a, m) (_, _, _, _, t) -> (e + if t == Issues.RuntimeException then 1 else 0, a + if t == Issues.APIChange then 1 else 0, m + if t == Issues.QueryAlert then 1 else 0)) (0, 0, 0) anomalies'
+                  (errTotal, apiTotal, qTotal) = L.foldl (\(e, a, m) (_, _, _, _, t) -> (e + if t == Issues.RuntimeException then 1 else 0, a + if t == Issues.APIChange then 1 else 0, m + if t == Issues.QueryAlert then 1 else 0)) (0, 0, 0) anomalies'
                   runtimeErrorsBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral errTotal / fromIntegral totalAnomalies) * 99
                   apiChangesBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral apiTotal / fromIntegral totalAnomalies) * 99
                   alertIssuesBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral qTotal / fromIntegral totalAnomalies) * 99
@@ -1058,7 +1057,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
         pass
 
       -- Send notifications
-      Relude.when (project.errorAlerts) do
+      Relude.when project.errorAlerts do
         forM_ project.notificationsChannel \case
           Projects.NSlack ->
             forM_ errors \err -> do sendSlackAlert (RuntimeErrorAlert err.errorData) pid project.title
