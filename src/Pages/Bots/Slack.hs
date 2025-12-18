@@ -213,11 +213,8 @@ data SlackAction = SlackAction
   , actions :: Maybe [SAction]
   , user :: SlackUser
   }
-  deriving (Generic, Show)
-
-
-instance AE.FromJSON SlackAction where
-  parseJSON = AE.genericParseJSON AE.defaultOptions{AE.fieldLabelModifier = \f -> if f == "type_" then "type" else f}
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.StripSuffix "_"]] SlackAction
 
 
 data SlackView = SlackView
@@ -245,13 +242,8 @@ data SAction = SAction
   , selected_option :: Maybe SlackOption
   , action_ts :: Text
   }
-  deriving (Generic, Show)
-
-
--- deriving anyclass (AE.FromJSON)
-
-instance AE.FromJSON SAction where
-  parseJSON = AE.genericParseJSON AE.defaultOptions{AE.fieldLabelModifier = \f -> if f == "type_a" then "type" else f}
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.Rename "type_a" "type"]] SAction
 
 
 slackActionsH :: SlackActionForm -> ATBaseCtx AE.Value
@@ -500,43 +492,38 @@ sendSlackChatMessage token content = do
   pass
 
 
+data UrlVerificationData = UrlVerificationData
+  { token :: Text
+  , challenge :: Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON)
+
+
+data EventCallbackData = EventCallbackData
+  { token :: Text
+  , team_id :: Text
+  , api_app_id :: Text
+  , event :: SlackEvent
+  , event_id :: Text
+  , event_time :: Int
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON)
+
+
 data SlackEventPayload
-  = UrlVerification
-      { token :: Text
-      , challenge :: Text
-      }
-  | EventCallback
-      { token :: Text
-      , team_id :: Text
-      , api_app_id :: Text
-      , event :: SlackEvent
-      , event_id :: Text
-      , event_time :: Int
-      }
+  = UrlVerification UrlVerificationData
+  | EventCallback EventCallbackData
   deriving (Show)
 
 
--- Custom parser that switches on "type"
 instance AE.FromJSON SlackEventPayload where
-  parseJSON = AE.withObject "SlackEventPayload" $ \v -> do
+  parseJSON = withObject "SlackEventPayload" \v -> do
     typ <- v AE..: "type"
     case typ of
-      "url_verification" ->
-        UrlVerification <$> v AE..: "token" <*> v AE..: "challenge"
-      "event_callback" ->
-        EventCallback
-          <$> v
-          AE..: "token"
-          <*> v
-          AE..: "team_id"
-          <*> v
-          AE..: "api_app_id"
-          <*> v
-          AE..: "event"
-          <*> v
-          AE..: "event_id"
-          <*> v
-          AE..: "event_time"
+      "url_verification" -> UrlVerification <$> AE.parseJSON (AE.Object v)
+      "event_callback" -> EventCallback <$> AE.parseJSON (AE.Object v)
       other -> fail $ "Unsupported Slack event type: " ++ show other
 
 
@@ -549,11 +536,8 @@ data SlackEvent = SlackMessageEvent
   , event_ts :: Text
   , thread_ts :: Maybe Text
   }
-  deriving (Generic, Show)
-
-
-instance AE.FromJSON SlackEvent where
-  parseJSON = AE.genericParseJSON AE.defaultOptions{AE.fieldLabelModifier = \f -> if f == "type_" then "type" else f}
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.StripSuffix "_"]] SlackEvent
 
 
 slackEventsPostH :: SlackEventPayload -> ATBaseCtx AE.Value
@@ -561,9 +545,9 @@ slackEventsPostH payload = do
   envCfg <- asks env
   now <- Time.currentTime
   case payload of
-    UrlVerification _ challenge -> pure $ AE.object ["challenge" AE..= challenge]
-    EventCallback{..} -> do
-      void $ forkIO $ handleEventCallback envCfg event team_id now
+    UrlVerification (UrlVerificationData _ challenge) -> pure $ AE.object ["challenge" AE..= challenge]
+    EventCallback cb -> do
+      void $ forkIO $ handleEventCallback envCfg cb.event cb.team_id now
       pure $ AE.object []
   where
     handleEventCallback envCfg event teamId now =
@@ -634,7 +618,8 @@ data SlackThreadedMessage = SlackThreadedMessage
   , thread_ts :: Text
   , ts :: Text
   }
-  deriving (Generic, Show)
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.StripSuffix "_"]] SlackThreadedMessage
 
 
 data SlackChannelsResponse = SlackChannelsResponse
@@ -658,10 +643,6 @@ getSlackChannels token team_id = do
     Left err -> do
       Log.logAttention ("Error decoding Slack channels response: " <> toText err) ()
       return Nothing
-
-
-instance AE.FromJSON SlackThreadedMessage where
-  parseJSON = AE.genericParseJSON AE.defaultOptions{AE.fieldLabelModifier = \f -> if f == "type_" then "type" else f}
 
 
 data SlackThreadedMessageResponse = SlackThreadedMessageResponse

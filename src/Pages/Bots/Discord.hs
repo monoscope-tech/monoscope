@@ -8,6 +8,7 @@ import Data.ByteString.Base16 qualified as Base16
 import Data.Default (Default (def))
 import Data.Text qualified as T
 import Data.Vector qualified as V
+import Deriving.Aeson qualified as DAE
 import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
@@ -120,7 +121,8 @@ data DiscordInteraction = Interaction
   , guild_id :: Maybe Text
   , channel :: Maybe DiscordThreadChannel
   }
-  deriving (Generic, Show)
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.Rename "interaction_type" "type", DAE.Rename "data_i" "data"]] DiscordInteraction
 
 
 data ThreadMetadata = ThreadMetadata
@@ -130,10 +132,8 @@ data ThreadMetadata = ThreadMetadata
   , create_timestamp :: Text
   , locked :: Bool
   }
-  deriving (Generic, Show)
-
-
-instance AE.FromJSON ThreadMetadata
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON)
 
 
 data DiscordThreadChannel = DiscordThreadChannel
@@ -145,15 +145,8 @@ data DiscordThreadChannel = DiscordThreadChannel
   , owner_id :: Maybe Text
   , thread_metadata :: Maybe ThreadMetadata
   }
-  deriving (Generic, Show)
-
-
-instance AE.FromJSON DiscordThreadChannel where
-  parseJSON = AE.genericParseJSON AE.defaultOptions{AE.fieldLabelModifier = \f -> if f == "type_" then "type" else f}
-
-
-instance AE.FromJSON DiscordInteraction where
-  parseJSON = AE.genericParseJSON AE.defaultOptions{AE.fieldLabelModifier = \f -> if f == "data_i" then "data" else if f == "interaction_type" then "type" else f}
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.StripSuffix "_"]] DiscordThreadChannel
 
 
 -- Slash command data

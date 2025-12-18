@@ -52,12 +52,10 @@ import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isAlphaNum, isDigit, isLower)
 import Data.Default (Default (..))
-import Data.Effectful.UUID (UUID)
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq
 import Data.Effectful.Wreq qualified as W
 import Data.List.Unique (uniq)
-import Data.Map qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time
@@ -73,15 +71,12 @@ import Effectful.Reader.Static (ask)
 import Fmt
 import GHC.Records (HasField (getField))
 import Lucid
-import Lucid (Term (term), div_, href_, min_, pattern_, required_)
 import Lucid.Htmx
-import Lucid.Htmx (hxPost_, hxSelect_, hxSwapOob_, hxTrigger_)
 import Lucid.Hyperscript (__)
-import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Slack (SlackData, getDiscordDataByProjectId, getProjectSlackData)
 import Models.Apis.Slack qualified as Slack
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
-import Models.Projects.ProjectMembers (ProjectMembers (ProjectMembers), TeamMemberVM (..), TeamVM (..))
+import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -91,12 +86,10 @@ import Network.Wreq (getWith)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper)
 import Pages.Bots.Discord qualified as Discord
-import Pages.Bots.Slack (channels, getSlackChannels)
-import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
 import Pages.Components (paymentPlanPicker)
-import Pkg.Components.Table (BulkAction (..), Column, Features (..), Table (..))
+import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
 import Pkg.ConvertKit qualified as ConvertKit
@@ -109,7 +102,7 @@ import Servant.API.ResponseHeaders (Headers)
 import Servant.Server (err302, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, redirectCS)
-import Utils (faSprite_, formatUTC, insertIfNotExist, isDemoAndNotSudo, lookupValueText)
+import Utils (faSprite_, insertIfNotExist, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
 import "base64" Data.ByteString.Base64 qualified as B64
 
@@ -504,12 +497,12 @@ manageMembersPostH pid onboardingM form = do
 
       unless (null uAndPOldAndChanged)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       unless (null deletedUAndP)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
@@ -536,37 +529,14 @@ data TeamForm = TeamForm
   , teamId :: Maybe UUID.UUID
   }
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (FromForm)
-instance AE.FromJSON TeamForm where
-  parseJSON = AE.withObject "TeamForm" $ \o -> do
-    TeamForm
-      <$> o
-      AE..: "teamName"
-      <*> o
-      AE..: "teamDescription"
-      <*> o
-      AE..: "teamHandle"
-      <*> o
-      AE..:? "teamMembers"
-      AE..!= V.empty
-      <*> o
-      AE..:? "notifEmails"
-      AE..!= V.empty
-      <*> o
-      AE..:? "slackChannels"
-      AE..!= V.empty
-      <*> o
-      AE..:? "discordChannels"
-      AE..!= V.empty
-      <*> o
-      AE..:? "teamId"
+  deriving anyclass (AE.FromJSON, FromForm)
 
 
 validateTeamDetails :: Text -> Text -> Either Text ()
 validateTeamDetails name handle = do
   validateName name
   validateHandle handle
-  pure ()
+  pass
   where
     validNameChar c = isAlphaNum c || c == ' ' || c == '-' || c == '_'
     validHandleChar c = isLower c || isDigit c || c == '-'
@@ -577,7 +547,7 @@ validateTeamDetails name handle = do
       | otherwise = Right ()
     validateHandle h
       | T.null h = Left "Handle is required"
-      | not (validHandleChar <$> T.unpack h & and) = Left "Handle must be lowercase, no spaces, and hyphens only"
+      | not (all validHandleChar (toString h)) = Left "Handle must be lowercase, no spaces, and hyphens only"
       | not (isLower (T.head h)) = Left "Handle must start with a lowercase letter"
       | otherwise = Right ()
 
@@ -641,8 +611,8 @@ manageTeamBulkActionH pid action TBulkActionForm{teamId} listViewM = do
 
 
 data ManageTeams
-  = ManageTeamsGet (PageCtx (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel], (V.Vector ProjectMembers.TeamVM)))
-  | ManageTeamsGet' (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel], (V.Vector ProjectMembers.TeamVM))
+  = ManageTeamsGet (PageCtx (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel], V.Vector ProjectMembers.TeamVM))
+  | ManageTeamsGet' (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel], V.Vector ProjectMembers.TeamVM)
   | ManageTeamsPostError Text
   | ManageTeamsDelete
   | ManageTeamGet (PageCtx (Projects.ProjectId, ProjectMembers.TeamVM, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel]))
@@ -653,7 +623,7 @@ data ManageTeams
 instance ToHtml ManageTeams where
   toHtml (ManageTeamsGet (PageCtx bwconf (pid, members, slackChannels, discordChannels, teams))) = toHtml $ PageCtx bwconf $ manageTeamsPage pid members slackChannels discordChannels teams
   toHtml (ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams)) = toHtml $ manageTeamsPage pid members slackChannels discordChannels teams
-  toHtml (ManageTeamsPostError msg) = span_ [] $ ""
+  toHtml (ManageTeamsPostError msg) = span_ [] ""
   toHtml ManageTeamsDelete = toHtml ""
   toHtml (ManageTeamGet (PageCtx bwconf (pid, team, members, slackChannels, discordChannels))) = toHtml $ PageCtx bwconf $ teamPage pid team members slackChannels discordChannels
   toHtml (ManageTeamGet' (pid, team, members, slackChannels, discordChannels)) = toHtml $ teamPage pid team members slackChannels discordChannels
@@ -713,7 +683,7 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
       let renderTeamNameCol team = nameCell pid team.name team.description team.handle
       let renderModifiedCol team = toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" team.updated_at
       let renderMembersCol team = memberCell team.members
-      let renderNotificationsCol team = notifsCell team
+      let renderNotificationsCol = notifsCell
 
       let tableCols =
             [ Table.col "" renderTeamCheckboxCol & Table.withAttrs [class_ "w-8"]
@@ -822,8 +792,8 @@ teamPage pid team projMembers slackChannels discordChannels = do
           div_ [class_ "flex items-center justify-between mb-2"] do
             span_ [class_ "flex items-center gap-2 font-semibold py-2"] do
               faSprite_ "users" "regular" "h-5 w-5"
-              toHtml $ "Members"
-              span_ [class_ "text-textWeak"] $ ("(" <> show (V.length team.members) <> ")")
+              toHtml "Members"
+              span_ [class_ "text-textWeak"] ("(" <> show (V.length team.members) <> ")")
             label_ [class_ "btn btn-outline border border-strokeWeak btn-xs", Lucid.for_ $ team.handle <> "-new-team-modal"] (faSprite_ "plus" "regular" "h-3 w-3 mr-1" >> "Add")
             input_ [type_ "checkbox", id_ $ team.handle <> "-new-team-modal", class_ "modal-toggle"]
             teamModal pid (Just team) whiteList channelWhiteList discordWhiteList True
@@ -848,7 +818,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
                 "Email addresses"
               div_ [class_ "flex items-center gap-2 text-xs text-textWeak"] do
                 when (V.null team.notify_emails) $ span_ [] "No emails added"
-                forM_ team.notify_emails \e -> span_ [] $ toHtml e
+                forM_ team.notify_emails (span_ [] . toHtml)
             div_ [class_ "flex flex-col gap-2 py-3"] do
               div_ [class_ "flex items-center text-sm gap-2 font-medium"] do
                 faSprite_ "slack" "solid" "h-4 w-4"
@@ -1529,7 +1499,7 @@ teamModal pid team whiteList channelWhiteList discordWhiteList isInTeamView = do
   let description = maybe "" (.description) team
   let teamId = fmap (.id) team
   let prefix = maybe "n" (\x -> x.handle) team
-  let membersTags = decodeUtf8 $ AE.encode $ maybe [] (\t -> ((\m -> UUID.toText m.memberId) <$> t.members)) team
+  let membersTags = decodeUtf8 $ AE.encode $ maybe [] (\t -> (\m -> UUID.toText m.memberId) <$> t.members) team
   let notifEmails = decodeUtf8 $ AE.encode $ maybe [] (.notify_emails) team
   let slackChannels = decodeUtf8 $ AE.encode $ maybe [] (.slack_channels) team
   let discordChannels = decodeUtf8 $ AE.encode $ maybe [] (.discord_channels) team
