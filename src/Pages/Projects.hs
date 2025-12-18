@@ -96,7 +96,7 @@ import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
 import Pages.Components (paymentPlanPicker)
-import Pkg.Components.Table (Table (..), TableCell (..), TableColumn (..))
+import Pkg.Components.Table (BulkAction (..), Column, Features (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
 import Pkg.ConvertKit qualified as ConvertKit
@@ -562,6 +562,26 @@ instance AE.FromJSON TeamForm where
       AE..:? "teamId"
 
 
+validateTeamDetails :: Text -> Text -> Either Text ()
+validateTeamDetails name handle = do
+  validateName name
+  validateHandle handle
+  pure ()
+  where
+    validNameChar c = isAlphaNum c || c == ' ' || c == '-' || c == '_'
+    validHandleChar c = isLower c || isDigit c || c == '-'
+    validateName n
+      | T.null n = Left "Team name is required"
+      | T.length n < 3 = Left "Team name must be at least 3 characters"
+      | not (T.all validNameChar n) = Left "Invalid characters in team name"
+      | otherwise = Right ()
+    validateHandle h
+      | T.null h = Left "Handle is required"
+      | not (validHandleChar <$> T.unpack h & and) = Left "Handle must be lowercase, no spaces, and hyphens only"
+      | not (isLower (T.head h)) = Left "Handle must start with a lowercase letter"
+      | otherwise = Right ()
+
+
 manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
 manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers, notifEmails, slackChannels, discordChannels, teamId} tmView = do
   (sess, project) <- Sessions.sessionAndProject pid
@@ -689,37 +709,36 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
         label_ [class_ "btn btn-primary btn-sm text-white", Lucid.for_ "n-new-team-modal"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Team")
         input_ [type_ "checkbox", id_ "n-new-team-modal", class_ "modal-toggle"]
         teamModal pid Nothing whiteList channelWhiteList discordWhiteList False
-      let mapColumn x =
-            (Table.mkColumn x x)
-              { columnWidth = if x == "Name" then Just "60%" else if x == "Modified" then Just "20%" else Nothing
-              , columnCheckBox = x == "teamId"
-              , columnActionable = x == "Name"
-              }
-      let tableCols = (\x -> mapColumn x) <$> ["teamId", "Name", "Modified", "Members", "Notifications"]
-      let mapRow x =
-            Map.fromList
-              [ ("teamId", CellCheckbox $ UUID.toText x.id)
-              , ("Name", CellCustom $ nameCell pid x.name x.description x.handle)
-              , ("Modified", CellText $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" x.updated_at)
-              , ("Members", CellCustom $ memberCell x.members)
-              , ("Notifications", CellCustom $ notifsCell x)
-              ]
-          tableRows = (mapRow <$> V.toList teams)
-          table =
-            (Table.defaultTable tableCols tableRows)
-              { tableId = Just "teams_table"
-              , tableClass = "border rounded border-strokeWeak"
-              , tableHasSearch = True
-              , tableHasCheckboxes = True
-              , tableActions =
-                  Just
-                    $ [ button_ [class_ "flex items-center gap-2 btn btn-sm text-textError", type_ "button", hxPost_ $ "/p/" <> pid.toText <> "/manage_teams/bulk_action/delete", hxSwap_ "none"] do
-                          faSprite_ "trash" "regular" "w-3 h-3"
-                          "Delete"
-                      ]
+      let renderTeamCheckboxCol team = input_ [term "aria-label" "Select Team", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "teamId", value_ $ UUID.toText team.id]
+      let renderTeamNameCol team = nameCell pid team.name team.description team.handle
+      let renderModifiedCol team = toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" team.updated_at
+      let renderMembersCol team = memberCell team.members
+      let renderNotificationsCol team = notifsCell team
+
+      let tableCols =
+            [ Table.col "" renderTeamCheckboxCol & Table.withAttrs [class_ "w-8"]
+            , Table.col "Name" renderTeamNameCol & Table.withAttrs [class_ "flex-1"]
+            , Table.col "Modified" renderModifiedCol & Table.withAttrs [class_ "w-36"]
+            , Table.col "Members" renderMembersCol & Table.withAttrs [class_ "w-48"]
+            , Table.col "Notifications" renderNotificationsCol & Table.withAttrs [class_ "w-32"]
+            ]
+
+      let table =
+            Table
+              { config = def{Table.elemID = "teams_table"}
+              , columns = tableCols
+              , rows = teams
+              , features =
+                  def
+                    { Table.rowId = Just \team -> UUID.toText team.id
+                    , Table.bulkActions =
+                        [ Table.BulkAction{icon = Just "trash", title = "Delete", uri = "/p/" <> pid.toText <> "/manage_teams/bulk_action/delete"}
+                        ]
+                    , Table.search = Just Table.ClientSide
+                    }
               }
       div_ [class_ "w-full"] do
-        Table.renderTable table
+        toHtml table
 
 
 nameCell :: Projects.ProjectId -> Text -> Text -> Text -> Html ()
@@ -1032,7 +1051,7 @@ getSubscriptionPortalUrl subId apiKey = do
   case subId of
     Nothing -> return Nothing
     Just sid -> do
-      let hds = header "Authorization" .~ ["Bearer " <> encodeUtf8 @Text @ByteString apiKey]
+      let hds = W.header "Authorization" .~ ["Bearer " <> encodeUtf8 @Text @ByteString apiKey]
       response <- liftIO $ Network.Wreq.getWith (defaults & hds) ("https://api.lemonsqueezy.com/v1/subscriptions/" <> toString sid)
       let responseBdy = response ^. responseBody
       case AE.eitherDecode responseBdy of
@@ -1255,7 +1274,7 @@ getSubscriptionId orderId apiKey = do
   case orderId of
     Nothing -> pure Nothing
     Just ordId -> do
-      let hds = header "Authorization" .~ ["Bearer " <> encodeUtf8 @Text @ByteString apiKey]
+      let hds = W.header "Authorization" .~ ["Bearer " <> encodeUtf8 @Text @ByteString apiKey]
       response <- W.getWith (defaults & hds) ("https://api.lemonsqueezy.com/v1/orders/" <> toString ordId <> "/subscriptions")
       let responseBdy = response ^. responseBody
       case AE.eitherDecode responseBdy of

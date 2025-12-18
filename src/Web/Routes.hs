@@ -285,7 +285,7 @@ data MonitorsRoutes' mode = MonitorsRoutes'
   , alertSingleGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Get '[HTML] (RespHeaders Alerts.Alert)
   , alertSingleToggleActive :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[HTML] (RespHeaders Alerts.Alert)
   , alertOverviewGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "overview" :> Get '[HTML] (RespHeaders Alerts.Alert)
-  , teamAlertsGetH :: mode :- "alerts" :> "team" :> Capture "team_id" UUID.UUID :> Get '[HTML] (RespHeaders (ItemsList.ItemsRows Testing.UnifiedMonitorItem))
+  , teamAlertsGetH :: mode :- "alerts" :> "team" :> Capture "team_id" UUID.UUID :> Get '[HTML] (RespHeaders (Table.TableRows Testing.UnifiedMonitorItem))
   }
   deriving stock (Generic)
 

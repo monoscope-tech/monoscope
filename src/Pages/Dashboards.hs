@@ -69,6 +69,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem (getServiceName)
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
+import Pkg.Components.Table (BulkAction (..), Column, Features (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
@@ -907,43 +908,50 @@ dashboardsGet_ dg = do
 
   div_ [id_ "itemsListPage", class_ $ "mx-auto gap-8 w-full flex flex-col h-full overflow-hidden group/pg" <> if dg.embedded then "" else "pb-2 px-6 pt-8"] do
     let getTeams x = catMaybes $ (\xx -> find (\t -> t.id == xx) dg.teams) <$> V.toList x.teams
-    let mapRow x =
-          Map.fromList
-            [ ("dashboardId", CellCheckbox x.id.toText)
-            , ("Name", CellText x.title)
-            , ("Modified", CellText $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" x.updatedAt)
-            , ("Teams", CellArray $ (\x' -> CellBadge x'.handle) <$> getTeams x)
-            , ("Widgets", CellText $ maybe "0" (show . length . (.widgets)) $ loadDashboardFromVM x)
-            ]
-    let tableCols = (\x -> (Table.mkColumn x x){columnActionable = x /= "dashboardId", columnWidth = if x == "Name" then Just "40%" else Nothing, columnCheckBox = x == "dashboardId"}) <$> ["dashboardId", "Name", "Modified", "Teams", "Widgets"]
-    let tableRows = mapRow <$> dg.dashboards
+
+    let renderCheckboxCol dash =
+          unless dg.embedded
+            $ input_ [term "aria-label" "Select Dashboard", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "dashboardId", value_ $ dash.id.toText]
+
+    let renderNameCol dash = do
+          let baseUrl = "/p/" <> dg.projectId.toText <> "/dashboards/" <> dash.id.toText
+          a_ [href_ baseUrl, class_ "font-medium text-textStrong hover:text-textBrand"] $ toHtml dash.title
+
+    let renderModifiedCol dash = toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" dash.updatedAt
+
+    let renderTeamsCol dash = forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-blue mr-1"] $ toHtml team.handle
+
+    let renderWidgetsCol dash = toHtml $ maybe "0" (show . length . (.widgets)) $ loadDashboardFromVM dash
+
+    let tableCols =
+          [ Table.col "" renderCheckboxCol & Table.withAttrs [class_ "w-8"]
+          , Table.col "Name" renderNameCol & Table.withAttrs [class_ "flex-1 min-w-0"]
+          , Table.col "Modified" renderModifiedCol & Table.withAttrs [class_ "w-36"]
+          , Table.col "Teams" renderTeamsCol & Table.withAttrs [class_ "w-48"]
+          , Table.col "Widgets" renderWidgetsCol & Table.withAttrs [class_ "w-24"]
+          ]
+
     let table =
-          (Table.defaultTable tableCols (V.toList tableRows))
-            { tableClass = "border border-strokeWeak rounded-box"
-            , tableId = Just "dashboardsTable"
-            , tableHasSearch = not dg.embedded
-            , tableShowHeader = not dg.embedded
-            , tableHasCheckboxes = not dg.embedded
-            , rowAction = Just $ \row -> do
-                let baseUrl = "/p/" <> dg.projectId.toText <> "/dashboards/"
-                    scrpt = case Map.lookup "dashboardId" row of
-                      Just (Table.CellCheckbox dashId) -> [text|on click go to url "$baseUrl$dashId"|]
-                      _ -> ""
-                 in scrpt
-            , tableActions =
-                if dg.embedded
-                  then Nothing
-                  else
-                    Just
-                      $ [ addTeamsDrowndown_ dg.projectId dg.teams
-                        , button_ [class_ "flex items-center gap-2 btn btn-sm text-textError", type_ "button", hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/delete", hxSwap_ "none"] do
-                            faSprite_ "trash" "regular" "w-3 h-3"
-                            span_ "Delete"
-                        ]
+          Table
+            { config = def{Table.elemID = "dashboardsTable", Table.showHeader = not dg.embedded}
+            , columns = tableCols
+            , rows = dg.dashboards
+            , features =
+                def
+                  { Table.rowId = Just \dash -> dash.id.toText
+                  , Table.bulkActions =
+                      if dg.embedded
+                        then []
+                        else
+                          [ Table.BulkAction{icon = Just "plus", title = "Add teams", uri = "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/add_teams"}
+                          , Table.BulkAction{icon = Just "trash", title = "Delete", uri = "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/delete"}
+                          ]
+                  , Table.search = if dg.embedded then Nothing else Just Table.ClientSide
+                  }
             }
 
     div_ [class_ "w-full", id_ "dashboardsTableContainer"] do
-      Table.renderTable table
+      toHtml table
 
 
 addTeamsDrowndown_ :: Projects.ProjectId -> V.Vector ManageMembers.Team -> Html ()
