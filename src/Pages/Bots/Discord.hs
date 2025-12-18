@@ -1,6 +1,7 @@
 {-# LANGUAGE PackageImports #-}
 
 module Pages.Bots.Discord (linkDiscordGetH, discordInteractionsH, getDiscordChannels, DiscordInteraction) where
+module Pages.Bots.Discord (linkDiscordGetH, discordInteractionsH, getDiscordChannels, DiscordInteraction) where
 
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS

@@ -148,8 +148,8 @@ instance Default (Features a) where
 instance Default Config where
   def =
     Config
-      { tableClasses = "table table-zebra table-sm w-full relative"
-      , thClasses = "text-left bg-bgRaised sticky top-0"
+      { tableClasses = "table table-sm w-full relative"
+      , thClasses = "text-left bg-fillWeaker sticky top-0"
       , tdClasses = "px-6 py-4"
       , containerClasses = "w-full mx-auto space-y-4 overflow-y-scroll h-full"
       , showHeader = True
@@ -239,7 +239,23 @@ renderTable tbl =
 renderRows :: Table a -> Html ()
 renderRows tbl =
   if tbl.config.renderAsTable
-    then V.mapM_ (renderTableRow tbl) tbl.rows
+    then div_ [class_ "overflow-hidden rounded-lg border border-strokeWeak"] do
+      table_ [class_ tbl.config.tableClasses] do
+        when tbl.config.showHeader
+          $ thead_ do
+            tr_ do
+              when (isJust tbl.features.rowId)
+                $ th_ [class_ $ tbl.config.thClasses <> " w-8"]
+                $ input_
+                  [ term "aria-label" "Select All"
+                  , type_ "checkbox"
+                  , class_ "checkbox h-6 w-6 checked:checkbox-primary"
+                  , [__| on click set .bulkactionItemCheckbox.checked to my.checked |]
+                  ]
+              forM_ tbl.columns \c ->
+                th_ [class_ $ tbl.config.thClasses <> " " <> tbl.config.tdClasses <> maybe "" (" " <>) c.align] $ toHtml c.name
+        tbody_ do
+          V.mapM_ (renderTableRow tbl) tbl.rows
     else V.mapM_ (renderListRow tbl) tbl.rows
 
 
@@ -278,11 +294,11 @@ renderTableRow tbl row =
 
 renderToolbar :: Table a -> Html ()
 renderToolbar tbl =
-  div_ [class_ "flex py-3 gap-8 items-center bg-fillWeaker"] do
-    div_ [class_ "h-4 flex space-x-3 w-8 items-center"] do
-      span_ [class_ "w-2 h-full"] ""
-      when (isJust tbl.features.rowId)
-        $ input_
+  div_ [class_ $ "flex py-3 gap-8 items-center " <> if tbl.config.renderAsTable then "" else "bg-fillWeaker"] do
+    when (isJust tbl.features.rowId && not tbl.config.renderAsTable) do
+      div_ [class_ "h-4 flex space-x-3 w-8 items-center"] do
+        span_ [class_ "w-2 h-full"] ""
+        input_
           [ term "aria-label" "Select All"
           , type_ "checkbox"
           , class_ "checkbox h-6 w-6 checked:checkbox-primary"
@@ -297,7 +313,7 @@ renderToolbar tbl =
           , hxSwap_ "none"
           ]
           do
-            whenJust blkA.icon \icon -> faSprite_ icon "solid" "h-4 w-4 inline-block"
+            whenJust blkA.icon \icon -> faSprite_ icon "regular" "h-4 w-4 inline-block"
             span_ (toHtml blkA.title)
 
       whenJust tbl.features.sort renderSortMenu
