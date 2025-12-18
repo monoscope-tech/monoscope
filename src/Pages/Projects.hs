@@ -96,7 +96,7 @@ import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
 import Pages.Components (paymentPlanPicker)
-import Pkg.Components.Table (Table (..), TableCell (..), TableColumn (..))
+import Pkg.Components.Table (Config (renderAsTable), Features (bulkActions, rowId, search, zeroState), SearchMode (ClientSide), Table (..), ZeroState (ZeroState), col, elemID)
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
 import Pkg.ConvertKit qualified as ConvertKit
@@ -502,12 +502,12 @@ manageMembersPostH pid onboardingM form = do
 
       unless (null uAndPOldAndChanged)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       unless (null deletedUAndP)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
@@ -539,25 +539,25 @@ instance AE.FromJSON TeamForm where
   parseJSON = AE.withObject "TeamForm" $ \o -> do
     TeamForm
       <$> o
-      AE..: "teamName"
+        AE..: "teamName"
       <*> o
-      AE..: "teamDescription"
+        AE..: "teamDescription"
       <*> o
-      AE..: "teamHandle"
+        AE..: "teamHandle"
       <*> o
-      AE..:? "teamMembers"
-      AE..!= V.empty
+        AE..:? "teamMembers"
+        AE..!= V.empty
       <*> o
-      AE..:? "notifEmails"
-      AE..!= V.empty
+        AE..:? "notifEmails"
+        AE..!= V.empty
       <*> o
-      AE..:? "slackChannels"
-      AE..!= V.empty
+        AE..:? "slackChannels"
+        AE..!= V.empty
       <*> o
-      AE..:? "discordChannels"
-      AE..!= V.empty
+        AE..:? "discordChannels"
+        AE..!= V.empty
       <*> o
-      AE..:? "teamId"
+        AE..:? "teamId"
 
 
 manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
@@ -687,50 +687,84 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
         label_ [class_ "btn btn-primary btn-sm text-white", Lucid.for_ "n-new-team-modal"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Team")
         input_ [type_ "checkbox", id_ "n-new-team-modal", class_ "modal-toggle"]
         teamModal pid Nothing whiteList channelWhiteList discordWhiteList False
-      let mapColumn x =
-            (Table.mkColumn x x)
-              { columnWidth = if x == "Name" then Just "60%" else if x == "Modified" then Just "20%" else Nothing
-              , columnCheckBox = x == "teamId"
-              , columnActionable = x == "Name"
-              }
-      let tableCols = (\x -> mapColumn x) <$> ["teamId", "Name", "Modified", "Members", "Notifications"]
-      let mapRow x =
-            Map.fromList
-              [ ("teamId", CellCheckbox $ UUID.toText x.id)
-              , ("Name", CellCustom $ nameCell pid x.name x.description x.handle)
-              , ("Modified", CellText $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" x.updated_at)
-              , ("Members", CellCustom $ memberCell x.members)
-              , ("Notifications", CellCustom $ notifsCell x)
-              ]
-          tableRows = (mapRow <$> V.toList teams)
-          table =
-            (Table.defaultTable tableCols tableRows)
-              { tableId = Just "teams_table"
-              , tableClass = "border rounded border-strokeWeak"
-              , tableHasSearch = True
-              , tableHasCheckboxes = True
-              , tableActions =
-                  Just
-                    $ [ button_ [class_ "flex items-center gap-2 btn btn-sm text-textError", type_ "button", hxPost_ $ "/p/" <> pid.toText <> "/manage_teams/bulk_action/delete", hxSwap_ "none"] do
-                          faSprite_ "trash" "regular" "w-3 h-3"
-                          "Delete"
+    -- let mapColumn x =
+    --       (Table.mkColumn x x)
+    --         { columnWidth = if x == "Name" then Just "60%" else if x == "Modified" then Just "20%" else Nothing
+    --         , columnCheckBox = x == "teamId"
+    --         , columnActionable = x == "Name"
+    --         }
+    -- let tableCols = (\x -> mapColumn x) <$> ["teamId", "Name", "Modified", "Members", "Notifications"]
+    -- let mapRow x =
+    --       Map.fromList
+    --         [ ("teamId", CellCheckbox $ UUID.toText x.id)
+    --         , ("Name", CellCustom $ nameCell pid x.name x.description x.handle)
+    --         , ("Modified", CellText $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" x.updated_at)
+    --         , ("Members", CellCustom $ memberCell x.members)
+    --         , ("Notifications", CellCustom $ notifsCell x)
+    --         ]
+    --     tableRows = (mapRow <$> V.toList teams)
+    --     table =
+    --       (Table.defaultTable tableCols tableRows)
+    --         { tableId = Just "teams_table"
+    --         , tableClass = "border rounded border-strokeWeak"
+    --         , tableHasSearch = True
+    --         , tableHasCheckboxes = True
+    --         , tableActions =
+    --             Just
+    --               $ [ button_ [class_ "flex items-center gap-2 btn btn-sm text-textError", type_ "button", hxPost_ $, hxSwap_ "none"] do
+    --                     faSprite_ "trash" "regular" "w-3 h-3"
+    --                     "Delete"
+    --                 ]
+    --         }
+    let table =
+          Table
+            { config = def{elemID = "teamsListForm", renderAsTable = True}
+            , columns = [col "Name" (nameCell pid), col "Modified" modifiedCell, col "Members" memberCell, col "Notifications" notifsCell]
+            , rows = teams
+            , features =
+                def
+                  { search = Just ClientSide
+                  , rowId = Just (\team -> UUID.toText team.id)
+                  , bulkActions =
+                      [ Table.BulkAction
+                          { title = "Delete"
+                          , icon = Just "trash"
+                          , uri = "/p/" <> pid.toText <> "/manage_teams/bulk_action/delete"
+                          }
                       ]
-              }
-      div_ [class_ "w-full"] do
-        Table.renderTable table
+                  , zeroState =
+                      Just
+                        $ ZeroState
+                          { icon = "empty-set"
+                          , title = "You haven't created any teams yet"
+                          , description = "Create teams to manage access and collaboration"
+                          , actionText = "Create team"
+                          , destination =
+                              Left $ "/p/" <> pid.toText <> "/manage_teams#new-team-modal"
+                          }
+                  }
+            }
+
+    div_ [class_ "w-full"] do
+      toHtml table
 
 
-nameCell :: Projects.ProjectId -> Text -> Text -> Text -> Html ()
-nameCell pid name description handle = do
-  a_ [class_ "flex items-center gap-2", href_ ("/p/" <> pid.toText <> "/manage_teams/" <> handle)] do
-    span_ [class_ "text-textStrong font-medium"] $ toHtml name
-    span_ [class_ "text-textWeak text-sm overflow-ellipsis truncate "] $ toHtml description
+modifiedCell :: ProjectMembers.TeamVM -> Html ()
+modifiedCell team = do
+  time_ [datetime_ $ fmt $ dateDashF team.updated_at, class_ "text text-sm"] $ toHtml $ formatTime defaultTimeLocale "%b %-d, %Y %-I:%M %p" team.updated_at
 
 
-memberCell :: V.Vector ProjectMembers.TeamMemberVM -> Html ()
-memberCell members = do
+nameCell :: Projects.ProjectId -> ProjectMembers.TeamVM -> Html ()
+nameCell pid team = do
+  a_ [class_ "flex items-center gap-2", href_ ("/p/" <> pid.toText <> "/manage_teams/" <> team.handle)] do
+    span_ [class_ "text-textStrong text-sm font-medium"] $ toHtml team.name
+    span_ [class_ "text-textWeak text-sm overflow-ellipsis truncate "] $ toHtml team.description
+
+
+memberCell :: ProjectMembers.TeamVM -> Html ()
+memberCell team = do
   div_ [class_ "inline-block flex -space-x-2"] do
-    forM_ members $ \m -> do
+    forM_ team.members $ \m -> do
       div_ [class_ "inline-block mx-0.5", term "data-tippy-content" m.memberName]
         $ img_ [class_ "inline-block h-6 w-6 rounded-full border border-strokeWeak ", src_ m.memberAvatar, alt_ "User avatar"]
 
@@ -1513,7 +1547,7 @@ teamModal pid team whiteList channelWhiteList discordWhiteList isInTeamView = do
   let slackChannels = decodeUtf8 $ AE.encode $ maybe [] (.slack_channels) team
   let discordChannels = decodeUtf8 $ AE.encode $ maybe [] (.discord_channels) team
 
-  div_ [class_ "modal", role_ "dialog", style_ "--color-base-100: var(--color-fillWeaker)"] $ do
+  div_ [class_ "modal", role_ "dialog"] $ do
     div_ [class_ "modal-box max-w-max"] $ do
       form_
         [ hxPost_ $ "/p/" <> pid.toText <> "/manage_teams?" <> (if isInTeamView then "teamView=true" else "")

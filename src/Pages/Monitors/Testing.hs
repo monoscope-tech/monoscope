@@ -27,6 +27,7 @@ import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (statBox_)
 import Pkg.Components.Table (Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), ZeroState (..), col, withAttrs)
+import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
@@ -69,7 +70,7 @@ data UnifiedMonitorDetails
   }
 
 
-teamAlertsGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (ItemsList.ItemsRows UnifiedMonitorItem))
+teamAlertsGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Table.TableRows UnifiedMonitorItem))
 teamAlertsGetH pid teamId = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -77,7 +78,7 @@ teamAlertsGetH pid teamId = do
   currTime <- Time.currentTime
   let alerts' = V.map (toUnifiedMonitorItem pid currTime) alerts
 
-  addRespHeaders $ ItemsList.ItemsRows Nothing alerts'
+  addRespHeaders $ Table.TableRows Nothing [] alerts'
 
 
 -- | Unified handler for monitors endpoint showing both alerts and multi-step monitors
@@ -197,85 +198,84 @@ toUnifiedMonitorItem pid currTime = alertToUnifiedItem pid
             }
 
 
-instance ToHtml UnifiedMonitorItem where
-  toHtml item = toHtmlRaw $ unifiedMonitorCard item
-  toHtmlRaw = toHtml
+-- | Render monitor icon column
+renderMonitorIcon :: UnifiedMonitorItem -> Html ()
+renderMonitorIcon item = do
+  div_ [class_ "mt-2 pl-4 shrink-0"] do
+    div_ [class_ $ "w-10 h-10 rounded-lg flex items-center justify-center " <> typeColorClass] do
+      faSprite_ typeIcon "regular" "h-5 w-5"
+  where
+    (typeIcon, _, typeColorClass) = ("bell", "Alert", "bg-fillWarning-weak text-iconWarning")
 
 
--- | Render unified monitor card
-unifiedMonitorCard :: UnifiedMonitorItem -> Html ()
-unifiedMonitorCard item = do
-  div_ [class_ "border-b flex p-4 gap-4 itemsListItem hover:bg-fillWeak transition-colors group/card"] do
-    -- Monitor type indicator
-    div_ [class_ "mt-2 pl-4 shrink-0"] do
-      div_ [class_ $ "w-10 h-10 rounded-lg flex items-center justify-center " <> typeColorClass] do
-        faSprite_ typeIcon "regular" "h-5 w-5"
+-- | Render monitor content column
+renderMonitorContent :: Projects.ProjectId -> UnifiedMonitorItem -> Html ()
+renderMonitorContent _ item = do
+  div_ [class_ "w-full flex flex-col gap-2 shrink-1"] do
+    -- Title and tags row
+    div_ [class_ "flex gap-10 items-center"] do
+      a_ [href_ detailsUrl, class_ "font-medium text-textStrong text-base hover:text-textBrand transition-colors"] $ toHtml $ if T.null item.title then "(Untitled)" else item.title
+      div_ [class_ "flex gap-1 items-center text-sm"] do
+        -- Monitor type badge
+        span_ [class_ "badge badge-sm badge-ghost"] $ toHtml typeLabel
+        -- Tags
+        forM_ item.tags $ \tag -> do
+          span_ [class_ "badge badge-sm badge-blue"] $ toHtml tag
 
-    div_ [class_ "w-full flex flex-col gap-2 shrink-1"] do
-      -- Title and tags row
-      div_ [class_ "flex gap-10 items-center"] do
-        a_ [href_ detailsUrl, class_ "font-medium text-textStrong text-base hover:text-textBrand transition-colors"] $ toHtml $ if T.null item.title then "(Untitled)" else item.title
-        div_ [class_ "flex gap-1 items-center text-sm"] do
-          -- Monitor type badge
-          span_ [class_ "badge badge-sm badge-ghost"] $ toHtml typeLabel
-          -- Tags
-          forM_ item.tags $ \tag -> do
-            span_ [class_ "badge badge-sm badge-blue"] $ toHtml tag
-
-      -- Details row
-      div_ [class_ "w-full flex"] do
-        div_ [class_ "flex flex-col gap-6 w-1/3"] do
-          -- Hosts or query preview
-          div_ [class_ "flex gap-2 items-center w-full"] do
-            case item.details of
-              AlertDetails{query} -> do
-                span_ [class_ "text-sm text-textWeak p-1 bg-fillWeak font-mono truncate", term "data-tippy-content" query] $ toHtml $ T.take 50 query
-
-          -- Status and schedule
-          div_ [class_ "flex gap-4 w-full items-center"] do
-            statusBadge item.status
-            div_ [class_ "flex items-center shrink-0 gap-1"] do
-              faSprite_ "clock" "regular" "h-4 w-4"
-              span_ [class_ "shrink-0 text-sm"] $ toHtml item.schedule
-
-        div_ [class_ "w-2/3 flex justify-between gap-10 items-center"] do
-          div_ [class_ "flex gap-6 items-center"] do
-            -- Created date
-            div_ [class_ "flex gap-1.5 items-center"] do
-              faSprite_ "calendar" "regular" "h-6 w-6 fill-none"
-              div_ [class_ "flex flex-col"] do
-                span_ [class_ "text-textWeak text-xs"] "Created"
-                span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ prettyTimeAuto item.now item.createdAt
-
-            -- Last run
-            div_ [class_ "flex gap-1.5 items-center"] do
-              faSprite_ "play" "regular" "h-6 w-6 fill-none text-iconNeutral"
-              div_ [class_ "flex flex-col"] do
-                span_ [class_ "text-textWeak text-xs"] "Last run"
-                span_ [class_ "text-sm font-medium text-textStrong"] do
-                  case item.lastRun of
-                    Just t -> toHtml $ prettyTimeAuto item.createdAt t
-                    Nothing -> "Never"
-
-          -- Type-specific details
+    -- Details row
+    div_ [class_ "w-full flex"] do
+      div_ [class_ "flex flex-col gap-6 w-1/3"] do
+        -- Hosts or query preview
+        div_ [class_ "flex gap-2 items-center w-full"] do
           case item.details of
-            AlertDetails{alertThreshold, warningThreshold, triggerDirection} ->
-              thresholdBox_ alertThreshold warningThreshold triggerDirection
+            AlertDetails{query} -> do
+              span_ [class_ "text-sm text-textWeak p-1 bg-fillWeak font-mono truncate", term "data-tippy-content" query] $ toHtml $ T.take 50 query
 
-          -- Actions
-          div_ [class_ "flex gap-2 px-4 py-2 items-center rounded-3xl opacity-0 group-hover/card:opacity-100 transition-opacity"] do
-            a_ [href_ editUrl, term "data-tippy-content" "Edit", class_ "hover:text-textBrand transition-colors"] do
-              faSprite_ "pen-to-square" "regular" "h-5 w-5"
-            button_
-              [ type_ "button"
-              , term "data-tippy-content" $ if item.status `elem` ["Active", "Passing"] then "Deactivate" else "Activate"
-              , class_ "hover:text-textBrand transition-colors"
-              , hxPost_ toggleUrl
-              , hxTarget_ "closest .itemsListItem"
-              , hxSwap_ "outerHTML"
-              ]
-              do
-                faSprite_ (if item.status `elem` ["Active", "Passing"] then "pause" else "play") "regular" "h-5 w-5"
+        -- Status and schedule
+        div_ [class_ "flex gap-4 w-full items-center"] do
+          statusBadge item.status
+          div_ [class_ "flex items-center shrink-0 gap-1"] do
+            faSprite_ "clock" "regular" "h-4 w-4"
+            span_ [class_ "shrink-0 text-sm"] $ toHtml item.schedule
+
+      div_ [class_ "w-2/3 flex justify-between gap-10 items-center"] do
+        div_ [class_ "flex gap-6 items-center"] do
+          -- Created date
+          div_ [class_ "flex gap-1.5 items-center"] do
+            faSprite_ "calendar" "regular" "h-6 w-6 fill-none"
+            div_ [class_ "flex flex-col"] do
+              span_ [class_ "text-textWeak text-xs"] "Created"
+              span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ prettyTimeAuto item.now item.createdAt
+
+          -- Last run
+          div_ [class_ "flex gap-1.5 items-center"] do
+            faSprite_ "play" "regular" "h-6 w-6 fill-none text-iconNeutral"
+            div_ [class_ "flex flex-col"] do
+              span_ [class_ "text-textWeak text-xs"] "Last run"
+              span_ [class_ "text-sm font-medium text-textStrong"] do
+                case item.lastRun of
+                  Just t -> toHtml $ prettyTimeAuto item.createdAt t
+                  Nothing -> "Never"
+
+        -- Type-specific details
+        case item.details of
+          AlertDetails{alertThreshold, warningThreshold, triggerDirection} ->
+            thresholdBox_ alertThreshold warningThreshold triggerDirection
+
+        -- Actions
+        div_ [class_ "flex gap-2 px-4 py-2 items-center rounded-3xl opacity-0 group-hover/card:opacity-100 transition-opacity"] do
+          a_ [href_ editUrl, term "data-tippy-content" "Edit", class_ "hover:text-textBrand transition-colors"] do
+            faSprite_ "pen-to-square" "regular" "h-5 w-5"
+          button_
+            [ type_ "button"
+            , term "data-tippy-content" $ if item.status `elem` ["Active", "Passing"] then "Deactivate" else "Activate"
+            , class_ "hover:text-textBrand transition-colors"
+            , hxPost_ toggleUrl
+            , hxTarget_ "closest .itemsListItem"
+            , hxSwap_ "outerHTML"
+            ]
+            do
+              faSprite_ (if item.status `elem` ["Active", "Passing"] then "pause" else "play") "regular" "h-5 w-5"
   where
     (_, typeLabel, _) = ("bell", "Alert", "bg-fillWarning-weak text-iconWarning")
 
@@ -327,21 +327,21 @@ statusBadge_ isLarge status = do
 -- | Threshold box for alerts
 thresholdBox_ :: Int -> Maybe Int -> Text -> Html ()
 thresholdBox_ alert warning direction = do
-  div_ [class_ "flex gap-2 p-3 items-center border rounded-3xl"] do
+  div_ [class_ "flex gap-2 px-4 py-2 items-center border rounded-3xl"] do
     div_ [class_ "flex items-center gap-3"] do
       -- Direction indicator
       div_ [class_ "flex items-center gap-1"] do
-        -- faSprite_ (if direction == "above" then "arrow-down" else "arrow-down") "regular" "h-4 w-4"
+        faSprite_ (if direction == "above" then "arrow-up" else "arrow-down") "regular" "h-4 w-4"
         span_ [class_ "text-xs text-textWeak"] $ toHtml direction
       -- Alert threshold
-      div_ [class_ "text-center flex items-center gap-2"] do
+      div_ [class_ "text-center"] do
         div_ [class_ "text-textError font-medium"] $ show alert
-        small_ [class_ "block text-xs text-textWeak"] "Alert"
+        small_ [class_ "block text-xs"] "Alert"
       -- Warning threshold
       whenJust warning $ \w -> do
-        div_ [class_ "text-center flex items-center gap-2"] do
+        div_ [class_ "text-center"] do
           div_ [class_ "text-textWarning font-medium"] $ show w
-          small_ [class_ "block text-xs text-textWeak"] "Warning"
+          small_ [class_ "block text-xs"] "Warning"
 
 
 -- | Unified monitor overview handler that works for both alerts and collections

@@ -37,6 +37,7 @@ import Data.List qualified as L
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Time qualified as Time
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity qualified as DBT
 import Database.PostgreSQL.Entity.DBT (query_)
@@ -61,6 +62,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users
+import Models.Users.Users qualified as Users
 import NeatInterpolation
 import Network.HTTP.Types.URI qualified as URI
 import Pages.Anomalies qualified as AnomalyList
@@ -69,7 +71,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem (getServiceName)
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
-import Pkg.Components.Table (Table (..), TableCell (CellArray, CellBadge, CellCheckbox, CellText), TableColumn (..))
+import Pkg.Components.Table (Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col)
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
@@ -167,7 +169,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
               , value_ $ maybeToMonoid var.value
               ]
-            <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
+              <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
   const tagifyInstances = new Map();
@@ -375,7 +377,7 @@ processWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widgetBas
   forOf (#children . _Just . traverse) widget' $ \child ->
     processWidget pid now timeRange allParams
       $ child
-      & #_dashboardId %~ (<|> widget'._dashboardId)
+        & #_dashboardId %~ (<|> widget'._dashboardId)
 
 
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
@@ -385,30 +387,30 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
     let issuesVM = V.map (AnomalyList.IssueVM False True now "24h") issues
     pure
       $ widget
-      & #html
-        ?~ renderText
-          ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-              $ forM_ issuesVM \vm@(AnomalyList.IssueVM hideByDefault _ _ _ issue) ->
-                div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] do
-                  Table.renderRowWithColumns
-                    [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "card-round" else "px-0.5 py-4"
-                    , style_ (if hideByDefault then "display:none" else "")
-                    ]
-                    (AnomalyList.issueColumns issue.projectId)
-                    vm
-          )
-      & #html
-        ?~ renderText
-          ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-              $ forM_ issuesVM \vm@(AnomalyList.IssueVM hideByDefault _ _ _ issue) ->
-                div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] do
-                  Table.renderRowWithColumns
-                    [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "surface-raised rounded-2xl" else "px-0.5 py-4"
-                    , style_ (if hideByDefault then "display:none" else "")
-                    ]
-                    (AnomalyList.issueColumns issue.projectId)
-                    vm
-          )
+        & #html
+          ?~ renderText
+            ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
+                $ forM_ issuesVM \vm@(AnomalyList.IssueVM hideByDefault _ _ _ issue) ->
+                  div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] do
+                    Table.renderRowWithColumns
+                      [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "card-round" else "px-0.5 py-4"
+                      , style_ (if hideByDefault then "display:none" else "")
+                      ]
+                      (AnomalyList.issueColumns issue.projectId)
+                      vm
+            )
+        & #html
+          ?~ renderText
+            ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
+                $ forM_ issuesVM \vm@(AnomalyList.IssueVM hideByDefault _ _ _ issue) ->
+                  div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] do
+                    Table.renderRowWithColumns
+                      [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "surface-raised rounded-2xl" else "px-0.5 py-4"
+                      , style_ (if hideByDefault then "display:none" else "")
+                      ]
+                      (AnomalyList.issueColumns issue.projectId)
+                      vm
+            )
   Widget.WTStat -> do
     stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure $ widget & #dataset ?~ def{Widget.source = AE.Null, Widget.value = stat.dataFloat}
@@ -418,8 +420,8 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
     -- Render the table with data server-side
     pure
       $ widget
-      & #html
-        ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
+        & #html
+          ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
   Widget.WTTraces -> do
     tracesD <- Charts.queryMetrics (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     let trIds = V.map V.last tracesD.dataText
@@ -436,21 +438,21 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
 
     pure
       $ widget
-      & #html
-        ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText grouped spansGrouped colorsJson)
+        & #html
+          ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText grouped spansGrouped colorsJson)
   _ -> do
     metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure
       $ widget
-      & #dataset
-        ?~ Widget.WidgetDataset
-          { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
-          , rowsPerMin = metricsD.rowsPerMin
-          , value = Just metricsD.rowsCount
-          , from = metricsD.from
-          , to = metricsD.to
-          , stats = metricsD.stats
-          }
+        & #dataset
+          ?~ Widget.WidgetDataset
+            { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
+            , rowsPerMin = metricsD.rowsPerMin
+            , value = Just metricsD.rowsCount
+            , from = metricsD.from
+            , to = metricsD.to
+            , stats = metricsD.stats
+            }
 
 
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
@@ -530,10 +532,10 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
       let newLayout =
             Just
               $ maybe def Relude.id orig.layout
-              & #x %~ (<|> item.x)
-              & #y %~ (<|> item.y)
-              & #w %~ (<|> item.w)
-              & #h %~ (<|> item.h)
+                & #x %~ (<|> item.x)
+                & #y %~ (<|> item.y)
+                & #w %~ (<|> item.w)
+                & #h %~ (<|> item.h)
       pure
         orig
           { Widget.layout = newLayout
@@ -706,7 +708,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
                     , class_ $ "hidden page-drawer-tab-" <> T.toLower tabName
                     , name_ $ wid <> "-drawer-tab"
                     ]
-                  <> [checked_ | isActive]
+                    <> [checked_ | isActive]
                 toHtml tabName
           mkTab "Overview" (effectiveActiveTab /= "edit")
           mkTab "Edit" (effectiveActiveTab == "edit")
@@ -919,44 +921,86 @@ dashboardsGet_ dg = do
         |]
 
   div_ [id_ "itemsListPage", class_ $ "mx-auto gap-8 w-full flex flex-col h-full overflow-hidden group/pg" <> if dg.embedded then "" else "pb-2 px-6 pt-8"] do
-    let getTeams x = catMaybes $ (\xx -> find (\t -> t.id == xx) dg.teams) <$> V.toList x.teams
-    let mapRow x =
-          Map.fromList
-            [ ("dashboardId", CellCheckbox x.id.toText)
-            , ("Name", CellText x.title)
-            , ("Modified", CellText $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" x.updatedAt)
-            , ("Teams", CellArray $ (\x' -> CellBadge x'.handle) <$> getTeams x)
-            , ("Widgets", CellText $ maybe "0" (show . length . (.widgets)) $ loadDashboardFromVM x)
-            ]
-    let tableCols = (\x -> (Table.mkColumn x x){columnActionable = x /= "dashboardId", columnWidth = if x == "Name" then Just "40%" else Nothing, columnCheckBox = x == "dashboardId"}) <$> ["dashboardId", "Name", "Modified", "Teams", "Widgets"]
-    let tableRows = mapRow <$> dg.dashboards
-    let table =
-          (Table.defaultTable tableCols (V.toList tableRows))
-            { tableClass = "border border-strokeWeak rounded-box"
-            , tableId = Just "dashboardsTable"
-            , tableHasSearch = not dg.embedded
-            , tableShowHeader = not dg.embedded
-            , tableHasCheckboxes = not dg.embedded
-            , rowAction = Just $ \row -> do
-                let baseUrl = "/p/" <> dg.projectId.toText <> "/dashboards/"
-                    scrpt = case Map.lookup "dashboardId" row of
-                      Just (Table.CellCheckbox dashId) -> [text|on click go to url "$baseUrl$dashId"|]
-                      _ -> ""
-                 in scrpt
-            , tableActions =
-                if dg.embedded
-                  then Nothing
-                  else
-                    Just
-                      $ [ addTeamsDrowndown_ dg.projectId dg.teams
-                        , button_ [class_ "flex items-center gap-2 btn btn-sm text-textError", type_ "button", hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/delete", hxSwap_ "none"] do
-                            faSprite_ "trash" "regular" "w-3 h-3"
-                            span_ "Delete"
-                        ]
-            }
+    let getTeams x = mapMaybe (\xx -> find (\t -> t.id == xx) dg.teams) (V.toList x.teams)
+    let dashboardCardItems =
+          V.map
+            ( \d ->
+                DashboardCard
+                  { id = d.id
+                  , title = d.title
+                  , createdAt = d.createdAt
+                  , createdBy = d.createdBy
+                  , starredSince = d.starredSince
+                  , homepageSince = d.homepageSince
+                  , teams = V.fromList $ getTeams d
+                  , widgetCount = maybe 0 (\x -> length x.widgets) $ loadDashboardFromVM d
+                  }
+            )
+            dg.dashboards
 
-    div_ [class_ "w-full", id_ "dashboardsTableContainer"] do
-      Table.renderTable table
+    let table =
+          Table
+            { config = def{elemID = "dashboardsListForm", renderAsTable = True}
+            , columns =
+                [ col "Title" renderDashboardTitle
+                , col "Modified" renderDateModified
+                , col "Teams" renderTeams
+                , col "Widgets" renderWidgetCount
+                ]
+            , rows = dashboardCardItems
+            , features =
+                def
+                  { search = Just ClientSide
+                  , zeroState =
+                      Just
+                        $ ZeroState
+                          { icon = "empty-set"
+                          , title = "No dashboards created yet"
+                          , description = "Create dashboards to visualize and monitor your project's metrics and logs."
+                          , actionText = "Create dashboard"
+                          , destination =
+                              Left $ "/p/" <> dg.projectId.toText <> "/log_explorer#create-alert-toggle"
+                          }
+                  }
+            }
+    div_ [class_ "w-full overflow-y-auto", id_ "dashboardsTableContainer"] do
+      toHtml table
+
+
+data DashboardCard = DashboardCard
+  { id :: Dashboards.DashboardId
+  , title :: Text
+  , createdAt :: Time.UTCTime
+  , createdBy :: Users.UserId
+  , starredSince :: Maybe Time.UTCTime
+  , homepageSince :: Maybe Time.UTCTime
+  , teams :: V.Vector ManageMembers.Team
+  , widgetCount :: Int
+  }
+  deriving (Generic, Show)
+
+
+renderDashboardTitle :: DashboardCard -> Html ()
+renderDashboardTitle dc = div_ [class_ "flex items-center gap-2"] do
+  span_ [class_ "text-sm font-medium"] $ toHtml dc.title
+  when (isJust dc.starredSince) $ span_ [class_ "text-yellow-400"] $ faSprite_ "star" "solid" "w-4 h-4"
+  when (isJust dc.homepageSince) $ span_ [class_ "text-green-500"] $ faSprite_ "home" "solid" "w-4 h-4"
+
+
+renderDateModified :: DashboardCard -> Html ()
+renderDateModified dc = div_ [class_ "text-sm text-textWeak"] $ toHtml $ formatTime defaultTimeLocale "%b %-d, %Y %-I:%M %p" dc.createdAt
+
+
+renderTeams :: DashboardCard -> Html ()
+renderTeams dc = div_ [class_ "flex items-center gap-2"] do
+  if V.null dc.teams
+    then span_ [class_ "text-sm text-textWeak"] "No teams"
+    else forM_ dc.teams \team -> do
+      span_ [class_ "px-2 py-1 bg-fillWeak rounded-full text-sm"] $ toHtml team.handle
+
+
+renderWidgetCount :: DashboardCard -> Html ()
+renderWidgetCount dc = div_ [class_ "text-sm text-textWeak"] $ toHtml $ show dc.widgetCount
 
 
 addTeamsDrowndown_ :: Projects.ProjectId -> V.Vector ManageMembers.Team -> Html ()
