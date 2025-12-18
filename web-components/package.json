@@ -20,7 +20,7 @@
     "@lit-labs/virtualizer": "^2.1.1",
     "@rrweb/replay": "^2.0.0-alpha.18",
     "@rrweb/types": "^2.0.0-alpha.18",
-    "@types/lodash": "^4.17.16",
+    "@types/lodash": "^4.17.21",
     "ansi_up": "^6.0.6",
     "ansi-up": "^1.0.0",
     "clsx": "^2.1.1",
