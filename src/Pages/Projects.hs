@@ -497,12 +497,12 @@ manageMembersPostH pid onboardingM form = do
 
       unless (null uAndPOldAndChanged)
         $ void
-          . dbtToEff
+        . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       unless (null deletedUAndP)
         $ void
-          . dbtToEff
+        . dbtToEff
         $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
