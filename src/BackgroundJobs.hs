@@ -771,6 +771,15 @@ handleQueryMonitorThreshold monitorE isAlert hostUrl = do
   _ <- dbtToEff $ Monitors.updateQMonitorTriggeredState monitorE.id isAlert
   whenJustM (dbtToEff $ Projects.projectById monitorE.projectId) \p -> do
     teams <- dbtToEff $ ProjectMembers.getTeamsById monitorE.projectId monitorE.teams
+
+    -- Log if configured teams are missing (deleted or invalid)
+    Relude.when (not (V.null monitorE.teams) && V.null teams) do
+      Log.logAttention "Monitor configured with teams but none found (possibly deleted)"
+        (monitorE.id, monitorE.projectId, V.length monitorE.teams)
+    Relude.when (not (V.null monitorE.teams) && V.length teams < V.length monitorE.teams) do
+      Log.logAttention "Some monitor teams not found (possibly deleted)"
+        (monitorE.id, monitorE.projectId, "expected" :: Text, V.length monitorE.teams, "found" :: Text, V.length teams)
+
     let thresholdType = if monitorE.triggerLessThan then "below" else "above"
         threshold = fromIntegral monitorE.alertThreshold
 
@@ -788,21 +797,24 @@ handleQueryMonitorThreshold monitorE isAlert hostUrl = do
     dbtToEff $ Issues.insertIssue issue
 
     let alert = MonitorsAlert{monitorTitle = monitorE.alertConfig.title, monitorUrl = hostUrl <> "/p/" <> monitorE.projectId.toText <> "/anomalies/" <> issue.id.toText}
-    if null teams
-      then do
-        Relude.when monitorE.alertConfig.emailAll do
-          users <- dbtToEff $ Projects.usersByProjectId monitorE.projectId
-          forM_ users \u -> emailQueryMonitorAlert monitorE u.email (Just u)
-        forM_ monitorE.alertConfig.emails \email -> emailQueryMonitorAlert monitorE email Nothing
-        unless (null monitorE.alertConfig.slackChannels) $ sendSlackMessage monitorE.projectId [fmtTrim| 🤖 *Log Alert triggered for `{monitorE.alertConfig.title}`*|]
-      else forM_ teams \team -> dispatchTeamNotifications team alert monitorE.projectId p.title (emailQueryMonitorAlert monitorE)
+
+    -- Send team notifications (no-op when teams is empty)
+    for_ teams \team -> dispatchTeamNotifications team alert monitorE.projectId p.title (emailQueryMonitorAlert monitorE)
+
+    -- Fallback notifications when no teams configured or all teams deleted
+    Relude.when (V.null teams) do
+      Relude.when monitorE.alertConfig.emailAll do
+        users <- dbtToEff $ Projects.usersByProjectId monitorE.projectId
+        forM_ users \u -> emailQueryMonitorAlert monitorE u.email (Just u)
+      forM_ monitorE.alertConfig.emails \email -> emailQueryMonitorAlert monitorE email Nothing
+      unless (null monitorE.alertConfig.slackChannels) $ sendSlackMessage monitorE.projectId [fmtTrim| 🤖 *Log Alert triggered for `{monitorE.alertConfig.title}`*|]
 
 
 dispatchTeamNotifications :: ProjectMembers.Team -> Pkg.Mail.NotificationAlerts -> Projects.ProjectId -> Text -> (CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
 dispatchTeamNotifications team alert projectId projectTitle emailAction = do
-  forM_ team.notify_emails \email -> emailAction (CI.mk email) Nothing
-  forM_ team.slack_channels (sendSlackAlert alert projectId projectTitle . Just)
-  forM_ team.discord_channels (sendDiscordAlert alert projectId projectTitle . Just)
+  for_ team.notify_emails \email -> emailAction (CI.mk email) Nothing
+  for_ team.slack_channels (sendSlackAlert alert projectId projectTitle . Just)
+  for_ team.discord_channels (sendDiscordAlert alert projectId projectTitle . Just)
 
 
 -- Send notifications

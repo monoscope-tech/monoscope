@@ -500,10 +500,8 @@ manageMembersPostH pid onboardingM form = do
         . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
-      unless (null deletedUAndP)
-        $ void
-        . dbtToEff
-        $ ProjectMembers.softDeleteProjectMembers deletedUAndP
+      whenJust (nonEmpty deletedUAndP) \ne ->
+        void . dbtToEff $ ProjectMembers.softDeleteProjectMembers ne
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
       if isJust onboardingM
@@ -526,6 +524,7 @@ data TeamForm = TeamForm
   , notifEmails :: V.Vector Text
   , slackChannels :: V.Vector Text
   , discordChannels :: V.Vector Text
+  , phoneNumbers :: V.Vector Text
   , teamId :: Maybe UUID.UUID
   }
   deriving stock (Eq, Generic, Show)
@@ -554,14 +553,14 @@ validateTeamDetails name handle notifEmails = validateName name >> validateHandl
 
 
 manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
-manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers, notifEmails, slackChannels, discordChannels, teamId} tmView = do
+manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers, notifEmails, slackChannels, discordChannels, phoneNumbers, teamId} tmView = do
   (sess, _) <- Sessions.sessionAndProject pid
   let currUserId = sess.persistentSession.userId
   userPermission <- dbtToEff $ ProjectMembers.getUserPermission pid currUserId
   projMembers <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
   let validMemberIds = V.map (.userId) projMembers
       invalidMembers = V.filter (`V.notElem` validMemberIds) teamMembers
-      teamDetails = ProjectMembers.TeamDetails teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels
+      teamDetails = ProjectMembers.TeamDetails teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels phoneNumbers
       validationErr msg = addErrorToast msg Nothing >> addRespHeaders (ManageTeamsPostError msg)
   case (userPermission == Just ProjectMembers.PAdmin, V.null invalidMembers, validateTeamDetails teamName teamHandle notifEmails, teamId) of
     (False, _, _, _) -> validationErr "Only admins can create or update teams"
@@ -1295,9 +1294,9 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan} = do
         _ <- updatePricing "Free" "" "" ""
         handleOnboarding "Free"
         users <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
-        let usersToDel = (\u -> u.id) <$> V.tail users
-        _ <- dbtToEff $ ProjectMembers.softDeleteProjectMembers $ V.toList usersToDel
-        pass
+        let usersToDel = V.toList $ V.map (.id) $ V.tail users
+        whenJust (nonEmpty usersToDel) \ne ->
+          void . dbtToEff $ ProjectMembers.softDeleteProjectMembers ne
   if project.paymentPlan == "ONBOARDING"
     then do
       redirectCS $ "/p/" <> pid.toText <> "/"

@@ -170,13 +170,13 @@ updateProjectMembersPermissons vals = void $ executeMany q vals
             WHERE pm.id::uuid = c.id::uuid; |]
 
 
-softDeleteProjectMembers :: [UUID.UUID] -> DBT IO ()
-softDeleteProjectMembers vals = unless (null vals) $ void $ execute q (Only $ V.fromList vals)
+softDeleteProjectMembers :: NonEmpty UUID.UUID -> DBT IO ()
+softDeleteProjectMembers vals = void $ execute q (Only $ V.fromList $ toList vals)
   where
     q =
       [sql| UPDATE projects.project_members
             SET active = FALSE
-            WHERE id = Any(?::uuid[]); |]
+            WHERE id = ANY(?::uuid[]); |]
 
 
 data TeamDetails = TeamDetails
@@ -187,26 +187,27 @@ data TeamDetails = TeamDetails
   , notifyEmails :: V.Vector Text
   , slackChannels :: V.Vector Text
   , discordChannels :: V.Vector Text
+  , phoneNumbers :: V.Vector Text
   }
   deriving stock (Eq, Generic, Show)
 
 
 createTeam :: Projects.ProjectId -> Users.UserId -> TeamDetails -> DBT IO Int64
-createTeam pid uid TeamDetails{..} = execute q (pid, uid, name, description, handle, members, notifyEmails, slackChannels, discordChannels)
+createTeam pid uid TeamDetails{..} = execute q (pid, uid, name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers)
   where
     q =
       [sql| INSERT INTO projects.teams
-               (project_id,created_by, name, description, handle, members, notify_emails, slack_channels, discord_channels)
-               VALUES (?,?, ?,?,?,?::uuid[],?,?,?)
+               (project_id, created_by, name, description, handle, members, notify_emails, slack_channels, discord_channels, phone_numbers)
+               VALUES (?, ?, ?, ?, ?, ?::uuid[], ?, ?, ?, ?)
                ON CONFLICT (project_id, handle) DO NOTHING |]
 
 
 updateTeam :: Projects.ProjectId -> UUID.UUID -> TeamDetails -> DBT IO Int64
-updateTeam pid tid TeamDetails{..} = execute q (name, description, handle, members, notifyEmails, slackChannels, discordChannels, pid, tid)
+updateTeam pid tid TeamDetails{..} = execute q (name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pid, tid)
   where
     q =
       [sql| UPDATE projects.teams
-               SET name = ?, description = ?, handle = ?, members = ?::uuid[], notify_emails = ?, slack_channels = ?, discord_channels = ?
+               SET name = ?, description = ?, handle = ?, members = ?::uuid[], notify_emails = ?, slack_channels = ?, discord_channels = ?, phone_numbers = ?
                WHERE project_id = ? AND id = ? |]
 
 
@@ -222,6 +223,7 @@ data Team = Team
   , notify_emails :: V.Vector Text
   , slack_channels :: V.Vector Text
   , discord_channels :: V.Vector Text
+  , phone_numbers :: V.Vector Text
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (FromRow, NFData)
@@ -232,9 +234,9 @@ getTeams pid = query q (Only pid)
   where
     q =
       [sql|
-      SELECT  t.id, t.name, t.description, t.handle, t.members, t.created_by, t.created_at, t.updated_at, t.notify_emails, t.slack_channels, t.discord_channels
-       FROM projects.teams t
-       WHERE t.project_id = ? AND t.deleted_at is null
+      SELECT t.id, t.name, t.description, t.handle, t.members, t.created_by, t.created_at, t.updated_at, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers
+      FROM projects.teams t
+      WHERE t.project_id = ? AND t.deleted_at IS NULL
     |]
 
 
@@ -243,7 +245,7 @@ getTeamsVM pid = query q (Only pid)
   where
     q =
       [sql|
-      SELECT 
+      SELECT
         t.id,
         t.created_at,
         t.updated_at,
@@ -254,18 +256,24 @@ getTeamsVM pid = query q (Only pid)
         t.notify_emails,
         t.slack_channels,
         t.discord_channels,
-ARRAY(
-  SELECT jsonb_build_object(
-    'memberId', u.id,
-    'memberName', concat_ws(' ', u.first_name, u.last_name),
-    'memberEmail', u.email,
-    'memberAvatar', u.display_image_url
-  )
-  FROM unnest(t.members) AS mid
-  JOIN users.users u ON u.id = mid
-) AS members
+        t.phone_numbers,
+        COALESCE(
+          array_agg(
+            jsonb_build_object(
+              'memberId', u.id,
+              'memberName', concat_ws(' ', u.first_name, u.last_name),
+              'memberEmail', u.email,
+              'memberAvatar', u.display_image_url
+            ) ORDER BY u.first_name, u.last_name
+          ) FILTER (WHERE u.id IS NOT NULL),
+          '{}'
+        ) AS members
       FROM projects.teams t
-      WHERE t.project_id = ?  AND t.deleted_at is null
+      LEFT JOIN unnest(t.members) AS mid ON true
+      LEFT JOIN users.users u ON u.id = mid
+      WHERE t.project_id = ? AND t.deleted_at IS NULL
+      GROUP BY t.id, t.created_at, t.updated_at, t.created_by, t.name, t.handle,
+               t.description, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers
     |]
 
 
@@ -280,6 +288,7 @@ data TeamVM = TeamVM
   , notify_emails :: V.Vector Text
   , slack_channels :: V.Vector Text
   , discord_channels :: V.Vector Text
+  , phone_numbers :: V.Vector Text
   , members :: V.Vector TeamMemberVM
   }
   deriving stock (Eq, Generic, Show)
@@ -302,7 +311,7 @@ getTeamByHandle pid handle = queryOne q (pid, handle)
   where
     q =
       [sql|
-      SELECT 
+      SELECT
         t.id,
         t.created_at,
         t.updated_at,
@@ -313,20 +322,24 @@ getTeamByHandle pid handle = queryOne q (pid, handle)
         t.notify_emails,
         t.slack_channels,
         t.discord_channels,
-ARRAY(
-  SELECT jsonb_build_object(
-    'memberId', u.id,
-    'memberName', concat_ws(' ', u.first_name, u.last_name),
-    'memberEmail', u.email,
-    'memberAvatar', u.display_image_url
-  )
-  FROM unnest(t.members) AS mid
-  JOIN users.users u ON u.id = mid
-) AS members
+        t.phone_numbers,
+        COALESCE(
+          array_agg(
+            jsonb_build_object(
+              'memberId', u.id,
+              'memberName', concat_ws(' ', u.first_name, u.last_name),
+              'memberEmail', u.email,
+              'memberAvatar', u.display_image_url
+            ) ORDER BY u.first_name, u.last_name
+          ) FILTER (WHERE u.id IS NOT NULL),
+          '{}'
+        ) AS members
       FROM projects.teams t
-      WHERE t.project_id = ? 
-        AND t.handle = ?
-        AND t.deleted_at is null
+      LEFT JOIN unnest(t.members) AS mid ON true
+      LEFT JOIN users.users u ON u.id = mid
+      WHERE t.project_id = ? AND t.handle = ? AND t.deleted_at IS NULL
+      GROUP BY t.id, t.created_at, t.updated_at, t.created_by, t.name, t.handle,
+               t.description, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers
     |]
 
 
@@ -343,7 +356,7 @@ deleteTeams pid tids
   | otherwise = void $ execute q (pid, tids)
   where
     q =
-      [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND id=ANY(?::UUID[]) |]
+      [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND id = ANY(?::uuid[]) |]
 
 
 getTeamsById :: Projects.ProjectId -> V.Vector UUID.UUID -> DBT IO (V.Vector Team)
@@ -351,7 +364,7 @@ getTeamsById pid tids = if V.null tids then pure V.empty else query q (pid, tids
   where
     q =
       [sql|
-      SELECT 
+      SELECT
         t.id,
         t.name,
         t.description,
@@ -362,7 +375,8 @@ getTeamsById pid tids = if V.null tids then pure V.empty else query q (pid, tids
         t.updated_at,
         t.notify_emails,
         t.slack_channels,
-        t.discord_channels
+        t.discord_channels,
+        t.phone_numbers
       FROM projects.teams t
-      WHERE t.project_id = ? AND t.id=ANY(?::UUID[]) AND t.deleted_at is null
+      WHERE t.project_id = ? AND t.id = ANY(?::uuid[]) AND t.deleted_at IS NULL
     |]
