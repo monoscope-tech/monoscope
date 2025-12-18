@@ -910,8 +910,9 @@ dashboardsGet_ dg = do
     let getTeams x = catMaybes $ (\xx -> find (\t -> t.id == xx) dg.teams) <$> V.toList x.teams
 
     let renderCheckboxCol dash =
-          unless dg.embedded
-            $ input_ [term "aria-label" "Select Dashboard", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "dashboardId", value_ $ dash.id.toText]
+          unless dg.embedded do
+            span_ [class_ "w-2 h-full"] ""
+            input_ [term "aria-label" "Select Dashboard", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "dashboardId", value_ $ dash.id.toText]
 
     let renderNameCol dash = do
           let baseUrl = "/p/" <> dg.projectId.toText <> "/dashboards/" <> dash.id.toText
@@ -924,7 +925,7 @@ dashboardsGet_ dg = do
     let renderWidgetsCol dash = toHtml $ maybe "0" (show . length . (.widgets)) $ loadDashboardFromVM dash
 
     let tableCols =
-          [ Table.col "" renderCheckboxCol & Table.withAttrs [class_ "w-8"]
+          [ Table.col "" renderCheckboxCol & Table.withAttrs [class_ "w-8 flex space-x-3 items-center"]
           , Table.col "Name" renderNameCol & Table.withAttrs [class_ "flex-1 min-w-0"]
           , Table.col "Modified" renderModifiedCol & Table.withAttrs [class_ "w-36"]
           , Table.col "Teams" renderTeamsCol & Table.withAttrs [class_ "w-48"]
@@ -997,7 +998,9 @@ dashboardsGetH pid embeddedM teamIdM = do
               , pageTitle = "Dashboards"
               , freeTierExceeded = freeTierExceeded
               , config = appCtx.config
-              , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn btn-primary text-white"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Dashboard")
+              , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn btn-sm btn-primary gap-2"] do
+                  faSprite_ "plus" "regular" "h-4 w-4"
+                  "New Dashboard"
               }
       addRespHeaders $ DashboardsGet (PageCtx bwconf $ DashboardsGetD{dashboards, projectId = pid, embedded = False, teams})
 
