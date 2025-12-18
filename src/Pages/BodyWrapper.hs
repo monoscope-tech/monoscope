@@ -359,7 +359,7 @@ bodyWrapper bcfg child = do
                     when bcfg.freeTierExceeded $ whenJust bcfg.currProject (\p -> freeTierLimitExceededBanner p.id.toText)
                     if bcfg.isSettingsPage
                       then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
-                      else child
+                      else div_ [class_ "px-6 pt-4 pb-16"] child
                   div_ [class_ "h-0 shrink"] do
                     Components.drawer_ "global-data-drawer" Nothing Nothing ""
                     -- Modal for copying widgets to other dashboards
