@@ -150,7 +150,7 @@ instance Default Config where
       { tableClasses = "table table-zebra table-sm w-full relative"
       , thClasses = "text-left bg-bgRaised sticky top-0"
       , tdClasses = "px-6 py-4"
-      , containerClasses = "w-full mx-auto px-6 pt-4 space-y-4 pb-16 overflow-y-scroll h-full"
+      , containerClasses = "w-full mx-auto space-y-4 overflow-y-scroll h-full"
       , showHeader = True
       , elemID = "tableContainer"
       , renderAsTable = False
