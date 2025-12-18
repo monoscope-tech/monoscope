@@ -769,7 +769,6 @@ handleQueryMonitorThreshold :: Monitors.QueryMonitorEvaled -> Bool -> Text -> AT
 handleQueryMonitorThreshold monitorE isAlert hostUrl = do
   Log.logTrace "Query Monitors Triggered " monitorE
   _ <- dbtToEff $ Monitors.updateQMonitorTriggeredState monitorE.id isAlert
-  project <- dbtToEff $ Projects.projectById monitorE.projectId
   whenJustM (dbtToEff $ Projects.projectById monitorE.projectId) \p -> do
     teams <- dbtToEff $ ProjectMembers.getTeamsById monitorE.projectId monitorE.teams
     let thresholdType = if monitorE.triggerLessThan then "below" else "above"
@@ -796,11 +795,14 @@ handleQueryMonitorThreshold monitorE isAlert hostUrl = do
           forM_ users \u -> emailQueryMonitorAlert monitorE u.email (Just u)
         forM_ monitorE.alertConfig.emails \email -> emailQueryMonitorAlert monitorE email Nothing
         unless (null monitorE.alertConfig.slackChannels) $ sendSlackMessage monitorE.projectId [fmtTrim| 🤖 *Log Alert triggered for `{monitorE.alertConfig.title}`*|]
-      else do
-        forM_ teams \team -> do
-          forM_ team.notify_emails \email -> emailQueryMonitorAlert monitorE (CI.mk email) Nothing
-          forM_ team.slack_channels (sendSlackAlert alert monitorE.projectId p.title . Just)
-          forM_ team.discord_channels (sendDiscordAlert alert monitorE.projectId p.title . Just)
+      else forM_ teams \team -> dispatchTeamNotifications team alert monitorE.projectId p.title (emailQueryMonitorAlert monitorE)
+
+
+dispatchTeamNotifications :: ProjectMembers.Team -> Pkg.Mail.NotificationAlerts -> Projects.ProjectId -> Text -> (CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
+dispatchTeamNotifications team alert projectId projectTitle emailAction = do
+  forM_ team.notify_emails \email -> emailAction (CI.mk email) Nothing
+  forM_ team.slack_channels (sendSlackAlert alert projectId projectTitle . Just)
+  forM_ team.discord_channels (sendDiscordAlert alert projectId projectTitle . Just)
 
 
 -- Send notifications

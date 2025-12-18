@@ -293,8 +293,8 @@ body, :host {
 
   /* Frosted glass backdrop for modals */
   .modal-backdrop {
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
   }
 
   .dropdown summary {

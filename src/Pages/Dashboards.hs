@@ -921,12 +921,12 @@ dashboardsGet_ dg = do
         |]
 
   div_ [id_ "itemsListPage", class_ "mx-auto gap-8 w-full flex flex-col h-full overflow-hidden group/pg"] do
-    let getTeams x = catMaybes $ (\xx -> find (\t -> t.id == xx) dg.teams) <$> V.toList x.teams
+    let getTeams x = mapMaybe (\xx -> find (\t -> t.id == xx) dg.teams) (V.toList x.teams)
 
     let renderCheckboxCol dash =
           unless dg.embedded do
             span_ [class_ "w-2 h-full"] ""
-            input_ [term "aria-label" "Select Dashboard", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "dashboardId", value_ $ dash.id.toText]
+            input_ [term "aria-label" "Select Dashboard", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "dashboardId", value_ dash.id.toText]
 
     let renderNameCol dash = do
           let baseUrl = "/p/" <> dg.projectId.toText <> "/dashboards/" <> dash.id.toText
@@ -1233,14 +1233,14 @@ dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
     "delete" -> do
       _ <- Dashboards.deleteDashboardsByIds pid $ V.fromList dashboardId
       addSuccessToast "Selected dashboards were deleted successfully" Nothing
-      addRespHeaders NoContent
     "add_teams" -> do
-      _ <- Dashboards.addTeamsToDashboards pid (V.fromList dashboardId) (V.fromList teamHandles)
-      addSuccessToast "Teams added to selected dashboards successfully" Nothing
-      addRespHeaders NoContent
-    _ -> do
-      addErrorToast "Invalid action" Nothing
-      addRespHeaders NoContent
+      teams <- dbtToEff $ ManageMembers.getTeamsById pid (V.fromList teamHandles)
+      if V.length teams /= length teamHandles then addErrorToast "Some teams not found or don't belong to this project" Nothing
+        else Dashboards.addTeamsToDashboards pid (V.fromList dashboardId) (V.fromList teamHandles) >>= \case
+          n | n > 0 -> addSuccessToast "Teams added to selected dashboards successfully" Nothing
+          _ -> addErrorToast "No dashboards were updated" Nothing
+    _ -> addErrorToast "Invalid action" Nothing
+  addRespHeaders NoContent
 
 
 -- | Form data for moving a widget between dashboards

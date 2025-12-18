@@ -532,53 +532,50 @@ data TeamForm = TeamForm
   deriving anyclass (AE.FromJSON, FromForm)
 
 
-validateTeamDetails :: Text -> Text -> Either Text ()
-validateTeamDetails name handle = do
-  validateName name
-  validateHandle handle
-  pass
+validateTeamDetails :: Text -> Text -> V.Vector Text -> Either Text ()
+validateTeamDetails name handle notifEmails = validateName name >> validateHandle handle >> forM_ notifEmails validateEmail
   where
-    validNameChar c = isAlphaNum c || c == ' ' || c == '-' || c == '_'
-    validHandleChar c = isLower c || isDigit c || c == '-'
     validateName n
-      | T.null n = Left "Team name is required"
-      | T.length n < 3 = Left "Team name must be at least 3 characters"
-      | not (T.all validNameChar n) = Left "Invalid characters in team name"
-      | otherwise = Right ()
+      | T.null (T.strip n) = Left "Team name is required"
+      | T.length (T.strip n) < 3 = Left "Team name must be at least 3 characters"
+      | T.length n > 100 = Left "Team name must be less than 100 characters"
+      | not $ T.all (\c -> isAlphaNum c || c `elem` [' ', '-', '_']) n = Left "Invalid characters in team name"
+      | otherwise = pass
     validateHandle h
       | T.null h = Left "Handle is required"
-      | not (all validHandleChar (toString h)) = Left "Handle must be lowercase, no spaces, and hyphens only"
+      | T.length h < 3 = Left "Handle must be at least 3 characters"
+      | T.length h > 50 = Left "Handle must be less than 50 characters"
+      | not $ all (\c -> isLower c || isDigit c || c == '-') (toString h) = Left "Handle must be lowercase, no spaces, and hyphens only"
       | not (isLower (T.head h)) = Left "Handle must start with a lowercase letter"
-      | otherwise = Right ()
+      | otherwise = pass
+    validateEmail email = case T.splitOn "@" email of
+      [local, domain] | not (T.null local) && not (T.null domain) && T.elem '.' domain -> pass
+      _ -> Left $ "Invalid email format: " <> email
 
 
 manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
 manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers, notifEmails, slackChannels, discordChannels, teamId} tmView = do
-  (sess, project) <- Sessions.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  (sess, _) <- Sessions.sessionAndProject pid
   let currUserId = sess.persistentSession.userId
-  let res = validateTeamDetails teamName teamHandle
-  case (res, teamId) of
-    (Right _, Just tid) -> do
-      _ <- dbtToEff $ ProjectMembers.updateTeam pid tid teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels
+  userPermission <- dbtToEff $ ProjectMembers.getUserPermission pid currUserId
+  projMembers <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
+  let validMemberIds = V.map (.userId) projMembers
+      invalidMembers = V.filter (`V.notElem` validMemberIds) teamMembers
+      teamDetails = ProjectMembers.TeamDetails teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels
+      validationErr msg = addErrorToast msg Nothing >> addRespHeaders (ManageTeamsPostError msg)
+  case (userPermission == Just ProjectMembers.PAdmin, V.null invalidMembers, validateTeamDetails teamName teamHandle notifEmails, teamId) of
+    (False, _, _, _) -> validationErr "Only admins can create or update teams"
+    (_, False, _, _) -> validationErr "Some team members are not project members"
+    (_, _, Left e, _) -> addErrorToast e Nothing >> addReswap "" >> addRespHeaders (ManageTeamsPostError e)
+    (_, _, _, Just tid) -> do
+      _ <- dbtToEff $ ProjectMembers.updateTeam pid tid teamDetails
       addSuccessToast "Team updated successfully" Nothing
-      case tmView of
-        Just _ -> teamGetH pid teamHandle (Just "main-page")
-        _ -> manageTeamsGetH pid (Just "from_post")
-    (Right _, Nothing) -> do
-      teamVM <- dbtToEff $ ProjectMembers.getTeamByHandle pid teamHandle
-      case teamVM of
-        Just _ -> do
-          addErrorToast "Team handle already exists" Nothing
-          addRespHeaders $ ManageTeamsPostError "Team handle already exists for this project."
-        _ -> do
-          _ <- dbtToEff $ ProjectMembers.createTeam pid currUserId teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels
-          addSuccessToast "Team saved successfully" Nothing
-          manageTeamsGetH pid (Just "from_post")
-    (Left e, _) -> do
-      addErrorToast e Nothing
-      addReswap ""
-      addRespHeaders $ ManageTeamsPostError e
+      maybe (manageTeamsGetH pid (Just "from_post")) (\_ -> teamGetH pid teamHandle (Just "main-page")) tmView
+    (_, _, _, Nothing) -> do
+      rowsAffected <- dbtToEff $ ProjectMembers.createTeam pid currUserId teamDetails
+      if rowsAffected > 0
+        then addSuccessToast "Team saved successfully" Nothing >> manageTeamsGetH pid (Just "from_post")
+        else validationErr "Team handle already exists for this project."
 
 
 newtype TBulkActionForm = TBulkActionForm
@@ -595,7 +592,7 @@ manageTeamBulkActionH pid action TBulkActionForm{teamId} listViewM = do
   case action of
     "delete" -> do
       teamVm <- dbtToEff $ ProjectMembers.getTeamsById pid $ V.fromList teamId
-      let canDelete = all (\team -> sess.user.id == team.created_by) teamVm
+      let canDelete = all (\team -> Just sess.user.id == team.created_by) teamVm
       if canDelete
         then do
           _ <- dbtToEff $ ProjectMembers.deleteTeams pid $ V.fromList teamId

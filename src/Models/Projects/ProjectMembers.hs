@@ -5,8 +5,10 @@ module Models.Projects.ProjectMembers (
   ProjectMemberVM (..),
   Permissions (..),
   selectActiveProjectMembers,
+  getUserPermission,
   updateProjectMembersPermissons,
   softDeleteProjectMembers,
+  TeamDetails (..),
   createTeam,
   updateTeam,
   getTeams,
@@ -143,9 +145,19 @@ selectActiveProjectMembers = query q
     q =
       [sql| SELECT pm.id, pm.user_id, pm.permission,us.email, us.first_name, us.last_name from projects.project_members pm
                    JOIN users.users us ON (pm.user_id=us.id)
-                   WHERE pm.project_id=?::uuid and pm.active=TRUE 
+                   WHERE pm.project_id=?::uuid and pm.active=TRUE
                    ORDER BY pm.created_at ASC;
         |]
+
+
+getUserPermission :: Projects.ProjectId -> Users.UserId -> DBT IO (Maybe Permissions)
+getUserPermission pid uid = do
+  result <- queryOne q (pid, uid)
+  pure $ fmap (\(Only p) -> p) result
+  where
+    q =
+      [sql| SELECT permission FROM projects.project_members
+            WHERE project_id = ? AND user_id = ? AND active = TRUE |]
 
 
 updateProjectMembersPermissons :: [(UUID.UUID, Permissions)] -> DBT IO ()
@@ -167,18 +179,30 @@ softDeleteProjectMembers vals = unless (null vals) $ void $ execute q (Only $ V.
             WHERE id = Any(?::uuid[]); |]
 
 
-createTeam :: Projects.ProjectId -> Users.UserId -> Text -> Text -> Text -> V.Vector Users.UserId -> V.Vector Text -> V.Vector Text -> V.Vector Text -> DBT IO Int64
-createTeam pid uid name description handle memberIds notifEmails slackChannels discordChannels = execute q (pid, uid, name, description, handle, memberIds, notifEmails, slackChannels, discordChannels)
+data TeamDetails = TeamDetails
+  { name :: Text
+  , description :: Text
+  , handle :: Text
+  , members :: V.Vector Users.UserId
+  , notifyEmails :: V.Vector Text
+  , slackChannels :: V.Vector Text
+  , discordChannels :: V.Vector Text
+  }
+  deriving stock (Eq, Generic, Show)
+
+
+createTeam :: Projects.ProjectId -> Users.UserId -> TeamDetails -> DBT IO Int64
+createTeam pid uid TeamDetails{..} = execute q (pid, uid, name, description, handle, members, notifyEmails, slackChannels, discordChannels)
   where
     q =
       [sql| INSERT INTO projects.teams
                (project_id,created_by, name, description, handle, members, notify_emails, slack_channels, discord_channels)
-               VALUES (?,?, ?,?,?,?::uuid[],?,?,?) |]
+               VALUES (?,?, ?,?,?,?::uuid[],?,?,?)
+               ON CONFLICT (project_id, handle) DO NOTHING |]
 
 
-updateTeam :: Projects.ProjectId -> UUID.UUID -> Text -> Text -> Text -> V.Vector Users.UserId -> V.Vector Text -> V.Vector Text -> V.Vector Text -> DBT IO Int64
-updateTeam pid tid name description handle memberIds notifEmails slackChannels discordChannels = do
-  execute q (name, description, handle, memberIds, notifEmails, slackChannels, discordChannels, pid, tid)
+updateTeam :: Projects.ProjectId -> UUID.UUID -> TeamDetails -> DBT IO Int64
+updateTeam pid tid TeamDetails{..} = execute q (name, description, handle, members, notifyEmails, slackChannels, discordChannels, pid, tid)
   where
     q =
       [sql| UPDATE projects.teams
@@ -192,7 +216,7 @@ data Team = Team
   , description :: Text
   , handle :: Text
   , members :: V.Vector Users.UserId
-  , created_by :: Users.UserId
+  , created_by :: Maybe Users.UserId
   , created_at :: UTCTime
   , updated_at :: UTCTime
   , notify_emails :: V.Vector Text
@@ -249,7 +273,7 @@ data TeamVM = TeamVM
   { id :: UUID.UUID
   , created_at :: UTCTime
   , updated_at :: UTCTime
-  , created_by :: Users.UserId
+  , created_by :: Maybe Users.UserId
   , name :: Text
   , handle :: Text
   , description :: Text
@@ -315,7 +339,7 @@ deleteTeamByHandle pid handle = void $ execute q (pid, handle)
 
 deleteTeams :: Projects.ProjectId -> V.Vector UUID.UUID -> DBT IO ()
 deleteTeams pid tids
-  | V.null tids = pure ()
+  | V.null tids = pass
   | otherwise = void $ execute q (pid, tids)
   where
     q =
