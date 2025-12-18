@@ -548,7 +548,7 @@ validateTeamDetails name handle notifEmails = validateName name >> validateHandl
       | not (isLower (T.head h)) = Left "Handle must start with a lowercase letter"
       | otherwise = pass
     validateEmail email = case T.splitOn "@" email of
-      [local, domain] | not (T.null local) && not (T.null domain) && T.elem '.' domain -> pass
+      [localPart, domain] | not (T.null localPart) && not (T.null domain) && T.elem '.' domain -> pass
       _ -> Left $ "Invalid email format: " <> email
 
 
