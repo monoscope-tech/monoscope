@@ -500,8 +500,8 @@ export class LogList extends LitElement {
     // Set fixed widths for all columns to avoid dynamic calculations during scroll
     this.fixedColumnWidths = {
       id: 24,
-      timestamp: 175, // Further increased to ensure full "MMM dd HH:mm:ss.SSS" format fits
-      created_at: 175, // Further increased to ensure full "MMM dd HH:mm:ss.SSS" format fits
+      timestamp: 155, // Reduced to fit smaller text-xs font while ensuring full "MMM dd HH:mm:ss.SSS" format fits
+      created_at: 155, // Reduced to fit smaller text-xs font while ensuring full "MMM dd HH:mm:ss.SSS" format fits
       status_code: 102,
       method: 102,
       raw_url: 212,
@@ -1229,7 +1229,7 @@ export class LogList extends LitElement {
             .join('; ')}
         >
           <thead class="z-10 sticky top-0 isolate">
-            <tr class="text-textStrong border-b flex min-w-0 relative font-medium isolate">
+            <tr class="text-textWeak border-b flex min-w-0 relative font-medium isolate">
               ${isInitialLoading
                 ? html`
                     ${[...Array(6)].map(
@@ -1444,7 +1444,7 @@ export class LogList extends LitElement {
       case 'timestamp':
         let timestamp = lookupVecValue<string>(dataArr, this.colIdxMap, key);
         return html`<div>
-          <time class=${`monospace text-textStrong tooltip tooltip-right ${wrapClass}`} data-tip="timestamp" datetime=${timestamp}
+          <time class=${`monospace text-xs text-textWeak tooltip tooltip-right ${wrapClass}`} data-tip="timestamp" datetime=${timestamp}
             >${formatTimestamp(timestamp)}</time
           >
         </div>`;

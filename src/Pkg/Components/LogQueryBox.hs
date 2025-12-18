@@ -149,10 +149,10 @@ logQueryBox_ config = do
             unless (isJust config.targetWidgetPreview)
               $ queryLibrary_ config.pid config.queryLibSaved config.queryLibRecent
 
-            div_ [id_ "queryBuilder", class_ "w-full flex-1 flex items-center min-w-0"]
+            div_ [id_ "queryBuilder", class_ "w-full flex-1 flex items-center min-w-0 min-h-[38px]"]
               $ termRaw
                 "query-editor"
-                ( [id_ "filterElement", class_ "w-full h-full flex items-center", term "default-value" (fromMaybe "" config.query)]
+                ( [id_ "filterElement", class_ "w-full flex items-center min-h-[38px]", term "default-value" (fromMaybe "" config.query)]
                     <> maybeToList (term "target-widget-preview" <$> config.targetWidgetPreview)
                     <> [term "widget-editor" "true" | isJust config.targetWidgetPreview]
                 )
@@ -241,13 +241,13 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
     -- Use vizTypeM if provided, otherwise default to timeseries for alerts or logs otherwise
     let defaultVizType = fromMaybe (if alert then "timeseries" else "logs") vizTypeM
         containerSelector = fromMaybe "visualization-widget-container" widgetContainerId
-
+        showEmojis = isJust widgetContainerId -- Only show emojis in widget mode, not in log explorer
     forM_ visTypes $ \(icon, label, vizType, emoji) -> do
       label_
         [ term "data-value" vizType
         , term "data-reload" $ if vizTypeM == Just "patterns" || vizType == "patterns" then "patterns" else ""
         , class_ "tab !shadow-none !border-strokeWeak flex gap-1"
-        , [__| on click 
+        , [__| on click
                if @data-reload == "patterns" then window.setParams({viz_type:@data-value}, true) end
           |]
         ]
@@ -269,7 +269,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
                        |]
               ]
             <> [checked_ | vizType == defaultVizType]
-          span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
+          when showEmojis $ span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
           span_ [] $ toHtml label
 
 

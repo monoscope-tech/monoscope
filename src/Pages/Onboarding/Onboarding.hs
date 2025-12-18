@@ -886,7 +886,7 @@ inviteTeamMemberModal :: Projects.ProjectId -> V.Vector Text -> Html ()
 inviteTeamMemberModal pid emails = do
   div_ [id_ "invite-modal-container"] $ do
     input_ [type_ "checkbox", id_ "inviteModal", class_ "modal-toggle", checked_]
-    div_ [class_ "modal p-8", role_ "dialog"] do
+    div_ [class_ "modal p-8 backdrop-blur-md bg-black/30", role_ "dialog"] do
       universalIndicator
       div_ [class_ "modal-box bg-bgRaised flex flex-col gap-4"] $ do
         div_ [class_ "p-3 bg-fillSuccess-weak rounded-full w-max border-strokeSuccess-weak gap-2 inline-flex"]

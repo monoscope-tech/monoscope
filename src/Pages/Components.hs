@@ -92,11 +92,11 @@ dateTime t endTM = do
 paymentPlanPicker :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
 paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicAuthEnabled = do
   let gridCols
-        | basicAuthEnabled = "grid-cols-1"
+        | basicAuthEnabled = "grid-cols-2"
         | freePricingEnabled = "grid-cols-3"
         | otherwise = "grid-cols-2"
   div_ [class_ "flex flex-col gap-8 w-full"] do
-    div_ [class_ "flex flex-col gap-2 w-full"] do
+    unless basicAuthEnabled $ div_ [class_ "flex flex-col gap-2 w-full"] do
       div_ [class_ "flex items-center justify-between w-full gap-4"] do
         p_ [class_ " text-textStrong"] "Total events"
         p_ [class_ " text-textWeak", id_ "num_requests"] "25 Million"
@@ -104,6 +104,7 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
     div_ [class_ "flex flex-col gap-8 mt-6 w-full"] do
       div_ [class_ $ "grid gap-8 w-full " <> gridCols] do
         when basicAuthEnabled $ openSourcePricing pid (currentPlan == "Open Source")
+        when basicAuthEnabled enterprisePricing
         when (freePricingEnabled && not basicAuthEnabled) $ freePricing pid (currentPlan == "Free")
         unless basicAuthEnabled $ popularPricing pid lemonUrl (currentPlan == "Bring nothing") freePricingEnabled
         unless basicAuthEnabled $ systemsPricing pid criticalUrl (currentPlan == "Bring your own storage")
@@ -357,6 +358,50 @@ openSourcePricing pid isCurrent = do
       , "Full control over your data"
       , "Community support"
       , "All APItoolkit features"
+      ]
+
+
+enterprisePricing :: Html ()
+enterprisePricing = do
+  div_ [class_ "relative"] do
+    div_
+      [ class_ "relative bg-bgRaised rounded-2xl py-11 px-4 outline outline-strokeBrand-strong overflow-hidden"
+      ]
+      $ do
+        div_
+          [ class_ "flex flex-col gap-2"
+          ]
+          do
+            div_ [class_ "w-[500px] h-36 right-0 top-0 rotate-y-15 rotate-z-15 top-[-55px] right-[-40px] rounded-t-2xl absolute bg-gradient-to-b from-fillBrand-weak to-transparent"] pass
+            div_ [class_ "flex-col justify-start items-start gap-1 flex"] $ do
+              div_ [class_ "text-xl font-semibold text-textStrong"] "Enterprise"
+              div_ [class_ "text-textStrong text-sm"] "Custom plan for your team"
+            div_ [class_ "flex items-center gap-1 mt-4"] do
+              div_ [class_ "flex items-end"] do
+                span_ [class_ "text-4xl text-textStrong"] "Custom"
+              div_ [class_ "flex flex-col text-textWeak text-sm"] do
+                span_ [class_ ""] "pricing"
+            div_ do
+              a_
+                [ class_ "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg btn-primary flex items-center justify-center"
+                , href_ "https://monoscope.tech/pricing"
+                , target_ "_blank"
+                ]
+                "Contact us"
+            included features $ span_ [] do
+              "Everything in "
+              span_ [class_ "text-textBrand"] "open source"
+              " plus..."
+
+    div_ [class_ "px-3 py-1.5 bg-fillBrand-strong absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-lg inline-flex justify-center items-center gap-2"] do
+      div_ [class_ "justify-start text-white"] do
+        span_ [class_ "leading-tight text-sm"] "RECOMMENDED FOR TEAMS"
+  where
+    features =
+      [ "Premium features & integrations"
+      , "SSO & advanced auth"
+      , "Priority support & SLA"
+      , "Advanced security & compliance"
       ]
 
 
