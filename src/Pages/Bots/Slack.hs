@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction) where
+module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction) where
 
 import BackgroundJobs qualified as BgJobs
 import Control.Lens ((.~), (^.))
@@ -27,6 +27,7 @@ import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.Concurrent (forkIO)
 import Effectful.Error.Static (throwError)
+import Effectful.Log qualified as Log
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
@@ -38,7 +39,7 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
-import Pages.Bots.Utils (BotResponse (..), BotType (..), contentTypeHeader, handleTableResponse)
+import Pages.Bots.Utils (BotResponse (..), BotType (..), Channel, contentTypeHeader, handleTableResponse)
 import Pkg.AI (callOpenAIAPI, systemPrompt)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..))
@@ -633,6 +634,29 @@ data SlackThreadedMessage = SlackThreadedMessage
   , ts :: Text
   }
   deriving (Generic, Show)
+
+
+data SlackChannelsResponse = SlackChannelsResponse
+  { ok :: Bool
+  , channels :: [Channel]
+  }
+  deriving (Generic, Show)
+  deriving anyclass (AE.FromJSON)
+
+
+getSlackChannels :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Eff es (Maybe SlackChannelsResponse)
+getSlackChannels token team_id = do
+  let url = "https://slack.com/api/conversations.list"
+      opts =
+        defaults & header "Authorization" .~ ["Bearer " <> encodeUtf8 token] & Wreq.param "team_id" .~ [team_id]
+
+  r <- getWith opts url
+  let resBody = r ^. responseBody
+  case AE.eitherDecode resBody of
+    Right val -> return $ Just val
+    Left err -> do
+      Log.logAttention ("Error decoding Slack channels response: " <> toText err) ()
+      return Nothing
 
 
 instance AE.FromJSON SlackThreadedMessage where

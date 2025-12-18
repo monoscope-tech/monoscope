@@ -34,15 +34,18 @@ module Data.Effectful.Notify (
 ) where
 
 import Control.Lens ((.~))
+import Control.Lens.Getter ((^.))
 import Control.Lens.Setter ((?~))
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.QQ (aesonQQ)
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Effectful.TH
-import Network.Wreq (FormParam ((:=)), auth, basicAuth, defaults, header, postWith)
+import Network.HTTP.Types (statusIsSuccessful)
+import Network.Wreq (FormParam ((:=)), auth, basicAuth, defaults, header, postWith, responseStatus)
 import Relude hiding (Reader, State, ask, get, modify, put, runState)
 import System.Config qualified as Config
 import System.Logging qualified as Log
@@ -59,7 +62,7 @@ data EmailData = EmailData
 
 
 data SlackData = SlackData
-  { webhookUrl :: Text
+  { channelId :: Text
   , message :: AE.Value
   }
   deriving stock (Eq, Generic, Show)
@@ -111,7 +114,7 @@ emailNotification receiver templateOptions subjectMessage =
 
 
 slackNotification :: Text -> AE.Value -> Notification
-slackNotification webhookUrl message =
+slackNotification channelId message =
   SlackNotification SlackData{..}
 
 
@@ -126,7 +129,7 @@ whatsappNotification template to contentVariables =
 
 
 -- Production interpreter
-runNotifyProduction :: (IOE :> es, Reader Config.AuthContext :> es) => Eff (Notify ': es) a -> Eff es a
+runNotifyProduction :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => Eff (Notify ': es) a -> Eff es a
 runNotifyProduction = interpret $ \_ -> \case
   SendNotification notification -> case notification of
     EmailNotification EmailData{..} -> do
@@ -155,14 +158,25 @@ runNotifyProduction = interpret $ \_ -> \case
       _ <- liftIO $ postWith opts url payload
       pass
     SlackNotification SlackData{..} -> do
-      let opts = defaults & header "Content-Type" .~ ["application/json"]
-      _ <- liftIO $ postWith opts (toString webhookUrl) message
-      pass
+      appCtx <- ask @Config.AuthContext
+      let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> appCtx.config.slackBotToken]
+      case message of
+        AE.Object obj -> do
+          let msg = AE.Object $ AEK.insert "channel" (AE.String channelId) obj
+          re <- liftIO $ postWith opts "https://slack.com/api/chat.postMessage" msg
+          unless (statusIsSuccessful (re ^. responseStatus))
+            $ Log.logAttention "Slack notification failed" (channelId, show $ re ^. responseStatus)
+          pass
+        _ -> do
+          Log.logAttention "Slack notification message is not an object" (channelId, show message)
+          pass
     DiscordNotification DiscordData{..} -> do
       appCtx <- ask @Config.AuthContext
       let url = toString $ "https://discord.com/api/v10/channels/" <> channelId <> "/messages"
       let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bot " <> appCtx.config.discordBotToken]
-      _ <- liftIO $ postWith opts url content
+      re <- liftIO $ postWith opts url content
+      unless (statusIsSuccessful (re ^. responseStatus))
+        $ Log.logAttention "Discord notification failed" (channelId, show $ re ^. responseStatus)
       pass
     WhatsAppNotification WhatsAppData{template, to, contentVariables} -> do
       appCtx <- ask @Config.AuthContext
@@ -196,7 +210,7 @@ runNotifyTest eff = do
                   EmailNotification emailData ->
                     ("Email" :: Text, emailData.receiver, fmap fst emailData.templateOptions)
                   SlackNotification slackData ->
-                    ("Slack" :: Text, slackData.webhookUrl, Nothing :: Maybe Text)
+                    ("Slack" :: Text, slackData.channelId, Nothing :: Maybe Text)
                   DiscordNotification discordData ->
                     ("Discord" :: Text, discordData.channelId, Nothing :: Maybe Text)
                   WhatsAppNotification whatsappData ->

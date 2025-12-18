@@ -35,6 +35,7 @@ declare global {
     updateMarkAreas: (chartId: string, warningVal: string, incidentVal: string) => void;
     formatNumber: (num: number) => string;
     getUTCOffset: () => string;
+    createTagify: (selector: string, options?: any) => any;
   }
   function updateUrlState(key: string, value: string): void;
 }
@@ -74,8 +75,6 @@ export type Assertion = {
   value: any;
   status?: 'PASSED' | 'FAILED' | 'PENDING';
 };
-
-
 
 export type ColIdxMap = Record<string, number>;
 

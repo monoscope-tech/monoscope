@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports #-}
 
-module Pages.Bots.Discord (linkDiscordGetH, discordInteractionsH, DiscordInteraction) where
+module Pages.Bots.Discord (linkDiscordGetH, discordInteractionsH, getDiscordChannels, DiscordInteraction) where
 
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
@@ -29,13 +29,14 @@ import Data.Effectful.Wreq (
  )
 import Data.Time qualified as Time
 import Effectful (Eff, type (:>))
+import Effectful.Log qualified as Log
 import Effectful.Time qualified as Time
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Dashboards qualified as Dashboards
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Pages.Bots.Utils (BotResponse (..), BotType (..), authHeader, chartImageUrl, contentTypeHeader, handleTableResponse)
+import Pages.Bots.Utils (BotResponse (..), BotType (..), Channel, authHeader, chartImageUrl, contentTypeHeader, handleTableResponse)
 import Pkg.AI (callOpenAIAPI, systemPrompt)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
@@ -117,7 +118,7 @@ data DiscordInteraction = Interaction
   , data_i :: Maybe InteractionData
   , channel_id :: Maybe Text
   , guild_id :: Maybe Text
-  , channel :: Maybe Channel
+  , channel :: Maybe DiscordThreadChannel
   }
   deriving (Generic, Show)
 
@@ -135,7 +136,7 @@ data ThreadMetadata = ThreadMetadata
 instance AE.FromJSON ThreadMetadata
 
 
-data Channel = Channel
+data DiscordThreadChannel = DiscordThreadChannel
   { id :: Text
   , name :: Text
   , guild_id :: Maybe Text
@@ -147,7 +148,7 @@ data Channel = Channel
   deriving (Generic, Show)
 
 
-instance AE.FromJSON Channel where
+instance AE.FromJSON DiscordThreadChannel where
   parseJSON = AE.genericParseJSON AE.defaultOptions{AE.fieldLabelModifier = \f -> if f == "type_" then "type" else f}
 
 
@@ -195,6 +196,19 @@ data InteractionOption = InteractionOption
   }
   deriving (Generic, Show)
   deriving anyclass (AE.FromJSON)
+
+
+getDiscordChannels :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Eff es [Channel]
+getDiscordChannels token guildId = do
+  let url = "https://discord.com/api/v10/guilds/" <> toString guildId <> "/channels"
+      opts = defaults & header "Authorization" .~ ["Bot " <> encodeUtf8 token]
+  r <- getWith opts url
+  let body = r ^. responseBody
+  case AE.eitherDecode body of
+    Right val -> return val
+    Left err -> do
+      Log.logAttention ("Error decoding discord channels response: " <> toText err) ()
+      return []
 
 
 discordInteractionsH :: BS.ByteString -> Maybe BS.ByteString -> Maybe BS.ByteString -> ATBaseCtx AE.Value
@@ -424,11 +438,11 @@ data DiscordMessage = DiscordMessage
   deriving anyclass (AE.FromJSON)
 
 
-getThreadStarterMessage :: HTTP :> es => DiscordInteraction -> Text -> Eff es (Maybe [DiscordMessage])
+getThreadStarterMessage :: (HTTP :> es, Log.Log :> es) => DiscordInteraction -> Text -> Eff es (Maybe [DiscordMessage])
 getThreadStarterMessage interaction botToken = do
   case interaction.channel_id of
     Just channelId -> case interaction.channel of
-      Just Channel{type_ = 11, parent_id = Just pId} -> do
+      Just DiscordThreadChannel{type_ = 11, parent_id = Just pId} -> do
         let baseUrl = "https://discord.com/api/v10/channels/"
             url = toString $ baseUrl <> channelId <> "/messages?limit=50"
             starterMessageUrl = toString $ baseUrl <> pId <> "/messages/" <> channelId
@@ -437,6 +451,7 @@ getThreadStarterMessage interaction botToken = do
         response' <- getWith opts starterMessageUrl
         case AE.eitherDecode (response ^. responseBody) of
           Left err -> do
+            Log.logAttention ("Error decoding Discord thread messages: " <> toText err) ()
             return Nothing
           Right messages -> do
             case AE.eitherDecode (response' ^. responseBody) of

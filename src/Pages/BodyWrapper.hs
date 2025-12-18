@@ -92,11 +92,11 @@ bodyWrapper bcfg child = do
         meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
         meta_ [name_ "theme-color", content_ "#ffffff"]
         link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/thirdparty/notyf3.min.css")]
-        link_ [rel_ "stylesheet", href_ "https://cdn.jsdelivr.net/npm/@yaireo/tagify/dist/tagify.css", type_ "text/css"]
+        link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/css/thirdparty/tagify.min.css"), type_ "text/css"]
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css")]
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/css/thirdparty/rrweb.css")]
 
-        link_ [rel_ "stylesheet", type_ "text/css", href_ "/public/assets/css/tailwind.min.css"]
+        link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css")]
         link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/web-components/dist/css/index.css")]
 
         -- Include optional head content from the page

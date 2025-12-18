@@ -623,11 +623,11 @@ tracePage p = do
                 waterFallTree pid rootSpans traceItem.traceId serviceColors
               div_ [class_ "shrink-0 px-2"] do
                 div_
-                  [ class_ "w-[550px] sticky top-0 border-b border-b-strokeWeak h-10 text-xs relative"
+                  [ class_ "w-xl sticky top-0 border-b border-b-strokeWeak h-10 text-xs relative"
                   , id_ "waterfall-time-container"
                   ]
                   pass
-                div_ [class_ "w-[550px] overflow-x-hidden py-2 relative flex flex-col gap-2", id_ $ "waterfall-" <> traceItem.traceId] pass
+                div_ [class_ "w-xl overflow-x-hidden py-2 relative flex flex-col gap-2", id_ $ "waterfall-" <> traceItem.traceId] pass
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "span_list"] do
             div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-x-hidden "] do
