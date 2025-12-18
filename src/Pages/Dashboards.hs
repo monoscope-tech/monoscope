@@ -1235,10 +1235,12 @@ dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
       addSuccessToast "Selected dashboards were deleted successfully" Nothing
     "add_teams" -> do
       teams <- dbtToEff $ ManageMembers.getTeamsById pid (V.fromList teamHandles)
-      if V.length teams /= length teamHandles then addErrorToast "Some teams not found or don't belong to this project" Nothing
-        else Dashboards.addTeamsToDashboards pid (V.fromList dashboardId) (V.fromList teamHandles) >>= \case
-          n | n > 0 -> addSuccessToast "Teams added to selected dashboards successfully" Nothing
-          _ -> addErrorToast "No dashboards were updated" Nothing
+      if V.length teams /= length teamHandles
+        then addErrorToast "Some teams not found or don't belong to this project" Nothing
+        else
+          Dashboards.addTeamsToDashboards pid (V.fromList dashboardId) (V.fromList teamHandles) >>= \case
+            n | n > 0 -> addSuccessToast "Teams added to selected dashboards successfully" Nothing
+            _ -> addErrorToast "No dashboards were updated" Nothing
     _ -> addErrorToast "Invalid action" Nothing
   addRespHeaders NoContent
 
