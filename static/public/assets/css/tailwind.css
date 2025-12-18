@@ -290,6 +290,13 @@ body, :host {
   .modal-box {
     background-color: var(--color-bgOverlay);
   }
+
+  /* Frosted glass backdrop for modals */
+  .modal-backdrop {
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+
   .dropdown summary {
     list-style: none;
   }
