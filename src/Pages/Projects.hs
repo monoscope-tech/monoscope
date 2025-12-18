@@ -21,8 +21,6 @@ module Pages.Projects (
   ManageMembers (..),
   -- ManageTeams
   manageTeamsGetH,
-  -- ManageTeams
-  manageTeamsGetH,
   -- CreateProject
   createProjectPostH,
   createProjectFormV,
