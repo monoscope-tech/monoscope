@@ -774,10 +774,12 @@ handleQueryMonitorThreshold monitorE isAlert hostUrl = do
 
     -- Log if configured teams are missing (deleted or invalid)
     Relude.when (not (V.null monitorE.teams) && V.null teams) do
-      Log.logAttention "Monitor configured with teams but none found (possibly deleted)"
+      Log.logAttention
+        "Monitor configured with teams but none found (possibly deleted)"
         (monitorE.id, monitorE.projectId, V.length monitorE.teams)
     Relude.when (not (V.null monitorE.teams) && V.length teams < V.length monitorE.teams) do
-      Log.logAttention "Some monitor teams not found (possibly deleted)"
+      Log.logAttention
+        "Some monitor teams not found (possibly deleted)"
         (monitorE.id, monitorE.projectId, "expected" :: Text, V.length monitorE.teams, "found" :: Text, V.length teams)
 
     let thresholdType = if monitorE.triggerLessThan then "below" else "above"
