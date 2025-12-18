@@ -9,6 +9,7 @@ module Models.Apis.Monitors (
   MonitorAlertConfig (..),
   QueryMonitorId (..),
   updateQMonitorTriggeredState,
+  getAlertsByTeamHandle,
 ) where
 
 import Data.Aeson qualified as AE
@@ -87,6 +88,7 @@ data QueryMonitor = QueryMonitor
   , deactivatedAt :: Maybe UTCTime
   , deletedAt :: Maybe UTCTime
   , visualizationType :: Text
+  , teams :: V.Vector UUID.UUID
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, NFData, ToRow)
@@ -113,6 +115,7 @@ data QueryMonitorEvaled = QueryMonitorEvaled
   , deactivatedAt :: Maybe UTCTime
   , deletedAt :: Maybe UTCTime
   , visualizationType :: Text
+  , teams :: V.Vector UUID.UUID
   , evalResult :: Int
   }
   deriving stock (Generic, Show)
@@ -138,13 +141,14 @@ queryMonitorUpsert qm =
     , qm.alertConfig
     , qm.checkIntervalMins
     , qm.visualizationType
+    , qm.teams
     )
   where
     q =
       [sql|
     INSERT INTO monitors.query_monitors (id, project_id, alert_threshold, warning_threshold, log_query,
                   log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
-                  threshold_sustained_for_mins, alert_config, check_interval_mins, visualization_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  threshold_sustained_for_mins, alert_config, check_interval_mins, visualization_type, teams) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::uuid[])
           ON CONFLICT (id) DO UPDATE SET
                   alert_threshold=EXCLUDED.alert_threshold,
                   warning_threshold=EXCLUDED.warning_threshold,
@@ -157,7 +161,8 @@ queryMonitorUpsert qm =
                   threshold_sustained_for_mins=EXCLUDED.threshold_sustained_for_mins,
                   alert_config=EXCLUDED.alert_config,
                   check_interval_mins=EXCLUDED.check_interval_mins,
-                  visualization_type=EXCLUDED.visualization_type;
+                  visualization_type=EXCLUDED.visualization_type,
+                  teams=EXCLUDED.teams
     |]
 
 
@@ -174,7 +179,7 @@ queryMonitorsById ids
       [sql|
     SELECT id, created_at, updated_at, project_id, check_interval_mins, alert_threshold, warning_threshold,
         log_query, log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
-        threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, visualization_type, eval(log_query_as_sql)
+        threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, visualization_type, teams, eval(log_query_as_sql)
       FROM monitors.query_monitors where id=ANY(?::UUID[])
     |]
 
@@ -202,3 +207,16 @@ monitorToggleActiveById id' = execute q (Only id')
 
 queryMonitorsAll :: Projects.ProjectId -> DBT IO (V.Vector QueryMonitor)
 queryMonitorsAll pid = selectManyByField @QueryMonitor [DAT.field| project_id |] pid
+
+
+getAlertsByTeamHandle :: Projects.ProjectId -> UUID.UUID -> DBT IO (V.Vector QueryMonitor)
+getAlertsByTeamHandle pid teamId = query q (pid, teamId)
+  where
+    q =
+      [sql|
+      SELECT qm.id, qm.created_at, qm.updated_at, qm.project_id, qm.check_interval_mins, qm.alert_threshold, qm.warning_threshold,
+        qm.log_query, qm.log_query_as_sql, qm.last_evaluated, qm.warning_last_triggered, qm.alert_last_triggered, qm.trigger_less_than,
+        qm.threshold_sustained_for_mins, qm.alert_config, qm.deactivated_at, qm.deleted_at, qm.visualization_type, qm.teams
+      FROM monitors.query_monitors qm
+      WHERE qm.project_id = ? AND ? = ANY(qm.teams)
+    |]

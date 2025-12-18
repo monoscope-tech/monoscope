@@ -694,6 +694,7 @@ navBottomList pidTxt =
   [ ("gear", "bg-fillBrand-weak", "text-textBrand", "Project settings", "/p/" <> pidTxt <> "/settings", Nothing, Nothing, Nothing)
   , ("key", "bg-fillSuccess-weak", "text-textSuccess", "API keys", "/p/" <> pidTxt <> "/apis", Nothing, Nothing, Nothing)
   , ("user-plus", "bg-fillWarning-weak", "text-textWarning", "Manage members", "/p/" <> pidTxt <> "/manage_members", Nothing, Nothing, Nothing)
+  , ("users", "bg-fillInfo-weak", "text-textInfo", "Manage teams", "/p/" <> pidTxt <> "/manage_teams", Nothing, Nothing, Nothing)
   , ("dollar", "bg-fillWarning-weak", "text-textWarning", "Manage billing", "/p/" <> pidTxt <> "/manage_billing", Nothing, Nothing, Nothing)
   , ("arrows-turn-right", "bg-fillBrand-weak", "text-textBrand", "Integrations", "/p/" <> pidTxt <> "/integrations", Nothing, Nothing, Nothing)
   , ("bucket", "", "", "Your S3 bucket", "/p/" <> pidTxt <> "/byob_s3", Nothing, Nothing, Nothing)

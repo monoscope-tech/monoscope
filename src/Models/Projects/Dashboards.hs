@@ -1,10 +1,27 @@
-module Models.Projects.Dashboards (Dashboard (..), DashboardVM (..), DashboardId, readDashboardFile, Variable (..), VariableType (..), Tab (..), getDashboardById, readDashboardsFromDirectory, readDashboardEndpoint, replaceQueryVariables) where
+module Models.Projects.Dashboards (
+  Dashboard (..),
+  DashboardVM (..),
+  DashboardId,
+  readDashboardFile,
+  Variable (..),
+  VariableType (..),
+  Tab (..),
+  getDashboardById,
+  readDashboardsFromDirectory,
+  readDashboardEndpoint,
+  replaceQueryVariables,
+  deleteDashboardsByIds,
+  addTeamsToDashboards,
+  insert,
+  selectDashboardsByTeam,
+) where
 
 import Control.Exception (try)
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.Default
+import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
@@ -18,6 +35,7 @@ import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField
+import Database.PostgreSQL.Simple.TypeInfo.Static (uuid)
 import Database.PostgreSQL.Simple.Types (Only (Only), Query (Query))
 import Database.PostgreSQL.Transact qualified as DBT
 import Deriving.Aeson qualified as DAE
@@ -51,6 +69,7 @@ data DashboardVM = DashboardVM
   , homepageSince :: Maybe UTCTime
   , tags :: V.Vector Text
   , title :: Text
+  , teams :: V.Vector UUID.UUID
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
@@ -117,6 +136,29 @@ data Tab = Tab
   deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Tab
 
 
+insert :: DB :> es => DashboardVM -> Eff es Int64
+insert dashboardVM = do
+  dbtToEff $ DBT.execute (Query $ encodeUtf8 q) params
+  where
+    q =
+      [text| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::uuid[]) |]
+    params =
+      ( dashboardVM.id
+      , dashboardVM.projectId
+      , dashboardVM.createdAt
+      , dashboardVM.updatedAt
+      , dashboardVM.createdBy
+      , dashboardVM.baseTemplate
+      , dashboardVM.schema
+      , dashboardVM.starredSince
+      , dashboardVM.homepageSince
+      , dashboardVM.tags
+      , dashboardVM.title
+      , dashboardVM.teams
+      )
+
+
 readDashboardsFromDirectory :: FilePath -> Q Exp
 readDashboardsFromDirectory dir = do
   files <- runIO $ listDirectory dir
@@ -161,4 +203,29 @@ replaceQueryVariables pid mf mt allParams currentTime variable =
 getDashboardById :: DB :> es => Text -> Eff es (Maybe DashboardVM)
 getDashboardById did = dbtToEff $ DBT.queryOne (Query $ encodeUtf8 q) (Only did)
   where
-    q = [text|SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title FROM projects.dashboards WHERE id = ?|]
+    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE id = ?|]
+
+
+deleteDashboardsByIds :: DB :> es => Projects.ProjectId -> V.Vector DashboardId -> Eff es Int64
+deleteDashboardsByIds pid dids = dbtToEff $ DBT.execute (Query $ encodeUtf8 q) (pid, dids)
+  where
+    q = [text|DELETE FROM projects.dashboards WHERE project_id = ? AND id = ANY(?::uuid[])|]
+
+
+addTeamsToDashboards :: DB :> es => Projects.ProjectId -> V.Vector DashboardId -> V.Vector UUID.UUID -> Eff es Int64
+addTeamsToDashboards pid dids teamIds = do
+  dbtToEff $ DBT.execute (Query $ encodeUtf8 q) (teamIds, pid, dids)
+  where
+    q =
+      [text|
+      UPDATE projects.dashboards
+      SET teams = teams || ?::uuid[] 
+      WHERE project_id = ? AND id = ANY(?::uuid[])
+    |]
+
+
+selectDashboardsByTeam :: DB :> es => Projects.ProjectId -> UUID.UUID -> Eff es [DashboardVM]
+selectDashboardsByTeam pid teamId = do
+  dbtToEff $ DBT.query (Query $ encodeUtf8 q) (pid, teamId)
+  where
+    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE project_id = ? AND teams @> ARRAY[?::uuid]|]

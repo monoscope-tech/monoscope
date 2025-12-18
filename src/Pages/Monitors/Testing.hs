@@ -4,6 +4,7 @@ module Pages.Monitors.Testing (
   unifiedMonitorsGetH,
   unifiedMonitorOverviewH,
   statusBadge_,
+  teamAlertsGetH,
 )
 where
 
@@ -25,7 +26,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (statBox_)
-import Pkg.Components.Table (Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), ZeroState (..), col, withAttrs)
+import Pkg.Components.Table (Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
@@ -68,6 +69,17 @@ data UnifiedMonitorDetails
   }
 
 
+teamAlertsGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (TableRows UnifiedMonitorItem))
+teamAlertsGetH pid teamId = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
+  alerts <- dbtToEff $ Monitors.getAlertsByTeamHandle pid teamId
+  currTime <- Time.currentTime
+  let alerts' = V.map (toUnifiedMonitorItem pid currTime) alerts
+
+  addRespHeaders $ TableRows Nothing [] alerts'
+
+
 -- | Unified handler for monitors endpoint showing both alerts and multi-step monitors
 unifiedMonitorsGetH
   :: Projects.ProjectId
@@ -101,7 +113,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
   let currentURL = "/p/" <> pid.toText <> "/monitors?"
   let monitorsTable =
         Table
-          { config = def{elemID = "monitorsListForm"}
+          { config = def{elemID = "monitorsListForm", addPadding = True}
           , columns =
               [ col "" renderMonitorIcon & withAttrs [class_ "shrink-0"]
               , col "" (renderMonitorContent pid) & withAttrs [class_ "w-full"]
@@ -314,21 +326,21 @@ statusBadge_ isLarge status = do
 -- | Threshold box for alerts
 thresholdBox_ :: Int -> Maybe Int -> Text -> Html ()
 thresholdBox_ alert warning direction = do
-  div_ [class_ "flex gap-2 px-4 py-2 items-center border rounded-3xl"] do
+  div_ [class_ "flex gap-2 p-3 items-center border rounded-3xl"] do
     div_ [class_ "flex items-center gap-3"] do
       -- Direction indicator
       div_ [class_ "flex items-center gap-1"] do
-        faSprite_ (if direction == "above" then "arrow-up" else "arrow-down") "regular" "h-4 w-4"
+        -- faSprite_ (if direction == "above" then "arrow-down" else "arrow-down") "regular" "h-4 w-4"
         span_ [class_ "text-xs text-textWeak"] $ toHtml direction
       -- Alert threshold
-      div_ [class_ "text-center"] do
+      div_ [class_ "text-center flex items-center gap-2"] do
         div_ [class_ "text-textError font-medium"] $ show alert
-        small_ [class_ "block text-xs"] "Alert"
+        small_ [class_ "block text-xs text-textWeak"] "Alert"
       -- Warning threshold
       whenJust warning $ \w -> do
-        div_ [class_ "text-center"] do
+        div_ [class_ "text-center flex items-center gap-2"] do
           div_ [class_ "text-textWarning font-medium"] $ show w
-          small_ [class_ "block text-xs"] "Warning"
+          small_ [class_ "block text-xs text-textWeak"] "Warning"
 
 
 -- | Unified monitor overview handler that works for both alerts and collections

@@ -84,6 +84,7 @@ data Config = Config
   , showHeader :: Bool
   , elemID :: Text
   , renderAsTable :: Bool -- True for table mode, False for list mode
+  , addPadding :: Bool -- When True, wraps table in div with px-6 pt-4 pb-2 padding
   }
 
 
@@ -147,13 +148,14 @@ instance Default (Features a) where
 instance Default Config where
   def =
     Config
-      { tableClasses = "table table-zebra table-sm w-full relative"
-      , thClasses = "text-left bg-bgRaised sticky top-0"
+      { tableClasses = "table table-sm w-full relative"
+      , thClasses = "text-left bg-fillWeaker sticky top-0"
       , tdClasses = "px-6 py-4"
-      , containerClasses = "w-full mx-auto px-6 pt-4 space-y-4 pb-16 overflow-y-scroll h-full"
+      , containerClasses = "w-full mx-auto space-y-4 overflow-y-scroll h-full"
       , showHeader = True
       , elemID = "tableContainer"
       , renderAsTable = False
+      , addPadding = False
       }
 
 
@@ -202,38 +204,58 @@ instance ToHtml TabFilter where
 -- Core Rendering Functions
 
 renderTable :: Table a -> Html ()
-renderTable tbl = div_ [class_ tbl.config.containerClasses, id_ $ tbl.config.elemID <> "_page"] do
-  whenJust tbl.features.header id
-  whenJust tbl.features.search renderSearch
+renderTable tbl =
+  let tableContent = div_ [class_ tbl.config.containerClasses, id_ $ tbl.config.elemID <> "_page"] do
+        whenJust tbl.features.header id
+        whenJust tbl.features.search renderSearch
 
-  div_
-    [ class_ "grid surface-raised overflow-hidden my-0 group/grid"
-    , id_ $ tbl.config.elemID <> "_grid"
-    ]
-    do
-      form_
-        [ class_ "flex flex-col divide-y w-full"
-        , id_ tbl.config.elemID
-        , onkeydown_ "return event.key != 'Enter';"
-        ]
-        do
-          when (isJust tbl.features.rowId || isJust tbl.features.sort)
-            $ renderToolbar tbl
+        div_
+          [ class_ "grid surface-raised overflow-hidden my-0 group/grid"
+          , id_ $ tbl.config.elemID <> "_grid"
+          ]
+          do
+            form_
+              [ class_ "flex flex-col divide-y w-full"
+              , id_ tbl.config.elemID
+              , onkeydown_ "return event.key != 'Enter';"
+              ]
+              do
+                when (isJust tbl.features.rowId || isJust tbl.features.sort)
+                  $ renderToolbar tbl
 
-          when (V.null tbl.rows) $ whenJust tbl.features.zeroState renderZeroState
+                when (V.null tbl.rows) $ whenJust tbl.features.zeroState renderZeroState
 
-          div_ [class_ "w-full flex-col"] do
-            whenJust tbl.features.search \_ ->
-              span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
-            div_ [id_ "rowsContainer", class_ "divide-y"] do
-              renderRows tbl
-              whenJust tbl.features.pagination $ uncurry renderPaginationLink
+                div_ [class_ "w-full flex-col"] do
+                  whenJust tbl.features.search \_ ->
+                    span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
+                  div_ [id_ "rowsContainer", class_ "divide-y"] do
+                    renderRows tbl
+                    whenJust tbl.features.pagination $ uncurry renderPaginationLink
+   in if tbl.config.addPadding
+        then div_ [class_ "px-6 pt-4 pb-2"] tableContent
+        else tableContent
 
 
 renderRows :: Table a -> Html ()
 renderRows tbl =
   if tbl.config.renderAsTable
-    then V.mapM_ (renderTableRow tbl) tbl.rows
+    then div_ [class_ "overflow-hidden rounded-lg border border-strokeWeak"] do
+      table_ [class_ tbl.config.tableClasses] do
+        when tbl.config.showHeader
+          $ thead_ do
+            tr_ do
+              when (isJust tbl.features.rowId)
+                $ th_ [class_ $ tbl.config.thClasses <> " w-8"]
+                $ input_
+                  [ term "aria-label" "Select All"
+                  , type_ "checkbox"
+                  , class_ "checkbox h-6 w-6 checked:checkbox-primary"
+                  , [__| on click set .bulkactionItemCheckbox.checked to my.checked |]
+                  ]
+              forM_ tbl.columns \c ->
+                th_ [class_ $ tbl.config.thClasses <> " " <> tbl.config.tdClasses <> maybe "" (" " <>) c.align] $ toHtml c.name
+        tbody_ do
+          V.mapM_ (renderTableRow tbl) tbl.rows
     else V.mapM_ (renderListRow tbl) tbl.rows
 
 
@@ -272,11 +294,11 @@ renderTableRow tbl row =
 
 renderToolbar :: Table a -> Html ()
 renderToolbar tbl =
-  div_ [class_ "flex py-3 gap-8 items-center bg-fillWeaker"] do
-    div_ [class_ "h-4 flex space-x-3 w-8 items-center"] do
-      span_ [class_ "w-2 h-full"] ""
-      when (isJust tbl.features.rowId)
-        $ input_
+  div_ [class_ $ "flex py-3 gap-8 items-center " <> if tbl.config.renderAsTable then "" else "bg-fillWeaker"] do
+    when (isJust tbl.features.rowId && not tbl.config.renderAsTable) do
+      div_ [class_ "h-4 flex space-x-3 w-8 items-center"] do
+        span_ [class_ "w-2 h-full"] ""
+        input_
           [ term "aria-label" "Select All"
           , type_ "checkbox"
           , class_ "checkbox h-6 w-6 checked:checkbox-primary"
@@ -291,7 +313,7 @@ renderToolbar tbl =
           , hxSwap_ "none"
           ]
           do
-            whenJust blkA.icon \icon -> faSprite_ icon "solid" "h-4 w-4 inline-block"
+            whenJust blkA.icon \icon -> faSprite_ icon "regular" "h-4 w-4 inline-block"
             span_ (toHtml blkA.title)
 
       whenJust tbl.features.sort renderSortMenu

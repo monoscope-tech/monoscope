@@ -188,7 +188,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
   let issuesVM = V.map (IssueVM False False currTime filterV) issues
   let issuesTable =
         Table
-          { config = def{elemID = "anomalyListForm"}
+          { config = def{elemID = "anomalyListForm", addPadding = True}
           , columns = issueColumns pid
           , rows = issuesVM
           , features =

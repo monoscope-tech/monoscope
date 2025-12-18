@@ -290,6 +290,13 @@ body, :host {
   .modal-box {
     background-color: var(--color-bgOverlay);
   }
+
+  /* Frosted glass backdrop for modals */
+  .modal-backdrop {
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+
   .dropdown summary {
     list-style: none;
   }
@@ -648,6 +655,8 @@ code, pre, .code, .monospace {
 .badge-clickhouse {
   @apply bg-fillWeak text-textStrong border border-strokeWarning-strong;
 }
+
+.tagify {}
 
 @utility ctable {
   & :where(.table-pin-rows thead tr) {

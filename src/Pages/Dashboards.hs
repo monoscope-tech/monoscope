@@ -1,4 +1,28 @@
-module Pages.Dashboards (dashboardGetH, entrypointRedirectGetH, DashboardGet (..), dashboardsGetH, DashboardsGet (..), dashboardsPostH, DashboardForm (..), dashboardWidgetPutH, dashboardWidgetReorderPatchH, WidgetReorderItem (..), dashboardDeleteH, dashboardRenamePatchH, DashboardRenameForm (..), dashboardDuplicatePostH, WidgetMoveForm (..), dashboardDuplicateWidgetPostH, dashboardWidgetExpandGetH, visTypes, processEagerWidget) where
+module Pages.Dashboards (
+  dashboardGetH,
+  entrypointRedirectGetH,
+  DashboardGet (..),
+  dashboardsGetH,
+  DashboardsGet (..),
+  dashboardsPostH,
+  DashboardForm (..),
+  dashboardWidgetPutH,
+  dashboardWidgetReorderPatchH,
+  WidgetReorderItem (..),
+  dashboardDeleteH,
+  dashboardRenamePatchH,
+  DashboardRenameForm (..),
+  dashboardDuplicatePostH,
+  WidgetMoveForm (..),
+  DashboardBulkActionForm (..),
+  DashboardRes (..),
+  DashboardsGetD (..),
+  dashboardDuplicateWidgetPostH,
+  dashboardWidgetExpandGetH,
+  visTypes,
+  processEagerWidget,
+  dashboardBulkActionPostH,
+) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -13,6 +37,7 @@ import Data.List qualified as L
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Time qualified as Time
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity qualified as DBT
 import Database.PostgreSQL.Entity.DBT (query_)
@@ -32,10 +57,12 @@ import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxPatch_, hxPost_, hxPut_, hxS
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards qualified as Dashboards
+import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users
+import Models.Users.Users qualified as Users
 import NeatInterpolation
 import Network.HTTP.Types.URI qualified as URI
 import Pages.Anomalies qualified as AnomalyList
@@ -44,6 +71,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem (getServiceName)
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
+import Pkg.Components.Table (BulkAction (..), Column, Features (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
@@ -146,20 +174,12 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       [text|
   const tagifyInstances = new Map();
   document.querySelectorAll('.tagify-select-input').forEach(input => {
-    const tgfy = new Tagify(input, {
+    const tgfy = createTagify(input, {
       whitelist: JSON.parse(input.dataset.whitelistjson || "[]"),
       enforceWhitelist: true,
       tagTextProp: 'name',
       mode: input.dataset.mode || "",
-      dropdown: { 
-        enabled: 0,
-        mapValueTo: "name",
-        highlightFirst: true,
-        searchKeys: ["name", "value"],
-        placeAbove: false,
-        maxItems: 50
-      },
-    })
+    });
     
     const inputKey = input.getAttribute('name') || input.id;
     tagifyInstances.set(inputKey, tgfy);
@@ -367,6 +387,18 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
     let issuesVM = V.map (AnomalyList.IssueVM False True now "24h") issues
     pure
       $ widget
+      & #html
+        ?~ renderText
+          ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
+              $ forM_ issuesVM \vm@(AnomalyList.IssueVM hideByDefault _ _ _ issue) ->
+                div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] do
+                  Table.renderRowWithColumns
+                    [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "card-round" else "px-0.5 py-4"
+                    , style_ (if hideByDefault then "display:none" else "")
+                    ]
+                    (AnomalyList.issueColumns issue.projectId)
+                    vm
+          )
       & #html
         ?~ renderText
           ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
@@ -770,23 +802,29 @@ newWidget_ pid currentRange = widgetViewerEditor_ pid Nothing currentRange Nothi
 -- Dashboard List
 --
 
-data DashboardsGet = DashboardsGet
+data DashboardsGetD = DashboardsGetD
   { dashboards :: V.Vector Dashboards.DashboardVM
   , projectId :: Projects.ProjectId
   , embedded :: Bool -- Whether to render in embedded mode (for modals)
+  , teams :: V.Vector ManageMembers.Team
   }
+  deriving (Generic, Show)
+data DashboardsGet
+  = DashboardsGet (PageCtx DashboardsGetD)
+  | DashboardsGetSlim DashboardsGetD
   deriving (Generic, Show)
 
 
 instance ToHtml DashboardsGet where
-  toHtml dash = toHtml $ dashboardsGet_ dash
+  toHtml (DashboardsGet (PageCtx pc dg)) = toHtml $ PageCtx pc $ dashboardsGet_ dg
+  toHtml (DashboardsGetSlim dash) = toHtml $ dashboardsGet_ dash
   toHtmlRaw = toHtml
 
 
 renderDashboardListItem :: Bool -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Html ()
 renderDashboardListItem checked tmplClass title value description icon prview = label_
   [ class_
-      [text| cursor-pointer group/it border border-transparent hover:bg-fillWeaker hover:border-strokeWeak rounded-lg flex p-1.5 gap-2 items-center
+      [text| cursor-pointer group/it text-sm border border-transparent hover:bg-fillWeaker hover:border-strokeWeak rounded-lg flex p-1.5 gap-2 items-center
       group-has-[input:checked]/it:bg-fillWeaker group-has-[input:checked]/it:border-strokeWeak dashboardListItem|]
   , term "data-title" title
   , term "data-description" $ maybeToMonoid description
@@ -806,110 +844,167 @@ renderDashboardListItem checked tmplClass title value description icon prview = 
   ]
   do
     input_ $ [class_ $ "hidden " <> tmplClass, type_ "radio", name_ "file", value_ value] <> [checked_ | checked]
-    span_ [class_ "p-1 px-2 bg-fillWeak rounded-md"] $ faSprite_ (fromMaybe "square-dashed" icon) "regular" "w-4 h-4"
+    span_ [class_ "p-1 px-2 bg-fillWeak rounded-md"] $ faSprite_ (fromMaybe "square-dashed" icon) "regular" "w-3 h-3"
     span_ [class_ "grow"] $ toHtml title
-    span_ [class_ "px-2 p-1 invisible group-has-[input:checked]/it:visible"] $ faSprite_ "chevron-right" "regular" "w-4 h-4"
+    span_ [class_ "px-2 p-1 invisible group-has-[input:checked]/it:visible"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
 
 
-dashboardsGet_ :: DashboardsGet -> Html ()
+dashboardsGet_ :: DashboardsGetD -> Html ()
 dashboardsGet_ dg = do
   unless dg.embedded $ Components.modal_ "newDashboardMdl" "" $ form_
-    [ class_ "grid grid-cols-7 overflow-hidden h-full gap-4 group/md"
+    [ class_ "flex  h-[90vh] gap-4 group/md"
     , hxPost_ ""
+    , hxVals_ "js:{ teams: getSelectedTeams() }"
     ]
     do
-      div_ [class_ "col-span-2 space-y-4"] do
-        strong_ "Create dashboard"
-        label_ [class_ "input input-sm flex items-center "] do
-          faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
-          input_
-            [ type_ "text"
-            , class_ "grow pl-2"
-            , placeholder_ "Search"
-            , [__|
-              on keyup
-                if the event's key is 'Escape' set my value to '' then trigger keyup
-                else show <.dashboardListItem/> in #dashListItemParent when its textContent.toLowerCase() contains my value.toLowerCase() |]
-            ]
-          kbd_ [class_ "kbd kbd-sm"] "/"
-        div_ [class_ "space-y-1", id_ "dashListItemParent"] do
+      div_ [class_ "w-2/7 space-y-4 h-full flex flex-col"] do
+        div_ [class_ "flex flex-col gap-2 border-b pb-4"] do
+          strong_ "Create dashboard"
+          label_ [class_ "input input-sm flex items-center "] do
+            faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
+            input_
+              [ type_ "text"
+              , class_ "grow pl-2"
+              , placeholder_ "Search"
+              , [__|
+               on keyup
+                 if the event's key is 'Escape' set my value to '' then trigger keyup
+                 else show <.dashboardListItem/> in #dashListItemParent when its textContent.toLowerCase() contains my value.toLowerCase() |]
+              ]
+            kbd_ [class_ "kbd kbd-sm"] "/"
+        div_ [class_ "space-y-1 h-auto overflow-auto", id_ "dashListItemParent"] do
           renderDashboardListItem True "tmplRadio0" "Blank dashboard" "" (Just "Get started from a blank slate") (Just "cards-blank") Nothing
           iforM_ dashboardTemplates \idx dashTmpl -> do
             let tmplItemClass = "tmplRadio" <> show (idx + 1)
             renderDashboardListItem False tmplItemClass (maybeToMonoid dashTmpl.title) (maybeToMonoid dashTmpl.file) dashTmpl.description dashTmpl.icon dashTmpl.preview
 
-      div_ [class_ "col-span-5 px-3 py-5 divide-y h-full overflow-y-scroll "] do
-        div_ [class_ "flex gap-3 pb-5"] do
-          div_ $ div_ [class_ "p-2 bg-fillWeaker rounded-lg ", id_ "dItemIcon"] $ faSprite_ "cards-blank" "regular" "w-8 h-8"
-          div_ [class_ "flex-1"] do
-            strong_ [class_ "text-xl", id_ "dItemTitle"] "Custom Dashboard"
-            p_ [class_ "text-sm line-clamp-2 min-h-10", id_ "dItemDescription"] "Get started from a blank slate"
-          div_ [class_ "flex items-center justify-center shrink"] $ button_ [class_ "leading-none rounded-lg p-3 cursor-pointer bg-fillBrand-strong shadow-sm text-white", type_ "submit"] "Select template"
+      div_ [class_ "w-5/7 px-3 py-5 h-full overflow-y-scroll "] do
+        div_ [class_ "flex items-end justify-between gap-2"] do
+          div_ [class_ "flex items-center w-full justify-between gap-2"] do
+            label_ [class_ "flex flex-col gap-1 w-full"] do
+              span_ [class_ "text-sm font-medium"] "Dashboard name"
+              input_
+                [ type_ "text"
+                , class_ "input input-sm w-full shrink-1"
+                , placeholder_ "Dashboard Title"
+                , name_ "title"
+                , required_ "required"
+                ]
+            label_ [class_ "flex flex-col gap-1 w-full"] do
+              span_ [class_ "text-sm font-medium"] "Teams"
+              input_
+                [ type_ "text"
+                , class_ "input input-sm w-full shrink-1"
+                , id_ "teamHandlesInput"
+                , name_ "teams"
+                , placeholder_ "Add teams"
+                ]
+
+          div_ [class_ "flex items-center justify-center shrink"] $ button_ [class_ "btn btn-primary btn-sm", type_ "submit"] "Create"
+        div_ [class_ "py-2 border-b border-b-strokeWeak"] do
+          span_ [class_ "text-sm "] "Using "
+          span_ [class_ "text-sm font-medium", id_ "dItemTitle"] "Custom Dashboard"
+          span_ [class_ "text-sm "] " template"
+          p_ [class_ "text-xs text-textWeak w-full overflow-ellipsis truncate", id_ "dItemDescription"] "Get started from a blank slate"
         div_ [class_ "pt-5"]
-          $ div_ [class_ "bg-[#1e9cff] px-5 py-8 rounded-xl aspect-square w-full flex items-center"]
-          $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full", id_ "dItemPreview"]
+          $ div_ [class_ "bg-fillBrand-strong px-2 py-4 rounded-xl w-full flex items-center"]
+          $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full rounded overflow-hidden", id_ "dItemPreview"]
+        let teamList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> dg.teams
+        script_
+          [text| 
+              window.addEventListener('DOMContentLoaded', (event) => {
+                const tagify = createTagify('#teamHandlesInput', {tagTextProp: 'name',whitelist: $teamList,});
+              }); 
+            const getSelectedTeams = () => {
+                return tagify.value.map(item => item.value);
+            }   
+        |]
 
-  div_ [id_ "itemsListPage", class_ "mx-auto px-6 pt-4 gap-8 w-full flex flex-col h-full overflow-hidden pb-2  group/pg"] do
-    div_ [class_ "flex"] $ label_ [class_ "input input-md flex-1 flex bg-fillWeaker border-strokeWeak shadow-none overflow-hidden items-center gap-2"] do
-      faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
-      input_
-        [ type_ "text"
-        , class_ "grow"
-        , placeholder_ "Search"
-        , [__|on keyup if the event's key is 'Escape' set my value to '' then trigger keyup
-                         else show <.itemListItem/> in #itemsListPage when its textContent.toLowerCase() contains my value.toLowerCase() |]
-        ]
+  div_ [id_ "itemsListPage", class_ "mx-auto gap-8 w-full flex flex-col h-full overflow-hidden group/pg"] do
+    let getTeams x = mapMaybe (\xx -> find (\t -> t.id == xx) dg.teams) (V.toList x.teams)
 
-    when dg.embedded $ h3_ [class_ "text-lg font-normal"] "Select a dashboard below, and the widget will be copied there"
+    let renderCheckboxCol dash =
+          unless dg.embedded do
+            span_ [class_ "w-2 h-full"] ""
+            input_ [term "aria-label" "Select Dashboard", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "dashboardId", value_ dash.id.toText]
 
-    div_ [class_ $ "grid gap-5 " <> if dg.embedded then "grid-cols-1" else "grid-cols-2"] do
-      forM_ dg.dashboards \dashVM -> do
-        let dash = loadDashboardFromVM dashVM
-        let attrs =
-              if dg.embedded
-                then
-                  [ class_ "cursor-pointer"
-                  , hxPut_ ("/p/" <> dg.projectId.toText <> "/dashboards/" <> dashVM.id.toText)
-                  , hxVals_ "js:{...JSON.parse(document.getElementById(document.getElementById('dashboards-modal-widget-id').value + '_widgetEl').dataset.widget)}"
-                  , hxSwap_ "none"
-                  , hxExt_ "json-enc"
-                  ]
-                else [href_ ("/p/" <> dg.projectId.toText <> "/dashboards/" <> dashVM.id.toText)]
-        a_ ([class_ "rounded-xl border border-strokeWeak hover:border-strokeBrand-strong gap-3.5 p-4 bg-fillWeaker flex itemListItem group/i"] <> attrs) do
-          div_ [class_ "flex-1 space-y-2"] do
-            div_ [class_ "flex items-center gap-2"] do
-              span_ [class_ "group-hover/i:underline underline-offset-2"]
-                $ strong_ [class_ "font-medium"] (toHtml $ bool "Untitled" dashVM.title (dashVM.title /= ""))
-              span_ [class_ "leading-none", term "data-tippy-content" "This dashboard is currently your homepage."] do
-                when (isJust dashVM.homepageSince) $ faSprite_ "house" "regular" "w-4 h-4"
-            div_ [class_ "gap-2 flex items-center"] do
-              time_ [class_ "mr-2 text-textWeak", term "data-tippy-content" "Date of dashboard creation", datetime_ $ Utils.formatUTC dashVM.createdAt] $ toHtml $ formatTime defaultTimeLocale "%eth %b %Y" dashVM.createdAt
-              forM_ dashVM.tags (span_ [class_ "badge badge-neutral"] . toHtml @Text)
-          div_ [class_ "flex items-end justify-center gap-5"] do
-            button_ [class_ "leading-none", term "data-tippy-content" "click to star this dashboard"]
-              $ if isJust dashVM.starredSince
-                then faSprite_ "star" "solid" "w-5 h-5"
-                else faSprite_ "star" "regular" "w-5 h-5"
-            let widgetCount = maybe "0" (show . length . (.widgets)) dash
-            div_ [class_ "flex items-end gap-2", term "data-tippy-content" $ "There are " <> widgetCount <> " charts/widgets in this dashboard"] $ faSprite_ "chart-area" "regular" "w-5 h-5 text-iconNeutral" >> (span_ [class_ "leading-none"] . toHtml $ widgetCount)
+    let renderNameCol dash = do
+          let baseUrl = "/p/" <> dg.projectId.toText <> "/dashboards/" <> dash.id.toText
+          a_ [href_ baseUrl, class_ "font-medium text-textStrong hover:text-textBrand"] $ toHtml dash.title
+
+    let renderModifiedCol dash = toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" dash.updatedAt
+
+    let renderTeamsCol dash = forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-blue mr-1"] $ toHtml team.handle
+
+    let renderWidgetsCol dash = toHtml $ maybe "0" (show . length . (.widgets)) $ loadDashboardFromVM dash
+
+    let tableCols =
+          [ Table.col "" renderCheckboxCol & Table.withAttrs [class_ "w-8 flex space-x-3 items-center"]
+          , Table.col "Name" renderNameCol & Table.withAttrs [class_ "flex-1 min-w-0"]
+          , Table.col "Modified" renderModifiedCol & Table.withAttrs [class_ "w-36"]
+          , Table.col "Teams" renderTeamsCol & Table.withAttrs [class_ "w-48"]
+          , Table.col "Widgets" renderWidgetsCol & Table.withAttrs [class_ "w-24"]
+          ]
+
+    let table =
+          Table
+            { config = def{Table.elemID = "dashboardsTable", Table.showHeader = not dg.embedded, Table.addPadding = not dg.embedded}
+            , columns = tableCols
+            , rows = dg.dashboards
+            , features =
+                def
+                  { Table.rowId = Just \dash -> dash.id.toText
+                  , Table.bulkActions =
+                      if dg.embedded
+                        then []
+                        else
+                          [ Table.BulkAction{icon = Just "plus", title = "Add teams", uri = "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/add_teams"}
+                          , Table.BulkAction{icon = Just "trash", title = "Delete", uri = "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/delete"}
+                          ]
+                  , Table.search = if dg.embedded then Nothing else Just Table.ClientSide
+                  }
+            }
+
+    div_ [class_ "w-full", id_ "dashboardsTableContainer"] do
+      toHtml table
 
 
-dashboardsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx DashboardsGet))
-dashboardsGetH pid embeddedM = do
+addTeamsDrowndown_ :: Projects.ProjectId -> V.Vector ManageMembers.Team -> Html ()
+addTeamsDrowndown_ pid teams = div_ [class_ "dropdown dropdown-end"] do
+  label_ [tabindex_ "0", role_ "button", class_ "flex items-center gap-2 btn btn-sm"] do
+    faSprite_ "plus" "regular" "w-3 h-3"
+    span_ "Add teams"
+  ul_ [tabindex_ "0", class_ "dropdown-content rounded w-52 px-0 py-3"] do
+    h6_ [class_ "font-medium mb-2 px-2"] "Add up to 5 teams"
+    forM_ teams \team -> do
+      li_ [class_ "p-0"] do
+        label_ [class_ "flex flex-row items-center gap-1 px-2 text-sm hover:bg-fillWeak"] do
+          input_ [type_ "checkbox", class_ "checkbox checkbox-xs", name_ "teamHandles", value_ $ UUID.toText team.id]
+          span_ [class_ "px-2 py-1"] $ toHtml team.handle
+    button_ [class_ "btn btn-primary btn-xs float-right", hxPost_ $ "/p/" <> pid.toText <> "/dashboards/bulk_action/add_teams", hxSwap_ "none"] "Add teams"
+
+
+dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe UUID.UUID -> ATAuthCtx (RespHeaders DashboardsGet)
+dashboardsGetH pid embeddedM teamIdM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   now <- Time.currentTime
-  dashboards <- dbtToEff $ DBT.selectManyByField @Dashboards.DashboardVM [DBT.field| project_id |] pid
+  dashboards <- case teamIdM of
+    Just teamId -> do
+      ds <- Dashboards.selectDashboardsByTeam pid teamId
+      pure $ V.fromList ds
+    Nothing -> dbtToEff $ DBT.selectManyByField @Dashboards.DashboardVM [DBT.field| project_id |] pid
+  teams <- dbtToEff $ ManageMembers.getTeams pid
 
   -- Check if we're requesting in embedded mode (for modals, etc.)
   let embedded = embeddedM == Just "true" || embeddedM == Just "1" || embeddedM == Just "yes"
 
-  if embedded
+  if embedded || isJust teamIdM
     then -- For embedded mode, use a minimal BWConfig that will still work with ToHtml instance
-      addRespHeaders $ PageCtx def $ DashboardsGet{dashboards, projectId = pid, embedded = True}
+      addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded = True, teams}
+    -- PageCtx def $ DashboardsGetD{dashboards, projectId = pid, embedded = True, teams}
     else do
       freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
-
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
@@ -917,42 +1012,62 @@ dashboardsGetH pid embeddedM = do
               , pageTitle = "Dashboards"
               , freeTierExceeded = freeTierExceeded
               , config = appCtx.config
-              , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "leading-none rounded-xl shadow-sm p-3 cursor-pointer bg-fillBrand-strong text-white"] "New Dashboard"
+              , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn btn-sm btn-primary gap-2"] do
+                  faSprite_ "plus" "regular" "h-4 w-4"
+                  "New Dashboard"
               }
-      addRespHeaders $ PageCtx bwconf $ DashboardsGet{dashboards, projectId = pid, embedded = False}
+      addRespHeaders $ DashboardsGet (PageCtx bwconf $ DashboardsGetD{dashboards, projectId = pid, embedded = False, teams})
 
 
-newtype DashboardForm = DashboardForm
+data DashboardRes = DashboardNoContent | DashboardPostError Text
+  deriving (Generic, Show)
+
+
+instance ToHtml DashboardRes where
+  toHtml DashboardNoContent = ""
+  toHtml (DashboardPostError msg) = div_ [class_ "text-textError"] $ toHtml msg
+  toHtmlRaw = toHtml
+
+
+data DashboardForm = DashboardForm
   { file :: Text
+  , teams :: [UUID.UUID]
+  , title :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 
-dashboardsPostH :: Projects.ProjectId -> DashboardForm -> ATAuthCtx (RespHeaders NoContent)
+dashboardsPostH :: Projects.ProjectId -> DashboardForm -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardsPostH pid form = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
   did <- UUIDId <$> UUID.genUUID
-  let dashM = find (\dashboard -> dashboard.file == Just form.file) dashboardTemplates
-  let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> did.toText
-  dbtToEff
-    $ DBT.insert @Dashboards.DashboardVM
-    $ Dashboards.DashboardVM
-      { id = did
-      , projectId = pid
-      , createdAt = now
-      , updatedAt = now
-      , createdBy = sess.user.id
-      , baseTemplate = if form.file == "" then Nothing else Just form.file
-      , schema = Nothing
-      , starredSince = Nothing
-      , homepageSince = Nothing
-      , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
-      , title = fromMaybe [] $ dashM >>= (.title)
-      }
-  redirectCS redirectURI
-  addRespHeaders NoContent
+  if form.title == ""
+    then do
+      addErrorToast "Dashboard title is required" Nothing
+      addRespHeaders $ DashboardPostError "Dashboard title is required"
+    else do
+      let dashM = find (\dashboard -> dashboard.file == Just form.file) dashboardTemplates
+      let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> did.toText
+      let dbd =
+            Dashboards.DashboardVM
+              { id = did
+              , projectId = pid
+              , createdAt = now
+              , updatedAt = now
+              , createdBy = sess.user.id
+              , baseTemplate = if form.file == "" then Nothing else Just form.file
+              , schema = Nothing
+              , starredSince = Nothing
+              , homepageSince = Nothing
+              , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
+              , title = form.title
+              , teams = V.fromList form.teams
+              }
+      _ <- Dashboards.insert dbd
+      redirectCS redirectURI
+      addRespHeaders DashboardNoContent
 
 
 -- -- Template Haskell splice to generate the list of dashboards by reading the dashboards folder in filesystem
@@ -989,6 +1104,7 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
               , homepageSince = Nothing
               , tags = V.fromList tags
               , title = title
+              , teams = V.empty
               }
         pure did.toText
   redirectTo <-
@@ -1017,11 +1133,13 @@ newtype DashboardRenameForm = DashboardRenameForm
 
 -- | Handler for renaming a dashboard.
 -- It updates the title of the specified dashboard.
-dashboardRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardRenameForm -> ATAuthCtx (RespHeaders (Html ()))
+dashboardRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardRenameForm -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardRenamePatchH pid dashId form = do
   mDashboard <- dbtToEff $ DBT.selectOneByField @Dashboards.DashboardVM [DBT.field| id |] (Only dashId)
   case mDashboard of
-    Nothing -> throwError $ err404{errBody = "Dashboard not found or does not belong to this project"}
+    Nothing -> do
+      addErrorToast "Dashboard not found or does not belong to this project" Nothing
+      addRespHeaders $ DashboardPostError "Dashboard not found or does not belong to this project"
     Just dashVM -> do
       _ <- dbtToEff $ DBT.updateFieldsBy @Dashboards.DashboardVM [[DBT.field| title |]] ([DBT.field| id |], dashId) (Only form.title)
 
@@ -1037,17 +1155,18 @@ dashboardRenamePatchH pid dashId form = do
 
       addSuccessToast "Dashboard renamed successfully" Nothing
       addTriggerEvent "closeModal" ""
-      addRespHeaders (toHtml form.title)
+      addRespHeaders DashboardNoContent
 
 
 -- | Handler for duplicating a dashboard.
 -- It creates a new dashboard with the same content but with "(Copy)" appended to the title.
-dashboardDuplicatePostH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders NoContent)
+dashboardDuplicatePostH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardDuplicatePostH pid dashId = do
   mDashboard <- dbtToEff $ DBT.selectOneByField @Dashboards.DashboardVM [DBT.field| id |] (Only dashId)
-
   case mDashboard of
-    Nothing -> throwError $ err404{errBody = "Dashboard not found or does not belong to this project"}
+    Nothing -> do
+      addErrorToast "Dashboard not found or does not belong to this project" Nothing
+      addRespHeaders $ DashboardPostError "Dashboard not found or does not belong to this project"
     Just dashVM -> do
       (sess, _) <- Sessions.sessionAndProject pid
       now <- Time.currentTime
@@ -1080,13 +1199,13 @@ dashboardDuplicatePostH pid dashId = do
       let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> newDashId.toText
       redirectCS redirectURI
       addSuccessToast "Dashboard was duplicated successfully" Nothing
-      addRespHeaders NoContent
+      addRespHeaders DashboardNoContent
 
 
 -- | Handler for deleting a dashboard.
 -- It verifies the dashboard exists and belongs to the project before deletion.
 -- After deletion, redirects to the dashboard list page.
-dashboardDeleteH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders NoContent)
+dashboardDeleteH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardDeleteH pid dashId = do
   mDashboard <- dbtToEff $ DBT.selectOneByField @Dashboards.DashboardVM [DBT.field| id |] (Only dashId)
   case mDashboard of
@@ -1097,7 +1216,33 @@ dashboardDeleteH pid dashId = do
       let redirectURI = "/p/" <> pid.toText <> "/dashboards"
       redirectCS redirectURI
       addSuccessToast "Dashboard was deleted successfully" Nothing
-      addRespHeaders NoContent
+      addRespHeaders DashboardNoContent
+
+
+data DashboardBulkActionForm = DashboardBulkActionForm
+  { dashboardId :: [Dashboards.DashboardId]
+  , teamHandles :: [UUID.UUID]
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+dashboardBulkActionPostH :: Projects.ProjectId -> Text -> DashboardBulkActionForm -> ATAuthCtx (RespHeaders NoContent)
+dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
+  case action of
+    "delete" -> do
+      _ <- Dashboards.deleteDashboardsByIds pid $ V.fromList dashboardId
+      addSuccessToast "Selected dashboards were deleted successfully" Nothing
+    "add_teams" -> do
+      teams <- dbtToEff $ ManageMembers.getTeamsById pid (V.fromList teamHandles)
+      if V.length teams /= length teamHandles
+        then addErrorToast "Some teams not found or don't belong to this project" Nothing
+        else
+          Dashboards.addTeamsToDashboards pid (V.fromList dashboardId) (V.fromList teamHandles) >>= \case
+            n | n > 0 -> addSuccessToast "Teams added to selected dashboards successfully" Nothing
+            _ -> addErrorToast "No dashboards were updated" Nothing
+    _ -> addErrorToast "Invalid action" Nothing
+  addRespHeaders NoContent
 
 
 -- | Form data for moving a widget between dashboards

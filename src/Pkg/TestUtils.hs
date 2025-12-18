@@ -352,7 +352,7 @@ testSessionHeader :: MonadIO m => Pool Connection -> m (Servant.Headers '[Servan
 testSessionHeader pool = do
   pSessId <-
     Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@monoscope.tech"
-      & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 10])
+      & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 100])
       & runHTTPGolden "./tests/golden/"
       & DB.runDB pool
       & runTime

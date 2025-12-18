@@ -45,6 +45,7 @@ import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps (ATError (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Users qualified as Users
@@ -59,7 +60,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Reports qualified as RP
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Drain qualified as Drain
-import Pkg.Mail (NotificationAlerts (EndpointAlert, ReportAlert, RuntimeErrorAlert), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
+import Pkg.Mail (NotificationAlerts (..), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
@@ -153,7 +154,7 @@ processBackgroundJob :: Config.AuthContext -> Job -> BgJobs -> ATBackgroundCtx (
 processBackgroundJob authCtx job bgJob =
   case bgJob of
     GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
-    QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds
+    QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds authCtx
     NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} -> newAnomalyJob projectId createdAt anomalyType anomalyAction (V.fromList targetHashes)
     InviteUserToProject userId projectId reciever projectTitle' -> do
       userM <- Users.userById userId
@@ -747,32 +748,50 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
   pass
 
 
-queryMonitorsTriggered :: V.Vector Monitors.QueryMonitorId -> ATBackgroundCtx ()
-queryMonitorsTriggered queryMonitorIds = do
+queryMonitorsTriggered :: V.Vector Monitors.QueryMonitorId -> Config.AuthContext -> ATBackgroundCtx ()
+queryMonitorsTriggered queryMonitorIds authCtx = do
   monitorsEvaled <- dbtToEff $ Monitors.queryMonitorsById queryMonitorIds
   forM_ monitorsEvaled \monitorE ->
     if (monitorE.triggerLessThan && monitorE.evalResult >= monitorE.alertThreshold)
       || (not monitorE.triggerLessThan && monitorE.evalResult <= monitorE.alertThreshold)
-      then handleQueryMonitorThreshold monitorE True
+      then handleQueryMonitorThreshold monitorE True authCtx.config.hostUrl
       else do
         if Just True
           == ( monitorE.warningThreshold <&> \warningThreshold ->
                  (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
                    || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
              )
-          then handleQueryMonitorThreshold monitorE False
+          then handleQueryMonitorThreshold monitorE False authCtx.config.hostUrl
           else pass
 
 
-handleQueryMonitorThreshold :: Monitors.QueryMonitorEvaled -> Bool -> ATBackgroundCtx ()
-handleQueryMonitorThreshold monitorE isAlert = do
+handleQueryMonitorThreshold :: Monitors.QueryMonitorEvaled -> Bool -> Text -> ATBackgroundCtx ()
+handleQueryMonitorThreshold monitorE isAlert hostUrl = do
   Log.logTrace "Query Monitors Triggered " monitorE
   _ <- dbtToEff $ Monitors.updateQMonitorTriggeredState monitorE.id isAlert
+  whenJustM (dbtToEff $ Projects.projectById monitorE.projectId) \p -> do
+    teams <- dbtToEff $ ProjectMembers.getTeamsById monitorE.projectId monitorE.teams
+    logMissingTeams monitorE teams
+    issue <- createAndInsertIssue monitorE hostUrl
+    let alert = buildMonitorAlert monitorE issue hostUrl
+    sendNotifications monitorE teams p alert
 
-  -- Create query alert issue
-  let thresholdType = if monitorE.triggerLessThan then "below" else "above"
-      threshold = fromIntegral monitorE.alertThreshold
 
+logMissingTeams :: Monitors.QueryMonitorEvaled -> V.Vector ProjectMembers.Team -> ATBackgroundCtx ()
+logMissingTeams monitorE teams = do
+  Relude.when (not (V.null monitorE.teams) && V.null teams)
+    $ Log.logAttention
+      "Monitor configured with teams but none found (possibly deleted)"
+      (monitorE.id, monitorE.projectId, V.length monitorE.teams)
+  Relude.when (not (V.null monitorE.teams) && V.length teams < V.length monitorE.teams)
+    $ Log.logAttention
+      "Some monitor teams not found (possibly deleted)"
+      (monitorE.id, monitorE.projectId, "expected" :: Text, V.length monitorE.teams, "found" :: Text, V.length teams)
+
+
+createAndInsertIssue :: Monitors.QueryMonitorEvaled -> Text -> ATBackgroundCtx Issues.Issue
+createAndInsertIssue monitorE hostUrl = do
+  let (thresholdType, threshold) = calculateThreshold monitorE
   issue <-
     liftIO
       $ Issues.createQueryAlertIssue
@@ -783,16 +802,48 @@ handleQueryMonitorThreshold monitorE isAlert = do
         threshold
         (fromIntegral monitorE.evalResult :: Double)
         thresholdType
-
   dbtToEff $ Issues.insertIssue issue
+  pure issue
 
-  -- Send notifications
+
+calculateThreshold :: Monitors.QueryMonitorEvaled -> (Text, Double)
+calculateThreshold monitorE =
+  ( if monitorE.triggerLessThan then "below" else "above"
+  , fromIntegral monitorE.alertThreshold
+  )
+
+
+buildMonitorAlert :: Monitors.QueryMonitorEvaled -> Issues.Issue -> Text -> Pkg.Mail.NotificationAlerts
+buildMonitorAlert monitorE issue hostUrl =
+  MonitorsAlert
+    { monitorTitle = monitorE.alertConfig.title
+    , monitorUrl = hostUrl <> "/p/" <> monitorE.projectId.toText <> "/anomalies/" <> issue.id.toText
+    }
+
+
+sendNotifications :: Monitors.QueryMonitorEvaled -> V.Vector ProjectMembers.Team -> Projects.Project -> Pkg.Mail.NotificationAlerts -> ATBackgroundCtx ()
+sendNotifications monitorE teams p alert = do
+  for_ teams \team -> dispatchTeamNotifications team alert monitorE.projectId p.title (emailQueryMonitorAlert monitorE)
+  Relude.when (V.null teams) $ sendFallbackNotifications monitorE
+
+
+sendFallbackNotifications :: Monitors.QueryMonitorEvaled -> ATBackgroundCtx ()
+sendFallbackNotifications monitorE = do
   Relude.when monitorE.alertConfig.emailAll do
     users <- dbtToEff $ Projects.usersByProjectId monitorE.projectId
     forM_ users \u -> emailQueryMonitorAlert monitorE u.email (Just u)
   forM_ monitorE.alertConfig.emails \email -> emailQueryMonitorAlert monitorE email Nothing
   unless (null monitorE.alertConfig.slackChannels) $ sendSlackMessage monitorE.projectId [fmtTrim| 🤖 *Log Alert triggered for `{monitorE.alertConfig.title}`*|]
 
+
+dispatchTeamNotifications :: ProjectMembers.Team -> Pkg.Mail.NotificationAlerts -> Projects.ProjectId -> Text -> (CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
+dispatchTeamNotifications team alert projectId projectTitle emailAction = do
+  for_ team.notify_emails \email -> emailAction (CI.mk email) Nothing
+  for_ team.slack_channels (sendSlackAlert alert projectId projectTitle . Just)
+  for_ team.discord_channels (sendDiscordAlert alert projectId projectTitle . Just)
+
+
+-- Send notifications
 
 -- way to get emails for company. for email all
 -- TODO: based on monitor send emails or slack
@@ -947,9 +998,9 @@ sendReportForProject pid rType = do
 
       Relude.when pr.weeklyNotif $ forM_ pr.notificationsChannel \case
         Projects.NDiscord -> do
-          sendDiscordAlert alert pid pr.title
+          sendDiscordAlert alert pid pr.title Nothing
         Projects.NSlack -> do
-          sendSlackAlert alert pid pr.title
+          sendSlackAlert alert pid pr.title Nothing
         Projects.NPhone -> do
           sendWhatsAppAlert alert pid pr.title pr.whatsappNumbers
         _ -> do
@@ -1060,9 +1111,9 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
       Relude.when project.errorAlerts do
         forM_ project.notificationsChannel \case
           Projects.NSlack ->
-            forM_ errors \err -> do sendSlackAlert (RuntimeErrorAlert err.errorData) pid project.title
+            forM_ errors \err -> do sendSlackAlert (RuntimeErrorAlert err.errorData) pid project.title Nothing
           Projects.NDiscord ->
-            forM_ errors \err -> do sendDiscordAlert (RuntimeErrorAlert err.errorData) pid project.title
+            forM_ errors \err -> do sendDiscordAlert (RuntimeErrorAlert err.errorData) pid project.title Nothing
           Projects.NPhone ->
             forM_ errors \err -> do
               sendWhatsAppAlert (RuntimeErrorAlert err.errorData) pid project.title project.whatsappNumbers
@@ -1163,8 +1214,8 @@ processAPIChangeAnomalies pid targetHashes = do
       let alert = EndpointAlert project.title (V.fromList endpointInfo) (fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes)
 
       forM_ project.notificationsChannel \case
-        Projects.NSlack -> sendSlackAlert alert pid project.title
-        Projects.NDiscord -> sendDiscordAlert alert pid project.title
+        Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
+        Projects.NDiscord -> sendDiscordAlert alert pid project.title Nothing
         Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
         Projects.NEmail -> do
           forM_ users \u -> do

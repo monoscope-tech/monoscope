@@ -58,6 +58,7 @@ data AlertUpsertForm = AlertUpsertForm
   , conditionType :: Maybe Text
   , source :: Maybe Text
   , vizType :: Maybe Text
+  , teams :: [UUID.UUID]
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -104,6 +105,7 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , deletedAt = Nothing
         , deactivatedAt = Nothing
         , visualizationType = fromMaybe "timeseries" alertForm.vizType
+        , teams = V.fromList alertForm.teams
         }
 
 
@@ -242,7 +244,7 @@ monitorsPageContent_ :: Projects.ProjectId -> V.Vector Monitors.QueryMonitor -> 
 monitorsPageContent_ pid monitors = do
   let activeMonitors = V.filter (isNothing . (.deactivatedAt)) monitors
       inactiveMonitors = V.filter (isJust . (.deactivatedAt)) monitors
-  section_ [class_ "pt-2 mx-auto px-14 w-full flex flex-col gap-4"] do
+  section_ [class_ "pt-4 pb-2 mx-auto px-6 w-full flex flex-col gap-4"] do
     when (V.null monitors) do
       div_ [class_ "flex flex-col items-center justify-center py-16 text-center"] do
         faSprite_ "bell-slash" "regular" "h-12 w-12 text-iconNeutral mb-4"

@@ -50,7 +50,10 @@ import Utils (checkFreeTierExceeded, faSprite_, formatUTC, getServiceColors, lev
 
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
+import Models.Apis.Monitors (MonitorAlertConfig (..))
 import Models.Apis.Monitors qualified as Monitors
+import Models.Projects.ProjectMembers (TeamVM (..))
+import Models.Projects.ProjectMembers qualified as ManageMembers
 import Pkg.AI (callOpenAIAPI, systemPrompt)
 import Pkg.AI qualified as AI
 
@@ -461,6 +464,9 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
 
+  -- Fetch teams
+  teams <- dbtToEff $ ManageMembers.getTeams pid
+
   patterns <- case effectiveVizType of
     Just "patterns" -> do
       patternsResult <- RequestDumps.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
@@ -567,6 +573,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
             , patternsToSkip
             , targetPattern = pTargetM
             , project = project
+            , teams
             }
 
       let jsonResponse = LogsGetJson finalVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap resultCount
@@ -653,6 +660,7 @@ data ApiLogsPageData = ApiLogsPageData
   , patternsToSkip :: Int
   , targetPattern :: Maybe Text
   , project :: Projects.Project
+  , teams :: V.Vector ManageMembers.Team
   }
 
 
@@ -855,7 +863,7 @@ apiLogsPage page = do
         div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block"] $ resizer_ "alert_container" "alert_width" False
 
         div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block", id_ "alert_container", style_ "width: 500px;"] do
-          alertConfigurationForm_ page.project page.alert
+          alertConfigurationForm_ page.project page.alert page.teams
 
         div_ [class_ $ "transition-opacity duration-200 hidden group-has-[#viz-logs:checked]/pg:block " <> if isJust page.targetEvent then "" else "opacity-0 pointer-events-none hidden", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
 
@@ -954,8 +962,8 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
 
 
 -- | Render alert configuration form for creating log-based alerts
-alertConfigurationForm_ :: Projects.Project -> Maybe Monitors.QueryMonitor -> Html ()
-alertConfigurationForm_ project alertM = do
+alertConfigurationForm_ :: Projects.Project -> Maybe Monitors.QueryMonitor -> V.Vector ManageMembers.Team -> Html ()
+alertConfigurationForm_ project alertM teams = do
   let pid = project.id
       isByos = project.paymentPlan == "Bring your own storage"
   div_ [class_ "bg-fillWeaker h-full flex flex-col group/alt"] do
@@ -980,7 +988,7 @@ alertConfigurationForm_ project alertM = do
       form_
         [ id_ "alert-form"
         , hxPost_ $ "/p/" <> pid.toText <> "/monitors/alerts"
-        , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType()}"
+        , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType(), teams: getSelectedTeams()}"
         , hxSwap_ "none"
         , class_ "flex flex-col gap-3"
         , [__|on htmx:afterRequest
@@ -1188,6 +1196,37 @@ alertConfigurationForm_ project alertM = do
                     div_ [class_ "flex items-center gap-1.5 ml-2 hidden", id_ "stopAfterInput"] do
                       input_ [type_ "number", class_ "input input-sm w-16", value_ "5", name_ "stopAfter", min_ "1", max_ "100"]
                       span_ [class_ "text-xs text-textWeak"] "occurrences"
+              -- Teams
+              div_ [class_ "border-t border-strokeWeak pt-4 mt-4"] do
+                div_ [class_ "flex flex-col gap-1"] do
+                  span_ [class_ "text text-sm"] "Teams"
+                  span_ [class_ "text-xs text-textWeak"] "Add teams to notify (if no team is added, project level notification channels will be used)"
+                textarea_ [class_ "input max-h-max w-full mt-2 resize-none", name_ "teams"] ""
+              let teamList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> teams
+                  -- alertConfig.teams is a list of team IDs
+                  -- teams is a list of TeamVM with id and name
+                  -- map all team IDs to names
+                  teamName tId teamVMs =
+                    case V.find (\t -> t.id == tId) teamVMs of
+                      Just t -> t.handle
+                      Nothing -> "Unknown Team"
+
+                  existingTeams = decodeUtf8 $ AE.encode $ case alertM of
+                    Nothing -> []
+                    Just am -> (\tId -> AE.object ["name" AE..= teamName tId teams, "value" AE..= tId]) <$> am.teams
+              script_
+                [text|
+                window.addEventListener('DOMContentLoaded', () => {
+                      const tagify = createTagify('#alert-form textarea[name="teams"]', {
+                      tagTextProp: 'name',
+                      whitelist: $teamList,
+                    });
+                  tagify.addTags($existingTeams);
+                })
+                const getSelectedTeams = () => {
+                    return tagify.value.map(item => item.value);
+                }
+              |]
 
               -- Recipients checkbox with better spacing
               div_ [class_ "flex items-center gap-2 mt-4 pt-3 border-t border-strokeWeak"] do

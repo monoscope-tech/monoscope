@@ -19,6 +19,8 @@ module Pages.Projects (
   ManageMembersForm (..),
   manageSubGetH,
   ManageMembers (..),
+  -- ManageTeams
+  manageTeamsGetH,
   -- CreateProject
   createProjectPostH,
   createProjectFormV,
@@ -33,6 +35,12 @@ module Pages.Projects (
   CreateProject (..),
   pricingUpdateGetH,
   CreateProjectResp (..),
+  manageTeamPostH,
+  manageTeamBulkActionH,
+  TeamForm (..),
+  teamGetH,
+  ManageTeams (..),
+  TBulkActionForm (..),
 )
 where
 
@@ -42,6 +50,7 @@ import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64
 import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
+import Data.Char (isAlphaNum, isDigit, isLower)
 import Data.Default (Default (..))
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq
@@ -49,6 +58,7 @@ import Data.Effectful.Wreq qualified as W
 import Data.List.Unique (uniq)
 import Data.Pool (withResource)
 import Data.Text qualified as T
+import Data.Time
 import Data.UUID qualified as RealUUID
 import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
@@ -64,7 +74,9 @@ import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.Slack (SlackData, getDiscordDataByProjectId, getProjectSlackData)
+import Models.Apis.Slack qualified as Slack
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
+import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -73,7 +85,12 @@ import NeatInterpolation (text)
 import Network.Wreq (getWith)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper)
+import Pages.Bots.Discord qualified as Discord
+import Pages.Bots.Slack qualified as SlackP
+import Pages.Bots.Utils qualified as BotUtils
 import Pages.Components (paymentPlanPicker)
+import Pkg.Components.Table (BulkAction (..), Table (..))
+import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
 import Pkg.ConvertKit qualified as ConvertKit
 import Pkg.DeriveUtils (UUIDId (..))
@@ -84,7 +101,7 @@ import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers)
 import Servant.Server (err302, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, redirectCS)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, redirectCS)
 import Utils (faSprite_, insertIfNotExist, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
 import "base64" Data.ByteString.Base64 qualified as B64
@@ -483,10 +500,8 @@ manageMembersPostH pid onboardingM form = do
         . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
-      unless (null deletedUAndP)
-        $ void
-        . dbtToEff
-        $ ProjectMembers.softDeleteProjectMembers deletedUAndP
+      whenJust (nonEmpty deletedUAndP) \ne ->
+        void . dbtToEff $ ProjectMembers.softDeleteProjectMembers ne
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
       if isJust onboardingM
@@ -499,6 +514,410 @@ manageMembersPostH pid onboardingM form = do
     else do
       addErrorToast "Only one member allowed on Free plan" Nothing
       addRespHeaders $ ManageMembersPost projMembers
+
+
+data TeamForm = TeamForm
+  { teamName :: Text
+  , teamDescription :: Text
+  , teamHandle :: Text
+  , teamMembers :: V.Vector Users.UserId
+  , notifEmails :: V.Vector Text
+  , slackChannels :: V.Vector Text
+  , discordChannels :: V.Vector Text
+  , phoneNumbers :: V.Vector Text
+  , teamId :: Maybe UUID.UUID
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, FromForm)
+
+
+validateTeamDetails :: Text -> Text -> V.Vector Text -> Either Text ()
+validateTeamDetails name handle notifEmails = validateName name >> validateHandle handle >> forM_ notifEmails validateEmail
+  where
+    validateName n
+      | T.null (T.strip n) = Left "Team name is required"
+      | T.length (T.strip n) < 3 = Left "Team name must be at least 3 characters"
+      | T.length n > 100 = Left "Team name must be less than 100 characters"
+      | not $ T.all (\c -> isAlphaNum c || c `elem` [' ', '-', '_']) n = Left "Invalid characters in team name"
+      | otherwise = pass
+    validateHandle h
+      | T.null h = Left "Handle is required"
+      | T.length h < 3 = Left "Handle must be at least 3 characters"
+      | T.length h > 50 = Left "Handle must be less than 50 characters"
+      | not $ all (\c -> isLower c || isDigit c || c == '-') (toString h) = Left "Handle must be lowercase, no spaces, and hyphens only"
+      | not (isLower (T.head h)) = Left "Handle must start with a lowercase letter"
+      | otherwise = pass
+    validateEmail email = case T.splitOn "@" email of
+      [localPart, domain] | not (T.null localPart) && not (T.null domain) && T.elem '.' domain -> pass
+      _ -> Left $ "Invalid email format: " <> email
+
+
+manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
+manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers, notifEmails, slackChannels, discordChannels, phoneNumbers, teamId} tmView = do
+  (sess, _) <- Sessions.sessionAndProject pid
+  let currUserId = sess.persistentSession.userId
+  userPermission <- dbtToEff $ ProjectMembers.getUserPermission pid currUserId
+  projMembers <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
+  let validMemberIds = V.map (.userId) projMembers
+      invalidMembers = V.filter (`V.notElem` validMemberIds) teamMembers
+      teamDetails = ProjectMembers.TeamDetails teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels phoneNumbers
+      validationErr msg = addErrorToast msg Nothing >> addRespHeaders (ManageTeamsPostError msg)
+  case (userPermission == Just ProjectMembers.PAdmin, V.null invalidMembers, validateTeamDetails teamName teamHandle notifEmails, teamId) of
+    (False, _, _, _) -> validationErr "Only admins can create or update teams"
+    (_, False, _, _) -> validationErr "Some team members are not project members"
+    (_, _, Left e, _) -> addErrorToast e Nothing >> addReswap "" >> addRespHeaders (ManageTeamsPostError e)
+    (_, _, _, Just tid) -> do
+      _ <- dbtToEff $ ProjectMembers.updateTeam pid tid teamDetails
+      addSuccessToast "Team updated successfully" Nothing
+      maybe (manageTeamsGetH pid (Just "from_post")) (\_ -> teamGetH pid teamHandle (Just "main-page")) tmView
+    (_, _, _, Nothing) -> do
+      rowsAffected <- dbtToEff $ ProjectMembers.createTeam pid currUserId teamDetails
+      if rowsAffected > 0
+        then addSuccessToast "Team saved successfully" Nothing >> manageTeamsGetH pid (Just "from_post")
+        else validationErr "Team handle already exists for this project."
+
+
+newtype TBulkActionForm = TBulkActionForm
+  { teamId :: [UUID.UUID]
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (FromForm)
+
+
+manageTeamBulkActionH :: Projects.ProjectId -> Text -> TBulkActionForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
+manageTeamBulkActionH pid action TBulkActionForm{teamId} listViewM = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
+  case action of
+    "delete" -> do
+      teamVm <- dbtToEff $ ProjectMembers.getTeamsById pid $ V.fromList teamId
+      let canDelete = all (\team -> Just sess.user.id == team.created_by) teamVm
+      if canDelete
+        then do
+          _ <- dbtToEff $ ProjectMembers.deleteTeams pid $ V.fromList teamId
+          when (isNothing listViewM) do
+            redirectCS ("/p/" <> pid.toText <> "/manage_teams")
+          addRespHeaders ManageTeamsDelete
+        else do
+          addErrorToast "You may only delete teams you own" Nothing
+          addRespHeaders $ ManageTeamsPostError "You may only delete teams you own"
+    _ -> do
+      addErrorToast "Invalid action" Nothing
+      addRespHeaders $ ManageTeamsPostError "Invalid action"
+
+
+data ManageTeams
+  = ManageTeamsGet (PageCtx (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel], V.Vector ProjectMembers.TeamVM))
+  | ManageTeamsGet' (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel], V.Vector ProjectMembers.TeamVM)
+  | ManageTeamsPostError Text
+  | ManageTeamsDelete
+  | ManageTeamGet (PageCtx (Projects.ProjectId, ProjectMembers.TeamVM, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel]))
+  | ManageTeamGet' (Projects.ProjectId, ProjectMembers.TeamVM, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel])
+  | ManageTeamGetError (PageCtx (Projects.ProjectId, Text))
+
+
+instance ToHtml ManageTeams where
+  toHtml (ManageTeamsGet (PageCtx bwconf (pid, members, slackChannels, discordChannels, teams))) = toHtml $ PageCtx bwconf $ manageTeamsPage pid members slackChannels discordChannels teams
+  toHtml (ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams)) = toHtml $ manageTeamsPage pid members slackChannels discordChannels teams
+  toHtml (ManageTeamsPostError msg) = span_ [] ""
+  toHtml ManageTeamsDelete = toHtml ""
+  toHtml (ManageTeamGet (PageCtx bwconf (pid, team, members, slackChannels, discordChannels))) = toHtml $ PageCtx bwconf $ teamPage pid team members slackChannels discordChannels
+  toHtml (ManageTeamGet' (pid, team, members, slackChannels, discordChannels)) = toHtml $ teamPage pid team members slackChannels discordChannels
+  toHtml (ManageTeamGetError (PageCtx bwconf (pid, message))) = toHtml $ PageCtx bwconf $ teamPageNF pid message
+  toHtmlRaw = toHtml
+
+
+manageTeamsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
+manageTeamsGetH pid layoutM = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
+  projMembers <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
+  slackDataM <- Slack.getProjectSlackData pid
+  channels <- case slackDataM of
+    Just slackData -> do
+      channels' <- SlackP.getSlackChannels appCtx.env.slackBotToken slackData.teamId
+      case channels' of
+        Just chs -> return chs.channels
+        Nothing -> return []
+    Nothing -> return []
+
+  discordDataM <- Slack.getDiscordDataByProjectId pid
+  discordChannels <- case discordDataM of
+    Just discordData -> Discord.getDiscordChannels appCtx.env.discordBotToken discordData.guildId
+    Nothing -> return []
+  teams <- dbtToEff $ ProjectMembers.getTeamsVM pid
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess
+          , pageTitle = "Manage teams"
+          , currProject = Just project
+          , isSettingsPage = True
+          , config = appCtx.config
+          }
+  case layoutM of
+    Just _ -> do
+      addRespHeaders $ ManageTeamsGet' (pid, projMembers, channels, discordChannels, teams)
+    _ -> do
+      addRespHeaders $ ManageTeamsGet (PageCtx bwconf (pid, projMembers, channels, discordChannels, teams))
+
+
+manageTeamsPage :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberVM -> [BotUtils.Channel] -> [BotUtils.Channel] -> V.Vector ProjectMembers.TeamVM -> Html ()
+manageTeamsPage pid projMembers channels discordChannels teams = do
+  let whiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
+  let channelWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]) <$> channels
+  let discordWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]) <$> discordChannels
+  section_ [id_ "main-content", class_ "w-full py-8"] do
+    div_ [class_ "p-6 w-full"] do
+      div_ [class_ "mb-8 w-full flex items-center justify-between"] do
+        div_ [class_ "flex flex-col gap-2"] do
+          h2_ [class_ "text-textStrong text-3xl font-semibold"] "Teams"
+          p_ [class_ "text-textWeak text-sm"] "Manage your project teams and their access"
+        label_ [class_ "btn btn-primary btn-sm text-white", Lucid.for_ "n-new-team-modal"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Team")
+        input_ [type_ "checkbox", id_ "n-new-team-modal", class_ "modal-toggle"]
+        teamModal pid Nothing whiteList channelWhiteList discordWhiteList False
+      let renderTeamCheckboxCol team = input_ [term "aria-label" "Select Team", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "teamId", value_ $ UUID.toText team.id]
+      let renderTeamNameCol team = nameCell pid team.name team.description team.handle
+      let renderModifiedCol team = toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" team.updated_at
+      let renderMembersCol team = memberCell team.members
+      let renderNotificationsCol = notifsCell
+
+      let tableCols =
+            [ Table.col "" renderTeamCheckboxCol & Table.withAttrs [class_ "w-8"]
+            , Table.col "Name" renderTeamNameCol & Table.withAttrs [class_ "flex-1"]
+            , Table.col "Modified" renderModifiedCol & Table.withAttrs [class_ "w-36"]
+            , Table.col "Members" renderMembersCol & Table.withAttrs [class_ "w-48"]
+            , Table.col "Notifications" renderNotificationsCol & Table.withAttrs [class_ "w-32"]
+            ]
+
+      let table =
+            Table
+              { config = def{Table.elemID = "teams_table"}
+              , columns = tableCols
+              , rows = teams
+              , features =
+                  def
+                    { Table.rowId = Just \team -> UUID.toText team.id
+                    , Table.bulkActions =
+                        [ Table.BulkAction{icon = Just "trash", title = "Delete", uri = "/p/" <> pid.toText <> "/manage_teams/bulk_action/delete"}
+                        ]
+                    , Table.search = Just Table.ClientSide
+                    }
+              }
+      div_ [class_ "w-full"] do
+        toHtml table
+
+
+nameCell :: Projects.ProjectId -> Text -> Text -> Text -> Html ()
+nameCell pid name description handle = do
+  a_ [class_ "flex items-center gap-2", href_ ("/p/" <> pid.toText <> "/manage_teams/" <> handle)] do
+    span_ [class_ "text-textStrong font-medium"] $ toHtml name
+    span_ [class_ "text-textWeak text-sm overflow-ellipsis truncate "] $ toHtml description
+
+
+memberCell :: V.Vector ProjectMembers.TeamMemberVM -> Html ()
+memberCell members = do
+  div_ [class_ "inline-block flex -space-x-2"] do
+    forM_ members $ \m -> do
+      div_ [class_ "inline-block mx-0.5", term "data-tippy-content" m.memberName]
+        $ img_ [class_ "inline-block h-6 w-6 rounded-full border border-strokeWeak ", src_ m.memberAvatar, alt_ "User avatar"]
+
+
+notifsCell :: ProjectMembers.TeamVM -> Html ()
+notifsCell team = do
+  div_ [class_ "flex items-center gap-2"] do
+    unless (V.null team.slack_channels) do
+      div_ [term "data-tippy-content" "Slack"] do
+        faSprite_ "slack" "solid" "h-3.5 w-3.5"
+    unless (V.null team.discord_channels) do
+      div_ [term "data-tippy-content" "Discord"] do
+        faSprite_ "discord" "solid" "h-3.5 w-3.5"
+    unless (V.null team.notify_emails) do
+      div_ [term "data-tippy-content" "Email"] do
+        faSprite_ "envelope" "solid" "h-3.5 w-3.5"
+
+
+teamGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
+teamGetH pid handle layoutM = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
+  teamVm <- dbtToEff $ ProjectMembers.getTeamByHandle pid handle
+  projMembers <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
+  slackDataM <- Slack.getProjectSlackData pid
+  channels <- case slackDataM of
+    Just slackData -> do
+      channels' <- SlackP.getSlackChannels appCtx.env.slackBotToken slackData.teamId
+      case channels' of
+        Just chs -> return chs.channels
+        Nothing -> return []
+    Nothing -> return []
+
+  discordDataM <- Slack.getDiscordDataByProjectId pid
+  discordChannels <- case discordDataM of
+    Just discordData -> Discord.getDiscordChannels appCtx.env.discordBotToken discordData.guildId
+    Nothing -> return []
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess
+          , pageTitle = "Team details"
+          , currProject = Just project
+          , config = appCtx.config
+          }
+  case teamVm of
+    Just team -> case layoutM of
+      Just _ -> addRespHeaders $ ManageTeamGet' (pid, team, projMembers, channels, discordChannels)
+      _ -> addRespHeaders $ ManageTeamGet (PageCtx bwconf (pid, team, projMembers, channels, discordChannels))
+    Nothing -> addRespHeaders $ ManageTeamGetError (PageCtx bwconf (pid, handle))
+
+
+teamPage :: Projects.ProjectId -> ProjectMembers.TeamVM -> V.Vector ProjectMembers.ProjectMemberVM -> [BotUtils.Channel] -> [BotUtils.Channel] -> Html ()
+teamPage pid team projMembers slackChannels discordChannels = do
+  let whiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
+  let channelWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]) <$> slackChannels
+  let discordWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]) <$> discordChannels
+  section_ [id_ "main-content", class_ "w-full h-full"] do
+    div_ [class_ "flex h-full border-t border-strokeWeak"] do
+      div_ [class_ "p-4 w-4/12 space-y-6 mx-auto h-full overflow-y-auto"] do
+        div_ [] do
+          div_ [class_ "flex items-center gap-3"] do
+            h2_ [class_ "text-xl font-semibold"] $ toHtml team.name
+            span_ [class_ "text-textWeak flex items-center gap-1 text-sm"] do
+              faSprite_ "copy" "regular" "w-3 h-3"
+              toHtml team.handle
+          p_ [class_ "text-textWeak mt-3 text-sm"] $ toHtml team.description
+        div_ [class_ "rounded-lg p-4 border border-strokeWeak"] do
+          div_ [class_ "flex items-center justify-between mb-2"] do
+            span_ [class_ "flex items-center gap-2 font-semibold py-2"] do
+              faSprite_ "users" "regular" "h-5 w-5"
+              toHtml "Members"
+              span_ [class_ "text-textWeak"] ("(" <> show (V.length team.members) <> ")")
+            label_ [class_ "btn btn-outline border border-strokeWeak btn-xs", Lucid.for_ $ team.handle <> "-new-team-modal"] (faSprite_ "plus" "regular" "h-3 w-3 mr-1" >> "Add")
+            input_ [type_ "checkbox", id_ $ team.handle <> "-new-team-modal", class_ "modal-toggle"]
+            teamModal pid (Just team) whiteList channelWhiteList discordWhiteList True
+          div_ [] do
+            forM_ team.members \m -> do
+              div_ [class_ "flex flex-col gap-1 py-3 "] do
+                div_ [class_ "flex  gap-2 text-sm"] do
+                  img_ [src_ m.memberAvatar, class_ "w-5 h-5 rounded-full border border-strokeWeak"]
+                  span_ [] $ toHtml m.memberName
+                span_ [class_ "text-textWeak text-xs"] $ toHtml m.memberEmail
+
+        div_ [class_ "p-4 rounded-lg border border-strokeWeak"] do
+          div_ [class_ "flex items-center justify-between mb-2"] do
+            span_ [class_ "flex items-center gap-2 py-2 font-semibold"] do
+              faSprite_ "bell" "regular" "h-5 w-5"
+              "Notifications"
+            label_ [class_ "btn btn-outline border border-strokeWeak btn-xs", Lucid.for_ $ team.handle <> "-new-team-modal"] (faSprite_ "plus" "regular" "h-3 w-3 mr-1" >> "Add")
+          div_ [] do
+            div_ [class_ "flex flex-col gap-2 py-3"] do
+              div_ [class_ "flex items-center text-sm gap-2 font-medium"] do
+                faSprite_ "envelope" "regular" "h-4 w-4"
+                "Email addresses"
+              div_ [class_ "flex items-center gap-2 text-xs text-textWeak"] do
+                when (V.null team.notify_emails) $ span_ [] "No emails added"
+                forM_ team.notify_emails (span_ [] . toHtml)
+            div_ [class_ "flex flex-col gap-2 py-3"] do
+              div_ [class_ "flex items-center text-sm gap-2 font-medium"] do
+                faSprite_ "slack" "solid" "h-4 w-4"
+                "Slack channels"
+              div_ [class_ "flex items-center gap-2 text-xs text-textWeak"] do
+                when (V.null team.slack_channels) $ span_ [] "No slack channel configured"
+                forM_ team.slack_channels \e -> do
+                  let tar = maybe e (.channelName) $ find (\x -> x.channelId == e) slackChannels
+                  span_ [] $ toHtml tar
+            div_ [class_ "flex flex-col gap-2 py-3"] do
+              div_ [class_ "flex items-center text-sm gap-2 font-medium"] do
+                faSprite_ "discord" "solid" "h-4 w-4"
+                "Discord channels"
+              div_ [class_ "flex items-center gap-2 text-xs text-textWeak"] do
+                when (V.null team.discord_channels) $ span_ [] "No discord channel configured"
+                forM_ team.discord_channels \e -> do
+                  let tar = maybe e (.channelName) $ find (\x -> x.channelId == e) discordChannels
+                  span_ [] $ toHtml tar
+
+      div_ [class_ "h-full w-8/12 overflow-y-auto p-4 space-y-6"] do
+        monitorsSection pid team.id
+        dashboardsSection pid team.id
+        servicesSection pid team.id
+
+
+monitorsSection :: Projects.ProjectId -> UUID.UUID -> Html ()
+monitorsSection pid teamId = div_ [class_ "rounded-xl border border-strokeWeak overflow-x-hidden"] do
+  div_
+    [ class_ "flex items-center justify-between w-full p-2 hover:bg-fillWeaker cursor-pointer"
+    , [__|on click toggle .hidden on the next <div/> 
+           then toggle .rotate-270 on the first <button/> in me|]
+    ]
+    do
+      h4_ [class_ "text-sm font-medium"] (faSprite_ "list-check" "regular" "h-4 w-4 mr-2" >> "Alerts")
+      div_ [class_ "flex items-center gap-4"] do
+        label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
+          faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
+          input_ [type_ "text", placeholder_ "Search alerts...", class_ "", [__| on click halt|]]
+        button_ [class_ ""] do
+          faSprite_ "p-chevron-down" "regular" "h-4 w-4"
+
+  div_ [class_ "p-3 border-t border-strokeWeak w-full max-h-96 overflow-y-auto", id_ "monitors-section"] do
+    a_ [hxGet_ ("/p/" <> pid.toText <> "/monitors/alerts/team/" <> UUID.toText teamId), hxTrigger_ "intersect once", hxTarget_ "#monitors-section", hxSwap_ "outerHTML"] ""
+    span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-sm"] ""
+    emptySectionState "No monitors are currently linked to this team"
+
+
+dashboardsSection :: Projects.ProjectId -> UUID.UUID -> Html ()
+dashboardsSection pid teamId = div_ [class_ "rounded-xl border border-strokeWeak overflow-x-hidden"] do
+  div_
+    [ class_ "flex items-center justify-between w-full p-2 bg-fillWeaker cursor-pointer"
+    , [__|on click toggle .hidden on the next <div/>
+         then toggle .rotate-270 on the first <button/> in me
+    |]
+    ]
+    do
+      h4_ [class_ "text-sm font-medium"] (faSprite_ "chart-area" "regular" "h-4 w-4 mr-2" >> "Dashboards")
+      div_ [class_ "flex items-center gap-4"] do
+        label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
+          faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
+          input_ [type_ "text", placeholder_ "Search dashboards...", class_ "", [__| on click halt|]]
+        button_ [class_ ""] do
+          faSprite_ "p-chevron-down" "regular" "h-4 w-4"
+  div_ [class_ "-mt-4 w-full max-h-96 overflow-y-auto", id_ "dashboards-section"] do
+    a_ [hxGet_ ("/p/" <> pid.toText <> "/dashboards/?teamId=" <> UUID.toText teamId), hxTrigger_ "intersect once", hxTarget_ "#dashboards-section", hxSwap_ "innerHTML"] ""
+    span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-sm"] ""
+    emptySectionState "No dashboards are currently linked to this team"
+
+
+servicesSection :: Projects.ProjectId -> UUID.UUID -> Html ()
+servicesSection pid teamId = div_ [class_ "rounded-xl border border-strokeWeak overflow-x-hidden"] do
+  div_
+    [ class_ "flex items-center justify-between w-full p-2 hover:bg-fillWeaker cursor-pointer"
+    , [__|on click toggle .hidden on the next <div/>
+         then toggle .rotate-270 on the first <button/> in me
+    |]
+    ]
+    do
+      h4_ [class_ "text-sm font-medium"] (faSprite_ "server" "regular" "h-4 w-4 mr-2" >> "Services")
+      div_ [class_ "flex items-center gap-4"] do
+        label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
+          faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
+          input_ [type_ "text", placeholder_ "Search services...", class_ "", [__| on click halt|]]
+        button_ [class_ ""] do
+          faSprite_ "p-chevron-down" "regular" "h-4 w-4"
+  div_ [class_ "p-3 border-t w-full border-strokeWeak"] do
+    emptySectionState "No services are currently linked to this team"
+
+
+emptySectionState :: Text -> Html ()
+emptySectionState message =
+  div_ [class_ "flex flex-col items-center justify-center py-10 text-center text-textWeak gap-3"] do
+    faSprite_ "empty" "regular" "h-8 w-8 text-textWeak"
+    div_ [class_ "text-sm"] $ toHtml message
+    button_ [class_ "btn btn-primary btn-sm"] "Create dashboard"
+
+
+teamPageNF :: Projects.ProjectId -> Text -> Html ()
+teamPageNF pid handle = do
+  section_ [id_ "main-content", class_ "w-full py-16"] do
+    div_ [class_ "p-6 w-[606px] mx-auto"] do
+      h2_ [class_ "text-textStrong mb-4 text-xl font-semibold"] $ "Team not found: " <> toHtml handle
+      p_ [class_ "text-textWeak text-sm leading-tight"] "We couldn't find the team you're looking for."
 
 
 manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ManageMembers)
@@ -598,7 +1017,7 @@ getSubscriptionPortalUrl subId apiKey = do
   case subId of
     Nothing -> return Nothing
     Just sid -> do
-      let hds = header "Authorization" .~ ["Bearer " <> encodeUtf8 @Text @ByteString apiKey]
+      let hds = W.header "Authorization" .~ ["Bearer " <> encodeUtf8 @Text @ByteString apiKey]
       response <- liftIO $ Network.Wreq.getWith (defaults & hds) ("https://api.lemonsqueezy.com/v1/subscriptions/" <> toString sid)
       let responseBdy = response ^. responseBody
       case AE.eitherDecode responseBdy of
@@ -821,7 +1240,7 @@ getSubscriptionId orderId apiKey = do
   case orderId of
     Nothing -> pure Nothing
     Just ordId -> do
-      let hds = header "Authorization" .~ ["Bearer " <> encodeUtf8 @Text @ByteString apiKey]
+      let hds = W.header "Authorization" .~ ["Bearer " <> encodeUtf8 @Text @ByteString apiKey]
       response <- W.getWith (defaults & hds) ("https://api.lemonsqueezy.com/v1/orders/" <> toString ordId <> "/subscriptions")
       let responseBdy = response ^. responseBody
       case AE.eitherDecode responseBdy of
@@ -875,9 +1294,9 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan} = do
         _ <- updatePricing "Free" "" "" ""
         handleOnboarding "Free"
         users <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
-        let usersToDel = (\u -> u.id) <$> V.tail users
-        _ <- dbtToEff $ ProjectMembers.softDeleteProjectMembers $ V.toList usersToDel
-        pass
+        let usersToDel = V.toList $ V.map (.id) $ V.tail users
+        whenJust (nonEmpty usersToDel) \ne ->
+          void . dbtToEff $ ProjectMembers.softDeleteProjectMembers ne
   if project.paymentPlan == "ONBOARDING"
     then do
       redirectCS $ "/p/" <> pid.toText <> "/"
@@ -1046,3 +1465,246 @@ alertConfiguration newEndpointsAlerts errorAlerts weeklyReportsAlerts dailyRepor
       switchRow "Receive weekly reports alerts" "weeklyNotifs" "Get a summary of your project activity every week" weeklyReportsAlerts
       hr_ [class_ "border-border my-2"]
       switchRow "Receive daily reports alerts" "dailyNotifs" "Receive daily summaries of your project metrics" dailyReportsAlerts
+
+
+-- Types
+data TeamMember = TeamMember
+  { memberId :: Text
+  , memberEmail :: Text
+  , memberName :: Text
+  , memberRole :: Role
+  }
+
+
+data Role = Owner | Admin | Member | Viewer
+  deriving (Eq, Show)
+
+
+data NotificationChannel
+  = EmailChannel Text
+  | SlackChannel Text Text -- url, name
+  | DiscordChannel Text Text
+  | WhatsAppChannel Text
+
+
+-- Main Modal Component
+teamModal :: Projects.ProjectId -> Maybe ProjectMembers.TeamVM -> Text -> Text -> Text -> Bool -> Html ()
+teamModal pid team whiteList channelWhiteList discordWhiteList isInTeamView = do
+  let name = maybe "" (.name) team
+  let handle = maybe "" (.handle) team
+  let description = maybe "" (.description) team
+  let teamId = fmap (.id) team
+  let prefix = maybe "n" (\x -> x.handle) team
+  let membersTags = decodeUtf8 $ AE.encode $ maybe [] (\t -> (\m -> UUID.toText m.memberId) <$> t.members) team
+  let notifEmails = decodeUtf8 $ AE.encode $ maybe [] (.notify_emails) team
+  let slackChannels = decodeUtf8 $ AE.encode $ maybe [] (.slack_channels) team
+  let discordChannels = decodeUtf8 $ AE.encode $ maybe [] (.discord_channels) team
+
+  div_ [class_ "modal", role_ "dialog", style_ "--color-base-100: var(--color-fillWeaker)"] $ do
+    div_ [class_ "modal-box max-w-max"] $ do
+      form_
+        [ hxPost_ $ "/p/" <> pid.toText <> "/manage_teams?" <> (if isInTeamView then "teamView=true" else "")
+        , hxExt_ "json-enc"
+        , hxVals_ [text|js:{...getTagValues(`$prefix`)}|]
+        , hxTarget_ "#main-content"
+        , hxSwap_ "outerHTML"
+        , class_ "w-xl"
+        ]
+        do
+          div_ [class_ "px-2 max-h-[75vh] overflow-y-auto"] $ do
+            whenJust teamId $ \tid ->
+              input_
+                [ type_ "hidden"
+                , id_ $ prefix <> "-team-id"
+                , name_ "teamId"
+                , value_ $ UUID.toText tid
+                ]
+            div_ [class_ "sticky top-0 pb-2 bg-[var(--color-bgOverlay)] border-b border-border z-50"] $ do
+              h2_ [class_ "text-lg font-semibold  flex items-center gap-2"] do
+                faSprite_ "users" "solid" "w-4 h-4 "
+                toHtml $ if isJust team then "Edit Team " <> name else "Create Team"
+              p_ [class_ "text-sm text-textWeak"] "Manage team details, members, and notification channels"
+            div_ [class_ "flex-1 overflow-y-auto space-y-8 mt-4"] $ do
+              teamDetailsSection name handle description
+              div_ [class_ "pb-2 space-y-4"] $ do
+                h3_ [class_ "text-sm font-medium  flex items-center gap-2 pb-2 border-b border-strokeWeak"] $ do
+                  "Add Members"
+                div_ [class_ "flex gap-2"] $ do
+                  textarea_
+                    [ class_ "min-h-10 w-full rounded border-strokeWeak input resize-none"
+                    , type_ "email"
+                    , placeholder_ "Add members"
+                    , id_ $ prefix <> "-team-members-input"
+                    , name_ "teamMembers"
+                    , style_ "border: 1px solid var(--color-strokeWeak)"
+                    ]
+                    pass
+              notificationChannelsSection prefix
+          div_ [class_ "modal-action"] $ do
+            label_ [Lucid.for_ (prefix <> "-new-team-modal"), class_ "btn btn-sm btn-outline", type_ "button"] "Cancel"
+            button_ [class_ "btn btn-sm btn-primary ml-4", type_ "submit"] "Save Team"
+    label_ [class_ "modal-backdrop", Lucid.for_ (prefix <> "-new-team-modal")] "Close"
+  script_
+    [text|
+function getTagValues(prefix) {
+  const val = {
+    teamMembers: window[`$${prefix}-membersTagify`].value.map(item => item.value),
+    notifEmails: window[`$${prefix}-notifEmailsTagify`].value.map(item => item.value),
+    slackChannels: window[`$${prefix}-slackTagify`].value.map(item => item.value),
+    discordChannels: window[`$${prefix}-discordTagify`].value.map(item => item.value)
+  }
+  return val
+}
+  window.addEventListener('DOMContentLoaded', (event) => {
+  
+window[`$prefix-membersTagify`] = createTagify('#$prefix-team-members-input', {
+  enforceWhitelist: true,
+  whitelist: $whiteList,
+  placeholder: "Add member",
+});
+
+var existingMembers = $membersTags
+var memberTags = []
+existingMembers.forEach(member => {
+   const target = $whiteList.find(v => v.value == member)
+   if(target) {
+      memberTags.push(target)
+    }
+})
+window[`$prefix-membersTagify`].addTags(memberTags)
+
+window[`$prefix-notifEmailsTagify`] = createTagify('#$prefix-notif-emails-input', { placeholder: "Add email"});
+window[`$prefix-notifEmailsTagify`].addTags($notifEmails)
+
+window[`$prefix-slackTagify`] = createTagify('#$prefix-slack-channels-input', {
+  enforceWhitelist: true,
+  whitelist: $channelWhiteList,
+  placeholder: "Add Slack channel",
+});
+
+var slackChannels = $slackChannels 
+var channels = []
+slackChannels.forEach(channel => {
+  const target = $channelWhiteList.find(v => v.value == channel)
+  if(target) {
+      channels.push(target)
+    }
+})
+window[`$prefix-slackTagify`].addTags(channels)
+
+window[`$prefix-discordTagify`] = createTagify('#$prefix-discord-channels-input', {
+  enforceWhitelist: true,
+  whitelist: $discordWhiteList,
+  placeholder: "Add Discord channel",
+});
+
+var discordChannels = $discordChannels 
+var discordChannelTags = []
+discordChannels.forEach(channel => {
+  const target = $discordWhiteList.find(v => v.value === channel)
+  if(target) {
+    discordChannelTags.push(target)
+  }
+})
+window[`$prefix-discordTagify`].addTags(discordChannelTags)
+// Update email whitelist when members change
+window[`$prefix-membersTagify`].on("change", (e) => {
+  window[`$prefix-notifEmailsTagify`].settings.whitelist = window[`$prefix-membersTagify`].value.map(item => item.email);
+});
+      });
+  |]
+
+
+teamDetailsSection :: Text -> Text -> Text -> Html ()
+teamDetailsSection name handle description = do
+  let prefix = if T.null handle then "n" else handle
+  div_ [class_ "space-y-4"] $ do
+    div_ [class_ "flex items-center w-full gap-2 justify-between"] do
+      div_ [class_ "flex flex-col w-full gap-2"] $ do
+        label_ [class_ "text-sm font-medium ", Lucid.for_ "team-name", required_ "true"] "Team Name"
+        input_
+          [ class_ "input w-full"
+          , type_ "text"
+          , id_ $ prefix <> "-team-name"
+          , name_ "teamName"
+          , placeholder_ "e.g. Backend Team"
+          , value_ name
+          ]
+        span_ [id_ $ prefix <> "-team-name-error", class_ "text-xs text-red-500 h-4"] ""
+
+      div_ [class_ "flex flex-col gap-2 w-full"] $ do
+        label_ [class_ "text-sm font-medium ", Lucid.for_ "team-handle"] "Team Handle"
+        input_
+          [ class_ "input w-full"
+          , type_ "text"
+          , id_ $ prefix <> "-team-handle"
+          , name_ "teamHandle"
+          , placeholder_ "e.g. backend-team"
+          , value_ handle
+          , required_ "true"
+          , min_ "3"
+          , max_ "30"
+          , pattern_ "^[a-z][a-z0-9-]*$"
+          ]
+        span_ [id_ $ prefix <> "-team-handle-error", class_ "text-xs text-red-500 h-4"] ""
+    div_ [class_ "flex flex-col gap-2"] $ do
+      label_ [class_ "text-sm font-medium ", Lucid.for_ "team-description"] "Description"
+      textarea_
+        [ class_ "w-full p-2 min-h-[80px] input focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+        , id_ $ prefix <> "-team-description"
+        , name_ "teamDescription"
+        , placeholder_ "What does this team do?"
+        ]
+        $ toHtml description
+  script_
+    [text|
+  
+document.addEventListener("DOMContentLoaded", () => {
+  const nameInput = document.getElementById("$prefix-team-name");
+  const handleInput = document.getElementById("$prefix-team-handle");
+  let handleManuallyEdited = false;
+
+  handleInput.addEventListener("input", () => {
+    handleManuallyEdited = true;
+  });
+
+  nameInput.addEventListener("input", () => {
+    if (!handleManuallyEdited) {
+      const val = nameInput.value.toLowerCase().trim();
+      const generated = val
+        .replace(/[^a-z0-9\s-]/g, "")  // remove invalid chars
+        .replace(/\s+/g, "-")          // spaces → hyphens
+        .replace(/-{2,}/g, "-")        // collapse multiple hyphens
+        .replace(/^-+|-+$/g, "");      // trim hyphens 
+      handleInput.value = generated;
+      showError(handleInput, handleError, validators.handle());
+    }
+  });
+
+});
+|]
+
+
+-- Notification Channels Section
+notificationChannelsSection :: Text -> Html ()
+notificationChannelsSection prefix = do
+  div_ [class_ "space-y-4"] $ do
+    h3_ [class_ "text-sm font-medium flex items-center gap-2 pb-2 border-b border-strokeWeak"] "Notification Channels"
+    div_ [class_ "w-full space-y-8"] $ do
+      channelBlock "Email addresses" (prefix <> "-notif-emails-input") "Add email addresses" "notifEmails" "envelope"
+      channelBlock "Slack Channels" (prefix <> "-slack-channels-input") "Add slack channels" "slackChannels" "slack"
+      channelBlock "Discord Channels" (prefix <> "-discord-channels-input") "Add channels" "discordChannels" "discord"
+
+
+-- Reusable helper
+channelBlock :: Text -> Text -> Text -> Text -> Text -> Html ()
+channelBlock title inputId placeholder name icon = div_ [class_ "flex flex-col gap-2"] do
+  label_ [class_ "text-sm font-medium flex items-center gap-2", Lucid.for_ inputId] do
+    faSprite_ icon "solid" "w-4 h-4"
+    toHtml title
+  textarea_
+    [ class_ "input w-full min-h-10 resize-none rounded"
+    , id_ inputId
+    , placeholder_ placeholder
+    ]
+    ""

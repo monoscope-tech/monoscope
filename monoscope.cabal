@@ -42,6 +42,7 @@ extra-source-files:
     static/migrations/0015_summary_pattern.sql
     static/migrations/0016_drop_overly_restrictive_issues_constraint.sql
     static/migrations/0016_reports_start_and_end_time.sql
+    static/migrations/0017_teams_table.sql
 
 source-repository head
   type: git
@@ -435,6 +436,7 @@ test-suite integration-tests
       Pages.LogExplorer.LogSpec
       Pages.MonitorsSpec
       Pages.Projects.ManageMembersSpec
+      Pages.DashboardsSpec
       Pages.Projects.ProjectsSpec
       Pages.ReportsSpec
       Pages.ShareSpec
