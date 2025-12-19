@@ -861,7 +861,9 @@ starButton_ pid dashId isStarred = do
     , hxTarget_ $ "#star-btn-" <> dashId.toText
     , hxSwap_ "outerHTML"
     ]
-    $ faSprite_ "star" starIconType $ "w-4 h-4 " <> if isStarred then "text-yellow-500" else "text-iconNeutral"
+    $ faSprite_ "star" starIconType
+    $ "w-4 h-4 "
+    <> if isStarred then "text-yellow-500" else "text-iconNeutral"
 
 
 dashboardsGet_ :: DashboardsGetD -> Html ()

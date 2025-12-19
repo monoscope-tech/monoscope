@@ -800,8 +800,9 @@ teamPage pid team projMembers slackChannels discordChannels = do
           div_ [class_ "mt-3 space-y-2 text-sm"] do
             div_ [class_ "flex gap-2"] $ span_ [class_ "text-textWeak w-16"] "Handle" >> span_ [class_ "text-textStrong"] (toHtml $ "@" <> team.handle)
             unless (T.null team.description) $ div_ [class_ "flex gap-2"] $ span_ [class_ "text-textWeak w-16"] "About" >> span_ [class_ "text-textStrong"] (toHtml team.description)
-        card_ (faSprite_ "users" "regular" "h-4 w-4" >> "Members" >> span_ [class_ "text-textWeak font-normal"] ("(" <> show (V.length team.members) <> ")")) $
-          div_ [class_ "mt-3 divide-y divide-strokeWeak"] $ forM_ team.members \m ->
+        card_ (faSprite_ "users" "regular" "h-4 w-4" >> "Members" >> span_ [class_ "text-textWeak font-normal"] ("(" <> show (V.length team.members) <> ")"))
+          $ div_ [class_ "mt-3 divide-y divide-strokeWeak"]
+          $ forM_ team.members \m ->
             div_ [class_ "flex items-center gap-3 py-2.5"] $ img_ [src_ m.memberAvatar, class_ "w-8 h-8 rounded-full border border-strokeWeak"] >> div_ [] (div_ [class_ "text-sm font-medium text-textStrong"] (toHtml m.memberName) >> div_ [class_ "text-xs text-textWeak"] (toHtml m.memberEmail))
         card_ (faSprite_ "bell" "regular" "h-4 w-4" >> "Notifications") $ div_ [class_ "mt-3 space-y-3"] do
           notifRow_ "envelope" "regular" "Email" $ V.toList team.notify_emails
@@ -1453,5 +1454,3 @@ window.addEventListener('DOMContentLoaded', () => {
   window[`$prefix-discordTagify`].addTags(discordTags);
 });
 |]
-
-
