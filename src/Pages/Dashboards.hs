@@ -928,13 +928,14 @@ dashboardsGet_ dg = do
           $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full rounded overflow-hidden", id_ "dItemPreview"]
         let teamList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> dg.teams
         script_
-          [text| 
-              window.addEventListener('DOMContentLoaded', (event) => {
-                const tagify = createTagify('#teamHandlesInput', {tagTextProp: 'name',whitelist: $teamList,});
-              }); 
+          [text|
+            let tagify;
+            window.addEventListener('DOMContentLoaded', (event) => {
+              tagify = createTagify('#teamHandlesInput', {tagTextProp: 'name',whitelist: $teamList,});
+            });
             const getSelectedTeams = () => {
-                return tagify.value.map(item => item.value);
-            }   
+              return tagify.value.map(item => item.value);
+            }
         |]
 
   div_ [id_ "itemsListPage", class_ "mx-auto gap-8 w-full flex flex-col h-full overflow-hidden group/pg"] do
