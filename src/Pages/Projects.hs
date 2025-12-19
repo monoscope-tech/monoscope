@@ -16,6 +16,7 @@ module Pages.Projects (
   -- ManageMembers
   manageMembersGetH,
   manageMembersPostH,
+  deleteMemberH,
   ManageMembersForm (..),
   manageSubGetH,
   ManageMembers (..),
@@ -507,13 +508,13 @@ manageMembersPostH pid onboardingM form = do
       if isJust onboardingM
         then do
           redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
-          addRespHeaders $ ManageMembersPost projMembersLatest
+          addRespHeaders $ ManageMembersPost (pid, projMembersLatest)
         else do
           addSuccessToast "Updated Members List Successfully" Nothing
-          addRespHeaders $ ManageMembersPost projMembersLatest
+          addRespHeaders $ ManageMembersPost (pid, projMembersLatest)
     else do
       addErrorToast "Only one member allowed on Free plan" Nothing
-      addRespHeaders $ ManageMembersPost projMembers
+      addRespHeaders $ ManageMembersPost (pid, projMembers)
 
 
 data TeamForm = TeamForm
@@ -835,68 +836,107 @@ manageMembersGetH pid = do
           , isSettingsPage = True
           , config = appCtx.config
           }
-  addRespHeaders $ ManageMembersGet $ PageCtx bwconf projMembers
+  addRespHeaders $ ManageMembersGet $ PageCtx bwconf (pid, projMembers)
 
 
 data ManageMembers
-  = ManageMembersGet {unwrapGet :: PageCtx (V.Vector ProjectMembers.ProjectMemberVM)}
-  | ManageMembersPost {unwrapPost :: V.Vector ProjectMembers.ProjectMemberVM}
+  = ManageMembersGet {unwrapGet :: PageCtx (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM)}
+  | ManageMembersPost {unwrapPost :: (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM)}
 
 
 instance ToHtml ManageMembers where
-  toHtml (ManageMembersGet (PageCtx bwconf memebers)) = toHtml $ PageCtx bwconf $ manageMembersBody memebers
-  toHtml (ManageMembersPost memebers) = toHtml $ manageMembersBody memebers
+  toHtml (ManageMembersGet (PageCtx bwconf (pid, memebers))) = toHtml $ PageCtx bwconf $ manageMembersBody pid memebers
+  toHtml (ManageMembersPost (pid, memebers)) = toHtml $ manageMembersBody pid memebers
   toHtmlRaw = toHtml
 
 
-manageMembersBody :: V.Vector ProjectMembers.ProjectMemberVM -> Html ()
-manageMembersBody projMembers =
-  div_ [id_ "main-content", class_ "w-full py-16"] do
-    section_ [class_ "p-6 w-[606px] mx-auto"] do
-      h2_ [class_ "text-textStrong mb-4 text-xl font-semibold"] "Manage Access"
-      p_ [class_ "text-textWeak text-sm leading-tight"] "We'll email them instructions and a link to sign in"
+manageMembersBody :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
+manageMembersBody pid projMembers =
+  div_ [id_ "main-content", class_ "w-full h-full overflow-y-auto"] do
+    section_ [class_ "p-8 max-w-2xl mx-auto space-y-6"] do
+      -- Header
+      div_ [class_ "mb-2"] do
+        h2_ [class_ "text-textStrong text-xl font-semibold"] "Manage Members"
+        p_ [class_ "text-textWeak text-sm mt-1"] "Invite team members and manage their access permissions"
+
       form_
-        [ class_ "my-8 flex flex-col gap-8"
+        [ class_ "space-y-6"
         , hxPost_ ""
         , hxTarget_ "#main-content"
         , hxSwap_ "outerHTML"
         , hxIndicator_ "#submitIndicator"
         ]
         do
-          div_ [class_ "flex gap-2 w-full"] do
-            input_ [type_ "text", name_ "emails", class_ "input w-full", placeholder_ "Add a member by email"]
-            select_ [name_ "permissions", class_ "select w-[130px]"] do
-              option_ [class_ "text-textWeak", value_ "admin"] "Admin"
-              option_ [class_ "text-textWeak", value_ "edit"] "Can Edit"
-              option_ [class_ "text-textWeak", value_ "view"] "Can View"
-            button_ [class_ "btn btn-secondary"] "Send invite"
-          div_ [class_ "flex w-full flex-col gap-4"] do
-            h3_ [class_ "text-textWeak font-semibold"] "Members"
-            div_ [class_ "flex flex-col gap-2"] do
-              mapM_ memberRow projMembers
-            button_ [class_ "self-end btn btn-primary mt-2"] "Update settings"
+          -- Invite section
+          div_ [class_ "surface-raised rounded-2xl p-4"] do
+            label_ [class_ "text-sm font-medium text-textStrong mb-3 block"] "Invite new member"
+            div_ [class_ "flex gap-2"] do
+              input_ [type_ "email", name_ "emails", class_ "input input-bordered flex-1", placeholder_ "colleague@company.com"]
+              select_ [name_ "permissions", class_ "select select-bordered w-32"] do
+                option_ [value_ "admin"] "Admin"
+                option_ [value_ "edit"] "Editor"
+                option_ [value_ "view"] "Viewer"
+              button_ [class_ "btn btn-outline gap-1"] do
+                faSprite_ "paper-plane" "regular" "w-3 h-3"
+                span_ "Invite"
+
+          -- Members list
+          div_ [class_ "space-y-3"] do
+            div_ [class_ "flex items-center justify-between"] do
+              h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ "Team members (" <> show (V.length projMembers) <> ")"
+              when (V.length projMembers > 0) $ button_ [class_ "btn btn-sm"] "Save changes"
+            div_ [class_ "surface-raised rounded-2xl divide-y divide-strokeWeak overflow-hidden"] do
+              if V.null projMembers
+                then div_ [class_ "p-8 text-center text-textWeak text-sm"] "No members yet. Invite someone to get started."
+                else mapM_ (memberRow pid) projMembers
 
 
-memberRow :: ProjectMembers.ProjectMemberVM -> Html ()
-memberRow prM = do
+memberRow :: Projects.ProjectId -> ProjectMembers.ProjectMemberVM -> Html ()
+memberRow pid prM = do
   let email = CI.original prM.email
-  div_ [class_ "w-full  px-1.5 py-3 rounded-lg  border border-transparent hover:border-strokeWeak gap-4 hover:bg-fillWeak flex justify-between items-center"] $ do
-    div_ [data_ "size" "Small", class_ "w-full grow-1 flex items-center gap-2"] $ do
-      div_ [class_ "w-8 h-8 relative rounded-[32px] flex items-center text-xs justify-center outline outline-1 outline-offset-[-1px] outline-strokeWeak text-textWeak uppercase font-medium"] $ toHtml $ T.take 2 email
-      div_ [class_ "inline-flex flex-col items-start"] do
-        input_ [type_ "text", name_ "emails", value_ email, class_ "focus:border-none focus:outline-0 text-textStrong text-sm font-normal leading-tight"]
-
-    div_ [class_ "flex items-center gap-4"] $ do
-      let permission = prM.permission
-      select_ [name_ "permissions", class_ "w-max text-textWeak text-sm font-normal leading-tight"] do
-        option_ ([class_ "text-textWeak", value_ "admin"] <> selectedIf ProjectMembers.PAdmin permission) "Admin"
-        option_ ([class_ "text-textWeak", value_ "edit"] <> selectedIf ProjectMembers.PEdit permission) "Can edit"
-        option_ ([class_ "text-textWeak", value_ "view"] <> selectedIf ProjectMembers.PView permission) "View only"
-    button_ [[__| on click remove the closest parent <div/> then halt |]] do
-      faSprite_ "trash" "regular" "w-4 h-4 text-textWeak"
+      permission = prM.permission
+      memberId = RealUUID.toText prM.id
+  div_ [class_ "px-4 py-3 flex items-center gap-3", id_ $ "member-" <> memberId] do
+    div_ [class_ "flex-1 min-w-0"] do
+      input_ [type_ "text", name_ "emails", value_ email, readonly_ "true", class_ "bg-transparent w-full text-textStrong text-sm truncate focus:outline-none cursor-default"]
+    div_ [class_ "flex items-center gap-2"] do
+      select_ [name_ "permissions", class_ "select select-sm select-bordered text-sm"] do
+        option_ ([value_ "admin"] <> selectedIf ProjectMembers.PAdmin permission) "Admin"
+        option_ ([value_ "edit"] <> selectedIf ProjectMembers.PEdit permission) "Editor"
+        option_ ([value_ "view"] <> selectedIf ProjectMembers.PView permission) "Viewer"
+      button_
+        [ class_ "btn btn-sm btn-ghost text-textWeak hover:text-textError hover:bg-fillError-weak"
+        , hxDelete_ $ "/p/" <> pid.toText <> "/manage_members/" <> memberId
+        , hxTarget_ $ "#member-" <> memberId
+        , hxSwap_ "outerHTML"
+        , hxConfirm_ "Remove this member from the project?"
+        ]
+        do
+          faSprite_ "trash" "regular" "w-4 h-4"
   where
     selectedIf :: ProjectMembers.Permissions -> ProjectMembers.Permissions -> [Attribute]
     selectedIf a b = [selected_ "" | a == b]
+
+
+deleteMemberH :: Projects.ProjectId -> RealUUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
+deleteMemberH pid memberId = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  let currUserId = sess.persistentSession.userId
+  projMembers <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
+  let memberM = V.find (\m -> m.id == memberId) projMembers
+  case memberM of
+    Nothing -> do
+      addErrorToast "Member not found" Nothing
+      addRespHeaders ""
+    Just member ->
+      if member.userId == currUserId
+        then do
+          addErrorToast "You cannot remove yourself" Nothing
+          addRespHeaders ""
+        else do
+          _ <- dbtToEff $ ProjectMembers.softDeleteProjectMembers (memberId :| [])
+          addSuccessToast "Member removed" Nothing
+          addRespHeaders ""
 
 
 manageSubGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
@@ -1252,12 +1292,15 @@ processProjectPostForm cpRaw pid = do
 
 createProjectBody :: Sessions.PersistentSession -> Projects.ProjectId -> EnvConfig -> Text -> CreateProjectForm -> CreateProjectFormError -> Projects.Project -> Html ()
 createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
-  section_ [id_ "main-content", class_ "overflow-y-scroll h-full text-textWeak"] do
-    div_ [class_ "mx-auto px-2 pt-12 w-[800px]"] do
-      h2_ [class_ "text-textStrong mb-3 text-xl font-semibold"] "Manage Project"
-      p_ [class_ "text-textWeak text-sm leading-tight"] "Manage your project details and upgrade your plan"
+  div_ [id_ "main-content", class_ "w-full h-full overflow-y-auto"] do
+    section_ [class_ "p-8 max-w-2xl mx-auto space-y-6"] do
+      -- Header
+      div_ [class_ "mb-2"] do
+        h2_ [class_ "text-textStrong text-xl font-semibold"] "Project Settings"
+        p_ [class_ "text-textWeak text-sm mt-1"] "Manage your project details and notification preferences"
+
       form_
-        [ class_ "py-8 flex flex-col gap-8 w-full"
+        [ class_ "space-y-6"
         , hxPost_ $ "/p/update/" <> pid.toText
         , hxTarget_ "#main-content"
         , hxSwap_ "outerHTML"
@@ -1265,42 +1308,37 @@ createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
         , hxIndicator_ "#createIndicator"
         ]
         do
-          div_ [class_ "flex flex-col gap-1 w-full"] do
-            label_ [class_ "text-textStrong leading-normal"] do
-              "Project title"
-              span_ [class_ ""] " *"
-            input_
-              [ class_ "input w-full"
-              , type_ "text"
-              , id_ "title"
-              , name_ "title"
-              , value_ cp.title
-              , required_ "required"
-              ]
-          div_ [class_ "flex flex-col gap-1 w-full"] do
-            label_ [class_ "text-textStrong leading-normal"] do
-              "Timezone"
-            select_ [name_ "timeZone", id_ "timezone", class_ "select w-full"] do
-              option_ [value_ cp.timeZone] $ toHtml cp.timeZone
-          div_ [class_ "flex flex-col gap-1 w-full"] do
-            label_ [class_ "text-textStrong leading-normal"] "Description"
-            textarea_
-              [ class_ "textarea w-full"
-              , rows_ "4"
-              , placeholder_ "Description"
-              , id_ "description"
-              , name_ "description"
-              ]
-              $ toHtml cp.description
+          -- Project details card
+          div_ [class_ "surface-raised rounded-2xl p-4 space-y-4"] do
+            div_ [class_ "flex items-center gap-2 mb-1"] do
+              div_ [class_ "p-1.5 rounded-md bg-fillBrand-weak"] $ faSprite_ "folder" "regular" "h-3.5 w-3.5 text-textBrand"
+              label_ [class_ "text-sm font-medium text-textStrong"] "Project Details"
 
+            div_ [class_ "space-y-4"] do
+              div_ [class_ "space-y-1.5"] do
+                label_ [class_ "flex items-center gap-1 text-xs font-medium text-textWeak", Lucid.for_ "title"] do
+                  "Project Name"
+                  span_ [class_ "text-textError"] "*"
+                input_ [class_ "input input-bordered input-sm w-full", type_ "text", id_ "title", name_ "title", value_ cp.title, required_ "required", placeholder_ "My Project"]
+
+              div_ [class_ "space-y-1.5"] do
+                label_ [class_ "text-xs font-medium text-textWeak", Lucid.for_ "timezone"] "Timezone"
+                select_ [name_ "timeZone", id_ "timezone", class_ "select select-bordered select-sm w-full"] do
+                  option_ [value_ cp.timeZone] $ toHtml cp.timeZone
+
+              div_ [class_ "space-y-1.5"] do
+                label_ [class_ "text-xs font-medium text-textWeak", Lucid.for_ "description"] "Description"
+                textarea_ [class_ "textarea textarea-bordered w-full text-sm", rows_ "3", placeholder_ "What is this project about?", id_ "description", name_ "description"] $ toHtml cp.description
+
+          -- Alert configuration card
           alertConfiguration (isJust cp.endpointAlerts) (isJust cp.errorAlerts) (isJust cp.weeklyNotifs) (isJust cp.dailyNotifs)
 
-          div_ [class_ "flex w-full justify-end items-center"] do
-            button_
-              [class_ "btn btn-primary cursor-pointer", type_ "submit"]
-              do
-                span_ [id_ "createIndicator", class_ "htmx-indicator loading loading-dots loading-md"] ""
-                "Update project"
+          -- Save button
+          div_ [class_ "flex justify-end"] do
+            button_ [class_ "btn btn-sm gap-1", type_ "submit"] do
+              span_ [id_ "createIndicator", class_ "htmx-indicator loading loading-dots loading-xs"] ""
+              faSprite_ "floppy-disk" "regular" "w-3 h-3"
+              span_ "Save Changes"
 
       script_ do
         [text|
@@ -1323,7 +1361,7 @@ projectDeleteGetH pid = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "Delete Project"
+          , pageTitle = "Delete project"
           , isSettingsPage = True
           , config = appCtx.config
           }
@@ -1333,40 +1371,57 @@ projectDeleteGetH pid = do
 deleteProjectBody :: Projects.ProjectId -> Html ()
 deleteProjectBody pid = do
   let pidText = pid.toText
-  section_ [class_ "px-60 w-max"] do
-    div_ [class_ " gap-5 w-full my-24"] do
-      h1_ [class_ "text-textStrong font-semibold text-2xl"] "Delete project"
-      p_ [class_ "py-4 text-sm text-textWeak"] "This is action not reversible, only delete a project you no longer need."
-      button_
-        [ class_ "btn btn-sm bg-fillError-strong text-white shadow-md hover:bg-fillError-strong cursor-pointer"
-        , hxGet_ [text|/p/$pidText/delete|]
-        , hxConfirm_ "Are you sure you want to delete this project?"
-        ]
-        "Delete Project"
+  div_ [class_ "w-full h-full overflow-y-auto"] do
+    section_ [class_ "p-8 max-w-2xl mx-auto space-y-6"] do
+      -- Header
+      div_ [class_ "mb-2"] do
+        h2_ [class_ "text-textStrong text-xl font-semibold"] "Delete Project"
+        p_ [class_ "text-textWeak text-sm mt-1"] "Permanently remove this project and all associated data"
+
+      -- Warning card
+      div_ [class_ "surface-raised rounded-2xl p-4"] do
+        div_ [class_ "flex items-start gap-3"] do
+          div_ [class_ "p-2 rounded-full bg-fillError-weak shrink-0"] $ faSprite_ "triangle-alert" "regular" "h-4 w-4 text-textError"
+          div_ [class_ "space-y-2"] do
+            h3_ [class_ "text-sm font-medium text-textStrong"] "Danger Zone"
+            p_ [class_ "text-sm text-textWeak"] "Deleting this project will permanently remove all data including:"
+            ul_ [class_ "text-sm text-textWeak list-disc list-inside space-y-1 ml-1"] do
+              li_ "API keys and configurations"
+              li_ "All collected telemetry data"
+              li_ "Dashboards and saved queries"
+              li_ "Team member access"
+            p_ [class_ "text-sm text-textError font-medium mt-3"] "This action cannot be undone."
+
+      -- Delete button
+      div_ [class_ "flex justify-end"] do
+        button_
+          [ class_ "btn btn-sm bg-fillError-weak text-textError hover:bg-fillError-strong hover:text-white gap-1"
+          , hxGet_ [text|/p/$pidText/delete|]
+          , hxConfirm_ "Are you sure you want to delete this project? This action cannot be undone."
+          ]
+          do
+            faSprite_ "trash" "regular" "w-3 h-3"
+            span_ "Delete Project"
 
 
 alertConfiguration :: Bool -> Bool -> Bool -> Bool -> Html ()
 alertConfiguration newEndpointsAlerts errorAlerts weeklyReportsAlerts dailyReportsAlerts =
-  div_ [class_ "space-y-6"] $ do
-    div_ [class_ "flex items-center gap-3"] $ do
-      div_ $ do
-        h3_ [class_ "text-textStrong mb-3 text-lg font-semibold"] "Alert Configuration"
-        p_ [class_ "text-textWeak text-sm leading-tight"] "Manage your notification preferences"
-    div_ [class_ "space-y-4 rounded-lg border border-strokeWeak p-6"] $ do
-      let switchRow :: Text -> Text -> Text -> Bool -> Html ()
-          switchRow lbl forId descr checked =
-            div_ [class_ "flex items-center justify-between"] $ do
-              div_ [class_ "space-y-0.5"] $ do
-                label_ [Lucid.for_ forId, class_ "text-sm font-medium text-textStrong"] (toHtmlRaw lbl)
-                p_ [class_ "text-xs text-textWeak"] (toHtmlRaw descr)
-              input_ $ [type_ "checkbox", id_ forId, class_ "switch", name_ forId] ++ [checked_ | checked]
-      switchRow "Receive new endpoint alerts" "endpointAlerts" "Get notified when new API endpoints are detected" newEndpointsAlerts
-      hr_ [class_ "border-border my-2"]
-      switchRow "Receive runtime error alerts" "errorAlerts" "Receive immediate notifications for system errors" errorAlerts
-      hr_ [class_ "border-border my-2"]
-      switchRow "Receive weekly reports alerts" "weeklyNotifs" "Get a summary of your project activity every week" weeklyReportsAlerts
-      hr_ [class_ "border-border my-2"]
-      switchRow "Receive daily reports alerts" "dailyNotifs" "Receive daily summaries of your project metrics" dailyReportsAlerts
+  div_ [class_ "surface-raised rounded-2xl p-4"] do
+    div_ [class_ "flex items-center gap-2 mb-4"] do
+      div_ [class_ "p-1.5 rounded-md bg-fillWeak"] $ faSprite_ "bell" "regular" "h-3.5 w-3.5 text-textWeak"
+      label_ [class_ "text-sm font-medium text-textStrong"] "Notifications"
+    div_ [class_ "space-y-1 divide-y divide-strokeWeak"] do
+      switchRow "New endpoint alerts" "endpointAlerts" "Get notified when new API endpoints are detected" newEndpointsAlerts
+      switchRow "Runtime error alerts" "errorAlerts" "Receive immediate notifications for system errors" errorAlerts
+      switchRow "Weekly reports" "weeklyNotifs" "Get a summary of your project activity every week" weeklyReportsAlerts
+      switchRow "Daily reports" "dailyNotifs" "Receive daily summaries of your project metrics" dailyReportsAlerts
+  where
+    switchRow lbl forId descr checked =
+      div_ [class_ "flex items-center justify-between py-3 first:pt-0 last:pb-0"] do
+        div_ [class_ "space-y-0.5"] do
+          label_ [Lucid.for_ forId, class_ "text-sm font-medium text-textStrong cursor-pointer"] $ toHtml lbl
+          p_ [class_ "text-xs text-textWeak"] $ toHtml descr
+        input_ $ [type_ "checkbox", id_ forId, class_ "toggle toggle-sm", name_ forId] ++ [checked_ | checked]
 
 
 -- Main Modal Component

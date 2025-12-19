@@ -5,7 +5,6 @@ import Data.Text qualified as T
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxDelete_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
-import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Network.Minio qualified as Minio
@@ -59,81 +58,82 @@ bringS3GetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 bringS3GetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext -- Get auth context
-  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Bring your own s3", isSettingsPage = True, config = appCtx.config}
+  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Your S3 bucket", isSettingsPage = True, config = appCtx.config}
   addRespHeaders $ bodyWrapper bwconf $ bringS3Page pid project.s3Bucket
 
 
 bringS3Page :: Projects.ProjectId -> Maybe Projects.ProjectS3Bucket -> Html ()
-bringS3Page pid s3BucketM = div_ [class_ "space-y-6 mx-auto w-full max-w-5xl px-4 py-10 md:py-14"] $ do
-  div_ [class_ "space-y-2"] $ do
-    div_ [class_ "flex items-center gap-2"] $ do
-      faSprite_ "cloud" "regular" "h-8 w-8"
-      h1_ [class_ "text-2xl font-semibold tracking-tight"] "Bring Your Own S3 Bucket"
-    p_ [class_ "text-textWeak text-sm max-w-3xl leading-tight"] "Connect your own S3 or S3-compatible bucket, validate access. Your project's data opentelemetry and session replay events will be store in this bucket"
+bringS3Page pid s3BucketM = div_ [class_ "w-full h-full overflow-y-auto"] do
+  section_ [class_ "p-8 max-w-2xl mx-auto space-y-6"] do
+    -- Header
+    div_ [class_ "mb-2"] do
+      h2_ [class_ "text-textStrong text-xl font-semibold"] "Bring Your Own S3 Bucket"
+      p_ [class_ "text-textWeak text-sm mt-1"] "Connect your own S3 or S3-compatible storage for OpenTelemetry and session replay data"
 
-  form_ [class_ "rounded-lg border bg-bgBase w-full", hxPost_ "", hxSwap_ "innerHtml", hxTarget_ "#connectedInd", hxIndicator_ "#indicator"] $ do
-    div_ [class_ "flex flex-wrap items-center w-full justify-between gap-3 border-b p-5"] $ do
-      div_ [class_ "flex items-center w-full justify-between"] $ do
-        div_ [class_ "space-y-1"] $ do
-          h2_ [class_ "flex items-center gap-2 font-semibold"] $ do
-            faSprite_ "shield-check" "regular" "h-5 w-5"
-            "Connection"
-          p_ [class_ "text-sm text-textWeak"] "Enter credentials to connect to your S3 bucket."
-        div_ [id_ "connectedInd"] do
-          case s3BucketM of
-            Just _ -> connected
-            Nothing -> notConnected
+    form_ [class_ "space-y-6", hxPost_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd", hxIndicator_ "#indicator"] do
+      -- Connection status card
+      div_ [class_ "surface-raised rounded-2xl p-4"] do
+        div_ [class_ "flex items-center justify-between"] do
+          div_ [class_ "flex items-center gap-3"] do
+            div_ [class_ "p-2 rounded-full bg-fillBrand-weak"] $ faSprite_ "bucket" "regular" "h-4 w-4 text-textBrand"
+            div_ do
+              h3_ [class_ "text-sm font-medium text-textStrong"] "Connection Status"
+              p_ [class_ "text-xs text-textWeak"] "Your bucket connection state"
+          div_ [id_ "connectedInd"] $ maybe notConnected (const connected) s3BucketM
 
-    div_ [class_ "p-5"] $ do
-      div_ [class_ "grid grid-cols-1 gap-4 md:grid-cols-2"] $ do
-        connectionField "Access Key ID" "accessKey" True (maybe "" (.accessKey) s3BucketM) False
-        connectionField "Secret Access Key" "secretKey" True (maybe "" (.secretKey) s3BucketM) True
-        connectionField "Region" "region" True (maybe "" (.region) s3BucketM) False
-        connectionField "Bucket" "bucket" True (maybe "" (.bucket) s3BucketM) False
-        div_ [class_ "space-y-2 md:col-span-2"] $ do
-          connectionField "Custom Endpoint (optional, for S3-compatible providers)" "endpointUrl" False (maybe "" (.endpointUrl) s3BucketM) False
-      div_ [class_ "mt-10 flex flex-wrap justify-between items-center gap-3"] $ do
-        div_ [class_ "flex gap-2 items-center"] do
-          button_ [class_ "btn btn-sm btn-primary"] do
-            "Validate Connection"
-            span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-sm", id_ "indicator"] ""
-          span_ [class_ "text-sm text-textWeak"] "Auto saves if credentials are valid"
-        label_ [class_ "btn bg-fillWeak text-textWeak", Lucid.for_ "remove-modal"] "Remove bucket"
+      -- Credentials card
+      div_ [class_ "surface-raised rounded-2xl p-4 space-y-4"] do
+        label_ [class_ "text-sm font-medium text-textStrong block"] "Bucket Credentials"
+        div_ [class_ "grid grid-cols-1 gap-4 md:grid-cols-2"] do
+          connectionField "Access Key ID" "accessKey" True (maybe "" (.accessKey) s3BucketM) False
+          connectionField "Secret Access Key" "secretKey" True (maybe "" (.secretKey) s3BucketM) True
+          connectionField "Region" "region" True (maybe "" (.region) s3BucketM) False
+          connectionField "Bucket Name" "bucket" True (maybe "" (.bucket) s3BucketM) False
+        connectionField "Custom Endpoint" "endpointUrl" False (maybe "" (.endpointUrl) s3BucketM) False
+        p_ [class_ "text-xs text-textWeak"] "Optional: For S3-compatible providers like MinIO, DigitalOcean Spaces, etc."
 
+      -- Actions
+      div_ [class_ "flex items-center justify-between"] do
+        div_ [class_ "flex items-center gap-3"] do
+          button_ [class_ "btn btn-sm btn-outline gap-1"] do
+            "Validate & Save"
+            span_ [class_ "htmx-indicator loading loading-dots loading-xs", id_ "indicator"] ""
+          span_ [class_ "text-xs text-textWeak"] "Auto-saves on success"
+        when (isJust s3BucketM) $ label_ [class_ "btn btn-sm btn-ghost text-textError hover:bg-fillError-weak", Lucid.for_ "remove-modal"] do
+          faSprite_ "trash" "regular" "w-3 h-3"
+          span_ "Remove"
+
+    -- Remove modal
     input_ [type_ "checkbox", id_ "remove-modal", class_ "modal-toggle"]
-    div_ [class_ "modal ", role_ "dialog", id_ "remove-modal"] do
-      div_ [class_ "modal-box flex flex-col gap-2 p-8"] $ do
-        div_ [class_ "flex w-full mb-2 justify-between items-start"] do
-          div_ [class_ "p-3 bg-fillError-weak rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"]
-            $ faSprite_ "circle-info" "regular" "h-6 w-6 text-textError"
-          button_
-            [ class_ "btn btn-ghost btn-sm btn-circle"
-            , [__|on click set #remove-modal.checked to false |]
-            ]
-            do
-              faSprite_ "circle-xmark" "regular" "h-6 w-6 text-textWeak"
-        span_ [class_ "text-textStrong text-2xl font-semibold"] "Remove bucket?"
-        span_ [class_ "text-textWeak text-sm font-semibold"] "Removing bucket will result in the loss of all data associated with it on your dashboard"
-        button_ [class_ "btn mt-4 bg-fillError-strong text-white", hxDelete_ "", hxSwap_ "innerHtml", hxTarget_ "#connectedInd"] "Remove"
-      label_ [class_ "modal-backdrop", Lucid.for_ "remove-modal"] "Close"
+    div_ [class_ "modal", role_ "dialog"] do
+      div_ [class_ "modal-box p-6"] do
+        div_ [class_ "flex items-start gap-3 mb-4"] do
+          div_ [class_ "p-2 bg-fillError-weak rounded-full"] $ faSprite_ "triangle-alert" "regular" "h-5 w-5 text-textError"
+          div_ do
+            h3_ [class_ "text-lg font-semibold text-textStrong"] "Remove bucket?"
+            p_ [class_ "text-sm text-textWeak mt-1"] "This will disconnect your S3 bucket. Data already stored will remain in your bucket."
+        div_ [class_ "flex justify-end gap-2 mt-6"] do
+          label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ "remove-modal"] "Cancel"
+          button_ [class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90", hxDelete_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd"] "Remove bucket"
+      label_ [class_ "modal-backdrop", Lucid.for_ "remove-modal"] ""
 
 
 connectionField :: Text -> Text -> Bool -> Text -> Bool -> Html ()
 connectionField lbl name required defVal isPass =
-  div_ [class_ "space-y-2"] $ do
-    label_ [class_ "flex items-center gap-2 text-sm font-medium"] do
+  div_ [class_ "space-y-1.5"] do
+    label_ [class_ "flex items-center gap-1 text-xs font-medium text-textWeak"] do
       toHtml lbl
       when required $ span_ [class_ "text-textError"] "*"
-    input_ ([class_ "input rounded-lg w-full border border-strokeStrong", value_ defVal, name_ name, type_ $ if isPass then "password" else "text", placeholder_ lbl] <> [required_ "true" | required])
+    input_ ([class_ "input input-bordered input-sm w-full", value_ defVal, name_ name, type_ $ if isPass then "password" else "text", placeholder_ lbl] <> [required_ "true" | required])
 
 
 connected :: Html ()
-connected = span_ [class_ "inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs text-textSuccess bg-green-50 font-medium bg-fillWeaker"] do
+connected = span_ [class_ "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium bg-fillSuccess-weak text-textSuccess"] do
   faSprite_ "circle-check" "regular" "w-3 h-3"
   "Connected"
 
 
 notConnected :: Html ()
-notConnected = span_ [class_ "inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium bg-fillWeaker"] do
+notConnected = span_ [class_ "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium bg-fillWeak text-textWeak"] do
   faSprite_ "circle-info" "regular" "w-3 h-3"
-  "Not Connected"
+  "Not connected"

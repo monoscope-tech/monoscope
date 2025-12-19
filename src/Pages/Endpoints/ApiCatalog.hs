@@ -197,10 +197,11 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                 $ TabFilter
                   { current = currentFilterTab
                   , currentURL
+                  , clientSide = False
                   , options =
-                      [ TabFilterOpt{name = "Active", count = Nothing}
-                      , TabFilterOpt{name = "Inbox", count = Just inboxCount}
-                      , TabFilterOpt{name = "Archived", count = Nothing}
+                      [ TabFilterOpt{name = "Active", count = Nothing, targetId = Nothing}
+                      , TabFilterOpt{name = "Inbox", count = Just inboxCount, targetId = Nothing}
+                      , TabFilterOpt{name = "Archived", count = Nothing, targetId = Nothing}
                       ]
                   }
           }

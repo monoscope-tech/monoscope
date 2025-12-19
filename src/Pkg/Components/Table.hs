@@ -116,12 +116,14 @@ data TabFilter = TabFilter
   { current :: Text
   , currentURL :: Text
   , options :: [TabFilterOpt]
+  , clientSide :: Bool -- When True, uses JS navigation; when False, uses links
   }
 
 
 data TabFilterOpt = TabFilterOpt
   { name :: Text
   , count :: Maybe Int
+  , targetId :: Maybe Text -- For client-side tabs, the target element ID
   }
 
 
@@ -206,17 +208,30 @@ renderTableRows tr
 
 instance ToHtml TabFilter where
   toHtmlRaw = toHtml
-  toHtml tf = div_ [class_ "tabs tabs-box tabs-outline items-center"] do
-    let uri = deleteParam "filter" tf.currentURL
-    forM_ tf.options \opt ->
-      a_
-        [ href_ $ uri <> "&filter=" <> toUriStr opt.name
-        , role_ "tab"
-        , class_ $ "tab h-auto! " <> if opt.name == tf.current then "tab-active text-textStrong" else ""
-        ]
-        do
-          span_ $ toHtml opt.name
-          whenJust opt.count $ span_ [class_ "absolute top-[1px] -right-[5px] text-textInverse-strong text-xs font-medium rounded-full px-1 bg-fillError-strong"] . show
+  toHtml tf =
+    if tf.clientSide
+      then div_ [class_ "justify-start items-start gap-4 flex mb-6 text-sm"] do
+        forM_ tf.options \opt ->
+          let targetId = fromMaybe ("#" <> toUriStr opt.name <> "_content") opt.targetId
+              isActive = opt.name == tf.current
+           in button_
+                [ onclick_ $ "navigatable(this, '" <> targetId <> "', '#main-content', 't-tab-active')"
+                , class_ $ "flex items-center gap-4 a-tab border-b border-b-strokeWeak px-3 py-2" <> if isActive then " t-tab-active" else ""
+                ]
+                do
+                  toHtml opt.name
+                  whenJust opt.count \c -> span_ [class_ "text-textDisabled text-xs font-normal"] $ toHtml $ show c
+      else div_ [class_ "tabs tabs-box tabs-outline items-center"] do
+        let uri = deleteParam "filter" tf.currentURL
+        forM_ tf.options \opt ->
+          a_
+            [ href_ $ uri <> "&filter=" <> toUriStr opt.name
+            , role_ "tab"
+            , class_ $ "tab h-auto! " <> if opt.name == tf.current then "tab-active text-textStrong" else ""
+            ]
+            do
+              span_ $ toHtml opt.name
+              whenJust opt.count $ span_ [class_ "absolute top-[1px] -right-[5px] text-textInverse-strong text-xs font-medium rounded-full px-1 bg-fillError-strong"] . show
 
 
 -- Core Rendering Functions

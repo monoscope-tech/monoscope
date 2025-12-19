@@ -18,6 +18,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pkg.Components.Table qualified as Table
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
@@ -156,53 +157,51 @@ mainContent :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Ma
 mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
   copyNewApiKey newKeyM False
   let activeKeys = V.filter (\x -> x.active) apiKeys
-  let revokedKeys = V.filter (\x -> not x.active) apiKeys
-  div_ [class_ "justify-start items-start gap-4 flex mb-6 text-sm"] $ do
-    button_ [onclick_ "navigatable(this, '#active_content', '#main-content', 't-tab-active')", class_ "flex items-center gap-4 a-tab border-b border-b-strokeWeak  px-3 py-2 t-tab-active"] do
-      "Active keys"
-      span_ [class_ "text-textDisabled text-xs font-normal"] $ toHtml $ show $ V.length activeKeys
-    button_ [onclick_ "navigatable(this, '#revoked_content', '#main-content', 't-tab-active')", class_ "flex items-center gap-4 a-tab border-b border-b-strokeWeak  px-3 py-2"] do
-      "Archived keys"
-      span_ [class_ "text-textDisabled text-xs font-normal"] $ toHtml $ show $ V.length revokedKeys
+      revokedKeys = V.filter (\x -> not x.active) apiKeys
+      activeTable = makeApiKeysTable pid activeKeys "active_content"
+      revokedTable = makeApiKeysTable pid revokedKeys "revoked_content"
+      tabs =
+        Table.TabFilter
+          { current = "Active keys"
+          , currentURL = ""
+          , clientSide = True
+          , options =
+              [ Table.TabFilterOpt{name = "Active keys", count = Just $ V.length activeKeys, targetId = Just "#active_content"}
+              , Table.TabFilterOpt{name = "Archived keys", count = Just $ V.length revokedKeys, targetId = Just "#revoked_content"}
+              ]
+          }
 
-  table_ [class_ "min-w-full a-tab-content", id_ "active_content"] do
-    thead_ [class_ "bg-fillWeaker"] do
-      tr_ do
-        th_ [class_ "px-6 py-4 text-left text-sm font-semibold text-textWeak uppercase leading-tight"] "Title"
-        th_ [class_ "px-6 py-4 text-left text-sm font-semibold text-textWeak uppercase leading-tight"] "Key"
-    tbody_ [class_ ""] do
-      V.indexed activeKeys & mapM_ (uncurry (keyRow pid))
-
-  table_ [class_ "min-w-full hidden a-tab-content", id_ "revoked_content"] do
-    thead_ [class_ "bg-fillWeaker"] do
-      tr_ do
-        th_ [class_ "px-6 py-4 text-left text-sm font-semibold text-textWeak uppercase leading-tight"] "Title"
-        th_ [class_ "px-6 py-4 text-left text-sm font-semibold text-textWeak uppercase leading-tight"] "Key"
-    tbody_ [class_ ""] do
-      V.indexed revokedKeys & mapM_ (uncurry (keyRow pid))
+  toHtml tabs
+  div_ [class_ "a-tab-content", id_ "active_content"] $ toHtml activeTable
+  div_ [class_ "hidden a-tab-content", id_ "revoked_content"] $ toHtml revokedTable
 
 
-keyRow :: Projects.ProjectId -> Int -> ProjectApiKeys.ProjectApiKey -> Html ()
-keyRow pid i apiKey = do
-  tr_ [class_ "group hover:bg-fillWeak rounded-lg"] do
-    td_ [class_ "px-6 py-4 text-textStrong font-semibold text-sm w-96 max-w-96 truncate"] $ toHtml apiKey.title
-    td_ [class_ "px-6 py-4 whitespace-nowrap w-full flex items-center text-sm text-textWeak"] do
+makeApiKeysTable :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Text -> Table.Table (Int, ProjectApiKeys.ProjectApiKey)
+makeApiKeysTable pid apiKeys elemId =
+  Table.Table
+    { config = def{Table.elemID = elemId, Table.renderAsTable = True}
+    , columns = apiKeyColumns pid
+    , rows = V.indexed apiKeys
+    , features = def{Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]}
+    }
+
+
+apiKeyColumns :: Projects.ProjectId -> [Table.Column (Int, ProjectApiKeys.ProjectApiKey)]
+apiKeyColumns pid =
+  [ Table.col "Title" \(_, apiKey) ->
+      span_ [class_ "text-textStrong font-semibold text-sm truncate"] $ toHtml apiKey.title
+  , Table.col "Key" \(i, apiKey) -> do
       let idx = "key-" <> show i
-      span_
-        [class_ $ "mr-2 w-full " <> idx]
-        $ toHtml
-        $ T.take 8 apiKey.keyPrefix
-        <> T.replicate 20 "*"
-      div_ [class_ "hidden group-hover:flex justify-between items-center gap-3"] do
-        button_
-          [ class_ "text-textBrand"
-          , term "data-key" apiKey.keyPrefix
-          , term "data-state" "hide"
-          , term "data-tippy-content" "Show key"
-          , term "data-prefix" (T.take 8 apiKey.keyPrefix <> T.replicate 20 "*")
-          , term
-              "_"
-              [text|on click
+      div_ [class_ "whitespace-nowrap w-full flex items-center text-sm text-textWeak"] do
+        span_ [class_ $ "mr-2 w-full " <> idx] $ toHtml $ T.take 8 apiKey.keyPrefix <> T.replicate 20 "*"
+        div_ [class_ "hidden group-hover:flex justify-between items-center gap-3"] do
+          button_
+            [ class_ "text-textBrand"
+            , term "data-key" apiKey.keyPrefix
+            , term "data-state" "hide"
+            , term "data-tippy-content" "Show key"
+            , term "data-prefix" (T.take 8 apiKey.keyPrefix <> T.replicate 20 "*")
+            , term "_" [text|on click
                  if my @data-state is "hide"
                    put my @data-key into <.$idx/>
                    put "show" into my @data-state
@@ -212,24 +211,20 @@ keyRow pid i apiKey = do
                    put "hide" into my @data-state
                    put "Show key" into my @data-tippy-content
                  end |]
-          ]
-          do
-            faSprite_ "eye" "regular" "h-4 w-4 text-textWeak"
-        button_
-          [ class_ "text-textBrand  cursor-pointer"
-          , term "data-key" apiKey.keyPrefix
-          , [__| on click if 'clipboard' in window.navigator then
-                          call navigator.clipboard.writeText(my @data-key)
-                          send successToast(value:['API Key has been copied to the Clipboard']) to <body/>
-                        end
-                        |]
-          , term "data-tippy-content" "Copy key"
-          ]
-          do
-            faSprite_ "clipboard-copy" "regular" "h-4 w-4 text-textWeak"
-        if apiKey.active
-          then do
-            button_
+            ]
+            $ faSprite_ "eye" "regular" "h-4 w-4 text-textWeak"
+          button_
+            [ class_ "text-textBrand cursor-pointer"
+            , term "data-key" apiKey.keyPrefix
+            , [__| on click if 'clipboard' in window.navigator then
+                            call navigator.clipboard.writeText(my @data-key)
+                            send successToast(value:['API Key has been copied to the Clipboard']) to <body/>
+                          end |]
+            , term "data-tippy-content" "Copy key"
+            ]
+            $ faSprite_ "clipboard-copy" "regular" "h-4 w-4 text-textWeak"
+          if apiKey.active
+            then button_
               [ class_ "text-textWeak flex gap-2 items-center cursor-pointer"
               , hxDelete_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
               , hxConfirm_ $ "Are you sure you want to revoke " <> apiKey.title <> " API Key?"
@@ -239,8 +234,7 @@ keyRow pid i apiKey = do
               do
                 faSprite_ "circle-xmark" "regular" "h-4 w-4 text-textError"
                 span_ [class_ "text-textWeak"] "Revoke"
-          else do
-            button_
+            else button_
               [ class_ "text-textWeak flex gap-2 items-center cursor-pointer"
               , hxPatch_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
               , hxConfirm_ $ "Are you sure you want to activate " <> apiKey.title <> " API Key?"
@@ -250,6 +244,7 @@ keyRow pid i apiKey = do
               do
                 faSprite_ "circle-check" "regular" "h-4 w-4 text-textWeak"
                 span_ [class_ "text-textWeak"] "Activate"
+  ]
 
 
 copyNewApiKey :: Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Bool -> Html ()

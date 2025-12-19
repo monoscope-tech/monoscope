@@ -236,10 +236,11 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
                 $ TabFilter
                   { current = currentFilterTab
                   , currentURL
+                  , clientSide = False
                   , options =
-                      [ TabFilterOpt "Inbox" Nothing
-                      , TabFilterOpt "Acknowleged" Nothing
-                      , TabFilterOpt "Archived" Nothing
+                      [ TabFilterOpt "Inbox" Nothing Nothing
+                      , TabFilterOpt "Acknowleged" Nothing Nothing
+                      , TabFilterOpt "Archived" Nothing Nothing
                       ]
                   }
           }

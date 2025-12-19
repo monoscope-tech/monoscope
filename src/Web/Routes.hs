@@ -310,6 +310,7 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , -- Member management
     membersManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Get '[HTML] (RespHeaders ManageMembers.ManageMembers)
   , membersManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> QPT "onboarding" :> ReqBody '[FormUrlEncoded] ManageMembers.ManageMembersForm :> Post '[HTML] (RespHeaders ManageMembers.ManageMembers)
+  , membersDeleteH :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Capture "memberId" UUID.UUID :> Delete '[HTML] (RespHeaders (Html ()))
   , teamsManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> QPT "what" :> Get '[HTML] (RespHeaders ManageMembers.ManageTeams)
   , teamsManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> ReqBody '[JSON] ManageMembers.TeamForm :> QPT "teamView" :> Post '[HTML] (RespHeaders ManageMembers.ManageTeams)
   , teamGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> Capture "teamHandle" Text :> QPT "layout" :> Get '[HTML] (RespHeaders ManageMembers.ManageTeams)
@@ -492,6 +493,7 @@ projectsServer =
     , deleteProjectGet = CreateProject.deleteProjectGetH
     , membersManageGet = ManageMembers.manageMembersGetH
     , membersManagePost = ManageMembers.manageMembersPostH
+    , membersDeleteH = ManageMembers.deleteMemberH
     , teamsManageGet = ManageMembers.manageTeamsGetH
     , teamsManagePost = ManageMembers.manageTeamPostH
     , teamGet = ManageMembers.teamGetH
