@@ -1070,7 +1070,7 @@ dashboardsGetH pid sortM embeddedM teamIdM filters = do
       orderByClause = Table.sortFieldsToSQL $ Table.parseSortParam currentSort Nothing
       basePath = "/p/" <> pid.toText <> "/dashboards"
       -- Build URL with current state (sort + existing filters) for proper multi-select
-      currentParams = "?sort=" <> toUriStr currentSort <> T.concat (map (\t -> "&tag=" <> toUriStr t) filters.tag)
+      currentParams = "?sort=" <> toUriStr currentSort <> foldMap (\t -> "&tag=" <> toUriStr t) filters.tag
       baseUrl = basePath <> currentParams
 
   dashboards' <- case teamIdM of

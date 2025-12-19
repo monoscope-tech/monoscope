@@ -1180,8 +1180,7 @@ alertConfigurationForm_ project alertM teams = do
                       input_ [type_ "checkbox", class_ "checkbox checkbox-sm", name_ "notifyAfterCheck"]
                       span_ [] "Renotify every"
                     select_ [class_ "select select-sm w-28 ml-2", name_ "notifyAfter", id_ "notifyAfterInterval"]
-                      $ forM_ (zip ["10m", "20m", "30m", "1h", "6h", "24h"] ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"])
-                      $ \(v, t) -> option_ (value_ v : [selected_ "" | v == "30m"]) (toHtml t)
+                      $ zipWithM_ (\v t -> option_ (value_ v : [selected_ "" | v == "30m"]) (toHtml t)) ["10m", "20m", "30m", "1h", "6h", "24h"] ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"]
 
                   -- Stop after option
                   div_ [class_ "flex items-center"] do

@@ -616,8 +616,7 @@ processProjectErrors pid errors = do
   let (_, queries, paramsList) = V.unzip3 processedErrors
 
   -- Bulk insert errors
-  result <- try $ forM_ (V.zip queries paramsList) \(q, params) -> do
-    dbtToEff $ execute q params
+  result <- try $ V.zipWithM_ (\q params -> dbtToEff $ execute q params) queries paramsList
 
   case result of
     Left (e :: SomePostgreSqlException) ->
