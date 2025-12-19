@@ -684,7 +684,7 @@ renderPaginationLink :: Maybe Text -> Text -> Text -> Html ()
 renderPaginationLink targetM url trigger =
   a_
     ( [ class_ "cursor-pointer flex justify-center items-center p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center min-h-[2.5rem]"
-      , hxTrigger_ $ case trigger of { "click" -> "click"; "intersect" -> "intersect once"; _ -> "click, intersect once" }
+      , hxTrigger_ $ case trigger of "click" -> "click"; "intersect" -> "intersect once"; _ -> "click, intersect once"
       , hxSwap_ "outerHTML"
       , hxGet_ url
       , hxIndicator_ "#rowsIndicator"
