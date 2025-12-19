@@ -280,7 +280,7 @@ renderTableRows tr
       let colCount = length tr.columns + if isJust tr.rowId then 1 else 0
           getRowAttrs row = maybe [] ($ row) tr.rowAttrs
       V.forM_ tr.rows \row -> tr_ (getRowAttrs row) do
-        whenJust tr.rowId \getId -> td_ [class_ "w-8"] $ input_ [term "aria-label" "Select Item", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "itemId", value_ $ getId row]
+        whenJust tr.rowId \getId -> td_ [class_ "w-8 align-top pt-4"] $ input_ [term "aria-label" "Select Item", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "itemId", value_ $ getId row]
         forM_ tr.columns \c -> td_ c.attrs $ c.render row
       whenJust tr.nextUrl \url -> tr_ [] $ td_ [colspan_ $ show colCount] $ renderPaginationLink (Just "closest tr") url "both"
   | otherwise = do
@@ -410,7 +410,7 @@ renderTableRow :: Table a -> a -> Html ()
 renderTableRow tbl row =
   tr_ (rowAttrs <> linkHandler) do
     when (isJust tbl.features.rowId)
-      $ td_ [class_ "w-8"] do
+      $ td_ [class_ "w-8 align-top pt-4"] do
         whenJust tbl.features.rowId \getId ->
           input_
             $ [ term "aria-label" "Select Item"

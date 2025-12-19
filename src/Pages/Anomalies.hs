@@ -341,9 +341,9 @@ data IssueVM = IssueVM Bool Bool UTCTime Text Issues.IssueL
 
 issueColumns :: Projects.ProjectId -> [Column IssueVM]
 issueColumns pid =
-  [ col "Issue" (renderIssueMainCol pid) & withAttrs [class_ ""]
-  , col "Events" renderIssueEventsCol & withAttrs [class_ "w-36 text-center"]
-  , col "Activity" renderIssueChartCol & withAttrs [class_ "w-60"]
+  [ col "Issue" (renderIssueMainCol pid) & withAttrs [class_ "py-4"]
+  , col "Events" renderIssueEventsCol & withAttrs [class_ "w-36 text-center align-top pt-4"]
+  , col "Activity" renderIssueChartCol & withAttrs [class_ "w-60 align-top pt-4"]
   ]
 
 
