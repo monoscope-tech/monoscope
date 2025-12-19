@@ -783,7 +783,7 @@ mkFilter colName sqlType txtF values =
   guard (not $ null values) $> [fmt|{colName} = ANY(ARRAY[{T.intercalate "," (map (quote . txtF) values)}]::{sqlType}[])|]
   where
     quote txt = [fmt|'{escapeSql txt}'|]
-    escapeSql = T.replace "'" "''"  -- SQL standard: escape single quotes by doubling
+    escapeSql = T.replace "'" "''" -- SQL standard: escape single quotes by doubling
 
 
 -- Toggle sort direction for a column, returning the new sort param
