@@ -224,6 +224,8 @@ library:
     - servant-htmx
     - servant-lucid
     - servant-server
+    - servant-queryparam-core
+    - servant-queryparam-server
     - text
     - text-display
     - text-builder-linear

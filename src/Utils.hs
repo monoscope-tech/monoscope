@@ -128,10 +128,17 @@ faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes]
 
 
 deleteParam :: Text -> Text -> Text
-deleteParam key url = if needle == "" then url else T.replace needle "" url
+deleteParam key url
+  | needle == "" = url
+  | otherwise = fixQueryStart $ T.replace needle "" url
   where
     needle = url =~ reg :: Text
-    reg = "&" <> key <> "(=[^&]*)?|^" <> key <> "(=[^&]*)?&?" :: Text
+    -- Handle &key= and ?key= patterns
+    reg = "&" <> key <> "(=[^&]*)?|\\?" <> key <> "(=[^&]*)?" :: Text
+    -- If result has path&remaining (no ?), fix to path?remaining
+    fixQueryStart t = case T.breakOn "&" t of
+      (before, after) | not (T.null after) && not ("?" `T.isInfixOf` before) -> before <> "?" <> T.drop 1 after
+      _ -> t
 
 
 getGrpcStatusColor :: Int -> Text
@@ -357,20 +364,12 @@ lookupVecTextByKey vec colIdxMap key = HM.lookup key colIdxMap >>= lookupVecText
 
 
 lookupVecBoolByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Bool
-lookupVecBoolByKey vec colIdxMap key =
-  fromMaybe
-    False
-    ( HM.lookup key colIdxMap
-        >>= ( \i ->
-                case vec V.!? i of
-                  Just (AE.Bool b) -> Just b
-                  _ -> Nothing
-            )
-    )
+lookupVecBoolByKey vec colIdxMap key = fromMaybe False $ HM.lookup key colIdxMap >>= \i ->
+  vec V.!? i >>= \case AE.Bool b -> Just b; _ -> Nothing
 
 
 lookupVecIntByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Int
-lookupVecIntByKey vec colIdxMap key = (HM.lookup key colIdxMap >>= Just . lookupVecInt vec) & fromMaybe 0
+lookupVecIntByKey vec colIdxMap key = fromMaybe 0 $ lookupVecInt vec <$> HM.lookup key colIdxMap
 
 
 lookupValueText :: AE.Value -> Text -> Maybe Text

@@ -1,4 +1,4 @@
-module Web.Routes (server, genAuthServerContext) where
+module Web.Routes (server, genAuthServerContext, KeepPrefixExp) where
 
 -- Standard library imports
 import Control.Lens
@@ -7,6 +7,7 @@ import Data.ByteString qualified as BS
 import Data.Map qualified as Map
 import Data.Pool (Pool)
 import Data.UUID qualified as UUID
+import GHC.TypeLits (Symbol)
 import Relude
 
 -- Database imports
@@ -31,6 +32,9 @@ import Network.Wai (Request, queryString)
 import Servant
 import Servant.HTML.Lucid (HTML)
 import Servant.Htmx
+import Servant.QueryParam.Record (RecordParam)
+import Servant.QueryParam.Server.Record ()
+import Servant.QueryParam.TypeLevel (Eval, Exp)
 import Servant.Server.Generic (AsServerT)
 import Servant.Server.Internal.Delayed (passToServer)
 import Web.Cookie (SetCookie)
@@ -115,6 +119,12 @@ type QPUUId a = QueryParam a UUID.UUID
 data AllQueryParams
 
 
+-- Type-level expression for preserving field prefixes in RecordParam
+type role KeepPrefixExp phantom phantom
+data KeepPrefixExp :: Symbol -> Exp Symbol
+type instance Eval (KeepPrefixExp sym) = sym
+
+
 -- =============================================================================
 -- Custom content types
 -- =============================================================================
@@ -181,7 +191,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
     dashboardRedirectGet :: mode :- "p" :> ProjectId :> AllQueryParams :> GetRedirect '[HTML] (Headers '[Header "Location" Text] NoContent)
   , endpointDetailsRedirect :: mode :- "p" :> ProjectId :> "endpoints" :> "details" :> AllQueryParams :> GetRedirect '[HTML] (Headers '[Header "Location" Text] NoContent)
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
-  , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "embedded" :> QPUUId "teamId" :> Get '[HTML] (RespHeaders Dashboards.DashboardsGet)
+  , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "sort" :> QPT "embedded" :> QPUUId "teamId" :> RecordParam KeepPrefixExp Dashboards.DashboardFilters :> Get '[HTML] (RespHeaders Dashboards.DashboardsGet)
   , dashboardsPost :: mode :- "p" :> ProjectId :> "dashboards" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardForm :> Post '[HTML] (RespHeaders Dashboards.DashboardRes)
   , dashboardWidgetPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "widget_id" :> ReqBody '[JSON] Widget.Widget :> Put '[HTML] (RespHeaders Widget.Widget)
   , dashboardWidgetReorderPatchH :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets_order" :> ReqBody '[JSON] (Map Text Dashboards.WidgetReorderItem) :> Patch '[HTML] (RespHeaders NoContent)

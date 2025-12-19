@@ -4,6 +4,7 @@ module Pages.Dashboards (
   DashboardGet (..),
   dashboardsGetH,
   DashboardsGet (..),
+  DashboardFilters (..),
   dashboardsPostH,
   DashboardForm (..),
   dashboardWidgetPutH,
@@ -38,7 +39,6 @@ import Data.List qualified as L
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
-import Data.Time qualified as Time
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity qualified as DBT
 import Database.PostgreSQL.Entity.DBT (query_)
@@ -54,7 +54,7 @@ import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
-import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxPatch_, hxPost_, hxPut_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxPatch_, hxPost_, hxPushUrl_, hxPut_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards qualified as Dashboards
@@ -63,7 +63,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users
-import Models.Users.Users qualified as Users
 import NeatInterpolation
 import Network.HTTP.Types.URI qualified as URI
 import Pages.Anomalies qualified as AnomalyList
@@ -72,7 +71,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem (getServiceName)
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
-import Pkg.Components.Table (BulkAction (..), Column, Features (..), Table (..))
+import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
@@ -87,6 +86,17 @@ import System.Types
 import Text.Slugify (slugify)
 import Utils
 import Web.FormUrlEncoded (FromForm)
+
+
+-- Filter record for dashboard list
+data DashboardFilters = DashboardFilters
+  { tag :: [Text]
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (Default)
+
+
+instance FromForm DashboardFilters
 
 
 data DashboardGet = DashboardGet Projects.ProjectId Dashboards.DashboardId Dashboards.Dashboard Dashboards.DashboardVM [(Text, Maybe Text)]
@@ -395,32 +405,16 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
   Widget.WTAnomalies -> do
     issues <- dbtToEff $ Issues.selectIssues pid Nothing (Just False) (Just False) 2 0 Nothing
     let issuesVM = V.map (AnomalyList.IssueVM False True now "24h") issues
-    pure
-      $ widget
-      & #html
-        ?~ renderText
-          ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-              $ forM_ issuesVM \vm@(AnomalyList.IssueVM hideByDefault _ _ _ issue) ->
-                div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] do
-                  Table.renderRowWithColumns
-                    [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "card-round" else "px-0.5 py-4"
-                    , style_ (if hideByDefault then "display:none" else "")
-                    ]
-                    (AnomalyList.issueColumns issue.projectId)
-                    vm
-          )
-      & #html
-        ?~ renderText
-          ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"]
-              $ forM_ issuesVM \vm@(AnomalyList.IssueVM hideByDefault _ _ _ issue) ->
-                div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] do
-                  Table.renderRowWithColumns
-                    [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "surface-raised rounded-2xl" else "px-0.5 py-4"
-                    , style_ (if hideByDefault then "display:none" else "")
-                    ]
-                    (AnomalyList.issueColumns issue.projectId)
-                    vm
-          )
+    pure $ widget & #html ?~ renderText
+      ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"] $ forM_ issuesVM \vm@(AnomalyList.IssueVM hideByDefault _ _ _ issue) ->
+          div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] do
+            Table.renderRowWithColumns
+              [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "surface-raised rounded-2xl" else "px-0.5 py-4"
+              , style_ (if hideByDefault then "display:none" else "")
+              ]
+              (AnomalyList.issueColumns issue.projectId)
+              vm
+      )
   Widget.WTStat -> do
     stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure $ widget & #dataset ?~ def{Widget.source = AE.Null, Widget.value = stat.dataFloat}
@@ -817,6 +811,9 @@ data DashboardsGetD = DashboardsGetD
   , projectId :: Projects.ProjectId
   , embedded :: Bool -- Whether to render in embedded mode (for modals)
   , teams :: V.Vector ManageMembers.Team
+  , tableActions :: Maybe Table.TableHeaderActions
+  , filters :: DashboardFilters
+  , availableTags :: [Text]
   }
   deriving (Generic, Show)
 data DashboardsGet
@@ -964,7 +961,17 @@ dashboardsGet_ dg = do
 
     let renderTeamsCol dash = forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml team.handle
 
-    let renderTagsCol dash = forM_ (V.toList dash.tags) \tag -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml tag
+    let baseUrl = "/p/" <> dg.projectId.toText <> "/dashboards"
+    let renderTagsCol dash = forM_ (V.toList dash.tags) \tag ->
+          a_
+            [ class_ "badge badge-sm badge-neutral mr-1 cursor-pointer hover:badge-primary"
+            , hxGet_ $ baseUrl <> "?tag=" <> toUriStr tag
+            , hxTarget_ "#dashboardsTableContainer"
+            , hxSelect_ "#dashboardsTableContainer"
+            , hxPushUrl_ "true"
+            , hxSwap_ "outerHTML"
+            ]
+            $ toHtml tag
 
     let renderWidgetsCol dash = do
           let count = getWidgetCount dash
@@ -973,8 +980,8 @@ dashboardsGet_ dg = do
             span_ [class_ "leading-none monospace"] $ toHtml $ show count
 
     let tableCols =
-          [ Table.col "Name" renderNameCol & Table.withAttrs [class_ "min-w-0"]
-          , Table.col "Last Modified" renderModifiedCol & Table.withAttrs [class_ "w-44"]
+          [ Table.col "Name" renderNameCol & Table.withAttrs [class_ "min-w-0"] & Table.withSort "title"
+          , Table.col "Last Modified" renderModifiedCol & Table.withAttrs [class_ "w-44"] & Table.withSort "updated_at"
           , Table.col "Teams" renderTeamsCol & Table.withAttrs [class_ "w-48"]
           , Table.col "Tags" renderTagsCol & Table.withAttrs [class_ "w-48"]
           , Table.col "Widgets" renderWidgetsCol & Table.withAttrs [class_ "w-24"]
@@ -997,12 +1004,43 @@ dashboardsGet_ dg = do
                           , Table.BulkAction{icon = Just "trash", title = "Delete", uri = "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/delete"}
                           ]
                   , Table.search = if dg.embedded then Nothing else Just Table.ClientSide
+                  , Table.tableHeaderActions = dg.tableActions
+                  , Table.header = if dg.embedded || null dg.filters.tag then Nothing else Just $ activeFilters_ dg.projectId baseUrl dg.filters
                   , Table.zeroState = if dg.embedded then Nothing else Just Table.ZeroState{icon = "chart-area", title = "No dashboards yet", description = "Create your first dashboard to visualize your data", actionText = "Create Dashboard", destination = Left "newDashboardMdl"}
                   }
             }
 
     div_ [class_ "w-full", id_ "dashboardsTableContainer"] do
       toHtml table
+
+
+activeFilters_ :: Projects.ProjectId -> Text -> DashboardFilters -> Html ()
+activeFilters_ pid baseUrl filters = div_ [class_ "flex items-center gap-2 mb-4"] do
+  let basePath = "/p/" <> pid.toText <> "/dashboards"
+      -- Remove a specific tag from the URL
+      removeTag tag = T.replace ("&tag=" <> toUriStr tag) "" baseUrl
+  span_ [class_ "text-sm text-textWeak"] "Filtered by:"
+  forM_ filters.tag \tag ->
+    span_ [class_ "badge badge-sm badge-primary gap-1"] do
+      toHtml tag
+      a_
+        [ class_ "cursor-pointer"
+        , hxGet_ $ removeTag tag
+        , hxTarget_ "#dashboardsTableContainer"
+        , hxSelect_ "#dashboardsTableContainer"
+        , hxPushUrl_ "true"
+        , hxSwap_ "outerHTML"
+        ]
+        $ faSprite_ "xmark" "regular" "w-3 h-3"
+  a_
+    [ class_ "text-xs text-textBrand hover:underline cursor-pointer"
+    , hxGet_ basePath
+    , hxTarget_ "#dashboardsTableContainer"
+    , hxSelect_ "#dashboardsTableContainer"
+    , hxPushUrl_ "true"
+    , hxSwap_ "outerHTML"
+    ]
+    "Clear all"
 
 
 addTeamsDrowndown_ :: Projects.ProjectId -> V.Vector ManageMembers.Team -> Html ()
@@ -1020,14 +1058,29 @@ addTeamsDrowndown_ pid teams = div_ [class_ "dropdown dropdown-end"] do
     button_ [class_ "btn btn-primary btn-xs float-right", hxPost_ $ "/p/" <> pid.toText <> "/dashboards/bulk_action/add_teams", hxSwap_ "none"] "Add teams"
 
 
-dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe UUID.UUID -> ATAuthCtx (RespHeaders DashboardsGet)
-dashboardsGetH pid embeddedM teamIdM = do
+dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UUID.UUID -> DashboardFilters -> ATAuthCtx (RespHeaders DashboardsGet)
+dashboardsGetH pid sortM embeddedM teamIdM filters = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  now <- Time.currentTime
-  dashboards <- case teamIdM of
+
+  -- Sort and filter configuration
+  let currentSort = fromMaybe "-updated_at" sortM
+      orderByClause = Table.sortFieldsToSQL $ Table.parseSortParam currentSort Nothing
+      basePath = "/p/" <> pid.toText <> "/dashboards"
+      -- Build URL with current state (sort + existing filters) for proper multi-select
+      currentParams = "?sort=" <> toUriStr currentSort <> T.concat (map (\t -> "&tag=" <> toUriStr t) filters.tag)
+      baseUrl = basePath <> currentParams
+
+  dashboards' <- case teamIdM of
     Just teamId -> V.fromList <$> Dashboards.selectDashboardsByTeam pid teamId
-    Nothing -> Dashboards.selectDashboardsSorted pid
+    Nothing -> Dashboards.selectDashboardsSorted pid orderByClause
+
+  -- Collect all available tags from all dashboards (before filtering)
+  let availableTags = L.nub $ concatMap (V.toList . (.tags)) (V.toList dashboards')
+
+  -- Apply tag filtering
+  let dashboards = if null filters.tag then dashboards' else V.filter (\d -> any (`elem` filters.tag) (V.toList d.tags)) dashboards'
+
   teams <- dbtToEff $ ManageMembers.getTeams pid
 
   -- Check if we're requesting in embedded mode (for modals, etc.)
@@ -1035,8 +1088,7 @@ dashboardsGetH pid embeddedM teamIdM = do
 
   if embedded || isJust teamIdM
     then -- For embedded mode, use a minimal BWConfig that will still work with ToHtml instance
-      addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded = True, teams}
-    -- PageCtx def $ DashboardsGetD{dashboards, projectId = pid, embedded = True, teams}
+      addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded = True, teams, tableActions = Nothing, filters, availableTags}
     else do
       freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
       let bwconf =
@@ -1050,7 +1102,18 @@ dashboardsGetH pid embeddedM teamIdM = do
                   faSprite_ "plus" "regular" "h-4 w-4"
                   "New Dashboard"
               }
-      addRespHeaders $ DashboardsGet (PageCtx bwconf $ DashboardsGetD{dashboards, projectId = pid, embedded = False, teams})
+          tagFilterMenu = Table.FilterMenu{label = "Tags", paramName = "tag", multiSelect = True, options = map (\t -> Table.FilterOption{label = t, value = t, isActive = t `elem` filters.tag}) availableTags}
+          tableActions =
+            Just
+              Table.TableHeaderActions
+                { baseUrl
+                , targetId = "dashboardsTableContainer"
+                , sortOptions = [("Newest", "Most recently modified", "-updated_at"), ("Oldest", "Least recently modified", "+updated_at"), ("Name (A-Z)", "Sort alphabetically", "+title"), ("Name (Z-A)", "Sort reverse alphabetically", "-title")]
+                , currentSort
+                , filterMenus = [tagFilterMenu | not (null availableTags)]
+                , activeFilters = [("Tags", filters.tag) | not (null filters.tag)]
+                }
+      addRespHeaders $ DashboardsGet (PageCtx bwconf $ DashboardsGetD{dashboards, projectId = pid, embedded = False, teams, tableActions, filters, availableTags})
 
 
 data DashboardRes = DashboardNoContent | DashboardPostError Text
@@ -1178,15 +1241,8 @@ dashboardRenamePatchH pid dashId form = do
     Just dashVM -> do
       _ <- dbtToEff $ DBT.updateFieldsBy @Dashboards.DashboardVM [[DBT.field| title |]] ([DBT.field| id |], dashId) (Only form.title)
 
-      when (isJust dashVM.schema) do
-        let updatedSchema = dashVM.schema & (_Just . #title) ?~ form.title
-        _ <-
-          dbtToEff
-            $ DBT.updateFieldsBy @Dashboards.DashboardVM
-              [[DBT.field| schema |]]
-              ([DBT.field| id |], dashId)
-              (Only updatedSchema)
-        pass
+      whenJust dashVM.schema \_ -> void $ dbtToEff $ DBT.updateFieldsBy @Dashboards.DashboardVM
+        [[DBT.field| schema |]] ([DBT.field| id |], dashId) (Only $ dashVM.schema & _Just . #title ?~ form.title)
 
       addSuccessToast "Dashboard renamed successfully" Nothing
       addTriggerEvent "closeModal" ""
@@ -1208,13 +1264,7 @@ dashboardDuplicatePostH pid dashId = do
       newDashId <- UUIDId <$> UUID.genUUID
 
       let copyTitle = if dashVM.title == "" then "Untitled (Copy)" else dashVM.title <> " (Copy)"
-      let updatedSchema =
-            dashVM.schema
-              & _Just . #title %~ \t ->
-                Just $ case t of
-                  Nothing -> copyTitle
-                  Just "" -> "Untitled (Copy)"
-                  Just title -> title <> " (Copy)"
+          updatedSchema = dashVM.schema & _Just . #title %~ fmap (<> " (Copy)") . (<|> Just "Untitled")
 
       _ <-
         dbtToEff
