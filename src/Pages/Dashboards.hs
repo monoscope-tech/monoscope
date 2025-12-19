@@ -1122,6 +1122,7 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
   now <- Time.currentTime
   let mkPath p d = "/p/" <> pid.toText <> p <> d <> "?" <> toQueryParams qparams
       q = [sql|select id::text from projects.dashboards where project_id=? and (homepage_since is not null or base_template=?)|]
+      shouldBeStarred = baseTemplate `elem` ["_overview.yaml", "endpoint-stats.yaml"]
       newDashboard = do
         did <- UUIDId <$> UUID.genUUID
         dbtToEff
@@ -1134,7 +1135,7 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
               , createdBy = sess.user.id
               , baseTemplate = Just baseTemplate
               , schema = Nothing
-              , starredSince = Nothing
+              , starredSince = if shouldBeStarred then Just now else Nothing
               , homepageSince = Nothing
               , tags = V.fromList tags
               , title = title

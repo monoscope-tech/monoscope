@@ -1338,10 +1338,10 @@ renderPattern (template, count) total pid =
         , Widget.standalone = Just True
         , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
         }
-    td_ [class_ "px-4 py-2 font-mono"] (toHtml (show count))
+    td_ [class_ "px-4 py-2 monospace"] (toHtml (show count))
     td_ [class_ "px-4 py-2"]
       $ toHtml (take 4 (show (fromIntegral count / fromIntegral total * 100 :: Double)) ++ "%")
     td_ [class_ "px-4 py-2 max-w-xl truncate whitespace-nowrap"]
       $ code_
-        [class_ "bg-muted/50 px-2 py-1 rounded font-mono text-foreground"]
+        [class_ "bg-muted/50 px-2 py-1 rounded monospace text-foreground"]
         (toHtml template)

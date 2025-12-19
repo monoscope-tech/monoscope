@@ -434,7 +434,7 @@ renderErrors errs =
             button_ [class_ "w-full flex justify-between items-center py-2 text-sm font-medium text-left rounded"] "Stack Trace"
             div_ [id_ "stackTraceContent", class_ "rounded bg-fillWeak p-2"]
               $ div_ [class_ "bg-muted p-3 rounded-md max-h-64 overflow-y-auto mb-4"]
-              $ pre_ [class_ "text-xs font-mono whitespace-pre-wrap text-muted-foreground"]
+              $ pre_ [class_ "text-xs monospace whitespace-pre-wrap text-muted-foreground"]
               $ toHtml stacktrace
 
 

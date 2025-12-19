@@ -177,7 +177,7 @@ installedSuccess botPlatform = do
                       span_ [class_ "text-white font-bold text-lg"] "?"
                   div_ [class_ "flex-1"] do
                     div_ [class_ "flex items-center space-x-2 mb-3"] do
-                      span_ [class_ "font-mono bg-fillBrand-weak text-textBrand px-3 py-1 rounded-lg font-semibold"] "/ask"
+                      span_ [class_ "monospace bg-fillBrand-weak text-textBrand px-3 py-1 rounded-lg font-semibold"] "/ask"
                       span_ [class_ "bg-fillBrand-strong text-white text-xs px-2 py-1 rounded-full"] "AI Powered"
                     p_ [class_ "text-textStrong text-sm"] $ toHtml $ "Ask questions about your API in natural language and get instant insights with logs and charts delivered right to " <> botPlatform <> "."
               div_ [class_ "bg-gradient-to-br from-fillSuccess-weak to-fillWeaker rounded-2xl p-6 border border-strokeSuccess-weak"] do
@@ -187,7 +187,7 @@ installedSuccess botPlatform = do
                       faSprite_ "bell" "regular" "h-6 w-6 text-white"
                   div_ [class_ "flex-1"] do
                     div_ [class_ "flex items-center space-x-2 mb-3"] do
-                      span_ [class_ "font-mono bg-fillSuccess-weak text-textSuccess px-3 py-1 rounded-lg font-semibold"] "/here"
+                      span_ [class_ "monospace bg-fillSuccess-weak text-textSuccess px-3 py-1 rounded-lg font-semibold"] "/here"
                       span_ [class_ "bg-fillSuccess-strong text-white text-xs px-2 py-1 rounded-full"] "Alerts"
                     p_
                       [class_ "text-textStrong text-sm"]

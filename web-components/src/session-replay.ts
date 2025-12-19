@@ -550,7 +550,7 @@ export class SessionReplay extends LitElement {
             </div>
             <div class="flex p-4 w-full items-center justify-between">
               <div>
-                <div class="text-xs flex gap-0.5 font-mono font-medium flex-nowrap w-max">
+                <div class="text-xs flex gap-0.5 monospace font-medium flex-nowrap w-max">
                   <span>${SessionReplay.formatTime(this.currentTime)}</span>
                   <span>/</span>
                   <span>${SessionReplay.formatTime(this.metaData.totalTime)}</span>

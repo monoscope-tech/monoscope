@@ -418,7 +418,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
             div_ [class_ "flex items-center gap-2"] do
               span_ [class_ $ "badge " <> methodFillColor apiData.endpointMethod] $ toHtml apiData.endpointMethod
               -- Endpoint path
-              span_ [class_ "font-mono bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml apiData.endpointPath
+              span_ [class_ "monospace bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml apiData.endpointPath
           _ -> pass
 
       -- Service badge
@@ -475,7 +475,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
                 faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.err-input:checked]/er:rotate-90"
                 "Stack trace"
                 input_ [class_ "err-input w-0 h-0 opacity-0", type_ "checkbox"]
-              div_ [class_ "bg-fillError-weak p-4 overflow-x-scroll hidden group-has-[.err-input:checked]/er:block text-sm font-mono text-fillError-strong"] do
+              div_ [class_ "bg-fillError-weak p-4 overflow-x-scroll hidden group-has-[.err-input:checked]/er:block text-sm monospace text-fillError-strong"] do
                 pre_ [class_ "whitespace-pre-wrap "] $ toHtml exceptionData.stackTrace
           _ -> pass
       Issues.QueryAlert -> do
@@ -483,7 +483,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
           AE.Success (alertData :: Issues.QueryAlertData) -> do
             div_ [class_ "mb-4"] do
               span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
-              div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"]
+              div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm monospace text-fillInformation-strong max-w-2xl overflow-x-auto"]
                 $ toHtml alertData.queryExpression
           _ -> pass
       _ -> pass
@@ -679,7 +679,7 @@ renderFieldChange fieldChange =
     div_ [class_ "flex items-start justify-between gap-4 mb-3"] do
       div_ [class_ "flex items-center gap-2 flex-wrap"] do
         -- Field path in monospace
-        span_ [class_ "font-mono text-sm bg-fillWeak px-2 py-1 rounded text-textStrong"] $ toHtml fieldChange.path
+        span_ [class_ "monospace text-sm bg-fillWeak px-2 py-1 rounded text-textStrong"] $ toHtml fieldChange.path
 
         -- Change kind badge
         let kindText = case fieldChange.changeKind of
@@ -720,12 +720,12 @@ renderFieldChange fieldChange =
           when (isJust fieldChange.oldValue) do
             div_ [] do
               span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "Previous Value:"
-              code_ [class_ "block bg-fillError-weak text-fillError-strong px-3 py-2 rounded text-xs font-mono whitespace-pre-wrap border border-strokeError-weak"] do
+              code_ [class_ "block bg-fillError-weak text-fillError-strong px-3 py-2 rounded text-xs monospace whitespace-pre-wrap border border-strokeError-weak"] do
                 toHtml $ fromMaybe "" fieldChange.oldValue
           when (isJust fieldChange.newValue) do
             div_ [] do
               span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "New Value:"
-              code_ [class_ "block bg-fillSuccess-weak text-fillSuccess-strong px-3 py-2 rounded text-xs font-mono whitespace-pre-wrap border border-strokeSuccess-weak"] do
+              code_ [class_ "block bg-fillSuccess-weak text-fillSuccess-strong px-3 py-2 rounded text-xs monospace whitespace-pre-wrap border border-strokeSuccess-weak"] do
                 toHtml $ fromMaybe "" fieldChange.newValue
 
 
