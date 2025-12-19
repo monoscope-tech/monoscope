@@ -1,11 +1,11 @@
 {
   "devDependencies": {
-    "@tailwindcss/typography": "^0.5.16",
-    "autoprefixer": "^10.4.17",
+    "@tailwindcss/typography": "^0.5.19",
+    "autoprefixer": "^10.4.23",
     "daisyui": "^5.5.14",
     "jest": "^29.7.0",
-    "postcss": "^8.4.34",
-    "tailwindcss": "^4.1.13"
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.18"
   },
   "dependencies": {
     "@opentelemetry/auto-instrumentations-node": "^0.67.2",
