@@ -220,7 +220,7 @@ renderMonitorContent _ item = do
         span_ [class_ "badge badge-sm badge-ghost"] $ toHtml typeLabel
         -- Tags
         forM_ item.tags $ \tag -> do
-          span_ [class_ "badge badge-sm badge-blue"] $ toHtml tag
+          span_ [class_ "badge badge-sm badge-neutral"] $ toHtml tag
 
     -- Details row
     div_ [class_ "w-full flex"] do

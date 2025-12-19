@@ -962,7 +962,7 @@ dashboardsGet_ dg = do
 
     let renderModifiedCol dash = span_ [class_ "monospace text-textWeak", data_ "tippy-content" "Last modified date"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" dash.updatedAt
 
-    let renderTeamsCol dash = forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-blue mr-1"] $ toHtml team.handle
+    let renderTeamsCol dash = forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml team.handle
 
     let renderTagsCol dash = forM_ (V.toList dash.tags) \tag -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml tag
 
