@@ -254,7 +254,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
           }
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
     (Just "slider", Just "true", _, _) -> ALSlider currTime pid endpointM (Just $ V.map (IssueVM True False currTime filterV) issues)
-    (_, _, _, Just "true") -> ALRows $ TableRows{nextUrl = nextFetchUrl, columns = issueColumns pid, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Nothing, rowAttrs = Just \_ -> [class_ "group/row hover:bg-fillWeaker"]}
+    (_, _, _, Just "true") -> ALRows $ TableRows{nextUrl = nextFetchUrl, columns = issueColumns pid, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(IssueVM _ _ _ _ issue) -> Issues.issueIdText issue.id, rowAttrs = Just \_ -> [class_ "group/row hover:bg-fillWeaker"]}
     _ -> ALPage $ PageCtx bwconf issuesTable
 
 
@@ -341,18 +341,10 @@ data IssueVM = IssueVM Bool Bool UTCTime Text Issues.IssueL
 
 issueColumns :: Projects.ProjectId -> [Column IssueVM]
 issueColumns pid =
-  [ col "" renderIssueCheckboxCol & withAttrs [class_ "w-12"]
-  , col "Issue" (renderIssueMainCol pid) & withAttrs [class_ ""]
+  [ col "Issue" (renderIssueMainCol pid) & withAttrs [class_ ""]
   , col "Events" renderIssueEventsCol & withAttrs [class_ "w-36 text-center"]
   , col "Activity" renderIssueChartCol & withAttrs [class_ "w-60"]
   ]
-
-
-renderIssueCheckboxCol :: IssueVM -> Html ()
-renderIssueCheckboxCol (IssueVM hideByDefault isWidget _ _ issue) =
-  unless isWidget $ div_ [class_ "flex items-center space-x-2"] do
-    a_ [class_ $ anomalyAccentColor (isJust issue.acknowledgedAt) (isJust issue.archivedAt) <> " w-2 h-full"] ""
-    input_ [term "aria-label" "Select Issue", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "anomalyId", value_ $ Issues.issueIdText issue.id]
 
 
 renderIssueEventsCol :: IssueVM -> Html ()
@@ -384,14 +376,16 @@ renderIssueChartCol (IssueVM _ _ _ _ issue) =
 renderIssueMainCol :: Projects.ProjectId -> IssueVM -> Html ()
 renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue) = do
   let timeSinceString = prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
+      statusColor = anomalyAccentColor (isJust issue.acknowledgedAt) (isJust issue.archivedAt)
 
-  do
-    -- Title and badges row
-    div_ [class_ $ "flex gap-3 mb-3 flex-wrap " <> if isWidget then "flex-col" else " items-center "] do
-      h3_ [class_ "text-textStrong text-base"] $ toHtml issue.title
+  -- Title and badges row with status indicator
+  div_ [class_ $ "flex gap-3 mb-3 flex-wrap " <> if isWidget then "flex-col" else " items-center "] do
+    -- Status indicator dot
+    unless isWidget $ div_ [class_ $ statusColor <> " w-2 h-2 rounded-full shrink-0 mt-1.5"] ""
+    h3_ [class_ "text-textStrong text-base"] $ toHtml issue.title
 
-      -- Issue type badge
-      div_ [class_ "flex items-center gap-2"] do
+    -- Issue type badge
+    div_ [class_ "flex items-center gap-2"] do
         -- Type badge
         case issue.issueType of
           Issues.RuntimeException ->
