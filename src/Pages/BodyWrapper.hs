@@ -682,9 +682,9 @@ loginBanner = do
 settingsWrapper :: Projects.ProjectId -> Text -> Html () -> Html ()
 settingsWrapper pid current pageHtml = do
   section_ [class_ "flex h-full w-full"] do
-    nav_ [class_ "w-[300px]  h-full p-4 pt-8 border-r border-r-strokWeak"] do
-      h1_ [class_ "text-3xl pl-5 font-medium"] "Settings"
-      ul_ [class_ "flex flex-col mt-14 gap-2 w-full"] $ mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
+    nav_ [class_ "w-56 h-full p-4 pt-8 border-r border-r-strokWeak"] do
+      h1_ [class_ "text-xl pl-3 font-semibold"] "Settings"
+      ul_ [class_ "flex flex-col mt-6 gap-0.5 w-full"] $ mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
     main_ [class_ "w-full h-full overflow-y-auto"] do
       pageHtml
 
@@ -697,7 +697,7 @@ navBottomList pidTxt =
   , ("users", "bg-fillInfo-weak", "text-textInfo", "Manage teams", "/p/" <> pidTxt <> "/manage_teams", Nothing, Nothing, Nothing)
   , ("dollar", "bg-fillWarning-weak", "text-textWarning", "Manage billing", "/p/" <> pidTxt <> "/manage_billing", Nothing, Nothing, Nothing)
   , ("arrows-turn-right", "bg-fillBrand-weak", "text-textBrand", "Integrations", "/p/" <> pidTxt <> "/integrations", Nothing, Nothing, Nothing)
-  , ("bucket", "", "", "Your S3 bucket", "/p/" <> pidTxt <> "/byob_s3", Nothing, Nothing, Nothing)
+  , ("bucket", "bg-fillInfo-weak", "text-textInfo", "Your S3 bucket", "/p/" <> pidTxt <> "/byob_s3", Nothing, Nothing, Nothing)
   , ("trash", "bg-fillError-weak", "text-textError", "Delete project", "/p/" <> pidTxt <> "/settings/delete", Nothing, Nothing, Nothing)
   ]
 
@@ -706,22 +706,19 @@ renderNavBottomItem :: Text -> (Text, Text, Text, Text, Text, Maybe Text, Maybe 
 renderNavBottomItem curr (iconName, bgColor, textColor, linkText, link, targetBlankM, onClickM, hxGetM) =
   let
     defaultAttrs =
-      [ class_ "hover:bg-fillBrand-weak flex gap-2 items-center "
+      [ class_ "hover:bg-fillBrand-weak flex gap-2 items-center"
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" linkText
       ]
     activeCls = if curr == linkText then "bg-fillWeak" else ""
+    iconCls = "p-1.5 rounded-full shrink-0 leading-none " <> bgColor <> " " <> textColor
     attrs =
       defaultAttrs
         ++ [target_ "BLANK_" | isJust targetBlankM]
         ++ maybe [] (\onClick -> [onclick_ onClick]) onClickM
         ++ (if isJust hxGetM then [hxGet_ link, hxTarget_ "body"] else [href_ link])
    in
-    li_ [class_ $ "px-2 py-1 w-[220px] rounded-lg " <> activeCls] do
+    li_ [class_ $ "px-1 py-0.5 rounded-lg " <> activeCls] do
       a_ attrs $ do
-        span_
-          [class_ "p-2 rounded-full shrink-0 leading-none"]
-          (faSprite_ iconName "regular" "shrink-0 h-3 w-3")
-        span_
-          [class_ "text-textWeak"]
-          (toHtml linkText)
+        span_ [class_ iconCls] (faSprite_ iconName "regular" "shrink-0 h-3 w-3")
+        span_ [class_ "text-sm"] (toHtml linkText)
