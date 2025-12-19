@@ -201,7 +201,9 @@ apiKeyColumns pid =
             , term "data-state" "hide"
             , term "data-tippy-content" "Show key"
             , term "data-prefix" (T.take 8 apiKey.keyPrefix <> T.replicate 20 "*")
-            , term "_" [text|on click
+            , term
+                "_"
+                [text|on click
                  if my @data-state is "hide"
                    put my @data-key into <.$idx/>
                    put "show" into my @data-state
