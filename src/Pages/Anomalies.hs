@@ -188,20 +188,21 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
             then Nothing
             else Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)
   let issuesVM = V.map (IssueVM False False currTime filterV) issues
-      tableActions = TableHeaderActions
-        { baseUrl
-        , targetId = "anomalyListContainer"
-        , sortOptions =
-            [ ("Newest", "Most recently created", "-created_at")
-            , ("Oldest", "Oldest issues first", "+created_at")
-            , ("Recently Updated", "Most recently updated", "-updated_at")
-            , ("Name (A-Z)", "Sort alphabetically", "+title")
-            , ("Name (Z-A)", "Sort reverse alphabetically", "-title")
-            ]
-        , currentSort
-        , filterMenus = []
-        , activeFilters = []
-        }
+      tableActions =
+        TableHeaderActions
+          { baseUrl
+          , targetId = "anomalyListContainer"
+          , sortOptions =
+              [ ("Newest", "Most recently created", "-created_at")
+              , ("Oldest", "Oldest issues first", "+created_at")
+              , ("Recently Updated", "Most recently updated", "-updated_at")
+              , ("Name (A-Z)", "Sort alphabetically", "+title")
+              , ("Name (Z-A)", "Sort reverse alphabetically", "-title")
+              ]
+          , currentSort
+          , filterMenus = []
+          , activeFilters = []
+          }
   let issuesTable =
         Table
           { config = def{elemID = "anomalyListForm", containerId = Just "anomalyListContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}

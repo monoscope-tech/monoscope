@@ -51,17 +51,18 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
           then Nothing
           else Just $ currentURL <> "&skip=" <> maybe "20" (\x -> show $ 20 + x) skipM
   let hostsVM = V.map (\host -> HostEventsVM pid host filterV requestType) hostsAndEvents
-      tableActions = TableHeaderActions
-        { baseUrl
-        , targetId = "apiCatalogContainer"
-        , sortOptions =
-            [ ("Most Active", "Most recently accessed", "-events")
-            , ("Alphabetical", "Sort by dependency name", "+name")
-            ]
-        , currentSort
-        , filterMenus = []
-        , activeFilters = []
-        }
+      tableActions =
+        TableHeaderActions
+          { baseUrl
+          , targetId = "apiCatalogContainer"
+          , sortOptions =
+              [ ("Most Active", "Most recently accessed", "-events")
+              , ("Alphabetical", "Sort by dependency name", "+name")
+              ]
+          , currentSort
+          , filterMenus = []
+          , activeFilters = []
+          }
   let catalogTable =
         Table
           { config = def{elemID = "apiCatalogForm", containerId = Just "apiCatalogContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
@@ -225,17 +226,18 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
         if V.length endpointStats < 30
           then Nothing
           else Just $ currentURL <> "&page=" <> show (page + 1) <> "&load_more=true"
-      tableActions = TableHeaderActions
-        { baseUrl
-        , targetId = "endpointsListContainer"
-        , sortOptions =
-            [ ("Most Active", "Most requests", "-events")
-            , ("Alphabetical", "Sort by endpoint path", "+name")
-            ]
-        , currentSort
-        , filterMenus = []
-        , activeFilters = []
-        }
+      tableActions =
+        TableHeaderActions
+          { baseUrl
+          , targetId = "endpointsListContainer"
+          , sortOptions =
+              [ ("Most Active", "Most requests", "-events")
+              , ("Alphabetical", "Sort by endpoint path", "+name")
+              ]
+          , currentSort
+          , filterMenus = []
+          , activeFilters = []
+          }
   let endpointsTable =
         Table
           { config = def{elemID = "endpointsForm", containerId = Just "endpointsListContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
@@ -328,5 +330,3 @@ instance ToHtml EndpointRequestStatsVM where
   toHtml (EndpointsListPage pg) = toHtml pg
   toHtml (EndpointsListRows rows) = toHtml rows
   toHtmlRaw = toHtml
-
-
