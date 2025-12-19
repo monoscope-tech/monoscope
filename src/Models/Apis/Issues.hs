@@ -309,46 +309,33 @@ selectIssueById = selectOneByField [field| id |] . Only
 
 
 -- | Select issues with filters
-selectIssues :: Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> DBT IO (V.Vector IssueL)
-selectIssues pid typeM isAcknowledged isArchived limit offset timeRangeM = query (Query $ encodeUtf8 q) params
+selectIssues :: Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> DBT IO (V.Vector IssueL)
+selectIssues pid typeM isAcknowledged isArchived limit offset timeRangeM sortM = query (Query $ encodeUtf8 q) params
   where
-    -- Query must return columns in the exact order of IssueL fields
-
     timefilter = case timeRangeM of
       Just (st, end) -> " AND created_at >= '" <> formatUTC st <> "' AND created_at <= '" <> formatUTC end <> "'"
       _ -> ""
     ackF = ""
+    orderBy = case sortM of
+      Just "-created_at" -> "ORDER BY created_at DESC"
+      Just "+created_at" -> "ORDER BY created_at ASC"
+      Just "-updated_at" -> "ORDER BY updated_at DESC"
+      Just "+updated_at" -> "ORDER BY updated_at ASC"
+      Just "-title" -> "ORDER BY title DESC"
+      Just "+title" -> "ORDER BY title ASC"
+      _ -> "ORDER BY critical DESC, created_at DESC"
     q =
       [text|
-      SELECT 
-        id,                                               -- 1. id
-        created_at,                                       -- 2. createdAt
-        updated_at,                                       -- 3. updatedAt
-        project_id,                                       -- 4. projectId
-        issue_type::text,                              -- 5. issueType (converted)
-        endpoint_hash,                                    -- 6. endpointHash
-        acknowledged_at,                                  -- 7. acknowledgedAt
-        acknowledged_by,                                  -- 8. acknowledgedBy
-        archived_at,                                      -- 9. archivedAt
-        title,                                           -- 10. title
-        service,                                         -- 11. service
-        critical,                                        -- 12. critical
-        CASE WHEN critical THEN 'critical' ELSE 'info' END, -- 13. severity
-        affected_requests,                               -- 14. affectedRequests
-        affected_clients,                                -- 15. affectedClients
-        NULL::double precision,                          -- 16. errorRate
-        recommended_action,                              -- 17. recommendedAction
-        migration_complexity,                            -- 18. migrationComplexity
-        issue_data,                                      -- 19. issueData
-        request_payloads,                                -- 20. requestPayloads
-        response_payloads,                               -- 21. responsePayloads
-        NULL::timestamp with time zone,                  -- 22. llmEnhancedAt
-        NULL::int,                                       -- 23. llmEnhancementVersion
-        0::bigint,                                       -- 24. eventCount
-        updated_at                                       -- 25. lastSeen
+      SELECT
+        id, created_at, updated_at, project_id, issue_type::text, endpoint_hash,
+        acknowledged_at, acknowledged_by, archived_at, title, service, critical,
+        CASE WHEN critical THEN 'critical' ELSE 'info' END,
+        affected_requests, affected_clients, NULL::double precision,
+        recommended_action, migration_complexity, issue_data, request_payloads,
+        response_payloads, NULL::timestamp with time zone, NULL::int, 0::bigint, updated_at
       FROM apis.issues
-      WHERE project_id = ?  $timefilter $ackF
-      ORDER BY critical DESC, created_at DESC
+      WHERE project_id = ? $timefilter $ackF
+      $orderBy
       LIMIT ? OFFSET ?
     |]
     params = (pid, limit, offset)

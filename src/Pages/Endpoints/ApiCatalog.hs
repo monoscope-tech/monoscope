@@ -13,7 +13,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pkg.Components.Table (Column (..), Config (..), Features (..), SearchMode (..), SortConfig (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
+import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.Widget (WidgetAxis (..))
 import Pkg.Components.Widget qualified as Widget
 import PyF qualified
@@ -29,40 +29,51 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
   appCtx <- ask @AuthContext
 
   let requestType = fromMaybe "Incoming" requestTypeM
-  let sortV = fromMaybe "events" sortM
-  let filterV = fromMaybe "24H" timeFilter
+      currentSort = fromMaybe "-events" sortM
+      filterV = fromMaybe "24H" timeFilter
+      -- Map new sort format to old format for DB query
+      sortV = case currentSort of
+        "-events" -> "events"
+        "+events" -> "events"
+        "-name" -> "name"
+        "+name" -> "name"
+        _ -> "events"
 
   hostsAndEvents <- dbtToEff $ Endpoints.dependenciesAndEventsCount pid requestType sortV (fromMaybe 0 skipM) filterV
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
 
   currTime <- Time.currentTime
 
-  let currentURL = "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=" <> requestType
+  let baseUrl = "/p/" <> pid.toText <> "/api_catalog?request_type=" <> requestType
+      currentURL = baseUrl <> "&sort=" <> currentSort
       nextFetchUrl =
         if V.length hostsAndEvents < 20
           then Nothing
           else Just $ currentURL <> "&skip=" <> maybe "20" (\x -> show $ 20 + x) skipM
   let hostsVM = V.map (\host -> HostEventsVM pid host filterV requestType) hostsAndEvents
+      tableActions = TableHeaderActions
+        { baseUrl
+        , targetId = "apiCatalogContainer"
+        , sortOptions =
+            [ ("Most Active", "Most recently accessed", "-events")
+            , ("Alphabetical", "Sort by dependency name", "+name")
+            ]
+        , currentSort
+        , filterMenus = []
+        , activeFilters = []
+        }
   let catalogTable =
         Table
-          { config = def{elemID = "anomalyListForm", addPadding = True}
+          { config = def{elemID = "apiCatalogForm", containerId = Just "apiCatalogContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
           , columns = catalogColumns pid requestType
           , rows = hostsVM
           , features =
               def
                 { rowId = Just \(HostEventsVM _ he _ _) -> he.host
-                , bulkActions = [] -- No bulk actions for dependencies
+                , rowAttrs = Just \_ -> [class_ "group/row hover:bg-fillWeaker"]
+                , bulkActions = [BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/archive"}]
                 , search = Just ClientSide
-                , sort =
-                    Just
-                      $ SortConfig
-                        { current = sortV
-                        , currentURL = currentURL
-                        , options =
-                            [ ("Latest", "Most recently accessed", "events")
-                            , ("Alphabetical", "Sort by dependency name", "name")
-                            ]
-                        }
+                , tableHeaderActions = Just tableActions
                 , pagination = (,"both") <$> nextFetchUrl
                 , zeroState =
                     Just
@@ -83,11 +94,11 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
           , pageTitle = "API Catalog"
           , freeTierExceeded = freeTierExceeded
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
-              a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Incoming", role_ "tab", class_ $ "tab h-auto! " <> if requestType == "Incoming" then "tab-active text-textStrong" else ""] "Incoming"
-              a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Outgoing", role_ "tab", class_ $ "tab h-auto! " <> if requestType == "Outgoing" then "tab-active text-textStrong" else ""] "Outgoing"
+              a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> currentSort <> "&request_type=Incoming", role_ "tab", class_ $ "tab h-auto! " <> if requestType == "Incoming" then "tab-active text-textStrong" else ""] "Incoming"
+              a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> currentSort <> "&request_type=Outgoing", role_ "tab", class_ $ "tab h-auto! " <> if requestType == "Outgoing" then "tab-active text-textStrong" else ""] "Outgoing"
           }
   case skipM of
-    Just _ -> addRespHeaders $ CatalogListRows $ TableRows{nextUrl = nextFetchUrl, columns = catalogColumns pid requestType, rows = hostsVM, emptyState = Nothing}
+    Just _ -> addRespHeaders $ CatalogListRows $ TableRows{nextUrl = nextFetchUrl, columns = catalogColumns pid requestType, rows = hostsVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(HostEventsVM _ he _ _) -> he.host, rowAttrs = Just \_ -> [class_ "group/row hover:bg-fillWeaker"]}
     _ -> addRespHeaders $ CatalogListPage $ PageCtx bwconf catalogTable
 
 
@@ -96,17 +107,10 @@ data HostEventsVM = HostEventsVM Projects.ProjectId Endpoints.HostEvents Text Te
 
 catalogColumns :: Projects.ProjectId -> Text -> [Column HostEventsVM]
 catalogColumns pid requestType =
-  [ col "" renderCatalogCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8"]
-  , col "Dependency" (renderCatalogMainCol pid requestType) & withAttrs [class_ "space-y-3 grow"]
-  , col "Events" renderCatalogEventsCol & withAttrs [class_ "w-36 flex items-center justify-center"]
-  , col "Activity" renderCatalogChartCol & withAttrs [class_ "flex items-center justify-center"]
+  [ col "Dependency" (renderCatalogMainCol pid requestType) & withAttrs [class_ "space-y-3"]
+  , col "Events" renderCatalogEventsCol & withAttrs [class_ "w-36 text-center"]
+  , col "Activity" renderCatalogChartCol & withAttrs [class_ "w-60"]
   ]
-
-
-renderCatalogCheckboxCol :: HostEventsVM -> Html ()
-renderCatalogCheckboxCol (HostEventsVM _ he _ _) = do
-  a_ [class_ "w-2 h-full"] ""
-  input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "hostId", value_ he.host]
 
 
 renderCatalogEventsCol :: HostEventsVM -> Html ()
@@ -175,14 +179,23 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
         _ -> (True, False, "Active")
 
   let host = maybeToMonoid $ hostM >>= \t -> if t == "" then Nothing else Just t
-  let page = fromMaybe 0 $ readMaybe (toString $ fromMaybe "" pageM)
-  let hostParam = hostM >>= \h -> if h == "" then Nothing else Just h
-  endpointStats <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid ackd archived hostParam sortM searchM page (fromMaybe "" requestTypeM)
+      page = fromMaybe 0 $ readMaybe (toString $ fromMaybe "" pageM)
+      hostParam = hostM >>= \h -> if h == "" then Nothing else Just h
+      currentSort = fromMaybe "-events" sortM
+      -- Map new sort format to old format for DB query
+      sortV = case currentSort of
+        "-events" -> Just "events"
+        "+events" -> Just "events"
+        "-name" -> Just "name"
+        "+name" -> Just "name"
+        _ -> Just "events"
+  endpointStats <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid ackd archived hostParam sortV searchM page (fromMaybe "" requestTypeM)
   inboxCount <- dbtToEff $ Endpoints.countEndpointInbox pid host (fromMaybe "Incoming" requestTypeM)
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
 
   let requestType = fromMaybe "Incoming" requestTypeM
-  let currentURL = [PyF.fmt|/p/{pid.toText}/endpoints?layout={fromMaybe "false" layoutM}&filter={fromMaybe "" filterTM}&sort={fromMaybe "event" sortM}&request_type={requestType}&host={host}|]
+      baseUrl = [PyF.fmt|/p/{pid.toText}/endpoints?filter={currentFilterTab}&request_type={requestType}&host={host}|]
+      currentURL = baseUrl <> "&sort=" <> currentSort
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
@@ -196,7 +209,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                 $ toHtml
                 $ TabFilter
                   { current = currentFilterTab
-                  , currentURL
+                  , currentURL = baseUrl
                   , clientSide = False
                   , options =
                       [ TabFilterOpt{name = "Active", count = Nothing, targetId = Nothing}
@@ -212,26 +225,29 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
         if V.length endpointStats < 30
           then Nothing
           else Just $ currentURL <> "&page=" <> show (page + 1) <> "&load_more=true"
+      tableActions = TableHeaderActions
+        { baseUrl
+        , targetId = "endpointsListContainer"
+        , sortOptions =
+            [ ("Most Active", "Most requests", "-events")
+            , ("Alphabetical", "Sort by endpoint path", "+name")
+            ]
+        , currentSort
+        , filterMenus = []
+        , activeFilters = []
+        }
   let endpointsTable =
         Table
-          { config = def{elemID = "anomalyListForm"}
+          { config = def{elemID = "endpointsForm", containerId = Just "endpointsListContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
           , columns = endpointColumns pid
           , rows = endpReqVM
           , features =
               def
                 { rowId = Just \(EnpReqStatsVM _ _ enp) -> enp.endpointHash
-                , bulkActions = [] -- No bulk actions for endpoints
-                , search = Just (ServerSide currentURL)
-                , sort =
-                    Just
-                      $ SortConfig
-                        { current = fromMaybe "events" sortM
-                        , currentURL = currentURL
-                        , options =
-                            [ ("Most Active", "Most requests", "events")
-                            , ("Alphabetical", "Sort by endpoint path", "name")
-                            ]
-                        }
+                , rowAttrs = Just \_ -> [class_ "group/row hover:bg-fillWeaker"]
+                , bulkActions = [BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/endpoints/bulk_action/archive"}]
+                , search = Just (ServerSide baseUrl)
+                , tableHeaderActions = Just tableActions
                 , pagination = (,"both") <$> nextFetchUrl
                 , zeroState =
                     Just
@@ -247,9 +263,11 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                     Nothing -> "Endpoints"
                 }
           }
+  let endpRowId = Just \(EnpReqStatsVM _ _ enp) -> enp.endpointHash
+      endpRowAttrs = Just \_ -> [class_ "group/row hover:bg-fillWeaker"]
   case (loadMoreM, searchM) of
-    (Just _, _) -> addRespHeaders $ EndpointsListRows $ TableRows{nextUrl = nextFetchUrl, columns = endpointColumns pid, rows = endpReqVM, emptyState = Nothing}
-    (_, Just _) -> addRespHeaders $ EndpointsListRows $ TableRows{nextUrl = nextFetchUrl, columns = endpointColumns pid, rows = endpReqVM, emptyState = Nothing}
+    (Just _, _) -> addRespHeaders $ EndpointsListRows $ TableRows{nextUrl = nextFetchUrl, columns = endpointColumns pid, rows = endpReqVM, emptyState = Nothing, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs}
+    (_, Just _) -> addRespHeaders $ EndpointsListRows $ TableRows{nextUrl = nextFetchUrl, columns = endpointColumns pid, rows = endpReqVM, emptyState = Nothing, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs}
     _ -> addRespHeaders $ EndpointsListPage $ PageCtx bwconf endpointsTable
 
 
@@ -259,17 +277,10 @@ data EnpReqStatsVM = EnpReqStatsVM Bool UTCTime Endpoints.EndpointRequestStats
 
 endpointColumns :: Projects.ProjectId -> [Column EnpReqStatsVM]
 endpointColumns pid =
-  [ col "" renderEndpointCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8 justify-center items-center"]
-  , col "Endpoint" (renderEndpointMainCol pid) & withAttrs [class_ "space-y-3 grow"]
-  , col "Events" renderEndpointEventsCol & withAttrs [class_ "w-36 flex items-center justify-center"]
-  , col "Activity" renderEndpointChartCol & withAttrs [class_ "flex items-center justify-center w-60 h-10"]
+  [ col "Endpoint" (renderEndpointMainCol pid) & withAttrs [class_ "space-y-3"]
+  , col "Events" renderEndpointEventsCol & withAttrs [class_ "w-36 text-center"]
+  , col "Activity" renderEndpointChartCol & withAttrs [class_ "w-60"]
   ]
-
-
-renderEndpointCheckboxCol :: EnpReqStatsVM -> Html ()
-renderEndpointCheckboxCol (EnpReqStatsVM _ _ enp) = do
-  a_ [class_ $ endpointAccentColor True True <> " w-2 h-full"] ""
-  input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "endpointHash", value_ enp.endpointHash]
 
 
 renderEndpointEventsCol :: EnpReqStatsVM -> Html ()
@@ -314,14 +325,8 @@ data EndpointRequestStatsVM
 
 
 instance ToHtml EndpointRequestStatsVM where
-  {-# INLINE toHtml #-}
   toHtml (EndpointsListPage pg) = toHtml pg
   toHtml (EndpointsListRows rows) = toHtml rows
-  toHtmlRaw :: Monad m => EndpointRequestStatsVM -> HtmlT m ()
   toHtmlRaw = toHtml
 
 
-endpointAccentColor :: Bool -> Bool -> Text
-endpointAccentColor _ True = "bg-fillWeaker"
-endpointAccentColor True False = "bg-fillSuccess-weak"
-endpointAccentColor False False = "bg-fillError-strong"

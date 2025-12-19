@@ -78,6 +78,9 @@ data TableRows a = TableRows
   , columns :: [Column a]
   , rows :: V.Vector a
   , emptyState :: Maybe SimpleZeroState
+  , renderAsTable :: Bool
+  , rowId :: Maybe (a -> Text)
+  , rowAttrs :: Maybe (a -> [Attribute])
   }
 
 
@@ -115,6 +118,7 @@ data Config = Config
   , containerClasses :: Text
   , showHeader :: Bool
   , elemID :: Text
+  , containerId :: Maybe Text -- Outer container id for HTMX targeting
   , renderAsTable :: Bool -- True for table mode, False for list mode
   , addPadding :: Bool -- When True, wraps table in div with px-6 pt-4 pb-2 padding
   , bulkActionsInHeader :: Maybe Int -- Column index (0-based) to place bulk actions in header; Nothing uses toolbar
@@ -242,9 +246,10 @@ instance Default Config where
       { tableClasses = "table table-sm w-full relative"
       , thClasses = "text-left bg-fillWeaker sticky top-0"
       , tdClasses = "px-6 py-4"
-      , containerClasses = "w-full mx-auto space-y-4 overflow-y-scroll h-full"
+      , containerClasses = "w-full mx-auto space-y-4"
       , showHeader = True
       , elemID = "tableContainer"
+      , containerId = Nothing
       , renderAsTable = False
       , addPadding = False
       , bulkActionsInHeader = Nothing
@@ -271,10 +276,15 @@ instance ToHtml (TableRows a) where
 renderTableRows :: TableRows a -> Html ()
 renderTableRows tr
   | V.null tr.rows = whenJust tr.emptyState renderSimpleZeroState
+  | tr.renderAsTable = do
+      let colCount = length tr.columns + if isJust tr.rowId then 1 else 0
+          getRowAttrs row = maybe [] ($ row) tr.rowAttrs
+      V.forM_ tr.rows \row -> tr_ (getRowAttrs row) do
+        whenJust tr.rowId \getId -> td_ [class_ "w-8"] $ input_ [term "aria-label" "Select Item", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "itemId", value_ $ getId row]
+        forM_ tr.columns \c -> td_ c.attrs $ c.render row
+      whenJust tr.nextUrl \url -> tr_ [] $ td_ [colspan_ $ show colCount] $ renderPaginationLink url "both"
   | otherwise = do
-      V.forM_ tr.rows \row ->
-        div_ [class_ "flex gap-8 items-start itemsListItem"] do
-          forM_ tr.columns \c -> div_ c.attrs $ c.render row
+      V.forM_ tr.rows \row -> div_ [class_ "flex gap-8 items-start itemsListItem"] $ forM_ tr.columns \c -> div_ c.attrs $ c.render row
       whenJust tr.nextUrl (`renderPaginationLink` "both")
 
 
@@ -315,32 +325,19 @@ renderTable tbl =
   let tableContent = div_ [class_ tbl.config.containerClasses, id_ $ tbl.config.elemID <> "_page"] do
         whenJust tbl.features.search renderSearch
         whenJust tbl.features.header id
-
-        div_
-          [ class_ "grid surface-raised overflow-hidden my-0 group/grid"
-          , id_ $ tbl.config.elemID <> "_grid"
-          ]
-          do
-            form_
-              [ class_ "flex flex-col divide-y w-full"
-              , id_ tbl.config.elemID
-              , onkeydown_ "return event.key != 'Enter';"
-              ]
-              do
-                when ((isJust tbl.features.rowId || isJust tbl.features.sort) && isNothing tbl.config.bulkActionsInHeader)
-                  $ renderToolbar tbl
-
-                when (V.null tbl.rows) $ whenJust tbl.features.zeroState renderZeroState
-
-                div_ [class_ "w-full flex-col"] do
-                  whenJust tbl.features.search \_ ->
-                    span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
-                  div_ [id_ "rowsContainer", class_ "divide-y"] do
-                    renderRows tbl
-                    whenJust tbl.features.pagination $ uncurry renderPaginationLink
-   in if tbl.config.addPadding
-        then div_ [class_ "px-6 pt-4 pb-2"] tableContent
-        else tableContent
+        div_ [class_ "grid surface-raised overflow-hidden my-0 group/grid", id_ $ tbl.config.elemID <> "_grid"] do
+          form_ [class_ "flex flex-col divide-y w-full", id_ tbl.config.elemID, onkeydown_ "return event.key != 'Enter';"] do
+            when ((isJust tbl.features.rowId || isJust tbl.features.sort) && isNothing tbl.config.bulkActionsInHeader) $ renderToolbar tbl
+            when (V.null tbl.rows) $ whenJust tbl.features.zeroState renderZeroState
+            div_ [class_ "w-full flex-col"] do
+              whenJust tbl.features.search \_ -> span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
+              div_ [id_ "rowsContainer", class_ "divide-y"] do
+                renderRows tbl
+                whenJust tbl.features.pagination $ uncurry renderPaginationLink
+      paddedContent = if tbl.config.addPadding then div_ [class_ "px-6 pt-4 pb-2"] tableContent else tableContent
+   in case tbl.config.containerId of
+        Just cid -> div_ [class_ "w-full", id_ cid] paddedContent
+        Nothing -> paddedContent
 
 
 renderRows :: Table a -> Html ()
@@ -360,7 +357,7 @@ renderRows tbl =
                   , [__| on click set .bulkactionItemCheckbox.checked to my.checked |]
                   ]
               forM_ (zip [0 ..] tbl.columns) \(idx, c) -> do
-                let baseAttrs = [class_ $ tbl.config.thClasses <> maybe "" (" " <>) c.align]
+                let baseAttrs = [class_ $ tbl.config.thClasses <> " " <> fromMaybe "" c.align]
                     sortAttrs = case (c.sortField, tbl.features.sortableColumns) of
                       (Just field, Just cfg) ->
                         [ hxGet_ $ toggleSortUrl cfg field
@@ -378,7 +375,7 @@ renderRows tbl =
                       (Just field, Just cfg) | "-" <> field == cfg.currentSort -> Just Desc
                       (Just field, Just cfg) | "+" <> field == cfg.currentSort -> Just Asc
                       _ -> Nothing
-                th_ (baseAttrs <> sortAttrs) do
+                th_ (c.attrs <> baseAttrs <> sortAttrs) do
                   span_ [class_ "flex items-center gap-2"] do
                     toHtml c.name
                     when isSorted $ case sortOrder of

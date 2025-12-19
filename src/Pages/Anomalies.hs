@@ -45,7 +45,7 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users (User (id))
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), SearchMode (..), SortConfig (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, renderRowWithColumns, withAttrs)
+import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, renderRowWithColumns, withAttrs)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
@@ -171,14 +171,16 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
   let filterV = fromMaybe "14d" timeFilter
 
   let pageInt = maybe 0 (Unsafe.read . toString) pageM
+  let currentSort = fromMaybe "-created_at" sortM
 
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
   currTime <- liftIO getCurrentTime
 
   let fLimit = 10
-  issues <- dbtToEff $ Issues.selectIssues pid Nothing (Just ackd) (Just archived) fLimit (pageInt * fLimit) Nothing
+  issues <- dbtToEff $ Issues.selectIssues pid Nothing (Just ackd) (Just archived) fLimit (pageInt * fLimit) Nothing (Just currentSort)
 
-  let currentURL = mconcat ["/p/", pid.toText, "/anomalies?layout=", fromMaybe "false" layoutM, "&ackd=", show ackd, "&archived=", show archived]
+  let baseUrl = "/p/" <> pid.toText <> "/anomalies?filter=" <> currentFilterTab
+      currentURL = baseUrl <> "&sort=" <> currentSort
       nextFetchUrl = case layoutM of
         Just "slider" -> Nothing
         _ ->
@@ -186,30 +188,35 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
             then Nothing
             else Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)
   let issuesVM = V.map (IssueVM False False currTime filterV) issues
+      tableActions = TableHeaderActions
+        { baseUrl
+        , targetId = "anomalyListContainer"
+        , sortOptions =
+            [ ("Newest", "Most recently created", "-created_at")
+            , ("Oldest", "Oldest issues first", "+created_at")
+            , ("Recently Updated", "Most recently updated", "-updated_at")
+            , ("Name (A-Z)", "Sort alphabetically", "+title")
+            , ("Name (Z-A)", "Sort reverse alphabetically", "-title")
+            ]
+        , currentSort
+        , filterMenus = []
+        , activeFilters = []
+        }
   let issuesTable =
         Table
-          { config = def{elemID = "anomalyListForm", addPadding = True}
+          { config = def{elemID = "anomalyListForm", containerId = Just "anomalyListContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
           , columns = issueColumns pid
           , rows = issuesVM
           , features =
               def
                 { rowId = Just \(IssueVM _ _ _ _ issue) -> Issues.issueIdText issue.id
+                , rowAttrs = Just \_ -> [class_ "group/row hover:bg-fillWeaker"]
                 , bulkActions =
-                    [ BulkAction{icon = Just "check", title = "acknowledge", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowledge"}
-                    , BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
+                    [ BulkAction{icon = Just "check", title = "Acknowledge", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowledge"}
+                    , BulkAction{icon = Just "inbox-full", title = "Archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
                     ]
                 , search = Just ClientSide
-                , sort =
-                    Just
-                      $ SortConfig
-                        { current = fromMaybe "events" sortM
-                        , currentURL = currentURL
-                        , options =
-                            [ ("First Seen", "First time the issue occured", "first_seen")
-                            , ("Last Seen", "Last time the issue occured", "last_seen")
-                            , ("Events", "Number of events", "events")
-                            ]
-                        }
+                , tableHeaderActions = Just tableActions
                 , pagination = (,"both") <$> nextFetchUrl
                 , zeroState =
                     Just
@@ -246,7 +253,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
           }
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
     (Just "slider", Just "true", _, _) -> ALSlider currTime pid endpointM (Just $ V.map (IssueVM True False currTime filterV) issues)
-    (_, _, _, Just "true") -> ALRows $ TableRows{nextUrl = nextFetchUrl, columns = issueColumns pid, rows = issuesVM, emptyState = Nothing} -- For load more - only rows
+    (_, _, _, Just "true") -> ALRows $ TableRows{nextUrl = nextFetchUrl, columns = issueColumns pid, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Nothing, rowAttrs = Just \_ -> [class_ "group/row hover:bg-fillWeaker"]}
     _ -> ALPage $ PageCtx bwconf issuesTable
 
 
@@ -333,16 +340,16 @@ data IssueVM = IssueVM Bool Bool UTCTime Text Issues.IssueL
 
 issueColumns :: Projects.ProjectId -> [Column IssueVM]
 issueColumns pid =
-  [ col "" renderIssueCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8 items-center justify-center"]
-  , col "Issue" (renderIssueMainCol pid) & withAttrs [class_ "flex-1 min-w-0"]
-  , col "Events" renderIssueEventsCol & withAttrs [class_ "w-36 flex items-start justify-center"]
-  , col "Activity" renderIssueChartCol & withAttrs [class_ "flex items-start justify-center"]
+  [ col "" renderIssueCheckboxCol & withAttrs [class_ "w-12"]
+  , col "Issue" (renderIssueMainCol pid) & withAttrs [class_ ""]
+  , col "Events" renderIssueEventsCol & withAttrs [class_ "w-36 text-center"]
+  , col "Activity" renderIssueChartCol & withAttrs [class_ "w-60"]
   ]
 
 
 renderIssueCheckboxCol :: IssueVM -> Html ()
 renderIssueCheckboxCol (IssueVM hideByDefault isWidget _ _ issue) =
-  unless isWidget do
+  unless isWidget $ div_ [class_ "flex items-center space-x-2"] do
     a_ [class_ $ anomalyAccentColor (isJust issue.acknowledgedAt) (isJust issue.archivedAt) <> " w-2 h-full"] ""
     input_ [term "aria-label" "Select Issue", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "anomalyId", value_ $ Issues.issueIdText issue.id]
 

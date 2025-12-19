@@ -355,7 +355,7 @@ bodyWrapper bcfg child = do
                     (currUser.email == "hello@apitoolkit.io")
                     loginBanner
                   unless (bcfg.isSettingsPage || bcfg.hideNavbar) $ navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
-                  section_ [class_ "overflow-y-hidden h-full grow"] do
+                  section_ [class_ "overflow-y-auto h-full grow"] do
                     when bcfg.freeTierExceeded $ whenJust bcfg.currProject (\p -> freeTierLimitExceededBanner p.id.toText)
                     if bcfg.isSettingsPage
                       then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject

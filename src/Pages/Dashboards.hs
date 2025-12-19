@@ -403,7 +403,7 @@ processWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widgetBas
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
 processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case widget.wType of
   Widget.WTAnomalies -> do
-    issues <- dbtToEff $ Issues.selectIssues pid Nothing (Just False) (Just False) 2 0 Nothing
+    issues <- dbtToEff $ Issues.selectIssues pid Nothing (Just False) (Just False) 2 0 Nothing Nothing
     let issuesVM = V.map (AnomalyList.IssueVM False True now "24h") issues
     pure $ widget
       & #html
