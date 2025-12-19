@@ -779,12 +779,12 @@ teamPage pid team projMembers slackChannels discordChannels = do
       discordWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]) <$> discordChannels
       card_ title content = div_ [class_ "surface-raised rounded-2xl p-4"] (span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong"] title >> content)
       notifRow_ icon iconType label vals = div_ [class_ "flex items-start gap-3"] do
-        span_ [class_ "p-1.5 bg-fillWeak rounded-md"] $ faSprite_ icon iconType "h-3.5 w-3.5"
+        _ <- span_ [class_ "p-1.5 bg-fillWeak rounded-md"] $ faSprite_ icon iconType "h-3.5 w-3.5"
         div_ [class_ "flex-1"] (div_ [class_ "text-sm font-medium"] label >> div_ [class_ "text-xs text-textWeak mt-0.5"] (if null vals then "Not configured" else toHtml $ T.intercalate ", " vals))
       resolveChannel chans cid = maybe cid (("#" <>) . (.channelName)) $ find (\x -> x.channelId == cid) chans
       lazySection_ secId icon title searchPh url = div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
-        div_ [class_ "flex items-center justify-between w-full p-4 border-b border-strokeWeak"] do
-          span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong"] (faSprite_ icon "regular" "h-4 w-4" >> toHtml title)
+        _ <- div_ [class_ "flex items-center justify-between w-full p-4 border-b border-strokeWeak"] do
+          _ <- span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong"] (faSprite_ icon "regular" "h-4 w-4" >> toHtml title)
           label_ [class_ "input input-sm w-64 bg-fillWeak border-0"] (faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 text-textWeak" >> input_ [type_ "text", placeholder_ searchPh, class_ ""])
         div_ [class_ "w-full max-h-96 overflow-y-auto", id_ secId] do
           unless (T.null url) $ a_ [hxGet_ url, hxTrigger_ "intersect once", hxTarget_ $ "#" <> secId, hxSwap_ "outerHTML"] ""
@@ -1439,12 +1439,12 @@ teamModal pid team whiteList channelWhiteList discordWhiteList isInTeamView = do
       discordChannels = decodeUtf8 $ AE.encode $ maybe [] (.discord_channels) team
 
   let teamSection_ icon title content = div_ [class_ "space-y-4"] do
-        h3_ [class_ "text-sm font-semibold text-textStrong uppercase tracking-wide flex items-center gap-2"] (faSprite_ icon "regular" "w-4 h-4 text-iconNeutral" >> title)
+        _ <- h3_ [class_ "text-sm font-semibold text-textStrong uppercase tracking-wide flex items-center gap-2"] (faSprite_ icon "regular" "w-4 h-4 text-iconNeutral" >> title)
         content
 
   let field_ inputId lbl input = fieldset_ [class_ "fieldset"] (label_ [class_ "label text-sm font-medium", Lucid.for_ inputId] lbl >> input)
   let fieldIcon_ icon inputId lbl input = fieldset_ [class_ "fieldset"] do
-        label_ [class_ "label text-sm font-medium flex items-center gap-2", Lucid.for_ inputId] (faSprite_ icon "solid" "w-4 h-4 text-iconNeutral" >> lbl)
+        _ <- label_ [class_ "label text-sm font-medium flex items-center gap-2", Lucid.for_ inputId] (faSprite_ icon "solid" "w-4 h-4 text-iconNeutral" >> lbl)
         input
   let tagInput_ inputId ph = textarea_ [class_ "textarea w-full min-h-12 resize-none", id_ inputId, placeholder_ ph] ""
 

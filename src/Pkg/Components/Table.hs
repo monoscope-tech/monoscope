@@ -44,7 +44,7 @@ import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Pages.Components (emptyState_)
 import PyF (fmt)
-import Relude hiding (lookup)
+import Relude
 import Utils (deleteParam, faSprite_, toUriStr)
 
 
@@ -775,8 +775,8 @@ sortFieldsToSQL sortFields
 -- Generate SQL filter clause for a list of values
 -- e.g. mkFilter "status" "text" id ["active", "pending"] => "status = ANY(ARRAY['active','pending']::text[])"
 mkFilter :: Text -> Text -> (a -> Text) -> [a] -> Maybe Text
-mkFilter col sqlType txtF values =
-  guard (not $ null values) $> [fmt|{col} = ANY(ARRAY[{T.intercalate "," (map (quote . txtF) values)}]::{sqlType}[])|]
+mkFilter colName sqlType txtF values =
+  guard (not $ null values) $> [fmt|{colName} = ANY(ARRAY[{T.intercalate "," (map (quote . txtF) values)}]::{sqlType}[])|]
   where
     quote txt = [fmt|'{txt}'|]
 
