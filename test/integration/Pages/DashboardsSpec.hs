@@ -141,19 +141,66 @@ spec = aroundAll withTestResources do
             _ -> fail "Expected DashboardDelete response"
         _ -> fail "Expected DashboardGet' response"
 
--- it "Should star a dashboard" \tr -> do
---   (_, pg) <- testServant tr $ Dashboards.dashboardPostH testPid dashboard Nothing
---   case pg of
---     Dashboards.DashboardGet' (_, dashboards) -> do
---       let createdDashboard = head dashboards
---       (_, pg') <- testServant tr $ Dashboards.dashboardStarH testPid createdDashboard.id
---       case pg' of
---         Dashboards.DashboardStar -> do
---           (_, pg'') <- testServant tr $ Dashboards.dashboardGetH testPid
---           case pg'' of
---             Dashboards.DashboardGet' (_, starredDashboards) -> do
---               let starred = head starredDashboards
---               starred.starred `shouldBe` True
---             _ -> fail "Expected DashboardGet' response"
---         _ -> fail "Expected DashboardStar response"
---     _ -> fail "Expected DashboardGet' response"
+    it "Should star and unstar a dashboard" \tr -> do
+      let dashboard1 = dashboard{title = "Star Test Dashboard"} :: Dashboards.DashboardForm
+      _ <- testServant tr $ Dashboards.dashboardsPostH testPid dashboard1
+      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing
+      case pg of
+        Dashboards.DashboardsGet (PageCtx _ d) -> do
+          let dash = Unsafe.fromJust $ V.find (\x -> x.title == "Star Test Dashboard") d.dashboards
+          dash.starredSince `shouldSatisfy` isNothing
+
+          -- Star the dashboard
+          _ <- testServant tr $ Dashboards.dashboardStarPostH testPid dash.id
+          (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing
+          case pg' of
+            Dashboards.DashboardsGet (PageCtx _ d') -> do
+              let starredDash = Unsafe.fromJust $ V.find (\x -> x.id == dash.id) d'.dashboards
+              starredDash.starredSince `shouldSatisfy` isJust
+
+              -- Unstar the dashboard
+              _ <- testServant tr $ Dashboards.dashboardStarPostH testPid dash.id
+              (_, pg'') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing
+              case pg'' of
+                Dashboards.DashboardsGet (PageCtx _ d'') -> do
+                  let unstarredDash = Unsafe.fromJust $ V.find (\x -> x.id == dash.id) d''.dashboards
+                  unstarredDash.starredSince `shouldSatisfy` isNothing
+                _ -> fail "Expected DashboardsGet response"
+            _ -> fail "Expected DashboardsGet response"
+        _ -> fail "Expected DashboardsGet response"
+
+    it "Should sort starred dashboards first" \tr -> do
+      let dashboard1 = dashboard{title = "Dashboard A"} :: Dashboards.DashboardForm
+      let dashboard2 = dashboard{title = "Dashboard B"} :: Dashboards.DashboardForm
+      let dashboard3 = dashboard{title = "Dashboard C"} :: Dashboards.DashboardForm
+      _ <- testServant tr $ Dashboards.dashboardsPostH testPid dashboard1
+      _ <- testServant tr $ Dashboards.dashboardsPostH testPid dashboard2
+      _ <- testServant tr $ Dashboards.dashboardsPostH testPid dashboard3
+
+      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing
+      case pg of
+        Dashboards.DashboardsGet (PageCtx _ d) -> do
+          let dashA = Unsafe.fromJust $ V.find (\x -> x.title == "Dashboard A") d.dashboards
+          let dashC = Unsafe.fromJust $ V.find (\x -> x.title == "Dashboard C") d.dashboards
+
+          -- Star Dashboard C and Dashboard A
+          _ <- testServant tr $ Dashboards.dashboardStarPostH testPid dashC.id
+          _ <- testServant tr $ Dashboards.dashboardStarPostH testPid dashA.id
+
+          -- Fetch dashboards and verify starred ones appear first
+          (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing
+          case pg' of
+            Dashboards.DashboardsGet (PageCtx _ d') -> do
+              let dashboards = d'.dashboards
+              let starredDashboards = V.filter (\x -> isJust x.starredSince) dashboards
+              let unstarredDashboards = V.filter (\x -> isNothing x.starredSince) dashboards
+
+              -- Verify starred dashboards come first
+              V.length starredDashboards `shouldBe` 2
+              V.length unstarredDashboards `shouldBe` 1
+
+              -- Check that first dashboards in the list are starred
+              let firstTwo = V.take 2 dashboards
+              V.all (\x -> isJust x.starredSince) firstTwo `shouldBe` True
+            _ -> fail "Expected DashboardsGet response"
+        _ -> fail "Expected DashboardsGet response"
