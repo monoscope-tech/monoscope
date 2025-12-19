@@ -427,7 +427,7 @@ deleteTeamByHandle pid handle = void $ execute q (pid, handle)
 
 deleteTeams :: Projects.ProjectId -> V.Vector UUID.UUID -> DBT IO ()
 deleteTeams pid tids
-  | V.null tids = pure () 
+  | V.null tids = pure ()
   | otherwise = void $ execute q (pid, tids)
   where
     q =
@@ -435,7 +435,7 @@ deleteTeams pid tids
 
 
 getTeamsById :: Projects.ProjectId -> V.Vector UUID.UUID -> DBT IO (V.Vector Team)
-getTeamsById pid tids = if V.null tids then pure V.empty else query q (pid, tids) 
+getTeamsById pid tids = if V.null tids then pure V.empty else query q (pid, tids)
   where
     q =
       [sql|

@@ -329,40 +329,40 @@ expandedItemView pid item aptSp leftM rightM = do
           borderClass = "border-b-strokeWeak"
       div_ [class_ "flex", [__|on click halt|]] $ do
         when (isLog && isJust item.body)
-          $ button_ [class_ $ "http-tab cursor-pointer  border-b-2 " <> borderClass <> " px-4 py-1.5 t-tab-active", onpointerdown_ $ "navigatable(this, '#body-content', '#" <> tabContainerId <> "', 't-tab-active', 'http')"] "Body"
-        when (not isLog && isHttp) $ button_ [class_ $ "http-tab cursor-pointer  border-b-2 " <> borderClass <> " px-4 py-1.5 t-tab-active", onpointerdown_ $ "navigatable(this, '#request-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] "Request"
-        button_ [class_ $ "cursor-pointer http-tab border-b-2 " <> borderClass <> " px-4 py-1.5 " <> if (isLog && isNothing item.body) || (not isLog && not isHttp) then "t-tab-active" else "", onpointerdown_ $ "navigatable(this, '#att-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] "Attributes"
-        button_ [class_ $ "cursor-pointer http-tab border-b-2 " <> borderClass <> " px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#meta-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] "Process"
+          $ button_ [class_ $ "a-tab cursor-pointer  border-b-2 " <> borderClass <> " px-4 py-1.5 t-tab-active", onpointerdown_ $ "navigatable(this, '#body-content', '#" <> tabContainerId <> "', 't-tab-active', '.http')"] "Body"
+        when (not isLog && isHttp) $ button_ [class_ $ "a-tab cursor-pointer  border-b-2 " <> borderClass <> " px-4 py-1.5 t-tab-active", onpointerdown_ $ "navigatable(this, '#request-content', '#" <> tabContainerId <> "', 't-tab-active','.http')"] "Request"
+        button_ [class_ $ "cursor-pointer a-tab border-b-2 " <> borderClass <> " px-4 py-1.5 " <> if (isLog && isNothing item.body) || (not isLog && not isHttp) then "t-tab-active" else "", onpointerdown_ $ "navigatable(this, '#att-content', '#" <> tabContainerId <> "', 't-tab-active'" <> if isLog then ")" else ",'.http')"] "Attributes"
+        button_ [class_ $ "cursor-pointer a-tab border-b-2 " <> borderClass <> " px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#meta-content', '#" <> tabContainerId <> "', 't-tab-active'" <> if isLog then ")" else ", '.http')"] "Process"
         unless (isLog || null spanErrors) $ do
-          button_ [class_ $ "http-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 nowrap px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#errors-content', '#" <> tabContainerId <> "', 't-tab-active', 'http')"] do
+          button_ [class_ $ "a-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 nowrap px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#errors-content', '#" <> tabContainerId <> "', 't-tab-active', '.http')"] do
             "Errors"
             div_ [class_ "badge badge-error badge-sm"] $ show $ length spanErrors
-        unless isLog $ button_ [class_ $ "http-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#logs-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] $ do
+        unless isLog $ button_ [class_ $ "a-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#logs-content', '#" <> tabContainerId <> "', 't-tab-active','.http')"] $ do
           "Logs"
           div_ [class_ "badge badge-ghost badge-sm"] $ show $ numberOfEvents $ fromMaybe AE.Null (unAesonTextMaybe item.events)
-        button_ [class_ $ "http-tab cursor-pointer border-b-2 whitespace-nowrap " <> borderClass <> " px-4 py-1.5", onpointerdown_ $ "navigatable(this, '#m-raw-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] "Raw data"
+        button_ [class_ $ "a-tab cursor-pointer border-b-2 whitespace-nowrap " <> borderClass <> " px-4 py-1.5", onpointerdown_ $ "navigatable(this, '#m-raw-content', '#" <> tabContainerId <> "', 't-tab-active','.http')"] "Raw data"
         div_ [class_ $ "w-full border-b-2 " <> borderClass] pass
 
       div_ [class_ "my-4 py-2 text-textWeak"] $ do
         when isLog $ whenJust item.body $ \b -> do
-          div_ [class_ "http-tab-content", id_ "body-content"] do
+          div_ [class_ "a-tab-content", id_ "body-content"] do
             jsonValueToHtmlTree (AE.toJSON b) Nothing
-        div_ [class_ "hidden http-tab-content", id_ "m-raw-content"] $ do
+        div_ [class_ "hidden a-tab-content", id_ "m-raw-content"] $ do
           jsonValueToHtmlTree (AE.toJSON item) Nothing
-        div_ [class_ $ "http-tab-content " <> if (isLog && isNothing item.body) || (not isLog && not isHttp) then "" else "hidden", id_ "att-content"] $ do
+        div_ [class_ $ "a-tab-content " <> if (isLog && isNothing item.body) || (not isLog && not isHttp) then "" else "hidden", id_ "att-content"] $ do
           jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) (unAesonTextMaybe item.attributes)) $ Just "attributes"
-        div_ [class_ "hidden http-tab-content", id_ "meta-content"] $ do
+        div_ [class_ "hidden a-tab-content", id_ "meta-content"] $ do
           jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) (unAesonTextMaybe item.resource)) $ Just "resource"
         unless isLog $ do
-          div_ [class_ "hidden http-tab-content w-full whitespace-wrap", id_ "errors-content"] $ do
+          div_ [class_ "hidden a-tab-content w-full whitespace-wrap", id_ "errors-content"] $ do
             renderErrors spanErrors
-          div_ [class_ "hidden http-tab-content", id_ "logs-content"] $ do
+          div_ [class_ "hidden a-tab-content", id_ "logs-content"] $ do
             jsonValueToHtmlTree (AE.toJSON (unAesonTextMaybe item.events)) Nothing
 
         unless isLog $ whenJust reqDetails $ \case
           ("HTTP", method, path, status) -> do
             let cSp = fromMaybe item aptSp
-            div_ [class_ "http-tab-content nested-tab", id_ "request-content"] do
+            div_ [class_ "a-tab-content nested-tab", id_ "request-content"] do
               div_ [id_ "http-content-container", class_ "flex flex-col gap-3 mt-2"] do
                 div_ [class_ "bg-fillWeaker w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"] do
                   div_ [class_ "justify-start items-start flex text-sm"] do

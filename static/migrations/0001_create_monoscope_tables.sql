@@ -866,7 +866,7 @@ INSERT into projects.projects (id, title) VALUES ('00000000-0000-0000-0000-00000
 
 INSERT into users.users (id, email, first_name, last_name) VALUES ('00000000-0000-0000-0000-000000000000', 'hello@monoscope.tech', 'Guest', 'User');
 
-INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', 'view');
+INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', 'admin');
 
 CREATE TABLE IF NOT EXISTS apis.errors
 (

@@ -44,7 +44,6 @@ import GHC.Records (HasField (getField))
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Lucid.Svg (z)
 import Pages.Components (emptyState_)
 import PyF (fmt)
 import Relude
@@ -403,6 +402,9 @@ renderRows tbl =
                     whenJust tbl.features.tableHeaderActions renderHeaderTableActions
       tbody_ [id_ $ tbl.config.elemID <> "_tbody"] do
         V.mapM_ (renderTableRow tbl) tbl.rows
+        -- Pagination inside tbody for table mode
+        whenJust tbl.features.pagination \(url, trigger) ->
+          tr_ [] $ td_ [colspan_ $ show $ columnCount tbl.columns tbl.features.rowId] $ renderPaginationLink (Just "closest tr") url trigger
     else V.mapM_ (renderListRow tbl) tbl.rows
 
 

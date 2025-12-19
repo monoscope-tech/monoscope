@@ -121,7 +121,7 @@ bodyWrapper bcfg child = do
 
         script_ [src_ "https://unpkg.com/@monoscopetech/browser@latest/dist/monoscope.min.js"] ("" :: Text)
 
-        script_ [type_ "module", src_ "/public/assets/web-components/dist/js/index.js"] ("" :: Text)
+        script_ [type_ "module", src_ $(hashAssetFile "/public/assets/web-components/dist/js/index.js")] ("" :: Text)
 
         script_
           [text|
@@ -154,12 +154,12 @@ bodyWrapper bcfg child = do
           [raw|
 
 
-        function navigatable(me, target, container, activeClass, tabPrefix)  {
-            const tabeName = tabPrefix ? tabPrefix + "-tab" : "a-tab";
-            const contentName = tabPrefix ? tabPrefix + "-tab-content" : "a-tab-content";
+        function navigatable(me, target, container, activeClass, excl)  {
+            const exCls = excl ? ":not(" + excl + ".a-tab)" : "";
+            const exClsC = excl ? ":not(" + excl + ".a-tab-content)" : "";
             const nav = document.querySelector(container);
-            const tabs = nav.querySelectorAll("." + tabeName);
-            const contents = nav.querySelectorAll("." + contentName);
+            const tabs = nav.querySelectorAll(".a-tab" + exCls);
+            const contents = nav.querySelectorAll(".a-tab-content" + exClsC);
             const targetElement = document.querySelector(target);
             
             // Batch DOM updates using requestAnimationFrame

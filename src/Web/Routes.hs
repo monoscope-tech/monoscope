@@ -73,7 +73,6 @@ import Data.Aeson.Key qualified as AEKey
 import Data.HashMap.Lazy qualified as HM
 import Data.Vector qualified as V
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Issues qualified as Anomalies
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.Anomalies qualified as AnomalyList
@@ -276,7 +275,6 @@ data AnomaliesRoutes' mode = AnomaliesRoutes'
   , unarchiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] AnomalyList.AnomalyBulkForm :> Post '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , listGet :: mode :- QPT "layout" :> QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "load_more" :> QEID "endpoint" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders AnomalyList.AnomalyListGet)
-  , anomalyGet :: mode :- Capture "anomalyID" Anomalies.IssueId :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   }
   deriving stock (Generic)
 
@@ -474,7 +472,6 @@ anomaliesServer pid =
     , unarchiveGet = AnomalyList.unArchiveAnomalyGetH pid
     , bulkActionsPost = AnomalyList.anomalyBulkActionsPostH pid
     , listGet = AnomalyList.anomalyListGetH pid
-    , anomalyGet = AnomalyList.anomalyDetailGetH pid
     }
 
 
@@ -500,7 +497,6 @@ monitorsServer pid =
     , alertSingleToggleActive = Alerts.alertSingleToggleActiveH pid
     , alertOverviewGet = Alerts.alertOverviewGetH pid
     , teamAlertsGetH = Testing.teamAlertsGetH pid
-    , alertTeamDeleteH = Alerts.alertTeamDeleteH pid
     }
 
 

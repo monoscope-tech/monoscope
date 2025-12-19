@@ -44,9 +44,7 @@ module Utils (
   statusFillColorText,
   methodFillColor,
   levelFillColor,
-  lookupVecValueByKey,
   changeTypeFillColor,
-  lookupValueInt,
 )
 where
 
@@ -367,10 +365,6 @@ lookupVecTextByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe 
 lookupVecTextByKey vec colIdxMap key = HM.lookup key colIdxMap >>= lookupVecText vec
 
 
-lookupVecValueByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe AE.Value
-lookupVecValueByKey vec colIdxMap key = HM.lookup key colIdxMap >>= (\i -> vec V.!? i)
-
-
 lookupVecBoolByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Bool
 lookupVecBoolByKey vec colIdxMap key =
   fromMaybe False $ HM.lookup key colIdxMap >>= ((vec V.!?) >=> \case AE.Bool b -> Just b; _ -> Nothing)
@@ -385,13 +379,6 @@ lookupValueText (AE.Object obj) key = case AEKM.lookup (AEK.fromText key) obj of
   Just (AE.String textValue) -> Just textValue -- Extract text from Value if it's a String
   _ -> Nothing
 lookupValueText _ _ = Nothing
-
-
-lookupValueInt :: AE.Value -> Text -> Maybe Int
-lookupValueInt (AE.Object obj) key = case AEKM.lookup (AEK.fromText key) obj of
-  Just (AE.Number val) -> toBoundedInteger val
-  _ -> Nothing
-lookupValueInt _ _ = Nothing
 
 
 listToIndexHashMap :: Hashable a => [a] -> HM.HashMap a Int

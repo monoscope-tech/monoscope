@@ -10,7 +10,6 @@ module Models.Apis.Monitors (
   QueryMonitorId (..),
   updateQMonitorTriggeredState,
   getAlertsByTeamHandle,
-  monitorRemoveTeam,
 ) where
 
 import Data.Aeson qualified as AE
@@ -219,15 +218,4 @@ getAlertsByTeamHandle pid teamId = PG.query q (pid, teamId)
         qm.threshold_sustained_for_mins, qm.alert_config, qm.deactivated_at, qm.deleted_at, qm.visualization_type, qm.teams
       FROM monitors.query_monitors qm
       WHERE qm.project_id = ? AND ? = ANY(qm.teams)
-    |]
-
-
-monitorRemoveTeam :: Projects.ProjectId -> QueryMonitorId -> UUID.UUID -> DBT IO Int64
-monitorRemoveTeam pid monitorId teamId = execute q (teamId, pid, monitorId)
-  where
-    q =
-      [sql|
-    UPDATE monitors.query_monitors
-    SET teams = array_remove(teams, ?::uuid)
-    WHERE project_id = ? AND id = ?
     |]

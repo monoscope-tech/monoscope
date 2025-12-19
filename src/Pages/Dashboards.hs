@@ -39,7 +39,6 @@ import Data.List qualified as L
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
-import Data.Time qualified as Time
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.Types (Query (Query))
@@ -59,7 +58,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users
-import Models.Users.Users qualified as Users
 import NeatInterpolation
 import Network.HTTP.Types.URI qualified as URI
 import Pages.Anomalies qualified as AnomalyList
@@ -1339,78 +1337,6 @@ dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
             _ -> addErrorToast "No dashboards were updated" Nothing
     _ -> addErrorToast "Invalid action" Nothing
   addRespHeaders NoContent
-
-
-data DashboardBulkActionForm = DashboardBulkActionForm
-  { dashboardId :: [Dashboards.DashboardId]
-  , teamHandles :: [UUID.UUID]
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (FromForm)
-
-
-dashboardBulkActionPostH :: Projects.ProjectId -> Text -> DashboardBulkActionForm -> ATAuthCtx (RespHeaders NoContent)
-dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
-  case action of
-    "delete" -> do
-      _ <- Dashboards.deleteDashboardsByIds pid $ V.fromList dashboardId
-      addSuccessToast "Selected dashboards were deleted successfully" Nothing
-    "add_teams" -> do
-      teams <- dbtToEff $ ManageMembers.getTeamsById pid (V.fromList teamHandles)
-      if V.length teams /= length teamHandles
-        then addErrorToast "Some teams not found or don't belong to this project" Nothing
-        else
-          Dashboards.addTeamsToDashboards pid (V.fromList dashboardId) (V.fromList teamHandles) >>= \case
-            n | n > 0 -> addSuccessToast "Teams added to selected dashboards successfully" Nothing
-            _ -> addErrorToast "No dashboards were updated" Nothing
-    _ -> addErrorToast "Invalid action" Nothing
-  addRespHeaders NoContent
-
-
-data DashboardBulkActionForm = DashboardBulkActionForm
-  { dashboardId :: [Dashboards.DashboardId]
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (FromForm)
-
-dashboardBulkActionPostH :: Projects.ProjectId -> Text -> DashboardBulkActionForm -> ATAuthCtx (RespHeaders NoContent)
-dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
-  case action of
-    "delete" -> do
-      _ <- Dashboards.deleteDashboardsByIds pid $ V.fromList dashboardId
-      addSuccessToast "Selected dashboards were deleted successfully" Nothing
-    "add_teams" -> do
-      teams <- dbtToEff $ ManageMembers.getTeamsById pid (V.fromList teamHandles)
-      if V.length teams /= length teamHandles
-        then addErrorToast "Some teams not found or don't belong to this project" Nothing
-        else
-          Dashboards.addTeamsToDashboards pid (V.fromList dashboardId) (V.fromList teamHandles) >>= \case
-            n | n > 0 -> addSuccessToast "Teams added to selected dashboards successfully" Nothing
-            _ -> addErrorToast "No dashboards were updated" Nothing
-    _ -> addErrorToast "Invalid action" Nothing
-  addRespHeaders NoContent
-
-
-data DashboardBulkActionForm = DashboardBulkActionForm
-  { dashboardId :: [Dashboards.DashboardId]
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (FromForm)
-
-dashboardBulkActionPostH :: Projects.ProjectId -> Text -> DashboardBulkActionForm -> ATAuthCtx (RespHeaders NoContent)
-dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
-  case action of
-    "delete" -> do
-      _ <- Dashboards.deleteDashboardsByIds pid $ V.fromList dashboardId
-      addSuccessToast "Selected dashboards were deleted successfully" Nothing
-      addRespHeaders NoContent
-    "add_teams" -> do
-      _ <- Dashboards.addTeamsToDashboards pid (V.fromList dashboardId) (V.fromList teamHandles)
-      addSuccessToast "Teams added to selected dashboards successfully" Nothing
-      addRespHeaders NoContent
-    _ -> do
-      addErrorToast "Invalid action" Nothing
-      addRespHeaders NoContent
 
 
 -- | Form data for moving a widget between dashboards

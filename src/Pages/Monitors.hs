@@ -6,7 +6,6 @@ module Pages.Monitors (
   alertUpsertPostH,
   alertOverviewGetH,
   monitorsPageGetH,
-  alertTeamDeleteH,
   AlertUpsertForm (..),
   Alert (..),
 )
@@ -259,10 +258,3 @@ monitorsPageContent_ pid monitors = do
         div_ [class_ "badge badge-lg badge-ghost"] $ toHtml $ "Inactive: " <> show (V.length inactiveMonitors)
       div_ [id_ "alertsListContainer"] do
         queryMonitors_ monitors
-
-
-alertTeamDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> UUID.UUID -> ATAuthCtx (RespHeaders Alert)
-alertTeamDeleteH pid monitorId teamId = do
-  _ <- dbtToEff $ Monitors.monitorRemoveTeam pid monitorId teamId
-  addSuccessToast "Team removed from alert successfully" Nothing
-  addRespHeaders $ AlertNoContent ""

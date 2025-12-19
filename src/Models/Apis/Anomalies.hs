@@ -25,7 +25,6 @@ module Models.Apis.Anomalies (
   countAnomalies,
   acknowlegeCascade,
   acknowledgeAnomalies,
-  errorByHash,
 )
 where
 
@@ -577,8 +576,6 @@ data ATError = ATError
   , errorType :: Text
   , message :: Text
   , errorData :: RequestDumps.ATError
-  , firstTraceId :: Maybe Text
-  , recentTraceId :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, NFData, ToRow)
@@ -593,28 +590,16 @@ errorsByHashes pid hashes
   | otherwise = PG.query q (pid, hashes)
   where
     q =
-      [sql| SELECT id, created_at, updated_at, project_id, hash, error_type, message, error_data, first_trace_id, recent_trace_id
+      [sql| SELECT id, created_at, updated_at, project_id, hash, error_type, message, error_data
             FROM apis.errors WHERE project_id=? AND hash=ANY(?); |]
-
-
-errorByHash :: Projects.ProjectId -> Text -> DBT IO (Maybe ATError)
-errorByHash pid hash = do
-  results <- query q (pid, hash)
-  case results of
-    [err] -> return $ Just err
-    _ -> return Nothing
-  where
-    q =
-      [sql| SELECT id, created_at, updated_at, project_id, hash, error_type, message, error_data, first_trace_id, recent_trace_id
-            FROM apis.errors WHERE project_id=? AND hash=?; |]
 
 
 insertErrorQueryAndParams :: Projects.ProjectId -> RequestDumps.ATError -> (Query, [DBField])
 insertErrorQueryAndParams pid err = (q, params)
   where
     q =
-      [sql| insert into apis.errors (project_id, created_at, hash, error_type, message, error_data, first_trace_id, recent_trace_id) VALUES (?,?,?,?,?,?,?,?)
-            ON CONFLICT (project_id, hash) DO UPDATE SET updated_at = EXCLUDED.created_at, recent_trace_id = EXCLUDED.recent_trace_id; |]
+      [sql| insert into apis.errors (project_id,created_at, hash, error_type, message, error_data) VALUES (?,?,?,?,?,?)
+            ON CONFLICT (project_id, hash) DO NOTHING; |]
     params =
       [ MkDBField pid
       , MkDBField err.when
@@ -622,6 +607,4 @@ insertErrorQueryAndParams pid err = (q, params)
       , MkDBField err.errorType
       , MkDBField err.message
       , MkDBField err
-      , MkDBField err.traceId
-      , MkDBField err.traceId
       ]

@@ -5,7 +5,6 @@ module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slac
 import BackgroundJobs qualified as BgJobs
 import Control.Lens ((.~), (^.))
 import Data.Aeson (withObject)
-import Data.Aeson (withObject)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as KEM
 import Data.Aeson.KeyMap qualified as KEMP

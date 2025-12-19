@@ -9,7 +9,6 @@ module Pages.Anomalies (
   archiveAnomalyGetH,
   unArchiveAnomalyGetH,
   anomalyListSlider,
-  anomalyDetailGetH,
   AnomalyBulkForm (..),
   AnomalyListGet (..),
   anomalyAcknowledgeButton,
@@ -22,7 +21,6 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Default (def)
-import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Data.Time.LocalTime (zonedTimeToUTC)
@@ -36,16 +34,13 @@ import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxGet_, hxIndicator_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
-import Models.Apis.Anomalies (ATError (ATError), FieldChange (..), PayloadChange (..))
+import Models.Apis.Anomalies (FieldChange (..), PayloadChange (..))
 import Models.Apis.Anomalies qualified as Anomalies
-import Models.Apis.Anomalies qualified as RequestDump
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Issues
-import Models.Apis.RequestDumps (ATError (requestMethod, serviceName, stack, technology, traceId))
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users (User (id))
 import NeatInterpolation (text)
@@ -58,7 +53,7 @@ import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (changeTypeFillColor, checkFreeTierExceeded, escapedQueryPartial, faSprite_, formatUTC, methodFillColor, statusFillColor)
+import Utils (changeTypeFillColor, checkFreeTierExceeded, escapedQueryPartial, faSprite_, methodFillColor, statusFillColor)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -149,198 +144,6 @@ anomalyBulkActionsPostH pid action items = do
         _ -> error $ "unhandled anomaly bulk action state " <> action
       addSuccessToast (action <> "d items Successfully") Nothing
       addRespHeaders Bulk
-
-
-anomalyDetailGetH :: Projects.ProjectId -> Issues.IssueId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-anomalyDetailGetH pid issueId = do
-  (sess, project) <- Sessions.sessionAndProject pid
-  appCtx <- ask @AuthContext
-  issueM <- dbtToEff $ Issues.selectIssueById issueId
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , pageTitle = "Anomaly Detail"
-          , config = appCtx.config
-          }
-  case issueM of
-    Nothing -> do
-      addErrorToast "Issue not found" Nothing
-      addRespHeaders $ PageCtx bwconf $ toHtml ("Issue not found" :: Text)
-    Just issue -> do
-      errorM <- case issue.issueType of
-        Issues.RuntimeException -> dbtToEff $ Anomalies.errorByHash pid issue.endpointHash
-        _ -> return Nothing
-      (trItem, spanRecs) <- case errorM of
-        Just err -> case err.recentTraceId of
-          Just x -> do
-            trM <- Telemetry.getTraceDetails pid x (Just $ zonedTimeToUTC err.updatedAt)
-            case trM of
-              Just traceItem -> do
-                spanRecords' <- Telemetry.getSpanRecordsByTraceId pid traceItem.traceId (Just traceItem.traceStartTime)
-                pure (Just traceItem, spanRecords')
-              Nothing -> pure (Nothing, V.empty)
-          Nothing -> return (Nothing, V.empty)
-        _ -> return (Nothing, V.empty)
-      pass
-      now <- liftIO getCurrentTime
-      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now
-
-
-anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Maybe RequestDump.ATError -> UTCTime -> Html ()
-anomalyDetailPage pid issue tr otellogs errM now = do
-  let spanRecs = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> otellogs
-      -- logs = V.filter (\xx -> xx.kind == Just "log") otellogs
-      issueId = UUID.toText issue.id.unUUIDId
-  div_ [class_ "pt-2 mx-auto px-4 w-full flex flex-col gap-4 h-full overflow-auto"] do
-    div_ [] do
-      div_ [class_ "flex gap-3 mb-3 flex-wrap items-center "] do
-        div_ [class_ "flex items-center gap-2"] do
-          case issue.issueType of
-            Issues.RuntimeException ->
-              span_ [class_ "badge bg-fillError-strong"] do
-                faSprite_ "triangle-alert" "regular" "w-3 h-3"
-                "ERROR"
-            Issues.QueryAlert ->
-              span_ [class_ "badge bg-fillWarning-strong"] do
-                faSprite_ "zap" "regular" "w-3 h-3"
-                "ALERT"
-            Issues.APIChange ->
-              if issue.critical
-                then span_ [class_ "badge bg-fillError-strong"] do
-                  faSprite_ "exclamation-triangle" "regular" "w-3 h-3"
-                  "BREAKING"
-                else span_ [class_ "badge bg-fillInformation-strong"] do
-                  faSprite_ "info" "regular" "w-3 h-3 mr-0.5"
-                  "Incremental"
-
-          -- Severity badge
-          case issue.severity of
-            "critical" -> span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
-            "warning" -> span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "WARNING"
-            _ -> pass
-        h3_ [class_ "text-textStrong text-2xl font-medium"] $ toHtml issue.title
-      p_ [class_ "text-sm text-textWeak"] $ toHtml issue.recommendedAction
-
-    -- Metrics Bar
-    div_ [class_ "flex items-center justify-between mb-6"] do
-      div_ [class_ "flex items-center gap-4"] do
-        statBox_ (Just pid) Nothing "Affected Requests" "How the error occurred" (show issue.affectedRequests) Nothing Nothing
-        statBox_ (Just pid) Nothing "Affected Clients" "Number of unique clients affected" (show issue.affectedClients) Nothing Nothing
-      div_ [class_ "w-96 h-28 rounded-xl overflow-hidden border p-2 border-strokeWeak bg-fillWeaker"]
-        $ Widget.widget_
-        $ (def :: Widget.Widget)
-          { Widget.standalone = Just True
-          , Widget.id = Just issueId
-          , Widget.wType = Widget.WTTimeseries
-          , Widget.title = Just "Error trends"
-          , Widget.showTooltip = Just False
-          , Widget.naked = Just True
-          , Widget.xAxis = Just (def{Widget.showAxisLabel = Just False})
-          , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
-          , Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin(timestamp, 1h)"
-          , Widget._projectId = Just issue.projectId
-          , Widget.hideLegend = Just True
-          }
-    -- Two Column Layout
-    div_ [class_ "flex flex-col gap-6"] do
-      div_ [class_ "grid grid-cols-2 gap-6 w-full"] do
-        case issue.issueType of
-          Issues.RuntimeException -> do
-            case AE.fromJSON (getAeson issue.issueData) of
-              AE.Success (exceptionData :: Issues.RuntimeExceptionData) -> do
-                div_ [class_ "bg-fillWeaker border border-strokeWeak rounded-lg"] do
-                  div_ [class_ "px-4 py-2 border-b border-strokeWeak flex items-center justify-between"] do
-                    div_ [class_ "flex items-center gap-2"] do
-                      span_ [class_ "text-sm font-medium text-textStrong"] "Stack Trace"
-                  div_ [class_ "p-4"] do
-                    pre_ [class_ "text-sm text-textWeak font-mono leading-relaxed overflow-x-auto"] $ toHtml exceptionData.stackTrace
-                whenJust errM $ \err -> do
-                  div_ [class_ "bg-fillWeaker border border-strokeWeak rounded-lg"] do
-                    div_ [class_ "px-4 py-2 border-b border-strokeWeak flex items-center justify-between"] do
-                      div_ [class_ "flex items-center gap-2"] do
-                        span_ [class_ "text-sm font-medium text-textStrong"] "Error details"
-                    div_ [class_ "p-4 flex flex-col gap-6"] do
-                      case (exceptionData.requestMethod, exceptionData.requestPath) of
-                        (Just method, Just path) -> do
-                          div_ [class_ "mb-2"] do
-                            span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap"] $ toHtml method
-                            span_ [class_ "ml-2 text-sm text-textWeak"] $ toHtml path
-                        _ -> pass
-                      div_ [class_ "flex items-center gap-4"] do
-                        div_ [class_ "flex items-center gap-2"] do
-                          faSprite_ "calendar" "regular" "w-3 h-3"
-                          div_ [] do
-                            span_ [class_ "text-sm text-textWeak"] "First seen:"
-                            span_ [class_ "ml-2 text-sm"] $ toHtml $ prettyTimeAuto now (zonedTimeToUTC err.createdAt)
-
-                        div_ [class_ "flex items-center gap-2"] do
-                          faSprite_ "calendar" "regular" "w-3 h-3"
-                          div_ [] do
-                            span_ [class_ "text-sm text-textWeak"] "Last seen:"
-                            span_ [class_ "ml-2 text-sm"] $ toHtml $ prettyTimeAuto now (zonedTimeToUTC err.updatedAt)
-                      div_ [class_ "flex items-center gap-4"] do
-                        div_ [class_ "flex items-center gap-2"] do
-                          faSprite_ "code" "regular" "w-4 h-4"
-                          div_ [] do
-                            span_ [class_ "text-sm text-textWeak"] "Stack:"
-                            span_ [class_ "ml-2 text-sm"] $ toHtml $ fromMaybe "Unknown stack" err.errorData.stack
-
-                        div_ [class_ "flex items-center gap-2"] do
-                          faSprite_ "server" "regular" "w-3 h-3"
-                          div_ [] do
-                            span_ [class_ "text-sm text-textWeak"] "Service:"
-                            span_ [class_ "ml-2 text-sm"] $ toHtml $ fromMaybe "Unknown stack" err.errorData.serviceName
-              _ -> pass
-          Issues.QueryAlert -> do
-            case AE.fromJSON (getAeson issue.issueData) of
-              AE.Success (alertData :: Issues.QueryAlertData) -> do
-                div_ [class_ "mb-4"] do
-                  span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
-                  div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"]
-                    $ toHtml alertData.queryExpression
-              _ -> pass
-          _ -> pass
-
-      div_ [class_ "w-full border border-strokeWeak rounded-lg mb-5", id_ "error-details-container"] do
-        div_ [class_ "px-4 py-2 border-b border-b-strokeWeak flex items-center justify-between"] do
-          h4_ [class_ "text-textStrong text-lg font-medium"] "Insights & Trace"
-          div_ [class_ "flex items-center gap-4"] do
-            button_ [class_ "text-xs py-1 px-2 rounded cursor-pointer err-tab t-tab-active hover:bg-fillWeak font-medium", onclick_ "navigatable(this, '#span-content', '#error-details-container', 't-tab-active', 'err')"] "Trace"
-            button_ [class_ "text-xs py-1 px-2 rounded cursor-pointer err-tab hover:bg-fillWeak font-medium", onclick_ "navigatable(this, '#log-content', '#error-details-container', 't-tab-active', 'err')"] "Logs"
-            button_ [class_ "text-xs py-1 px-2 rounded cursor-pointer err-tab hover:bg-fillWeak font-medium", onclick_ "navigatable(this, '#replay-content', '#error-details-container', 't-tab-active', 'err')"] "Replay"
-            button_ [class_ "text-xs py-1 px-2 rounded cursor-pointer hover:bg-fillWeak font-medium", term "data-tippy-content" "Show first trace the error occured"] "First"
-            button_ [class_ "text-xs py-1 px-2 rounded cursor-pointer hover:bg-fillWeak font-medium", term "data-tippy-content" "Show recent trace the error occured"] "Recent"
-        div_ [class_ "p-2 w-full overflow-x-hidden"] do
-          div_ [class_ "flex w-full err-tab-content", id_ "span-content"] do
-            div_ [id_ "trace_container", class_ "grow-1 max-w-[80%] w-1/2 min-w-[20%] shrink-1"] do
-              whenJust tr $ \t ->
-                tracePage pid t spanRecs
-            div_ [class_ "transition-opacity duration-200 mx-1", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
-            div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden max-h-[500px] w-1/2 w-c-scroll overflow-x-hidden overflow-y-auto", id_ "log_details_container"] do
-              span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
-              let (spanId, createdAt) = case spanRecs V.!? 0 of
-                    Just sr -> (sr.uSpanId, formatUTC sr.timestamp)
-                    Nothing -> ("", "")
-              let url = "/p/" <> pid.toText <> "/log_explorer/" <> spanId <> "/" <> createdAt <> "/detailed"
-              div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
-
-          div_ [id_ "log-content", class_ "hidden err-tab-content"] do
-            div_ [class_ "flex flex-col gap-4"] pass
-          --             let tableCols = (\x -> Table.mkColumn x x) <$> ["Timestamp", "Severity", "Body"]
-          --     mapRows x =
-          --       Map.fromList
-          --         [ ("Timestamp", CellText $ formatUTC x.timestamp)
-          --         , ("Severity", CellText $ show x.severity)
-          --         , ("Body", CellText $ show x.body)
-          --         ]
-          --     rows = V.toList $ V.map mapRows logs
-          --     table = Table.defaultTable tableCols rows
-          -- Table.renderTable table
-
-          div_ [id_ "replay-content", class_ "hidden err-tab-content"] do
-            div_ [class_ "flex flex-col gap-4"] do
-              emptyState_ "No Replay Available" "No session replays associated with this trace" (Just "https://monoscope.tech/docs/sdks/javascript/session-replay/") "Session Replay Guide"
 
 
 anomalyListGetH
@@ -882,7 +685,7 @@ anomalyAcknowledgeButton pid aid acked host = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
-          <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+        <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" "acknowledge issue"
     , hxGet_ acknowledgeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -898,7 +701,7 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
-          <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+        <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"
