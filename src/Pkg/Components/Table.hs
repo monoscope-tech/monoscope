@@ -749,7 +749,6 @@ renderRowWithColumns attrs columns row =
 
 -- Sorting Utilities
 
-
 -- Parse sort param like "+name,-updated_at" into sort fields
 -- Optionally takes field name overrides (e.g. [("name", ["first_name", "last_name"])])
 parseSortParam :: Text -> Maybe [(Text, [Text])] -> [SortField]

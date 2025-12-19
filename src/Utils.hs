@@ -364,8 +364,9 @@ lookupVecTextByKey vec colIdxMap key = HM.lookup key colIdxMap >>= lookupVecText
 
 
 lookupVecBoolByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Bool
-lookupVecBoolByKey vec colIdxMap key = fromMaybe False $ HM.lookup key colIdxMap >>= \i ->
-  vec V.!? i >>= \case AE.Bool b -> Just b; _ -> Nothing
+lookupVecBoolByKey vec colIdxMap key =
+  fromMaybe False $ HM.lookup key colIdxMap >>= \i ->
+    vec V.!? i >>= \case AE.Bool b -> Just b; _ -> Nothing
 
 
 lookupVecIntByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Int
