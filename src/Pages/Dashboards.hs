@@ -263,7 +263,12 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               // Hide all panels
               document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
               // Show active panel
-              document.getElementById('tab-panel-${dashboardId}-' + tabIndex).classList.remove('hidden');
+              const activePanel = document.getElementById('tab-panel-${dashboardId}-' + tabIndex);
+              activePanel.classList.remove('hidden');
+              // Update gridStackInstance to point to the active tab's grid
+              if (activePanel.gridstack) {
+                window.gridStackInstance = activePanel.gridstack;
+              }
             }
           });
         });
@@ -295,10 +300,14 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               styleInHead: true,
               staticGrid: false,
             }, gridEl);
-            
+
             grid.on('removed change', debounce(updateWidgetOrder('${projectId}', '${dashboardId}'), 200));
             gridEl.classList.add('grid-stack-initialized');
             gridInstances.push(grid);
+            // Set global gridStackInstance to the first (or visible) grid for hyperscript access
+            if (!window.gridStackInstance) {
+              window.gridStackInstance = grid;
+            }
           }
         });
 
