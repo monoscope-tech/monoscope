@@ -419,7 +419,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
           Anomalies.Incremental -> (b, i + 1, t + 1)
           _ -> (b, i, t + 1)
         (breakingChanges, incrementalChanges, totalChanges) = foldl' countChange (0, 0, 0) allChanges
-        affectedRequests = totalChanges
+        affectedRequests = length requestChanges + length responseChanges
     div_ [class_ "flex items-center gap-4 text-sm mb-4 p-3 bg-fillWeak rounded-lg"] do
       span_ [class_ "text-textWeak"] do
         strong_ [class_ "text-textStrong"] $ toHtml $ show totalChanges
