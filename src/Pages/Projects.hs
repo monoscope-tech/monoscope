@@ -1310,10 +1310,6 @@ createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
         do
           -- Project details card
           div_ [class_ "surface-raised rounded-2xl p-4 space-y-4"] do
-            div_ [class_ "flex items-center gap-2 mb-1"] do
-              div_ [class_ "p-1.5 rounded-md bg-fillBrand-weak"] $ faSprite_ "folder" "regular" "h-3.5 w-3.5 text-textBrand"
-              label_ [class_ "text-sm font-medium text-textStrong"] "Project Details"
-
             div_ [class_ "space-y-4"] do
               div_ [class_ "space-y-1.5"] do
                 label_ [class_ "flex items-center gap-1 text-xs font-medium text-textWeak", Lucid.for_ "title"] do
