@@ -385,14 +385,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
     h3_ [class_ "text-textStrong text-base"] $ toHtml issue.title
     -- Issue type badge
     div_ [class_ "flex items-center gap-2"] do
-      -- Type badge
-      case issue.issueType of
-        Issues.RuntimeException -> span_ [class_ "badge bg-fillError-strong"] do faSprite_ "triangle-alert" "regular" "w-3 h-3"; "ERROR"
-        Issues.QueryAlert -> span_ [class_ "badge bg-fillWarning-strong"] do faSprite_ "zap" "regular" "w-3 h-3"; "ALERT"
-        Issues.APIChange ->
-          if issue.critical
-            then span_ [class_ "badge bg-fillError-strong"] do faSprite_ "exclamation-triangle" "regular" "w-3 h-3"; "BREAKING"
-            else span_ [class_ "badge bg-fillInformation-strong"] do faSprite_ "info" "regular" "w-3 h-3 mr-0.5"; "Incremental"
+      issueTypeBadge issue.issueType issue.critical
       -- Severity badge
       case issue.severity of
         "critical" -> span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
@@ -719,3 +712,15 @@ anomalyArchiveButton pid aid archived = do
     do
       faSprite_ "archive" "regular" "w-4 h-4"
       span_ [class_ "leading-none"] $ if archived then "Unarchive" else "Archive"
+
+
+issueTypeBadge :: Issues.IssueType -> Bool -> Html ()
+issueTypeBadge issueType critical = badge cls icon txt
+  where
+    (cls, icon, txt) = case issueType of
+      Issues.RuntimeException -> ("bg-fillError-strong", "triangle-alert", "ERROR")
+      Issues.QueryAlert -> ("bg-fillWarning-strong", "zap", "ALERT")
+      Issues.APIChange
+        | critical -> ("bg-fillError-strong", "exclamation-triangle", "BREAKING")
+        | otherwise -> ("bg-fillInformation-strong", "info", "Incremental")
+    badge c i t = span_ [class_ $ "badge " <> c] do faSprite_ i "regular" "w-3 h-3"; t
