@@ -419,12 +419,14 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
   -- Statistics row (only for API changes)
   when (issue.issueType == Issues.APIChange) do
     let requestChanges = getAeson issue.requestPayloads :: [Anomalies.PayloadChange]
-    let responseChanges = getAeson issue.responsePayloads :: [Anomalies.PayloadChange]
-    let allChanges = requestChanges ++ responseChanges
-    let breakingChanges = length $ filter (\c -> c.changeType == Anomalies.Breaking) allChanges
-    let incrementalChanges = length $ filter (\c -> c.changeType == Anomalies.Incremental) allChanges
-    let totalChanges = length allChanges
-    let affectedRequests = length requestChanges + length responseChanges
+        responseChanges = getAeson issue.responsePayloads :: [Anomalies.PayloadChange]
+        allChanges = requestChanges ++ responseChanges
+        countChange (!b, !i, !t) c = case c.changeType of
+          Anomalies.Breaking -> (b + 1, i, t + 1)
+          Anomalies.Incremental -> (b, i + 1, t + 1)
+          _ -> (b, i, t + 1)
+        (breakingChanges, incrementalChanges, totalChanges) = foldl' countChange (0, 0, 0) allChanges
+        affectedRequests = totalChanges
     div_ [class_ "flex items-center gap-4 text-sm mb-4 p-3 bg-fillWeak rounded-lg"] do
       span_ [class_ "text-textWeak"] do
         strong_ [class_ "text-textStrong"] $ toHtml $ show totalChanges

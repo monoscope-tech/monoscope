@@ -453,7 +453,8 @@ renderSortDropdown actions = do
   let defaultSort = maybe "" (\(_, _, k) -> k) (listToMaybe actions.sortOptions)
       currentLabel = maybe "Sort" (\(t, _, _) -> t) $ find (\(_, _, k) -> k == actions.currentSort) actions.sortOptions
       baseUrl' = deleteParam "sort" actions.baseUrl
-      separator = if T.isInfixOf "?" baseUrl' then "&" else "?"
+      urlPrefix = baseUrl' <> (if T.isInfixOf "?" baseUrl' then "&" else "?") <> "sort="
+      mkSortUrl sortKey = urlPrefix <> toUriStr sortKey
       popId = "sortDropdown"
 
   div_ [class_ "inline-block", data_ "tippy-content" "Sort by"] do
@@ -475,10 +476,9 @@ renderSortDropdown actions = do
       do
         forM_ actions.sortOptions \(title, desc, sortKey) -> do
           let isActive = actions.currentSort == sortKey || (actions.currentSort == "" && sortKey == defaultSort)
-              url = baseUrl' <> separator <> "sort=" <> toUriStr sortKey
           a_
             [ class_ $ "block flex flex-row px-3 py-2 hover:bg-fillBrand-weak rounded-md cursor-pointer " <> if isActive then " text-textBrand " else ""
-            , hxGet_ url
+            , hxGet_ $ mkSortUrl sortKey
             , hxTarget_ $ "#" <> actions.targetId
             , hxSelect_ $ "#" <> actions.targetId
             , hxPushUrl_ "true"
