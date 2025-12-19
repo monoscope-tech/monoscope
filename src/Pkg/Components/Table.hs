@@ -277,7 +277,7 @@ renderTableRows :: TableRows a -> Html ()
 renderTableRows tr
   | V.null tr.rows = whenJust tr.emptyState renderSimpleZeroState
   | tr.renderAsTable = do
-      let colCount = length tr.columns + if isJust tr.rowId then 1 else 0
+      let colCount = columnCount tr.columns tr.rowId
           getRowAttrs row = maybe [] ($ row) tr.rowAttrs
       V.forM_ tr.rows \row -> tr_ (getRowAttrs row) do
         whenJust tr.rowId \getId -> td_ [class_ "w-8 align-top pt-4"] $ input_ [term "aria-label" "Select Item", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "itemId", value_ $ getId row]
@@ -390,9 +390,8 @@ renderRows tbl =
         tbody_ [id_ $ tbl.config.elemID <> "_tbody"] do
           V.mapM_ (renderTableRow tbl) tbl.rows
           -- Pagination inside tbody for table mode
-          whenJust tbl.features.pagination \(url, trigger) -> do
-            let colCount = length tbl.columns + if isJust tbl.features.rowId then 1 else 0
-            tr_ [] $ td_ [colspan_ $ show colCount] $ renderPaginationLink (Just "closest tr") url trigger
+          whenJust tbl.features.pagination \(url, trigger) ->
+            tr_ [] $ td_ [colspan_ $ show $ columnCount tbl.columns tbl.features.rowId] $ renderPaginationLink (Just "closest tr") url trigger
     else V.mapM_ (renderListRow tbl) tbl.rows
 
 
@@ -770,6 +769,11 @@ sortFieldsToSQL :: [SortField] -> Text
 sortFieldsToSQL sortFields
   | null sortFields = ""
   | otherwise = "ORDER BY " <> T.intercalate ", " (map (.toSql) sortFields)
+
+
+-- Calculate total column count including checkbox column for bulk actions
+columnCount :: [Column a] -> Maybe b -> Int
+columnCount columns rowIdM = length columns + if isJust rowIdM then 1 else 0
 
 
 -- Generate SQL filter clause for a list of values

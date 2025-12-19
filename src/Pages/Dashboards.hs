@@ -78,6 +78,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
+import UnliftIO.Exception (try)
 import Servant (NoContent (..), ServerError, err404, errBody)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
@@ -378,8 +379,10 @@ processVariable pid now timeRange@(sinceStr, fromDStr, toDStr) allParams variabl
 
   case variable._vType of
     Dashboards.VTQuery | Just sqlQuery <- variable.sql -> do
-      queryResults <- dbtToEff $ query_ (Query $ encodeUtf8 sqlQuery)
-      pure variable{Dashboards.options = Just $ V.toList queryResults}
+      result <- try $ dbtToEff $ query_ (Query $ encodeUtf8 sqlQuery)
+      case result of
+        Right queryResults -> pure variable{Dashboards.options = Just $ V.toList queryResults}
+        Left (_ :: SomeException) -> pure variable -- Return unchanged on error
     _ -> pure variable
 
 
