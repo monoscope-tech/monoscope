@@ -682,7 +682,7 @@ loginBanner = do
 settingsWrapper :: Projects.ProjectId -> Text -> Html () -> Html ()
 settingsWrapper pid current pageHtml = do
   section_ [class_ "flex h-full w-full"] do
-    nav_ [class_ "w-64 h-full p-4 pt-8 border-r border-r-strokWeak"] do
+    nav_ [class_ "w-72 h-full p-4 pt-8 border-r border-r-strokWeak"] do
       h1_ [class_ "text-xl pl-3 font-semibold"] "Settings"
       ul_ [class_ "flex flex-col mt-6 gap-0.5 w-full"] $ mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
     main_ [class_ "w-full h-full overflow-y-auto"] do
