@@ -45,7 +45,7 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users (User (id))
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), SearchMode (..), SortConfig (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, renderRowWithColumns, withAttrs)
+import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, renderRowWithColumns, withAttrs)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
@@ -171,14 +171,16 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
   let filterV = fromMaybe "14d" timeFilter
 
   let pageInt = maybe 0 (Unsafe.read . toString) pageM
+  let currentSort = fromMaybe "-created_at" sortM
 
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
   currTime <- liftIO getCurrentTime
 
   let fLimit = 10
-  issues <- dbtToEff $ Issues.selectIssues pid Nothing (Just ackd) (Just archived) fLimit (pageInt * fLimit) Nothing
+  issues <- dbtToEff $ Issues.selectIssues pid Nothing (Just ackd) (Just archived) fLimit (pageInt * fLimit) Nothing (Just currentSort)
 
-  let currentURL = mconcat ["/p/", pid.toText, "/anomalies?layout=", fromMaybe "false" layoutM, "&ackd=", show ackd, "&archived=", show archived]
+  let baseUrl = "/p/" <> pid.toText <> "/anomalies?filter=" <> currentFilterTab
+      currentURL = baseUrl <> "&sort=" <> currentSort
       nextFetchUrl = case layoutM of
         Just "slider" -> Nothing
         _ ->
@@ -186,30 +188,36 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
             then Nothing
             else Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)
   let issuesVM = V.map (IssueVM False False currTime filterV) issues
+      tableActions =
+        TableHeaderActions
+          { baseUrl
+          , targetId = "anomalyListContainer"
+          , sortOptions =
+              [ ("Newest", "Most recently created", "-created_at")
+              , ("Oldest", "Oldest issues first", "+created_at")
+              , ("Recently Updated", "Most recently updated", "-updated_at")
+              , ("Name (A-Z)", "Sort alphabetically", "+title")
+              , ("Name (Z-A)", "Sort reverse alphabetically", "-title")
+              ]
+          , currentSort
+          , filterMenus = []
+          , activeFilters = []
+          }
   let issuesTable =
         Table
-          { config = def{elemID = "anomalyListForm", addPadding = True}
+          { config = def{elemID = "anomalyListForm", containerId = Just "anomalyListContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
           , columns = issueColumns pid
           , rows = issuesVM
           , features =
               def
                 { rowId = Just \(IssueVM _ _ _ _ issue) -> Issues.issueIdText issue.id
+                , rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
                 , bulkActions =
-                    [ BulkAction{icon = Just "check", title = "acknowledge", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowledge"}
-                    , BulkAction{icon = Just "inbox-full", title = "archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
+                    [ BulkAction{icon = Just "check", title = "Acknowledge", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/acknowledge"}
+                    , BulkAction{icon = Just "inbox-full", title = "Archive", uri = "/p/" <> pid.toText <> "/anomalies/bulk_actions/archive"}
                     ]
                 , search = Just ClientSide
-                , sort =
-                    Just
-                      $ SortConfig
-                        { current = fromMaybe "events" sortM
-                        , currentURL = currentURL
-                        , options =
-                            [ ("First Seen", "First time the issue occured", "first_seen")
-                            , ("Last Seen", "Last time the issue occured", "last_seen")
-                            , ("Events", "Number of events", "events")
-                            ]
-                        }
+                , tableHeaderActions = Just tableActions
                 , pagination = (,"both") <$> nextFetchUrl
                 , zeroState =
                     Just
@@ -236,16 +244,17 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
                 $ TabFilter
                   { current = currentFilterTab
                   , currentURL
+                  , clientSide = False
                   , options =
-                      [ TabFilterOpt "Inbox" Nothing
-                      , TabFilterOpt "Acknowleged" Nothing
-                      , TabFilterOpt "Archived" Nothing
+                      [ TabFilterOpt "Inbox" Nothing Nothing
+                      , TabFilterOpt "Acknowleged" Nothing Nothing
+                      , TabFilterOpt "Archived" Nothing Nothing
                       ]
                   }
           }
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
     (Just "slider", Just "true", _, _) -> ALSlider currTime pid endpointM (Just $ V.map (IssueVM True False currTime filterV) issues)
-    (_, _, _, Just "true") -> ALRows $ TableRows nextFetchUrl (issueColumns pid) issuesVM -- For load more - only rows
+    (_, _, _, Just "true") -> ALRows $ TableRows{nextUrl = nextFetchUrl, columns = issueColumns pid, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(IssueVM _ _ _ _ issue) -> Issues.issueIdText issue.id, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]}
     _ -> ALPage $ PageCtx bwconf issuesTable
 
 
@@ -332,18 +341,10 @@ data IssueVM = IssueVM Bool Bool UTCTime Text Issues.IssueL
 
 issueColumns :: Projects.ProjectId -> [Column IssueVM]
 issueColumns pid =
-  [ col "" renderIssueCheckboxCol & withAttrs [class_ "h-4 flex space-x-3 w-8 items-center justify-center"]
-  , col "Issue" (renderIssueMainCol pid) & withAttrs [class_ "flex-1 min-w-0"]
-  , col "Events" renderIssueEventsCol & withAttrs [class_ "w-36 flex items-start justify-center"]
-  , col "Activity" renderIssueChartCol & withAttrs [class_ "flex items-start justify-center"]
+  [ col "Issue" (renderIssueMainCol pid) & withAttrs [class_ "py-4"]
+  , col "Events" renderIssueEventsCol & withAttrs [class_ "w-36 text-center align-top pt-4"]
+  , col "Activity" renderIssueChartCol & withAttrs [class_ "w-60 align-top pt-4"]
   ]
-
-
-renderIssueCheckboxCol :: IssueVM -> Html ()
-renderIssueCheckboxCol (IssueVM hideByDefault isWidget _ _ issue) =
-  unless isWidget do
-    a_ [class_ $ anomalyAccentColor (isJust issue.acknowledgedAt) (isJust issue.archivedAt) <> " w-2 h-full"] ""
-    input_ [term "aria-label" "Select Issue", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "anomalyId", value_ $ Issues.issueIdText issue.id]
 
 
 renderIssueEventsCol :: IssueVM -> Html ()
@@ -375,176 +376,126 @@ renderIssueChartCol (IssueVM _ _ _ _ issue) =
 renderIssueMainCol :: Projects.ProjectId -> IssueVM -> Html ()
 renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue) = do
   let timeSinceString = prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
+      statusColor = anomalyAccentColor (isJust issue.acknowledgedAt) (isJust issue.archivedAt)
 
-  do
-    -- Title and badges row
-    div_ [class_ $ "flex gap-3 mb-3 flex-wrap " <> if isWidget then "flex-col" else " items-center "] do
-      h3_ [class_ "text-textStrong text-base"] $ toHtml issue.title
+  -- Title and badges row with status indicator
+  div_ [class_ $ "flex gap-3 mb-3 flex-wrap " <> if isWidget then "flex-col" else " items-center "] do
+    -- Status indicator dot
+    unless isWidget $ div_ [class_ $ statusColor <> " w-2 h-2 rounded-full shrink-0 mt-1.5"] ""
+    h3_ [class_ "text-textStrong text-base"] $ toHtml issue.title
+    -- Issue type badge
+    div_ [class_ "flex items-center gap-2"] do
+      issueTypeBadge issue.issueType issue.critical
+      -- Severity badge
+      case issue.severity of
+        "critical" -> span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
+        "warning" -> span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "WARNING"
+        _ -> pass
 
-      -- Issue type badge
-      div_ [class_ "flex items-center gap-2"] do
-        -- Type badge
-        case issue.issueType of
-          Issues.RuntimeException ->
-            span_ [class_ "badge bg-fillError-strong"] do
-              faSprite_ "triangle-alert" "regular" "w-3 h-3"
-              "ERROR"
-          Issues.QueryAlert ->
-            span_ [class_ "badge bg-fillWarning-strong"] do
-              faSprite_ "zap" "regular" "w-3 h-3"
-              "ALERT"
-          Issues.APIChange ->
-            if issue.critical
-              then span_ [class_ "badge bg-fillError-strong"] do
-                faSprite_ "exclamation-triangle" "regular" "w-3 h-3"
-                "BREAKING"
-              else span_ [class_ "badge bg-fillInformation-strong"] do
-                faSprite_ "info" "regular" "w-3 h-3 mr-0.5"
-                "Incremental"
-
-        -- Severity badge
-        case issue.severity of
-          "critical" -> span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
-          "warning" -> span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "WARNING"
-          _ -> pass
-
-    -- Metadata row (method, endpoint, service, time)
-    div_ [class_ "flex items-center gap-4 text-sm text-textWeak mb-3 flex-wrap"] do
-      -- Method and endpoint (for API changes)
-      when (issue.issueType == Issues.APIChange) do
-        case AE.fromJSON (getAeson issue.issueData) of
-          AE.Success (apiData :: Issues.APIChangeData) -> do
-            div_ [class_ "flex items-center gap-2"] do
-              span_ [class_ $ "badge " <> methodFillColor apiData.endpointMethod] $ toHtml apiData.endpointMethod
-              -- Endpoint path
-              span_ [class_ "font-mono bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml apiData.endpointPath
-          _ -> pass
-
-      -- Service badge
-      span_ [class_ "flex items-center gap-1"] do
-        div_ [class_ "w-3 h-3 bg-fillYellow rounded-sm"] ""
-        span_ [class_ "text-textStrong"] $ toHtml issue.service
-
-      -- Time since
-      span_ [class_ "text-textWeak"] $ toHtml timeSinceString
-
-    -- Statistics row (only for API changes)
+  -- Metadata row (method, endpoint, service, time)
+  div_ [class_ "flex items-center gap-4 text-sm text-textWeak mb-3 flex-wrap"] do
+    -- Method and endpoint (for API changes)
     when (issue.issueType == Issues.APIChange) do
-      let requestChanges = getAeson issue.requestPayloads :: [Anomalies.PayloadChange]
-      let responseChanges = getAeson issue.responsePayloads :: [Anomalies.PayloadChange]
-      let allChanges = requestChanges ++ responseChanges
-      let breakingChanges = length $ filter (\c -> c.changeType == Anomalies.Breaking) allChanges
-      let incrementalChanges = length $ filter (\c -> c.changeType == Anomalies.Incremental) allChanges
-      let totalChanges = length allChanges
-      let affectedRequests = length requestChanges + length responseChanges
+      case AE.fromJSON (getAeson issue.issueData) of
+        AE.Success (apiData :: Issues.APIChangeData) -> do
+          div_ [class_ "flex items-center gap-2"] do
+            span_ [class_ $ "badge " <> methodFillColor apiData.endpointMethod] $ toHtml apiData.endpointMethod
+            span_ [class_ "monospace bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml apiData.endpointPath
+        _ -> pass
+    -- Service badge
+    span_ [class_ "flex items-center gap-1"] do
+      div_ [class_ "w-3 h-3 bg-fillYellow rounded-sm"] ""
+      span_ [class_ "text-textStrong"] $ toHtml issue.service
+    -- Time since
+    span_ [class_ "text-textWeak"] $ toHtml timeSinceString
 
-      div_ [class_ "flex items-center gap-4 text-sm mb-4 p-3 bg-fillWeak rounded-lg"] do
-        span_ [class_ "text-textWeak"] do
-          strong_ [class_ "text-textStrong"] $ toHtml $ show totalChanges
-          " total changes"
+  -- Statistics row (only for API changes)
+  when (issue.issueType == Issues.APIChange) do
+    let allChanges = getAeson issue.requestPayloads <> getAeson issue.responsePayloads :: [Anomalies.PayloadChange]
+        countChange (!b, !i, !t) c = case c.changeType of
+          Anomalies.Breaking -> (b + 1, i, t + 1)
+          Anomalies.Incremental -> (b, i + 1, t + 1)
+          _ -> (b, i, t + 1)
+        (breakingChanges, incrementalChanges, totalChanges) = foldl' countChange (0, 0, 0) allChanges
+    div_ [class_ "flex items-center gap-4 text-sm mb-4 p-3 bg-fillWeak rounded-lg"] do
+      span_ [class_ "text-textWeak"] do
+        strong_ [class_ "text-textStrong"] $ toHtml $ show totalChanges
+        " total changes"
+      div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+      span_ [class_ "text-textWeak"] do
+        strong_ [class_ "text-fillError-strong"] $ toHtml $ show breakingChanges
+        " breaking"
+        when (breakingChanges > 0 && totalChanges > 0) $ span_ [class_ "text-xs ml-1 bg-fillError-weak text-fillError-strong px-1.5 py-0.5 rounded"] $ toHtml $ show (round (fromIntegral breakingChanges / fromIntegral totalChanges * 100 :: Float) :: Int) <> "%"
+      div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+      span_ [class_ "text-textWeak"] do
+        strong_ [class_ "text-fillSuccess-strong"] $ toHtml $ show incrementalChanges
+        " incremental"
+      div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+      span_ [class_ "text-textWeak"] do
+        strong_ [class_ "text-textBrand"] $ toHtml $ show totalChanges
+        " payloads affected"
 
-        div_ [class_ "w-px h-4 bg-strokeWeak"] ""
-
-        span_ [class_ "text-textWeak"] do
-          strong_ [class_ "text-fillError-strong"] $ toHtml $ show breakingChanges
-          " breaking"
-          when (breakingChanges > 0 && totalChanges > 0) do
-            span_ [class_ "text-xs ml-1 bg-fillError-weak text-fillError-strong px-1.5 py-0.5 rounded"] do
-              toHtml $ show (round (fromIntegral breakingChanges / fromIntegral totalChanges * 100 :: Float) :: Int) <> "%"
-
-        div_ [class_ "w-px h-4 bg-strokeWeak"] ""
-
-        span_ [class_ "text-textWeak"] do
-          strong_ [class_ "text-fillSuccess-strong"] $ toHtml $ show incrementalChanges
-          " incremental"
-
-        div_ [class_ "w-px h-4 bg-strokeWeak"] ""
-
-        span_ [class_ "text-textWeak"] do
-          strong_ [class_ "text-textBrand"] $ toHtml $ show affectedRequests
-          " payloads affected"
-
-    -- Stack trace for runtime exceptions or Query for alerts
-    case issue.issueType of
-      Issues.RuntimeException -> do
-        case AE.fromJSON (getAeson issue.issueData) of
-          AE.Success (exceptionData :: Issues.RuntimeExceptionData) -> do
-            div_ [class_ "border border-strokeError-weak rounded-lg group/er mb-4"] do
-              label_ [class_ "text-sm text-textWeak font semibold rounded-lg p-2 flex gap-2 items-center"] do
-                faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.err-input:checked]/er:rotate-90"
-                "Stack trace"
-                input_ [class_ "err-input w-0 h-0 opacity-0", type_ "checkbox"]
-              div_ [class_ "bg-fillError-weak p-4 overflow-x-scroll hidden group-has-[.err-input:checked]/er:block text-sm font-mono text-fillError-strong"] do
-                pre_ [class_ "whitespace-pre-wrap "] $ toHtml exceptionData.stackTrace
-          _ -> pass
-      Issues.QueryAlert -> do
-        case AE.fromJSON (getAeson issue.issueData) of
-          AE.Success (alertData :: Issues.QueryAlertData) -> do
-            div_ [class_ "mb-4"] do
-              span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
-              div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"]
-                $ toHtml alertData.queryExpression
-          _ -> pass
+  -- Stack trace for runtime exceptions or Query for alerts
+  case issue.issueType of
+    Issues.RuntimeException -> case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (exceptionData :: Issues.RuntimeExceptionData) ->
+        div_ [class_ "border border-strokeError-weak rounded-lg group/er mb-4"] do
+          label_ [class_ "text-sm text-textWeak font semibold rounded-lg p-2 flex gap-2 items-center"] do
+            faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.err-input:checked]/er:rotate-90"
+            "Stack trace"
+            input_ [class_ "err-input w-0 h-0 opacity-0", type_ "checkbox"]
+          div_ [class_ "bg-fillError-weak p-4 overflow-x-scroll hidden group-has-[.err-input:checked]/er:block text-sm monospace text-fillError-strong"] $ pre_ [class_ "whitespace-pre-wrap "] $ toHtml exceptionData.stackTrace
       _ -> pass
+    Issues.QueryAlert -> case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (alertData :: Issues.QueryAlertData) ->
+        div_ [class_ "mb-4"] do
+          span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
+          div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm monospace text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
+      _ -> pass
+    _ -> pass
 
-    -- Recommended action
-    div_ [class_ "border-l-4 border-strokeBrand pl-4 mb-4"] do
-      p_ [class_ "text-sm text-textStrong leading-relaxed"] $ toHtml issue.recommendedAction
+  -- Recommended action
+  div_ [class_ "border-l-4 border-strokeBrand pl-4 mb-4"] $ p_ [class_ "text-sm text-textStrong leading-relaxed"] $ toHtml issue.recommendedAction
 
-    -- Collapsible payload changes (only for API changes)
-    when (issue.issueType == Issues.APIChange) do
-      details_ [class_ "group mb-4"] do
-        summary_ [class_ "inline-flex items-center cursor-pointer whitespace-nowrap text-sm font-medium transition-all rounded-md gap-1.5 text-textBrand hover:text-textBrand/80 list-none"] do
-          faSprite_ "chevron-right" "regular" "h-4 w-4 mr-1 transition-transform group-open:rotate-90"
-          "View detailed payload changes"
+  -- Collapsible payload changes (only for API changes)
+  when (issue.issueType == Issues.APIChange) $ details_ [class_ "group mb-4"] do
+    summary_ [class_ "inline-flex items-center cursor-pointer whitespace-nowrap text-sm font-medium transition-all rounded-md gap-1.5 text-textBrand hover:text-textBrand/80 list-none"] do
+      faSprite_ "chevron-right" "regular" "h-4 w-4 mr-1 transition-transform group-open:rotate-90"
+      "View detailed payload changes"
+    div_ [class_ "mt-4 border border-strokeWeak rounded-lg overflow-hidden bg-bgRaised"] $ renderPayloadChanges issue
 
-        -- Payload details content
-        div_ [class_ "mt-4 border border-strokeWeak rounded-lg overflow-hidden bg-bgRaised"] do
-          renderPayloadChanges issue
-
-    -- Action buttons
-    div_ [class_ "flex items-center gap-3 mt-4 pt-4 border-t border-strokeWeak"] do
-      button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 text-textBrand hover:text-textBrand/80 hover:bg-fillBrand-weak"] do
-        faSprite_ "eye" "regular" "w-4 h-4"
-        span_ [class_ "leading-none"] "view related logs"
-
-      button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-textBrand border-strokeBrand-strong hover:bg-fillBrand-weak"] do
-        faSprite_ "code" "regular" "w-4 h-4"
-        span_ [class_ "leading-none"] "View Full Schema"
-
-      -- Acknowledge button
-      let isAcknowledged = isJust issue.acknowledgedAt
-      let acknowledgeEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/" <> Issues.issueIdText issue.id <> if isAcknowledged then "/unacknowledge" else "/acknowledge"
-      button_
-        [ class_
-            $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
-            <> if isAcknowledged
-              then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80"
-              else "bg-fillPrimary text-textInverse-strong hover:bg-fillPrimary/90"
-        , hxGet_ acknowledgeEndpoint
-        , hxSwap_ "outerHTML"
-        , hxTarget_ "closest .itemsListItem"
-        ]
-        do
-          faSprite_ "check" "regular" "w-4 h-4"
-          span_ [class_ "leading-none"] $ if isAcknowledged then "Acknowledged" else "Acknowledge"
-
-      -- Archive button
-      let isArchived = isJust issue.archivedAt
-      let archiveEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/" <> Issues.issueIdText issue.id <> if isArchived then "/unarchive" else "/archive"
-      button_
-        [ class_
-            $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 "
-            <> if isArchived
-              then "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak hover:bg-fillWarning-weak/80"
-              else "border border-strokeWeak text-textStrong hover:bg-fillWeak"
-        , hxGet_ archiveEndpoint
-        , hxSwap_ "outerHTML"
-        , hxTarget_ "closest .itemsListItem"
-        ]
-        do
-          faSprite_ "archive" "regular" "w-4 h-4"
-          span_ [class_ "leading-none"] $ if isArchived then "Unarchive" else "Archive"
+  -- Action buttons
+  div_ [class_ "flex items-center gap-3 mt-4 pt-4 border-t border-strokeWeak"] do
+    button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 text-textBrand hover:text-textBrand/80 hover:bg-fillBrand-weak"] do
+      faSprite_ "eye" "regular" "w-4 h-4"
+      span_ [class_ "leading-none"] "view related logs"
+    button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-textBrand border-strokeBrand-strong hover:bg-fillBrand-weak"] do
+      faSprite_ "code" "regular" "w-4 h-4"
+      span_ [class_ "leading-none"] "View Full Schema"
+    -- Acknowledge button
+    let isAcknowledged = isJust issue.acknowledgedAt
+    let acknowledgeEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/" <> Issues.issueIdText issue.id <> if isAcknowledged then "/unacknowledge" else "/acknowledge"
+    button_
+      [ class_ $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 " <> if isAcknowledged then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80" else "bg-fillPrimary text-textInverse-strong hover:bg-fillPrimary/90"
+      , hxGet_ acknowledgeEndpoint
+      , hxSwap_ "outerHTML"
+      , hxTarget_ "closest .itemsListItem"
+      ]
+      do
+        faSprite_ "check" "regular" "w-4 h-4"
+        span_ [class_ "leading-none"] $ if isAcknowledged then "Acknowledged" else "Acknowledge"
+    -- Archive button
+    let isArchived = isJust issue.archivedAt
+    let archiveEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/" <> Issues.issueIdText issue.id <> if isArchived then "/unarchive" else "/archive"
+    button_
+      [ class_ $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 " <> if isArchived then "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak hover:bg-fillWarning-weak/80" else "border border-strokeWeak text-textStrong hover:bg-fillWeak"
+      , hxGet_ archiveEndpoint
+      , hxSwap_ "outerHTML"
+      , hxTarget_ "closest .itemsListItem"
+      ]
+      do
+        faSprite_ "archive" "regular" "w-4 h-4"
+        span_ [class_ "leading-none"] $ if isArchived then "Unarchive" else "Archive"
 
 
 -- Render payload changes section
@@ -678,7 +629,7 @@ renderFieldChange fieldChange =
     div_ [class_ "flex items-start justify-between gap-4 mb-3"] do
       div_ [class_ "flex items-center gap-2 flex-wrap"] do
         -- Field path in monospace
-        span_ [class_ "font-mono text-sm bg-fillWeak px-2 py-1 rounded text-textStrong"] $ toHtml fieldChange.path
+        span_ [class_ "monospace text-sm bg-fillWeak px-2 py-1 rounded text-textStrong"] $ toHtml fieldChange.path
 
         -- Change kind badge
         let kindText = case fieldChange.changeKind of
@@ -719,12 +670,12 @@ renderFieldChange fieldChange =
           when (isJust fieldChange.oldValue) do
             div_ [] do
               span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "Previous Value:"
-              code_ [class_ "block bg-fillError-weak text-fillError-strong px-3 py-2 rounded text-xs font-mono whitespace-pre-wrap border border-strokeError-weak"] do
+              code_ [class_ "block bg-fillError-weak text-fillError-strong px-3 py-2 rounded text-xs monospace whitespace-pre-wrap border border-strokeError-weak"] do
                 toHtml $ fromMaybe "" fieldChange.oldValue
           when (isJust fieldChange.newValue) do
             div_ [] do
               span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "New Value:"
-              code_ [class_ "block bg-fillSuccess-weak text-fillSuccess-strong px-3 py-2 rounded text-xs font-mono whitespace-pre-wrap border border-strokeSuccess-weak"] do
+              code_ [class_ "block bg-fillSuccess-weak text-fillSuccess-strong px-3 py-2 rounded text-xs monospace whitespace-pre-wrap border border-strokeSuccess-weak"] do
                 toHtml $ fromMaybe "" fieldChange.newValue
 
 
@@ -758,3 +709,15 @@ anomalyArchiveButton pid aid archived = do
     do
       faSprite_ "archive" "regular" "w-4 h-4"
       span_ [class_ "leading-none"] $ if archived then "Unarchive" else "Archive"
+
+
+issueTypeBadge :: Issues.IssueType -> Bool -> Html ()
+issueTypeBadge issueType critical = badge cls icon txt
+  where
+    (cls, icon, txt) = case issueType of
+      Issues.RuntimeException -> ("bg-fillError-strong", "triangle-alert", "ERROR")
+      Issues.QueryAlert -> ("bg-fillWarning-strong", "zap", "ALERT")
+      Issues.APIChange
+        | critical -> ("bg-fillError-strong", "exclamation-triangle", "BREAKING")
+        | otherwise -> ("bg-fillInformation-strong", "info", "Incremental")
+    badge c i t = span_ [class_ $ "badge " <> c] do faSprite_ i "regular" "w-3 h-3"; t

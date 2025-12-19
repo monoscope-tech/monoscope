@@ -152,59 +152,67 @@ manageBillingGetH pid from = do
 
 
 billingPage :: Projects.ProjectId -> Int64 -> Text -> Text -> Text -> Text -> Text -> Bool -> Bool -> Html ()
-billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFreetier basicAuthEnabled = div_ [class_ "w-full pt-12"] do
+billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFreetier basicAuthEnabled = div_ [id_ "main-content", class_ "w-full h-full overflow-y-auto"] do
   let pidTxt = pid.toText
-  div_ [class_ "w-[606px] mx-auto"] do
-    div_ [class_ "flex flex-col gap-1"] do
-      h2_ [class_ "text-textStrong mb-3 text-xl font-semibold"] "Manage billing"
-      p_ [class_ "text-textWeak text-sm leading-tight"] "Track your usage and estimated costs"
-    div_ [class_ "flex gap-6 justify-between mt-8"] do
-      div_ [class_ "flex flex-col gap-2"] $ do
-        div_ [class_ "text-4xl font-bold"] $ toHtml $ formatNumberWithCommas reqs
-        div_ [class_ " text-textWeak"] "Total Requests Made"
-        div_ [class_ " text-textWeak"] "*Calculation may not be up-to-date"
-      div_ [class_ "flex flex-col gap-2"] $ do
-        div_ [class_ "text-4xl font-bold"] $ toHtml $ "$" <> if paymentPlan == "Free" then "0" else T.replace "\"" "" amount
-        div_ [class_ " text-textWeak"] "Estimated Cost"
-        div_ [class_ " text-textWeak"] "*Based on current usage"
-    div_ [class_ "mt-8 flex flex-col gap-4"] do
-      div_ [class_ "flex items-center gap-2  text-textWeak"] $ do
-        faSprite_ "regular-calendar-days-clock" "regular" "h-4 w-4"
-        span_ [data_ "id" "18"] $ toHtml $ "Latest data: " <> T.take 19 last_reported
-      unless (paymentPlan == "Free") do
-        a_ [class_ "flex items-center gap-2 font-bold cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]] $ do
-          faSprite_ "link-simple" "regular" "h-4 w-4"
-          span_ [data_ "id" "18"] "View on LemonSqueezy"
+  section_ [class_ "p-8 max-w-2xl mx-auto space-y-6"] do
+    div_ [class_ "mb-2"] do
+      h2_ [class_ "text-textStrong text-xl font-semibold"] "Manage billing"
+      p_ [class_ "text-textWeak text-sm mt-1"] "Track your usage and estimated costs"
 
-    div_ [class_ "border-t mt-8 pt-8"] do
-      div_ [class_ "self-stretch justify-start text-textStrong text-base font-semibold font-['Inter']"] "Upgrade plan"
-      p_ [class_ "text-textWeak text-sm max-w-[513px] mt-3"] "Monoscope pricing, click on compare feature below to select the option that best suit your project."
+    div_ [class_ "surface-raised rounded-2xl p-6 space-y-6"] do
+      div_ [class_ "flex items-center gap-2 mb-4"] do
+        div_ [class_ "p-1.5 rounded-md bg-fillBrand-weak"] $ faSprite_ "chart-line" "regular" "h-3.5 w-3.5 text-textBrand"
+        label_ [class_ "text-sm font-medium text-textStrong"] "Usage Overview"
 
-    div_ [class_ "border border-strokeWeak rounded-2xl h-32 flex items-center px-6 py-8 overflow-hidden mt-8 relative"] do
-      div_ [class_ "w-full h-36 rotate-y-5 rotate-z-15 right-[-40px] top-[-95px] z-0 absolute bg-gradient-to-b from-slate-500/10 to-slate-500/0"] pass
-      div_ [class_ "flex items-center justify-between w-full"] do
-        div_ [class_ "flex flex-col gap-1"] do
-          span_ [class_ "text-textStrong font-semibold"] $ toHtml paymentPlan
-          span_ [class_ "rounded-2xl text-textWeak bg-fillWeaker border border-strokeWeak py-[2px] leading-tight text-center text-xs px-2 w-max"] "Current plan"
-        div_ [class_ "flex items-center gap-1 mt-4"] do
-          div_ [class_ "flex items-end"] do
-            span_ [class_ "text-textStrong text-xl"] "$"
-            span_ [class_ "text-4xl text-textStrong"] $ if paymentPlan == "Free" then "0" else if paymentPlan == "Bring your own storage" then "199" else "29"
-          div_ [class_ "flex flex-col text-textWeak text-sm"] do
-            span_ [class_ ""] "/per month"
-        label_ [class_ "btn btn-secondary bg-bgRaised cursor pointer z-10", Lucid.for_ "pricing-modal", [__|on click set #pricing-modal.check to true|]] "Change plan"
+      div_ [class_ "grid grid-cols-2 gap-6"] do
+        div_ [class_ "flex flex-col gap-2"] do
+          div_ [class_ "text-4xl font-bold text-textStrong"] $ toHtml $ formatNumberWithCommas reqs
+          div_ [class_ "text-textWeak text-sm"] "Total Requests Made"
+          div_ [class_ "text-textWeak text-xs"] "*Calculation may not be up-to-date"
+        div_ [class_ "flex flex-col gap-2"] do
+          div_ [class_ "text-4xl font-bold text-textStrong"] $ toHtml $ "$" <> if paymentPlan == "Free" then "0" else T.replace "\"" "" amount
+          div_ [class_ "text-textWeak text-sm"] "Estimated Cost"
+          div_ [class_ "text-textWeak text-xs"] "*Based on current usage"
 
-        input_ [type_ "checkbox", id_ "pricing-modal", class_ "modal-toggle"]
-        div_ [class_ "modal p-8", role_ "dialog", [__|on closeModal from body set #pricing-modal.checked to false |]] do
-          div_ [class_ "modal-box relative flex flex-col gap-5 w-[1250px] py-16 px-32", style_ "max-width:1300px"] $ do
-            button_ [class_ "absolute top-8 right-8 cursor-pointer", [__| on click set #pricing-modal.checked to false |]] do
-              faSprite_ "circle-xmark" "regular" "w-8 h-8"
-            div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
-              span_ [class_ " text-textStrong text-2xl font-semibold"] "What’s Included?"
-              p_ [class_ "mt-2 mb-4"] "See and compare what you get in each plan."
-              p_ [] "Please adjust the bar below to see difference in price as your events increase"
-            paymentPlanPicker pid lemonUrl critical paymentPlan enableFreetier basicAuthEnabled
-          label_ [class_ "modal-backdrop", Lucid.for_ "pricing-modal"] "Close"
+      div_ [class_ "border-t border-strokeWeak pt-4 space-y-3"] do
+        div_ [class_ "flex items-center gap-2 text-textWeak text-sm"] do
+          faSprite_ "regular-calendar-days-clock" "regular" "h-4 w-4"
+          span_ $ toHtml $ "Latest data: " <> T.take 19 last_reported
+        unless (paymentPlan == "Free") do
+          a_ [class_ "flex items-center gap-2 text-textBrand hover:underline cursor-pointer text-sm font-medium", hxGet_ [text| /p/$pidTxt/manage_subscription |]] do
+            faSprite_ "link-simple" "regular" "h-4 w-4"
+            span_ "View on LemonSqueezy"
+
+    div_ [class_ "surface-raised rounded-2xl p-6 space-y-4"] do
+      div_ [class_ "flex items-center gap-2 mb-2"] do
+        div_ [class_ "p-1.5 rounded-md bg-fillSuccess-weak"] $ faSprite_ "dollar" "regular" "h-3.5 w-3.5 text-textSuccess"
+        label_ [class_ "text-sm font-medium text-textStrong"] "Current Plan"
+
+      div_ [class_ "flex items-center justify-between p-4 border border-strokeWeak rounded-xl bg-fillWeaker"] do
+        div_ [class_ "flex flex-col gap-2"] do
+          span_ [class_ "text-textStrong font-semibold text-lg"] $ toHtml paymentPlan
+          span_ [class_ "rounded-lg text-textWeak bg-fillWeak border border-strokeWeak py-1 px-2.5 text-xs w-max"] "Active"
+        div_ [class_ "flex items-baseline gap-1"] do
+          span_ [class_ "text-textStrong text-xl"] "$"
+          span_ [class_ "text-4xl text-textStrong font-bold"] $ if paymentPlan == "Free" then "0" else if paymentPlan == "Bring your own storage" then "199" else "29"
+          span_ [class_ "text-textWeak text-sm ml-1"] "/month"
+
+      div_ [class_ "border-t border-strokeWeak pt-4"] do
+        div_ [class_ "text-textStrong text-sm font-semibold mb-2"] "Upgrade plan"
+        p_ [class_ "text-textWeak text-sm mb-4"] "Monoscope pricing, click on compare feature below to select the option that best suit your project."
+        label_ [class_ "btn btn-primary btn-sm", Lucid.for_ "pricing-modal", [__|on click set #pricing-modal.check to true|]] "Change plan"
+
+  input_ [type_ "checkbox", id_ "pricing-modal", class_ "modal-toggle"]
+  div_ [class_ "modal p-8", role_ "dialog", [__|on closeModal from body set #pricing-modal.checked to false |]] do
+    div_ [class_ "modal-box relative flex flex-col gap-5 w-[1250px] py-16 px-32", style_ "max-width:1300px"] do
+      button_ [class_ "absolute top-8 right-8 cursor-pointer", [__| on click set #pricing-modal.checked to false |]] do
+        faSprite_ "circle-xmark" "regular" "w-8 h-8"
+      div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
+        span_ [class_ "text-textStrong text-2xl font-semibold"] "What's Included?"
+        p_ [class_ "mt-2 mb-4"] "See and compare what you get in each plan."
+        p_ [] "Please adjust the bar below to see difference in price as your events increase"
+      paymentPlanPicker pid lemonUrl critical paymentPlan enableFreetier basicAuthEnabled
+    label_ [class_ "modal-backdrop", Lucid.for_ "pricing-modal"] "Close"
 
 
 calculateCycleStartDate :: UTCTime -> UTCTime -> UTCTime

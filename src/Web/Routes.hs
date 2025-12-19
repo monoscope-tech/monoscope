@@ -1,4 +1,4 @@
-module Web.Routes (server, genAuthServerContext) where
+module Web.Routes (server, genAuthServerContext, KeepPrefixExp) where
 
 -- Standard library imports
 import Control.Lens
@@ -7,6 +7,7 @@ import Data.ByteString qualified as BS
 import Data.Map qualified as Map
 import Data.Pool (Pool)
 import Data.UUID qualified as UUID
+import GHC.TypeLits (Symbol)
 import Relude
 
 -- Database imports
@@ -31,6 +32,9 @@ import Network.Wai (Request, queryString)
 import Servant
 import Servant.HTML.Lucid (HTML)
 import Servant.Htmx
+import Servant.QueryParam.Record (RecordParam)
+import Servant.QueryParam.Server.Record ()
+import Servant.QueryParam.TypeLevel (Eval, Exp)
 import Servant.Server.Generic (AsServerT)
 import Servant.Server.Internal.Delayed (passToServer)
 import Web.Cookie (SetCookie)
@@ -115,6 +119,12 @@ type QPUUId a = QueryParam a UUID.UUID
 data AllQueryParams
 
 
+-- Type-level expression for preserving field prefixes in RecordParam
+type role KeepPrefixExp phantom phantom
+data KeepPrefixExp :: Symbol -> Exp Symbol
+type instance Eval (KeepPrefixExp sym) = sym
+
+
 -- =============================================================================
 -- Custom content types
 -- =============================================================================
@@ -181,13 +191,14 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
     dashboardRedirectGet :: mode :- "p" :> ProjectId :> AllQueryParams :> GetRedirect '[HTML] (Headers '[Header "Location" Text] NoContent)
   , endpointDetailsRedirect :: mode :- "p" :> ProjectId :> "endpoints" :> "details" :> AllQueryParams :> GetRedirect '[HTML] (Headers '[Header "Location" Text] NoContent)
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
-  , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "embedded" :> QPUUId "teamId" :> Get '[HTML] (RespHeaders Dashboards.DashboardsGet)
+  , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "sort" :> QPT "embedded" :> QPUUId "teamId" :> RecordParam KeepPrefixExp Dashboards.DashboardFilters :> Get '[HTML] (RespHeaders Dashboards.DashboardsGet)
   , dashboardsPost :: mode :- "p" :> ProjectId :> "dashboards" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardForm :> Post '[HTML] (RespHeaders Dashboards.DashboardRes)
   , dashboardWidgetPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "widget_id" :> ReqBody '[JSON] Widget.Widget :> Put '[HTML] (RespHeaders Widget.Widget)
   , dashboardWidgetReorderPatchH :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets_order" :> ReqBody '[JSON] (Map Text Dashboards.WidgetReorderItem) :> Patch '[HTML] (RespHeaders NoContent)
   , dashboardDelete :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Delete '[HTML] (RespHeaders Dashboards.DashboardRes)
   , dashboardRenamePatch :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "rename" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardRenameForm :> Patch '[HTML] (RespHeaders Dashboards.DashboardRes)
   , dashboardDuplicatePost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "duplicate" :> Post '[HTML] (RespHeaders Dashboards.DashboardRes)
+  , dashboardStarPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Post '[HTML] (RespHeaders (Html ()))
   , dashboardDuplicateWidget :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "duplicate" :> Post '[HTML] (RespHeaders Widget.Widget)
   , dashboardWidgetExpandGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "expand" :> Get '[HTML] (RespHeaders (Html ()))
   , dashboardBulkActionPost :: mode :- "p" :> ProjectId :> "dashboards" :> "bulk_action" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] Dashboards.DashboardBulkActionForm :> Post '[HTML] (RespHeaders NoContent)
@@ -309,6 +320,7 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , -- Member management
     membersManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Get '[HTML] (RespHeaders ManageMembers.ManageMembers)
   , membersManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> QPT "onboarding" :> ReqBody '[FormUrlEncoded] ManageMembers.ManageMembersForm :> Post '[HTML] (RespHeaders ManageMembers.ManageMembers)
+  , membersDeleteH :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Capture "memberId" UUID.UUID :> Delete '[HTML] (RespHeaders (Html ()))
   , teamsManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> QPT "what" :> Get '[HTML] (RespHeaders ManageMembers.ManageTeams)
   , teamsManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> ReqBody '[JSON] ManageMembers.TeamForm :> QPT "teamView" :> Post '[HTML] (RespHeaders ManageMembers.ManageTeams)
   , teamGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> Capture "teamHandle" Text :> QPT "layout" :> Get '[HTML] (RespHeaders ManageMembers.ManageTeams)
@@ -390,6 +402,7 @@ cookieProtectedServer =
     , dashboardDelete = Dashboards.dashboardDeleteH
     , dashboardRenamePatch = Dashboards.dashboardRenamePatchH
     , dashboardDuplicatePost = Dashboards.dashboardDuplicatePostH
+    , dashboardStarPost = Dashboards.dashboardStarPostH
     , dashboardDuplicateWidget = Dashboards.dashboardDuplicateWidgetPostH
     , dashboardWidgetExpandGet = Dashboards.dashboardWidgetExpandGetH
     , dashboardBulkActionPost = Dashboards.dashboardBulkActionPostH
@@ -490,6 +503,7 @@ projectsServer =
     , deleteProjectGet = CreateProject.deleteProjectGetH
     , membersManageGet = ManageMembers.manageMembersGetH
     , membersManagePost = ManageMembers.manageMembersPostH
+    , membersDeleteH = ManageMembers.deleteMemberH
     , teamsManageGet = ManageMembers.manageTeamsGetH
     , teamsManagePost = ManageMembers.manageTeamPostH
     , teamGet = ManageMembers.teamGetH

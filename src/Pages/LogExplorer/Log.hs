@@ -1180,8 +1180,7 @@ alertConfigurationForm_ project alertM teams = do
                       input_ [type_ "checkbox", class_ "checkbox checkbox-sm", name_ "notifyAfterCheck"]
                       span_ [] "Renotify every"
                     select_ [class_ "select select-sm w-28 ml-2", name_ "notifyAfter", id_ "notifyAfterInterval"]
-                      $ forM_ (zip ["10m", "20m", "30m", "1h", "6h", "24h"] ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"])
-                      $ \(v, t) -> option_ (value_ v : [selected_ "" | v == "30m"]) (toHtml t)
+                      $ zipWithM_ (\v t -> option_ (value_ v : [selected_ "" | v == "30m"]) (toHtml t)) ["10m", "20m", "30m", "1h", "6h", "24h"] ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"]
 
                   -- Stop after option
                   div_ [class_ "flex items-center"] do
@@ -1338,10 +1337,10 @@ renderPattern (template, count) total pid =
         , Widget.standalone = Just True
         , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
         }
-    td_ [class_ "px-4 py-2 font-mono"] (toHtml (show count))
+    td_ [class_ "px-4 py-2 monospace"] (toHtml (show count))
     td_ [class_ "px-4 py-2"]
       $ toHtml (take 4 (show (fromIntegral count / fromIntegral total * 100 :: Double)) ++ "%")
     td_ [class_ "px-4 py-2 max-w-xl truncate whitespace-nowrap"]
       $ code_
-        [class_ "bg-muted/50 px-2 py-1 rounded font-mono text-foreground"]
+        [class_ "bg-muted/50 px-2 py-1 rounded monospace text-foreground"]
         (toHtml template)

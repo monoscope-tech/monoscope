@@ -14,18 +14,21 @@ module Models.Projects.Dashboards (
   addTeamsToDashboards,
   insert,
   selectDashboardsByTeam,
+  selectDashboardsSortedBy,
 ) where
 
 import Control.Exception (try)
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
+import Data.Char (isAlphaNum)
 import Data.Default
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
 import Data.List qualified as L (isSuffixOf)
+import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Data.Yaml qualified as Yml
@@ -228,4 +231,15 @@ selectDashboardsByTeam :: DB :> es => Projects.ProjectId -> UUID.UUID -> Eff es 
 selectDashboardsByTeam pid teamId = do
   dbtToEff $ DBT.query (Query $ encodeUtf8 q) (pid, teamId)
   where
-    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE project_id = ? AND teams @> ARRAY[?::uuid]|]
+    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE project_id = ? AND teams @> ARRAY[?::uuid] ORDER BY starred_since DESC NULLS LAST, updated_at DESC|]
+
+
+selectDashboardsSortedBy :: DB :> es => Projects.ProjectId -> Text -> Eff es (V.Vector DashboardVM)
+selectDashboardsSortedBy pid orderBy = do
+  V.fromList <$> dbtToEff (DBT.query (Query $ encodeUtf8 q) (Only pid))
+  where
+    defaultOrder = "ORDER BY starred_since DESC NULLS LAST, updated_at DESC"
+    -- Reject if contains dangerous SQL chars; only allow alphanumeric, underscore, space, comma, and ORDER BY keywords
+    isSafe = T.all (\c -> c `elem` ("_-, " :: String) || isAlphaNum c) . T.filter (/= ' ')
+    safeOrder = if orderBy == "" || not (isSafe orderBy) then defaultOrder else orderBy
+    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE project_id = ? |] <> safeOrder

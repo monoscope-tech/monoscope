@@ -309,6 +309,8 @@ library
     , servant
     , servant-htmx
     , servant-lucid
+    , servant-queryparam-core
+    , servant-queryparam-server
     , servant-server
     , slugify
     , template-haskell
@@ -432,11 +434,11 @@ test-suite integration-tests
       Pages.AnomaliesSpec
       Pages.ApiSpec
       Pages.BusinessFlowsSpec
+      Pages.DashboardsSpec
       Pages.Endpoints.ApiCatalogSpec
       Pages.LogExplorer.LogSpec
       Pages.MonitorsSpec
       Pages.Projects.ManageMembersSpec
-      Pages.DashboardsSpec
       Pages.Projects.ProjectsSpec
       Pages.ReportsSpec
       Pages.ShareSpec

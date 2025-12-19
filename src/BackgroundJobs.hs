@@ -616,8 +616,7 @@ processProjectErrors pid errors = do
   let (_, queries, paramsList) = V.unzip3 processedErrors
 
   -- Bulk insert errors
-  result <- try $ forM_ (V.zip queries paramsList) \(q, params) -> do
-    dbtToEff $ execute q params
+  result <- try $ V.zipWithM_ (\q params -> dbtToEff $ execute q params) queries paramsList
 
   case result of
     Left (e :: SomePostgreSqlException) ->
@@ -960,7 +959,7 @@ sendReportForProject pid rType = do
     chartDataEvents <- liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "| summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx
     chartDataErrors <- liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx
 
-    anomalies <- dbtToEff $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime))
+    anomalies <- dbtToEff $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing
 
     let anomalies' = (\x -> (x.id, x.title, x.critical, x.severity, x.issueType)) <$> anomalies
 

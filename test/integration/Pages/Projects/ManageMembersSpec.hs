@@ -241,7 +241,7 @@ spec = aroundAll withTestResources do
           V.length teams' `shouldBe` 1
           let team' = V.head teams'
           let teamForm =
-                TBulkActionForm{teamId = [team'.id]}
+                TBulkActionForm{itemId = [team'.id]}
           (_, pg') <-
             testServant tr $ ManageMembers.manageTeamBulkActionH testPid "delete" teamForm (Just "hello")
           case pg' of
@@ -270,7 +270,7 @@ spec = aroundAll withTestResources do
           let createdTeam2 = Unsafe.fromJust createdTeam2'
 
           let teamIds = [createdTeam1.id, createdTeam2.id]
-          let bulkActionForm = ManageMembers.TBulkActionForm{teamId = teamIds}
+          let bulkActionForm = ManageMembers.TBulkActionForm{itemId = teamIds}
           (_, pg') <- testServant tr $ ManageMembers.manageTeamBulkActionH testPid "delete" bulkActionForm Nothing
           case pg' of
             ManageMembers.ManageTeamsDelete -> do

@@ -355,7 +355,7 @@ bodyWrapper bcfg child = do
                     (currUser.email == "hello@apitoolkit.io")
                     loginBanner
                   unless (bcfg.isSettingsPage || bcfg.hideNavbar) $ navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
-                  section_ [class_ "overflow-y-hidden h-full grow"] do
+                  section_ [class_ "overflow-y-auto h-full grow"] do
                     when bcfg.freeTierExceeded $ whenJust bcfg.currProject (\p -> freeTierLimitExceededBanner p.id.toText)
                     if bcfg.isSettingsPage
                       then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
@@ -682,46 +682,42 @@ loginBanner = do
 settingsWrapper :: Projects.ProjectId -> Text -> Html () -> Html ()
 settingsWrapper pid current pageHtml = do
   section_ [class_ "flex h-full w-full"] do
-    nav_ [class_ "w-[300px]  h-full p-4 pt-8 border-r border-r-strokWeak"] do
-      h1_ [class_ "text-3xl pl-5 font-medium"] "Settings"
-      ul_ [class_ "flex flex-col mt-14 gap-2 w-full"] $ mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
+    nav_ [class_ "w-72 h-full p-4 pt-8 border-r border-r-strokWeak"] do
+      h1_ [class_ "text-xl pl-3 font-semibold"] "Settings"
+      ul_ [class_ "flex flex-col mt-6 gap-0.5 w-full"] $ mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
     main_ [class_ "w-full h-full overflow-y-auto"] do
       pageHtml
 
 
-navBottomList :: Text -> [(Text, Text, Text, Text, Text, Maybe Text, Maybe Text, Maybe Text)]
+navBottomList :: Text -> [(Text, Text, Text, Maybe Text, Maybe Text, Maybe Text)]
 navBottomList pidTxt =
-  [ ("gear", "bg-fillBrand-weak", "text-textBrand", "Project settings", "/p/" <> pidTxt <> "/settings", Nothing, Nothing, Nothing)
-  , ("key", "bg-fillSuccess-weak", "text-textSuccess", "API keys", "/p/" <> pidTxt <> "/apis", Nothing, Nothing, Nothing)
-  , ("user-plus", "bg-fillWarning-weak", "text-textWarning", "Manage members", "/p/" <> pidTxt <> "/manage_members", Nothing, Nothing, Nothing)
-  , ("users", "bg-fillInfo-weak", "text-textInfo", "Manage teams", "/p/" <> pidTxt <> "/manage_teams", Nothing, Nothing, Nothing)
-  , ("dollar", "bg-fillWarning-weak", "text-textWarning", "Manage billing", "/p/" <> pidTxt <> "/manage_billing", Nothing, Nothing, Nothing)
-  , ("arrows-turn-right", "bg-fillBrand-weak", "text-textBrand", "Integrations", "/p/" <> pidTxt <> "/integrations", Nothing, Nothing, Nothing)
-  , ("bucket", "", "", "Your S3 bucket", "/p/" <> pidTxt <> "/byob_s3", Nothing, Nothing, Nothing)
-  , ("trash", "bg-fillError-weak", "text-textError", "Delete project", "/p/" <> pidTxt <> "/settings/delete", Nothing, Nothing, Nothing)
+  [ ("gear", "Project settings", "/p/" <> pidTxt <> "/settings", Nothing, Nothing, Nothing)
+  , ("key", "API keys", "/p/" <> pidTxt <> "/apis", Nothing, Nothing, Nothing)
+  , ("user-plus", "Manage members", "/p/" <> pidTxt <> "/manage_members", Nothing, Nothing, Nothing)
+  , ("users", "Manage teams", "/p/" <> pidTxt <> "/manage_teams", Nothing, Nothing, Nothing)
+  , ("dollar", "Manage billing", "/p/" <> pidTxt <> "/manage_billing", Nothing, Nothing, Nothing)
+  , ("arrows-turn-right", "Integrations", "/p/" <> pidTxt <> "/integrations", Nothing, Nothing, Nothing)
+  , ("bucket", "Your S3 bucket", "/p/" <> pidTxt <> "/byob_s3", Nothing, Nothing, Nothing)
+  , ("trash", "Delete project", "/p/" <> pidTxt <> "/settings/delete", Nothing, Nothing, Nothing)
   ]
 
 
-renderNavBottomItem :: Text -> (Text, Text, Text, Text, Text, Maybe Text, Maybe Text, Maybe Text) -> Html ()
-renderNavBottomItem curr (iconName, bgColor, textColor, linkText, link, targetBlankM, onClickM, hxGetM) =
+renderNavBottomItem :: Text -> (Text, Text, Text, Maybe Text, Maybe Text, Maybe Text) -> Html ()
+renderNavBottomItem curr (iconName, linkText, link, targetBlankM, onClickM, hxGetM) =
   let
+    isActive = curr == linkText
     defaultAttrs =
-      [ class_ "hover:bg-fillBrand-weak flex gap-2 items-center "
+      [ class_ $ "flex gap-3 items-center px-3 py-2 rounded-lg " <> if isActive then "bg-fillBrand-weak text-textBrand" else "hover:bg-fillWeak text-textWeak"
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" linkText
       ]
-    activeCls = if curr == linkText then "bg-fillWeak" else ""
     attrs =
       defaultAttrs
         ++ [target_ "BLANK_" | isJust targetBlankM]
         ++ maybe [] (\onClick -> [onclick_ onClick]) onClickM
         ++ (if isJust hxGetM then [hxGet_ link, hxTarget_ "body"] else [href_ link])
    in
-    li_ [class_ $ "px-2 py-1 w-[220px] rounded-lg " <> activeCls] do
+    li_ [] do
       a_ attrs $ do
-        span_
-          [class_ "p-2 rounded-full shrink-0 leading-none"]
-          (faSprite_ iconName "regular" "shrink-0 h-3 w-3")
-        span_
-          [class_ "text-textWeak"]
-          (toHtml linkText)
+        faSprite_ iconName "regular" "shrink-0 h-4 w-4"
+        span_ [class_ "text-lg"] (toHtml linkText)

@@ -522,7 +522,7 @@ integrationsPage pid apikey =
         div_ [class_ "mt-6 mb-0 p-4 bg-fillWeak border border-strokeWeak rounded-xl"] do
           div_ [class_ "mb-2 text-textWeak"] "Your API Key"
           div_ [class_ "flex items-center gap-2"] do
-            div_ [class_ "flex-1 font-mono bg-bgBase p-3 border border-strokeWeak rounded-lg overflow-x-auto", id_ "api-key-display"] $ toHtml apikey
+            div_ [class_ "flex-1 monospace bg-bgBase p-3 border border-strokeWeak rounded-lg overflow-x-auto", id_ "api-key-display"] $ toHtml apikey
             button_
               [ class_ "px-4 py-2 bg-fillBrand-strong rounded-xl text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90 cursor-pointer"
               , type_ "button"
@@ -661,7 +661,7 @@ integrationsPage pid apikey =
               span_ [class_ "inline-flex items-center justify-center w-6 h-6 rounded-full bg-fillBrand-weak text-textBrand text-sm font-bold"] "1"
               span_ "Install telemetrygen"
             div_
-              [class_ "bg-bgBase p-3 rounded font-mono text-sm overflow-x-auto border border-strokeWeak"]
+              [class_ "bg-bgBase p-3 rounded monospace text-sm overflow-x-auto border border-strokeWeak"]
               "go install github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen@latest"
             p_ [class_ "text-xs text-textWeak mt-2 leading-relaxed"] "Requires Go 1.20 or later"
 
@@ -671,7 +671,7 @@ integrationsPage pid apikey =
               span_ [class_ "inline-flex items-center justify-center w-6 h-6 rounded-full bg-fillBrand-weak text-textBrand text-sm font-bold"] "2"
               span_ "Send test traces"
             div_ [class_ "relative"] do
-              pre_ [class_ "bg-bgBase p-3 rounded font-mono text-sm overflow-x-auto border border-strokeWeak", id_ "telemetrygen-cmd"]
+              pre_ [class_ "bg-bgBase p-3 rounded monospace text-sm overflow-x-auto border border-strokeWeak", id_ "telemetrygen-cmd"]
                 $ code_
                 $ toHtml
                 $ "telemetrygen traces --otlp-endpoint localhost:4317 \\\n  --otlp-insecure \\\n  --otlp-header 'Authorization=\"Bearer "
