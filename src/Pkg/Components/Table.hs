@@ -304,7 +304,7 @@ instance ToHtml TabFilter where
                 ]
                 do
                   toHtml opt.name
-                  whenJust opt.count \c -> span_ [class_ "text-textDisabled text-xs font-normal"] $ toHtml $ show c
+                  whenJust opt.count $ span_ [class_ "text-textDisabled text-xs font-normal"] . toHtml . show
       else div_ [class_ "tabs tabs-box tabs-outline items-center"] do
         let uri = deleteParam "filter" tf.currentURL
         forM_ tf.options \opt ->
@@ -334,7 +334,7 @@ renderTable tbl =
               div_ [id_ "rowsContainer", class_ "divide-y"] do
                 renderRows tbl
                 -- For list mode, pagination is outside; for table mode, it's inside tbody
-                unless tbl.config.renderAsTable $ whenJust tbl.features.pagination \(url, trigger) -> renderPaginationLink Nothing url trigger
+                unless tbl.config.renderAsTable $ whenJust tbl.features.pagination $ uncurry (renderPaginationLink Nothing)
       paddedContent = if tbl.config.addPadding then div_ [class_ "px-6 pt-4 pb-2"] tableContent else tableContent
    in case tbl.config.containerId of
         Just cid -> div_ [class_ "w-full", id_ cid] paddedContent
@@ -382,7 +382,7 @@ renderRows tbl =
                     when isSorted $ case sortOrder of
                       Just Asc -> faSprite_ "arrow-up" "regular" "w-3 h-3"
                       Just Desc -> faSprite_ "arrow-down" "regular" "w-3 h-3"
-                      Nothing -> pure ()
+                      Nothing -> pass
                     when (isJust c.sortField && isJust tbl.features.sortableColumns && not isSorted) $ faSprite_ "arrows-up-down" "regular" "w-3 h-3 opacity-30"
                     when (tbl.config.bulkActionsInHeader == Just idx) do
                       renderHeaderBulkActions tbl.features.bulkActions
@@ -581,7 +581,7 @@ renderFilterOption actions menu opt = label_ [class_ "flex items-center gap-3 px
 
 -- | Remove a specific param=value pair from a URL (for multi-select filter toggle)
 deleteParamValue :: Text -> Text -> Text -> Text
-deleteParamValue key val url = T.replace needle "" url
+deleteParamValue key val = T.replace needle ""
   where
     encodedVal = toUriStr val
     needle = "&" <> key <> "=" <> encodedVal
