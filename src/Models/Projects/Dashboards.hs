@@ -19,9 +19,9 @@ module Models.Projects.Dashboards (
 
 import Control.Exception (try)
 import Control.Lens
-import Data.Char (isAlphaNum)
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
+import Data.Char (isAlphaNum)
 import Data.Default
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq (HTTP)
