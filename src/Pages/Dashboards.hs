@@ -78,13 +78,13 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import UnliftIO.Exception (try)
 import Servant (NoContent (..), ServerError, err404, errBody)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import System.Config (AuthContext (..))
 import System.Types
 import Text.Slugify (slugify)
+import UnliftIO.Exception (try)
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
