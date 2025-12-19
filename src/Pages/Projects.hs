@@ -501,8 +501,10 @@ manageMembersPostH pid onboardingM form = do
         . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
-      whenJust (nonEmpty deletedUAndP) $
-        void . dbtToEff . ProjectMembers.softDeleteProjectMembers
+      whenJust (nonEmpty deletedUAndP)
+        $ void
+        . dbtToEff
+        . ProjectMembers.softDeleteProjectMembers
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
       if isJust onboardingM
@@ -1237,8 +1239,10 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan} = do
         handleOnboarding "Free"
         users <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
         let usersToDel = V.toList $ V.map (.id) $ V.tail users
-        whenJust (nonEmpty usersToDel) $
-          void . dbtToEff . ProjectMembers.softDeleteProjectMembers
+        whenJust (nonEmpty usersToDel)
+          $ void
+          . dbtToEff
+          . ProjectMembers.softDeleteProjectMembers
   if project.paymentPlan == "ONBOARDING"
     then do
       redirectCS $ "/p/" <> pid.toText <> "/"
