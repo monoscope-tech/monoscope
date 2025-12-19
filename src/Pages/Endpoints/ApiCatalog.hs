@@ -71,7 +71,7 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
           , features =
               def
                 { rowId = Just \(HostEventsVM _ he _ _) -> he.host
-                , rowAttrs = Just \_ -> [class_ "group/row hover:bg-fillWeaker"]
+                , rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
                 , bulkActions = [BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/archive"}]
                 , search = Just ClientSide
                 , tableHeaderActions = Just tableActions
@@ -99,7 +99,7 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> currentSort <> "&request_type=Outgoing", role_ "tab", class_ $ "tab h-auto! " <> if requestType == "Outgoing" then "tab-active text-textStrong" else ""] "Outgoing"
           }
   case skipM of
-    Just _ -> addRespHeaders $ CatalogListRows $ TableRows{nextUrl = nextFetchUrl, columns = catalogColumns pid requestType, rows = hostsVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(HostEventsVM _ he _ _) -> he.host, rowAttrs = Just \_ -> [class_ "group/row hover:bg-fillWeaker"]}
+    Just _ -> addRespHeaders $ CatalogListRows $ TableRows{nextUrl = nextFetchUrl, columns = catalogColumns pid requestType, rows = hostsVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(HostEventsVM _ he _ _) -> he.host, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]}
     _ -> addRespHeaders $ CatalogListPage $ PageCtx bwconf catalogTable
 
 
@@ -246,7 +246,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
           , features =
               def
                 { rowId = Just \(EnpReqStatsVM _ _ enp) -> enp.endpointHash
-                , rowAttrs = Just \_ -> [class_ "group/row hover:bg-fillWeaker"]
+                , rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
                 , bulkActions = [BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/endpoints/bulk_action/archive"}]
                 , search = Just (ServerSide baseUrl)
                 , tableHeaderActions = Just tableActions
@@ -266,7 +266,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                 }
           }
   let endpRowId = Just \(EnpReqStatsVM _ _ enp) -> enp.endpointHash
-      endpRowAttrs = Just \_ -> [class_ "group/row hover:bg-fillWeaker"]
+      endpRowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
   case (loadMoreM, searchM) of
     (Just _, _) -> addRespHeaders $ EndpointsListRows $ TableRows{nextUrl = nextFetchUrl, columns = endpointColumns pid, rows = endpReqVM, emptyState = Nothing, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs}
     (_, Just _) -> addRespHeaders $ EndpointsListRows $ TableRows{nextUrl = nextFetchUrl, columns = endpointColumns pid, rows = endpReqVM, emptyState = Nothing, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs}

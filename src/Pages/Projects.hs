@@ -501,8 +501,8 @@ manageMembersPostH pid onboardingM form = do
         . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
-      whenJust (nonEmpty deletedUAndP) \ne ->
-        void . dbtToEff $ ProjectMembers.softDeleteProjectMembers ne
+      whenJust (nonEmpty deletedUAndP) $
+        void . dbtToEff . ProjectMembers.softDeleteProjectMembers
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
       if isJust onboardingM
@@ -696,7 +696,7 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
               , features =
                   def
                     { Table.rowId = Just \team -> UUID.toText team.id
-                    , Table.rowAttrs = Just \_ -> [class_ "group/row hover:bg-fillWeaker"]
+                    , Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
                     , Table.bulkActions =
                         [ Table.BulkAction{icon = Just "trash", title = "Delete", uri = "/p/" <> pid.toText <> "/manage_teams/bulk_action/delete"}
                         ]
@@ -1237,8 +1237,8 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan} = do
         handleOnboarding "Free"
         users <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
         let usersToDel = V.toList $ V.map (.id) $ V.tail users
-        whenJust (nonEmpty usersToDel) \ne ->
-          void . dbtToEff $ ProjectMembers.softDeleteProjectMembers ne
+        whenJust (nonEmpty usersToDel) $
+          void . dbtToEff . ProjectMembers.softDeleteProjectMembers
   if project.paymentPlan == "ONBOARDING"
     then do
       redirectCS $ "/p/" <> pid.toText <> "/"

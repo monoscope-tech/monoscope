@@ -89,7 +89,7 @@ import Web.FormUrlEncoded (FromForm)
 
 
 -- Filter record for dashboard list
-data DashboardFilters = DashboardFilters
+newtype DashboardFilters = DashboardFilters
   { tag :: [Text]
   }
   deriving stock (Eq, Generic, Show)
@@ -997,7 +997,7 @@ dashboardsGet_ dg = do
             , features =
                 def
                   { Table.rowId = Just \dash -> dash.id.toText
-                  , Table.rowAttrs = Just \_ -> [class_ "group/row hover:bg-fillWeaker"]
+                  , Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
                   , Table.bulkActions =
                       if dg.embedded
                         then []
