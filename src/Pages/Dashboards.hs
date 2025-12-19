@@ -1078,7 +1078,7 @@ dashboardsGetH pid sortM embeddedM teamIdM filters = do
 
   dashboards' <- case teamIdM of
     Just teamId -> V.fromList <$> Dashboards.selectDashboardsByTeam pid teamId
-    Nothing -> Dashboards.selectDashboardsSorted pid orderByClause
+    Nothing -> Dashboards.selectDashboardsSortedBy pid orderByClause
 
   -- Collect all available tags from all dashboards (before filtering)
   let availableTags = L.nub $ concatMap (V.toList . (.tags)) (V.toList dashboards')
