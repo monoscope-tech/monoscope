@@ -19,6 +19,7 @@ module Models.Projects.Dashboards (
 
 import Control.Exception (try)
 import Control.Lens
+import Data.Char (isAlphaNum)
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.Default
@@ -238,13 +239,7 @@ selectDashboardsSorted pid orderBy = do
   V.fromList <$> dbtToEff (DBT.query (Query $ encodeUtf8 q) (Only pid))
   where
     defaultOrder = "ORDER BY starred_since DESC NULLS LAST, updated_at DESC"
-    -- Whitelist allowed sort columns to prevent SQL injection
-    allowedColumns = ["id", "created_at", "updated_at", "starred_since", "homepage_since", "title"]
-    sanitizeOrderBy ob
-      | ob == "" = defaultOrder
-      | "ORDER BY " `T.isPrefixOf` ob =
-          let tokens = words $ T.drop 9 ob
-           in if all isValidPart tokens then ob else defaultOrder
-      | otherwise = defaultOrder
-    isValidPart p = p `elem` allowedColumns || p `elem` ["ASC", "DESC", "NULLS", "LAST", "FIRST", ","] || any (`T.isPrefixOf` p) allowedColumns
-    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE project_id = ? |] <> sanitizeOrderBy orderBy
+    -- Reject if contains dangerous SQL chars; only allow alphanumeric, underscore, space, comma, and ORDER BY keywords
+    isSafe = T.all (\c -> c `elem` ("_-, " :: String) || isAlphaNum c) . T.filter (/= ' ')
+    safeOrder = if orderBy == "" || not (isSafe orderBy) then defaultOrder else orderBy
+    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE project_id = ? |] <> safeOrder
