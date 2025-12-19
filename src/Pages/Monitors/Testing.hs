@@ -116,7 +116,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
           { config = def{elemID = "monitorsListForm", addPadding = True}
           , columns =
               [ col "" renderMonitorIcon & withAttrs [class_ "shrink-0"]
-              , col "" (renderMonitorContent pid) & withAttrs [class_ "w-full"]
+              , col "" renderMonitorContent & withAttrs [class_ "w-full"]
               ]
           , rows = allItems
           , features =
@@ -209,8 +209,8 @@ renderMonitorIcon item = do
 
 
 -- | Render monitor content column
-renderMonitorContent :: Projects.ProjectId -> UnifiedMonitorItem -> Html ()
-renderMonitorContent _ item = do
+renderMonitorContent :: UnifiedMonitorItem -> Html ()
+renderMonitorContent item = do
   div_ [class_ "w-full flex flex-col gap-2 shrink-1"] do
     -- Title and tags row
     div_ [class_ "flex gap-10 items-center"] do
@@ -229,7 +229,7 @@ renderMonitorContent _ item = do
         div_ [class_ "flex gap-2 items-center w-full"] do
           case item.details of
             AlertDetails{query} -> do
-              span_ [class_ "text-sm text-textWeak p-1 bg-fillWeak font-mono truncate", term "data-tippy-content" query] $ toHtml $ T.take 50 query
+              span_ [class_ "text-sm text-textWeak p-1 bg-fillWeak monospace truncate", term "data-tippy-content" query] $ toHtml $ T.take 50 query
 
         -- Status and schedule
         div_ [class_ "flex gap-4 w-full items-center"] do
@@ -301,7 +301,7 @@ instance ToHtml UnifiedMonitorItem where
   toHtmlRaw item =
     div_ [class_ "border-b flex p-4 gap-4 itemsListItem hover:bg-fillWeak transition-colors group/card"] do
       toHtmlRaw $ renderMonitorIcon item
-      toHtmlRaw $ renderMonitorContent undefined item
+      toHtmlRaw $ renderMonitorContent item
 
 
 -- | Shared status badge component used across monitors
@@ -536,7 +536,7 @@ alertQueryTab_ pid alert = do
     div_ [class_ "mb-6"] do
       h3_ [class_ "text-lg font-medium text-textStrong mb-3"] "Alert Query"
       div_ [class_ "bg-bgAlternate rounded-lg p-4"] do
-        pre_ [class_ "text-sm font-mono text-textWeak overflow-x-auto"] $ toHtml alert.logQuery
+        pre_ [class_ "text-sm monospace text-textWeak overflow-x-auto"] $ toHtml alert.logQuery
 
     -- Visualization
     div_ [] do
