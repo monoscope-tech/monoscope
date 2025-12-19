@@ -282,7 +282,7 @@ renderTableRows tr
       V.forM_ tr.rows \row -> tr_ (getRowAttrs row) do
         whenJust tr.rowId \getId -> td_ [class_ "w-8"] $ input_ [term "aria-label" "Select Item", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "itemId", value_ $ getId row]
         forM_ tr.columns \c -> td_ c.attrs $ c.render row
-      whenJust tr.nextUrl \url -> tr_ [] $ td_ [colspan_ $ show colCount] $ renderPaginationLink url "both"
+      whenJust tr.nextUrl \url -> tr_ [] $ td_ [colspan_ $ show colCount] $ renderTablePaginationLink url "both"
   | otherwise = do
       V.forM_ tr.rows \row -> div_ [class_ "flex gap-8 items-start itemsListItem"] $ forM_ tr.columns \c -> div_ c.attrs $ c.render row
       whenJust tr.nextUrl (`renderPaginationLink` "both")
@@ -333,7 +333,8 @@ renderTable tbl =
               whenJust tbl.features.search \_ -> span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
               div_ [id_ "rowsContainer", class_ "divide-y"] do
                 renderRows tbl
-                whenJust tbl.features.pagination $ uncurry renderPaginationLink
+                -- For list mode, pagination is outside; for table mode, it's inside tbody
+                unless tbl.config.renderAsTable $ whenJust tbl.features.pagination $ uncurry renderPaginationLink
       paddedContent = if tbl.config.addPadding then div_ [class_ "px-6 pt-4 pb-2"] tableContent else tableContent
    in case tbl.config.containerId of
         Just cid -> div_ [class_ "w-full", id_ cid] paddedContent
@@ -386,8 +387,12 @@ renderRows tbl =
                     when (tbl.config.bulkActionsInHeader == Just idx) do
                       renderHeaderBulkActions tbl.features.bulkActions
                       whenJust tbl.features.tableHeaderActions renderHeaderTableActions
-        tbody_ do
+        tbody_ [id_ $ tbl.config.elemID <> "_tbody"] do
           V.mapM_ (renderTableRow tbl) tbl.rows
+          -- Pagination inside tbody for table mode
+          whenJust tbl.features.pagination \(url, trigger) -> do
+            let colCount = length tbl.columns + if isJust tbl.features.rowId then 1 else 0
+            tr_ [] $ td_ [colspan_ $ show colCount] $ renderTablePaginationLink url trigger
     else V.mapM_ (renderListRow tbl) tbl.rows
 
 
@@ -674,7 +679,7 @@ renderSortMenu sortCfg = do
     ""
 
 
--- Helper function for rendering pagination link
+-- Helper function for rendering pagination link (list mode)
 renderPaginationLink :: Text -> Text -> Html ()
 renderPaginationLink url trigger =
   a_
@@ -683,6 +688,25 @@ renderPaginationLink url trigger =
         "click" -> "click"
         "intersect" -> "intersect once"
         _ -> "click, intersect once" -- "both" or default
+    , hxSwap_ "outerHTML"
+    , hxGet_ url
+    , hxIndicator_ "#rowsIndicator"
+    ]
+    do
+      span_ [class_ "inline-block"] "Load more"
+      span_ [id_ "rowsIndicator", class_ "ml-2 htmx-indicator loading loading-dots loading-md inline-block"] ""
+
+
+-- Pagination link for table mode - targets the parent <tr> to swap entire row
+renderTablePaginationLink :: Text -> Text -> Html ()
+renderTablePaginationLink url trigger =
+  a_
+    [ class_ "cursor-pointer flex justify-center items-center p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center min-h-[2.5rem]"
+    , hxTrigger_ $ case trigger of
+        "click" -> "click"
+        "intersect" -> "intersect once"
+        _ -> "click, intersect once"
+    , hxTarget_ "closest tr"
     , hxSwap_ "outerHTML"
     , hxGet_ url
     , hxIndicator_ "#rowsIndicator"
