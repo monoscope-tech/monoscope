@@ -578,23 +578,23 @@ manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers,
 
 
 newtype TBulkActionForm = TBulkActionForm
-  { teamId :: [UUID.UUID]
+  { itemId :: [UUID.UUID]
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (FromForm)
 
 
 manageTeamBulkActionH :: Projects.ProjectId -> Text -> TBulkActionForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
-manageTeamBulkActionH pid action TBulkActionForm{teamId} listViewM = do
+manageTeamBulkActionH pid action TBulkActionForm{itemId} listViewM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   case action of
     "delete" -> do
-      teamVm <- dbtToEff $ ProjectMembers.getTeamsById pid $ V.fromList teamId
+      teamVm <- dbtToEff $ ProjectMembers.getTeamsById pid $ V.fromList itemId
       let canDelete = all (\team -> Just sess.user.id == team.created_by) teamVm
       if canDelete
         then do
-          _ <- dbtToEff $ ProjectMembers.deleteTeams pid $ V.fromList teamId
+          _ <- dbtToEff $ ProjectMembers.deleteTeams pid $ V.fromList itemId
           when (isNothing listViewM) do
             redirectCS ("/p/" <> pid.toText <> "/manage_teams")
           addRespHeaders ManageTeamsDelete
