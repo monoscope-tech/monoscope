@@ -245,7 +245,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
           }
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
     (Just "slider", Just "true", _, _) -> ALSlider currTime pid endpointM (Just $ V.map (IssueVM True False currTime filterV) issues)
-    (_, _, _, Just "true") -> ALRows $ TableRows nextFetchUrl (issueColumns pid) issuesVM -- For load more - only rows
+    (_, _, _, Just "true") -> ALRows $ TableRows{nextUrl = nextFetchUrl, columns = issueColumns pid, rows = issuesVM, emptyState = Nothing} -- For load more - only rows
     _ -> ALPage $ PageCtx bwconf issuesTable
 
 

@@ -239,7 +239,7 @@ window.createTagify = (selector: string, options: any = {}) => {
       fuzzySearch: true,
       position: 'text',
       caseSensitive: false,
-      mapValueTo: 'value',
+      mapValueTo: 'name',
       searchKeys: ['value', 'name'],
     },
   };

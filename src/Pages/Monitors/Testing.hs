@@ -26,7 +26,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (statBox_)
-import Pkg.Components.Table (Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
+import Pkg.Components.Table (Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, simpleZeroState, withAttrs)
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
@@ -77,7 +77,7 @@ teamAlertsGetH pid teamId = do
   currTime <- Time.currentTime
   let alerts' = V.map (toUnifiedMonitorItem pid currTime) alerts
 
-  addRespHeaders $ TableRows Nothing [] alerts'
+  addRespHeaders $ TableRows{nextUrl = Nothing, columns = [], rows = alerts', emptyState = Just $ simpleZeroState "bell-slash" "No alerts linked to this team"}
 
 
 -- | Unified handler for monitors endpoint showing both alerts and multi-step monitors

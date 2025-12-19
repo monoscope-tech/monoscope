@@ -538,7 +538,7 @@ validateTeamDetails name handle notifEmails = validateName name >> validateHandl
       | T.null (T.strip n) = Left "Team name is required"
       | T.length (T.strip n) < 3 = Left "Team name must be at least 3 characters"
       | T.length n > 100 = Left "Team name must be less than 100 characters"
-      | not $ T.all (\c -> isAlphaNum c || c `elem` [' ', '-', '_']) n = Left "Invalid characters in team name"
+      | not $ T.all (\c -> isAlphaNum c || c `elem` (" -_" :: String)) n = Left "Invalid characters in team name"
       | otherwise = pass
     validateHandle h
       | T.null h = Left "Handle is required"
@@ -675,28 +675,27 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
         label_ [class_ "btn btn-primary btn-sm text-white", Lucid.for_ "n-new-team-modal"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Team")
         input_ [type_ "checkbox", id_ "n-new-team-modal", class_ "modal-toggle"]
         teamModal pid Nothing whiteList channelWhiteList discordWhiteList False
-      let renderTeamCheckboxCol team = input_ [term "aria-label" "Select Team", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "teamId", value_ $ UUID.toText team.id]
       let renderTeamNameCol team = nameCell pid team.name team.description team.handle
-      let renderModifiedCol team = toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" team.updated_at
-      let renderMembersCol team = memberCell team.members
-      let renderNotificationsCol = notifsCell
+          renderModifiedCol team = span_ [class_ "monospace text-textWeak"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" team.updated_at
+          renderMembersCol team = memberCell team.members
+          renderNotificationsCol = notifsCell
 
       let tableCols =
-            [ Table.col "" renderTeamCheckboxCol & Table.withAttrs [class_ "w-8"]
-            , Table.col "Name" renderTeamNameCol & Table.withAttrs [class_ "flex-1"]
-            , Table.col "Modified" renderModifiedCol & Table.withAttrs [class_ "w-36"]
-            , Table.col "Members" renderMembersCol & Table.withAttrs [class_ "w-48"]
-            , Table.col "Notifications" renderNotificationsCol & Table.withAttrs [class_ "w-32"]
+            [ Table.col "Name" renderTeamNameCol
+            , Table.col "Modified" renderModifiedCol
+            , Table.col "Members" renderMembersCol
+            , Table.col "Notifications" renderNotificationsCol
             ]
 
       let table =
             Table
-              { config = def{Table.elemID = "teams_table"}
+              { config = def{Table.elemID = "teams_table", Table.renderAsTable = True, Table.bulkActionsInHeader = Just 0}
               , columns = tableCols
               , rows = teams
               , features =
                   def
                     { Table.rowId = Just \team -> UUID.toText team.id
+                    , Table.rowAttrs = Just \_ -> [class_ "group/row hover:bg-fillWeaker"]
                     , Table.bulkActions =
                         [ Table.BulkAction{icon = Just "trash", title = "Delete", uri = "/p/" <> pid.toText <> "/manage_teams/bulk_action/delete"}
                         ]
@@ -709,9 +708,10 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
 
 nameCell :: Projects.ProjectId -> Text -> Text -> Text -> Html ()
 nameCell pid name description handle = do
-  a_ [class_ "flex items-center gap-2", href_ ("/p/" <> pid.toText <> "/manage_teams/" <> handle)] do
-    span_ [class_ "text-textStrong font-medium"] $ toHtml name
-    span_ [class_ "text-textWeak text-sm overflow-ellipsis truncate "] $ toHtml description
+  span_ [class_ "flex items-center gap-2"] do
+    span_ [class_ "p-1 px-2 bg-fillWeak rounded-md", data_ "tippy-content" "Team"] $ faSprite_ "users" "regular" "w-3 h-3"
+    a_ [href_ ("/p/" <> pid.toText <> "/manage_teams/" <> handle), class_ "font-medium text-textStrong hover:text-textBrand hover:underline underline-offset-2"] $ toHtml name
+    span_ [class_ "text-textWeak text-sm overflow-ellipsis truncate"] $ toHtml description
 
 
 memberCell :: V.Vector ProjectMembers.TeamMemberVM -> Html ()
@@ -772,144 +772,45 @@ teamGetH pid handle layoutM = do
 teamPage :: Projects.ProjectId -> ProjectMembers.TeamVM -> V.Vector ProjectMembers.ProjectMemberVM -> [BotUtils.Channel] -> [BotUtils.Channel] -> Html ()
 teamPage pid team projMembers slackChannels discordChannels = do
   let whiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
-  let channelWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]) <$> slackChannels
-  let discordWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]) <$> discordChannels
-  section_ [id_ "main-content", class_ "w-full h-full"] do
-    div_ [class_ "flex h-full border-t border-strokeWeak"] do
-      div_ [class_ "p-4 w-4/12 space-y-6 mx-auto h-full overflow-y-auto"] do
-        div_ [] do
-          div_ [class_ "flex items-center gap-3"] do
-            h2_ [class_ "text-xl font-semibold"] $ toHtml team.name
-            span_ [class_ "text-textWeak flex items-center gap-1 text-sm"] do
-              faSprite_ "copy" "regular" "w-3 h-3"
-              toHtml team.handle
-          p_ [class_ "text-textWeak mt-3 text-sm"] $ toHtml team.description
-        div_ [class_ "rounded-lg p-4 border border-strokeWeak"] do
-          div_ [class_ "flex items-center justify-between mb-2"] do
-            span_ [class_ "flex items-center gap-2 font-semibold py-2"] do
-              faSprite_ "users" "regular" "h-5 w-5"
-              toHtml "Members"
-              span_ [class_ "text-textWeak"] ("(" <> show (V.length team.members) <> ")")
-            label_ [class_ "btn btn-outline border border-strokeWeak btn-xs", Lucid.for_ $ team.handle <> "-new-team-modal"] (faSprite_ "plus" "regular" "h-3 w-3 mr-1" >> "Add")
+      channelWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]) <$> slackChannels
+      discordWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]) <$> discordChannels
+      card_ title content = div_ [class_ "surface-raised rounded-2xl p-4"] $ span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong"] title >> content
+      notifRow_ icon iconType label vals = div_ [class_ "flex items-start gap-3"] do
+        span_ [class_ "p-1.5 bg-fillWeak rounded-md"] $ faSprite_ icon iconType "h-3.5 w-3.5"
+        div_ [class_ "flex-1"] $ div_ [class_ "text-sm font-medium"] label >> div_ [class_ "text-xs text-textWeak mt-0.5"] (if null vals then "Not configured" else toHtml $ T.intercalate ", " vals)
+      resolveChannel chans cid = maybe cid (("#" <>) . (.channelName)) $ find (\x -> x.channelId == cid) chans
+      lazySection_ secId icon title searchPh url = div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
+        div_ [class_ "flex items-center justify-between w-full p-4 border-b border-strokeWeak"] do
+          span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong"] $ faSprite_ icon "regular" "h-4 w-4" >> toHtml title
+          label_ [class_ "input input-sm w-64 bg-fillWeak border-0"] $ faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 text-textWeak" >> input_ [type_ "text", placeholder_ searchPh, class_ ""]
+        div_ [class_ "w-full max-h-96 overflow-y-auto", id_ secId] do
+          unless (T.null url) $ a_ [hxGet_ url, hxTrigger_ "intersect once", hxTarget_ $ "#" <> secId, hxSwap_ "outerHTML"] ""
+          div_ [class_ "flex flex-col items-center justify-center py-8 text-center gap-2"] $ faSprite_ icon "regular" "h-6 w-6 text-textWeak" >> div_ [class_ "text-sm text-textWeak"] (toHtml $ "No " <> T.toLower title <> " linked")
+  section_ [id_ "main-content", class_ "w-full py-8"] $ div_ [class_ "px-6 w-full"] do
+    div_ [class_ "mb-6 flex items-center gap-3"] do
+      a_ [href_ ("/p/" <> pid.toText <> "/manage_teams"), class_ "text-textWeak hover:text-textStrong"] $ faSprite_ "arrow-left" "regular" "h-4 w-4"
+      h2_ [class_ "text-textStrong text-3xl font-semibold"] $ toHtml team.name
+    div_ [class_ "flex gap-6 h-full"] do
+      div_ [class_ "w-4/12 space-y-4"] do
+        card_ (faSprite_ "circle-info" "regular" "h-4 w-4" >> "Details") do
+          div_ [class_ "absolute right-4 top-4"] do
+            label_ [class_ "btn btn-outline btn-xs", Lucid.for_ $ team.handle <> "-new-team-modal"] $ faSprite_ "pen" "regular" "h-3 w-3 mr-1" >> "Edit"
             input_ [type_ "checkbox", id_ $ team.handle <> "-new-team-modal", class_ "modal-toggle"]
             teamModal pid (Just team) whiteList channelWhiteList discordWhiteList True
-          div_ [] do
-            forM_ team.members \m -> do
-              div_ [class_ "flex flex-col gap-1 py-3 "] do
-                div_ [class_ "flex  gap-2 text-sm"] do
-                  img_ [src_ m.memberAvatar, class_ "w-5 h-5 rounded-full border border-strokeWeak"]
-                  span_ [] $ toHtml m.memberName
-                span_ [class_ "text-textWeak text-xs"] $ toHtml m.memberEmail
-
-        div_ [class_ "p-4 rounded-lg border border-strokeWeak"] do
-          div_ [class_ "flex items-center justify-between mb-2"] do
-            span_ [class_ "flex items-center gap-2 py-2 font-semibold"] do
-              faSprite_ "bell" "regular" "h-5 w-5"
-              "Notifications"
-            label_ [class_ "btn btn-outline border border-strokeWeak btn-xs", Lucid.for_ $ team.handle <> "-new-team-modal"] (faSprite_ "plus" "regular" "h-3 w-3 mr-1" >> "Add")
-          div_ [] do
-            div_ [class_ "flex flex-col gap-2 py-3"] do
-              div_ [class_ "flex items-center text-sm gap-2 font-medium"] do
-                faSprite_ "envelope" "regular" "h-4 w-4"
-                "Email addresses"
-              div_ [class_ "flex items-center gap-2 text-xs text-textWeak"] do
-                when (V.null team.notify_emails) $ span_ [] "No emails added"
-                forM_ team.notify_emails (span_ [] . toHtml)
-            div_ [class_ "flex flex-col gap-2 py-3"] do
-              div_ [class_ "flex items-center text-sm gap-2 font-medium"] do
-                faSprite_ "slack" "solid" "h-4 w-4"
-                "Slack channels"
-              div_ [class_ "flex items-center gap-2 text-xs text-textWeak"] do
-                when (V.null team.slack_channels) $ span_ [] "No slack channel configured"
-                forM_ team.slack_channels \e -> do
-                  let tar = maybe e (.channelName) $ find (\x -> x.channelId == e) slackChannels
-                  span_ [] $ toHtml tar
-            div_ [class_ "flex flex-col gap-2 py-3"] do
-              div_ [class_ "flex items-center text-sm gap-2 font-medium"] do
-                faSprite_ "discord" "solid" "h-4 w-4"
-                "Discord channels"
-              div_ [class_ "flex items-center gap-2 text-xs text-textWeak"] do
-                when (V.null team.discord_channels) $ span_ [] "No discord channel configured"
-                forM_ team.discord_channels \e -> do
-                  let tar = maybe e (.channelName) $ find (\x -> x.channelId == e) discordChannels
-                  span_ [] $ toHtml tar
-
-      div_ [class_ "h-full w-8/12 overflow-y-auto p-4 space-y-6"] do
-        monitorsSection pid team.id
-        dashboardsSection pid team.id
-        servicesSection pid team.id
-
-
-monitorsSection :: Projects.ProjectId -> UUID.UUID -> Html ()
-monitorsSection pid teamId = div_ [class_ "rounded-xl border border-strokeWeak overflow-x-hidden"] do
-  div_
-    [ class_ "flex items-center justify-between w-full p-2 hover:bg-fillWeaker cursor-pointer"
-    , [__|on click toggle .hidden on the next <div/> 
-           then toggle .rotate-270 on the first <button/> in me|]
-    ]
-    do
-      h4_ [class_ "text-sm font-medium"] (faSprite_ "list-check" "regular" "h-4 w-4 mr-2" >> "Alerts")
-      div_ [class_ "flex items-center gap-4"] do
-        label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
-          faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
-          input_ [type_ "text", placeholder_ "Search alerts...", class_ "", [__| on click halt|]]
-        button_ [class_ ""] do
-          faSprite_ "p-chevron-down" "regular" "h-4 w-4"
-
-  div_ [class_ "p-3 border-t border-strokeWeak w-full max-h-96 overflow-y-auto", id_ "monitors-section"] do
-    a_ [hxGet_ ("/p/" <> pid.toText <> "/monitors/alerts/team/" <> UUID.toText teamId), hxTrigger_ "intersect once", hxTarget_ "#monitors-section", hxSwap_ "outerHTML"] ""
-    span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-sm"] ""
-    emptySectionState "No monitors are currently linked to this team"
-
-
-dashboardsSection :: Projects.ProjectId -> UUID.UUID -> Html ()
-dashboardsSection pid teamId = div_ [class_ "rounded-xl border border-strokeWeak overflow-x-hidden"] do
-  div_
-    [ class_ "flex items-center justify-between w-full p-2 bg-fillWeaker cursor-pointer"
-    , [__|on click toggle .hidden on the next <div/>
-         then toggle .rotate-270 on the first <button/> in me
-    |]
-    ]
-    do
-      h4_ [class_ "text-sm font-medium"] (faSprite_ "chart-area" "regular" "h-4 w-4 mr-2" >> "Dashboards")
-      div_ [class_ "flex items-center gap-4"] do
-        label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
-          faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
-          input_ [type_ "text", placeholder_ "Search dashboards...", class_ "", [__| on click halt|]]
-        button_ [class_ ""] do
-          faSprite_ "p-chevron-down" "regular" "h-4 w-4"
-  div_ [class_ "-mt-4 w-full max-h-96 overflow-y-auto", id_ "dashboards-section"] do
-    a_ [hxGet_ ("/p/" <> pid.toText <> "/dashboards/?teamId=" <> UUID.toText teamId), hxTrigger_ "intersect once", hxTarget_ "#dashboards-section", hxSwap_ "innerHTML"] ""
-    span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-sm"] ""
-    emptySectionState "No dashboards are currently linked to this team"
-
-
-servicesSection :: Projects.ProjectId -> UUID.UUID -> Html ()
-servicesSection pid teamId = div_ [class_ "rounded-xl border border-strokeWeak overflow-x-hidden"] do
-  div_
-    [ class_ "flex items-center justify-between w-full p-2 hover:bg-fillWeaker cursor-pointer"
-    , [__|on click toggle .hidden on the next <div/>
-         then toggle .rotate-270 on the first <button/> in me
-    |]
-    ]
-    do
-      h4_ [class_ "text-sm font-medium"] (faSprite_ "server" "regular" "h-4 w-4 mr-2" >> "Services")
-      div_ [class_ "flex items-center gap-4"] do
-        label_ [class_ "input input-sm w-72 border-0 bg-fillWeaker focus:outline-0 focus:ring-0"] do
-          faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
-          input_ [type_ "text", placeholder_ "Search services...", class_ "", [__| on click halt|]]
-        button_ [class_ ""] do
-          faSprite_ "p-chevron-down" "regular" "h-4 w-4"
-  div_ [class_ "p-3 border-t w-full border-strokeWeak"] do
-    emptySectionState "No services are currently linked to this team"
-
-
-emptySectionState :: Text -> Html ()
-emptySectionState message =
-  div_ [class_ "flex flex-col items-center justify-center py-10 text-center text-textWeak gap-3"] do
-    faSprite_ "empty" "regular" "h-8 w-8 text-textWeak"
-    div_ [class_ "text-sm"] $ toHtml message
-    button_ [class_ "btn btn-primary btn-sm"] "Create dashboard"
+          div_ [class_ "mt-3 space-y-2 text-sm"] do
+            div_ [class_ "flex gap-2"] $ span_ [class_ "text-textWeak w-16"] "Handle" >> span_ [class_ "text-textStrong"] (toHtml $ "@" <> team.handle)
+            unless (T.null team.description) $ div_ [class_ "flex gap-2"] $ span_ [class_ "text-textWeak w-16"] "About" >> span_ [class_ "text-textStrong"] (toHtml team.description)
+        card_ (faSprite_ "users" "regular" "h-4 w-4" >> "Members" >> span_ [class_ "text-textWeak font-normal"] ("(" <> show (V.length team.members) <> ")")) $
+          div_ [class_ "mt-3 divide-y divide-strokeWeak"] $ forM_ team.members \m ->
+            div_ [class_ "flex items-center gap-3 py-2.5"] $ img_ [src_ m.memberAvatar, class_ "w-8 h-8 rounded-full border border-strokeWeak"] >> div_ [] (div_ [class_ "text-sm font-medium text-textStrong"] (toHtml m.memberName) >> div_ [class_ "text-xs text-textWeak"] (toHtml m.memberEmail))
+        card_ (faSprite_ "bell" "regular" "h-4 w-4" >> "Notifications") $ div_ [class_ "mt-3 space-y-3"] do
+          notifRow_ "envelope" "regular" "Email" $ V.toList team.notify_emails
+          notifRow_ "slack" "solid" "Slack" $ V.toList $ V.map (resolveChannel slackChannels) team.slack_channels
+          notifRow_ "discord" "solid" "Discord" $ V.toList $ V.map (resolveChannel discordChannels) team.discord_channels
+      div_ [class_ "flex-1 space-y-4"] do
+        lazySection_ "monitors-section" "bell" "Alerts" "Search alerts..." ("/p/" <> pid.toText <> "/monitors/alerts/team/" <> UUID.toText team.id)
+        lazySection_ "dashboards-section" "chart-area" "Dashboards" "Search dashboards..." ("/p/" <> pid.toText <> "/dashboards/?teamId=" <> UUID.toText team.id)
+        lazySection_ "services-section" "server" "Services" "Search services..." ""
 
 
 teamPageNF :: Projects.ProjectId -> Text -> Html ()
@@ -1467,244 +1368,90 @@ alertConfiguration newEndpointsAlerts errorAlerts weeklyReportsAlerts dailyRepor
       switchRow "Receive daily reports alerts" "dailyNotifs" "Receive daily summaries of your project metrics" dailyReportsAlerts
 
 
--- Types
-data TeamMember = TeamMember
-  { memberId :: Text
-  , memberEmail :: Text
-  , memberName :: Text
-  , memberRole :: Role
-  }
-
-
-data Role = Owner | Admin | Member | Viewer
-  deriving (Eq, Show)
-
-
-data NotificationChannel
-  = EmailChannel Text
-  | SlackChannel Text Text -- url, name
-  | DiscordChannel Text Text
-  | WhatsAppChannel Text
-
-
 -- Main Modal Component
 teamModal :: Projects.ProjectId -> Maybe ProjectMembers.TeamVM -> Text -> Text -> Text -> Bool -> Html ()
 teamModal pid team whiteList channelWhiteList discordWhiteList isInTeamView = do
   let name = maybe "" (.name) team
-  let handle = maybe "" (.handle) team
-  let description = maybe "" (.description) team
-  let teamId = fmap (.id) team
-  let prefix = maybe "n" (\x -> x.handle) team
-  let membersTags = decodeUtf8 $ AE.encode $ maybe [] (\t -> (\m -> UUID.toText m.memberId) <$> t.members) team
-  let notifEmails = decodeUtf8 $ AE.encode $ maybe [] (.notify_emails) team
-  let slackChannels = decodeUtf8 $ AE.encode $ maybe [] (.slack_channels) team
-  let discordChannels = decodeUtf8 $ AE.encode $ maybe [] (.discord_channels) team
+      handle = maybe "" (.handle) team
+      description = maybe "" (.description) team
+      prefix = maybe "n" (.handle) team
+      modalId = prefix <> "-new-team-modal"
+      mkId suffix = prefix <> "-" <> suffix
+      membersTags = decodeUtf8 $ AE.encode $ maybe [] (\t -> UUID.toText . (.memberId) <$> t.members) team
+      notifEmails = decodeUtf8 $ AE.encode $ maybe [] (.notify_emails) team
+      slackChannels = decodeUtf8 $ AE.encode $ maybe [] (.slack_channels) team
+      discordChannels = decodeUtf8 $ AE.encode $ maybe [] (.discord_channels) team
 
-  div_ [class_ "modal", role_ "dialog", style_ "--color-base-100: var(--color-fillWeaker)"] $ do
-    div_ [class_ "modal-box max-w-max"] $ do
-      form_
-        [ hxPost_ $ "/p/" <> pid.toText <> "/manage_teams?" <> (if isInTeamView then "teamView=true" else "")
-        , hxExt_ "json-enc"
-        , hxVals_ [text|js:{...getTagValues(`$prefix`)}|]
-        , hxTarget_ "#main-content"
-        , hxSwap_ "outerHTML"
-        , class_ "w-xl"
-        ]
-        do
-          div_ [class_ "px-2 max-h-[75vh] overflow-y-auto"] $ do
-            whenJust teamId $ \tid ->
-              input_
-                [ type_ "hidden"
-                , id_ $ prefix <> "-team-id"
-                , name_ "teamId"
-                , value_ $ UUID.toText tid
-                ]
-            div_ [class_ "sticky top-0 pb-2 bg-[var(--color-bgOverlay)] border-b border-border z-50"] $ do
-              h2_ [class_ "text-lg font-semibold  flex items-center gap-2"] do
-                faSprite_ "users" "solid" "w-4 h-4 "
-                toHtml $ if isJust team then "Edit Team " <> name else "Create Team"
-              p_ [class_ "text-sm text-textWeak"] "Manage team details, members, and notification channels"
-            div_ [class_ "flex-1 overflow-y-auto space-y-8 mt-4"] $ do
-              teamDetailsSection name handle description
-              div_ [class_ "pb-2 space-y-4"] $ do
-                h3_ [class_ "text-sm font-medium  flex items-center gap-2 pb-2 border-b border-strokeWeak"] $ do
-                  "Add Members"
-                div_ [class_ "flex gap-2"] $ do
-                  textarea_
-                    [ class_ "min-h-10 w-full rounded border-strokeWeak input resize-none"
-                    , type_ "email"
-                    , placeholder_ "Add members"
-                    , id_ $ prefix <> "-team-members-input"
-                    , name_ "teamMembers"
-                    , style_ "border: 1px solid var(--color-strokeWeak)"
-                    ]
-                    pass
-              notificationChannelsSection prefix
-          div_ [class_ "modal-action"] $ do
-            label_ [Lucid.for_ (prefix <> "-new-team-modal"), class_ "btn btn-sm btn-outline", type_ "button"] "Cancel"
-            button_ [class_ "btn btn-sm btn-primary ml-4", type_ "submit"] "Save Team"
-    label_ [class_ "modal-backdrop", Lucid.for_ (prefix <> "-new-team-modal")] "Close"
+  let section_ icon title content = div_ [class_ "space-y-4"] do
+        h3_ [class_ "text-sm font-semibold text-textStrong uppercase tracking-wide flex items-center gap-2"] $ faSprite_ icon "regular" "w-4 h-4 text-iconNeutral" >> title
+        content
+
+  let field_ inputId lbl input = fieldset_ [class_ "fieldset"] $ label_ [class_ "label text-sm font-medium", Lucid.for_ inputId] lbl >> input
+  let fieldIcon_ icon inputId lbl input = fieldset_ [class_ "fieldset"] do
+        label_ [class_ "label text-sm font-medium flex items-center gap-2", Lucid.for_ inputId] $ faSprite_ icon "solid" "w-4 h-4 text-iconNeutral" >> lbl
+        input
+  let tagInput_ inputId ph = textarea_ [class_ "textarea w-full min-h-12 resize-none", id_ inputId, placeholder_ ph] ""
+
+  div_ [class_ "modal", role_ "dialog", style_ "--color-base-100: var(--color-fillWeaker)"] do
+    label_ [class_ "modal-backdrop", Lucid.for_ modalId] ""
+    div_ [class_ "modal-box w-full max-w-2xl flex flex-col"] do
+      label_ [Lucid.for_ modalId, class_ "btn btn-sm btn-circle btn-ghost absolute right-3 top-3"] "✕"
+      form_ [hxPost_ $ "/p/" <> pid.toText <> "/manage_teams?" <> if isInTeamView then "teamView=true" else "", hxExt_ "json-enc", hxVals_ [text|js:{...getTagValues(`$prefix`)}|], hxTarget_ "#main-content", hxSwap_ "outerHTML", class_ "flex flex-col h-full"] do
+        whenJust ((.id) <$> team) \tid -> input_ [type_ "hidden", name_ "teamId", value_ $ UUID.toText tid]
+
+        div_ [class_ "pb-4 border-b border-strokeWeak"] do
+          h2_ [class_ "text-xl font-semibold text-textStrong flex items-center gap-2"] $ span_ [class_ "p-2 bg-fillBrand-weak rounded-lg"] (faSprite_ "users" "solid" "w-5 h-5 text-textBrand") >> toHtml (if isJust team then "Edit Team" else "Create New Team")
+          p_ [class_ "text-sm text-textWeak mt-1 ml-11"] "Set up your team details, add members, and configure notifications"
+
+        div_ [class_ "flex-1 overflow-y-auto max-h-[60vh] py-6 space-y-6"] do
+          section_ "circle-info" "Team Details" do
+            div_ [class_ "grid grid-cols-2 gap-4"] do
+              field_ (mkId "team-name") "Team Name" $ input_ [class_ "input w-full", type_ "text", id_ $ mkId "team-name", name_ "teamName", placeholder_ "e.g. Backend Team", value_ name, required_ "true"]
+              field_ (mkId "team-handle") "Handle" $ input_ [class_ "input w-full", type_ "text", id_ $ mkId "team-handle", name_ "teamHandle", placeholder_ "e.g. backend-team", value_ handle, required_ "true", pattern_ "^[a-z][a-z0-9-]*$"]
+            field_ (mkId "team-description") "Description" $ textarea_ [class_ "textarea w-full min-h-20 resize-none", id_ $ mkId "team-description", name_ "teamDescription", placeholder_ "What does this team do?"] $ toHtml description
+
+          section_ "user-plus" "Team Members" $ field_ (mkId "team-members-input") "Add members to this team" $ tagInput_ (mkId "team-members-input") "Start typing to search members..."
+
+          section_ "bell" "Notification Channels" do
+            p_ [class_ "text-sm text-textWeak -mt-2"] "Configure where this team receives alerts and notifications"
+            div_ [class_ "grid gap-4"] do
+              fieldIcon_ "envelope" (mkId "notif-emails-input") "Email Addresses" $ tagInput_ (mkId "notif-emails-input") "Add email addresses..."
+              fieldIcon_ "slack" (mkId "slack-channels-input") "Slack Channels" $ tagInput_ (mkId "slack-channels-input") "Add Slack channels..."
+              fieldIcon_ "discord" (mkId "discord-channels-input") "Discord Channels" $ tagInput_ (mkId "discord-channels-input") "Add Discord channels..."
+
+        div_ [class_ "pt-4 border-t border-strokeWeak flex justify-end gap-3"] do
+          label_ [Lucid.for_ modalId, class_ "btn btn-outline"] "Cancel"
+          button_ [class_ "btn btn-primary", type_ "submit"] $ faSprite_ "check" "solid" "w-4 h-4 mr-2" >> if isJust team then "Save Changes" else "Create Team"
   script_
     [text|
 function getTagValues(prefix) {
-  const val = {
-    teamMembers: window[`$${prefix}-membersTagify`].value.map(item => item.value),
-    notifEmails: window[`$${prefix}-notifEmailsTagify`].value.map(item => item.value),
-    slackChannels: window[`$${prefix}-slackTagify`].value.map(item => item.value),
-    discordChannels: window[`$${prefix}-discordTagify`].value.map(item => item.value)
+  return {
+    teamMembers: window[`$${prefix}-membersTagify`]?.value.map(item => item.value) || [],
+    notifEmails: window[`$${prefix}-notifEmailsTagify`]?.value.map(item => item.value || item) || [],
+    slackChannels: window[`$${prefix}-slackTagify`]?.value.map(item => item.value) || [],
+    discordChannels: window[`$${prefix}-discordTagify`]?.value.map(item => item.value) || [],
+    phoneNumbers: []
   }
-  return val
 }
-  window.addEventListener('DOMContentLoaded', (event) => {
-  
-window[`$prefix-membersTagify`] = createTagify('#$prefix-team-members-input', {
-  enforceWhitelist: true,
-  whitelist: $whiteList,
-  placeholder: "Add member",
-});
+window.addEventListener('DOMContentLoaded', () => {
+  const whiteList = $whiteList;
+  const emailWhiteList = whiteList.map(m => ({ name: m.email, value: m.email }));
 
-var existingMembers = $membersTags
-var memberTags = []
-existingMembers.forEach(member => {
-   const target = $whiteList.find(v => v.value == member)
-   if(target) {
-      memberTags.push(target)
-    }
-})
-window[`$prefix-membersTagify`].addTags(memberTags)
+  window[`$prefix-membersTagify`] = createTagify('#$prefix-team-members-input', { enforceWhitelist: true, whitelist: whiteList, tagTextProp: 'name' });
+  const memberTags = ($membersTags).map(id => whiteList.find(v => v.value == id)).filter(Boolean);
+  window[`$prefix-membersTagify`].addTags(memberTags);
 
-window[`$prefix-notifEmailsTagify`] = createTagify('#$prefix-notif-emails-input', { placeholder: "Add email"});
-window[`$prefix-notifEmailsTagify`].addTags($notifEmails)
+  window[`$prefix-notifEmailsTagify`] = createTagify('#$prefix-notif-emails-input', { whitelist: emailWhiteList, tagTextProp: 'name' });
+  window[`$prefix-notifEmailsTagify`].addTags($notifEmails);
 
-window[`$prefix-slackTagify`] = createTagify('#$prefix-slack-channels-input', {
-  enforceWhitelist: true,
-  whitelist: $channelWhiteList,
-  placeholder: "Add Slack channel",
-});
+  window[`$prefix-slackTagify`] = createTagify('#$prefix-slack-channels-input', { enforceWhitelist: true, whitelist: $channelWhiteList, tagTextProp: 'name' });
+  const slackTags = ($slackChannels).map(id => ($channelWhiteList).find(v => v.value == id)).filter(Boolean);
+  window[`$prefix-slackTagify`].addTags(slackTags);
 
-var slackChannels = $slackChannels 
-var channels = []
-slackChannels.forEach(channel => {
-  const target = $channelWhiteList.find(v => v.value == channel)
-  if(target) {
-      channels.push(target)
-    }
-})
-window[`$prefix-slackTagify`].addTags(channels)
-
-window[`$prefix-discordTagify`] = createTagify('#$prefix-discord-channels-input', {
-  enforceWhitelist: true,
-  whitelist: $discordWhiteList,
-  placeholder: "Add Discord channel",
-});
-
-var discordChannels = $discordChannels 
-var discordChannelTags = []
-discordChannels.forEach(channel => {
-  const target = $discordWhiteList.find(v => v.value === channel)
-  if(target) {
-    discordChannelTags.push(target)
-  }
-})
-window[`$prefix-discordTagify`].addTags(discordChannelTags)
-// Update email whitelist when members change
-window[`$prefix-membersTagify`].on("change", (e) => {
-  window[`$prefix-notifEmailsTagify`].settings.whitelist = window[`$prefix-membersTagify`].value.map(item => item.email);
-});
-      });
-  |]
-
-
-teamDetailsSection :: Text -> Text -> Text -> Html ()
-teamDetailsSection name handle description = do
-  let prefix = if T.null handle then "n" else handle
-  div_ [class_ "space-y-4"] $ do
-    div_ [class_ "flex items-center w-full gap-2 justify-between"] do
-      div_ [class_ "flex flex-col w-full gap-2"] $ do
-        label_ [class_ "text-sm font-medium ", Lucid.for_ "team-name", required_ "true"] "Team Name"
-        input_
-          [ class_ "input w-full"
-          , type_ "text"
-          , id_ $ prefix <> "-team-name"
-          , name_ "teamName"
-          , placeholder_ "e.g. Backend Team"
-          , value_ name
-          ]
-        span_ [id_ $ prefix <> "-team-name-error", class_ "text-xs text-red-500 h-4"] ""
-
-      div_ [class_ "flex flex-col gap-2 w-full"] $ do
-        label_ [class_ "text-sm font-medium ", Lucid.for_ "team-handle"] "Team Handle"
-        input_
-          [ class_ "input w-full"
-          , type_ "text"
-          , id_ $ prefix <> "-team-handle"
-          , name_ "teamHandle"
-          , placeholder_ "e.g. backend-team"
-          , value_ handle
-          , required_ "true"
-          , min_ "3"
-          , max_ "30"
-          , pattern_ "^[a-z][a-z0-9-]*$"
-          ]
-        span_ [id_ $ prefix <> "-team-handle-error", class_ "text-xs text-red-500 h-4"] ""
-    div_ [class_ "flex flex-col gap-2"] $ do
-      label_ [class_ "text-sm font-medium ", Lucid.for_ "team-description"] "Description"
-      textarea_
-        [ class_ "w-full p-2 min-h-[80px] input focus:outline-none focus:ring-2 focus:ring-ring resize-none"
-        , id_ $ prefix <> "-team-description"
-        , name_ "teamDescription"
-        , placeholder_ "What does this team do?"
-        ]
-        $ toHtml description
-  script_
-    [text|
-  
-document.addEventListener("DOMContentLoaded", () => {
-  const nameInput = document.getElementById("$prefix-team-name");
-  const handleInput = document.getElementById("$prefix-team-handle");
-  let handleManuallyEdited = false;
-
-  handleInput.addEventListener("input", () => {
-    handleManuallyEdited = true;
-  });
-
-  nameInput.addEventListener("input", () => {
-    if (!handleManuallyEdited) {
-      const val = nameInput.value.toLowerCase().trim();
-      const generated = val
-        .replace(/[^a-z0-9\s-]/g, "")  // remove invalid chars
-        .replace(/\s+/g, "-")          // spaces → hyphens
-        .replace(/-{2,}/g, "-")        // collapse multiple hyphens
-        .replace(/^-+|-+$/g, "");      // trim hyphens 
-      handleInput.value = generated;
-      showError(handleInput, handleError, validators.handle());
-    }
-  });
-
+  window[`$prefix-discordTagify`] = createTagify('#$prefix-discord-channels-input', { enforceWhitelist: true, whitelist: $discordWhiteList, tagTextProp: 'name' });
+  const discordTags = ($discordChannels).map(id => ($discordWhiteList).find(v => v.value == id)).filter(Boolean);
+  window[`$prefix-discordTagify`].addTags(discordTags);
 });
 |]
 
 
--- Notification Channels Section
-notificationChannelsSection :: Text -> Html ()
-notificationChannelsSection prefix = do
-  div_ [class_ "space-y-4"] $ do
-    h3_ [class_ "text-sm font-medium flex items-center gap-2 pb-2 border-b border-strokeWeak"] "Notification Channels"
-    div_ [class_ "w-full space-y-8"] $ do
-      channelBlock "Email addresses" (prefix <> "-notif-emails-input") "Add email addresses" "notifEmails" "envelope"
-      channelBlock "Slack Channels" (prefix <> "-slack-channels-input") "Add slack channels" "slackChannels" "slack"
-      channelBlock "Discord Channels" (prefix <> "-discord-channels-input") "Add channels" "discordChannels" "discord"
-
-
--- Reusable helper
-channelBlock :: Text -> Text -> Text -> Text -> Text -> Html ()
-channelBlock title inputId placeholder name icon = div_ [class_ "flex flex-col gap-2"] do
-  label_ [class_ "text-sm font-medium flex items-center gap-2", Lucid.for_ inputId] do
-    faSprite_ icon "solid" "w-4 h-4"
-    toHtml title
-  textarea_
-    [ class_ "input w-full min-h-10 resize-none rounded"
-    , id_ inputId
-    , placeholder_ placeholder
-    ]
-    ""

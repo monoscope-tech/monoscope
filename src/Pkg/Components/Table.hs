@@ -13,11 +13,13 @@ module Pkg.Components.Table (
   TabFilterOpt (..),
   SortConfig (..),
   ZeroState (..),
+  SimpleZeroState (..),
   col,
   withSort,
   withAttrs,
   withAlign,
   renderRowWithColumns,
+  simpleZeroState,
 ) where
 
 import Data.Default (Default (..))
@@ -55,7 +57,19 @@ data Table a = Table
 
 -- TableRows for pagination - only renders rows + pagination link
 type role TableRows nominal
-data TableRows a = TableRows (Maybe Text) [Column a] (V.Vector a) -- nextUrl, columns, rows
+data TableRows a = TableRows
+  { nextUrl :: Maybe Text
+  , columns :: [Column a]
+  , rows :: V.Vector a
+  , emptyState :: Maybe SimpleZeroState
+  }
+
+
+-- Simple zero state for TableRows (just icon and message)
+data SimpleZeroState = SimpleZeroState
+  { icon :: Text
+  , message :: Text
+  }
 
 
 data SearchMode = ClientSide | ServerSide Text
@@ -85,6 +99,7 @@ data Config = Config
   , elemID :: Text
   , renderAsTable :: Bool -- True for table mode, False for list mode
   , addPadding :: Bool -- When True, wraps table in div with px-6 pt-4 pb-2 padding
+  , bulkActionsInHeader :: Maybe Int -- Column index (0-based) to place bulk actions in header; Nothing uses toolbar
   }
 
 
@@ -156,6 +171,7 @@ instance Default Config where
       , elemID = "tableContainer"
       , renderAsTable = False
       , addPadding = False
+      , bulkActionsInHeader = Nothing
       }
 
 
@@ -171,17 +187,19 @@ instance ToHtml (Table a) where
 -- TableRows ToHtml - only renders rows + pagination link for load more
 
 instance ToHtml (TableRows a) where
-  toHtml (TableRows nextUrl columns rows) = toHtmlRaw $ renderTableRows nextUrl columns rows
-  toHtmlRaw (TableRows nextUrl columns rows) = toHtmlRaw $ renderTableRows nextUrl columns rows
+  toHtml tr = toHtmlRaw $ renderTableRows tr
+  toHtmlRaw tr = toHtmlRaw $ renderTableRows tr
 
 
 {-# INLINE renderTableRows #-}
-renderTableRows :: Maybe Text -> [Column a] -> V.Vector a -> Html ()
-renderTableRows nextUrl columns rows = do
-  V.forM_ rows \row ->
-    div_ [class_ "flex gap-8 items-start itemsListItem"] do
-      forM_ columns \c -> div_ c.attrs $ c.render row
-  whenJust nextUrl (`renderPaginationLink` "both")
+renderTableRows :: TableRows a -> Html ()
+renderTableRows tr
+  | V.null tr.rows = whenJust tr.emptyState renderSimpleZeroState
+  | otherwise = do
+      V.forM_ tr.rows \row ->
+        div_ [class_ "flex gap-8 items-start itemsListItem"] do
+          forM_ tr.columns \c -> div_ c.attrs $ c.render row
+      whenJust tr.nextUrl (`renderPaginationLink` "both")
 
 
 -- Tab Filter ToHtml
@@ -220,7 +238,7 @@ renderTable tbl =
               , onkeydown_ "return event.key != 'Enter';"
               ]
               do
-                when (isJust tbl.features.rowId || isJust tbl.features.sort)
+                when ((isJust tbl.features.rowId || isJust tbl.features.sort) && isNothing tbl.config.bulkActionsInHeader)
                   $ renderToolbar tbl
 
                 when (V.null tbl.rows) $ whenJust tbl.features.zeroState renderZeroState
@@ -252,8 +270,11 @@ renderRows tbl =
                   , class_ "checkbox h-6 w-6 checked:checkbox-primary"
                   , [__| on click set .bulkactionItemCheckbox.checked to my.checked |]
                   ]
-              forM_ tbl.columns \c ->
-                th_ [class_ $ tbl.config.thClasses <> " " <> tbl.config.tdClasses <> maybe "" (" " <>) c.align] $ toHtml c.name
+              forM_ (zip [0 ..] tbl.columns) \(idx, c) ->
+                th_ [class_ $ tbl.config.thClasses <> maybe "" (" " <>) c.align] do
+                  span_ [class_ "flex items-center gap-3"] do
+                    toHtml c.name
+                    when (tbl.config.bulkActionsInHeader == Just idx) $ renderHeaderBulkActions tbl.features.bulkActions
         tbody_ do
           V.mapM_ (renderTableRow tbl) tbl.rows
     else V.mapM_ (renderListRow tbl) tbl.rows
@@ -290,6 +311,20 @@ renderTableRow tbl row =
     linkHandler = maybe [] (\getLink -> [class_ "cursor-pointer", hxGet_ (getLink row), hxPushUrl_ "true"]) tbl.features.rowLink
     isSelected = maybe False (\f -> f row) tbl.features.selectRow
     colAttrs c = foldMap (\a -> [class_ a]) c.align
+
+
+renderHeaderBulkActions :: [BulkAction] -> Html ()
+renderHeaderBulkActions bulkActions =
+  span_ [class_ "inline-flex gap-2 ml-2"] do
+    forM_ bulkActions \blkA ->
+      button_
+        [ class_ "btn btn-xs btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:btn-primary group-has-[.bulkactionItemCheckbox:checked]/grid:pointer-events-auto!"
+        , hxPost_ blkA.uri
+        , hxSwap_ "none"
+        ]
+        do
+          whenJust blkA.icon \icon -> faSprite_ icon "regular" "h-3 w-3 inline-block"
+          span_ [class_ "ml-1"] $ toHtml blkA.title
 
 
 renderToolbar :: Table a -> Html ()
@@ -408,6 +443,17 @@ renderZeroState zs = do
         Left labelId -> labelId
         Right destination -> destination
   emptyState_ zs.title zs.description (Just url) zs.actionText
+
+
+renderSimpleZeroState :: SimpleZeroState -> Html ()
+renderSimpleZeroState zs =
+  div_ [class_ "flex items-center justify-center gap-2 py-4 text-textWeak"] do
+    faSprite_ zs.icon "regular" "h-4 w-4"
+    span_ [class_ "text-sm"] $ toHtml zs.message
+
+
+simpleZeroState :: Text -> Text -> SimpleZeroState
+simpleZeroState icon message = SimpleZeroState{icon, message}
 
 
 -- Column Builders

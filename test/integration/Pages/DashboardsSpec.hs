@@ -110,7 +110,7 @@ spec = aroundAll withTestResources do
           case pg of
             Dashboards.DashboardsGet (PageCtx _ d) -> do
               let dIds = V.toList $ V.map (\db -> db.id) $ V.filter (\db -> db.title /= "Updated Dashboard (Copy)") d.dashboards
-              let bulkActionForm = Dashboards.DashboardBulkActionForm{dashboardId = dIds, teamHandles = teamIds}
+              let bulkActionForm = Dashboards.DashboardBulkActionForm{itemId = dIds, teamHandles = teamIds}
               _ <- testServant tr $ Dashboards.dashboardBulkActionPostH testPid "add_teams" bulkActionForm
               (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing
               case pg' of
@@ -132,7 +132,7 @@ spec = aroundAll withTestResources do
       case pg of
         Dashboards.DashboardsGet (PageCtx _ d) -> do
           let dIds = V.toList $ V.map (\db -> db.id) d.dashboards
-          let bulkActionForm = Dashboards.DashboardBulkActionForm{dashboardId = dIds, teamHandles = []}
+          let bulkActionForm = Dashboards.DashboardBulkActionForm{itemId = dIds, teamHandles = []}
           _ <- testServant tr $ Dashboards.dashboardBulkActionPostH testPid "delete" bulkActionForm
           (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing
           case pg' of

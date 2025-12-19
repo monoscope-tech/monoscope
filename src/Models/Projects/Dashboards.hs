@@ -14,6 +14,7 @@ module Models.Projects.Dashboards (
   addTeamsToDashboards,
   insert,
   selectDashboardsByTeam,
+  selectDashboardsSorted,
 ) where
 
 import Control.Exception (try)
@@ -228,4 +229,11 @@ selectDashboardsByTeam :: DB :> es => Projects.ProjectId -> UUID.UUID -> Eff es 
 selectDashboardsByTeam pid teamId = do
   dbtToEff $ DBT.query (Query $ encodeUtf8 q) (pid, teamId)
   where
-    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE project_id = ? AND teams @> ARRAY[?::uuid]|]
+    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE project_id = ? AND teams @> ARRAY[?::uuid] ORDER BY starred_since DESC NULLS LAST, updated_at DESC|]
+
+
+selectDashboardsSorted :: DB :> es => Projects.ProjectId -> Eff es (V.Vector DashboardVM)
+selectDashboardsSorted pid = do
+  V.fromList <$> dbtToEff (DBT.query (Query $ encodeUtf8 q) (Only pid))
+  where
+    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE project_id = ? ORDER BY starred_since DESC NULLS LAST, updated_at DESC|]

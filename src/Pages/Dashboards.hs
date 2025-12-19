@@ -13,6 +13,7 @@ module Pages.Dashboards (
   dashboardRenamePatchH,
   DashboardRenameForm (..),
   dashboardDuplicatePostH,
+  dashboardStarPostH,
   WidgetMoveForm (..),
   DashboardBulkActionForm (..),
   DashboardRes (..),
@@ -849,6 +850,20 @@ renderDashboardListItem checked tmplClass title value description icon prview = 
     span_ [class_ "px-2 p-1 invisible group-has-[input:checked]/it:visible"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
 
 
+starButton_ :: Projects.ProjectId -> Dashboards.DashboardId -> Bool -> Html ()
+starButton_ pid dashId isStarred = do
+  let starIconType = if isStarred then "solid" else "regular"
+  button_
+    [ id_ $ "star-btn-" <> dashId.toText
+    , class_ $ "leading-none cursor-pointer " <> if isStarred then "" else "opacity-0 group-hover/row:opacity-100"
+    , data_ "tippy-content" $ if isStarred then "Click to unstar this dashboard" else "Click to star this dashboard"
+    , hxPost_ $ "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/star"
+    , hxTarget_ $ "#star-btn-" <> dashId.toText
+    , hxSwap_ "outerHTML"
+    ]
+    $ faSprite_ "star" starIconType $ "w-4 h-4 " <> if isStarred then "text-yellow-500" else "text-iconNeutral"
+
+
 dashboardsGet_ :: DashboardsGetD -> Html ()
 dashboardsGet_ dg = do
   unless dg.embedded $ Components.modal_ "newDashboardMdl" "" $ form_
@@ -923,37 +938,45 @@ dashboardsGet_ dg = do
   div_ [id_ "itemsListPage", class_ "mx-auto gap-8 w-full flex flex-col h-full overflow-hidden group/pg"] do
     let getTeams x = mapMaybe (\xx -> find (\t -> t.id == xx) dg.teams) (V.toList x.teams)
 
-    let renderCheckboxCol dash =
-          unless dg.embedded do
-            span_ [class_ "w-2 h-full"] ""
-            input_ [term "aria-label" "Select Dashboard", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "dashboardId", value_ dash.id.toText]
+    let getDashIcon dash = maybe "square-dashed" (\d -> fromMaybe "square-dashed" d.icon) (loadDashboardFromVM dash)
+        getWidgetCount dash = maybe 0 (length . (.widgets)) (loadDashboardFromVM dash)
 
     let renderNameCol dash = do
           let baseUrl = "/p/" <> dg.projectId.toText <> "/dashboards/" <> dash.id.toText
-          a_ [href_ baseUrl, class_ "font-medium text-textStrong hover:text-textBrand"] $ toHtml dash.title
+          span_ [class_ "flex items-center gap-2"] do
+            span_ [class_ "p-1 px-2 bg-fillWeak rounded-md", data_ "tippy-content" "Dashboard icon"] $ faSprite_ (getDashIcon dash) "regular" "w-3 h-3"
+            a_ [href_ baseUrl, class_ "font-medium text-textStrong hover:text-textBrand hover:underline underline-offset-2"] $ toHtml $ if dash.title == "" then "Untitled" else dash.title
+            starButton_ dg.projectId dash.id (isJust dash.starredSince)
 
-    let renderModifiedCol dash = toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" dash.updatedAt
+    let renderModifiedCol dash = span_ [class_ "monospace text-textWeak", data_ "tippy-content" "Last modified date"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" dash.updatedAt
 
     let renderTeamsCol dash = forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-blue mr-1"] $ toHtml team.handle
 
-    let renderWidgetsCol dash = toHtml $ maybe "0" (show . length . (.widgets)) $ loadDashboardFromVM dash
+    let renderTagsCol dash = forM_ (V.toList dash.tags) \tag -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml tag
+
+    let renderWidgetsCol dash = do
+          let count = getWidgetCount dash
+          span_ [class_ "flex items-center gap-2", data_ "tippy-content" $ "There are " <> show count <> " charts/widgets in this dashboard"] do
+            faSprite_ "chart-area" "regular" "w-4 h-4 text-iconNeutral"
+            span_ [class_ "leading-none monospace"] $ toHtml $ show count
 
     let tableCols =
-          [ Table.col "" renderCheckboxCol & Table.withAttrs [class_ "w-8 flex space-x-3 items-center"]
-          , Table.col "Name" renderNameCol & Table.withAttrs [class_ "flex-1 min-w-0"]
-          , Table.col "Modified" renderModifiedCol & Table.withAttrs [class_ "w-36"]
+          [ Table.col "Name" renderNameCol & Table.withAttrs [class_ "min-w-0"]
+          , Table.col "Last Modified" renderModifiedCol & Table.withAttrs [class_ "w-44"]
           , Table.col "Teams" renderTeamsCol & Table.withAttrs [class_ "w-48"]
+          , Table.col "Tags" renderTagsCol & Table.withAttrs [class_ "w-48"]
           , Table.col "Widgets" renderWidgetsCol & Table.withAttrs [class_ "w-24"]
           ]
 
     let table =
           Table
-            { config = def{Table.elemID = "dashboardsTable", Table.showHeader = not dg.embedded, Table.addPadding = not dg.embedded}
+            { config = def{Table.elemID = "dashboardsTable", Table.showHeader = not dg.embedded, Table.addPadding = not dg.embedded, Table.renderAsTable = not dg.embedded, Table.bulkActionsInHeader = if dg.embedded then Nothing else Just 0}
             , columns = tableCols
             , rows = dg.dashboards
             , features =
                 def
                   { Table.rowId = Just \dash -> dash.id.toText
+                  , Table.rowAttrs = Just \_ -> [class_ "group/row hover:bg-fillWeaker"]
                   , Table.bulkActions =
                       if dg.embedded
                         then []
@@ -962,6 +985,7 @@ dashboardsGet_ dg = do
                           , Table.BulkAction{icon = Just "trash", title = "Delete", uri = "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/delete"}
                           ]
                   , Table.search = if dg.embedded then Nothing else Just Table.ClientSide
+                  , Table.zeroState = if dg.embedded then Nothing else Just Table.ZeroState{icon = "chart-area", title = "No dashboards yet", description = "Create your first dashboard to visualize your data", actionText = "Create Dashboard", destination = Left "newDashboardMdl"}
                   }
             }
 
@@ -990,10 +1014,8 @@ dashboardsGetH pid embeddedM teamIdM = do
   appCtx <- ask @AuthContext
   now <- Time.currentTime
   dashboards <- case teamIdM of
-    Just teamId -> do
-      ds <- Dashboards.selectDashboardsByTeam pid teamId
-      pure $ V.fromList ds
-    Nothing -> dbtToEff $ DBT.selectManyByField @Dashboards.DashboardVM [DBT.field| project_id |] pid
+    Just teamId -> V.fromList <$> Dashboards.selectDashboardsByTeam pid teamId
+    Nothing -> Dashboards.selectDashboardsSorted pid
   teams <- dbtToEff $ ManageMembers.getTeams pid
 
   -- Check if we're requesting in embedded mode (for modals, etc.)
@@ -1202,6 +1224,21 @@ dashboardDuplicatePostH pid dashId = do
       addRespHeaders DashboardNoContent
 
 
+dashboardStarPostH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders (Html ()))
+dashboardStarPostH pid dashId = do
+  _ <- Sessions.sessionAndProject pid
+  now <- Time.currentTime
+  mDashboard <- dbtToEff $ DBT.selectOneByField @Dashboards.DashboardVM [DBT.field| id |] (Only dashId)
+  case mDashboard of
+    Nothing -> throwError $ err404{errBody = "Dashboard not found"}
+    Just dashVM -> do
+      let newStarredSince = if isJust dashVM.starredSince then Nothing else Just now
+      _ <- dbtToEff $ DBT.updateFieldsBy @Dashboards.DashboardVM [[DBT.field| starred_since |]] ([DBT.field| id |], dashId) (Only newStarredSince)
+      let msg = if isJust newStarredSince then "Dashboard starred" else "Dashboard unstarred"
+      addSuccessToast msg Nothing
+      addRespHeaders $ starButton_ pid dashId (isJust newStarredSince)
+
+
 -- | Handler for deleting a dashboard.
 -- It verifies the dashboard exists and belongs to the project before deletion.
 -- After deletion, redirects to the dashboard list page.
@@ -1220,7 +1257,7 @@ dashboardDeleteH pid dashId = do
 
 
 data DashboardBulkActionForm = DashboardBulkActionForm
-  { dashboardId :: [Dashboards.DashboardId]
+  { itemId :: [Dashboards.DashboardId]
   , teamHandles :: [UUID.UUID]
   }
   deriving stock (Generic, Show)
@@ -1231,14 +1268,14 @@ dashboardBulkActionPostH :: Projects.ProjectId -> Text -> DashboardBulkActionFor
 dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
   case action of
     "delete" -> do
-      _ <- Dashboards.deleteDashboardsByIds pid $ V.fromList dashboardId
+      _ <- Dashboards.deleteDashboardsByIds pid $ V.fromList itemId
       addSuccessToast "Selected dashboards were deleted successfully" Nothing
     "add_teams" -> do
       teams <- dbtToEff $ ManageMembers.getTeamsById pid (V.fromList teamHandles)
       if V.length teams /= length teamHandles
         then addErrorToast "Some teams not found or don't belong to this project" Nothing
         else
-          Dashboards.addTeamsToDashboards pid (V.fromList dashboardId) (V.fromList teamHandles) >>= \case
+          Dashboards.addTeamsToDashboards pid (V.fromList itemId) (V.fromList teamHandles) >>= \case
             n | n > 0 -> addSuccessToast "Teams added to selected dashboards successfully" Nothing
             _ -> addErrorToast "No dashboards were updated" Nothing
     _ -> addErrorToast "Invalid action" Nothing

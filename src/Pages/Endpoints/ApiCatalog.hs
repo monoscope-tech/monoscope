@@ -87,7 +87,7 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> sortV <> "&request_type=Outgoing", role_ "tab", class_ $ "tab h-auto! " <> if requestType == "Outgoing" then "tab-active text-textStrong" else ""] "Outgoing"
           }
   case skipM of
-    Just _ -> addRespHeaders $ CatalogListRows $ TableRows nextFetchUrl (catalogColumns pid requestType) hostsVM
+    Just _ -> addRespHeaders $ CatalogListRows $ TableRows{nextUrl = nextFetchUrl, columns = catalogColumns pid requestType, rows = hostsVM, emptyState = Nothing}
     _ -> addRespHeaders $ CatalogListPage $ PageCtx bwconf catalogTable
 
 
@@ -247,8 +247,8 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                 }
           }
   case (loadMoreM, searchM) of
-    (Just _, _) -> addRespHeaders $ EndpointsListRows $ TableRows nextFetchUrl (endpointColumns pid) endpReqVM
-    (_, Just _) -> addRespHeaders $ EndpointsListRows $ TableRows nextFetchUrl (endpointColumns pid) endpReqVM
+    (Just _, _) -> addRespHeaders $ EndpointsListRows $ TableRows{nextUrl = nextFetchUrl, columns = endpointColumns pid, rows = endpReqVM, emptyState = Nothing}
+    (_, Just _) -> addRespHeaders $ EndpointsListRows $ TableRows{nextUrl = nextFetchUrl, columns = endpointColumns pid, rows = endpReqVM, emptyState = Nothing}
     _ -> addRespHeaders $ EndpointsListPage $ PageCtx bwconf endpointsTable
 
 
