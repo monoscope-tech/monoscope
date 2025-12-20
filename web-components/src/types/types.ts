@@ -35,7 +35,7 @@ declare global {
     updateMarkAreas: (chartId: string, warningVal: string, incidentVal: string) => void;
     formatNumber: (num: number) => string;
     getUTCOffset: () => string;
-    createTagify: (selector: string, options?: any) => any;
+    createTagify: (selectorOrElement: string | Element, options?: any) => any;
   }
   function updateUrlState(key: string, value: string): void;
 }

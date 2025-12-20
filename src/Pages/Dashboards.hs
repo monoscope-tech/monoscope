@@ -153,7 +153,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     -- Variables section (pushed to the right)
     whenJust dash.variables \variables -> do
       div_ [class_ $ "flex gap-2 flex-wrap " <> if isJust dash.tabs then "ml-auto" else ""] do
-        forM_ variables \var -> fieldset_ [class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg overflow-hidden dash-variable text-sm"] do
+        forM_ variables \var -> fieldset_ [class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg dash-variable text-sm"] do
           legend_ [class_ "px-1 ml-2 text-xs"] $ toHtml $ fromMaybe var.key var.title <> memptyIfFalse (var.required == Just True) " *"
           let whitelist =
                 maybe
@@ -184,52 +184,52 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
-  const tagifyInstances = new Map();
-  document.querySelectorAll('.tagify-select-input').forEach(input => {
-    const tgfy = createTagify(input, {
-      whitelist: JSON.parse(input.dataset.whitelistjson || "[]"),
-      enforceWhitelist: true,
-      tagTextProp: 'name',
-      mode: input.dataset.mode || "",
+  window.addEventListener('DOMContentLoaded', () => {
+    const tagifyInstances = new Map();
+    document.querySelectorAll('.tagify-select-input').forEach(input => {
+      const tgfy = createTagify(input, {
+        whitelist: JSON.parse(input.dataset.whitelistjson || "[]"),
+        enforceWhitelist: true,
+        tagTextProp: 'name',
+        mode: input.dataset.mode || "",
+      });
+
+      const inputKey = input.getAttribute('name') || input.id;
+      tagifyInstances.set(inputKey, tgfy);
+
+      tgfy.on('change', (e) => {
+        const varName = e.detail.tagify.DOM.originalInput.getAttribute('name');
+        const url = new URL(window.location);
+        url.searchParams.set('var-' + varName, e.detail?.tagify?.value[0]?.value);
+        history.pushState({}, '', url);
+        window.dispatchEvent(new Event('update-query'));
+      });
     });
-    
-    const inputKey = input.getAttribute('name') || input.id;
-    tagifyInstances.set(inputKey, tgfy);
 
-    tgfy.on('change', (e)=>{
-      const varName = e.detail.tagify.DOM.originalInput.getAttribute('name');
-      const url = new URL(window.location);
-      url.searchParams.set('var-'+varName, e.detail?.tagify?.value[0]?.value);
-      history.pushState({}, '', url);
-      window.dispatchEvent(new Event('update-query'));
-    })
-    return tgfy
-  });
+    window.addEventListener('update-query', async (e) => {
+      document.querySelectorAll('.tagify-select-input[data-reload_on_change="true"]').forEach(async input => {
+        const { query_sql, query } = input.dataset;
+        if (!query_sql && !query) return;
 
-  window.addEventListener('update-query', async (e) => {
-    document.querySelectorAll('.tagify-select-input[data-reload_on_change="true"]').forEach(async input => {
-      const { query_sql, query } = input.dataset;
-      if (!query_sql && !query) return;
-      
-      try {
-        const tagify = tagifyInstances.get(input.getAttribute('name') || input.id);
-        tagify?.loading(true);
-        
-        const params = new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)), 
-          query, query_sql, data_type: 'text' });
-        
-        const { data_text } = await fetch(`/chart_data?$${params}`).then(res => res.json());
-        
-        if (tagify) {
-          tagify.settings.whitelist = data_text.map(i => i.length === 1 ? i[0] : { value: i[0], name: i[1] });
-          tagify.loading(false);
+        try {
+          const tagify = tagifyInstances.get(input.getAttribute('name') || input.id);
+          tagify?.loading(true);
+
+          const params = new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)),
+            query, query_sql, data_type: 'text' });
+
+          const { data_text } = await fetch(`/chart_data?$${params}`).then(res => res.json());
+
+          if (tagify) {
+            tagify.settings.whitelist = data_text.map(i => i.length === 1 ? i[0] : { value: i[0], name: i[1] });
+            tagify.loading(false);
+          }
+        } catch (e) {
+          console.error(`Error fetching data for ${input.name}:`, e);
         }
-      } catch (e) {
-        console.error(`Error fetching data for ${input.name}:`, e);
-      }
+      });
     });
   });
-
     |]
   section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-5 pb-6 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-20 group/pg", id_ "dashboardPage"] do
     let activeTabIdx = fromMaybe 0 $ readMaybe . toString =<< join (L.lookup "tab" allParams)

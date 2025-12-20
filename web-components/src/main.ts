@@ -225,7 +225,7 @@ window.getVariable = (key: string) => {
   return params.get(`var-${key}`) || '';
 };
 
-window.createTagify = (selector: string, options: any = {}) => {
+window.createTagify = (selectorOrElement: string | Element, options: any = {}) => {
   const defaultOptions = {
     skipInvalid: true,
     templates: {
@@ -243,7 +243,8 @@ window.createTagify = (selector: string, options: any = {}) => {
       searchKeys: ['value', 'name'],
     },
   };
-  return new (window as any).Tagify(document.querySelector(selector), { ...defaultOptions, ...options });
+  const element = typeof selectorOrElement === 'string' ? document.querySelector(selectorOrElement) : selectorOrElement;
+  return new (window as any).Tagify(element, { ...defaultOptions, ...options });
 };
 
 function tagifyTemplateFunc(tagData: any) {
