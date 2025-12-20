@@ -241,5 +241,8 @@ selectDashboardsSortedBy pid orderBy = do
     defaultOrder = "ORDER BY starred_since DESC NULLS LAST, updated_at DESC"
     -- Reject if contains dangerous SQL chars; only allow alphanumeric, underscore, space, comma, and ORDER BY keywords
     isSafe = T.all (\c -> c `elem` ("_-, " :: String) || isAlphaNum c) . T.filter (/= ' ')
-    safeOrder = if orderBy == "" || not (isSafe orderBy) then defaultOrder else orderBy
+    -- Always put starred items first, then apply the provided sort
+    safeOrder
+      | orderBy == "" || not (isSafe orderBy) = defaultOrder
+      | otherwise = T.replace "ORDER BY " "ORDER BY starred_since DESC NULLS LAST, " orderBy
     q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE project_id = ? |] <> safeOrder

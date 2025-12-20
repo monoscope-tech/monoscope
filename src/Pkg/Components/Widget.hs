@@ -555,7 +555,7 @@ renderChart widget = do
                 whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
                 toHtml $ maybeToMonoid widget.title
                 Utils.faSprite_ "circle-info" "regular" "w-4 h-4 text-iconNeutral"
-          unless (widget.wType == WTStat) $ div_ [class_ "h-0 max-h-full overflow-hidden w-full flex-1 min-h-0 "] do
+          unless (widget.wType == WTStat) $ div_ [class_ "h-0 max-h-full overflow-hidden w-full flex-1 min-h-0 p-2"] do
             div_ [class_ "h-full w-full", id_ $ maybeToMonoid widget.id] ""
             let theme = fromMaybe "default" widget.theme
             let echartOpt = decodeUtf8 $ AE.encode $ widgetToECharts widget
