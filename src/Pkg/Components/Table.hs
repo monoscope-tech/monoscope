@@ -344,8 +344,7 @@ renderTable tbl =
 renderRows :: Table a -> Html ()
 renderRows tbl =
   if tbl.config.renderAsTable
-    then div_ [class_ "overflow-hidden rounded-lg border border-strokeWeak"] do
-      table_ [class_ tbl.config.tableClasses] do
+    then table_ [class_ tbl.config.tableClasses] do
         when tbl.config.showHeader
           $ thead_ do
             tr_ do
