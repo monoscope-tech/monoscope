@@ -345,52 +345,52 @@ renderRows :: Table a -> Html ()
 renderRows tbl =
   if tbl.config.renderAsTable
     then table_ [class_ tbl.config.tableClasses] do
-        when tbl.config.showHeader
-          $ thead_ do
-            tr_ do
-              when (isJust tbl.features.rowId)
-                $ th_ [class_ $ tbl.config.thClasses <> " w-8"]
-                $ input_
-                  [ term "aria-label" "Select All"
-                  , type_ "checkbox"
-                  , class_ "checkbox h-6 w-6 checked:checkbox-primary"
-                  , [__| on click set .bulkactionItemCheckbox.checked to my.checked |]
-                  ]
-              forM_ (zip [0 ..] tbl.columns) \(idx, c) -> do
-                let baseAttrs = [class_ $ tbl.config.thClasses <> " " <> fromMaybe "" c.align]
-                    sortAttrs = case (c.sortField, tbl.features.sortableColumns) of
-                      (Just field, Just cfg) ->
-                        [ hxGet_ $ toggleSortUrl cfg field
-                        , hxTarget_ $ "#" <> cfg.targetId
-                        , hxSelect_ $ "#" <> cfg.targetId
-                        , hxPushUrl_ "true"
-                        , hxSwap_ "outerHTML"
-                        , class_ "cursor-pointer hover:bg-fillWeak"
-                        ]
-                      _ -> []
-                    isSorted = case (c.sortField, tbl.features.sortableColumns) of
-                      (Just field, Just cfg) -> ("+" <> field == cfg.currentSort) || ("-" <> field == cfg.currentSort)
-                      _ -> False
-                    sortOrder = case (c.sortField, tbl.features.sortableColumns) of
-                      (Just field, Just cfg) | "-" <> field == cfg.currentSort -> Just Desc
-                      (Just field, Just cfg) | "+" <> field == cfg.currentSort -> Just Asc
-                      _ -> Nothing
-                th_ (c.attrs <> baseAttrs <> sortAttrs) do
-                  span_ [class_ "flex items-center gap-2"] do
-                    toHtml c.name
-                    when isSorted $ case sortOrder of
-                      Just Asc -> faSprite_ "arrow-up" "regular" "w-3 h-3"
-                      Just Desc -> faSprite_ "arrow-down" "regular" "w-3 h-3"
-                      Nothing -> pass
-                    when (isJust c.sortField && isJust tbl.features.sortableColumns && not isSorted) $ faSprite_ "arrows-up-down" "regular" "w-3 h-3 opacity-30"
-                    when (tbl.config.bulkActionsInHeader == Just idx) do
-                      renderHeaderBulkActions tbl.features.bulkActions
-                      whenJust tbl.features.tableHeaderActions renderHeaderTableActions
-        tbody_ [id_ $ tbl.config.elemID <> "_tbody"] do
-          V.mapM_ (renderTableRow tbl) tbl.rows
-          -- Pagination inside tbody for table mode
-          whenJust tbl.features.pagination \(url, trigger) ->
-            tr_ [] $ td_ [colspan_ $ show $ columnCount tbl.columns tbl.features.rowId] $ renderPaginationLink (Just "closest tr") url trigger
+      when tbl.config.showHeader
+        $ thead_ do
+          tr_ do
+            when (isJust tbl.features.rowId)
+              $ th_ [class_ $ tbl.config.thClasses <> " w-8"]
+              $ input_
+                [ term "aria-label" "Select All"
+                , type_ "checkbox"
+                , class_ "checkbox h-6 w-6 checked:checkbox-primary"
+                , [__| on click set .bulkactionItemCheckbox.checked to my.checked |]
+                ]
+            forM_ (zip [0 ..] tbl.columns) \(idx, c) -> do
+              let baseAttrs = [class_ $ tbl.config.thClasses <> " " <> fromMaybe "" c.align]
+                  sortAttrs = case (c.sortField, tbl.features.sortableColumns) of
+                    (Just field, Just cfg) ->
+                      [ hxGet_ $ toggleSortUrl cfg field
+                      , hxTarget_ $ "#" <> cfg.targetId
+                      , hxSelect_ $ "#" <> cfg.targetId
+                      , hxPushUrl_ "true"
+                      , hxSwap_ "outerHTML"
+                      , class_ "cursor-pointer hover:bg-fillWeak"
+                      ]
+                    _ -> []
+                  isSorted = case (c.sortField, tbl.features.sortableColumns) of
+                    (Just field, Just cfg) -> ("+" <> field == cfg.currentSort) || ("-" <> field == cfg.currentSort)
+                    _ -> False
+                  sortOrder = case (c.sortField, tbl.features.sortableColumns) of
+                    (Just field, Just cfg) | "-" <> field == cfg.currentSort -> Just Desc
+                    (Just field, Just cfg) | "+" <> field == cfg.currentSort -> Just Asc
+                    _ -> Nothing
+              th_ (c.attrs <> baseAttrs <> sortAttrs) do
+                span_ [class_ "flex items-center gap-2"] do
+                  toHtml c.name
+                  when isSorted $ case sortOrder of
+                    Just Asc -> faSprite_ "arrow-up" "regular" "w-3 h-3"
+                    Just Desc -> faSprite_ "arrow-down" "regular" "w-3 h-3"
+                    Nothing -> pass
+                  when (isJust c.sortField && isJust tbl.features.sortableColumns && not isSorted) $ faSprite_ "arrows-up-down" "regular" "w-3 h-3 opacity-30"
+                  when (tbl.config.bulkActionsInHeader == Just idx) do
+                    renderHeaderBulkActions tbl.features.bulkActions
+                    whenJust tbl.features.tableHeaderActions renderHeaderTableActions
+      tbody_ [id_ $ tbl.config.elemID <> "_tbody"] do
+        V.mapM_ (renderTableRow tbl) tbl.rows
+        -- Pagination inside tbody for table mode
+        whenJust tbl.features.pagination \(url, trigger) ->
+          tr_ [] $ td_ [colspan_ $ show $ columnCount tbl.columns tbl.features.rowId] $ renderPaginationLink (Just "closest tr") url trigger
     else V.mapM_ (renderListRow tbl) tbl.rows
 
 
