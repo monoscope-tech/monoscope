@@ -44,13 +44,8 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
 
   currTime <- Time.currentTime
 
-  let baseUrl = "/p/" <> pid.toText <> "/api_catalog?request_type=" <> requestType
-      currentURL = baseUrl <> "&sort=" <> currentSort
-      nextFetchUrl =
-        if V.length hostsAndEvents < 20
-          then Nothing
-          else Just $ currentURL <> "&skip=" <> maybe "20" (\x -> show $ 20 + x) skipM
-  let hostsVM = V.map (\host -> HostEventsVM pid host filterV requestType) hostsAndEvents
+  let baseUrl = "/p/" <> pid.toText <> "/api_catalog?request_type=" <> requestType <> "&sort=" <> currentSort
+      hostsVM = V.map (\host -> HostEventsVM pid host filterV requestType) hostsAndEvents
       tableActions =
         TableHeaderActions
           { baseUrl
@@ -75,7 +70,7 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
                 , bulkActions = [BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/archive"}]
                 , search = Just ClientSide
                 , tableHeaderActions = Just tableActions
-                , pagination = (,"both") <$> nextFetchUrl
+                , pagination = Nothing -- TODO: Add proper pagination
                 , zeroState =
                     Just
                       $ ZeroState
@@ -99,7 +94,7 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
               a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> currentSort <> "&request_type=Outgoing", role_ "tab", class_ $ "tab h-auto! " <> if requestType == "Outgoing" then "tab-active text-textStrong" else ""] "Outgoing"
           }
   case skipM of
-    Just _ -> addRespHeaders $ CatalogListRows $ TableRows{nextUrl = nextFetchUrl, columns = catalogColumns pid requestType, rows = hostsVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(HostEventsVM _ he _ _) -> he.host, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]}
+    Just _ -> addRespHeaders $ CatalogListRows $ TableRows{columns = catalogColumns pid requestType, rows = hostsVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(HostEventsVM _ he _ _) -> he.host, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], pagination = Nothing}
     _ -> addRespHeaders $ CatalogListPage $ PageCtx bwconf catalogTable
 
 
@@ -195,8 +190,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
 
   let requestType = fromMaybe "Incoming" requestTypeM
-      baseUrl = [PyF.fmt|/p/{pid.toText}/endpoints?filter={currentFilterTab}&request_type={requestType}&host={host}|]
-      currentURL = baseUrl <> "&sort=" <> currentSort
+      baseUrl = [PyF.fmt|/p/{pid.toText}/endpoints?filter={currentFilterTab}&request_type={requestType}&host={host}&sort={currentSort}|]
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
@@ -222,10 +216,6 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
 
   currTime <- Time.currentTime
   let endpReqVM = V.map (EnpReqStatsVM False currTime) endpointStats
-      nextFetchUrl =
-        if V.length endpointStats < 30
-          then Nothing
-          else Just $ currentURL <> "&page=" <> show (page + 1) <> "&load_more=true"
       tableActions =
         TableHeaderActions
           { baseUrl
@@ -250,7 +240,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                 , bulkActions = [BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/endpoints/bulk_action/archive"}]
                 , search = Just (ServerSide baseUrl)
                 , tableHeaderActions = Just tableActions
-                , pagination = (,"both") <$> nextFetchUrl
+                , pagination = Nothing -- TODO: Add proper pagination
                 , zeroState =
                     Just
                       $ ZeroState
@@ -268,8 +258,8 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
   let endpRowId = Just \(EnpReqStatsVM _ _ enp) -> enp.endpointHash
       endpRowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
   case (loadMoreM, searchM) of
-    (Just _, _) -> addRespHeaders $ EndpointsListRows $ TableRows{nextUrl = nextFetchUrl, columns = endpointColumns pid, rows = endpReqVM, emptyState = Nothing, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs}
-    (_, Just _) -> addRespHeaders $ EndpointsListRows $ TableRows{nextUrl = nextFetchUrl, columns = endpointColumns pid, rows = endpReqVM, emptyState = Nothing, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs}
+    (Just _, _) -> addRespHeaders $ EndpointsListRows $ TableRows{columns = endpointColumns pid, rows = endpReqVM, emptyState = Nothing, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs, pagination = Nothing}
+    (_, Just _) -> addRespHeaders $ EndpointsListRows $ TableRows{columns = endpointColumns pid, rows = endpReqVM, emptyState = Nothing, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs, pagination = Nothing}
     _ -> addRespHeaders $ EndpointsListPage $ PageCtx bwconf endpointsTable
 
 

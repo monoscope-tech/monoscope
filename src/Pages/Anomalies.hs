@@ -45,7 +45,7 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users (User (id))
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, renderRowWithColumns, withAttrs)
+import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, renderRowWithColumns, withAttrs)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
@@ -154,11 +154,12 @@ anomalyListGetH
   -> Maybe Text
   -> Maybe Text
   -> Maybe Text
+  -> Maybe Text
   -> Maybe Endpoints.EndpointId
   -> Maybe Text
   -> Maybe Text
   -> ATAuthCtx (RespHeaders AnomalyListGet)
-anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRequestM hxBoostedM = do
+anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpointM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   let (ackd, archived, currentFilterTab) = case filterTM of
@@ -167,26 +168,25 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
         Just "Archived" -> (False, True, "Archived")
         _ -> (False, False, "Inbox")
 
-  -- let fLimit = 10
   let filterV = fromMaybe "14d" timeFilter
-
-  let pageInt = maybe 0 (Unsafe.read . toString) pageM
-  let currentSort = fromMaybe "-created_at" sortM
+      pageInt = maybe 0 (Unsafe.read . toString) pageM
+      perPage = maybe 25 (Unsafe.read . toString) perPageM
+      currentSort = fromMaybe "-created_at" sortM
 
   freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
   currTime <- liftIO getCurrentTime
 
-  let fLimit = 10
-  issues <- dbtToEff $ Issues.selectIssues pid Nothing (Just ackd) (Just archived) fLimit (pageInt * fLimit) Nothing (Just currentSort)
+  (issues, totalCount) <- dbtToEff $ Issues.selectIssues pid Nothing (Just ackd) (Just archived) perPage (pageInt * perPage) Nothing (Just currentSort)
 
-  let baseUrl = "/p/" <> pid.toText <> "/anomalies?filter=" <> currentFilterTab
-      currentURL = baseUrl <> "&sort=" <> currentSort
-      nextFetchUrl = case layoutM of
-        Just "slider" -> Nothing
-        _ ->
-          if V.length issues < fLimit
-            then Nothing
-            else Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)
+  let baseUrl = "/p/" <> pid.toText <> "/anomalies?filter=" <> currentFilterTab <> "&sort=" <> currentSort
+      paginationConfig =
+        Pagination
+          { currentPage = pageInt
+          , perPage = perPage
+          , totalCount = totalCount
+          , baseUrl = baseUrl
+          , targetId = "anomalyListContainer"
+          }
   let issuesVM = V.map (IssueVM False False currTime filterV) issues
       tableActions =
         TableHeaderActions
@@ -218,7 +218,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
                     ]
                 , search = Just ClientSide
                 , tableHeaderActions = Just tableActions
-                , pagination = (,"both") <$> nextFetchUrl
+                , pagination = if totalCount > 0 then Just paginationConfig else Nothing
                 , zeroState =
                     Just
                       $ ZeroState
@@ -243,7 +243,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
                 $ toHtml
                 $ TabFilter
                   { current = currentFilterTab
-                  , currentURL
+                  , currentURL = baseUrl
                   , clientSide = False
                   , options =
                       [ TabFilterOpt "Inbox" Nothing Nothing
@@ -254,7 +254,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM loadM endpointM hxRe
           }
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
     (Just "slider", Just "true", _, _) -> ALSlider currTime pid endpointM (Just $ V.map (IssueVM True False currTime filterV) issues)
-    (_, _, _, Just "true") -> ALRows $ TableRows{nextUrl = nextFetchUrl, columns = issueColumns pid, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(IssueVM _ _ _ _ issue) -> Issues.issueIdText issue.id, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]}
+    (_, _, _, Just "true") -> ALRows $ TableRows{columns = issueColumns pid, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(IssueVM _ _ _ _ issue) -> Issues.issueIdText issue.id, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], pagination = if totalCount > 0 then Just paginationConfig else Nothing}
     _ -> ALPage $ PageCtx bwconf issuesTable
 
 

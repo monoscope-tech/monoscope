@@ -77,7 +77,7 @@ teamAlertsGetH pid teamId = do
   currTime <- Time.currentTime
   let alerts' = V.map (toUnifiedMonitorItem pid currTime) alerts
 
-  addRespHeaders $ TableRows{nextUrl = Nothing, columns = [], rows = alerts', emptyState = Just $ simpleZeroState "bell-slash" "No alerts linked to this team", renderAsTable = False, rowId = Nothing, rowAttrs = Nothing}
+  addRespHeaders $ TableRows{columns = [], rows = alerts', emptyState = Just $ simpleZeroState "bell-slash" "No alerts linked to this team", renderAsTable = False, rowId = Nothing, rowAttrs = Nothing, pagination = Nothing}
 
 
 -- | Unified handler for monitors endpoint showing both alerts and multi-step monitors

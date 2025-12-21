@@ -15,6 +15,8 @@ module Pkg.Components.Table (
   SortableConfig (..),
   ZeroState (..),
   SimpleZeroState (..),
+  -- Pagination
+  Pagination (..),
   -- Header actions (sort/filter dropdowns in header)
   TableHeaderActions (..),
   FilterMenu (..),
@@ -71,16 +73,16 @@ data Table a = Table
   }
 
 
--- TableRows for pagination - only renders rows + pagination link
+-- TableRows for pagination - renders rows + pagination footer
 type role TableRows nominal
 data TableRows a = TableRows
-  { nextUrl :: Maybe Text
-  , columns :: [Column a]
+  { columns :: [Column a]
   , rows :: V.Vector a
   , emptyState :: Maybe SimpleZeroState
   , renderAsTable :: Bool
   , rowId :: Maybe (a -> Text)
   , rowAttrs :: Maybe (a -> [Attribute])
+  , pagination :: Maybe Pagination
   }
 
 
@@ -89,6 +91,17 @@ data SimpleZeroState = SimpleZeroState
   { icon :: Text
   , message :: Text
   }
+
+
+-- Pagination configuration for table footer
+data Pagination = Pagination
+  { currentPage :: Int -- 0-indexed
+  , perPage :: Int -- 25, 50, or 100
+  , totalCount :: Int -- Total items from COUNT(*) OVER()
+  , baseUrl :: Text -- URL without page/per_page params
+  , targetId :: Text -- HTMX target container id
+  }
+  deriving stock (Eq, Show)
 
 
 data SearchMode = ClientSide | ServerSide Text
@@ -105,7 +118,7 @@ data Features a = Features
   , sort :: Maybe SortConfig
   , sortableColumns :: Maybe SortableConfig -- HTMX-powered column sorting
   , tableHeaderActions :: Maybe TableHeaderActions -- Sort/filter dropdowns in header
-  , pagination :: Maybe (Text, Text) -- (nextUrl, trigger: "click" | "intersect" | "both")
+  , pagination :: Maybe Pagination -- Page-based pagination with per-page selector
   , zeroState :: Maybe ZeroState
   , header :: Maybe (Html ())
   }
@@ -279,15 +292,14 @@ renderTableRows :: TableRows a -> Html ()
 renderTableRows tr
   | V.null tr.rows = whenJust tr.emptyState renderSimpleZeroState
   | tr.renderAsTable = do
-      let colCount = columnCount tr.columns tr.rowId
-          getRowAttrs row = maybe [] ($ row) tr.rowAttrs
+      let getRowAttrs row = maybe [] ($ row) tr.rowAttrs
       V.forM_ tr.rows \row -> tr_ (getRowAttrs row) do
         whenJust tr.rowId \getId -> td_ [class_ "w-8 align-top pt-4"] $ input_ [term "aria-label" "Select Item", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "itemId", value_ $ getId row]
         forM_ tr.columns \c -> td_ c.attrs $ c.render row
-      whenJust tr.nextUrl \url -> tr_ [] $ td_ [colspan_ $ show colCount] $ renderPaginationLink (Just "closest tr") url "both"
+      whenJust tr.pagination renderPaginationFooter
   | otherwise = do
       V.forM_ tr.rows \row -> div_ [class_ "flex gap-8 items-start itemsListItem"] $ forM_ tr.columns \c -> div_ c.attrs $ c.render row
-      whenJust tr.nextUrl \url -> renderPaginationLink Nothing url "both"
+      whenJust tr.pagination renderPaginationFooter
 
 
 -- Tab Filter ToHtml
@@ -324,7 +336,7 @@ instance ToHtml TabFilter where
 
 renderTable :: Table a -> Html ()
 renderTable tbl =
-  let tableContent = div_ [class_ tbl.config.containerClasses, id_ $ tbl.config.elemID <> "_page"] do
+  let tableContent = div_ [class_ $ tbl.config.containerClasses <> " pb-24", id_ $ tbl.config.elemID <> "_page"] do
         whenJust tbl.features.search renderSearch
         whenJust tbl.features.header id
         div_ [class_ $ "grid overflow-hidden my-0 group/grid" <> if tbl.config.noSurface then "" else " surface-raised", id_ $ tbl.config.elemID <> "_grid"] do
@@ -335,8 +347,8 @@ renderTable tbl =
               whenJust tbl.features.search \_ -> span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
               div_ [id_ "rowsContainer", class_ "divide-y"] do
                 renderRows tbl
-                -- For list mode, pagination is outside; for table mode, it's inside tbody
-                unless tbl.config.renderAsTable $ whenJust tbl.features.pagination $ uncurry (renderPaginationLink Nothing)
+        -- Pagination footer outside the raised surface
+        whenJust tbl.features.pagination renderPaginationFooter
       paddedContent = if tbl.config.addPadding then div_ [class_ "px-6 pt-4 pb-2"] tableContent else tableContent
    in case tbl.config.containerId of
         Just cid -> div_ [class_ "w-full", id_ cid] paddedContent
@@ -390,9 +402,6 @@ renderRows tbl =
                     whenJust tbl.features.tableHeaderActions renderHeaderTableActions
       tbody_ [id_ $ tbl.config.elemID <> "_tbody"] do
         V.mapM_ (renderTableRow tbl) tbl.rows
-        -- Pagination inside tbody for table mode
-        whenJust tbl.features.pagination \(url, trigger) ->
-          tr_ [] $ td_ [colspan_ $ show $ columnCount tbl.columns tbl.features.rowId] $ renderPaginationLink (Just "closest tr") url trigger
     else V.mapM_ (renderListRow tbl) tbl.rows
 
 
@@ -679,21 +688,24 @@ renderSortMenu sortCfg = do
     ""
 
 
--- Helper function for rendering pagination link. Target is optional (used for table mode to target "closest tr")
-renderPaginationLink :: Maybe Text -> Text -> Text -> Html ()
-renderPaginationLink targetM url trigger =
-  a_
-    ( [ class_ "cursor-pointer flex justify-center items-center p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center min-h-[2.5rem]"
-      , hxTrigger_ $ case trigger of "click" -> "click"; "intersect" -> "intersect once"; _ -> "click, intersect once"
-      , hxSwap_ "outerHTML"
-      , hxGet_ url
-      , hxIndicator_ "#rowsIndicator"
-      ]
-        ++ maybeToList (hxTarget_ <$> targetM)
-    )
-    do
-      span_ [class_ "inline-block"] "Load more"
-      span_ [id_ "rowsIndicator", class_ "ml-2 htmx-indicator loading loading-dots loading-md inline-block"] ""
+-- Pagination footer with per-page selector and navigation
+renderPaginationFooter :: Pagination -> Html ()
+renderPaginationFooter pg = div_ [class_ "flex items-center justify-between px-6 py-3"] do
+  div_ [class_ "flex items-center gap-2"] do
+    div_ [class_ "flex rounded-md border border-strokeWeak overflow-hidden"] $ forM_ [25, 50, 100] \pp ->
+      button_ ([class_ $ "cursor-pointer px-3 py-1.5 text-sm font-medium transition-colors " <> if pp == pg.perPage then "bg-fillStrong text-textInverse-strong" else "bg-bgRaised text-textWeak hover:bg-fillWeak", type_ "button"] <> if pp == pg.perPage then [] else pgAttrs (mkUrl 0 pp)) $ toHtml (show pp)
+    span_ [class_ "text-sm text-textWeak ml-2"] "Items per page"
+  div_ [class_ "flex items-center gap-4"] do
+    span_ [class_ "text-sm text-textWeak tabular-nums"] $ toHtml $ show startItem <> "-" <> show endItem <> " of " <> show pg.totalCount
+    div_ [class_ "flex gap-1"] do
+      navBtn "chevron-left" (pg.currentPage > 0) (mkUrl (pg.currentPage - 1) pg.perPage)
+      navBtn "chevron-right" (endItem < pg.totalCount) (mkUrl (pg.currentPage + 1) pg.perPage)
+  where
+    startItem = pg.currentPage * pg.perPage + 1
+    endItem = min ((pg.currentPage + 1) * pg.perPage) pg.totalCount
+    mkUrl page perPage = pg.baseUrl <> (if T.isInfixOf "?" pg.baseUrl then "&" else "?") <> "page=" <> show page <> "&per_page=" <> show perPage
+    pgAttrs url = [hxGet_ url, hxTarget_ $ "#" <> pg.targetId, hxSelect_ $ "#" <> pg.targetId, hxSwap_ "outerHTML", hxPushUrl_ "true"]
+    navBtn icon enabled url = button_ ([class_ $ "cursor-pointer p-1.5 rounded border border-strokeWeak " <> if enabled then "hover:bg-fillWeak cursor-pointer" else "opacity-40 cursor-not-allowed", type_ "button"] <> if enabled then pgAttrs url else []) $ faSprite_ icon "regular" "w-4 h-4"
 
 
 renderZeroState :: ZeroState -> Html ()
@@ -770,11 +782,6 @@ sortFieldsToSQL :: [SortField] -> Text
 sortFieldsToSQL sortFields
   | null sortFields = ""
   | otherwise = "ORDER BY " <> T.intercalate ", " (map (.toSql) sortFields)
-
-
--- Calculate total column count including checkbox column for bulk actions
-columnCount :: [Column a] -> Maybe b -> Int
-columnCount columns rowIdM = length columns + if isJust rowIdM then 1 else 0
 
 
 -- Generate SQL filter clause for a list of values

@@ -308,14 +308,16 @@ selectIssueById :: IssueId -> DBT IO (Maybe Issue)
 selectIssueById = selectOneByField [field| id |] . Only
 
 
--- | Select issues with filters
-selectIssues :: Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> DBT IO (V.Vector IssueL)
-selectIssues pid typeM isAcknowledged isArchived limit offset timeRangeM sortM = query (Query $ encodeUtf8 q) params
+-- | Select issues with filters, returns issues and total count for pagination
+selectIssues :: Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> DBT IO (V.Vector IssueL, Int)
+selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM = do
+  issues <- query (Query $ encodeUtf8 q) (pid, limit, offset)
+  countResult <- query (Query $ encodeUtf8 countQ) (Only pid)
+  pure (issues, maybe 0 (\(Only c) -> c) $ V.headM countResult)
   where
-    timefilter = case timeRangeM of
-      Just (st, end) -> " AND created_at >= '" <> formatUTC st <> "' AND created_at <= '" <> formatUTC end <> "'"
-      _ -> ""
-    ackF = ""
+    timefilter = maybe "" (\(st, end) -> " AND created_at >= '" <> formatUTC st <> "' AND created_at <= '" <> formatUTC end <> "'") timeRangeM
+    ackF = maybe "" (\ack -> if ack then " AND acknowledged_at IS NOT NULL" else " AND acknowledged_at IS NULL") isAcknowledged
+    archF = maybe "" (\arch -> if arch then " AND archived_at IS NOT NULL" else " AND archived_at IS NULL") isArchived
     orderBy = case sortM of
       Just "-created_at" -> "ORDER BY created_at DESC"
       Just "+created_at" -> "ORDER BY created_at ASC"
@@ -326,19 +328,12 @@ selectIssues pid typeM isAcknowledged isArchived limit offset timeRangeM sortM =
       _ -> "ORDER BY critical DESC, created_at DESC"
     q =
       [text|
-      SELECT
-        id, created_at, updated_at, project_id, issue_type::text, endpoint_hash,
-        acknowledged_at, acknowledged_by, archived_at, title, service, critical,
-        CASE WHEN critical THEN 'critical' ELSE 'info' END,
-        affected_requests, affected_clients, NULL::double precision,
-        recommended_action, migration_complexity, issue_data, request_payloads,
-        response_payloads, NULL::timestamp with time zone, NULL::int, 0::bigint, updated_at
-      FROM apis.issues
-      WHERE project_id = ? $timefilter $ackF
-      $orderBy
-      LIMIT ? OFFSET ?
+      SELECT id, created_at, updated_at, project_id, issue_type::text, endpoint_hash, acknowledged_at, acknowledged_by, archived_at, title, service, critical,
+        CASE WHEN critical THEN 'critical' ELSE 'info' END, affected_requests, affected_clients, NULL::double precision,
+        recommended_action, migration_complexity, issue_data, request_payloads, response_payloads, NULL::timestamp with time zone, NULL::int, 0::bigint, updated_at
+      FROM apis.issues WHERE project_id = ? $timefilter $ackF $archF $orderBy LIMIT ? OFFSET ?
     |]
-    params = (pid, limit, offset)
+    countQ = [text|SELECT COUNT(*) FROM apis.issues WHERE project_id = ? $timefilter $ackF $archF|]
 
 
 -- | Find open issue for endpoint
