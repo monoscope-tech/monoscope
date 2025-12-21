@@ -122,6 +122,7 @@ data Config = Config
   , renderAsTable :: Bool -- True for table mode, False for list mode
   , addPadding :: Bool -- When True, wraps table in div with px-6 pt-4 pb-2 padding
   , bulkActionsInHeader :: Maybe Int -- Column index (0-based) to place bulk actions in header; Nothing uses toolbar
+  , noSurface :: Bool -- When True, removes surface-raised class from grid wrapper (for embedded tables)
   }
 
 
@@ -253,6 +254,7 @@ instance Default Config where
       , renderAsTable = False
       , addPadding = False
       , bulkActionsInHeader = Nothing
+      , noSurface = False
       }
 
 
@@ -325,7 +327,7 @@ renderTable tbl =
   let tableContent = div_ [class_ tbl.config.containerClasses, id_ $ tbl.config.elemID <> "_page"] do
         whenJust tbl.features.search renderSearch
         whenJust tbl.features.header id
-        div_ [class_ "grid surface-raised overflow-hidden my-0 group/grid", id_ $ tbl.config.elemID <> "_grid"] do
+        div_ [class_ $ "grid overflow-hidden my-0 group/grid" <> if tbl.config.noSurface then "" else " surface-raised", id_ $ tbl.config.elemID <> "_grid"] do
           form_ [class_ "flex flex-col divide-y w-full", id_ tbl.config.elemID, onkeydown_ "return event.key != 'Enter';"] do
             when ((isJust tbl.features.rowId || isJust tbl.features.sort) && isNothing tbl.config.bulkActionsInHeader) $ renderToolbar tbl
             when (V.null tbl.rows) $ whenJust tbl.features.zeroState renderZeroState

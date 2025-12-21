@@ -814,7 +814,8 @@ newWidget_ pid currentRange = widgetViewerEditor_ pid Nothing currentRange Nothi
 data DashboardsGetD = DashboardsGetD
   { dashboards :: V.Vector Dashboards.DashboardVM
   , projectId :: Projects.ProjectId
-  , embedded :: Bool -- Whether to render in embedded mode (for modals)
+  , embedded :: Bool -- Whether to render in embedded mode (for modals, no table headers)
+  , hideActions :: Bool -- Whether to hide bulk actions (for team views)
   , teams :: V.Vector ManageMembers.Team
   , tableActions :: Maybe Table.TableHeaderActions
   , filters :: DashboardFilters
@@ -992,23 +993,24 @@ dashboardsGet_ dg = do
           , Table.col "Widgets" renderWidgetsCol & Table.withAttrs [class_ "w-24"]
           ]
 
-    let table =
+    let noBulkActions = dg.embedded || dg.hideActions
+        table =
           Table
-            { config = def{Table.elemID = "dashboardsTable", Table.showHeader = not dg.embedded, Table.addPadding = not dg.embedded, Table.renderAsTable = not dg.embedded, Table.bulkActionsInHeader = if dg.embedded then Nothing else Just 0}
+            { config = def{Table.elemID = "dashboardsTable", Table.showHeader = not dg.embedded, Table.addPadding = not dg.embedded && not dg.hideActions, Table.renderAsTable = not dg.embedded, Table.bulkActionsInHeader = if noBulkActions then Nothing else Just 0, Table.noSurface = dg.hideActions}
             , columns = tableCols
             , rows = dg.dashboards
             , features =
                 def
-                  { Table.rowId = Just \dash -> dash.id.toText
+                  { Table.rowId = if noBulkActions then Nothing else Just \dash -> dash.id.toText
                   , Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
                   , Table.bulkActions =
-                      if dg.embedded
+                      if noBulkActions
                         then []
                         else
                           [ Table.BulkAction{icon = Just "plus", title = "Add teams", uri = "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/add_teams"}
                           , Table.BulkAction{icon = Just "trash", title = "Delete", uri = "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/delete"}
                           ]
-                  , Table.search = if dg.embedded then Nothing else Just Table.ClientSide
+                  , Table.search = if dg.embedded || dg.hideActions then Nothing else Just Table.ClientSide
                   , Table.tableHeaderActions = dg.tableActions
                   , Table.header = if dg.embedded || null dg.filters.tag then Nothing else Just $ activeFilters_ dg.projectId baseUrl dg.filters
                   , Table.zeroState = if dg.embedded then Nothing else Just Table.ZeroState{icon = "chart-area", title = "No dashboards yet", description = "Create your first dashboard to visualize your data", actionText = "Create Dashboard", destination = Left "newDashboardMdl"}
@@ -1090,10 +1092,11 @@ dashboardsGetH pid sortM embeddedM teamIdM filters = do
 
   -- Check if we're requesting in embedded mode (for modals, etc.)
   let embedded = embeddedM == Just "true" || embeddedM == Just "1" || embeddedM == Just "yes"
+      isTeamView = isJust teamIdM
 
-  if embedded || isJust teamIdM
-    then -- For embedded mode, use a minimal BWConfig that will still work with ToHtml instance
-      addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded = True, teams, tableActions = Nothing, filters, availableTags}
+  if embedded || isTeamView
+    then -- For embedded/team mode, use a minimal BWConfig that will still work with ToHtml instance
+      addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded, hideActions = isTeamView, teams, tableActions = Nothing, filters, availableTags}
     else do
       freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
       let bwconf =
@@ -1118,7 +1121,7 @@ dashboardsGetH pid sortM embeddedM teamIdM filters = do
                 , filterMenus = [tagFilterMenu | not (null availableTags)]
                 , activeFilters = [("Tags", filters.tag) | not (null filters.tag)]
                 }
-      addRespHeaders $ DashboardsGet (PageCtx bwconf $ DashboardsGetD{dashboards, projectId = pid, embedded = False, teams, tableActions, filters, availableTags})
+      addRespHeaders $ DashboardsGet (PageCtx bwconf $ DashboardsGetD{dashboards, projectId = pid, embedded = False, hideActions = False, teams, tableActions, filters, availableTags})
 
 
 data DashboardRes = DashboardNoContent | DashboardPostError Text

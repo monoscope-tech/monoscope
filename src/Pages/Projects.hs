@@ -785,7 +785,9 @@ teamPage pid team projMembers slackChannels discordChannels = do
       lazySection_ secId icon title searchPh url = div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
         _ <- div_ [class_ "flex items-center justify-between w-full p-4 border-b border-strokeWeak"] do
           _ <- span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong"] (faSprite_ icon "regular" "h-4 w-4" >> toHtml title)
-          label_ [class_ "input input-sm w-64 bg-fillWeak border-0"] (faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 text-textWeak" >> input_ [type_ "text", placeholder_ searchPh, class_ ""])
+          label_ [class_ "input input-sm w-64 bg-fillWeak border-0"] do
+            faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 text-textWeak"
+            input_ [type_ "text", placeholder_ searchPh, class_ "", [__|on input show <tr/> in #${secId} when its textContent.toLowerCase() contains my value.toLowerCase()|]]
         div_ [class_ "w-full max-h-96 overflow-y-auto", id_ secId] do
           unless (T.null url) $ a_ [hxGet_ url, hxTrigger_ "intersect once", hxTarget_ $ "#" <> secId, hxSwap_ "outerHTML"] ""
           div_ [class_ "flex flex-col items-center justify-center py-8 text-center gap-2"] (faSprite_ icon "regular" "h-6 w-6 text-textWeak" >> div_ [class_ "text-sm text-textWeak"] (toHtml $ "No " <> T.toLower title <> " linked"))
