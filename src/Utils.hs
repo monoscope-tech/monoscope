@@ -184,7 +184,7 @@ b64ToJson b64Text =
 
 jsonValueToHtmlTree :: AE.Value -> Maybe Text -> Html ()
 jsonValueToHtmlTree val pathM = do
-  div_ [class_ "p-2 rounded-lg bg-fillWeaker border w-full json-tree-container"] do
+  div_ [class_ "p-2 rounded-lg bg-fillWeaker border w-full json-tree-container monospace text-sm leading-6"] do
     div_ [class_ "w-full flex items-center gap-4 text-xs mb-2"] do
       button_
         [ class_ "flex hidden items-center gap-1 cursor-pointer"
