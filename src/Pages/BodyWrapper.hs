@@ -1,10 +1,7 @@
-{-# LANGUAGE PackageImports #-}
-
 module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..)) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
-import Data.Text qualified as T
 import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
 import Lucid
@@ -21,7 +18,6 @@ import PyF
 import Relude
 import System.Config (EnvConfig (..))
 import Utils (faSprite_, freeTierLimitExceededBanner)
-import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
@@ -551,14 +547,13 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
           if currUser.firstName /= "" || currUser.lastName /= ""
             then currUser.firstName <> " " <> currUser.lastName
             else CI.original currUser.email
-        emailMd5 = decodeUtf8 $ MD5.hash $ encodeUtf8 $ CI.original currUser.email
-        sanitizedID = T.replace " " "+" userIdentifier
+        avatarUrl = "/api/avatar/" <> currUser.id.toText
     div_ [tabindex_ "0", role_ "button", class_ ""] do
       img_
         [ class_ "inline-block w-9 h-9 p-2 rounded-full bg-fillPress"
         , term "data-tippy-placement" "right"
         , term "data-tippy-content" userIdentifier
-        , src_ [text|https://www.gravatar.com/avatar/${emailMd5}?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/${sanitizedID}/128|]
+        , src_ avatarUrl
         ]
       span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:inline-block overflow-hidden"] $ toHtml userIdentifier
 

@@ -1,3 +1,5 @@
+{-# LANGUAGE PackageImports #-}
+
 module Web.Routes (server, genAuthServerContext, KeepPrefixExp) where
 
 -- Standard library imports
@@ -49,7 +51,14 @@ import Web.ClientMetadata qualified as ClientMetadata
 import Web.Error
 
 -- Model imports
+import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
+import Data.ByteString.Lazy qualified as LBS
+import Data.CaseInsensitive qualified as CI
+import Data.Effectful.Wreq qualified as Wreq
+import Data.Text qualified as T
 import Models.Apis.Anomalies qualified as Anomalies
+import Models.Users.Users qualified as Users
+import UnliftIO.Exception (try)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Reports qualified as ReportsM
 import Models.Projects.Dashboards qualified as Dashboards
@@ -177,6 +186,7 @@ data Routes mode = Routes
   , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[JSON] LemonSqueezy.WebhookData :> Post '[HTML] (Html ())
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , rrwebPost :: mode :- "rrweb" :> ProjectId :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
+  , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Users.UserId :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
   }
   deriving stock (Generic)
 
@@ -372,6 +382,7 @@ server pool =
     , lemonWebhook = LemonSqueezy.webhookPostH
     , chartsDataShot = Charts.queryMetrics
     , rrwebPost = Replay.replayPostH
+    , avatarGet = avatarGetH
     , cookieProtected = \sessionWithCookies ->
         Servant.hoistServerWithContext
           (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
@@ -552,6 +563,36 @@ statusH = do
 
 pingH :: ATBaseCtx Text
 pingH = pure "pong"
+
+
+avatarGetH :: Users.UserId -> ATBaseCtx (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+avatarGetH userId = do
+  userM <- Users.userById userId
+  case userM of
+    Nothing -> fetchGravatar "" "?"
+    Just user -> do
+      let imageUrl = user.displayImageUrl
+          email = CI.original user.email
+      if T.null imageUrl
+        then fetchGravatar email (user.firstName <> " " <> user.lastName)
+        else do
+          result <- try $ Wreq.get (toString imageUrl)
+          case result of
+            Right resp -> do
+              let body = resp ^. Wreq.responseBody
+              pure $ addHeader @"Cache-Control" "public, max-age=604800, immutable" $ addHeader @"Content-Type" "image/jpeg" body
+            Left (_ :: SomeException) -> fetchGravatar email (user.firstName <> " " <> user.lastName)
+  where
+    fetchGravatar email name = do
+      let emailMd5 = decodeUtf8 $ MD5.hash $ encodeUtf8 $ T.toLower email
+          sanitizedName = T.replace " " "+" name
+          gravatarUrl = "https://www.gravatar.com/avatar/" <> emailMd5 <> "?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/" <> sanitizedName <> "/128"
+      result <- try $ Wreq.get (toString gravatarUrl)
+      case result of
+        Right resp -> do
+          let body = resp ^. Wreq.responseBody
+          pure $ addHeader @"Cache-Control" "public, max-age=604800" $ addHeader @"Content-Type" "image/png" body
+        Left (_ :: SomeException) -> pure $ addHeader @"Cache-Control" "public, max-age=60" $ addHeader @"Content-Type" "image/png" ""
 
 
 -- Widget GET handler that accepts dashboard parameters

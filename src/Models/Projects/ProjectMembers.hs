@@ -263,7 +263,7 @@ getTeamsVM pid = query q (Only pid)
               'memberId', u.id,
               'memberName', concat_ws(' ', u.first_name, u.last_name),
               'memberEmail', u.email,
-              'memberAvatar', u.display_image_url
+              'memberAvatar', '/api/avatar/' || u.id::text
             ) ORDER BY u.first_name, u.last_name
           ) FILTER (WHERE u.id IS NOT NULL),
           '{}'
@@ -329,7 +329,7 @@ getTeamByHandle pid handle = queryOne q (pid, handle)
               'memberId', u.id,
               'memberName', concat_ws(' ', u.first_name, u.last_name),
               'memberEmail', u.email,
-              'memberAvatar', u.display_image_url
+              'memberAvatar', '/api/avatar/' || u.id::text
             ) ORDER BY u.first_name, u.last_name
           ) FILTER (WHERE u.id IS NOT NULL),
           '{}'

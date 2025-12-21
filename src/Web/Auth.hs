@@ -315,8 +315,6 @@ authCallbackH codeM _ redirectToM = do
     let email = fromMaybe "" $ resp L.^? responseBody . key "email" . _String
     let firstName = fromMaybe "" $ resp L.^? responseBody . key "given_name" . _String
     let lastName = fromMaybe "" $ resp L.^? responseBody . key "family_name" . _String
-    -- TODO: For users with no profile photos or empty profile photos, use gravatars as their profile photo
-    -- https://en.gravatar.com/site/implement/images/
     let picture = fromMaybe "" $ resp L.^? responseBody . key "picture" . _String
     lift $ authorizeUserAndPersist (Just envCfg.config.convertkitApiKey) firstName lastName picture email
   case resp of

@@ -38,6 +38,7 @@ import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Time (Time, currentTime)
 import GHC.Records (HasField (getField))
 import Relude
+import Servant (FromHttpApiData)
 
 
 instance AE.FromJSON (CI.CI Text) where
@@ -53,7 +54,7 @@ newtype UserId = UserId {getUserId :: UUID.UUID}
   deriving newtype (NFData)
   deriving anyclass (FromRow, ToRow)
   deriving
-    (AE.FromJSON, AE.ToJSON, Default, FromField, Ord, ToField)
+    (AE.FromJSON, AE.ToJSON, Default, FromField, FromHttpApiData, Ord, ToField)
     via UUID.UUID
 
 

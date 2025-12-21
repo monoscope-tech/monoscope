@@ -289,7 +289,7 @@ selectProjectsForUser = query q
                     AND ols.timestamp >= CURRENT_DATE - INTERVAL '30 days'
                     LIMIT 1
                 ) as has_integrated,
-               ARRAY_AGG(us.display_image_url) OVER (PARTITION BY pp.id)
+               ARRAY_AGG('/api/avatar/' || us.id::text) OVER (PARTITION BY pp.id)
         FROM projects.projects AS pp
         JOIN projects.project_members AS ppm ON (pp.id = ppm.project_id)
         JOIN users.users AS us ON (us.id = ppm.user_id)
