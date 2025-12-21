@@ -498,6 +498,7 @@ test-suite integration-tests
     , odd-jobs
     , pg-entity
     , pg-transact
+    , log-effectful
     , postgresql-simple
     , proto-lens
     , relude >=1.2.0.0

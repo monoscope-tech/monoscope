@@ -41,7 +41,7 @@ spec = aroundAll withTestResources do
     it "Should create a dashboard" \tr -> do
       (_, pg) <- testServant tr do
         let dashboard1 = dashboard{title = "Dashboard 1"} :: Dashboards.DashboardForm
-        let dashboard2 = dashboard{title = "Dashboard 2"} :: Dashboards.DashboardForm
+            dashboard2 = dashboard{title = "Dashboard 2"} :: Dashboards.DashboardForm
         _ <- Dashboards.dashboardsPostH testPid dashboard1
         _ <- Dashboards.dashboardsPostH testPid dashboard2
         Dashboards.dashboardsPostH testPid dashboard
@@ -106,7 +106,7 @@ spec = aroundAll withTestResources do
     it "Should handle bulk add teams to dashboards" \tr -> do
       dlet team = ManageMembers.TeamForm{teamName = "Hello", teamDescription = "", teamHandle = "hello", notifEmails = [], teamMembers = [], discordChannels = [], slackChannels = [], teamId = Nothing}
       _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team Nothing
-      _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team{teamHandle = "hi"} Nothing
+      _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team{teamHandle = "hii"} Nothing
       _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team{teamHandle = "broo"} Nothing
       (_, tm) <- testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
       case tm of
@@ -151,7 +151,14 @@ spec = aroundAll withTestResources do
 
     it "Should star and unstar a dashboard" \tr -> do
       let dashboard1 = dashboard{title = "Star Test Dashboard"} :: Dashboards.DashboardForm
-      _ <- testServant tr $ Dashboards.dashboardsPostH testPid dashboard1
+      let dashboardA = dashboard{title = "Dashboard A"} :: Dashboards.DashboardForm
+          dashboardB = dashboard{title = "Dashboard B"} :: Dashboards.DashboardForm
+          dashboardC = dashboard{title = "Dashboard C"} :: Dashboards.DashboardForm
+      _ <- testServant tr do
+        _ <- Dashboards.dashboardsPostH testPid dashboardA
+        _ <- Dashboards.dashboardsPostH testPid dashboardB
+        _ <- Dashboards.dashboardsPostH testPid dashboardC
+        Dashboards.dashboardsPostH testPid dashboard1
       (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
       case pg of
         Dashboards.DashboardsGet (PageCtx _ d) -> do
@@ -210,7 +217,7 @@ spec = aroundAll withTestResources do
 
               -- Verify starred dashboards come first
               V.length starredDashboards `shouldBe` 2
-              V.length unstarredDashboards `shouldBe` 1
+              V.length unstarredDashboards `shouldBe` 2
 
               -- Check that first dashboards in the list are starred
               let firstTwo = V.take 2 dashboards

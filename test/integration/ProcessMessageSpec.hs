@@ -1,5 +1,6 @@
 module ProcessMessageSpec (spec) where
 
+import BackgroundJobs (processFiveMinuteSpans)
 import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HashMap
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
@@ -10,7 +11,6 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
-import BackgroundJobs (processFiveMinuteSpans)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldContain)
@@ -52,9 +52,8 @@ spec = aroundAll withTestResources do
             [ ("m1", toStrict $ AE.encode reqMsg1)
             , ("m2", toStrict $ AE.encode reqMsg2)
             ]
-      _ <- runTestBg tr $ processMessages msgs HashMap.empty
+      f <- runTestBg tr $ processMessages msgs HashMap.empty
       _ <- runTestBg tr $ processFiveMinuteSpans currentTime pid
-
       pendingJobs <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs
 

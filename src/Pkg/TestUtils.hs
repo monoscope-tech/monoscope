@@ -79,6 +79,7 @@ import Log qualified
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.SummaryGenerator qualified as SummaryGenerator
+import Models.Telemetry.Telemetry (OtelLogsAndSpans (log_pattern, summary_pattern))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
@@ -382,7 +383,7 @@ testSessionHeader pool = do
       PGS.execute
         conn
         [sql|INSERT INTO projects.projects (id, title, description, payment_plan, active, deleted_at, weekly_notif, daily_notif)
-         VALUES (?, 'Test Project', 'Test Description', 'FREE', true, NULL, true, true)
+         VALUES (?, 'Test Project', 'Test Description', 'Startup', true, NULL, true, true)
          ON CONFLICT (id) DO UPDATE SET title = 'Test Project', description = 'Test Description', payment_plan = 'Startup', active = true, deleted_at = NULL, weekly_notif = true, daily_notif = true|]
         (Only testProjectId)
 
@@ -829,6 +830,8 @@ createRequestDumps TestResources{..} projectId numRequestsPerEndpoint = do
               , date = currentTime
               , summary = V.empty -- Will be generated
               , errors = Nothing
+              , log_pattern = Nothing
+              , summary_pattern = Nothing
               }
       let summary = SummaryGenerator.generateSummary otelRecord
       void $ withResource trPool \conn ->

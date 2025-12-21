@@ -861,7 +861,7 @@ END;
 $$;
 SELECT add_job('tests.check_tests_to_trigger', '10min');
 
-INSERT into projects.projects (id, title) VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project');
+INSERT into projects.projects (id, title, payment_plan) VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project', 'Startup');
 
 
 INSERT into users.users (id, email, first_name, last_name) VALUES ('00000000-0000-0000-0000-000000000000', 'hello@monoscope.tech', 'Guest', 'User');

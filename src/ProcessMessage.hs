@@ -225,7 +225,7 @@ processSpanToEntities pjc otelSpan dumpId =
       !sdkTypeStr =
         fromMaybe "unknown"
           $ (attrValue ^? key "monoscope" . key "sdk_type" . _String)
-          <|> (attrValue ^? key "apitoolkit" . key "sdk_type" . _String)
+            <|> (attrValue ^? key "apitoolkit" . key "sdk_type" . _String)
       !sdkType = fromMaybe RequestDumps.SDKUnknown $ readMaybe $ toString sdkTypeStr
 
       -- URL normalization and dynamic path parameter extraction
@@ -352,7 +352,7 @@ processSpanToEntities pjc otelSpan dumpId =
             [ Just endpointHash
             , if isJust shape then Just shapeHash else Nothing
             ]
-          <> V.toList fieldHashes
+            <> V.toList fieldHashes
    in (endpoint, shape, fields', formats', hashes)
   where
     -- Helper function to extract headers from nested attribute structure
@@ -411,6 +411,8 @@ convertRequestMessageToSpan rm (spanId, trId) =
         , summary = V.empty -- Will be populated below
         , date = zonedTimeToUTC rm.timestamp
         , errors = Nothing
+        , log_pattern = Nothing
+        , summary_pattern = Nothing
         }
    in
     otelSpan{summary = generateSummary otelSpan}
@@ -468,7 +470,7 @@ createSpanAttributes rm =
         reqHeaders =
           fromMaybe (AE.object [])
             $ rm.requestHeaders
-            ^? _Object
+              ^? _Object
               >>= \obj ->
                 let pairs = [("http.request.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
                  in Just $ nestedJsonFromDotNotation pairs
@@ -477,7 +479,7 @@ createSpanAttributes rm =
         respHeaders =
           fromMaybe (AE.object [])
             $ rm.responseHeaders
-            ^? _Object
+              ^? _Object
               >>= \obj ->
                 let pairs = [("http.response.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
                  in Just $ nestedJsonFromDotNotation pairs

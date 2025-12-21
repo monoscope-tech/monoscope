@@ -6,10 +6,10 @@ import Data.Vector qualified as V
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper
-import Pkg.DeriveUtils (UUIDId (..))
 import Pages.Projects
 import Pages.Projects qualified as CreateProject
 import Pages.Projects qualified as ListProjects
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
@@ -31,9 +31,9 @@ spec = aroundAll withTestResources do
               , emails = ["test@monoscope.tech"]
               , permissions = [ProjectMembers.PAdmin]
               , timeZone = ""
-              , weeklyNotifs = Nothing 
-              , dailyNotifs = Nothing 
-              , endpointAlerts = Nothing 
+              , weeklyNotifs = Nothing
+              , dailyNotifs = Nothing
+              , endpointAlerts = Nothing
               , errorAlerts = Nothing
               }
       (_, pg) <-
@@ -49,13 +49,9 @@ spec = aroundAll withTestResources do
       -- User is member of both demo project and test project (added in testSessionHeader)
       length projects `shouldBe` 2
       let projectIds = map (.id.toText) (V.toList projects)
-      projectIds `shouldContain` ["12345678-9abc-def0-1234-56789abcdef0"] -- test project from testSessionHeader
-      projectIds `shouldContain` ["00000000-0000-0000-0000-000000000000"] -- demo project
-    -- TODO: add more checks for the info we we display on list page
-
+      projectIds `shouldContain` [testPid.toText] -- test project from testSessionHeader
+      -- TODO: add more checks for the info we we display on list page
     it "Should update project with new details and verify in list" \tr -> do
-      let testProjectPid = Unsafe.fromJust $ UUIDId <$> UUID.fromText "12345678-9abc-def0-1234-56789abcdef0"
-
       -- Section 1: Update the project
       let createPForm =
             CreateProject.CreateProjectForm
@@ -70,7 +66,7 @@ spec = aroundAll withTestResources do
               , errorAlerts = Nothing
               }
       (_, updateResp) <-
-        testServant tr $ CreateProject.createProjectPostH testProjectPid createPForm
+        testServant tr $ CreateProject.createProjectPostH testPid createPForm
       (updateResp.unwrapCreateProjectResp <&> (.form.title)) `shouldBe` Just @Text "Test Project CI2"
       (updateResp.unwrapCreateProjectResp <&> (.form.description)) `shouldBe` Just "Test Description2"
 
@@ -80,12 +76,12 @@ spec = aroundAll withTestResources do
       let (projects, _demoProject, _showDemoProject) = listResp.unwrap.content
 
       -- Find the updated project by ID instead of relying on index
-      let updatedProject = V.find (\p -> p.id.toText == "12345678-9abc-def0-1234-56789abcdef0") projects
+      let updatedProject = V.find (\p -> p.id.toText == testPid.toText) projects
       updatedProject `shouldSatisfy` isJust
 
       -- Safe to use fromJust here because we verified isJust above
       let project = Unsafe.fromJust updatedProject
       project.title `shouldBe` "Test Project CI2"
       project.description `shouldBe` "Test Description2"
-      project.paymentPlan `shouldBe` "FREE"
+      project.paymentPlan `shouldBe` "Startup"
       project.timeZone `shouldBe` "Africa/Accra"

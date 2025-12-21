@@ -565,7 +565,6 @@ manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers,
       invalidMembers = V.filter (`V.notElem` validMemberIds) teamMembers
       teamDetails = ProjectMembers.TeamDetails teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels phoneNumbers
       validationErr msg = addErrorToast msg Nothing >> addRespHeaders (ManageTeamsPostError msg)
-  Log.logAttention ("Team Details, : \n" <> show userPermission) ()
   case (userPermission == Just ProjectMembers.PAdmin, V.null invalidMembers, validateTeamDetails teamName teamHandle notifEmails, teamId) of
     (_, _, Left e, _) -> addErrorToast e Nothing >> addReswap "" >> addRespHeaders (ManageTeamsPostError e)
     (False, _, _, _) -> validationErr "Only admins can create or update teams"

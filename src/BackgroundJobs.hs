@@ -422,6 +422,7 @@ generateOtelFacetsBatch projectIds timestamp = do
 -- 5. Update spans with computed hashes for tracking
 processFiveMinuteSpans :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
 processFiveMinuteSpans scheduledTime pid = do
+  Log.logAttention "Starting 5-minute span processing for project" ("project_id", pid.toText)
   ctx <- ask @Config.AuthContext
   let fiveMinutesAgo = addUTCTime (-300) scheduledTime
 
@@ -437,7 +438,7 @@ processFiveMinuteSpans scheduledTime pid = do
         V.fromList
           <$> PG.query
             [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
-                         hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
+                         hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date, log_pattern, summary_pattern
                   FROM otel_logs_and_spans
               WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND name = 'monoscope.http' OFFSET ? LIMIT ? |]
             (pid, fiveMinutesAgo, scheduledTime, skip, perPage)

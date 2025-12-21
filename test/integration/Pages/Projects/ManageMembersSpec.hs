@@ -127,9 +127,7 @@ spec = aroundAll withTestResources do
             }
 
     it "Should create team" \tr -> do
-      (_, pg) <- testServant tr do
-        _ <- withPool tr.trPool $ PGT.execute [sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (?, ?, 'admin') ON CONFLICT (project_id, user_id) DO NOTHING UPDATE SET permission = 'admin'|] (testPid, userID)
-        ManageMembers.manageTeamPostH testPid team Nothing
+      (_, pg) <- testServant tr $ ManageMembers.manageTeamPostH testPid team Nothing
       case pg of
         ManageMembers.ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams) -> do
           length teams `shouldBe` 1
