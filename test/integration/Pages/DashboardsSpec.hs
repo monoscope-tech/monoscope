@@ -98,16 +98,19 @@ spec = aroundAll withTestResources do
 
     it "Should handle bulk add teams to dashboards" \tr -> do
       let team = ManageMembers.TeamForm{teamName = "Hello", teamDescription = "", teamHandle = "hello", notifEmails = V.empty, teamMembers = V.empty, discordChannels = V.empty, slackChannels = V.empty, phoneNumbers = V.empty, teamId = Nothing}
-      -- Create all teams in a single testServant call to avoid UUID sequence reset
-      _ <- testServant tr do
-        _ <- ManageMembers.manageTeamPostH testPid team Nothing
-        _ <- ManageMembers.manageTeamPostH testPid team{teamHandle = "hi"} Nothing
-        ManageMembers.manageTeamPostH testPid team{teamHandle = "broo"} Nothing
+      -- Create teams with unique names to avoid any handle conflicts
+      let team1 = team{teamName = "Team Hello", teamHandle = "team-hello"}
+      let team2 = team{teamName = "Team Hi", teamHandle = "team-hi"}
+      let team3 = team{teamName = "Team Broo", teamHandle = "team-broo"}
+      _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team1 Nothing
+      _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team2 Nothing
+      _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team3 Nothing
       (_, tm) <- testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
       case tm of
         ManageMembers.ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams') -> do
-          let teamIds = V.toList $ V.map (\t -> t.id) $ V.filter (\t -> t.handle /= "broo") teams'
-          let brooId = V.find (\t -> t.handle == "broo") teams' & Unsafe.fromJust & \t -> t.id
+          -- Filter to get team-hello and team-hi (exclude team-broo)
+          let teamIds = V.toList $ V.map (\t -> t.id) $ V.filter (\t -> t.handle /= "team-broo") teams'
+          let brooId = V.find (\t -> t.handle == "team-broo") teams' & Unsafe.fromJust & \t -> t.id
           (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing (DashboardFilters [])
           case pg of
             Dashboards.DashboardsGet (PageCtx _ d) -> do
