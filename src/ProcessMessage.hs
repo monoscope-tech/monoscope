@@ -125,7 +125,7 @@ defaultProjectCache =
 
 
 processMessages
-  :: (Concurrent :> es, WithConnection :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es)
+  :: (Concurrent :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es, WithConnection :> es)
   => [(Text, ByteString)]
   -> HashMap Text Text
   -> Eff es [Text]

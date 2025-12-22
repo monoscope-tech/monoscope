@@ -122,7 +122,7 @@ data QueryMonitorEvaled = QueryMonitorEvaled
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] QueryMonitorEvaled
 
 
-queryMonitorUpsert :: (WithConnection :> es, IOE :> es) => QueryMonitor -> Eff es Int64
+queryMonitorUpsert :: (IOE :> es, WithConnection :> es) => QueryMonitor -> Eff es Int64
 queryMonitorUpsert qm =
   PG.execute
     q
@@ -165,11 +165,11 @@ queryMonitorUpsert qm =
     |]
 
 
-queryMonitorById :: (WithConnection :> es, IOE :> es) => QueryMonitorId -> Eff es (Maybe QueryMonitor)
+queryMonitorById :: (IOE :> es, WithConnection :> es) => QueryMonitorId -> Eff es (Maybe QueryMonitor)
 queryMonitorById id' = listToMaybe <$> PG.query (_selectWhere @QueryMonitor [[DAT.field| id |]]) (Only id')
 
 
-queryMonitorsById :: (WithConnection :> es, IOE :> es) => V.Vector QueryMonitorId -> Eff es (V.Vector QueryMonitorEvaled)
+queryMonitorsById :: (IOE :> es, WithConnection :> es) => V.Vector QueryMonitorId -> Eff es (V.Vector QueryMonitorEvaled)
 queryMonitorsById ids
   | V.null ids = pure V.empty
   | otherwise = V.fromList <$> PG.query q (Only ids)
@@ -183,7 +183,7 @@ queryMonitorsById ids
     |]
 
 
-updateQMonitorTriggeredState :: (WithConnection :> es, IOE :> es) => QueryMonitorId -> Bool -> Eff es Int64
+updateQMonitorTriggeredState :: (IOE :> es, WithConnection :> es) => QueryMonitorId -> Bool -> Eff es Int64
 updateQMonitorTriggeredState qmId isAlert = PG.execute q (Only qmId)
   where
     q =
@@ -192,7 +192,7 @@ updateQMonitorTriggeredState qmId isAlert = PG.execute q (Only qmId)
         else [sql|UPDATE monitors.query_monitors SET warning_last_triggered=NOW() where id=?|]
 
 
-monitorToggleActiveById :: (WithConnection :> es, IOE :> es) => QueryMonitorId -> Eff es Int64
+monitorToggleActiveById :: (IOE :> es, WithConnection :> es) => QueryMonitorId -> Eff es Int64
 monitorToggleActiveById id' = PG.execute q (Only id')
   where
     q =
@@ -204,11 +204,11 @@ monitorToggleActiveById id' = PG.execute q (Only id')
         where id=?|]
 
 
-queryMonitorsAll :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Eff es (V.Vector QueryMonitor)
+queryMonitorsAll :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es (V.Vector QueryMonitor)
 queryMonitorsAll pid = V.fromList <$> PG.query (_selectWhere @QueryMonitor [[DAT.field| project_id |]]) (Only pid)
 
 
-getAlertsByTeamHandle :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> UUID.UUID -> Eff es (V.Vector QueryMonitor)
+getAlertsByTeamHandle :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UUID.UUID -> Eff es (V.Vector QueryMonitor)
 getAlertsByTeamHandle pid teamId = V.fromList <$> PG.query q (pid, teamId)
   where
     q =

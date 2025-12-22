@@ -109,25 +109,25 @@ createUser firstName lastName picture email = do
       }
 
 
-insertUser :: (WithConnection :> es, IOE :> es) => User -> Eff es ()
+insertUser :: (IOE :> es, WithConnection :> es) => User -> Eff es ()
 insertUser user = void $ PG.execute (_insert @User) user
 
 
-userById :: (WithConnection :> es, IOE :> es) => UserId -> Eff es (Maybe User)
+userById :: (IOE :> es, WithConnection :> es) => UserId -> Eff es (Maybe User)
 userById userId = listToMaybe <$> PG.query (_selectWhere @User [[field| id |]]) (Only userId)
 
 
-userByEmail :: (WithConnection :> es, IOE :> es) => Text -> Eff es (Maybe User)
+userByEmail :: (IOE :> es, WithConnection :> es) => Text -> Eff es (Maybe User)
 userByEmail email = listToMaybe <$> PG.query (_selectWhere @User [[field| email |]]) (Only email)
 
 
-userIdByEmail :: (WithConnection :> es, IOE :> es) => Text -> Eff es (Maybe UserId)
+userIdByEmail :: (IOE :> es, WithConnection :> es) => Text -> Eff es (Maybe UserId)
 userIdByEmail email = listToMaybe <$> PG.query q (Only email)
   where
     q = [sql|select id from users.users where email=?|]
 
 
-createEmptyUser :: (WithConnection :> es, IOE :> es) => Text -> Eff es (Maybe UserId)
+createEmptyUser :: (IOE :> es, WithConnection :> es) => Text -> Eff es (Maybe UserId)
 createEmptyUser email = listToMaybe <$> PG.query q (Only email)
   where
     q = [sql| insert into users.users (email, active) values (?, TRUE) on conflict do nothing returning id |]

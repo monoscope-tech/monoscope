@@ -119,7 +119,7 @@ data CreateProjectMembers = CreateProjectMembers
     via (GenericEntity '[Schema "projects", TableName "project_members", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CreateProjectMembers)
 
 
-insertProjectMembers :: (WithConnection :> es, IOE :> es) => [CreateProjectMembers] -> Eff es Int64
+insertProjectMembers :: (IOE :> es, WithConnection :> es) => [CreateProjectMembers] -> Eff es Int64
 insertProjectMembers members = PG.executeMany q members
   where
     q =
@@ -138,7 +138,7 @@ data ProjectMemberVM = ProjectMemberVM
   deriving anyclass (FromRow, NFData)
 
 
-selectActiveProjectMembers :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Eff es (V.Vector ProjectMemberVM)
+selectActiveProjectMembers :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es (V.Vector ProjectMemberVM)
 selectActiveProjectMembers pid = V.fromList <$> PG.query q (Only pid)
   where
     q =
@@ -149,7 +149,7 @@ selectActiveProjectMembers pid = V.fromList <$> PG.query q (Only pid)
         |]
 
 
-getUserPermission :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Users.UserId -> Eff es (Maybe Permissions)
+getUserPermission :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Users.UserId -> Eff es (Maybe Permissions)
 getUserPermission pid uid = do
   result <- PG.query q (pid, uid)
   pure $ fmap (\(Only p) -> p) (listToMaybe result)
@@ -159,7 +159,7 @@ getUserPermission pid uid = do
             WHERE project_id = ? AND user_id = ? AND active = TRUE |]
 
 
-updateProjectMembersPermissons :: (WithConnection :> es, IOE :> es) => [(UUID.UUID, Permissions)] -> Eff es ()
+updateProjectMembersPermissons :: (IOE :> es, WithConnection :> es) => [(UUID.UUID, Permissions)] -> Eff es ()
 updateProjectMembersPermissons vals = void $ PG.executeMany q vals
   where
     q =
@@ -169,7 +169,7 @@ updateProjectMembersPermissons vals = void $ PG.executeMany q vals
             WHERE pm.id::uuid = c.id::uuid; |]
 
 
-softDeleteProjectMembers :: (WithConnection :> es, IOE :> es) => NonEmpty UUID.UUID -> Eff es ()
+softDeleteProjectMembers :: (IOE :> es, WithConnection :> es) => NonEmpty UUID.UUID -> Eff es ()
 softDeleteProjectMembers ids = void $ PG.execute q (Only $ V.fromList $ toList ids)
   where
     q =
@@ -191,7 +191,7 @@ data TeamDetails = TeamDetails
   deriving stock (Eq, Generic, Show)
 
 
-createTeam :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Users.UserId -> TeamDetails -> Eff es Int64
+createTeam :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Users.UserId -> TeamDetails -> Eff es Int64
 createTeam pid uid TeamDetails{..} = PG.execute q (pid, uid, name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers)
   where
     q =
@@ -201,7 +201,7 @@ createTeam pid uid TeamDetails{..} = PG.execute q (pid, uid, name, description, 
                ON CONFLICT (project_id, handle) DO NOTHING |]
 
 
-updateTeam :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> UUID.UUID -> TeamDetails -> Eff es Int64
+updateTeam :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UUID.UUID -> TeamDetails -> Eff es Int64
 updateTeam pid tid TeamDetails{..} = PG.execute q (name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pid, tid)
   where
     q =
@@ -228,7 +228,7 @@ data Team = Team
   deriving anyclass (FromRow, NFData)
 
 
-getTeams :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Eff es (V.Vector Team)
+getTeams :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es (V.Vector Team)
 getTeams pid = V.fromList <$> PG.query q (Only pid)
   where
     q =
@@ -239,7 +239,7 @@ getTeams pid = V.fromList <$> PG.query q (Only pid)
     |]
 
 
-getTeamsVM :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Eff es (V.Vector TeamVM)
+getTeamsVM :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es (V.Vector TeamVM)
 getTeamsVM pid = V.fromList <$> PG.query q (Only pid)
   where
     q =
@@ -305,7 +305,7 @@ data TeamMemberVM = TeamMemberVM
   deriving (FromField) via Aeson TeamMemberVM
 
 
-getTeamByHandle :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Text -> Eff es (Maybe TeamVM)
+getTeamByHandle :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es (Maybe TeamVM)
 getTeamByHandle pid handle = listToMaybe <$> PG.query q (pid, handle)
   where
     q =
@@ -342,14 +342,14 @@ getTeamByHandle pid handle = listToMaybe <$> PG.query q (pid, handle)
     |]
 
 
-deleteTeamByHandle :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Text -> Eff es ()
+deleteTeamByHandle :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es ()
 deleteTeamByHandle pid handle = void $ PG.execute q (pid, handle)
   where
     q =
       [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND handle = ? |]
 
 
-deleteTeams :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es ()
+deleteTeams :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es ()
 deleteTeams pid tids
   | V.null tids = pass
   | otherwise = void $ PG.execute q (pid, tids)
@@ -358,7 +358,7 @@ deleteTeams pid tids
       [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND id = ANY(?::uuid[]) |]
 
 
-getTeamsById :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es (V.Vector Team)
+getTeamsById :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es (V.Vector Team)
 getTeamsById pid tids = if V.null tids then pure V.empty else V.fromList <$> PG.query q (pid, tids)
   where
     q =

@@ -34,13 +34,13 @@ import Effectful.Time qualified as Time
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Dashboards qualified as Dashboards
 import Network.HTTP.Types (urlEncode)
-import Pkg.DeriveUtils (idFromText)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import Pages.Bots.Utils (BotResponse (..), BotType (..), Channel, authHeader, chartImageUrl, contentTypeHeader, handleTableResponse)
 import Pkg.AI (callOpenAIAPI, systemPrompt)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DeriveUtils (idFromText)
 import Pkg.Parser (parseQueryToAST)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)

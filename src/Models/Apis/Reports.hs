@@ -56,15 +56,15 @@ data ReportListItem = ReportListItem
     via (GenericEntity '[Schema "apis", TableName "reports", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ReportListItem)
 
 
-addReport :: (WithConnection :> es, IOE :> es) => Report -> Eff es ()
+addReport :: (IOE :> es, WithConnection :> es) => Report -> Eff es ()
 addReport report = void $ PG.execute (_insert @Report) report
 
 
-getReportById :: (WithConnection :> es, IOE :> es) => ReportId -> Eff es (Maybe Report)
+getReportById :: (IOE :> es, WithConnection :> es) => ReportId -> Eff es (Maybe Report)
 getReportById id' = listToMaybe <$> PG.query (_selectWhere @Report [[field| id |]]) (Only id')
 
 
-reportHistoryByProject :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Int -> Eff es (V.Vector ReportListItem)
+reportHistoryByProject :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Int -> Eff es (V.Vector ReportListItem)
 reportHistoryByProject pid page = V.fromList <$> PG.query q (pid, offset)
   where
     offset = page * 20

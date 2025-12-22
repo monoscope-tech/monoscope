@@ -432,7 +432,7 @@ freeTierLimitExceededBanner pid =
     a_ [class_ "underline underline-offset-2 link", href_ $ "/p/" <> pid <> "/manage_billing"] "See pricing"
 
 
-checkFreeTierExceeded :: (WithConnection Effectful.:> es, IOE Effectful.:> es) => Projects.ProjectId -> Text -> Eff es Bool
+checkFreeTierExceeded :: (IOE Effectful.:> es, WithConnection Effectful.:> es) => Projects.ProjectId -> Text -> Eff es Bool
 checkFreeTierExceeded pid paymentPlan =
   if paymentPlan == "Free"
     then (> fromIntegral freeTierDailyMaxEvents) <$> RequestDumps.getLast24hTotalRequest pid

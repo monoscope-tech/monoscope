@@ -102,7 +102,7 @@ getMinioFile conn bucket object = do
   whenRight V.empty res pure
 
 
-saveReplayMinio :: (WithConnection :> es, IOE :> es) => EnvConfig -> (Text, ReplayPost') -> Eff es (Maybe Text)
+saveReplayMinio :: (IOE :> es, WithConnection :> es) => EnvConfig -> (Text, ReplayPost') -> Eff es (Maybe Text)
 saveReplayMinio envCfg (ackId, replayData) = do
   project <- Projects.projectById replayData.projectId
   case project of

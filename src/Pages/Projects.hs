@@ -124,7 +124,7 @@ listProjectsGetH = do
           , config = appCtx.env
           }
 
-  projects <-  Projects.selectProjectsForUser sess.persistentSession.userId
+  projects <- Projects.selectProjectsForUser sess.persistentSession.userId
   let demoProject =
         (def :: Projects.Project')
           { Projects.title = project.title
@@ -300,7 +300,7 @@ updateNotificationsChannel pid NotifListForm{notificationsChannel, phones} = do
       addErrorToast errorMessage Nothing
       addRespHeaders $ NotificationsUpdatePost ()
     Right () -> do
-      _ <-  Projects.updateNotificationsChannel pid notificationsChannel phones
+      _ <- Projects.updateNotificationsChannel pid notificationsChannel phones
       addSuccessToast "Updated Notification Channels Successfully" Nothing
       addRespHeaders $ NotificationsUpdatePost ()
 
@@ -451,7 +451,7 @@ manageMembersPostH pid onboardingM form = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   let currUserId = sess.persistentSession.userId
-  projMembers <-  ProjectMembers.selectActiveProjectMembers pid
+  projMembers <- ProjectMembers.selectActiveProjectMembers pid
 
   if project.paymentPlan /= "Free"
     then do
@@ -503,7 +503,7 @@ manageMembersPostH pid onboardingM form = do
         $ void
         . ProjectMembers.softDeleteProjectMembers
 
-      projMembersLatest <-  ProjectMembers.selectActiveProjectMembers pid
+      projMembersLatest <- ProjectMembers.selectActiveProjectMembers pid
       if isJust onboardingM
         then do
           redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
@@ -556,8 +556,8 @@ manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (Re
 manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers, notifEmails, slackChannels, discordChannels, phoneNumbers, teamId} tmView = do
   (sess, _) <- Sessions.sessionAndProject pid
   let currUserId = sess.persistentSession.userId
-  userPermission <-  ProjectMembers.getUserPermission pid currUserId
-  projMembers <-  ProjectMembers.selectActiveProjectMembers pid
+  userPermission <- ProjectMembers.getUserPermission pid currUserId
+  projMembers <- ProjectMembers.selectActiveProjectMembers pid
   let validMemberIds = V.map (.userId) projMembers
       invalidMembers = V.filter (`V.notElem` validMemberIds) teamMembers
       teamDetails = ProjectMembers.TeamDetails teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels phoneNumbers
@@ -567,11 +567,11 @@ manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers,
     (_, False, _, _) -> validationErr "Some team members are not project members"
     (_, _, Left e, _) -> addErrorToast e Nothing >> addReswap "" >> addRespHeaders (ManageTeamsPostError e)
     (_, _, _, Just tid) -> do
-      _ <-  ProjectMembers.updateTeam pid tid teamDetails
+      _ <- ProjectMembers.updateTeam pid tid teamDetails
       addSuccessToast "Team updated successfully" Nothing
       maybe (manageTeamsGetH pid (Just "from_post")) (\_ -> teamGetH pid teamHandle (Just "main-page")) tmView
     (_, _, _, Nothing) -> do
-      rowsAffected <-  ProjectMembers.createTeam pid currUserId teamDetails
+      rowsAffected <- ProjectMembers.createTeam pid currUserId teamDetails
       if rowsAffected > 0
         then addSuccessToast "Team saved successfully" Nothing >> manageTeamsGetH pid (Just "from_post")
         else validationErr "Team handle already exists for this project."
@@ -590,11 +590,11 @@ manageTeamBulkActionH pid action TBulkActionForm{itemId} listViewM = do
   appCtx <- ask @AuthContext
   case action of
     "delete" -> do
-      teamVm <-  ProjectMembers.getTeamsById pid $ V.fromList itemId
+      teamVm <- ProjectMembers.getTeamsById pid $ V.fromList itemId
       let canDelete = all (\team -> Just sess.user.id == team.created_by) teamVm
       if canDelete
         then do
-          _ <-  ProjectMembers.deleteTeams pid $ V.fromList itemId
+          _ <- ProjectMembers.deleteTeams pid $ V.fromList itemId
           when (isNothing listViewM) do
             redirectCS ("/p/" <> pid.toText <> "/manage_teams")
           addRespHeaders ManageTeamsDelete
@@ -631,7 +631,7 @@ manageTeamsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders Ma
 manageTeamsGetH pid layoutM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  projMembers <-  ProjectMembers.selectActiveProjectMembers pid
+  projMembers <- ProjectMembers.selectActiveProjectMembers pid
   slackDataM <- Slack.getProjectSlackData pid
   channels <- case slackDataM of
     Just slackData -> do
@@ -645,7 +645,7 @@ manageTeamsGetH pid layoutM = do
   discordChannels <- case discordDataM of
     Just discordData -> Discord.getDiscordChannels appCtx.env.discordBotToken discordData.guildId
     Nothing -> return []
-  teams <-  ProjectMembers.getTeamsVM pid
+  teams <- ProjectMembers.getTeamsVM pid
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
@@ -740,8 +740,8 @@ teamGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders M
 teamGetH pid handle layoutM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  teamVm <-  ProjectMembers.getTeamByHandle pid handle
-  projMembers <-  ProjectMembers.selectActiveProjectMembers pid
+  teamVm <- ProjectMembers.getTeamByHandle pid handle
+  projMembers <- ProjectMembers.selectActiveProjectMembers pid
   slackDataM <- Slack.getProjectSlackData pid
   channels <- case slackDataM of
     Just slackData -> do
@@ -828,7 +828,7 @@ manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ManageMembers)
 manageMembersGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  projMembers <-  ProjectMembers.selectActiveProjectMembers pid
+  projMembers <- ProjectMembers.selectActiveProjectMembers pid
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
@@ -923,7 +923,7 @@ deleteMemberH :: Projects.ProjectId -> RealUUID.UUID -> ATAuthCtx (RespHeaders (
 deleteMemberH pid memberId = do
   (sess, project) <- Sessions.sessionAndProject pid
   let currUserId = sess.persistentSession.userId
-  projMembers <-  ProjectMembers.selectActiveProjectMembers pid
+  projMembers <- ProjectMembers.selectActiveProjectMembers pid
   let memberM = V.find (\m -> m.id == memberId) projMembers
   case memberM of
     Nothing -> do
@@ -935,7 +935,7 @@ deleteMemberH pid memberId = do
           addErrorToast "You cannot remove yourself" Nothing
           addRespHeaders ""
         else do
-          _ <-  ProjectMembers.softDeleteProjectMembers (memberId :| [])
+          _ <- ProjectMembers.softDeleteProjectMembers (memberId :| [])
           addSuccessToast "Member removed" Nothing
           addRespHeaders ""
 
@@ -1036,7 +1036,7 @@ projectOnboardingH = do
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
   sess <- Sessions.getSession
-  projects <-  Projects.selectProjectsForUser sess.persistentSession.userId
+  projects <- Projects.selectProjectsForUser sess.persistentSession.userId
   let projectM = V.find (\pr -> pr.paymentPlan == "ONBOARDING") projects
       bwconf = (def :: BWConfig){sessM = Just sess, currProject = Nothing, pageTitle = "New Project", config = appCtx.config}
   case projectM of
@@ -1052,7 +1052,7 @@ projectOnboardingH = do
       pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" encryptedKeyB64
       _ <- ProjectApiKeys.insertProjectApiKey pApiKey
       let projectMember = ProjectMembers.CreateProjectMembers pid sess.user.id ProjectMembers.PAdmin
-      _ <-  ProjectMembers.insertProjectMembers [projectMember]
+      _ <- ProjectMembers.insertProjectMembers [projectMember]
       let h = "/p/" <> pid.toText <> "/onboarding"
       pure $ addHeader h $ PageCtx bwconf ""
 
@@ -1126,7 +1126,7 @@ deleteProjectGetH pid = do
       addSuccessToast "Can't perform this action on the demon project" Nothing
       addRespHeaders $ PostNoContent ""
     else do
-      _ <-  Projects.deleteProject pid
+      _ <- Projects.deleteProject pid
       _ <- liftIO $ withResource appCtx.pool \conn ->
         createJob conn "background_jobs" $ BackgroundJobs.DeletedProject pid
       addSuccessToast "Deleted Project Successfully" Nothing
@@ -1207,13 +1207,13 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan} = do
       apiKey = envCfg.lemonSqueezyApiKey
       steps = project.onboardingStepsCompleted
       newStepsComp = insertIfNotExist "Pricing" steps
-      updatePricing name sid fid oid =  Projects.updateProjectPricing pid name sid fid oid newStepsComp
+      updatePricing name sid fid oid = Projects.updateProjectPricing pid name sid fid oid newStepsComp
       handleOnboarding name = when (project.paymentPlan == "ONBOARDING") $ do
         _ <- liftIO $ withResource appCtx.pool \conn -> do
           let fullName = sess.user.firstName <> " " <> sess.user.lastName
               foundUsFrom = fromMaybe "" $ project.questions >>= (`lookupValueText` "foundUsFrom")
           createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.user.id pid fullName [foundUsFrom] foundUsFrom
-        users <-  ProjectMembers.selectActiveProjectMembers pid
+        users <- ProjectMembers.selectActiveProjectMembers pid
         unless (T.null envCfg.convertkitApiKey)
           $ forM_ users
           $ \user -> ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original user.email) pid.toText project.title name
@@ -1287,7 +1287,7 @@ processProjectPostForm cpRaw pid = do
       addErrorToast "Can't perform this action on the demo project" Nothing
       addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError) project)
     else do
-      _ <-  Projects.updateProject (createProjectFormToModel pid project.subId project.firstSubItemId project.orderId project.paymentPlan cp)
+      _ <- Projects.updateProject (createProjectFormToModel pid project.subId project.firstSubItemId project.orderId project.paymentPlan cp)
       addSuccessToast "Updated Project Successfully" Nothing
       addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError) project)
 

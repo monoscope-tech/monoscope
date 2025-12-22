@@ -68,7 +68,7 @@ data Shape = Shape
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Shape
 
 
-bulkInsertShapes :: (WithConnection :> es, IOE :> es) => V.Vector Shape -> Eff es ()
+bulkInsertShapes :: (IOE :> es, WithConnection :> es) => V.Vector Shape -> Eff es ()
 bulkInsertShapes shapes = void $ PG.executeMany q $ V.toList rowsToInsert
   where
     q =

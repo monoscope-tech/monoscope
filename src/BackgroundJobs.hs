@@ -346,7 +346,8 @@ runHourlyJob scheduledTime hour = do
   ctx <- ask @Config.AuthContext
   let oneHourAgo = addUTCTime (-3600) scheduledTime
   activeProjects <-
-    V.map (\(Only pid) -> pid) . V.fromList
+    V.map (\(Only pid) -> pid)
+      . V.fromList
       <$> PG.query
         [sql| SELECT DISTINCT project_id
               FROM otel_logs_and_spans ols
@@ -372,7 +373,7 @@ runHourlyJob scheduledTime hour = do
 
 -- | Batch process facets generation for multiple projects using 24-hour window
 -- Processes projects concurrently with individual error handling to prevent batch failures
-generateOtelFacetsBatch :: (WithConnection :> es, Effectful.Reader.Static.Reader Config.AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, Tracing :> es, UUID.UUIDEff :> es) => V.Vector Text -> UTCTime -> Eff es ()
+generateOtelFacetsBatch :: (Effectful.Reader.Static.Reader Config.AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, Tracing :> es, UUID.UUIDEff :> es, WithConnection :> es) => V.Vector Text -> UTCTime -> Eff es ()
 generateOtelFacetsBatch projectIds timestamp = do
   Log.logInfo "Starting batch OTLP facets generation" ("project_count", AE.toJSON $ V.length projectIds)
 

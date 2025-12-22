@@ -277,7 +277,7 @@ data IssueL = IssueL
 -- | Insert a single issue
 -- Note: ON CONFLICT only applies to api_change issues that are open (not acknowledged/archived)
 -- Other issue types will fail on duplicate inserts as intended
-insertIssue :: (WithConnection :> es, IOE :> es) => Issue -> Eff es ()
+insertIssue :: (IOE :> es, WithConnection :> es) => Issue -> Eff es ()
 insertIssue issue = void $ PG.execute q issue
   where
     q =
@@ -305,12 +305,12 @@ DO UPDATE SET
 
 
 -- | Select issue by ID
-selectIssueById :: (WithConnection :> es, IOE :> es) => IssueId -> Eff es (Maybe Issue)
+selectIssueById :: (IOE :> es, WithConnection :> es) => IssueId -> Eff es (Maybe Issue)
 selectIssueById iid = listToMaybe <$> PG.query (_selectWhere @Issue [[field| id |]]) (Only iid)
 
 
 -- | Select issues with filters, returns issues and total count for pagination
-selectIssues :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> Eff es (V.Vector IssueL, Int)
+selectIssues :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> Eff es (V.Vector IssueL, Int)
 selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM = do
   issues <- V.fromList <$> PG.query (Query $ encodeUtf8 q) (pid, limit, offset)
   countResult <- PG.query (Query $ encodeUtf8 countQ) (Only pid)
@@ -338,7 +338,7 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
 
 
 -- | Find open issue for endpoint
-findOpenIssueForEndpoint :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
+findOpenIssueForEndpoint :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
 findOpenIssueForEndpoint pid endpointHash = listToMaybe <$> PG.query q (pid, "api_change" :: Text, endpointHash)
   where
     q =
@@ -354,7 +354,7 @@ findOpenIssueForEndpoint pid endpointHash = listToMaybe <$> PG.query q (pid, "ap
 
 
 -- | Update issue with new anomaly data
-updateIssueWithNewAnomaly :: (WithConnection :> es, IOE :> es) => IssueId -> APIChangeData -> Eff es ()
+updateIssueWithNewAnomaly :: (IOE :> es, WithConnection :> es) => IssueId -> APIChangeData -> Eff es ()
 updateIssueWithNewAnomaly issueId newData = void $ PG.execute q (Aeson newData, issueId)
   where
     q =
@@ -369,7 +369,7 @@ updateIssueWithNewAnomaly issueId newData = void $ PG.execute q (Aeson newData, 
 
 
 -- | Update issue enhancement
-updateIssueEnhancement :: (WithConnection :> es, IOE :> es) => IssueId -> Text -> Text -> Text -> Eff es ()
+updateIssueEnhancement :: (IOE :> es, WithConnection :> es) => IssueId -> Text -> Text -> Text -> Eff es ()
 updateIssueEnhancement issueId title action complexity = void $ PG.execute q params
   where
     q =
@@ -386,7 +386,7 @@ updateIssueEnhancement issueId title action complexity = void $ PG.execute q par
 
 
 -- | Update issue criticality and severity
-updateIssueCriticality :: (WithConnection :> es, IOE :> es) => IssueId -> Bool -> Text -> Eff es ()
+updateIssueCriticality :: (IOE :> es, WithConnection :> es) => IssueId -> Bool -> Text -> Eff es ()
 updateIssueCriticality issueId isCritical severity = void $ PG.execute q params
   where
     q =
@@ -401,7 +401,7 @@ updateIssueCriticality issueId isCritical severity = void $ PG.execute q params
 
 
 -- | Acknowledge issue
-acknowledgeIssue :: (WithConnection :> es, IOE :> es) => IssueId -> Users.UserId -> Eff es ()
+acknowledgeIssue :: (IOE :> es, WithConnection :> es) => IssueId -> Users.UserId -> Eff es ()
 acknowledgeIssue issueId userId = void $ PG.execute q (userId, issueId)
   where
     q =

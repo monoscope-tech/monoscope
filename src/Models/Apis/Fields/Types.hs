@@ -260,7 +260,7 @@ instance Eq Field where
       && (f1.keyPath == f2.keyPath)
 
 
-bulkInsertFields :: (WithConnection :> es, IOE :> es) => V.Vector Field -> Eff es ()
+bulkInsertFields :: (IOE :> es, WithConnection :> es) => V.Vector Field -> Eff es ()
 bulkInsertFields fields = void $ PG.executeMany q (V.toList rowsToInsert)
   where
     q =
@@ -307,7 +307,7 @@ data Format = Format
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Format
 
 
-bulkInsertFormat :: (WithConnection :> es, IOE :> es) => V.Vector Format -> Eff es ()
+bulkInsertFormat :: (IOE :> es, WithConnection :> es) => V.Vector Format -> Eff es ()
 bulkInsertFormat formats = void $ PG.executeMany q $ V.toList rowsToInsert
   where
     q =

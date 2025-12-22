@@ -402,7 +402,7 @@ processWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widgetBas
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
 processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case widget.wType of
   Widget.WTAnomalies -> do
-    (issues, _) <-  Issues.selectIssues pid Nothing (Just False) (Just False) 2 0 Nothing Nothing
+    (issues, _) <- Issues.selectIssues pid Nothing (Just False) (Just False) 2 0 Nothing Nothing
     let issuesVM = V.map (AnomalyList.IssueVM False True now "24h") issues
     pure $ widget
       & #html
@@ -547,7 +547,7 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
     widgetId w = fromMaybe (maybeToMonoid $ slugify <$> w.title) w.id
 
 
-getDashAndVM :: (WithConnection :> es, IOE :> es, Error ServerError :> es, Wreq.HTTP :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
+getDashAndVM :: (Error ServerError :> es, IOE :> es, WithConnection :> es, Wreq.HTTP :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
 getDashAndVM dashId fileM = do
   dashVM <-
     Dashboards.getDashboardById dashId >>= \case
@@ -581,7 +581,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
   -- Also process widgets in tabs if they exist
   dash''' <- forOf (#tabs . _Just . traverse . #widgets . traverse) dash'' processWidgetWithDashboardId
 
-  freeTierExceeded <-  checkFreeTierExceeded pid project.paymentPlan
+  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
 
   let bwconf =
         (def :: BWConfig)
@@ -1079,7 +1079,7 @@ dashboardsGetH pid sortM embeddedM teamIdM filters = do
   -- Apply tag filtering
   let dashboards = if null filters.tag then dashboards' else V.filter (\d -> any (`elem` filters.tag) (V.toList d.tags)) dashboards'
 
-  teams <-  ManageMembers.getTeams pid
+  teams <- ManageMembers.getTeams pid
 
   -- Check if we're requesting in embedded mode (for modals, etc.)
   let embedded = embeddedM == Just "true" || embeddedM == Just "1" || embeddedM == Just "yes"
@@ -1089,7 +1089,7 @@ dashboardsGetH pid sortM embeddedM teamIdM filters = do
     then -- For embedded/team mode, use a minimal BWConfig that will still work with ToHtml instance
       addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded, hideActions = isTeamView, teams, tableActions = Nothing, filters, availableTags}
     else do
-      freeTierExceeded <-  checkFreeTierExceeded pid project.paymentPlan
+      freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
@@ -1186,21 +1186,22 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
       shouldBeStarred = baseTemplate `elem` ["_overview.yaml", "endpoint-stats.yaml"]
       newDashboard = do
         did <- UUIDId <$> UUID.genUUID
-        _ <- Dashboards.insert
-          Dashboards.DashboardVM
-            { id = did
-            , projectId = pid
-            , createdAt = now
-            , updatedAt = now
-            , createdBy = sess.user.id
-            , baseTemplate = Just baseTemplate
-            , schema = Nothing
-            , starredSince = if shouldBeStarred then Just now else Nothing
-            , homepageSince = Nothing
-            , tags = V.fromList tags
-            , title = title
-            , teams = V.empty
-            }
+        _ <-
+          Dashboards.insert
+            Dashboards.DashboardVM
+              { id = did
+              , projectId = pid
+              , createdAt = now
+              , updatedAt = now
+              , createdBy = sess.user.id
+              , baseTemplate = Just baseTemplate
+              , schema = Nothing
+              , starredSince = if shouldBeStarred then Just now else Nothing
+              , homepageSince = Nothing
+              , tags = V.fromList tags
+              , title = title
+              , teams = V.empty
+              }
         pure did.toText
   redirectTo <-
     if project.paymentPlan == "ONBOARDING"
@@ -1329,7 +1330,7 @@ dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
       _ <- Dashboards.deleteDashboardsByIds pid $ V.fromList itemId
       addSuccessToast "Selected dashboards were deleted successfully" Nothing
     "add_teams" -> do
-      teams <-  ManageMembers.getTeamsById pid (V.fromList teamHandles)
+      teams <- ManageMembers.getTeamsById pid (V.fromList teamHandles)
       if V.length teams /= length teamHandles
         then addErrorToast "Some teams not found or don't belong to this project" Nothing
         else

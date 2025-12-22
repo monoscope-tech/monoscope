@@ -115,14 +115,14 @@ newPersistentSessionId :: UUIDEff :> es => Eff es PersistentSessionId
 newPersistentSessionId = PersistentSessionId <$> UUID.genUUID
 
 
-insertSession :: (WithConnection :> es, IOE :> es) => PersistentSessionId -> UserId -> SessionData -> Eff es ()
+insertSession :: (IOE :> es, WithConnection :> es) => PersistentSessionId -> UserId -> SessionData -> Eff es ()
 insertSession pid userId sessionData = void $ PG.execute q (pid, userId, sessionData)
   where
     q = [sql| insert into users.persistent_sessions(id, user_id, session_data) VALUES (?, ?, ?) |]
 
 
 -- TODO: getting persistent session happens very frequently, so we should create a view for this, when our user base grows.
-getPersistentSession :: (WithConnection :> es, IOE :> es) => PersistentSessionId -> Eff es (Maybe PersistentSession)
+getPersistentSession :: (IOE :> es, WithConnection :> es) => PersistentSessionId -> Eff es (Maybe PersistentSession)
 getPersistentSession sessionId = listToMaybe <$> PG.query q value
   where
     q =
@@ -187,7 +187,7 @@ data Session = Session
 
 
 sessionAndProject
-  :: (WithConnection :> es, IOE :> es, EffError.Error ServerError :> es, EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Session) :> es)
+  :: (EffError.Error ServerError :> es, EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Session) :> es, IOE :> es, WithConnection :> es)
   => Projects.ProjectId
   -> Eff es (Session, Projects.Project)
 sessionAndProject pid = do

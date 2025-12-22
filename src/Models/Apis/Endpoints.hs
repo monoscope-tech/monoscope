@@ -21,6 +21,7 @@ import Data.Time (UTCTime, ZonedTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -28,7 +29,6 @@ import Database.PostgreSQL.Simple.ToField (toField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
 import Effectful
-import Database.PostgreSQL.Simple qualified as PGS
 import Effectful.PostgreSQL (WithConnection, withConnection)
 import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
@@ -65,7 +65,7 @@ data Endpoint = Endpoint
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Endpoint
 
 
-bulkInsertEndpoints :: (WithConnection :> es, IOE :> es) => V.Vector Endpoint -> Eff es ()
+bulkInsertEndpoints :: (IOE :> es, WithConnection :> es) => V.Vector Endpoint -> Eff es ()
 bulkInsertEndpoints endpoints = void $ PG.executeMany q $ V.toList rowsToInsert
   where
     q =
@@ -101,7 +101,7 @@ data EndpointRequestStats = EndpointRequestStats
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
-endpointRequestStatsByProject :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Text -> Eff es (V.Vector EndpointRequestStats)
+endpointRequestStatsByProject :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Text -> Eff es (V.Vector EndpointRequestStats)
 endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = withConnection \conn -> liftIO $ V.fromList <$> PGS.query conn (Query $ encodeUtf8 q) queryParams
   where
     -- Construct the list of parameters conditionally
@@ -162,7 +162,7 @@ data HostEvents = HostEvents
   deriving anyclass (FromRow, NFData, ToRow)
 
 
-dependenciesAndEventsCount :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Text -> Text -> Int -> Text -> Eff es (V.Vector HostEvents)
+dependenciesAndEventsCount :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Text -> Int -> Text -> Eff es (V.Vector HostEvents)
 dependenciesAndEventsCount pid requestType sortT skip timeF = V.fromList <$> PG.query (Query $ encodeUtf8 q) (pid, isOutgoing, isOutgoing, pid, skip)
   where
     orderBy = case sortT of
@@ -209,7 +209,7 @@ LIMIT 20 OFFSET ?
       |]
 
 
-countEndpointInbox :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Text -> Text -> Eff es Int
+countEndpointInbox :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Text -> Eff es Int
 countEndpointInbox pid host requestType = do
   result <- PG.query (Query $ encodeUtf8 q) (pid, host)
   case result of

@@ -324,7 +324,7 @@ buildCriticalityPrompt issue =
 
 
 -- | Update issue classification in database
-updateIssueClassification :: (WithConnection :> es, IOE :> es) => Issues.IssueId -> Bool -> Int -> Int -> Eff es ()
+updateIssueClassification :: (IOE :> es, WithConnection :> es) => Issues.IssueId -> Bool -> Int -> Int -> Eff es ()
 updateIssueClassification issueId isCritical breakingCount incrementalCount = do
   let severity
         | isCritical = "critical"

@@ -88,7 +88,7 @@ facetColumns =
 
 -- | Generate facets for a project from a specified table and save to database
 generateAndSaveFacets
-  :: (WithConnection :> es, IOE :> es, Effectful.Reader.Static.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, UUID.UUIDEff :> es)
+  :: (Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" WithConnection :> es, UUID.UUIDEff :> es, WithConnection :> es)
   => ProjectId
   -> Text
   -> [Text]
@@ -221,7 +221,7 @@ buildOptimizedFacetQuery tableName _ =
 
 -- | Get a facet summary for a project/table with time range extrapolation
 getFacetSummary
-  :: (WithConnection :> es, IOE :> es) => ProjectId -> Text -> UTCTime -> UTCTime -> Eff es (Maybe FacetSummary)
+  :: (IOE :> es, WithConnection :> es) => ProjectId -> Text -> UTCTime -> UTCTime -> Eff es (Maybe FacetSummary)
 getFacetSummary projectId tableName fromTime toTime = checkpoint "getFacetSummary" $ do
   -- Calculate time span in minutes for more precise scaling
   let projectIdText = projectId.toText

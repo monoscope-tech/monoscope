@@ -51,14 +51,13 @@ import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
 import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPWreq)
 import Data.Either.Extra
 import Data.HashMap.Strict qualified as HashMap
-import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool)
+import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, withResource)
 import Data.ProtoLens.Encoding (decodeMessage)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
-import Data.Pool (withResource)
 import Database.PostgreSQL.Simple (Connection, Only (..), close, connectPostgreSQL, execute, execute_)
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory, MigrationInitialization))
@@ -359,26 +358,29 @@ testSessionHeader pool = do
       & liftIO
 
   -- Grant sudo privileges to test user
-  _ <- liftIO $
-    withResource pool \conn ->
-      PGS.execute conn
+  _ <- liftIO
+    $ withResource pool \conn ->
+      PGS.execute
+        conn
         [sql|UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000001'|]
         ()
 
   -- Create a test project and add it to the user's session
   let testProjectId = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
-  _ <- liftIO $
-    withResource pool \conn ->
-      PGS.execute conn
+  _ <- liftIO
+    $ withResource pool \conn ->
+      PGS.execute
+        conn
         [sql|INSERT INTO projects.projects (id, title, description, payment_plan, active, deleted_at, weekly_notif, daily_notif)
          VALUES (?, 'Test Project', 'Test Description', 'FREE', true, NULL, true, true)
          ON CONFLICT (id) DO UPDATE SET title = 'Test Project', description = 'Test Description', payment_plan = 'FREE', active = true, deleted_at = NULL, weekly_notif = true, daily_notif = true|]
         (Only testProjectId)
 
   -- Add project member permissions
-  _ <- liftIO $
-    withResource pool \conn ->
-      PGS.execute conn
+  _ <- liftIO
+    $ withResource pool \conn ->
+      PGS.execute
+        conn
         [sql|INSERT INTO projects.project_members (project_id, user_id, permission)
          VALUES (?, '00000000-0000-0000-0000-000000000001', 'admin')
          ON CONFLICT (project_id, user_id) DO UPDATE SET permission = 'admin'|]
@@ -452,7 +454,7 @@ runTestBackgroundWithLogger logger appCtx process = do
 
 
 -- | Run an effect action in test context (for non-servant handlers like Auth.sessionByID)
-runTestEffect :: Pool Connection -> Log.Logger -> TracerProvider -> (forall es. (WithConnection :> es, Error ServantS.ServerError :> es, HTTP :> es, IOE :> es, Log :> es, Time :> es, Tracing :> es, UUIDEff :> es) => Eff es a) -> IO (Either ServantS.ServerError a)
+runTestEffect :: Pool Connection -> Log.Logger -> TracerProvider -> (forall es. (Error ServantS.ServerError :> es, HTTP :> es, IOE :> es, Log :> es, Time :> es, Tracing :> es, UUIDEff :> es, WithConnection :> es) => Eff es a) -> IO (Either ServantS.ServerError a)
 runTestEffect pool logger tp action = do
   logLevel <- Logging.getLogLevelFromEnv
   action
@@ -753,14 +755,16 @@ createRequestDumps :: TestResources -> Projects.ProjectId -> Int -> IO ()
 createRequestDumps TestResources{..} projectId numRequestsPerEndpoint = do
   endpoints <-
     withResource trPool \conn ->
-      V.fromList <$> PGS.query conn
-        [sql|
+      V.fromList
+        <$> PGS.query
+          conn
+          [sql|
     SELECT url_path, url_params, method, host, hash
     FROM apis.endpoints
     WHERE project_id = ?
   |]
-        (Only projectId)
-      :: IO (V.Vector (Text, AE.Value, Text, Text, Text))
+          (Only projectId)
+        :: IO (V.Vector (Text, AE.Value, Text, Text, Text))
 
   currentTime <- getCurrentTime
   forM_ endpoints $ \(path, _, method, host, hash) -> do
@@ -818,7 +822,8 @@ createRequestDumps TestResources{..} projectId numRequestsPerEndpoint = do
               }
       let summary = SummaryGenerator.generateSummary otelRecord
       void $ withResource trPool \conn ->
-        PGS.execute conn
+        PGS.execute
+          conn
           [sql|
         INSERT INTO otel_logs_and_spans
         (id, project_id, timestamp, start_time, name, kind, status_code,

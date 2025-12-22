@@ -42,8 +42,8 @@ import Pages.Bots.Utils (BotResponse (..), BotType (..), Channel, contentTypeHea
 import Pkg.AI (callOpenAIAPI, systemPrompt)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..))
-import Pkg.DeriveUtils (idFromText)
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DeriveUtils (idFromText)
 import Pkg.Parser (parseQueryToAST)
 import Relude hiding (ask, asks)
 import Servant.API (Header)

@@ -40,8 +40,8 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
         "+name" -> "name"
         _ -> "events"
 
-  hostsAndEvents <-  Endpoints.dependenciesAndEventsCount pid requestType sortV (fromMaybe 0 skipM) filterV
-  freeTierExceeded <-  checkFreeTierExceeded pid project.paymentPlan
+  hostsAndEvents <- Endpoints.dependenciesAndEventsCount pid requestType sortV (fromMaybe 0 skipM) filterV
+  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
 
   currTime <- Time.currentTime
 
@@ -186,9 +186,9 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
         "-name" -> Just "name"
         "+name" -> Just "name"
         _ -> Just "events"
-  endpointStats <-  Endpoints.endpointRequestStatsByProject pid ackd archived hostParam sortV searchM page (fromMaybe "" requestTypeM)
-  inboxCount <-  Endpoints.countEndpointInbox pid host (fromMaybe "Incoming" requestTypeM)
-  freeTierExceeded <-  checkFreeTierExceeded pid project.paymentPlan
+  endpointStats <- Endpoints.endpointRequestStatsByProject pid ackd archived hostParam sortV searchM page (fromMaybe "" requestTypeM)
+  inboxCount <- Endpoints.countEndpointInbox pid host (fromMaybe "Incoming" requestTypeM)
+  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
 
   let requestType = fromMaybe "Incoming" requestTypeM
       baseUrl = [PyF.fmt|/p/{pid.toText}/endpoints?filter={currentFilterTab}&request_type={requestType}&host={host}&sort={currentSort}|]
