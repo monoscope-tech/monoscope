@@ -68,8 +68,22 @@ jobs:
       - name: Build dependencies
         run: cabal build --only-dependencies all -j4
 
-      - name: Build project
-        run: cabal build all -j4
+      - name: Build project with HIE files
+        run: cabal build all -j4 --ghc-options="-fwrite-ide-info -hiedir=.hiefiles"
+
+      - name: Upload HIE files
+        uses: actions/upload-artifact@v4
+        with:
+          name: hiefiles
+          path: .hiefiles
+          retention-days: 1
+
+      - name: Upload dist-newstyle
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-newstyle
+          path: dist-newstyle
+          retention-days: 1
 
   test:
     name: Test ${{ matrix.test-suite }}
@@ -189,6 +203,47 @@ jobs:
         with:
           path: src/
           fail-on: warning
+
+  weeder:
+    name: Check unused code (weeder)
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: 9.12.2
+          cabal-version: 'latest'
+
+      - name: Cache weeder
+        id: cache-weeder
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/bin/weeder
+          key: weeder-2.9.0-ghc-9.12.2
+
+      - name: Install weeder
+        if: steps.cache-weeder.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.local/bin
+          cabal update
+          cabal install weeder-2.9.0 --install-method=copy --installdir=$HOME/.local/bin
+
+      - name: Download HIE files
+        uses: actions/download-artifact@v4
+        with:
+          name: hiefiles
+          path: .hiefiles
+
+      - name: Download dist-newstyle
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-newstyle
+          path: dist-newstyle
+
+      - name: Run weeder
+        run: ~/.local/bin/weeder --config config/weeder.toml
 
   ui-tests:
     name: UI Tests
