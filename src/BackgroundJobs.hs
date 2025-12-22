@@ -228,10 +228,11 @@ processBackgroundJob authCtx job bgJob =
               action `finally` do
                 -- Reset timeout and release lock. If unlock fails, session-level lock auto-releases on disconnect.
                 _ <- try @_ @SomeException $ PG.execute [sql|RESET statement_timeout|] ()
-                result <- try $ PG.execute [sql|SELECT pg_advisory_unlock(hashtext(?))|] (Only lockName)
+                result <- try @_ @SomeException $ PG.query [sql|SELECT pg_advisory_unlock(hashtext(?))|] (Only lockName)
                 case result of
-                  Left (e :: SomeException) -> Log.logAttention "Failed to release advisory lock (will auto-release on disconnect)" (AE.object ["lock_name" AE..= lockName, "error" AE..= show e])
-                  Right _ -> pass
+                  Left e -> Log.logAttention "Failed to release advisory lock (will auto-release on disconnect)" (AE.object ["lock_name" AE..= lockName, "error" AE..= show e])
+                  Right [Only True] -> pass
+                  Right other -> Log.logAttention "Advisory unlock returned unexpected result" (AE.object ["lock_name" AE..= lockName, "result" AE..= show (other :: [Only Bool])])
             _ -> Log.logInfo "Daily job already running in another pod, skipping" ()
 
         runDailyJobScheduling = do
@@ -350,8 +351,7 @@ runHourlyJob scheduledTime hour = do
   ctx <- ask @Config.AuthContext
   let oneHourAgo = addUTCTime (-3600) scheduledTime
   activeProjects <-
-    V.fromList
-      . coerce @[Only Projects.ProjectId] @[Projects.ProjectId]
+    coerce @[Only Projects.ProjectId] @[Projects.ProjectId]
       <$> PG.query
         [sql| SELECT DISTINCT project_id
               FROM otel_logs_and_spans ols
@@ -364,7 +364,7 @@ runHourlyJob scheduledTime hour = do
 
   -- Batch projects in groups of 10 (reduced from 100 to prevent timeouts)
   let batchSize = 10
-      projectBatches = chunksOf batchSize $ V.toList activeProjects
+      projectBatches = chunksOf batchSize activeProjects
 
   -- For each batch, create a single job with multiple project IDs
   liftIO $ withResource ctx.jobsPool \conn ->
