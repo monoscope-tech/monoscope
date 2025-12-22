@@ -127,7 +127,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
           { config = def{elemID = "monitorsListForm", addPadding = True}
           , columns =
               [ col "" renderMonitorIcon & withAttrs [class_ "shrink-0"]
-              , col "" (renderMonitorContent pid) & withAttrs [class_ "w-full"]
+              , col "" renderMonitorContent & withAttrs [class_ "w-full"]
               ]
           , rows = allItems
           , features =
@@ -220,8 +220,8 @@ renderMonitorIcon item = do
 
 
 -- | Render monitor content column
-renderMonitorContent :: Projects.ProjectId -> UnifiedMonitorItem -> Html ()
-renderMonitorContent _ item = do
+renderMonitorContent :: UnifiedMonitorItem -> Html ()
+renderMonitorContent item = do
   div_ [class_ "w-full flex flex-col gap-2 shrink-1"] do
     -- Title and tags row
     div_ [class_ "flex gap-10 items-center"] do
@@ -312,7 +312,7 @@ instance ToHtml UnifiedMonitorItem where
   toHtmlRaw item =
     div_ [class_ "border-b flex p-4 gap-4 itemsListItem hover:bg-fillWeak transition-colors group/card"] do
       toHtmlRaw $ renderMonitorIcon item
-      toHtmlRaw $ renderMonitorContent undefined item
+      toHtmlRaw $ renderMonitorContent item
 
 
 -- | Shared status badge component used across monitors
