@@ -141,7 +141,7 @@ effToServantHandlerTest :: AuthContext -> Log.Logger -> TracerProvider -> ATBase
 effToServantHandlerTest env logger tp app =
   app
     & Effectful.Reader.Static.runReader env
-    & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 10])
+    & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 1000])
     & runHTTPGolden "./golden/"
     & runWithConnectionPool env.pool
     & runLabeled @"timefusion" (runWithConnectionPool env.timefusionPgPool)

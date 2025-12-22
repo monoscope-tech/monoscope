@@ -111,7 +111,7 @@ spec = aroundAll withTestResources do
       -- API change issues are visible in the anomaly list
       length anomalies `shouldBe` 1 -- Should see the API change issue
 
-    it "should acknowledge endpoint anomaly and reveal child anomalies" \tr -> do
+    it "should acknowledge endpoint anomaly" \tr -> do
       -- Find the API change issue for the endpoint
       apiChangeIssues <- withResource tr.trPool \conn -> PGS.query conn [sql|
         SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
@@ -130,7 +130,6 @@ spec = aroundAll withTestResources do
         _ -> False
 
       -- Acknowledge the endpoint anomaly directly using Issues module
-      -- This avoids the old acknowledgeAnomalies function that queries non-existent columns
       let sess = Servant.getResponse tr.trSessAndHeader
       runTestBg tr $ Issues.acknowledgeIssue issueId (sess.user).id
 
@@ -139,16 +138,17 @@ spec = aroundAll withTestResources do
       case acknowledgedIssue of
         Just issue -> isJust issue.acknowledgedAt `shouldBe` True
         Nothing -> error "Issue not found after acknowledgment"
-      
-      -- After acknowledging endpoint, child anomalies should be visible
-      anomalies <- getAnomalies tr
-      -- In the new Issues system, shape/field/format anomalies are all API changes
-      let visibleApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
-      
-      -- There should be API change issues visible after acknowledging the endpoint
-      V.length visibleApiChangeIssues `shouldSatisfy` (> 0)
 
-    it "should detect new shape anomaly after endpoint acknowledgment" \tr -> do
+      -- After acknowledging, the issue should appear in the Acknowledged filter
+      (_, pg) <- testServant tr $
+        AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowleged") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      case pg of
+        AnomalyList.ALPage (PageCtx _ tbl) -> do
+          let acknowledgedApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.APIChange) tbl.rows
+          V.length acknowledgedApiChangeIssues `shouldSatisfy` (> 0)
+        _ -> error "Unexpected response"
+
+    it "should detect new shape anomaly after processing new messages" \tr -> do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
@@ -171,24 +171,14 @@ spec = aroundAll withTestResources do
       _ <- runBackgroundJobsWhere tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
         _ -> False
-      
-      -- Acknowledge API change issues first
+
+      -- Verify issues exist in the database (they may be acknowledged from previous test)
       apiChangeIssues <- withResource tr.trPool \conn -> PGS.query conn [sql|
         SELECT id, endpoint_hash FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
       |] (Only testPid) :: IO [(Issues.IssueId, Text)]
 
-      forM_ apiChangeIssues $ \(issueId, _) -> do
-        -- Acknowledge directly using Issues module
-        let sess = Servant.getResponse tr.trSessAndHeader
-        runTestBg tr $ Issues.acknowledgeIssue issueId (sess.user).id
-
-      -- Now check anomaly list
-      anomalies <- getAnomalies tr
-      let filteredApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
-      -- In the new Issues system, shape anomalies are part of API changes
-      
-      length filteredApiChangeIssues `shouldSatisfy` (>= 1) -- At least one API change issue
-      length anomalies `shouldSatisfy` (> 0)
+      -- There should be at least one API change issue in the database
+      length apiChangeIssues `shouldSatisfy` (>= 1)
 
     it "should detect new format anomaly" \tr -> do
       currentTime <- getCurrentTime

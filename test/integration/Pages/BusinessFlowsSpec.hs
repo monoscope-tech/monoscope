@@ -306,7 +306,7 @@ setupProjectWithSubscription pool testPid plan = do
   subId <- Projects.LemonSubId <$> UUIDV4.nextRandom
   currentZonedTime <- getZonedTime
   _ <- withResource pool \conn -> PGS.execute conn [sql|
-    INSERT INTO apis.subscriptions (id, created_at, updated_at, project_id, order_id, sub_id, first_sub_item_id, variant_name, user_email)
+    INSERT INTO apis.subscriptions (id, created_at, updated_at, project_id, order_id, subscription_id, first_sub_id, product_name, user_email)
     VALUES (?, ?, ?, ?, 12345, 67890, 111, 'Test Plan', 'test@example.com')
   |] (subId, currentZonedTime, currentZonedTime, testPid.toText)
   _ <- withResource pool \conn -> PGS.execute conn [sql|UPDATE projects.projects SET payment_plan = ?, order_id = '67890', sub_id = '12345', first_sub_item_id = '111' WHERE id = ?|] (plan, testPid)
