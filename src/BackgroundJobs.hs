@@ -8,7 +8,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.Effectful.UUID qualified as UUID
 import Data.Either qualified as Unsafe
 import Data.HashMap.Strict qualified as HM
-import Data.List as L (foldl)
+import Data.List as L (foldl, partition)
 import Data.List.Extra (chunksOf, groupBy)
 import Data.Map.Lazy qualified as Map
 import Data.Pool (withResource)
@@ -467,17 +467,13 @@ logsPatternExtraction scheduledTime pid = do
     paginate :: Int -> UTCTime -> ATBackgroundCtx ()
     paginate offset startTime = do
       otelEvents <- PG.query [sql| SELECT kind, id::text, coalesce(body::text,''), coalesce(summary::text,'') FROM otel_logs_and_spans WHERE project_id = ?   AND timestamp >= ?   AND timestamp < ?   AND (summary_pattern IS NULL  OR log_pattern IS NULL) OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
-      let count = length otelEvents
-      unless (null otelEvents) $ do
-        Log.logInfo "Fetching events for pattern extraction" ("offset", AE.toJSON offset, "count", AE.toJSON count)
-        let logEvents = filter ((== "log") . (\(k, _, _, _) -> k)) otelEvents
-            logPairs = V.fromList $ map (\(_, idTxt, body, _) -> (idTxt, body)) logEvents
-        processPatterns "log" "log_pattern" logPairs pid scheduledTime startTime
-        let summaryEvents = filter ((/= "log") . (\(k, _, _, _) -> k)) otelEvents
-            summaryPairs = V.fromList $ map (\(_, idTxt, _, summary) -> (idTxt, summary)) summaryEvents
-        processPatterns "summary" "summary_pattern" summaryPairs pid scheduledTime startTime
+      unless (null otelEvents) do
+        Log.logInfo "Fetching events for pattern extraction" ("offset", AE.toJSON offset, "count", AE.toJSON (length otelEvents))
+        let (logs, summaries) = L.partition (\(k, _, _, _) -> k == "log") otelEvents
+        processPatterns "log" "log_pattern" (V.fromList [(i, body) | (_, i, body, _) <- logs]) pid scheduledTime startTime
+        processPatterns "summary" "summary_pattern" (V.fromList [(i, s) | (_, i, _, s) <- summaries]) pid scheduledTime startTime
         Log.logInfo "Completed events pattern extraction for page" ("offset", AE.toJSON offset)
-      Relude.when (count == limitVal) $ paginate (offset + limitVal) startTime
+      Relude.when (length otelEvents == limitVal) $ paginate (offset + limitVal) startTime
 
 
 -- | Generic pattern extraction for logs or summaries
@@ -586,15 +582,15 @@ processOneMinuteErrors scheduledTime pid = do
       let errorsByTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.spanId == b.spanId) allErrors
       processProjectErrors pid allErrors
       -- Batch all error updates into a single query using unnest (avoids N+1 pattern)
-      let updates = mapMaybe mkErrorUpdate errorsByTrace
-          mkErrorUpdate groupedErrors = do
+      let mkErrorUpdate groupedErrors = do
             (firstError, _) <- V.uncons groupedErrors
             sId <- firstError.spanId
             tId <- firstError.traceId
             let mappedErrors = V.map (\x -> AE.object ["type" AE..= x.errorType, "message" AE..= x.message, "stack_trace" AE..= x.stackTrace]) groupedErrors
             pure (sId, tId, AE.toJSON mappedErrors)
-      unless (null updates) $ do
-        let (spanIds, traceIds, errorsJson) = V.unzip3 $ V.fromList updates
+          updates = V.mapMaybe mkErrorUpdate (V.fromList errorsByTrace)
+      unless (V.null updates) $ do
+        let (spanIds, traceIds, errorsJson) = V.unzip3 updates
         rowsUpdated <-
           PG.execute
             [sql| UPDATE otel_logs_and_spans o
@@ -602,8 +598,8 @@ processOneMinuteErrors scheduledTime pid = do
                   FROM (SELECT unnest(?::text[]) AS span_id, unnest(?::text[]) AS trace_id, unnest(?::jsonb[]) AS errors) u
                   WHERE o.project_id = ? AND o.context___span_id = u.span_id AND o.context___trace_id = u.trace_id |]
             (spanIds, traceIds, errorsJson, pid)
-        Relude.when (fromIntegral rowsUpdated /= length updates)
-          $ Log.logAttention "Some error updates had no effect" (AE.object ["project_id" AE..= pid.toText, "expected" AE..= length updates, "actual" AE..= rowsUpdated])
+        Relude.when (fromIntegral rowsUpdated /= V.length updates)
+          $ Log.logAttention "Some error updates had no effect" (AE.object ["project_id" AE..= pid.toText, "expected" AE..= V.length updates, "actual" AE..= rowsUpdated])
       Relude.when (V.length spansWithErrors == 30) $ do
         processErrorsPaginated oneMinuteAgo (skip + 30)
         pass
