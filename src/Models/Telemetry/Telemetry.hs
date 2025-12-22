@@ -97,7 +97,7 @@ import System.Logging qualified as Log
 import System.Types (DB)
 import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
-import Utils (formatUTC, lookupValueText, toXXHash)
+import Utils (lookupValueText, toXXHash)
 
 
 -- Helper function to get nested value from a map using dot notation
@@ -470,14 +470,14 @@ data MetricChartListData = MetricChartListData
   deriving anyclass (FromRow, NFData, ToRow)
 
 
-getTraceDetails :: DB es => Projects.ProjectId -> Text -> Maybe UTCTime -> Eff es (Maybe Trace)
-getTraceDetails pid trId tme = listToMaybe <$> PG.query (Query $ encodeUtf8 q) (pid.toText, trId)
+getTraceDetails :: DB :> es => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe Trace)
+getTraceDetails pid trId tme now = dbtToEff $ queryOne q (pid.toText, start, end, trId)
   where
-    (startTime, endTime) = case tme of
-      Nothing -> ("now() - interval '1 day'", "now()")
-      Just ts -> ("'" <> formatUTC (addUTCTime (-(60 * 5)) ts) <> "'", "'" <> formatUTC (addUTCTime (60 * 5) ts) <> "'")
+    (start, end) = case tme of
+      Nothing -> (addUTCTime (-14 * 24 * 3600) now, now)
+      Just ts -> (addUTCTime (-(60 * 5)) ts, addUTCTime (60 * 5) ts)
     q = do
-      [text| SELECT
+      [sql| SELECT
               context___trace_id,
               MIN(start_time) AS trace_start_time,
               MAX(COALESCE(end_time, start_time)) AS trace_end_time,
@@ -485,7 +485,7 @@ getTraceDetails pid trId tme = listToMaybe <$> PG.query (Query $ encodeUtf8 q) (
               COUNT(context->>'span_id') AS total_spans,
               ARRAY_REMOVE(ARRAY_AGG(DISTINCT jsonb_extract_path_text(resource, 'service.name')), NULL) AS service_names
             FROM otel_logs_and_spans
-            WHERE  project_id = ? AND timestamp BETWEEN $startTime AND $endTime AND context___trace_id = ?
+            WHERE  project_id = ? AND timestamp BETWEEN ? AND ? AND context___trace_id = ?
             GROUP BY context___trace_id;
         |]
 
@@ -499,18 +499,19 @@ logRecordByProjectAndId pid createdAt rdId = listToMaybe <$> PG.query q (created
              FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
-getSpanRecordsByTraceId :: DB es => Projects.ProjectId -> Text -> Maybe UTCTime -> Eff es [OtelLogsAndSpans]
-getSpanRecordsByTraceId pid trId tme = PG.query (Query $ encodeUtf8 q) (pid.toText, trId)
+getSpanRecordsByTraceId :: DB :> es => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (V.Vector OtelLogsAndSpans)
+getSpanRecordsByTraceId pid trId tme now = do
+  dbtToEff $ query q (pid.toText, start, end, trId)
   where
     (start, end) = case tme of
-      Nothing -> ("now() - interval '1 day'", "now()")
-      Just ts -> ("'" <> formatUTC (addUTCTime (-(60 * 5)) ts) <> "'", "'" <> formatUTC (addUTCTime (60 * 5) ts) <> "'")
+      Nothing -> (addUTCTime (-14 * 24 * 3600) now, now)
+      Just ts -> (addUTCTime (-(60 * 5)) ts, addUTCTime (60 * 5) ts)
     q =
-      [text|
+      [sql|
       SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
                   hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date::timestamptz
-              FROM otel_logs_and_spans where project_id=? and timestamp >= $start AND timestamp <= $end and context___trace_id=? ORDER BY start_time ASC;
-    |]
+              FROM otel_logs_and_spans where project_id=? and timestamp BETWEEN ? AND ? and context___trace_id=? ORDER BY start_time ASC;
+        |]
 
 
 getSpanRecordsByTraceIds :: DB es => Projects.ProjectId -> V.Vector Text -> Maybe UTCTime -> Eff es [OtelLogsAndSpans]

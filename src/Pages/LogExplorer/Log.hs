@@ -53,8 +53,8 @@ import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
 import Models.Apis.Monitors (MonitorAlertConfig (..))
 import Models.Apis.Monitors qualified as Monitors
-import Models.Projects.ProjectMembers (TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ManageMembers
+import Pages.Components (resizer_)
 import Pkg.AI (callOpenAIAPI, systemPrompt)
 import Pkg.AI qualified as AI
 
@@ -332,72 +332,6 @@ renderFacets facetSummary = do
                     div_ [class_ "hidden peer-checked/more:block space-y-1"] $ forM_ hiddenValues \(_, value) -> renderFacetValue value
 
 
-resizer_ :: Text -> Text -> Bool -> Html ()
-resizer_ targetId urlParam increasingDirection =
-  div_
-    [ class_ "group px-r relative shrink-0 h-full flex items-center justify-center cursor-ew-resize overflow-visible select-none touch-none"
-    , term "data-resize-target" targetId
-    , term "data-resize-direction" (if increasingDirection then "increase" else "decrease")
-    , term "data-url-param" urlParam
-    , [__|
-        js 
-          let rafId = null;
-          let currentWidth = null;
-          
-          function applyMove(el, newWidth){
-            currentWidth = newWidth;
-            if (rafId) cancelAnimationFrame(rafId);
-            rafId = requestAnimationFrame(() => {
-              el.style.width = newWidth + 'px';
-              rafId = null;
-            });
-          }
-          return {applyMove}
-        end
-        on pointerdown
-          add .select-none to body then
-          set :startX to event.clientX then
-          set :target to #{@data-resize-target} then
-          set :startWidth to the :target's offsetWidth then
-          set :urlParam to @data-url-param then
-          set :isRightPanel to (@data-resize-direction == 'decrease') then
-          set :lastWidth to :startWidth then
-          call me.setPointerCapture(event.pointerId)
-        end
-
-        on pointermove from #facets_and_loglist
-            if :startX is not null
-                set deltaX to (event.clientX - :startX) then
-                if :isRightPanel
-                then set newWidth to :startWidth - deltaX
-                else set newWidth to :startWidth + deltaX end
-                if newWidth < 0 set newWidth to 0 end
-                set :lastWidth to newWidth then
-                call applyMove(:target, newWidth)
-                then send "loglist-resize" to <body/>
-            end
-        end
-
-        on pointerup from #facets_and_loglist or pointercancel
-          if :startX is not null
-            set finalWidth to :lastWidth then
-            remove .select-none from body then
-
-            call updateUrlState(:urlParam, finalWidth) then
-            call localStorage.setItem('resizer-'+:urlParam, finalWidth + 'px') then
-            set :startX to null
-          end
-        end
-      |]
-    ]
-    $ div_ [class_ "h-full border-l hover:border-strokeBrand-strong"]
-    $ div_
-      [ id_ $ "resizer-" <> urlParam
-      , class_ "absolute left-1/2 top-1/2 z-50 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-bgBase rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"
-      ]
-    $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
-
-
 keepNonEmpty :: Maybe Text -> Maybe Text
 keepNonEmpty Nothing = Nothing
 keepNonEmpty (Just "") = Nothing
@@ -666,21 +600,19 @@ data ApiLogsPageData = ApiLogsPageData
   }
 
 
--- virtualTableTrigger is deprecated - we now use JSON responses for all data updates
-
-virtualTable :: ApiLogsPageData -> Html ()
-virtualTable page = do
+virtualTable :: Projects.ProjectId -> Maybe Text -> Html ()
+virtualTable pid initialFetchUrl = do
   termRaw
     "log-list"
-    [ id_ "resultTable"
-    , class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0 rr-block"
-    , term "windowTarget" "logList"
-    , term "projectId" page.pid.toText
-    ]
+    ( [ id_ "resultTable"
+      , class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0 rr-block"
+      , term "windowTarget" "logList"
+      , term "projectId" pid.toText
+      ]
+        <> [term "initialFetchUrl" (fromMaybe "" initialFetchUrl) | isJust initialFetchUrl]
+    )
     ("" :: Text)
 
-
--- visualizationTabs_ has been moved to Pkg.Components.LogQueryBox
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
@@ -859,7 +791,7 @@ apiLogsPage page = do
           -- Logs view section (also within the scrollable container)
           div_ [class_ "flex-1 min-h-0 h-full flex flex-col"] do
             -- Virtual table for logs
-            div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block"] $ virtualTable page
+            div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block"] $ virtualTable page.pid Nothing
 
         -- Alert configuration panel on the right
         div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block"] $ resizer_ "alert_container" "alert_width" False
@@ -1107,8 +1039,8 @@ alertConfigurationForm_ project alertM teams = do
                                      })
                                    end|]
                             ]
-                          ++ [required_ "" | req]
-                          ++ [value_ (maybe "" show vM) | isJust vM]
+                            ++ [required_ "" | req]
+                            ++ [value_ (maybe "" show vM) | isJust vM]
                         span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
 
                 thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)

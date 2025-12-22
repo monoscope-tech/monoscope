@@ -7,6 +7,7 @@ module Pages.Telemetry (
   -- Trace
   traceH,
   TraceDetailsGet (..),
+  tracePage,
 ) where
 
 import Data.Aeson qualified as AE
@@ -71,16 +72,8 @@ instance ToHtml MetricsOverViewGet where
   toHtmlRaw = toHtml
 
 
--- Trace types
-data PageProps = PageProps
-  { pid :: Projects.ProjectId
-  , traceItem :: Telemetry.Trace
-  , spanRecords :: V.Vector Telemetry.SpanRecord
-  }
-
-
 data TraceDetailsGet
-  = TraceDetails PageProps
+  = TraceDetails Projects.ProjectId Telemetry.Trace (V.Vector Telemetry.SpanRecord)
   | SpanDetails Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Telemetry.OtelLogsAndSpans) (Maybe Text) (Maybe Text)
   | TraceDetailsNotFound Text
 
@@ -113,7 +106,7 @@ data SpanTree = SpanTree
 
 
 instance ToHtml TraceDetailsGet where
-  toHtml (TraceDetails p) = toHtml $ tracePage p
+  toHtml (TraceDetails pid tr spanRecs) = toHtml $ tracePage pid tr spanRecs
   toHtml (SpanDetails pid s aptSpn left right) = toHtml $ LogItem.expandedItemView pid s aptSpn left right
   toHtml (TraceDetailsNotFound msg) = toHtml msg
   toHtmlRaw = toHtml
@@ -199,11 +192,11 @@ metricBreakdownGetH pid metricName labelM = do
 -- Trace handler
 traceH :: Projects.ProjectId -> Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)
 traceH pid trId timestamp spanIdM nav = do
+  now <- Time.currentTime
   if isJust nav
     then do
-      spanRecordsList <- Telemetry.getSpanRecordsByTraceId pid trId timestamp
-      let spanRecords' = V.fromList spanRecordsList
-          spanRecords = V.mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord spanRecords'
+      spanRecords' <- Telemetry.getSpanRecordsByTraceId pid trId timestamp now
+      let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
       let sid = fromMaybe "" spanIdM
           targetSpan = fromMaybe (V.head spanRecords') (V.find (\x -> maybe False (\s -> s.span_id == Just sid) x.context) spanRecords')
           targetIndex = fromMaybe 0 (V.findIndex (\x -> maybe False (\s -> s.span_id == Just sid) x.context) spanRecords')
@@ -218,13 +211,12 @@ traceH pid trId timestamp spanIdM nav = do
       let atpSpan = V.find (\x -> x.name == Just "monoscope.http") spanRecords'
       addRespHeaders $ SpanDetails pid targetSpan atpSpan (prevSpan >>= \s -> Just s.spanId) (nextSpan >>= \s -> Just s.spanId)
     else do
-      traceItemM <- Telemetry.getTraceDetails pid trId timestamp
+      traceItemM <- Telemetry.getTraceDetails pid trId timestamp now
       case traceItemM of
         Just traceItem -> do
-          spanRecords' <- Telemetry.getSpanRecordsByTraceId pid trId timestamp
+          spanRecords' <- Telemetry.getSpanRecordsByTraceId pid trId timestamp now
           let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
-              pageProps = PageProps pid traceItem spanRecords
-          addRespHeaders $ TraceDetails pageProps
+          addRespHeaders $ TraceDetails pid traceItem spanRecords
         Nothing -> addRespHeaders $ TraceDetailsNotFound "Trace not found"
 
 
@@ -528,14 +520,12 @@ buildMetricTree_ pid sp level isLasChild dp = do
 
 
 -- Trace UI components
-tracePage :: PageProps -> Html ()
-tracePage p = do
-  let pid = p.pid
-      traceItem = p.traceItem
-      serviceData = V.toList $ getServiceData <$> p.spanRecords
+tracePage :: Projects.ProjectId -> Telemetry.Trace -> V.Vector Telemetry.SpanRecord -> Html ()
+tracePage pid traceItem spanRecords = do
+  let serviceData = V.toList $ getServiceData <$> spanRecords
       serviceNames = V.fromList $ ordNub $ (.name) <$> serviceData
       serviceColors = getServiceColors serviceNames
-      rootSpans = buildSpanTree p.spanRecords
+      rootSpans = buildSpanTree spanRecords
   div_ [class_ "w-full p-2", id_ "trace_span_container"] $ do
     div_ [class_ "flex flex-col w-full gap-4 pb-4"] $ do
       div_ [class_ "flex justify-between items-center"] do
@@ -555,34 +545,34 @@ tracePage p = do
                 button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#water_fall', '#trace-tabs', 't-tab-active')"] "Waterfall"
                 button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Spans List"
               div_ [class_ "flex items-center gap-2"] do
-                stBox (show $ length p.spanRecords) Nothing
-                stBox (show $ length $ V.filter (\s -> s.status == Just SSError) p.spanRecords) $ Just (faSprite_ "alert-triangle" "regular" "w-3 h-3 text-textError")
+                stBox (show $ length spanRecords) Nothing
+                stBox (show $ length $ V.filter (\s -> s.status == Just SSError) spanRecords) $ Just (faSprite_ "alert-triangle" "regular" "w-3 h-3 text-textError")
                 stBox (toText $ getDurationNSMS traceItem.traceDurationNs) $ Just (faSprite_ "clock" "regular" "w-3 h-3 text-textWeak")
             div_ [class_ "flex gap-2 w-full items-center"] do
-              div_ [class_ "flex items-center gap-2 w-full rounded-xl px-3 grow-1 h-12 border border-strokeWeak bg-fillWeaker"] do
-                faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-textWeak"
+              div_ [class_ "flex items-center gap-2 w-full rounded-lg px-3 grow-1 h-9 border border-strokeWeak bg-fillWeaker"] do
+                faSprite_ "magnifying-glass" "regular" "w-3 h-3 text-textWeak"
                 input_
-                  [ class_ "w-full py text-textStrong bg-transparent hover:outline-hidden focus:outline-hidden"
+                  [ class_ "w-full text-textStrong bg-transparent hover:outline-hidden focus:outline-hidden"
                   , type_ "text"
                   , placeholder_ "Search"
                   , id_ "search-input"
                   , [__| on input show .span-filterble in #trace_span_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
                   ]
-                let spanIds = decodeUtf8 $ AE.encode $ (.spanId) <$> p.spanRecords
+                let spanIds = decodeUtf8 $ AE.encode $ (.spanId) <$> spanRecords
                 div_ [class_ "flex items-center gap-1", id_ "currentSpanIndex", term "data-span" "0"] do
                   button_
-                    [ class_ "h-7 w-7 flex items-center justify-center bg-fillWeaker rounded-full font-bold border border-strokeWeak text-textStrong  cursor-pointer"
+                    [ class_ "h-6 w-6 flex items-center justify-center bg-fillWeaker rounded-full font-bold border border-strokeWeak text-textStrong  cursor-pointer"
                     , onpointerdown_ [text|navigateSpans($spanIds, "prev")|]
                     ]
                     do
-                      faSprite_ "chevron-up" "regular" "w-4 h-4"
+                      faSprite_ "chevron-up" "regular" "w-3 h-3"
                   button_
-                    [ class_ "h-7 w-7 flex items-center justify-center rounded-full bg-fillWeaker font-bold border border-strokeWeak text-textStrong cursor-pointer"
+                    [ class_ "h-6 w-6 flex items-center justify-center rounded-full bg-fillWeaker font-bold border border-strokeWeak text-textStrong cursor-pointer"
                     , onpointerdown_ [text|navigateSpans($spanIds, "next")|]
                     ]
                     do
-                      faSprite_ "chevron-down" "regular" "h-4 w-4"
-              button_ [class_ "btn border border-strokeWeak bg-fillWeaker h-12"] "Reset Zoom"
+                      faSprite_ "chevron-down" "regular" "h-3 w-3"
+              button_ [class_ "btn border border-strokeWeak bg-fillWeaker h-9"] "Reset Zoom"
           div_ [role_ "tabpanel", class_ "a-tab-content w-full", id_ "flame_graph"] do
             div_ [class_ "flex gap-2 w-full pt-2"] do
               div_
@@ -632,9 +622,9 @@ tracePage p = do
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "span_list"] do
             div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-x-hidden "] do
-              renderSpanListTable serviceNames serviceColors p.spanRecords
+              renderSpanListTable serviceNames serviceColors spanRecords
 
-  let spanJson = decodeUtf8 $ AE.encode $ p.spanRecords <&> getSpanJson
+  let spanJson = decodeUtf8 $ AE.encode $ spanRecords <&> getSpanJson
   let waterFallJson = decodeUtf8 $ AE.encode rootSpans
 
   let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
@@ -656,8 +646,13 @@ tracePage p = do
          htmx.trigger('#trigger-span-' + span, 'click')
       }
   |]
-  script_ [text|flameGraphChart($spanJson, "$trId", $colorsJson);|]
-  script_ [text|waterFallGraphChart($waterFallJson, "waterfall-$trId", $colorsJson);|]
+  script_
+    [text|
+   window.addEventListener('DOMContentLoaded', function() {
+      flameGraphChart($spanJson, "$trId", $colorsJson);
+      waterFallGraphChart($waterFallJson, "waterfall-$trId", $colorsJson);
+   });
+  |]
 
 
 getSpanJson :: Telemetry.SpanRecord -> AE.Value

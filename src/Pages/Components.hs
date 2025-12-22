@@ -1,4 +1,4 @@
-module Pages.Components (statBox, drawer_, statBox_, emptyState_, dateTime, paymentPlanPicker, navBar, modal_) where
+module Pages.Components (statBox, drawer_, statBox_, emptyState_, resizer_, dateTime, paymentPlanPicker, navBar, modal_) where
 
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
@@ -21,7 +21,7 @@ statBox pid title helpInfo val bckupValM = wrapper do
       span_ [class_ "font-bold text-textStrong text-2xl"] $ toHtml @Text $ fmt (commaizeF val)
       maybe "" (\bVal -> small_ $ toHtml @Text $ fmt ("/" +| commaizeF bVal)) bckupValM
     span_ [class_ "text-textWeak"] $ toHtml title
-  span_ [class_ "inline-block tooltip", term "data-tip" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 h-4"
+  span_ [class_ "inline-block tooltip", term "data-tippy-content" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 h-4"
   where
     tl = getTargetPage title
     pidT = maybe "" (.toText) pid
@@ -46,7 +46,7 @@ statBox_ pid iconM title helpInfo val bckupValM valClsM = do
       span_ [class_ $ "font-bold  " <> fsiz <> fromMaybe "text-textStrong" valClsM] $ toHtml val
       div_ [class_ "flex gap-2 items-center text-sm text-textWeak"] do
         p_ [] $ toHtml title
-        span_ [term "data-tip" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 mt-[-2px]"
+        span_ [term "data-tippy-content" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 mt-[-2px]"
 
 
 emptyState_ :: Text -> Text -> Maybe Text -> Text -> Html ()
@@ -451,3 +451,69 @@ modal_ modalId btnTrigger contentHtml = do
     div_ [class_ "modal-box w-auto flex flex-col gap-5 max-w-5xl"] do
       label_ [Lucid.for_ modalId, class_ "btn btn-sm btn-circle btn-ghost absolute right-2 top-2"] "✕"
       div_ contentHtml
+
+
+resizer_ :: Text -> Text -> Bool -> Html ()
+resizer_ targetId urlParam increasingDirection =
+  div_
+    [ class_ "group px-r relative shrink-0 h-full flex items-center justify-center cursor-ew-resize overflow-visible select-none touch-none"
+    , term "data-resize-target" targetId
+    , term "data-resize-direction" (if increasingDirection then "increase" else "decrease")
+    , term "data-url-param" urlParam
+    , [__|
+        js 
+          let rafId = null;
+          let currentWidth = null;
+          
+          function applyMove(el, newWidth){
+            currentWidth = newWidth;
+            if (rafId) cancelAnimationFrame(rafId);
+            rafId = requestAnimationFrame(() => {
+              el.style.width = newWidth + 'px';
+              rafId = null;
+            });
+          }
+          return {applyMove}
+        end
+        on pointerdown
+          add .select-none to body then
+          set :startX to event.clientX then
+          set :target to #{@data-resize-target} then
+          set :startWidth to the :target's offsetWidth then
+          set :urlParam to @data-url-param then
+          set :isRightPanel to (@data-resize-direction == 'decrease') then
+          set :lastWidth to :startWidth then
+          call me.setPointerCapture(event.pointerId)
+        end
+
+        on pointermove from body
+            if :startX is not null
+                set deltaX to (event.clientX - :startX) then
+                if :isRightPanel
+                then set newWidth to :startWidth - deltaX
+                else set newWidth to :startWidth + deltaX end
+                if newWidth < 0 set newWidth to 0 end
+                set :lastWidth to newWidth then
+                call applyMove(:target, newWidth)
+                then send "loglist-resize" to <body/>
+            end
+        end
+
+        on pointerup from body or pointercancel
+          if :startX is not null
+            set finalWidth to :lastWidth then
+            remove .select-none from body then
+
+            call updateUrlState(:urlParam, finalWidth) then
+            call localStorage.setItem('resizer-'+:urlParam, finalWidth + 'px') then
+            set :startX to null
+          end
+        end
+      |]
+    ]
+    $ div_ [class_ "h-full border-l hover:border-strokeBrand-strong"]
+    $ div_
+      [ id_ $ "resizer-" <> urlParam
+      , class_ "absolute left-1/2 top-1/2 z-50 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-bgBase rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"
+      ]
+    $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
