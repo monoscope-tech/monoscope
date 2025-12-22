@@ -429,7 +429,7 @@ renderTableRow tbl row =
               , name_ "itemId"
               , value_ $ getId row
               ]
-              <> [checked_ | isSelected]
+            <> [checked_ | isSelected]
 
     forM_ tbl.columns \c -> td_ (c.attrs <> colAttrs c) $ c.render row
   where
@@ -585,7 +585,7 @@ renderFilterOption actions menu opt = label_ [class_ "flex items-center gap-3 px
       , hxSwap_ "outerHTML"
       , hxTrigger_ "change"
       ]
-      <> [checked_ | opt.isActive]
+    <> [checked_ | opt.isActive]
   span_ [class_ "text-sm"] $ toHtml opt.label
 
 
