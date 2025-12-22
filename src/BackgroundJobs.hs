@@ -240,14 +240,16 @@ processBackgroundJob authCtx job bgJob =
           currentDay <- utctDay <$> Time.currentTime
           currentTime <- Time.currentTime
           -- Check if app-wide jobs already scheduled for today (idempotent check)
-          hourlyJobsExist <- maybe False ((>= 24) . fromOnly) . listToMaybe <$>
-            PG.query
-              [sql|SELECT COUNT(*) FROM background_jobs
+          hourlyJobsExist <-
+            maybe False ((>= 24) . fromOnly)
+              . listToMaybe
+              <$> PG.query
+                [sql|SELECT COUNT(*) FROM background_jobs
                WHERE payload->>'tag' = 'HourlyJob'
                  AND run_at >= date_trunc('day', now())
                  AND run_at < date_trunc('day', now()) + interval '1 day'
                  AND status IN ('queued', 'locked')|]
-              ()
+                ()
 
           unless hourlyJobsExist $ do
             Log.logInfo "Scheduling hourly jobs for today" ()
