@@ -16,6 +16,7 @@ module Models.Projects.Projects (
   updateProjectPricing,
   projectById,
   projectCacheById,
+  projectCacheByIdIO,
   updateProjectReportNotif,
   ProjectCache (..),
   updateNotificationsChannel,
@@ -41,21 +42,21 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Default
+import Data.Pool (Pool, withResource)
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (execute, query, queryOne)
+import Database.PostgreSQL.Entity (Entity, _insert)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), Query, ToRow)
+import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, fromJSONField)
 import Database.PostgreSQL.Simple.Newtypes
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField, toField, toJSONField)
-import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import Effectful
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.PostgreSQL qualified as PG
 import GHC.Records (HasField (getField))
 import Models.Users.Users qualified as Users
 import Pkg.DBUtils (WrappedEnumSC (..))
@@ -63,6 +64,7 @@ import Pkg.DeriveUtils (UUIDId (..), idFromText)
 import Pkg.Parser.Stats (Section)
 import Relude
 import Servant (FromHttpApiData)
+import System.DB (DB)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -237,8 +239,8 @@ data CreateProject = CreateProject
 
 
 -- FIXME: We currently return an object with empty vectors when nothing was found.
-projectCacheById :: ProjectId -> DBT IO (Maybe ProjectCache)
-projectCacheById pid = queryOne q (pid, pid, pid, pid)
+projectCacheById :: DB es => ProjectId -> Eff es (Maybe ProjectCache)
+projectCacheById pid = listToMaybe <$> PG.query q (pid, pid, pid, pid)
   where
     q =
       [sql| select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts,
@@ -249,7 +251,7 @@ projectCacheById pid = queryOne q (pid, pid, pid, pid)
                      WHERE project_id=? AND timestamp > NOW() - INTERVAL '1' DAY
                     ) daily_event_count,
                     ( SELECT count(*) FROM telemetry.metrics
-                     WHERE project_id=? AND timestamp > NOW() - INTERVAL '1' DAY  
+                     WHERE project_id=? AND timestamp > NOW() - INTERVAL '1' DAY
                     ) daily_metric_count,
                     (SELECT COALESCE((SELECT payment_plan FROM projects.projects WHERE id = ?),'Free')) payment_plan
             from
@@ -261,24 +263,28 @@ projectCacheById pid = queryOne q (pid, pid, pid, pid)
                ) enp; |]
 
 
-insertProject :: CreateProject -> DBT IO ()
-insertProject = insert @CreateProject
+projectCacheByIdIO :: Pool Connection -> ProjectId -> IO (Maybe ProjectCache)
+projectCacheByIdIO pool pid = runEff $ PG.runWithConnectionPool pool $ projectCacheById pid
 
 
-projectById :: ProjectId -> DBT IO (Maybe Project)
-projectById = queryOne q
+insertProject :: DB es => CreateProject -> Eff es ()
+insertProject p = void $ PG.execute (_insert @CreateProject) p
+
+
+projectById :: DB es => ProjectId -> Eff es (Maybe Project)
+projectById pid = listToMaybe <$> PG.query q (Only pid)
   where
     q = [sql| select p.* from projects.projects p where id=?|]
 
 
-getProjectByPhoneNumber :: Text -> DBT IO (Maybe Project)
-getProjectByPhoneNumber number = queryOne q (Only number)
+getProjectByPhoneNumber :: DB es => Text -> Eff es (Maybe Project)
+getProjectByPhoneNumber number = listToMaybe <$> PG.query q (Only number)
   where
     q = [sql| select p.* from projects.projects p where ?=Any(p.whatsapp_numbers) |]
 
 
-selectProjectsForUser :: Users.UserId -> DBT IO (V.Vector Project')
-selectProjectsForUser = query q
+selectProjectsForUser :: DB es => Users.UserId -> Eff es [Project']
+selectProjectsForUser uid = PG.query q (Only uid)
   where
     q =
       [sql|
@@ -298,36 +304,34 @@ selectProjectsForUser = query q
       |]
 
 
-usersByProjectId :: ProjectId -> DBT IO (V.Vector Users.User)
-usersByProjectId pid = query q (Only pid)
+usersByProjectId :: DB es => ProjectId -> Eff es [Users.User]
+usersByProjectId pid = PG.query q (Only pid)
   where
     q =
       [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number, u.is_sudo
                 from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=? and u.active IS True;|]
 
 
-updateProject :: CreateProject -> DBT IO Int64
-updateProject cp = do
-  execute q (cp.title, cp.description, cp.paymentPlan, cp.subId, cp.firstSubItemId, cp.orderId, cp.timeZone, cp.weeklyNotif, cp.dailyNotif, cp.endpointAlerts, cp.errorAlerts, cp.id)
+updateProject :: DB es => CreateProject -> Eff es Int64
+updateProject cp = PG.execute q (cp.title, cp.description, cp.paymentPlan, cp.subId, cp.firstSubItemId, cp.orderId, cp.timeZone, cp.weeklyNotif, cp.dailyNotif, cp.endpointAlerts, cp.errorAlerts, cp.id)
   where
     q =
       [sql|
        UPDATE projects.projects SET title=?, description=?,
-        payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=?, 
+        payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=?,
         time_zone=?, weekly_notif=?, daily_notif=?, endpoint_alerts=?, error_alerts=? where id=?;
         |]
 
 
-updateProjectPricing :: ProjectId -> Text -> Text -> Text -> Text -> V.Vector Text -> DBT IO Int64
-updateProjectPricing pid paymentPlan subId firstSubItemId orderId stepsCompleted = do
-  execute q (paymentPlan, subId, firstSubItemId, orderId, stepsCompleted, pid)
+updateProjectPricing :: DB es => ProjectId -> Text -> Text -> Text -> Text -> V.Vector Text -> Eff es Int64
+updateProjectPricing pid paymentPlan subId firstSubItemId orderId stepsCompleted =
+  PG.execute q (paymentPlan, subId, firstSubItemId, orderId, stepsCompleted, pid)
   where
     q = [sql| UPDATE projects.projects SET payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=?, onboarding_steps_completed=? where id=?;|]
 
 
-updateProjectReportNotif :: ProjectId -> Text -> DBT IO Int64
-updateProjectReportNotif pid report_type = do
-  execute q (Only pid)
+updateProjectReportNotif :: DB es => ProjectId -> Text -> Eff es Int64
+updateProjectReportNotif pid report_type = PG.execute q (Only pid)
   where
     q =
       if report_type == "daily"
@@ -335,29 +339,28 @@ updateProjectReportNotif pid report_type = do
         else [sql| UPDATE projects.projects SET weekly_notif=(not weekly_notif) WHERE id=?;|]
 
 
-deleteProject :: ProjectId -> DBT IO Int64
-deleteProject pid = do
-  execute q pid
+deleteProject :: DB es => ProjectId -> Eff es Int64
+deleteProject pid = PG.execute q (Only pid)
   where
     q =
       [sql| UPDATE projects.projects SET deleted_at=NOW(), active=False where id=?;|]
 
 
-updateNotificationsChannel :: ProjectId -> [Text] -> [Text] -> DBT IO Int64
-updateNotificationsChannel pid channels phones = execute q (list, V.fromList phones, pid)
+updateNotificationsChannel :: DB es => ProjectId -> [Text] -> [Text] -> Eff es Int64
+updateNotificationsChannel pid channels phones = PG.execute q (list, V.fromList phones, pid)
   where
     list = V.fromList channels
     q = [sql| UPDATE projects.projects SET notifications_channel=?::notification_channel_enum[], whatsapp_numbers=? WHERE id=?;|]
 
 
-updateUsageLastReported :: ProjectId -> ZonedTime -> DBT IO Int64
-updateUsageLastReported pid lastReported = execute q (lastReported, pid)
+updateUsageLastReported :: DB es => ProjectId -> ZonedTime -> Eff es Int64
+updateUsageLastReported pid lastReported = PG.execute q (lastReported, pid)
   where
     q = [sql| UPDATE projects.projects SET usage_last_reported=? WHERE id=?;|]
 
 
-updateProjectS3Bucket :: DB :> es => ProjectId -> Maybe ProjectS3Bucket -> Eff es Int64
-updateProjectS3Bucket pid bucket = dbtToEff $ execute q (bucket, pid)
+updateProjectS3Bucket :: DB es => ProjectId -> Maybe ProjectS3Bucket -> Eff es Int64
+updateProjectS3Bucket pid bucket = PG.execute q (bucket, pid)
   where
     q = [sql| UPDATE projects.projects SET s3_bucket=? WHERE id=?|]
 
@@ -388,8 +391,8 @@ data QueryLibItem = QueryLibItem
   deriving anyclass (AE.FromJSON, AE.ToJSON, FromRow, NFData, ToRow)
 
 
-queryLibHistoryForUser :: DB :> es => ProjectId -> Users.UserId -> Eff es (V.Vector QueryLibItem)
-queryLibHistoryForUser pid uid = dbtToEff $ query q (uid, uid, pid, uid, uid, pid, uid, pid, uid)
+queryLibHistoryForUser :: DB es => ProjectId -> Users.UserId -> Eff es [QueryLibItem]
+queryLibHistoryForUser pid uid = PG.query q (uid, uid, pid, uid, uid, pid, uid, pid, uid)
   where
     q =
       [sql|
@@ -419,8 +422,8 @@ UNION ALL
     |]
 
 
-queryLibInsert :: DB :> es => QueryLibType -> ProjectId -> Users.UserId -> Text -> [Section] -> Maybe Text -> Eff es ()
-queryLibInsert qKind pid uid qt qast title = void $ dbtToEff $ execute q (pid, uid, qKind, pid, uid, qKind, qt, Aeson qast, title, pid, uid, qKind, qt)
+queryLibInsert :: DB es => QueryLibType -> ProjectId -> Users.UserId -> Text -> [Section] -> Maybe Text -> Eff es ()
+queryLibInsert qKind pid uid qt qast title = void $ PG.execute q (pid, uid, qKind, pid, uid, qKind, qt, Aeson qast, title, pid, uid, qKind, qt)
   where
     q =
       [sql|
@@ -448,14 +451,14 @@ ON CONFLICT DO NOTHING;
     |]
 
 
-queryLibTitleEdit :: DB :> es => ProjectId -> Users.UserId -> Text -> Text -> Eff es ()
-queryLibTitleEdit pid uid qId title = void $ dbtToEff $ execute q (title, pid, uid, qId)
+queryLibTitleEdit :: DB es => ProjectId -> Users.UserId -> Text -> Text -> Eff es ()
+queryLibTitleEdit pid uid qId title = void $ PG.execute q (title, pid, uid, qId)
   where
     q = [sql|UPDATE projects.query_library SET title=? where project_id=? AND user_id=? AND id=?::uuid|]
 
 
-queryLibItemDelete :: DB :> es => ProjectId -> Users.UserId -> Text -> Eff es ()
-queryLibItemDelete pid uid qId = void $ dbtToEff $ execute q (pid, uid, qId)
+queryLibItemDelete :: DB es => ProjectId -> Users.UserId -> Text -> Eff es ()
+queryLibItemDelete pid uid qId = void $ PG.execute q (pid, uid, qId)
   where
     q = [sql|DELETE from projects.query_library where project_id=? AND user_id=? AND id=?::uuid|]
 
@@ -487,31 +490,33 @@ data LemonSub = LemonSub
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "subscriptions", PrimaryKey "id", FieldModifiers '[CamelToSnake]] LemonSub)
 
 
-addSubscription :: LemonSub -> DBT IO ()
-addSubscription = insert @LemonSub
+addSubscription :: DB es => LemonSub -> Eff es ()
+addSubscription sub = void $ PG.execute (_insert @LemonSub) sub
 
 
-addDailyUsageReport :: ProjectId -> Int -> DBT IO Int64
-addDailyUsageReport pid total_requests = execute q (pid, total_requests)
+addDailyUsageReport :: DB es => ProjectId -> Int -> Eff es Int64
+addDailyUsageReport pid total_requests = PG.execute q (pid, total_requests)
   where
     q = [sql|INSERT INTO apis.daily_usage (project_id, total_requests) VALUES (?, ?) |]
 
 
-getTotalUsage :: ProjectId -> UTCTime -> DBT IO Int64
+getTotalUsage :: DB es => ProjectId -> UTCTime -> Eff es Int64
 getTotalUsage pid start = do
-  [Only count] <- query q (pid, start)
-  return count
+  results <- PG.query q (pid, start)
+  case results of
+    [Only count] -> pure count
+    _ -> pure 0
   where
     q = [sql|SELECT COALESCE(SUM(total_requests), 0) FROM apis.daily_usage WHERE project_id = ? AND created_at >= ?|]
 
 
-downgradeToFree :: Int -> Int -> Int -> DBT IO Int64
-downgradeToFree orderId' subId subItemId = execute q (show orderId', show subId, show subItemId)
+downgradeToFree :: DB es => Int -> Int -> Int -> Eff es Int64
+downgradeToFree orderId' subId subItemId = PG.execute q (show orderId', show subId, show subItemId)
   where
     q = [sql|UPDATE projects.projects SET payment_plan = 'FREE' WHERE order_id = ? AND sub_id = ? AND first_sub_item_id = ?|]
 
 
-upgradeToPaid :: Int -> Int -> Int -> DBT IO Int64
-upgradeToPaid orderId' subId subItemId = execute q (show orderId', show subId, show subItemId)
+upgradeToPaid :: DB es => Int -> Int -> Int -> Eff es Int64
+upgradeToPaid orderId' subId subItemId = PG.execute q (show orderId', show subId, show subItemId)
   where
     q = [sql|UPDATE projects.projects SET payment_plan = 'GraduatedPricing' WHERE order_id = ? AND sub_id = ? AND first_sub_item_id = ?|]

@@ -3,11 +3,11 @@ module MonitoringSpec (spec) where
 import Data.Aeson qualified as AE
 import Data.ByteString.Lazy qualified as BL
 import Data.HashMap.Strict qualified as HashMap
+import Data.Pool (withResource)
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
-import Database.PostgreSQL.Entity.DBT (withPool)
+import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Transact qualified as PGT
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Pages.Monitors (AlertUpsertForm (..), convertToQueryMonitor)
@@ -49,7 +49,7 @@ spec = aroundAll withTestResources do
                 , vizType = Nothing
                 , teams = []
                 }
-      respC <- withPool tr.trPool $ Monitors.queryMonitorUpsert queryMonitor
+      respC <- runTestBg tr $ Monitors.queryMonitorUpsert queryMonitor
       respC `shouldBe` 1
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
@@ -64,7 +64,7 @@ spec = aroundAll withTestResources do
       r <- runTestBg tr $ processMessages msgs HashMap.empty
       r `shouldBe` ["m1", "m2", "m4", "m5", "m5"]
 
-      _ <- withPool tr.trPool $ PGT.execute [sql|CALL monitors.check_triggered_query_monitors(0, '{}'::jsonb)|] ()
+      _ <- withResource tr.trPool \conn -> PGS.execute conn [sql|CALL monitors.check_triggered_query_monitors(0, '{}'::jsonb)|] ()
 
       pendingJobs <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs

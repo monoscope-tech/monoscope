@@ -41,13 +41,12 @@ import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Effectful
 import Effectful.Concurrent (Concurrent)
 import Effectful.Exception (onException)
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
-import Effectful.PostgreSQL.Transact.Effect (DB)
+import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
 import Log (LogLevel (..), Logger, runLogT)
@@ -82,7 +81,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Log
-import System.Types (runBackground)
+import System.Types (DB, runBackground)
 import Utils (b64ToJson, freeTierDailyMaxEvents, nestedJsonFromDotNotation)
 import "base64" Data.ByteString.Base64 qualified as B64
 
@@ -216,7 +215,7 @@ getMetricAttributeValue !attribute !rms = listToMaybe $ V.toList $ V.mapMaybe ge
 
 
 -- | Process a list of messages
-processList :: (Concurrent :> es, DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
+processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs !attrs = checkpoint "processList" $ do
   startTime <- liftIO getCurrentTime
@@ -290,7 +289,7 @@ processList msgs !attrs = checkpoint "processList" $ do
                     -- Use parallel evaluation for cache fetching
                     cachePairs <- forM projectIds $ \pid ->
                       Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-                        mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
+                        mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
                         pure $! fromMaybe defaultProjectCache mpjCache
                     -- Force evaluation of cache pairs
                     pure (zip projectIds cachePairs `using` parList rpar)
@@ -379,7 +378,7 @@ processList msgs !attrs = checkpoint "processList" $ do
                     -- Use parallel evaluation for cache fetching
                     cachePairs <- forM projectIds $ \pid ->
                       Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-                        mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
+                        mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
                         pure $! fromMaybe defaultProjectCache mpjCache
                     -- Force evaluation of cache pairs
                     pure (zip projectIds cachePairs `using` parList rpar)
@@ -442,7 +441,7 @@ processList msgs !attrs = checkpoint "processList" $ do
                       Just pid -> do
                         -- Fetch project cache using cache pattern
                         projectCache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-                          mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
+                          mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
                           pure $ fromMaybe defaultProjectCache mpjCache
                         let !projectCaches = one (pid, projectCache)
                             !metrics = convertResourceMetricsToMetricRecords fallbackTime projectCaches pid resourceMetrics
@@ -1274,7 +1273,7 @@ runServer appLogger appCtx tp = do
 
 
 -- | Process trace request with optional API key from gRPC metadata (extracted for testing)
-processTraceRequest :: (Concurrent :> es, DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
+processTraceRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
 processTraceRequest metadataApiKey req = do
   Log.logInfo "Received trace export request" AE.Null
 
@@ -1317,7 +1316,7 @@ processTraceRequest metadataApiKey req = do
 
     caches <- forM projectIds $ \pid -> do
       cache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-        mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
+        mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
         pure $ fromMaybe defaultProjectCache mpjCache
       pure (pid, cache)
     pure $ HashMap.fromList caches
@@ -1346,7 +1345,7 @@ traceServiceExport appLogger appCtx tp (Proto req) = do
 
 
 -- | Process logs request with optional API key from gRPC metadata (extracted for testing)
-processLogsRequest :: (Concurrent :> es, DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
+processLogsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
 processLogsRequest metadataApiKey req = do
   Log.logInfo "Received logs export request" AE.Null
   currentTime <- liftIO getCurrentTime
@@ -1386,7 +1385,7 @@ processLogsRequest metadataApiKey req = do
     let projectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
     caches <- forM projectIds $ \pid -> do
       cache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-        mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
+        mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
         pure $ fromMaybe defaultProjectCache mpjCache
       pure (pid, cache)
     pure $ HashMap.fromList caches
@@ -1415,7 +1414,7 @@ logsServiceExport appLogger appCtx tp (Proto req) = do
 
 
 -- | Process metrics request with optional API key from gRPC metadata (extracted for testing)
-processMetricsRequest :: (DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Log :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
+processMetricsRequest :: (DB es, Eff.Reader AuthContext :> es, Log :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
 processMetricsRequest metadataApiKey req = do
   Log.logInfo "Received metrics export request" AE.Null
 
@@ -1442,7 +1441,7 @@ processMetricsRequest metadataApiKey req = do
 
       -- Fetch project cache using cache pattern
       projectCache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-        mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
+        mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
         pure $ fromMaybe defaultProjectCache mpjCache
       let !projectCaches = one (pid, projectCache)
           !metricRecords = convertResourceMetricsToMetricRecords currentTime projectCaches pid resourceMetrics

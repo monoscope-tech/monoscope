@@ -29,7 +29,6 @@ import Data.Default.Instances ()
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (query, queryOne)
 import Database.PostgreSQL.Entity.Types (
   CamelToSnake,
   Entity,
@@ -45,14 +44,14 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.TypeInfo.Static (uuid)
-import Database.PostgreSQL.Transact (DBT, execute, executeMany)
-import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
-import Effectful.PostgreSQL.Transact.Effect (DB)
+import Effectful (Eff, type (:>))
+import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import Relude
 import Servant (FromHttpApiData)
+import System.Types (DB)
 import Web.HttpApiData (parseUrlPiece)
 
 
@@ -120,11 +119,11 @@ data CreateProjectMembers = CreateProjectMembers
     via (GenericEntity '[Schema "projects", TableName "project_members", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CreateProjectMembers)
 
 
-insertProjectMembers :: [CreateProjectMembers] -> DBT IO Int64
-insertProjectMembers = PgT.executeMany q
+insertProjectMembers :: DB es => [CreateProjectMembers] -> Eff es Int64
+insertProjectMembers [] = pure 0
+insertProjectMembers members = PG.executeMany q members
   where
-    q =
-      [sql| INSERT INTO projects.project_members(project_id, user_id, permission) VALUES (?,?,?) ON CONFLICT (project_id, user_id) DO UPDATE SET active = TRUE |]
+    q = [sql| INSERT INTO projects.project_members(project_id, user_id, permission) VALUES (?,?,?) ON CONFLICT (project_id, user_id) DO UPDATE SET active = TRUE |]
 
 
 data ProjectMemberVM = ProjectMemberVM
@@ -139,8 +138,8 @@ data ProjectMemberVM = ProjectMemberVM
   deriving anyclass (FromRow, NFData)
 
 
-selectActiveProjectMembers :: Projects.ProjectId -> DBT IO (V.Vector ProjectMemberVM)
-selectActiveProjectMembers = query q
+selectActiveProjectMembers :: DB es => Projects.ProjectId -> Eff es [ProjectMemberVM]
+selectActiveProjectMembers pid = PG.query q (Only pid)
   where
     q =
       [sql| SELECT pm.id, pm.user_id, pm.permission,us.email, us.first_name, us.last_name from projects.project_members pm
@@ -150,18 +149,16 @@ selectActiveProjectMembers = query q
         |]
 
 
-getUserPermission :: Projects.ProjectId -> Users.UserId -> DBT IO (Maybe Permissions)
-getUserPermission pid uid = do
-  result <- queryOne q (pid, uid)
-  pure $ fmap (\(Only p) -> p) result
+getUserPermission :: DB es => Projects.ProjectId -> Users.UserId -> Eff es (Maybe Permissions)
+getUserPermission pid uid = coerce @(Maybe (Only Permissions)) @(Maybe Permissions) . listToMaybe <$> PG.query q (pid, uid)
   where
     q =
       [sql| SELECT permission FROM projects.project_members
             WHERE project_id = ? AND user_id = ? AND active = TRUE |]
 
 
-updateProjectMembersPermissons :: [(UUID.UUID, Permissions)] -> DBT IO ()
-updateProjectMembersPermissons vals = void $ executeMany q vals
+updateProjectMembersPermissons :: DB es => [(UUID.UUID, Permissions)] -> Eff es ()
+updateProjectMembersPermissons vals = void $ PG.executeMany q vals
   where
     q =
       [sql| UPDATE projects.project_members pm
@@ -170,8 +167,8 @@ updateProjectMembersPermissons vals = void $ executeMany q vals
             WHERE pm.id::uuid = c.id::uuid; |]
 
 
-softDeleteProjectMembers :: NonEmpty UUID.UUID -> DBT IO ()
-softDeleteProjectMembers = void . execute q . Only . V.fromList . toList
+softDeleteProjectMembers :: DB es => NonEmpty UUID.UUID -> Eff es ()
+softDeleteProjectMembers ids = void $ PG.execute q (Only $ V.fromList $ toList ids)
   where
     q =
       [sql| UPDATE projects.project_members
@@ -192,8 +189,8 @@ data TeamDetails = TeamDetails
   deriving stock (Eq, Generic, Show)
 
 
-createTeam :: Projects.ProjectId -> Users.UserId -> TeamDetails -> DBT IO Int64
-createTeam pid uid TeamDetails{..} = execute q (pid, uid, name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers)
+createTeam :: DB es => Projects.ProjectId -> Users.UserId -> TeamDetails -> Eff es Int64
+createTeam pid uid TeamDetails{..} = PG.execute q (pid, uid, name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers)
   where
     q =
       [sql| INSERT INTO projects.teams
@@ -202,8 +199,8 @@ createTeam pid uid TeamDetails{..} = execute q (pid, uid, name, description, han
                ON CONFLICT (project_id, handle) DO NOTHING |]
 
 
-updateTeam :: Projects.ProjectId -> UUID.UUID -> TeamDetails -> DBT IO Int64
-updateTeam pid tid TeamDetails{..} = execute q (name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pid, tid)
+updateTeam :: DB es => Projects.ProjectId -> UUID.UUID -> TeamDetails -> Eff es Int64
+updateTeam pid tid TeamDetails{..} = PG.execute q (name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pid, tid)
   where
     q =
       [sql| UPDATE projects.teams
@@ -229,8 +226,8 @@ data Team = Team
   deriving anyclass (FromRow, NFData)
 
 
-getTeams :: Projects.ProjectId -> DBT IO (V.Vector Team)
-getTeams pid = query q (Only pid)
+getTeams :: DB es => Projects.ProjectId -> Eff es [Team]
+getTeams pid = PG.query q (Only pid)
   where
     q =
       [sql|
@@ -240,8 +237,8 @@ getTeams pid = query q (Only pid)
     |]
 
 
-getTeamsVM :: Projects.ProjectId -> DBT IO (V.Vector TeamVM)
-getTeamsVM pid = query q (Only pid)
+getTeamsVM :: DB es => Projects.ProjectId -> Eff es [TeamVM]
+getTeamsVM pid = PG.query q (Only pid)
   where
     q =
       [sql|
@@ -306,8 +303,8 @@ data TeamMemberVM = TeamMemberVM
   deriving (FromField) via Aeson TeamMemberVM
 
 
-getTeamByHandle :: Projects.ProjectId -> Text -> DBT IO (Maybe TeamVM)
-getTeamByHandle pid handle = queryOne q (pid, handle)
+getTeamByHandle :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe TeamVM)
+getTeamByHandle pid handle = listToMaybe <$> PG.query q (pid, handle)
   where
     q =
       [sql|
@@ -343,24 +340,24 @@ getTeamByHandle pid handle = queryOne q (pid, handle)
     |]
 
 
-deleteTeamByHandle :: Projects.ProjectId -> Text -> DBT IO ()
-deleteTeamByHandle pid handle = void $ execute q (pid, handle)
+deleteTeamByHandle :: DB es => Projects.ProjectId -> Text -> Eff es ()
+deleteTeamByHandle pid handle = void $ PG.execute q (pid, handle)
   where
     q =
       [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND handle = ? |]
 
 
-deleteTeams :: Projects.ProjectId -> V.Vector UUID.UUID -> DBT IO ()
+deleteTeams :: DB es => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es ()
 deleteTeams pid tids
   | V.null tids = pass
-  | otherwise = void $ execute q (pid, tids)
+  | otherwise = void $ PG.execute q (pid, tids)
   where
     q =
       [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND id = ANY(?::uuid[]) |]
 
 
-getTeamsById :: Projects.ProjectId -> V.Vector UUID.UUID -> DBT IO (V.Vector Team)
-getTeamsById pid tids = if V.null tids then pure V.empty else query q (pid, tids)
+getTeamsById :: DB es => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es [Team]
+getTeamsById pid tids = if V.null tids then pure [] else PG.query q (pid, tids)
   where
     q =
       [sql|

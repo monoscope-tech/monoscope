@@ -23,13 +23,11 @@ import Data.Text qualified as T
 import Data.Time qualified as Time
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.Concurrent (forkIO)
 import Effectful.Error.Static (throwError)
 import Effectful.Log qualified as Log
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -45,6 +43,7 @@ import Pkg.AI (callOpenAIAPI, systemPrompt)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DeriveUtils (idFromText)
 import Pkg.Parser (parseQueryToAST)
 import Relude hiding (ask, asks)
 import Servant.API (Header)
@@ -117,11 +116,10 @@ linkProjectGetH pid slack_code onboardingM = do
           , pageTitle = "Slack app installed"
           -- , enableBrowserMonitoring = envCfg.enableBrowserMonitoring
           }
-  project <- liftIO $ withPool pool $ Projects.projectById pid
+  project <- Projects.projectById pid
   case (token, project) of
     (Just token', Just project') -> do
-      n <- liftIO $ withPool pool do
-        insertAccessToken pid token'.incomingWebhook.url token'.team.id token'.incomingWebhook.channelId
+      n <- insertAccessToken pid token'.incomingWebhook.url token'.team.id token'.incomingWebhook.channelId
       -- Create a background job to send the Slack notification
       _ <- liftIO $ withResource pool $ \conn ->
         createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
@@ -139,12 +137,13 @@ slackInteractionsH interaction = do
       _ <- updateSlackNotificationChannel interaction.team_id interaction.channel_id
       pure $ AE.object ["response_type" AE..= "in_channel", "text" AE..= "Done, you'll be receiving project notifcations here going forward", "replace_original" AE..= True, "delete_original" AE..= True]
     "/dashboard" -> do
-      dashboards <- getDashboardsForSlack interaction.team_id
-      when (null dashboards) $ throwError err400{errBody = "No dashboards found for this project"}
+      dashboardsList <- getDashboardsForSlack interaction.team_id
+      let dashboards = V.fromList dashboardsList
+      when (V.null dashboards) $ throwError err400{errBody = "No dashboards found for this project"}
       _ <- triggerSlackModal authCtx.env.slackBotToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView interaction.channel_id (V.fromList [dashboardViewOne dashboards])]
       pure $ AE.object ["text" AE..= "modal opened", "replace_original" AE..= True, "delete_original" AE..= True]
     _ -> do
-      slackDataM <- dbtToEff $ getSlackDataByTeamId interaction.team_id
+      slackDataM <- getSlackDataByTeamId interaction.team_id
       void $ forkIO $ do
         case slackDataM of
           Nothing -> sendSlackFollowupResponse interaction.response_url (AE.object ["text" AE..= "Error: something went wrong"])
@@ -274,7 +273,7 @@ slackActionsH action = do
       case selectedOption of
         Just opt -> do
           let dashboardId = opt.value
-          dashboardVMM <- Dashboards.getDashboardById dashboardId
+          dashboardVMM <- maybe (pure Nothing) Dashboards.getDashboardById (idFromText dashboardId)
           case dashboardVMM of
             Nothing -> pure $ AE.object []
             Just dashboardVM -> updateDashboardModal authCtx slackAction dashboardVM opt.text
@@ -557,7 +556,7 @@ slackEventsPostH payload = do
 
     processThreadedEvent envCfg event teamId threadTs now = do
       replies <- getChannelMessages envCfg.slackBotToken event.channel (fromMaybe "" event.thread_ts)
-      slackDataM <- dbtToEff $ getSlackDataByTeamId teamId
+      slackDataM <- getSlackDataByTeamId teamId
       handleThreadedReplies envCfg event slackDataM replies threadTs now
 
     handleThreadedReplies envCfg event slackDataM replies threadTs now =

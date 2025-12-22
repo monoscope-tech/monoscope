@@ -23,9 +23,8 @@ import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Only(..))
-import Database.PostgreSQL.Entity.DBT qualified as DBT
+import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 
 
@@ -54,7 +53,7 @@ spec = aroundAll withTestResources do
         testServant tr $ PageReports.reportsPostH testPid "weekly"
         
       -- Check final state - fetch project from DB to avoid cache
-      projectM <- withPool tr.trPool $ Projects.projectById testPid
+      projectM <- runTestBg tr $ Projects.projectById testPid
       case projectM of
         Just project -> do
           project.dailyNotif `shouldBe` False  -- toggled from True to False

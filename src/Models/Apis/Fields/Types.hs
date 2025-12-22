@@ -34,15 +34,15 @@ import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
-import Database.PostgreSQL.Transact (executeMany)
 import Deriving.Aeson qualified as DAE
 import Effectful
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.PostgreSQL qualified as PG
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Pkg.DBUtils (WrappedEnumSC (..))
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
+import System.Types (DB)
 import Web.HttpApiData (FromHttpApiData)
 
 
@@ -260,8 +260,8 @@ instance Eq Field where
       && (f1.keyPath == f2.keyPath)
 
 
-bulkInsertFields :: DB :> es => V.Vector Field -> Eff es ()
-bulkInsertFields fields = void $ dbtToEff $ executeMany q (V.toList rowsToInsert)
+bulkInsertFields :: DB es => V.Vector Field -> Eff es ()
+bulkInsertFields fields = void $ PG.executeMany q (V.toList rowsToInsert)
   where
     q =
       [sql| INSERT into apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash)
@@ -307,8 +307,8 @@ data Format = Format
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Format
 
 
-bulkInsertFormat :: DB :> es => V.Vector Format -> Eff es ()
-bulkInsertFormat formats = void $ dbtToEff $ executeMany q $ V.toList rowsToInsert
+bulkInsertFormat :: DB es => V.Vector Format -> Eff es ()
+bulkInsertFormat formats = void $ PG.executeMany q $ V.toList rowsToInsert
   where
     q =
       [sql|

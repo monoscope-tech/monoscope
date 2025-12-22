@@ -30,12 +30,11 @@ import Data.Effectful.Wreq qualified as W (get, responseBody)
 import Data.Text qualified as T
 import Data.Tuple.Extra (thd3)
 import Data.Vector qualified as V (Vector, fromList, head, length, toList)
-import Database.PostgreSQL.Entity.DBT (execute, queryOne)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact (DBT)
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -99,8 +98,8 @@ onboardingGetH pid onboardingStepM = do
           discordUrl = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> "&state=" <> pid.toText <> "__onboarding" <> "&redirect_uri=" <> discordRedirectUri
       pure $ NotifChannelStep pid slackUrl discordUrl phone emails hasSlack hasDiscord
     "Integration" -> do
-      apiKey <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
-      let key = if V.length apiKey > 0 then let defKey = V.head apiKey in defKey.keyPrefix else "<API_KEY>"
+      apiKey <- ProjectApiKeys.projectApiKeysByProjectId pid
+      let key = maybe "<API_KEY>" (.keyPrefix) (listToMaybe apiKey)
       pure $ IntegrationStep pid key
     "Pricing" -> do
       let lemonUrl = appCtx.config.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
@@ -250,7 +249,7 @@ onboardingStepSkipped pid stepM = do
     Just step -> do
       let stepsCompleted = project.onboardingStepsCompleted
           newCompleted = insertIfNotExist step stepsCompleted
-      _ <- dbtToEff $ execute [sql| update projects.projects set onboarding_steps_completed=? where id=? |] (newCompleted, pid)
+      _ <- PG.execute [sql| update projects.projects set onboarding_steps_completed=? where id=? |] (newCompleted, pid)
 
       redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=" <> getNextStep step
       addRespHeaders ""
@@ -275,10 +274,10 @@ phoneEmailPostH pid form = do
       stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "NotifChannel" stepsCompleted
       q = [sql| update projects.projects set notifications_channel=?::notification_channel_enum[], notify_phone_number=?, notify_emails=?::text[],onboarding_steps_completed=? where id=? |]
-  projectMembers <- dbtToEff $ Projects.usersByProjectId pid
+  projectMembers <- Projects.usersByProjectId pid
   let emails' = (\u -> CI.original u.email) <$> projectMembers
-  _ <- dbtToEff $ execute q (V.fromList notifsTxt, phone, V.fromList emails, newCompleted, pid)
-  addRespHeaders $ OnboardingPhoneEmailsPost pid (V.fromList $ ordNub $ emails <> V.toList emails')
+  _ <- PG.execute q (V.fromList notifsTxt, phone, V.fromList emails, newCompleted, pid)
+  addRespHeaders $ OnboardingPhoneEmailsPost pid (V.fromList $ ordNub $ emails <> emails')
 
 
 checkIntegrationGet :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -292,10 +291,10 @@ checkIntegrationGet pid languageM = do
            in "and resource ->> 'telemetry.sdk.language' = '" <> l <> "'"
         _ -> ""
       q = [text|SELECT context___span_id, name FROM otel_logs_and_spans WHERE project_id = ? $extrQ|]
-  v <- dbtToEff (queryOne (Query $ encodeUtf8 q) (Only pid) :: (DBT IO (Maybe (Text, Text))))
+  v :: Maybe (Text, Text) <- listToMaybe <$> PG.query (Query $ encodeUtf8 q) (Only pid)
   if isJust v
     then do
-      _ <- dbtToEff $ execute [sql|update projects.projects set onboarding_steps_completed=? where id=?|] (newCompleted, pid)
+      _ <- PG.execute [sql|update projects.projects set onboarding_steps_completed=? where id=?|] (newCompleted, pid)
       case languageM of
         Just lg -> addRespHeaders verifiedCheck
         _ -> do
@@ -329,8 +328,8 @@ onboardingInfoPostH pid form = do
       jsonBytes = AE.encode questions
       stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "Info" stepsCompleted
-  _ <- dbtToEff $ execute [sql| update projects.projects set title=?,questions=?,onboarding_steps_completed=? where id=? |] (form.companyName, jsonBytes, newCompleted, pid)
-  _ <- dbtToEff $ execute [sql| update users.users set first_name= ?, last_name=? where id=? |] (firstName, lastName, sess.user.id)
+  _ <- PG.execute [sql| update projects.projects set title=?,questions=?,onboarding_steps_completed=? where id=? |] (form.companyName, jsonBytes, newCompleted, pid)
+  _ <- PG.execute [sql| update users.users set first_name= ?, last_name=? where id=? |] (firstName, lastName, sess.user.id)
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Survey"
   addRespHeaders $ OnboardingInfoPost ()
 
@@ -349,7 +348,7 @@ onboardingConfPostH pid form = do
       jsonBytes = AE.encode questions
       stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "Survey" stepsCompleted
-  _ <- dbtToEff $ execute [sql| update projects.projects set questions=?, onboarding_steps_completed=? where id=? |] (jsonBytes, newCompleted, pid)
+  _ <- PG.execute [sql| update projects.projects set questions=?, onboarding_steps_completed=? where id=? |] (jsonBytes, newCompleted, pid)
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
   addRespHeaders $ OnboardingConfPost ()
 

@@ -4,11 +4,11 @@ import Data.Default (def)
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
-import Database.PostgreSQL.Entity.DBT (execute, queryOne)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Labeled (labeled)
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified
 import Lucid
 import Lucid.Hyperscript (__)
@@ -38,11 +38,10 @@ shareLinkPostH pid eventId createdAt reqTypeM = do
   let eventType = fromMaybe "request" reqTypeM
   shareId <- liftIO UUIDV4.nextRandom
   res <-
-    dbtToEff
-      $ execute
-        [sql| INSERT INTO apis.share_events (id, project_id, event_id, event_type, event_created_at)
+    PG.execute
+      [sql| INSERT INTO apis.share_events (id, project_id, event_id, event_type, event_created_at)
                               VALUES (?,?,?,?,?) |]
-        (shareId, pid, eventId, eventType, createdAt)
+      (shareId, pid, eventId, eventType, createdAt)
   addRespHeaders $ ShareLinkPost $ show shareId
 
 
@@ -92,7 +91,7 @@ shareLinkGetH :: UUID.UUID -> ATBaseCtx ShareLinkGet
 shareLinkGetH sid = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   -- FIXME: handle errors
-  r <- dbtToEff $ queryOne [sql|SELECT project_id, event_id, event_type, event_created_at FROM apis.share_events where id=? and created_at > current_timestamp - interval '48 hours' limit 1|] (Only sid)
+  r <- listToMaybe <$> PG.query [sql|SELECT project_id, event_id, event_type, event_created_at FROM apis.share_events where id=? and created_at > current_timestamp - interval '48 hours' limit 1|] (Only sid)
   uiM <- do
     case r of
       Just (pid, eventId, eventType, createdAt) -> do
@@ -106,7 +105,7 @@ shareLinkGetH sid = do
           _ -> do
             spanItem <-
               if authCtx.env.enableTimefusionReads
-                then labeled @"timefusion" @DB $ Telemetry.spanRecordByProjectAndId pid createdAt eventId
+                then labeled @"timefusion" @WithConnection $ Telemetry.spanRecordByProjectAndId pid createdAt eventId
                 else Telemetry.spanRecordByProjectAndId pid createdAt eventId
             pure case spanItem of
               Just spn -> Just $ LogItem.expandedItemView pid spn Nothing Nothing Nothing

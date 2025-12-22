@@ -10,7 +10,6 @@ import "base64" Data.ByteString.Base64 qualified as B64
 import Data.UUID qualified as UUID
 import Deriving.Aeson qualified as DAE
 import Effectful.Error.Static (throwError)
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
@@ -51,7 +50,7 @@ clientMetadataH (Just authTextB64) = do
       case ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey of
         Nothing -> throwError err401
         Just apiKeyUUID -> do
-          (pApiKey, project) <- dbtToEff do
+          (pApiKey, project) <- do
             pApiKeyM <- ProjectApiKeys.getProjectApiKey apiKeyUUID
             case pApiKeyM of
               Nothing -> error "no api key with given id"

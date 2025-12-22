@@ -11,17 +11,18 @@ import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (execute, query)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (Only (..), Query)
 import Effectful (Eff, (:>))
 import Effectful.Labeled (Labeled, labeled)
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified
 import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Projects.Projects (ProjectId)
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Types (DB)
 
 
 -- | Centralized list of facet columns for OTLP data
@@ -88,7 +89,7 @@ facetColumns =
 
 -- | Generate facets for a project from a specified table and save to database
 generateAndSaveFacets
-  :: (DB :> es, Effectful.Reader.Static.Reader AuthContext :> es, Labeled "timefusion" DB :> es, UUID.UUIDEff :> es)
+  :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, UUID.UUIDEff :> es)
   => ProjectId
   -> Text
   -> [Text]
@@ -107,31 +108,27 @@ generateAndSaveFacets pid tableName columns maxValues timestamp = do
       if authCtx.env.enableTimefusionReads
         then
           checkpoint (toAnnotation (buildOptimizedFacetQuery tableName (length columns)))
-            $ labeled @"timefusion" @DB
-            $ dbtToEff
-            $ query
+            $ labeled @"timefusion" @WithConnection
+            $ PG.query
               (buildOptimizedFacetQuery tableName (length columns))
               (V.fromList columns, pid.toText, dayStart, dayEnd, maxValues)
         else
           checkpoint (toAnnotation (buildOptimizedFacetQuery tableName (length columns)))
-            $ dbtToEff
-            $ query
+            $ PG.query
               (buildOptimizedFacetQuery tableName (length columns))
               (V.fromList columns, pid.toText, dayStart, dayEnd, maxValues)
-    pure $ processQueryResults values
+    pure $ processQueryResults $ V.fromList values
 
   -- Get existing summary ID (if any) to preserve it
   existingIdM <-
-    dbtToEff
-      $ query
-        [sql| SELECT id FROM apis.facet_summaries
-              WHERE project_id = ? AND table_name = ?
-              LIMIT 1 |]
-        (pid.toText, tableName)
+    PG.query
+      [sql| SELECT id FROM apis.facet_summaries
+            WHERE project_id = ? AND table_name = ?
+            LIMIT 1 |]
+      (pid.toText, tableName)
       <&> \case
-        v
-          | V.null v -> Nothing
-          | otherwise -> Just (V.head v)
+        [] -> Nothing
+        (v : _) -> Just v
 
   -- Create a summary object with either existing or new ID
   facetId <- case existingIdM of
@@ -148,13 +145,12 @@ generateAndSaveFacets pid tableName columns maxValues timestamp = do
 
   -- Upsert the summary - replace existing data
   _ <-
-    dbtToEff
-      $ execute
-        [sql| INSERT INTO apis.facet_summaries (id, project_id, table_name, facet_json)
-              VALUES (?, ?, ?, ?)
-              ON CONFLICT (project_id, table_name) 
-              DO UPDATE SET facet_json = EXCLUDED.facet_json |]
-        (summary.id, pid.toText, summary.tableName, summary.facetJson)
+    PG.execute
+      [sql| INSERT INTO apis.facet_summaries (id, project_id, table_name, facet_json)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT (project_id, table_name)
+            DO UPDATE SET facet_json = EXCLUDED.facet_json |]
+      (summary.id, pid.toText, summary.tableName, summary.facetJson)
 
   pure summary
 
@@ -226,7 +222,7 @@ buildOptimizedFacetQuery tableName _ =
 
 -- | Get a facet summary for a project/table with time range extrapolation
 getFacetSummary
-  :: DB :> es => ProjectId -> Text -> UTCTime -> UTCTime -> Eff es (Maybe FacetSummary)
+  :: DB es => ProjectId -> Text -> UTCTime -> UTCTime -> Eff es (Maybe FacetSummary)
 getFacetSummary projectId tableName fromTime toTime = checkpoint "getFacetSummary" $ do
   -- Calculate time span in minutes for more precise scaling
   let projectIdText = projectId.toText
@@ -236,8 +232,7 @@ getFacetSummary projectId tableName fromTime toTime = checkpoint "getFacetSummar
   -- Fetch the single facet summary for this project/table
   summaryVec <-
     checkpoint "Fetching facet summary"
-      $ dbtToEff
-      $ query
+      $ PG.query
         [sql| SELECT id, project_id, table_name, facet_json
               FROM apis.facet_summaries
               WHERE project_id = ? AND table_name = ?
@@ -245,7 +240,7 @@ getFacetSummary projectId tableName fromTime toTime = checkpoint "getFacetSummar
         (projectIdText, tableName)
 
   -- Scale facet data based on requested time range
-  pure $ case V.toList summaryVec of
+  pure $ case summaryVec of
     [] -> Nothing
     [summary] -> Just $ scaleFacetSummary summary timeSpanMinutes
     _ -> error "Multiple facet summaries found for same project/table (should be impossible)"

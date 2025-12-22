@@ -22,7 +22,7 @@ import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful.Labeled (labeled)
-import Effectful.PostgreSQL.Transact.Effect (DB)
+import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Static qualified
 import Lucid
 import Lucid.Htmx
@@ -143,7 +143,7 @@ expandAPIlogItemH pid rdId timestamp sourceM = do
   -- Query the unified table using timestamp and id
   item <-
     if authCtx.env.enableTimefusionReads
-      then labeled @"timefusion" @DB $ Telemetry.logRecordByProjectAndId pid timestamp rdId
+      then labeled @"timefusion" @WithConnection $ Telemetry.logRecordByProjectAndId pid timestamp rdId
       else Telemetry.logRecordByProjectAndId pid timestamp rdId
 
   case item of
@@ -160,7 +160,7 @@ expandAPIlogItemH pid rdId timestamp sourceM = do
                 then case trIdM of
                   Just trId ->
                     if authCtx.env.enableTimefusionReads
-                      then labeled @"timefusion" @DB $ Telemetry.spanRecordByName pid trId "monoscope.http"
+                      then labeled @"timefusion" @WithConnection $ Telemetry.spanRecordByName pid trId "monoscope.http"
                       else Telemetry.spanRecordByName pid trId "monoscope.http"
                   _ -> pure Nothing
                 else pure Nothing

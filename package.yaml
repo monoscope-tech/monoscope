@@ -155,9 +155,9 @@ library:
     - effectful
     - effectful-core
     - effectful-th
+    - effectful-postgresql
     - monad-time-effectful
     - wai-log
-    - pg-transact-effectful
     - log-base
     - log-effectful
     - Unique

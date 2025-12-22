@@ -9,7 +9,8 @@ import Data.Time.Clock (UTCTime (..))
 import Data.UUID.V4 qualified as UUIDV4
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Lucid
@@ -104,16 +105,16 @@ webhookPostH secretHeaderM dat = do
               , productName = dat.dataVal.attributes.productName
               , userEmail = dat.dataVal.attributes.userEmail
               }
-      _ <- dbtToEff $ Projects.addSubscription sub
+      _ <- Projects.addSubscription sub
       pure "subscription created"
     "subscription_cancelled" -> do
-      _ <- dbtToEff $ Projects.downgradeToFree orderId subItem.subscriptionId subItem.id
+      _ <- Projects.downgradeToFree orderId subItem.subscriptionId subItem.id
       pure "downgraded"
     "subscription_resumed" -> do
-      _ <- dbtToEff $ Projects.upgradeToPaid orderId subItem.subscriptionId subItem.id
+      _ <- Projects.upgradeToPaid orderId subItem.subscriptionId subItem.id
       pure "Upgraded"
     "subscription_expired" -> do
-      _ <- dbtToEff $ Projects.downgradeToFree orderId subItem.subscriptionId subItem.id
+      _ <- Projects.downgradeToFree orderId subItem.subscriptionId subItem.id
       pure "Downgraded to free,sub expired"
     _ -> pure ""
 
@@ -134,7 +135,7 @@ manageBillingGetH pid from = do
   let envCfg = appCtx.config
   currentTime <- Time.currentTime
   let cycleStart = calculateCycleStartDate dat currentTime
-  totalRequests <- dbtToEff $ Projects.getTotalUsage pid cycleStart
+  totalRequests <- Projects.getTotalUsage pid cycleStart
   let requestAfter = totalRequests - 20_000_000
   let estimatedAmount = show $ if requestAfter <= 0 then "34.00" else printf "%.2f" (fromIntegral requestAfter / 500_000 + 34.00)
   let last_reported = show project.usageLastReported
