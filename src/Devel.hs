@@ -33,11 +33,11 @@ import System.Directory (doesFileExist)
 import System.Envy (FromEnv (..), ReadShowVar (..), Var (..), decodeEnv, fromVar, toVar)
 
 import BackgroundJobs qualified
-import Pkg.DeriveUtils (UUIDId (..))
 import Control.Exception.Safe qualified as Safe
 import Data.Time (getCurrentTime)
 import Effectful
 import Effectful.Fail (runFailIO)
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils (runTestBackground)
 import System.Config qualified as Cfg
 

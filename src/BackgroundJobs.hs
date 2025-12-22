@@ -350,7 +350,8 @@ runHourlyJob scheduledTime hour = do
   ctx <- ask @Config.AuthContext
   let oneHourAgo = addUTCTime (-3600) scheduledTime
   activeProjects <-
-    V.fromList . coerce @[Only Projects.ProjectId] @[Projects.ProjectId]
+    V.fromList
+      . coerce @[Only Projects.ProjectId] @[Projects.ProjectId]
       <$> PG.query
         [sql| SELECT DISTINCT project_id
               FROM otel_logs_and_spans ols
