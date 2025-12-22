@@ -596,8 +596,8 @@ processOneMinuteErrors scheduledTime pid = do
                         SET errors = ?
                         WHERE project_id = ? AND context___trace_id = ? AND context___span_id = ? |]
                 (AE.toJSON mappedErrors, pid, firstError.traceId, firstError.spanId)
-            Relude.when (rowsUpdated == 0) $
-              Log.logAttention "Error update had no effect - span not found" (AE.object ["project_id" AE..= pid.toText, "trace_id" AE..= firstError.traceId, "span_id" AE..= firstError.spanId])
+            Relude.when (rowsUpdated == 0)
+              $ Log.logAttention "Error update had no effect - span not found" (AE.object ["project_id" AE..= pid.toText, "trace_id" AE..= firstError.traceId, "span_id" AE..= firstError.spanId])
       Relude.when (V.length spansWithErrors == 30) $ do
         processErrorsPaginated oneMinuteAgo (skip + 30)
         pass
@@ -718,8 +718,8 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
                     AND otel_logs_and_spans.timestamp >= ?
                     AND otel_logs_and_spans.timestamp < ? |]
             (dbSpanIds, hashValues, pid, fiveMinutesAgo, scheduledTime)
-        Relude.when (fromIntegral rowsUpdated /= expectedCount) $
-          Log.logAttention "Span hash update count mismatch" (AE.object ["project_id" AE..= pid.toText, "expected" AE..= expectedCount, "actual" AE..= rowsUpdated])
+        Relude.when (fromIntegral rowsUpdated /= expectedCount)
+          $ Log.logAttention "Span hash update count mismatch" (AE.object ["project_id" AE..= pid.toText, "expected" AE..= expectedCount, "actual" AE..= rowsUpdated])
         Log.logInfo "Completed span processing for project" ("project_id", AE.toJSON pid.toText)
   where
     projectCacheDefault :: Projects.ProjectCache
