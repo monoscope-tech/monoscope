@@ -20,14 +20,13 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (SomePostgreSqlException)
-import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
 import Effectful (Eff, IOE, (:>))
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log, object)
-import Effectful.PostgreSQL (WithConnection, withConnection)
+import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified
@@ -325,12 +324,9 @@ processBackgroundJob authCtx job bgJob =
       Log.logInfo "Completed usage report for project" ("project_id", pid.toText)
     CleanupDemoProject -> do
       let pid = UUIDId UUID.nil
-      -- DELETE PROJECT members
-      _ <- withConnection \conn -> liftIO $ PGS.execute conn [sql| DELETE FROM projects.project_members WHERE project_id = ? |] (Only pid)
-      -- SOFT DELETE test collections
-      _ <- withConnection \conn -> liftIO $ PGS.execute conn [sql|DELETE FROM tests.collections  WHERE project_id = ? and title != 'Default Health check' |] (Only pid)
-      -- DELETE API KEYS
-      _ <- withConnection \conn -> liftIO $ PGS.execute conn [sql| DELETE FROM projects.project_api_keys WHERE project_id = ? AND title != 'Default API Key' |] (Only pid)
+      _ <- PG.execute [sql| DELETE FROM projects.project_members WHERE project_id = ? |] (Only pid)
+      _ <- PG.execute [sql|DELETE FROM tests.collections  WHERE project_id = ? and title != 'Default Health check' |] (Only pid)
+      _ <- PG.execute [sql| DELETE FROM projects.project_api_keys WHERE project_id = ? AND title != 'Default API Key' |] (Only pid)
       pass
     FiveMinuteSpanProcessing scheduledTime pid -> processFiveMinuteSpans scheduledTime pid
     OneMinuteErrorProcessing scheduledTime pid -> processOneMinuteErrors scheduledTime pid
@@ -1089,29 +1085,28 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
     -- Runtime exceptions get individual issues
     -- Each unique error pattern gets its own issue for tracking
     Anomalies.ATRuntimeException -> do
-      project <- fromMaybe (error "Project not found") <$> Projects.projectById pid
       errors <- Anomalies.errorsByHashes pid targetHashes
-      users <- Projects.usersByProjectId pid
 
       -- Create one issue per error
       forM_ errors \err -> do
         issue <- liftIO $ Issues.createRuntimeExceptionIssue pid err.errorData
         Issues.insertIssue issue
-
         -- Queue enhancement job
         _ <- liftIO $ withResource authCtx.jobsPool \conn ->
           createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
         pass
 
-      -- Send notifications
-      Relude.when project.errorAlerts do
+      -- Send notifications only if project exists and has alerts enabled
+      projectM <- Projects.projectById pid
+      whenJust projectM \project -> Relude.when project.errorAlerts do
+        users <- Projects.usersByProjectId pid
         forM_ project.notificationsChannel \case
           Projects.NSlack ->
-            forM_ errors \err -> do sendSlackAlert (RuntimeErrorAlert err.errorData) pid project.title Nothing
+            forM_ errors \err -> sendSlackAlert (RuntimeErrorAlert err.errorData) pid project.title Nothing
           Projects.NDiscord ->
-            forM_ errors \err -> do sendDiscordAlert (RuntimeErrorAlert err.errorData) pid project.title Nothing
+            forM_ errors \err -> sendDiscordAlert (RuntimeErrorAlert err.errorData) pid project.title Nothing
           Projects.NPhone ->
-            forM_ errors \err -> do
+            forM_ errors \err ->
               sendWhatsAppAlert (RuntimeErrorAlert err.errorData) pid project.title project.whatsappNumbers
           Projects.NEmail ->
             forM_ users \u -> do
