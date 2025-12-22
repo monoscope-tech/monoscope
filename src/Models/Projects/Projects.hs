@@ -57,7 +57,6 @@ import Database.PostgreSQL.Simple.ToField (ToField, toField, toJSONField)
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.PostgreSQL qualified as PG
-import System.DB (DB)
 import GHC.Records (HasField (getField))
 import Models.Users.Users qualified as Users
 import Pkg.DBUtils (WrappedEnumSC (..))
@@ -65,6 +64,7 @@ import Pkg.DeriveUtils (UUIDId (..), idFromText)
 import Pkg.Parser.Stats (Section)
 import Relude
 import Servant (FromHttpApiData)
+import System.DB (DB)
 import Web.FormUrlEncoded (FromForm)
 
 

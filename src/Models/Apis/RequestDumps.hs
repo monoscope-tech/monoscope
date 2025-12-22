@@ -43,7 +43,6 @@ import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.Log (Log)
 import Effectful.PostgreSQL qualified as PG
-import System.Types (DB)
 import Effectful.Time qualified as Time
 import Models.Apis.Fields.Types ()
 import Models.Projects.Projects qualified as Projects
@@ -52,6 +51,7 @@ import Pkg.Parser
 import Pkg.Parser.Stats (Section, Sources (SSpans))
 import Relude hiding (many, some)
 import System.Logging qualified as Log
+import System.Types (DB)
 import Web.HttpApiData (ToHttpApiData (..))
 
 

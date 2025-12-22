@@ -44,7 +44,6 @@ import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, runLabeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection, runWithConnectionPool)
-import System.DB
 import Effectful.Reader.Static (Reader, runReader)
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time (Time, runFrozenTime, runTime)
@@ -58,6 +57,7 @@ import Servant qualified
 import Servant.Htmx (HXRedirect, HXTriggerAfterSettle)
 import Servant.Server.Experimental.Auth (AuthServerData)
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.DB
 import System.Logging qualified as Logging
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing

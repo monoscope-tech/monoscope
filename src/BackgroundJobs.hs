@@ -28,7 +28,6 @@ import Effectful.Labeled (Labeled)
 import Effectful.Log (Log, object)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
-import System.Types (DB)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
@@ -70,7 +69,7 @@ import RequestMessages qualified
 import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
-import System.Types (ATBackgroundCtx, runBackground)
+import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, try)
 import Utils (DBField)
 
@@ -222,10 +221,12 @@ processBackgroundJob authCtx job bgJob =
         withAdvisoryLock :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
         withAdvisoryLock lockName action = do
           let acquireLock = PG.query [sql|SELECT pg_try_advisory_lock(hashtext(?))|] (Only lockName) <&> \case [Only True] -> True; _ -> False
-              releaseLock = (PG.query [sql|SELECT pg_advisory_unlock(hashtext(?))|] (Only lockName) >>= \case
-                  [Only True] -> pass
-                  other -> Log.logAttention "Advisory unlock returned unexpected result" (AE.object ["lock_name" AE..= lockName, "result" AE..= show (other :: [Only Bool])]))
-                `catch` \(e :: SomeException) -> Log.logAttention "Failed to release advisory lock (will auto-release on disconnect)" (AE.object ["lock_name" AE..= lockName, "error" AE..= show e])
+              releaseLock =
+                ( PG.query [sql|SELECT pg_advisory_unlock(hashtext(?))|] (Only lockName) >>= \case
+                    [Only True] -> pass
+                    other -> Log.logAttention "Advisory unlock returned unexpected result" (AE.object ["lock_name" AE..= lockName, "result" AE..= show (other :: [Only Bool])])
+                )
+                  `catch` \(e :: SomeException) -> Log.logAttention "Failed to release advisory lock (will auto-release on disconnect)" (AE.object ["lock_name" AE..= lockName, "error" AE..= show e])
           bracket acquireLock (Relude.when ?? releaseLock) \acquired ->
             if acquired then action else Log.logInfo "Daily job already running in another pod, skipping" ()
 

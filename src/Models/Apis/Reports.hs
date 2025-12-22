@@ -17,10 +17,10 @@ import Database.PostgreSQL.Simple hiding (execute, query)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
-import System.Types (DB)
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
+import System.Types (DB)
 
 
 type ReportId = UUIDId "report"

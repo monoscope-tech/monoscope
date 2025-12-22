@@ -31,11 +31,11 @@ import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.PostgreSQL (withConnection)
 import Effectful.PostgreSQL qualified as PG
-import System.Types (DB)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
+import System.Types (DB)
 
 
 type EndpointId = UUIDId "endpoint"

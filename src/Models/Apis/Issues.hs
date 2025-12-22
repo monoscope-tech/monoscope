@@ -63,7 +63,6 @@ import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
-import System.Types (DB)
 import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -72,6 +71,7 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (UUIDId (..), idToText)
 import Relude hiding (id)
+import System.Types (DB)
 import Utils (formatUTC)
 
 

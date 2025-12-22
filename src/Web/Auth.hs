@@ -36,7 +36,6 @@ import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
 import Effectful.PostgreSQL (runWithConnectionPool)
 import Effectful.PostgreSQL qualified as PG
-import System.Types (DB)
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time (Time, runTime)
 import Log (Logger)
@@ -80,7 +79,7 @@ import System.Config (
   ),
  )
 import System.Logging qualified as Logging
-import System.Types (ATBaseCtx)
+import System.Types (ATBaseCtx, DB)
 import Utils (escapedQueryPartial)
 import Web.Cookie (Cookies, SetCookie, parseCookies)
 import "base64" Data.ByteString.Base64 qualified as B64

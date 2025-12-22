@@ -51,7 +51,6 @@ import Deriving.Aeson.Stock qualified as DAES
 import Effectful
 import Effectful.Error.Static (Error, throwError)
 import Effectful.PostgreSQL qualified as PG
-import System.Types (DB)
 import Language.Haskell.TH (Exp, Q, runIO)
 import Language.Haskell.TH.Syntax qualified as THS
 import Models.Projects.Projects qualified as Projects
@@ -64,6 +63,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Servant (ServerError (..), err404)
 import System.Directory (listDirectory)
+import System.Types (DB)
 
 
 data DashboardVM = DashboardVM

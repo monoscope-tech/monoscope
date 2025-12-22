@@ -46,7 +46,6 @@ import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
 import Effectful.Error.Static (Error, throwError)
 import Effectful.PostgreSQL qualified as PG
-import System.Types (DB)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
@@ -79,6 +78,7 @@ import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import System.Config (AuthContext (..))
 import System.Types
+import System.Types (DB)
 import Text.Slugify (slugify)
 import UnliftIO.Exception (try)
 import Utils

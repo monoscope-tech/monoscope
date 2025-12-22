@@ -13,11 +13,11 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Effectful (Eff, (:>))
-import System.Types (DB)
 import Models.Apis.Issues qualified as Issues
 import Pkg.AI qualified as AI
 import Relude hiding (id)
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Types (DB)
 
 
 data IssueEnhancement = IssueEnhancement

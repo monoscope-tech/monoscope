@@ -17,7 +17,6 @@ import Effectful (
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Static (Reader, ask)
-import System.Types (DB)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Slack (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.Projects qualified as Projects
@@ -26,6 +25,7 @@ import Relude hiding (Reader, ask)
 import System.Config (AuthContext (env))
 import System.Config qualified as Config
 import System.Logging qualified as Log
+import System.Types (DB)
 
 
 sendPostmarkEmail :: Notify.Notify :> es => Text -> Maybe (Text, AE.Value) -> Maybe (Text, Text) -> Eff es ()

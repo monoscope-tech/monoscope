@@ -35,7 +35,6 @@ import Effectful.Error.Static (throwError)
 import Effectful.Error.Static qualified as EffError
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
-import System.DB (DB)
 import Effectful.Reader.Static (Reader, asks)
 import Effectful.Reader.Static qualified as EffReader
 import Models.Projects.Projects qualified as Projects
@@ -44,6 +43,7 @@ import Models.Users.Users qualified as Users
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Servant (Header, Headers, ServerError, addHeader, err302, errHeaders, getResponse)
+import System.DB (DB)
 import Web.Cookie (
   SetCookie (
     setCookieHttpOnly,

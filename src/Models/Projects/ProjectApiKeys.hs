@@ -33,7 +33,6 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL (withConnection)
 import Effectful.PostgreSQL qualified as PG
-import System.Types (DB)
 import Effectful.Reader.Static qualified as Effectful
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
@@ -42,6 +41,7 @@ import Models.Projects.Projects qualified as Projects
 import Relude hiding (ask, id)
 import Servant.API (FromHttpApiData)
 import System.Config qualified as Config
+import System.Types (DB)
 import "cryptonite" Crypto.Cipher.AES (AES256)
 import "cryptonite" Crypto.Cipher.Types (BlockCipher (..), Cipher (..), nullIV)
 import "cryptonite" Crypto.Error (throwCryptoError)

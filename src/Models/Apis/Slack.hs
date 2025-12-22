@@ -21,9 +21,9 @@ import Deriving.Aeson qualified as AE
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.PostgreSQL qualified as PG
-import System.Types (DB)
 import Models.Projects.Projects qualified as Projects
 import Relude
+import System.Types (DB)
 
 
 data SlackData = SlackData

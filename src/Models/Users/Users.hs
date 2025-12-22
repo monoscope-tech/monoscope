@@ -34,11 +34,11 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
-import System.DB (DB)
 import Effectful.Time (Time, currentTime)
 import GHC.Records (HasField (getField))
 import Relude
 import Servant (FromHttpApiData)
+import System.DB (DB)
 
 
 instance AE.FromJSON (CI.CI Text) where

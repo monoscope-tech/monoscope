@@ -37,11 +37,11 @@ import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
-import System.Types (DB)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Relude
 import Servant (FromHttpApiData)
+import System.Types (DB)
 
 
 newtype QueryMonitorId = QueryMonitorId {unQueryMonitorId :: UUID.UUID}

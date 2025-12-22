@@ -17,12 +17,12 @@ import Effectful (Eff, (:>))
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
-import System.Types (DB)
 import Effectful.Reader.Static qualified
 import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Projects.Projects (ProjectId)
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Types (DB)
 
 
 -- | Centralized list of facet columns for OTLP data

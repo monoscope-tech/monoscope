@@ -83,7 +83,6 @@ import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
-import System.Types (DB)
 import Effectful.Reader.Static qualified as Eff
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -95,6 +94,7 @@ import RequestMessages (replaceAllFormats)
 import System.Config (AuthContext)
 import System.Config qualified as SysConfig
 import System.Logging qualified as Log
+import System.Types (DB)
 import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
 import Utils (formatUTC, lookupValueText, toXXHash)

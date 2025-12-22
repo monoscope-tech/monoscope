@@ -73,7 +73,6 @@ import Effectful.Ki qualified as Ki
 import Effectful.Labeled (runLabeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection, runWithConnectionPool)
-import System.Types (DB)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runFrozenTime, runTime)
 import Log qualified
@@ -107,7 +106,7 @@ import System.Envy (DefConfig (..), decodeWithDefaults)
 import System.Logging qualified as Logging
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
-import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, effToServantHandlerTest)
+import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, atAuthToBase, effToServantHandlerTest)
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 

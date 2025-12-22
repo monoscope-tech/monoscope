@@ -47,11 +47,11 @@ import Database.PostgreSQL.Simple.TypeInfo.Static (uuid)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
-import System.Types (DB)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import Relude
 import Servant (FromHttpApiData)
+import System.Types (DB)
 import Web.HttpApiData (parseUrlPiece)
 
 

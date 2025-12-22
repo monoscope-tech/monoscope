@@ -46,7 +46,6 @@ import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
-import System.Types (DB)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields (
   FieldCategoryEnum,
@@ -63,6 +62,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (id, many, some)
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
+import System.Types (DB)
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer qualified as L

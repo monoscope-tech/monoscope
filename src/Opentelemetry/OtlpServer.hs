@@ -49,7 +49,6 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
-import System.Types (DB)
 import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogBase
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
@@ -82,7 +81,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Log
-import System.Types (runBackground)
+import System.Types (DB, runBackground)
 import Utils (b64ToJson, freeTierDailyMaxEvents, nestedJsonFromDotNotation)
 import "base64" Data.ByteString.Base64 qualified as B64
 
