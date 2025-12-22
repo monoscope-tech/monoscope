@@ -78,7 +78,6 @@ import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import System.Config (AuthContext (..))
 import System.Types
-import System.Types (DB)
 import Text.Slugify (slugify)
 import UnliftIO.Exception (try)
 import Utils
