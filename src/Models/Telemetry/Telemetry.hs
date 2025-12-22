@@ -808,8 +808,6 @@ instance ToRow OtelLogsAndSpans where
     , toField $ cleanNullBytes entry.project_id -- project_id
     , toField $ V.map cleanNullBytes entry.summary -- summary
     , toField entry.date
-    , toField entry.log_pattern -- log_pattern
-    , toField entry.summary_pattern -- summary_pattern
     ]
     where
       -- Helper functions for severity fields
@@ -873,10 +871,10 @@ bulkInserSpansAndLogsQuery =
        resource___service___instance___id, resource___service___namespace, 
        resource___telemetry___sdk___language, resource___telemetry___sdk___name,
        resource___telemetry___sdk___version, resource___user_agent___original,
-       project_id, summary, date, log_pattern, summary_pattern)
+       project_id, summary, date)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
  
     |]
 
@@ -933,8 +931,6 @@ data OtelLogsAndSpans = OtelLogsAndSpans
   , summary :: V.Vector Text
   , date :: UTCTime
   , errors :: Maybe AE.Value
-  , log_pattern :: Maybe Text
-  , summary_pattern :: Maybe Text
   }
   deriving (Generic, Show)
   deriving anyclass (NFData)
@@ -970,8 +966,6 @@ instance FromRow OtelLogsAndSpans where
     parent_id' <- field
     summary' <- field
     date' <- field
-    log_pattern' <- field
-    summary_pattern' <- field
     return
       $ OtelLogsAndSpans
         { id = id'
@@ -998,8 +992,6 @@ instance FromRow OtelLogsAndSpans where
         , summary = summary'
         , date = date'
         , errors = Nothing
-        , log_pattern = log_pattern'
-        , summary_pattern = summary_pattern'
         }
 
 

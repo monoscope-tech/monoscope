@@ -344,13 +344,17 @@ runHourlyJob scheduledTime hour = do
   ctx <- ask @Config.AuthContext
   let oneHourAgo = addUTCTime (-3600) scheduledTime
   activeProjects <-
+    dbtToEff
+      $ V.map (\(Only pid) -> pid)
+        <$> query
+          [sql| SELECT DISTINCT project_id
     coerce @[Only Projects.ProjectId] @[Projects.ProjectId]
       <$> PG.query
         [sql| SELECT DISTINCT project_id
               FROM otel_logs_and_spans ols
               WHERE ols.timestamp >= ?
                 AND ols.timestamp <= ? |]
-        (oneHourAgo, scheduledTime)
+          (oneHourAgo, scheduledTime)
 
   -- Log count of projects to process
   Log.logInfo "Projects with new data in the last hour window" ("count", AE.toJSON $ length activeProjects)
@@ -438,7 +442,7 @@ processFiveMinuteSpans scheduledTime pid = do
         V.fromList
           <$> PG.query
             [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
-                         hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date, log_pattern, summary_pattern
+                         hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
                   FROM otel_logs_and_spans
               WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND name = 'monoscope.http' OFFSET ? LIMIT ? |]
             (pid, fiveMinutesAgo, scheduledTime, skip, perPage)

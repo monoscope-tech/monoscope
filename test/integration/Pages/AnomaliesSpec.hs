@@ -1,15 +1,15 @@
-
 {-# LANGUAGE PackageImports #-}
 
 module Pages.AnomaliesSpec (spec) where
 
+import BackgroundJobs (processBackgroundJob, processFiveMinuteSpans, processOneMinuteErrors)
+import BackgroundJobs qualified
 import Control.Concurrent (threadDelay)
 import Data.Aeson (Value)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Base64.Types qualified as B64T
-import "base64" Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Lazy qualified as BL
 import Data.HashMap.Strict qualified as HashMap
 import Data.Int (Int64)
@@ -26,28 +26,28 @@ import Models.Apis.Anomalies (AnomalyId)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions (Session (..))
 import Models.Users.Users qualified as Users
-import Pkg.DeriveUtils (UUIDId (..))
-import Models.Users.Sessions (Session(..))
 import OddJobs.Job (Job (..))
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
 import Pkg.Components.Table qualified as Table
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
-import BackgroundJobs (processFiveMinuteSpans, processBackgroundJob, processOneMinuteErrors)
-import BackgroundJobs qualified
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages (RequestMessage (..), replaceNullChars, valueToFields)
-import Test.Hspec (Spec, aroundAll, describe, it, pendingWith, shouldBe, shouldSatisfy, xdescribe)
 import Servant qualified
+import Test.Hspec (Spec, aroundAll, describe, it, pendingWith, shouldBe, shouldSatisfy, xdescribe)
 import Utils (toXXHash)
+import "base64" Data.ByteString.Base64 qualified as B64
 
 
 testPid :: Projects.ProjectId
 testPid = UUIDId UUID.nil
+
 
 -- Helper function to get anomalies from API
 getAnomalies :: TestResources -> IO (V.Vector AnomalyList.IssueVM)
@@ -81,7 +81,7 @@ spec = aroundAll withTestResources do
             , ("m3", BL.toStrict $ AE.encode reqMsg1) -- same message
             , ("m4", BL.toStrict $ AE.encode reqMsg1) -- same message
             ]
-      
+
       processMessagesAndBackgroundJobs tr msgs
 
       -- Check that endpoint was created in database
@@ -99,7 +99,7 @@ spec = aroundAll withTestResources do
         BackgroundJobs.NewAnomaly{} -> True
         _ -> False
       createRequestDumps tr testPid 10
-      
+
       -- Check that API change issue was created for the endpoint
       apiChangeIssues <- withResource tr.trPool \conn -> PGS.query conn [sql|
         SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
@@ -191,7 +191,7 @@ spec = aroundAll withTestResources do
       _ <- runBackgroundJobsWhere tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
         _ -> False
-      
+
       -- Find and acknowledge the API change issues
       apiChangeIssuesForAck <- withResource tr.trPool \conn -> PGS.query conn [sql|
         SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
@@ -223,7 +223,7 @@ spec = aroundAll withTestResources do
       -- Get updated anomaly list
       anomalies <- getAnomalies tr
       let formatApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
-      
+
       -- In the new Issues system, format anomalies are part of API changes
       length formatApiChangeIssues `shouldSatisfy` (>= 1)
       length anomalies `shouldSatisfy` (> 0)

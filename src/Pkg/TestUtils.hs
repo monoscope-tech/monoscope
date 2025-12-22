@@ -79,7 +79,6 @@ import Log qualified
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.SummaryGenerator qualified as SummaryGenerator
-import Models.Telemetry.Telemetry (OtelLogsAndSpans (log_pattern, summary_pattern))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
@@ -271,8 +270,8 @@ ensureTemplateDatabase masterConnStr templateDbName = do
           ( Query
               $ encodeUtf8
               $ "DO $$ BEGIN  PERFORM pg_terminate_backend(pid) FROM pg_stat_activity  WHERE datname = '"
-              <> templateDbName
-              <> "' AND pid <> pg_backend_pid(); END $$;"
+                <> templateDbName
+                <> "' AND pid <> pg_backend_pid(); END $$;"
           )
           ()
 
@@ -830,8 +829,6 @@ createRequestDumps TestResources{..} projectId numRequestsPerEndpoint = do
               , date = currentTime
               , summary = V.empty -- Will be generated
               , errors = Nothing
-              , log_pattern = Nothing
-              , summary_pattern = Nothing
               }
       let summary = SummaryGenerator.generateSummary otelRecord
       void $ withResource trPool \conn ->

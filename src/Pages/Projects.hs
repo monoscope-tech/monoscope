@@ -80,6 +80,7 @@ import Models.Apis.Slack qualified as Slack
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.ProjectMembers qualified as ProjectsMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
@@ -499,7 +500,7 @@ manageMembersPostH pid onboardingM form = do
 
       unless (null uAndPOldAndChanged)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       whenJust (nonEmpty deletedUAndP)
@@ -566,9 +567,9 @@ manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers,
       teamDetails = ProjectMembers.TeamDetails teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels phoneNumbers
       validationErr msg = addErrorToast msg Nothing >> addRespHeaders (ManageTeamsPostError msg)
   case (userPermission == Just ProjectMembers.PAdmin, V.null invalidMembers, validateTeamDetails teamName teamHandle notifEmails, teamId) of
-    (_, _, Left e, _) -> addErrorToast e Nothing >> addReswap "" >> addRespHeaders (ManageTeamsPostError e)
     (False, _, _, _) -> validationErr "Only admins can create or update teams"
     (_, False, _, _) -> validationErr "Some team members are not project members"
+    (_, _, Left e, _) -> addErrorToast e Nothing >> addReswap "" >> addRespHeaders (ManageTeamsPostError e)
     (_, _, _, Just tid) -> do
       _ <- ProjectMembers.updateTeam pid tid teamDetails
       addSuccessToast "Team updated successfully" Nothing
