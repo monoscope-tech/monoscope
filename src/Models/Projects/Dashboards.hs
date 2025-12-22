@@ -271,4 +271,4 @@ deleteDashboard dashId = PG.execute (Query "DELETE FROM projects.dashboards WHER
 
 
 getDashboardByBaseTemplate :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es (Maybe DashboardId)
-getDashboardByBaseTemplate pid baseTemplate = fmap (\(Only t) -> t) . listToMaybe <$> PG.query (Query "SELECT id FROM projects.dashboards WHERE project_id = ? AND base_template = ?") (pid, baseTemplate)
+getDashboardByBaseTemplate pid baseTemplate = coerce @(Maybe (Only DashboardId)) @(Maybe DashboardId) . listToMaybe <$> PG.query (Query "SELECT id FROM projects.dashboards WHERE project_id = ? AND base_template = ?") (pid, baseTemplate)

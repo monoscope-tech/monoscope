@@ -91,7 +91,7 @@ data BgJobs
   | DailyJob
   | HourlyJob UTCTime Int
   | ReportUsage Projects.ProjectId
-  | GenerateOtelFacetsBatch (V.Vector Text) UTCTime
+  | GenerateOtelFacetsBatch (V.Vector Projects.ProjectId) UTCTime
   | QueryMonitorsTriggered (V.Vector Monitors.QueryMonitorId)
   | DeletedProject Projects.ProjectId
   | CleanupDemoProject
@@ -350,8 +350,7 @@ runHourlyJob scheduledTime hour = do
   ctx <- ask @Config.AuthContext
   let oneHourAgo = addUTCTime (-3600) scheduledTime
   activeProjects <-
-    V.map (\(Only pid) -> pid)
-      . V.fromList
+    V.fromList . coerce @[Only Projects.ProjectId] @[Projects.ProjectId]
       <$> PG.query
         [sql| SELECT DISTINCT project_id
               FROM otel_logs_and_spans ols
@@ -377,7 +376,7 @@ runHourlyJob scheduledTime hour = do
 
 -- | Batch process facets generation for multiple projects using 24-hour window
 -- Processes projects concurrently with individual error handling to prevent batch failures
-generateOtelFacetsBatch :: (Effectful.Reader.Static.Reader Config.AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, Tracing :> es, UUID.UUIDEff :> es, WithConnection :> es) => V.Vector Text -> UTCTime -> Eff es ()
+generateOtelFacetsBatch :: (Effectful.Reader.Static.Reader Config.AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, Tracing :> es, UUID.UUIDEff :> es, WithConnection :> es) => V.Vector Projects.ProjectId -> UTCTime -> Eff es ()
 generateOtelFacetsBatch projectIds timestamp = do
   Log.logInfo "Starting batch OTLP facets generation" ("project_count", AE.toJSON $ V.length projectIds)
 
@@ -387,12 +386,12 @@ generateOtelFacetsBatch projectIds timestamp = do
       -- Wrap each project's facet generation in a span
       withSpan
         "facet_generation.project"
-        [ ("project_id", OA.toAttribute pid)
+        [ ("project_id", OA.toAttribute pid.toText)
         , ("batch_size", OA.toAttribute $ V.length projectIds)
         ]
         $ \sp -> do
           addEvent sp "facet_generation.started" []
-          result <- try $ Facets.generateAndSaveFacets (UUIDId $ Unsafe.fromJust $ UUID.fromText pid) "otel_logs_and_spans" Facets.facetColumns 50 timestamp
+          result <- try $ Facets.generateAndSaveFacets pid "otel_logs_and_spans" Facets.facetColumns 50 timestamp
           case result of
             Left (e :: SomeException) -> do
               addEvent sp "facet_generation.failed" [("error", OA.toAttribute $ toText $ show e)]
@@ -487,7 +486,7 @@ processPatterns :: Text -> Text -> V.Vector (Text, Text) -> Projects.ProjectId -
 processPatterns kind fieldName events pid scheduledTime since = do
   Relude.when (not $ V.null events) $ do
     let qq = [text| select $fieldName from otel_logs_and_spans where project_id= ? AND timestamp >= now() - interval '1 hour' and $fieldName is not null GROUP BY $fieldName ORDER BY count(*) desc limit 20|]
-    existingPatterns <- map (\(Only p) -> p) <$> PG.query (Query $ encodeUtf8 qq) pid
+    existingPatterns <- coerce @[Only Text] @[Text] <$> PG.query (Query $ encodeUtf8 qq) pid
     let known = V.fromList $ map ("",) existingPatterns
         combined = known <> events
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree

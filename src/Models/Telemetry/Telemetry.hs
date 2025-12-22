@@ -668,13 +668,13 @@ getMetricChartListData pid sourceM prefixM dateRange cursor = PG.query (Query $ 
 
 
 getMetricLabelValues :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Text -> Eff es [Text]
-getMetricLabelValues pid metricName labelName = map (\(Only t) -> t) <$> PG.query q (labelName, pid, metricName)
+getMetricLabelValues pid metricName labelName = coerce @[Only Text] @[Text] <$> PG.query q (labelName, pid, metricName)
   where
     q = [sql| SELECT DISTINCT attributes->>? FROM telemetry.metrics WHERE project_id = ? AND metric_name = ?|]
 
 
 getMetricServiceNames :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es [Text]
-getMetricServiceNames pid = map (\(Only t) -> t) <$> PG.query q pid
+getMetricServiceNames pid = coerce @[Only Text] @[Text] <$> PG.query q pid
   where
     q =
       [sql| SELECT DISTINCT service_name FROM telemetry.metrics_meta WHERE project_id = ?|]

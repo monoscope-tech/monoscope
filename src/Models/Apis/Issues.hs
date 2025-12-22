@@ -313,8 +313,8 @@ selectIssueById iid = listToMaybe <$> PG.query (_selectWhere @Issue [[field| id 
 selectIssues :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> Eff es ([IssueL], Int)
 selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM = do
   issues <- PG.query (Query $ encodeUtf8 q) (pid, limit, offset)
-  countResult <- PG.query (Query $ encodeUtf8 countQ) (Only pid)
-  pure (issues, maybe 0 (\(Only c) -> c) $ listToMaybe countResult)
+  countResult <- coerce @(Maybe (Only Int)) @(Maybe Int) . listToMaybe <$> PG.query (Query $ encodeUtf8 countQ) (Only pid)
+  pure (issues, fromMaybe 0 countResult)
   where
     timefilter = maybe "" (\(st, end) -> " AND created_at >= '" <> formatUTC st <> "' AND created_at <= '" <> formatUTC end <> "'") timeRangeM
     ackF = maybe "" (\ack -> if ack then " AND acknowledged_at IS NOT NULL" else " AND acknowledged_at IS NULL") isAcknowledged

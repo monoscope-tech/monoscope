@@ -537,7 +537,6 @@ getLastSevenDaysTotalRequest = getRequestCountForInterval "7 days"
 
 
 getRequestCountForInterval :: (IOE :> es, WithConnection :> es) => Text -> Projects.ProjectId -> Eff es Int
-getRequestCountForInterval interval pid = do
-  maybe 0 (\(Only c) -> c) . listToMaybe <$> PG.query q (pid, interval)
+getRequestCountForInterval interval pid = fromMaybe 0 . coerce @(Maybe (Only Int)) @(Maybe Int) . listToMaybe <$> PG.query q (pid, interval)
   where
     q = [sql| SELECT count(*) FROM otel_logs_and_spans WHERE project_id=? AND timestamp > NOW() - interval ?;|]

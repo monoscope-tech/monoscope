@@ -276,7 +276,7 @@ acknowledgeAnomalies uid aids
   | otherwise = do
       -- Get anomaly hashes from the issues being acknowledged
       anomalyHashesResult :: [Only (V.Vector Text)] <- PG.query qGetHashes (Only aids)
-      let allAnomalyHashes = V.concat $ map (\(Only hashes) -> hashes) anomalyHashesResult
+      let allAnomalyHashes = V.concat $ coerce @[Only (V.Vector Text)] @[V.Vector Text] anomalyHashesResult
       -- Update issues
       (_ :: [Only Text]) <- PG.query qIssues (uid, aids)
       -- Update anomalies - both directly referenced and those tracked by the issues
@@ -285,7 +285,7 @@ acknowledgeAnomalies uid aids
       unless (V.null allAnomalyHashes) $ do
         _ <- PG.execute qAnomaliesByHash (uid, allAnomalyHashes)
         pass
-      map (\(Only t) -> t) <$> PG.query q (uid, aids)
+      coerce @[Only Text] @[Text] <$> PG.query q (uid, aids)
   where
     qGetHashes = [sql| SELECT anomaly_hashes FROM apis.issues WHERE id=ANY(?::uuid[]) |]
     qIssues = [sql| update apis.issues set acknowledged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]

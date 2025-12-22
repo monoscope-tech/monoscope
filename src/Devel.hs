@@ -33,6 +33,7 @@ import System.Directory (doesFileExist)
 import System.Envy (FromEnv (..), ReadShowVar (..), Var (..), decodeEnv, fromVar, toVar)
 
 import BackgroundJobs qualified
+import Pkg.DeriveUtils (UUIDId (..))
 import Control.Exception.Safe qualified as Safe
 import Data.Time (getCurrentTime)
 import Effectful
@@ -48,7 +49,7 @@ dev2 = do
   -- traceShowM ctx
   now <- getCurrentTime
   -- _ <- runTestBackground ctx $ BackgroundJobs.runHourlyJob now 18
-  let pids = ["00000000-0000-0000-0000-000000000000"]
+  let pids = V.singleton $ UUIDId $ Unsafe.fromJust $ UUID.fromString "00000000-0000-0000-0000-000000000000"
   _ <- runTestBackground ctx $ BackgroundJobs.generateOtelFacetsBatch pids now
 
   pass

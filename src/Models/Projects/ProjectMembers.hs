@@ -150,9 +150,7 @@ selectActiveProjectMembers pid = PG.query q (Only pid)
 
 
 getUserPermission :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Users.UserId -> Eff es (Maybe Permissions)
-getUserPermission pid uid = do
-  result <- PG.query q (pid, uid)
-  pure $ fmap (\(Only p) -> p) (listToMaybe result)
+getUserPermission pid uid = coerce @(Maybe (Only Permissions)) @(Maybe Permissions) . listToMaybe <$> PG.query q (pid, uid)
   where
     q =
       [sql| SELECT permission FROM projects.project_members
