@@ -218,9 +218,9 @@ processBackgroundJob authCtx job bgJob =
       where
         withAdvisoryLock :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
         withAdvisoryLock lockName action = do
-          lockAcquired <- V.fromList <$> PG.query [sql|SELECT pg_try_advisory_lock(hashtext(?))|] (Only lockName)
-          case V.headM lockAcquired of
-            Just (Only True) ->
+          lockAcquired <- PG.query [sql|SELECT pg_try_advisory_lock(hashtext(?))|] (Only lockName)
+          case lockAcquired of
+            [Only True] ->
               action `finally` do
                 result <- try $ PG.execute [sql|SELECT pg_advisory_unlock(hashtext(?))|] (Only lockName)
                 case result of
@@ -234,17 +234,16 @@ processBackgroundJob authCtx job bgJob =
           currentTime <- Time.currentTime
           -- Check if app-wide jobs already scheduled for today (idempotent check)
           existingHourlyJobs <-
-            V.fromList
-              <$> PG.query
-                [sql|SELECT COUNT(*) FROM background_jobs
-                 WHERE payload->>'tag' = 'HourlyJob'
-                   AND run_at >= date_trunc('day', now())
-                   AND run_at < date_trunc('day', now()) + interval '1 day'
-                   AND status IN ('queued', 'locked')|]
-                ()
+            PG.query
+              [sql|SELECT COUNT(*) FROM background_jobs
+               WHERE payload->>'tag' = 'HourlyJob'
+                 AND run_at >= date_trunc('day', now())
+                 AND run_at < date_trunc('day', now()) + interval '1 day'
+                 AND status IN ('queued', 'locked')|]
+              ()
 
-          let hourlyJobsExist = case V.headM existingHourlyJobs of
-                Just (Only (count :: Int)) -> count >= 24
+          let hourlyJobsExist = case existingHourlyJobs of
+                [Only (count :: Int)] -> count >= 24
                 _ -> False
 
           unless hourlyJobsExist $ do
@@ -272,18 +271,17 @@ processBackgroundJob authCtx job bgJob =
           forM_ projects \p -> do
             -- Check if this project's jobs already scheduled for today (per-project idempotent check)
             existingProjectJobs <-
-              V.fromList
-                <$> PG.query
-                  [sql|SELECT COUNT(*) FROM background_jobs
-                   WHERE payload->>'tag' = 'FiveMinuteSpanProcessing'
-                     AND payload->>'projectId' = ?
-                     AND run_at >= date_trunc('day', now())
-                     AND run_at < date_trunc('day', now()) + interval '1 day'
-                     AND status IN ('queued', 'locked')|]
-                  (Only p)
+              PG.query
+                [sql|SELECT COUNT(*) FROM background_jobs
+                 WHERE payload->>'tag' = 'FiveMinuteSpanProcessing'
+                   AND payload->>'projectId' = ?
+                   AND run_at >= date_trunc('day', now())
+                   AND run_at < date_trunc('day', now()) + interval '1 day'
+                   AND status IN ('queued', 'locked')|]
+                (Only p)
 
-            let projectJobsExist = case V.headM existingProjectJobs of
-                  Just (Only (count :: Int)) -> count >= 288
+            let projectJobsExist = case existingProjectJobs of
+                  [Only (count :: Int)] -> count >= 288
                   _ -> False
 
             unless projectJobsExist $ do

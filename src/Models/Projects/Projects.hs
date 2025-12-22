@@ -48,7 +48,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (Entity, _insert)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), Query, ToRow)
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, fromJSONField)
 import Database.PostgreSQL.Simple.Newtypes
@@ -264,27 +264,7 @@ projectCacheById pid = listToMaybe <$> PG.query q (pid, pid, pid, pid)
 
 
 projectCacheByIdIO :: Pool Connection -> ProjectId -> IO (Maybe ProjectCache)
-projectCacheByIdIO pool pid = withResource pool \conn -> listToMaybe <$> PGS.query conn q (pid, pid, pid, pid)
-  where
-    q =
-      [sql| select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts,
-                    coalesce(ARRAY_AGG(DISTINCT endpoint_hashes ORDER BY endpoint_hashes ASC),'{}') endpoint_hashes,
-                    coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}'::text[]) shape_hashes,
-                    coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields,
-                    ( SELECT count(*) FROM otel_logs_and_spans
-                     WHERE project_id=? AND timestamp > NOW() - INTERVAL '1' DAY
-                    ) daily_event_count,
-                    ( SELECT count(*) FROM telemetry.metrics
-                     WHERE project_id=? AND timestamp > NOW() - INTERVAL '1' DAY
-                    ) daily_metric_count,
-                    (SELECT COALESCE((SELECT payment_plan FROM projects.projects WHERE id = ?),'Free')) payment_plan
-            from
-              (select e.host hosts, e.hash endpoint_hashes, sh.hash shape_hashes, concat(rf.endpoint_hash,'<>', rf.field_category,'<>', rf.path) paths
-                from apis.endpoints e
-                left join apis.shapes sh ON sh.endpoint_hash = e.hash
-                left join projects.redacted_fields rf ON rf.project_id = e.project_id
-                where e.project_id = ? AND sh.hash IS NOT null
-               ) enp; |]
+projectCacheByIdIO pool pid = runEff $ PG.runWithConnectionPool pool $ projectCacheById pid
 
 
 insertProject :: (IOE :> es, WithConnection :> es) => CreateProject -> Eff es ()
