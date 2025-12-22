@@ -17,7 +17,7 @@ source-repository-package
   type: git
   location: https://github.com/tonyalaribe/effectful-postgresql
   tag: instrument-pg
-  subdir: .
+  subdir: effectful-postgresql
 
 source-repository-package
   type: git
