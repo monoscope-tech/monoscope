@@ -379,12 +379,12 @@ testSessionHeader pool = do
   -- Add project member permissions (test project and nil UUID project used by many tests)
   _ <- liftIO
     $ withResource pool \conn ->
-      PGS.executeMany
+      PGS.execute
         conn
         [sql|INSERT INTO projects.project_members (project_id, user_id, permission)
-         VALUES (?, '00000000-0000-0000-0000-000000000001', 'admin')
+         VALUES (?, '00000000-0000-0000-0000-000000000001', 'admin'), ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000001', 'admin')
          ON CONFLICT (project_id, user_id) DO UPDATE SET permission = 'admin', active = TRUE|]
-        [Only testProjectId, Only (UUIDId UUID.nil :: Projects.ProjectId)]
+        (Only testProjectId)
 
   tp <- liftIO getGlobalTracerProvider
   logger <- liftIO $ Log.mkLogger "test" (const pass)
