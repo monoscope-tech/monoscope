@@ -70,7 +70,7 @@ import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, runBackground)
-import UnliftIO.Exception (finally, try)
+import UnliftIO.Exception (catch, finally, try)
 import Utils (DBField)
 
 
@@ -228,11 +228,10 @@ processBackgroundJob authCtx job bgJob =
               action `finally` do
                 -- Reset timeout and release lock. If unlock fails, session-level lock auto-releases on disconnect.
                 _ <- try @_ @SomeException $ PG.execute [sql|RESET statement_timeout|] ()
-                result <- try @_ @SomeException $ PG.query [sql|SELECT pg_advisory_unlock(hashtext(?))|] (Only lockName)
-                case result of
-                  Left e -> Log.logAttention "Failed to release advisory lock (will auto-release on disconnect)" (AE.object ["lock_name" AE..= lockName, "error" AE..= show e])
-                  Right [Only True] -> pass
-                  Right other -> Log.logAttention "Advisory unlock returned unexpected result" (AE.object ["lock_name" AE..= lockName, "result" AE..= show (other :: [Only Bool])])
+                (PG.query [sql|SELECT pg_advisory_unlock(hashtext(?))|] (Only lockName) >>= \case
+                  [Only True] -> pass
+                  other -> Log.logAttention "Advisory unlock returned unexpected result" (AE.object ["lock_name" AE..= lockName, "result" AE..= show (other :: [Only Bool])]))
+                  `catch` \(e :: SomeException) -> Log.logAttention "Failed to release advisory lock (will auto-release on disconnect)" (AE.object ["lock_name" AE..= lockName, "error" AE..= show e])
             _ -> Log.logInfo "Daily job already running in another pod, skipping" ()
 
         runDailyJobScheduling = do
