@@ -33,6 +33,7 @@ import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Static qualified as Eff
+import System.Types (DB)
 
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields
@@ -125,7 +126,7 @@ defaultProjectCache =
 
 
 processMessages
-  :: (Concurrent :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es, WithConnection :> es)
+  :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es)
   => [(Text, ByteString)]
   -> HashMap Text Text
   -> Eff es [Text]

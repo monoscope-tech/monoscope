@@ -30,9 +30,10 @@ import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Effectful (Eff, IOE, type (:>))
-import Effectful.PostgreSQL (WithConnection, withConnection)
+import Effectful (Eff, type (:>))
+import Effectful.PostgreSQL (withConnection)
 import Effectful.PostgreSQL qualified as PG
+import System.Types (DB)
 import Effectful.Reader.Static qualified as Effectful
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
@@ -81,33 +82,33 @@ newProjectApiKeys projectId projectKeyUUID title keyPrefix = do
   pure $ ProjectApiKey{..}
 
 
-insertProjectApiKey :: (IOE :> es, WithConnection :> es) => ProjectApiKey -> Eff es ()
+insertProjectApiKey :: DB es => ProjectApiKey -> Eff es ()
 insertProjectApiKey apiKey = void $ PG.execute (_insert @ProjectApiKey) apiKey
 
 
-projectApiKeysByProjectId :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es [ProjectApiKey]
+projectApiKeysByProjectId :: DB es => Projects.ProjectId -> Eff es [ProjectApiKey]
 projectApiKeysByProjectId projectId = PG.query (_selectWhere @ProjectApiKey [[field| project_id |]]) (Only projectId)
 
 
-revokeApiKey :: (IOE :> es, WithConnection :> es) => ProjectApiKeyId -> Eff es Int64
+revokeApiKey :: DB es => ProjectApiKeyId -> Eff es Int64
 revokeApiKey kid = PG.execute q (Only kid)
   where
     q = [sql| UPDATE projects.project_api_keys SET deleted_at=NOW(), active=false where id=?;|]
 
 
-activateApiKey :: (IOE :> es, WithConnection :> es) => ProjectApiKeyId -> Eff es Int64
+activateApiKey :: DB es => ProjectApiKeyId -> Eff es Int64
 activateApiKey kid = PG.execute q (Only kid)
   where
     q = [sql| UPDATE projects.project_api_keys SET deleted_at=null, active=true where id=?;|]
 
 
-getProjectApiKey :: (IOE :> es, WithConnection :> es) => ProjectApiKeyId -> Eff es (Maybe ProjectApiKey)
+getProjectApiKey :: DB es => ProjectApiKeyId -> Eff es (Maybe ProjectApiKey)
 getProjectApiKey kid = listToMaybe <$> PG.query q (Only kid)
   where
     q = [sql|select id, created_at, updated_at, deleted_at, active, project_id,  title, key_prefix from projects.project_api_keys where id=? and active=true |]
 
 
-getProjectIdByApiKey :: (Effectful.Reader Config.AuthContext :> es, IOE :> es, WithConnection :> es) => Text -> Eff es (Maybe Projects.ProjectId)
+getProjectIdByApiKey :: (DB es, Effectful.Reader Config.AuthContext :> es) => Text -> Eff es (Maybe Projects.ProjectId)
 getProjectIdByApiKey projectKey = do
   appCtx <- Effectful.ask @Config.AuthContext
   withConnection \conn -> liftIO
@@ -117,7 +118,7 @@ getProjectIdByApiKey projectKey = do
     q = [sql| select project_id from projects.project_api_keys where key_prefix=?|]
 
 
-projectIdsByProjectApiKeys :: (Effectful.Reader Config.AuthContext :> es, IOE :> es, WithConnection :> es) => V.Vector Text -> Eff es (V.Vector (Text, Projects.ProjectId))
+projectIdsByProjectApiKeys :: (DB es, Effectful.Reader Config.AuthContext :> es) => V.Vector Text -> Eff es (V.Vector (Text, Projects.ProjectId))
 projectIdsByProjectApiKeys projectKeys = do
   appCtx <- Effectful.ask @Config.AuthContext
   withConnection \conn -> liftIO $ do

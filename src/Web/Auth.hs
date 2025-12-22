@@ -34,8 +34,9 @@ import Effectful (
  )
 import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
-import Effectful.PostgreSQL (WithConnection, runWithConnectionPool)
+import Effectful.PostgreSQL (runWithConnectionPool)
 import Effectful.PostgreSQL qualified as PG
+import System.Types (DB)
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time (Time, runTime)
 import Log (Logger)
@@ -114,7 +115,7 @@ authHandler logger env =
       & runTime
       & effToHandler
   where
-    handler :: (Error ServerError :> es, HTTP :> es, IOE :> es, Time :> es, UUIDEff :> es, WithConnection :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
+    handler :: (DB es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
     handler req = do
       -- Check if basic auth is enabled and try to authenticate
       if env.config.basicAuthEnabled
@@ -155,7 +156,7 @@ authHandler logger env =
       sessionByID mbPersistentSessionId requestID isSidebarClosed theme (Just $ getRequestUrl req) basicAuthEnabledFlag
 
 
-sessionByID :: (Error ServerError :> es, HTTP :> es, IOE :> es, Time :> es, UUIDEff :> es, WithConnection :> es) => Maybe Sessions.PersistentSessionId -> Text -> Bool -> Text -> Maybe ByteString -> Bool -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
+sessionByID :: (DB es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Sessions.PersistentSessionId -> Text -> Bool -> Text -> Maybe ByteString -> Bool -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
 sessionByID mbPersistentSessionId requestID isSidebarClosed theme url basicAuthEnabled = do
   mbPersistentSession <- join <$> mapM Sessions.getPersistentSession mbPersistentSessionId
   let mUser = mbPersistentSession <&> (.user.getUser)
@@ -331,7 +332,7 @@ authCallbackH codeM _ redirectToM = do
               a_ [href_ $ fromMaybe "/" redirectToM] "Continue to APIToolkit"
 
 
-authorizeUserAndPersist :: (HTTP :> es, IOE :> es, Time :> es, UUIDEff :> es, WithConnection :> es) => Maybe Text -> Text -> Text -> Text -> Text -> Eff es Sessions.PersistentSessionId
+authorizeUserAndPersist :: (DB es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Text -> Text -> Text -> Text -> Text -> Eff es Sessions.PersistentSessionId
 authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
   userM <- Users.userByEmail email
   userId <- case userM of

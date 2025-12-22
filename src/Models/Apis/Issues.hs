@@ -61,9 +61,9 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
-import Effectful (Eff, IOE, type (:>))
-import Effectful.PostgreSQL (WithConnection)
+import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
+import System.Types (DB)
 import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -277,7 +277,7 @@ data IssueL = IssueL
 -- | Insert a single issue
 -- Note: ON CONFLICT only applies to api_change issues that are open (not acknowledged/archived)
 -- Other issue types will fail on duplicate inserts as intended
-insertIssue :: (IOE :> es, WithConnection :> es) => Issue -> Eff es ()
+insertIssue :: DB es => Issue -> Eff es ()
 insertIssue issue = void $ PG.execute q issue
   where
     q =
@@ -305,12 +305,12 @@ DO UPDATE SET
 
 
 -- | Select issue by ID
-selectIssueById :: (IOE :> es, WithConnection :> es) => IssueId -> Eff es (Maybe Issue)
+selectIssueById :: DB es => IssueId -> Eff es (Maybe Issue)
 selectIssueById iid = listToMaybe <$> PG.query (_selectWhere @Issue [[field| id |]]) (Only iid)
 
 
 -- | Select issues with filters, returns issues and total count for pagination
-selectIssues :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> Eff es ([IssueL], Int)
+selectIssues :: DB es => Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> Eff es ([IssueL], Int)
 selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM = do
   issues <- PG.query (Query $ encodeUtf8 q) (pid, limit, offset)
   countResult <- coerce @(Maybe (Only Int)) @(Maybe Int) . listToMaybe <$> PG.query (Query $ encodeUtf8 countQ) (Only pid)
@@ -338,7 +338,7 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
 
 
 -- | Find open issue for endpoint
-findOpenIssueForEndpoint :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
+findOpenIssueForEndpoint :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
 findOpenIssueForEndpoint pid endpointHash = listToMaybe <$> PG.query q (pid, "api_change" :: Text, endpointHash)
   where
     q =
@@ -354,7 +354,7 @@ findOpenIssueForEndpoint pid endpointHash = listToMaybe <$> PG.query q (pid, "ap
 
 
 -- | Update issue with new anomaly data
-updateIssueWithNewAnomaly :: (IOE :> es, WithConnection :> es) => IssueId -> APIChangeData -> Eff es ()
+updateIssueWithNewAnomaly :: DB es => IssueId -> APIChangeData -> Eff es ()
 updateIssueWithNewAnomaly issueId newData = void $ PG.execute q (Aeson newData, issueId)
   where
     q =
@@ -369,7 +369,7 @@ updateIssueWithNewAnomaly issueId newData = void $ PG.execute q (Aeson newData, 
 
 
 -- | Update issue enhancement
-updateIssueEnhancement :: (IOE :> es, WithConnection :> es) => IssueId -> Text -> Text -> Text -> Eff es ()
+updateIssueEnhancement :: DB es => IssueId -> Text -> Text -> Text -> Eff es ()
 updateIssueEnhancement issueId title action complexity = void $ PG.execute q params
   where
     q =
@@ -386,7 +386,7 @@ updateIssueEnhancement issueId title action complexity = void $ PG.execute q par
 
 
 -- | Update issue criticality and severity
-updateIssueCriticality :: (IOE :> es, WithConnection :> es) => IssueId -> Bool -> Text -> Eff es ()
+updateIssueCriticality :: DB es => IssueId -> Bool -> Text -> Eff es ()
 updateIssueCriticality issueId isCritical severity = void $ PG.execute q params
   where
     q =
@@ -401,7 +401,7 @@ updateIssueCriticality issueId isCritical severity = void $ PG.execute q params
 
 
 -- | Acknowledge issue
-acknowledgeIssue :: (IOE :> es, WithConnection :> es) => IssueId -> Users.UserId -> Eff es ()
+acknowledgeIssue :: DB es => IssueId -> Users.UserId -> Eff es ()
 acknowledgeIssue issueId userId = void $ PG.execute q (userId, issueId)
   where
     q =

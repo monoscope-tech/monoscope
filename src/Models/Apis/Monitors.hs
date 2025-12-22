@@ -35,9 +35,9 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Deriving.Aeson qualified as DAE
-import Effectful (Eff, IOE, type (:>))
-import Effectful.PostgreSQL (WithConnection)
+import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
+import System.Types (DB)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Relude
@@ -122,7 +122,7 @@ data QueryMonitorEvaled = QueryMonitorEvaled
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] QueryMonitorEvaled
 
 
-queryMonitorUpsert :: (IOE :> es, WithConnection :> es) => QueryMonitor -> Eff es Int64
+queryMonitorUpsert :: DB es => QueryMonitor -> Eff es Int64
 queryMonitorUpsert qm =
   PG.execute
     q
@@ -165,11 +165,11 @@ queryMonitorUpsert qm =
     |]
 
 
-queryMonitorById :: (IOE :> es, WithConnection :> es) => QueryMonitorId -> Eff es (Maybe QueryMonitor)
+queryMonitorById :: DB es => QueryMonitorId -> Eff es (Maybe QueryMonitor)
 queryMonitorById id' = listToMaybe <$> PG.query (_selectWhere @QueryMonitor [[DAT.field| id |]]) (Only id')
 
 
-queryMonitorsById :: (IOE :> es, WithConnection :> es) => V.Vector QueryMonitorId -> Eff es [QueryMonitorEvaled]
+queryMonitorsById :: DB es => V.Vector QueryMonitorId -> Eff es [QueryMonitorEvaled]
 queryMonitorsById ids
   | V.null ids = pure []
   | otherwise = PG.query q (Only ids)
@@ -183,7 +183,7 @@ queryMonitorsById ids
     |]
 
 
-updateQMonitorTriggeredState :: (IOE :> es, WithConnection :> es) => QueryMonitorId -> Bool -> Eff es Int64
+updateQMonitorTriggeredState :: DB es => QueryMonitorId -> Bool -> Eff es Int64
 updateQMonitorTriggeredState qmId isAlert = PG.execute q (Only qmId)
   where
     q =
@@ -192,7 +192,7 @@ updateQMonitorTriggeredState qmId isAlert = PG.execute q (Only qmId)
         else [sql|UPDATE monitors.query_monitors SET warning_last_triggered=NOW() where id=?|]
 
 
-monitorToggleActiveById :: (IOE :> es, WithConnection :> es) => QueryMonitorId -> Eff es Int64
+monitorToggleActiveById :: DB es => QueryMonitorId -> Eff es Int64
 monitorToggleActiveById id' = PG.execute q (Only id')
   where
     q =
@@ -204,11 +204,11 @@ monitorToggleActiveById id' = PG.execute q (Only id')
         where id=?|]
 
 
-queryMonitorsAll :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es [QueryMonitor]
+queryMonitorsAll :: DB es => Projects.ProjectId -> Eff es [QueryMonitor]
 queryMonitorsAll pid = PG.query (_selectWhere @QueryMonitor [[DAT.field| project_id |]]) (Only pid)
 
 
-getAlertsByTeamHandle :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UUID.UUID -> Eff es [QueryMonitor]
+getAlertsByTeamHandle :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [QueryMonitor]
 getAlertsByTeamHandle pid teamId = PG.query q (pid, teamId)
   where
     q =

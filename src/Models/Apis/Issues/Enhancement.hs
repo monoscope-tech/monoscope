@@ -12,8 +12,8 @@ import Data.Effectful.LLM qualified as ELLM
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
-import Effectful (Eff, IOE, (:>))
-import Effectful.PostgreSQL (WithConnection)
+import Effectful (Eff, (:>))
+import System.Types (DB)
 import Models.Apis.Issues qualified as Issues
 import Pkg.AI qualified as AI
 import Relude hiding (id)
@@ -324,7 +324,7 @@ buildCriticalityPrompt issue =
 
 
 -- | Update issue classification in database
-updateIssueClassification :: (IOE :> es, WithConnection :> es) => Issues.IssueId -> Bool -> Int -> Int -> Eff es ()
+updateIssueClassification :: DB es => Issues.IssueId -> Bool -> Int -> Int -> Eff es ()
 updateIssueClassification issueId isCritical breakingCount incrementalCount = do
   let severity
         | isCritical = "critical"

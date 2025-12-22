@@ -43,10 +43,10 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson.Stock qualified as DAE
-import Effectful (Eff, IOE, (:>))
+import Effectful (Eff, (:>))
 import Effectful.Error.Static (Error, throwError)
-import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
+import System.Types (DB)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
@@ -546,7 +546,7 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
     widgetId w = fromMaybe (maybeToMonoid $ slugify <$> w.title) w.id
 
 
-getDashAndVM :: (Error ServerError :> es, IOE :> es, WithConnection :> es, Wreq.HTTP :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
+getDashAndVM :: (DB es, Error ServerError :> es, Wreq.HTTP :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
 getDashAndVM dashId fileM = do
   dashVM <-
     Dashboards.getDashboardById dashId >>= \case

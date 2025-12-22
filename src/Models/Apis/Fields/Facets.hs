@@ -13,10 +13,11 @@ import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (Only (..), Query)
-import Effectful (Eff, IOE, (:>))
+import Effectful (Eff, (:>))
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
+import System.Types (DB)
 import Effectful.Reader.Static qualified
 import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Projects.Projects (ProjectId)
@@ -88,7 +89,7 @@ facetColumns =
 
 -- | Generate facets for a project from a specified table and save to database
 generateAndSaveFacets
-  :: (Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" WithConnection :> es, UUID.UUIDEff :> es, WithConnection :> es)
+  :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, UUID.UUIDEff :> es)
   => ProjectId
   -> Text
   -> [Text]
@@ -221,7 +222,7 @@ buildOptimizedFacetQuery tableName _ =
 
 -- | Get a facet summary for a project/table with time range extrapolation
 getFacetSummary
-  :: (IOE :> es, WithConnection :> es) => ProjectId -> Text -> UTCTime -> UTCTime -> Eff es (Maybe FacetSummary)
+  :: DB es => ProjectId -> Text -> UTCTime -> UTCTime -> Eff es (Maybe FacetSummary)
 getFacetSummary projectId tableName fromTime toTime = checkpoint "getFacetSummary" $ do
   -- Calculate time span in minutes for more precise scaling
   let projectIdText = projectId.toText

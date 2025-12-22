@@ -56,8 +56,8 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField, toField, toJSONField)
 import Deriving.Aeson qualified as DAE
 import Effectful
-import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
+import System.DB (DB)
 import GHC.Records (HasField (getField))
 import Models.Users.Users qualified as Users
 import Pkg.DBUtils (WrappedEnumSC (..))
@@ -239,7 +239,7 @@ data CreateProject = CreateProject
 
 
 -- FIXME: We currently return an object with empty vectors when nothing was found.
-projectCacheById :: (IOE :> es, WithConnection :> es) => ProjectId -> Eff es (Maybe ProjectCache)
+projectCacheById :: DB es => ProjectId -> Eff es (Maybe ProjectCache)
 projectCacheById pid = listToMaybe <$> PG.query q (pid, pid, pid, pid)
   where
     q =
@@ -267,23 +267,23 @@ projectCacheByIdIO :: Pool Connection -> ProjectId -> IO (Maybe ProjectCache)
 projectCacheByIdIO pool pid = runEff $ PG.runWithConnectionPool pool $ projectCacheById pid
 
 
-insertProject :: (IOE :> es, WithConnection :> es) => CreateProject -> Eff es ()
+insertProject :: DB es => CreateProject -> Eff es ()
 insertProject p = void $ PG.execute (_insert @CreateProject) p
 
 
-projectById :: (IOE :> es, WithConnection :> es) => ProjectId -> Eff es (Maybe Project)
+projectById :: DB es => ProjectId -> Eff es (Maybe Project)
 projectById pid = listToMaybe <$> PG.query q (Only pid)
   where
     q = [sql| select p.* from projects.projects p where id=?|]
 
 
-getProjectByPhoneNumber :: (IOE :> es, WithConnection :> es) => Text -> Eff es (Maybe Project)
+getProjectByPhoneNumber :: DB es => Text -> Eff es (Maybe Project)
 getProjectByPhoneNumber number = listToMaybe <$> PG.query q (Only number)
   where
     q = [sql| select p.* from projects.projects p where ?=Any(p.whatsapp_numbers) |]
 
 
-selectProjectsForUser :: (IOE :> es, WithConnection :> es) => Users.UserId -> Eff es [Project']
+selectProjectsForUser :: DB es => Users.UserId -> Eff es [Project']
 selectProjectsForUser uid = PG.query q (Only uid)
   where
     q =
@@ -304,7 +304,7 @@ selectProjectsForUser uid = PG.query q (Only uid)
       |]
 
 
-usersByProjectId :: (IOE :> es, WithConnection :> es) => ProjectId -> Eff es [Users.User]
+usersByProjectId :: DB es => ProjectId -> Eff es [Users.User]
 usersByProjectId pid = PG.query q (Only pid)
   where
     q =
@@ -312,7 +312,7 @@ usersByProjectId pid = PG.query q (Only pid)
                 from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=? and u.active IS True;|]
 
 
-updateProject :: (IOE :> es, WithConnection :> es) => CreateProject -> Eff es Int64
+updateProject :: DB es => CreateProject -> Eff es Int64
 updateProject cp = PG.execute q (cp.title, cp.description, cp.paymentPlan, cp.subId, cp.firstSubItemId, cp.orderId, cp.timeZone, cp.weeklyNotif, cp.dailyNotif, cp.endpointAlerts, cp.errorAlerts, cp.id)
   where
     q =
@@ -323,14 +323,14 @@ updateProject cp = PG.execute q (cp.title, cp.description, cp.paymentPlan, cp.su
         |]
 
 
-updateProjectPricing :: (IOE :> es, WithConnection :> es) => ProjectId -> Text -> Text -> Text -> Text -> V.Vector Text -> Eff es Int64
+updateProjectPricing :: DB es => ProjectId -> Text -> Text -> Text -> Text -> V.Vector Text -> Eff es Int64
 updateProjectPricing pid paymentPlan subId firstSubItemId orderId stepsCompleted =
   PG.execute q (paymentPlan, subId, firstSubItemId, orderId, stepsCompleted, pid)
   where
     q = [sql| UPDATE projects.projects SET payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=?, onboarding_steps_completed=? where id=?;|]
 
 
-updateProjectReportNotif :: (IOE :> es, WithConnection :> es) => ProjectId -> Text -> Eff es Int64
+updateProjectReportNotif :: DB es => ProjectId -> Text -> Eff es Int64
 updateProjectReportNotif pid report_type = PG.execute q (Only pid)
   where
     q =
@@ -339,27 +339,27 @@ updateProjectReportNotif pid report_type = PG.execute q (Only pid)
         else [sql| UPDATE projects.projects SET weekly_notif=(not weekly_notif) WHERE id=?;|]
 
 
-deleteProject :: (IOE :> es, WithConnection :> es) => ProjectId -> Eff es Int64
+deleteProject :: DB es => ProjectId -> Eff es Int64
 deleteProject pid = PG.execute q (Only pid)
   where
     q =
       [sql| UPDATE projects.projects SET deleted_at=NOW(), active=False where id=?;|]
 
 
-updateNotificationsChannel :: (IOE :> es, WithConnection :> es) => ProjectId -> [Text] -> [Text] -> Eff es Int64
+updateNotificationsChannel :: DB es => ProjectId -> [Text] -> [Text] -> Eff es Int64
 updateNotificationsChannel pid channels phones = PG.execute q (list, V.fromList phones, pid)
   where
     list = V.fromList channels
     q = [sql| UPDATE projects.projects SET notifications_channel=?::notification_channel_enum[], whatsapp_numbers=? WHERE id=?;|]
 
 
-updateUsageLastReported :: (IOE :> es, WithConnection :> es) => ProjectId -> ZonedTime -> Eff es Int64
+updateUsageLastReported :: DB es => ProjectId -> ZonedTime -> Eff es Int64
 updateUsageLastReported pid lastReported = PG.execute q (lastReported, pid)
   where
     q = [sql| UPDATE projects.projects SET usage_last_reported=? WHERE id=?;|]
 
 
-updateProjectS3Bucket :: (IOE :> es, WithConnection :> es) => ProjectId -> Maybe ProjectS3Bucket -> Eff es Int64
+updateProjectS3Bucket :: DB es => ProjectId -> Maybe ProjectS3Bucket -> Eff es Int64
 updateProjectS3Bucket pid bucket = PG.execute q (bucket, pid)
   where
     q = [sql| UPDATE projects.projects SET s3_bucket=? WHERE id=?|]
@@ -391,7 +391,7 @@ data QueryLibItem = QueryLibItem
   deriving anyclass (AE.FromJSON, AE.ToJSON, FromRow, NFData, ToRow)
 
 
-queryLibHistoryForUser :: (IOE :> es, WithConnection :> es) => ProjectId -> Users.UserId -> Eff es [QueryLibItem]
+queryLibHistoryForUser :: DB es => ProjectId -> Users.UserId -> Eff es [QueryLibItem]
 queryLibHistoryForUser pid uid = PG.query q (uid, uid, pid, uid, uid, pid, uid, pid, uid)
   where
     q =
@@ -422,7 +422,7 @@ UNION ALL
     |]
 
 
-queryLibInsert :: (IOE :> es, WithConnection :> es) => QueryLibType -> ProjectId -> Users.UserId -> Text -> [Section] -> Maybe Text -> Eff es ()
+queryLibInsert :: DB es => QueryLibType -> ProjectId -> Users.UserId -> Text -> [Section] -> Maybe Text -> Eff es ()
 queryLibInsert qKind pid uid qt qast title = void $ PG.execute q (pid, uid, qKind, pid, uid, qKind, qt, Aeson qast, title, pid, uid, qKind, qt)
   where
     q =
@@ -451,13 +451,13 @@ ON CONFLICT DO NOTHING;
     |]
 
 
-queryLibTitleEdit :: (IOE :> es, WithConnection :> es) => ProjectId -> Users.UserId -> Text -> Text -> Eff es ()
+queryLibTitleEdit :: DB es => ProjectId -> Users.UserId -> Text -> Text -> Eff es ()
 queryLibTitleEdit pid uid qId title = void $ PG.execute q (title, pid, uid, qId)
   where
     q = [sql|UPDATE projects.query_library SET title=? where project_id=? AND user_id=? AND id=?::uuid|]
 
 
-queryLibItemDelete :: (IOE :> es, WithConnection :> es) => ProjectId -> Users.UserId -> Text -> Eff es ()
+queryLibItemDelete :: DB es => ProjectId -> Users.UserId -> Text -> Eff es ()
 queryLibItemDelete pid uid qId = void $ PG.execute q (pid, uid, qId)
   where
     q = [sql|DELETE from projects.query_library where project_id=? AND user_id=? AND id=?::uuid|]
@@ -490,17 +490,17 @@ data LemonSub = LemonSub
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "subscriptions", PrimaryKey "id", FieldModifiers '[CamelToSnake]] LemonSub)
 
 
-addSubscription :: (IOE :> es, WithConnection :> es) => LemonSub -> Eff es ()
+addSubscription :: DB es => LemonSub -> Eff es ()
 addSubscription sub = void $ PG.execute (_insert @LemonSub) sub
 
 
-addDailyUsageReport :: (IOE :> es, WithConnection :> es) => ProjectId -> Int -> Eff es Int64
+addDailyUsageReport :: DB es => ProjectId -> Int -> Eff es Int64
 addDailyUsageReport pid total_requests = PG.execute q (pid, total_requests)
   where
     q = [sql|INSERT INTO apis.daily_usage (project_id, total_requests) VALUES (?, ?) |]
 
 
-getTotalUsage :: (IOE :> es, WithConnection :> es) => ProjectId -> UTCTime -> Eff es Int64
+getTotalUsage :: DB es => ProjectId -> UTCTime -> Eff es Int64
 getTotalUsage pid start = do
   results <- PG.query q (pid, start)
   case results of
@@ -510,13 +510,13 @@ getTotalUsage pid start = do
     q = [sql|SELECT COALESCE(SUM(total_requests), 0) FROM apis.daily_usage WHERE project_id = ? AND created_at >= ?|]
 
 
-downgradeToFree :: (IOE :> es, WithConnection :> es) => Int -> Int -> Int -> Eff es Int64
+downgradeToFree :: DB es => Int -> Int -> Int -> Eff es Int64
 downgradeToFree orderId' subId subItemId = PG.execute q (show orderId', show subId, show subItemId)
   where
     q = [sql|UPDATE projects.projects SET payment_plan = 'FREE' WHERE order_id = ? AND sub_id = ? AND first_sub_item_id = ?|]
 
 
-upgradeToPaid :: (IOE :> es, WithConnection :> es) => Int -> Int -> Int -> Eff es Int64
+upgradeToPaid :: DB es => Int -> Int -> Int -> Eff es Int64
 upgradeToPaid orderId' subId subItemId = PG.execute q (show orderId', show subId, show subItemId)
   where
     q = [sql|UPDATE projects.projects SET payment_plan = 'GraduatedPricing' WHERE order_id = ? AND sub_id = ? AND first_sub_item_id = ?|]

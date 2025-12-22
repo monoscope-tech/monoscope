@@ -36,8 +36,8 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Deriving.Aeson qualified as DAE
 import Effectful
-import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
+import System.Types (DB)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Pkg.DBUtils (WrappedEnumSC (..))
@@ -260,7 +260,7 @@ instance Eq Field where
       && (f1.keyPath == f2.keyPath)
 
 
-bulkInsertFields :: (IOE :> es, WithConnection :> es) => V.Vector Field -> Eff es ()
+bulkInsertFields :: DB es => V.Vector Field -> Eff es ()
 bulkInsertFields fields = void $ PG.executeMany q (V.toList rowsToInsert)
   where
     q =
@@ -307,7 +307,7 @@ data Format = Format
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Format
 
 
-bulkInsertFormat :: (IOE :> es, WithConnection :> es) => V.Vector Format -> Eff es ()
+bulkInsertFormat :: DB es => V.Vector Format -> Eff es ()
 bulkInsertFormat formats = void $ PG.executeMany q $ V.toList rowsToInsert
   where
     q =

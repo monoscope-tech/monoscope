@@ -13,7 +13,6 @@ import Data.Time (UTCTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful (Eff, IOE, (:>))
-import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified
 import Models.Projects.Projects qualified as Projects
@@ -23,7 +22,7 @@ import Pkg.Queue (publishJSONToKafka)
 import Relude
 import RequestMessages (replaceNullChars)
 import System.Config (AuthContext (config), EnvConfig (..))
-import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, addRespHeaders)
+import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
 import Utils (eitherStrToText)
 
 
@@ -102,7 +101,7 @@ getMinioFile conn bucket object = do
   whenRight V.empty res pure
 
 
-saveReplayMinio :: (IOE :> es, WithConnection :> es) => EnvConfig -> (Text, ReplayPost') -> Eff es (Maybe Text)
+saveReplayMinio :: DB es => EnvConfig -> (Text, ReplayPost') -> Eff es (Maybe Text)
 saveReplayMinio envCfg (ackId, replayData) = do
   project <- Projects.projectById replayData.projectId
   case project of

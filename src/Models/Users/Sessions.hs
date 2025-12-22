@@ -35,6 +35,7 @@ import Effectful.Error.Static (throwError)
 import Effectful.Error.Static qualified as EffError
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
+import System.DB (DB)
 import Effectful.Reader.Static (Reader, asks)
 import Effectful.Reader.Static qualified as EffReader
 import Models.Projects.Projects qualified as Projects
@@ -115,14 +116,14 @@ newPersistentSessionId :: UUIDEff :> es => Eff es PersistentSessionId
 newPersistentSessionId = PersistentSessionId <$> UUID.genUUID
 
 
-insertSession :: (IOE :> es, WithConnection :> es) => PersistentSessionId -> UserId -> SessionData -> Eff es ()
+insertSession :: DB es => PersistentSessionId -> UserId -> SessionData -> Eff es ()
 insertSession pid userId sessionData = void $ PG.execute q (pid, userId, sessionData)
   where
     q = [sql| insert into users.persistent_sessions(id, user_id, session_data) VALUES (?, ?, ?) |]
 
 
 -- TODO: getting persistent session happens very frequently, so we should create a view for this, when our user base grows.
-getPersistentSession :: (IOE :> es, WithConnection :> es) => PersistentSessionId -> Eff es (Maybe PersistentSession)
+getPersistentSession :: DB es => PersistentSessionId -> Eff es (Maybe PersistentSession)
 getPersistentSession sessionId = listToMaybe <$> PG.query q value
   where
     q =
@@ -187,7 +188,7 @@ data Session = Session
 
 
 sessionAndProject
-  :: (EffError.Error ServerError :> es, EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Session) :> es, IOE :> es, WithConnection :> es)
+  :: (DB es, EffError.Error ServerError :> es, EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Session) :> es)
   => Projects.ProjectId
   -> Eff es (Session, Projects.Project)
 sessionAndProject pid = do

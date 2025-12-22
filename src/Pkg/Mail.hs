@@ -12,12 +12,12 @@ import Data.Time
 import Data.Vector qualified as V
 import Effectful (
   Eff,
-  IOE,
   type (:>),
  )
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Static (Reader, ask)
+import System.Types (DB)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Slack (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.Projects qualified as Projects
@@ -33,7 +33,7 @@ sendPostmarkEmail receiver tmpOptionsM subMsg =
   Notify.sendNotification $ Notify.emailNotification receiver tmpOptionsM subMsg
 
 
-sendSlackMessage :: (IOE :> es, Log :> es, Notify.Notify :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es ()
+sendSlackMessage :: (DB es, Log :> es, Notify.Notify :> es) => Projects.ProjectId -> Text -> Eff es ()
 sendSlackMessage pid message = do
   slackData <- getProjectSlackData pid
   case slackData of
@@ -64,7 +64,7 @@ data NotificationAlerts
       }
 
 
-sendDiscordAlert :: (IOE :> es, Notify.Notify :> es, Reader Config.AuthContext :> es, WithConnection :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es ()
+sendDiscordAlert :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es ()
 sendDiscordAlert alert pid pTitle channelIdM' = do
   appCtx <- ask @Config.AuthContext
   channelIdM <- case channelIdM' of
@@ -93,7 +93,7 @@ sendDiscordAlert alert pid pTitle channelIdM' = do
         Notify.sendNotification $ Notify.discordNotification cid content
 
 
-sendSlackAlert :: (IOE :> es, Notify.Notify :> es, Reader Config.AuthContext :> es, WithConnection :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es ()
+sendSlackAlert :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es ()
 sendSlackAlert alert pid pTitle channelM = do
   appCtx <- ask @Config.AuthContext
   channelIdM <- case channelM of

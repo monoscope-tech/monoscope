@@ -49,6 +49,7 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
+import System.Types (DB)
 import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogBase
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
@@ -215,7 +216,7 @@ getMetricAttributeValue !attribute !rms = listToMaybe $ V.toList $ V.mapMaybe ge
 
 
 -- | Process a list of messages
-processList :: (Concurrent :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es, WithConnection :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
+processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs !attrs = checkpoint "processList" $ do
   startTime <- liftIO getCurrentTime
@@ -1273,7 +1274,7 @@ runServer appLogger appCtx tp = do
 
 
 -- | Process trace request with optional API key from gRPC metadata (extracted for testing)
-processTraceRequest :: (Concurrent :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es, WithConnection :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
+processTraceRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
 processTraceRequest metadataApiKey req = do
   Log.logInfo "Received trace export request" AE.Null
 
@@ -1345,7 +1346,7 @@ traceServiceExport appLogger appCtx tp (Proto req) = do
 
 
 -- | Process logs request with optional API key from gRPC metadata (extracted for testing)
-processLogsRequest :: (Concurrent :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es, WithConnection :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
+processLogsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
 processLogsRequest metadataApiKey req = do
   Log.logInfo "Received logs export request" AE.Null
   currentTime <- liftIO getCurrentTime
@@ -1414,7 +1415,7 @@ logsServiceExport appLogger appCtx tp (Proto req) = do
 
 
 -- | Process metrics request with optional API key from gRPC metadata (extracted for testing)
-processMetricsRequest :: (Eff.Reader AuthContext :> es, IOE :> es, Log :> es, WithConnection :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
+processMetricsRequest :: (DB es, Eff.Reader AuthContext :> es, Log :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
 processMetricsRequest metadataApiKey req = do
   Log.logInfo "Received metrics export request" AE.Null
 

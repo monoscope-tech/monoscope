@@ -32,9 +32,9 @@ import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
-import Effectful (Eff, IOE, type (:>))
-import Effectful.PostgreSQL (WithConnection)
+import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
+import System.DB (DB)
 import Effectful.Time (Time, currentTime)
 import GHC.Records (HasField (getField))
 import Relude
@@ -109,25 +109,25 @@ createUser firstName lastName picture email = do
       }
 
 
-insertUser :: (IOE :> es, WithConnection :> es) => User -> Eff es ()
+insertUser :: DB es => User -> Eff es ()
 insertUser user = void $ PG.execute (_insert @User) user
 
 
-userById :: (IOE :> es, WithConnection :> es) => UserId -> Eff es (Maybe User)
+userById :: DB es => UserId -> Eff es (Maybe User)
 userById userId = listToMaybe <$> PG.query (_selectWhere @User [[field| id |]]) (Only userId)
 
 
-userByEmail :: (IOE :> es, WithConnection :> es) => Text -> Eff es (Maybe User)
+userByEmail :: DB es => Text -> Eff es (Maybe User)
 userByEmail email = listToMaybe <$> PG.query (_selectWhere @User [[field| email |]]) (Only email)
 
 
-userIdByEmail :: (IOE :> es, WithConnection :> es) => Text -> Eff es (Maybe UserId)
+userIdByEmail :: DB es => Text -> Eff es (Maybe UserId)
 userIdByEmail email = listToMaybe <$> PG.query q (Only email)
   where
     q = [sql|select id from users.users where email=?|]
 
 
-createEmptyUser :: (IOE :> es, WithConnection :> es) => Text -> Eff es (Maybe UserId)
+createEmptyUser :: DB es => Text -> Eff es (Maybe UserId)
 createEmptyUser email = listToMaybe <$> PG.query q (Only email)
   where
     q = [sql| insert into users.users (email, active) values (?, TRUE) on conflict do nothing returning id |]

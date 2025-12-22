@@ -50,8 +50,8 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
 import Effectful
 import Effectful.Error.Static (Error, throwError)
-import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
+import System.Types (DB)
 import Language.Haskell.TH (Exp, Q, runIO)
 import Language.Haskell.TH.Syntax qualified as THS
 import Models.Projects.Projects qualified as Projects
@@ -145,7 +145,7 @@ data Tab = Tab
   deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Tab
 
 
-insert :: (IOE :> es, WithConnection :> es) => DashboardVM -> Eff es Int64
+insert :: DB es => DashboardVM -> Eff es Int64
 insert dashboardVM = PG.execute (Query $ encodeUtf8 q) params
   where
     q =
@@ -208,19 +208,19 @@ replaceQueryVariables pid mf mt allParams currentTime variable =
         & #query . _Just %~ DashboardUtils.replacePlaceholders mappng
 
 
-getDashboardById :: (IOE :> es, WithConnection :> es) => DashboardId -> Eff es (Maybe DashboardVM)
+getDashboardById :: DB es => DashboardId -> Eff es (Maybe DashboardVM)
 getDashboardById did = listToMaybe <$> PG.query (Query $ encodeUtf8 q) (Only did)
   where
     q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE id = ?|]
 
 
-deleteDashboardsByIds :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> V.Vector DashboardId -> Eff es Int64
+deleteDashboardsByIds :: DB es => Projects.ProjectId -> V.Vector DashboardId -> Eff es Int64
 deleteDashboardsByIds pid dids = PG.execute (Query $ encodeUtf8 q) (pid, dids)
   where
     q = [text|DELETE FROM projects.dashboards WHERE project_id = ? AND id = ANY(?::uuid[])|]
 
 
-addTeamsToDashboards :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> V.Vector DashboardId -> V.Vector UUID.UUID -> Eff es Int64
+addTeamsToDashboards :: DB es => Projects.ProjectId -> V.Vector DashboardId -> V.Vector UUID.UUID -> Eff es Int64
 addTeamsToDashboards pid dids teamIds = PG.execute (Query $ encodeUtf8 q) (teamIds, pid, dids)
   where
     q =
@@ -231,13 +231,13 @@ addTeamsToDashboards pid dids teamIds = PG.execute (Query $ encodeUtf8 q) (teamI
     |]
 
 
-selectDashboardsByTeam :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UUID.UUID -> Eff es [DashboardVM]
+selectDashboardsByTeam :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [DashboardVM]
 selectDashboardsByTeam pid teamId = PG.query (Query $ encodeUtf8 q) (pid, teamId)
   where
     q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE project_id = ? AND teams @> ARRAY[?::uuid] ORDER BY starred_since DESC NULLS LAST, updated_at DESC|]
 
 
-selectDashboardsSortedBy :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es [DashboardVM]
+selectDashboardsSortedBy :: DB es => Projects.ProjectId -> Text -> Eff es [DashboardVM]
 selectDashboardsSortedBy pid orderBy = PG.query (Query $ encodeUtf8 q) (Only pid)
   where
     defaultOrder = "ORDER BY starred_since DESC NULLS LAST, updated_at DESC"
@@ -250,25 +250,25 @@ selectDashboardsSortedBy pid orderBy = PG.query (Query $ encodeUtf8 q) (Only pid
     q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE project_id = ? |] <> safeOrder
 
 
-updateSchema :: (IOE :> es, WithConnection :> es) => DashboardId -> Dashboard -> Eff es Int64
+updateSchema :: DB es => DashboardId -> Dashboard -> Eff es Int64
 updateSchema dashId dashboard = PG.execute (Query "UPDATE projects.dashboards SET schema = ? WHERE id = ?") (dashboard, dashId)
 
 
-updateTitle :: (IOE :> es, WithConnection :> es) => DashboardId -> Text -> Eff es Int64
+updateTitle :: DB es => DashboardId -> Text -> Eff es Int64
 updateTitle dashId title = PG.execute (Query "UPDATE projects.dashboards SET title = ? WHERE id = ?") (title, dashId)
 
 
-updateSchemaAndUpdatedAt :: (IOE :> es, WithConnection :> es) => DashboardId -> Dashboard -> UTCTime -> Eff es Int64
+updateSchemaAndUpdatedAt :: DB es => DashboardId -> Dashboard -> UTCTime -> Eff es Int64
 updateSchemaAndUpdatedAt dashId dashboard updatedAt = PG.execute (Query "UPDATE projects.dashboards SET schema = ?, updated_at = ? WHERE id = ?") (dashboard, updatedAt, dashId)
 
 
-updateStarredSince :: (IOE :> es, WithConnection :> es) => DashboardId -> Maybe UTCTime -> Eff es Int64
+updateStarredSince :: DB es => DashboardId -> Maybe UTCTime -> Eff es Int64
 updateStarredSince dashId starredSince = PG.execute (Query "UPDATE projects.dashboards SET starred_since = ? WHERE id = ?") (starredSince, dashId)
 
 
-deleteDashboard :: (IOE :> es, WithConnection :> es) => DashboardId -> Eff es Int64
+deleteDashboard :: DB es => DashboardId -> Eff es Int64
 deleteDashboard dashId = PG.execute (Query "DELETE FROM projects.dashboards WHERE id = ?") (Only dashId)
 
 
-getDashboardByBaseTemplate :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es (Maybe DashboardId)
+getDashboardByBaseTemplate :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe DashboardId)
 getDashboardByBaseTemplate pid baseTemplate = coerce @(Maybe (Only DashboardId)) @(Maybe DashboardId) . listToMaybe <$> PG.query (Query "SELECT id FROM projects.dashboards WHERE project_id = ? AND base_template = ?") (pid, baseTemplate)

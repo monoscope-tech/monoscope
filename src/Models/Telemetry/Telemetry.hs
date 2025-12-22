@@ -83,6 +83,7 @@ import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
+import System.Types (DB)
 import Effectful.Reader.Static qualified as Eff
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -469,7 +470,7 @@ data MetricChartListData = MetricChartListData
   deriving anyclass (FromRow, NFData, ToRow)
 
 
-getTraceDetails :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Maybe UTCTime -> Eff es (Maybe Trace)
+getTraceDetails :: DB es => Projects.ProjectId -> Text -> Maybe UTCTime -> Eff es (Maybe Trace)
 getTraceDetails pid trId tme = listToMaybe <$> PG.query (Query $ encodeUtf8 q) (pid.toText, trId)
   where
     (startTime, endTime) = case tme of
@@ -489,7 +490,7 @@ getTraceDetails pid trId tme = listToMaybe <$> PG.query (Query $ encodeUtf8 q) (
         |]
 
 
-logRecordByProjectAndId :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
+logRecordByProjectAndId :: DB es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
 logRecordByProjectAndId pid createdAt rdId = listToMaybe <$> PG.query q (createdAt, pid.toText, rdId)
   where
     q =
@@ -498,7 +499,7 @@ logRecordByProjectAndId pid createdAt rdId = listToMaybe <$> PG.query q (created
              FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
-getSpanRecordsByTraceId :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Maybe UTCTime -> Eff es [OtelLogsAndSpans]
+getSpanRecordsByTraceId :: DB es => Projects.ProjectId -> Text -> Maybe UTCTime -> Eff es [OtelLogsAndSpans]
 getSpanRecordsByTraceId pid trId tme = PG.query (Query $ encodeUtf8 q) (pid.toText, trId)
   where
     (start, end) = case tme of
@@ -512,7 +513,7 @@ getSpanRecordsByTraceId pid trId tme = PG.query (Query $ encodeUtf8 q) (pid.toTe
     |]
 
 
-getSpanRecordsByTraceIds :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> V.Vector Text -> Maybe UTCTime -> Eff es [OtelLogsAndSpans]
+getSpanRecordsByTraceIds :: DB es => Projects.ProjectId -> V.Vector Text -> Maybe UTCTime -> Eff es [OtelLogsAndSpans]
 getSpanRecordsByTraceIds pid traceIds tme = PG.query (Query $ encodeUtf8 q) (pid.toText, traceIds)
   where
     (start, end) =
@@ -534,7 +535,7 @@ getSpanRecordsByTraceIds pid traceIds tme = PG.query (Query $ encodeUtf8 q) (pid
       |]
 
 
-spanRecordByProjectAndId :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
+spanRecordByProjectAndId :: DB es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
 spanRecordByProjectAndId pid createdAt rdId = listToMaybe <$> PG.query q (createdAt, pid.toText, rdId)
   where
     q =
@@ -543,7 +544,7 @@ spanRecordByProjectAndId pid createdAt rdId = listToMaybe <$> PG.query q (create
               FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
-spanRecordByName :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Text -> Eff es (Maybe OtelLogsAndSpans)
+spanRecordByName :: DB es => Projects.ProjectId -> Text -> Text -> Eff es (Maybe OtelLogsAndSpans)
 spanRecordByName pid trId spanName = listToMaybe <$> PG.query q (pid.toText, trId, spanName)
   where
     q =
@@ -552,7 +553,7 @@ spanRecordByName pid trId spanName = listToMaybe <$> PG.query q (pid.toText, trI
               FROM otel_logs_and_spans where project_id=? and context___trace_id = ? and name=? LIMIT 1|]
 
 
-getDataPointsData :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es [MetricDataPoint]
+getDataPointsData :: DB es => Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es [MetricDataPoint]
 getDataPointsData pid dateRange = PG.query (Query $ Relude.encodeUtf8 q) (pid, pid)
   where
     dateRangeStr = toText $ case dateRange of
@@ -588,7 +589,7 @@ GROUP BY mm.metric_name, mm.metric_type, mm.metric_unit, mm.metric_description, 
 |]
 
 
-getMetricData :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es (Maybe MetricDataPoint)
+getMetricData :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe MetricDataPoint)
 getMetricData pid metricName = listToMaybe <$> PG.query q (pid, metricName, pid, metricName)
   where
     q =
@@ -624,7 +625,7 @@ getMetricData pid metricName = listToMaybe <$> PG.query q (pid, metricName, pid,
         |]
 
 
-getTotalEventsToReport :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UTCTime -> Eff es Int
+getTotalEventsToReport :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int
 getTotalEventsToReport pid lastReported = do
   result <- PG.query q (pid, lastReported)
   case result of
@@ -635,7 +636,7 @@ getTotalEventsToReport pid lastReported = do
       [sql| SELECT count(*) FROM otel_logs_and_spans WHERE project_id=? AND timestamp > ?|]
 
 
-getTotalMetricsCount :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UTCTime -> Eff es Int
+getTotalMetricsCount :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int
 getTotalMetricsCount pid lastReported = do
   result <- PG.query q (pid, lastReported)
   case result of
@@ -646,7 +647,7 @@ getTotalMetricsCount pid lastReported = do
       [sql| SELECT count(*) FROM telemetry.metrics WHERE project_id=? AND timestamp > ?|]
 
 
-getMetricChartListData :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime) -> Int -> Eff es [MetricChartListData]
+getMetricChartListData :: DB es => Projects.ProjectId -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime) -> Int -> Eff es [MetricChartListData]
 getMetricChartListData pid sourceM prefixM dateRange cursor = PG.query (Query $ Relude.encodeUtf8 q) pid
   where
     dateRangeStr = toText $ case dateRange of
@@ -667,20 +668,20 @@ getMetricChartListData pid sourceM prefixM dateRange cursor = PG.query (Query $ 
      |]
 
 
-getMetricLabelValues :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Text -> Eff es [Text]
+getMetricLabelValues :: DB es => Projects.ProjectId -> Text -> Text -> Eff es [Text]
 getMetricLabelValues pid metricName labelName = coerce @[Only Text] @[Text] <$> PG.query q (labelName, pid, metricName)
   where
     q = [sql| SELECT DISTINCT attributes->>? FROM telemetry.metrics WHERE project_id = ? AND metric_name = ?|]
 
 
-getMetricServiceNames :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es [Text]
+getMetricServiceNames :: DB es => Projects.ProjectId -> Eff es [Text]
 getMetricServiceNames pid = coerce @[Only Text] @[Text] <$> PG.query q pid
   where
     q =
       [sql| SELECT DISTINCT service_name FROM telemetry.metrics_meta WHERE project_id = ?|]
 
 
-bulkInsertMetrics :: (IOE :> es, WithConnection :> es) => V.Vector MetricRecord -> Eff es ()
+bulkInsertMetrics :: DB es => V.Vector MetricRecord -> Eff es ()
 bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ do
   void $ PG.executeMany q (V.toList rowsToInsert)
   void $ PG.executeMany q2 (removeDuplic $ V.toList rows2)
@@ -817,7 +818,7 @@ instance ToRow OtelLogsAndSpans where
       parseSeverityNumber = fmap (show . severity_number)
 
 
-bulkInsertOtelLogsAndSpansTF :: (Concurrent :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es, WithConnection :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
+bulkInsertOtelLogsAndSpansTF :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
 bulkInsertOtelLogsAndSpansTF records = do
   appCtx <- Eff.ask @AuthContext
   updatedRecords <- V.mapM (\r -> genUUID >>= \uid -> pure (r & #id .~ UUID.toText uid)) records
@@ -837,7 +838,7 @@ bulkInsertOtelLogsAndSpansTF records = do
 
 -- Function to insert OtelLogsAndSpans records with all fields in flattened structure
 -- Using direct connection without transaction
-bulkInsertOtelLogsAndSpans :: (IOE :> es, WithConnection :> es) => V.Vector OtelLogsAndSpans -> Eff es Int64
+bulkInsertOtelLogsAndSpans :: DB es => V.Vector OtelLogsAndSpans -> Eff es Int64
 bulkInsertOtelLogsAndSpans records = PG.executeMany bulkInserSpansAndLogsQuery (V.toList records)
 
 
@@ -1091,7 +1092,7 @@ extractATError spanObj (AE.Object o) = do
 extractATError _ _ = Nothing
 
 
-getProjectStatsForReport :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
+getProjectStatsForReport :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
 getProjectStatsForReport projectId start end = PG.query q (projectId, start, end)
   where
     q =
@@ -1103,7 +1104,7 @@ getProjectStatsForReport projectId start end = PG.query q (projectId, start, end
         |]
 
 
-getProjectStatsBySpanType :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
+getProjectStatsBySpanType :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
 getProjectStatsBySpanType projectId start end = PG.query q (projectId, start, end)
   where
     q =
@@ -1129,7 +1130,7 @@ getProjectStatsBySpanType projectId start end = PG.query q (projectId, start, en
       |]
 
 
-getEndpointStats :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Text, Text, Int, Int)]
+getEndpointStats :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Text, Text, Int, Int)]
 getEndpointStats projectId start end = PG.query q (projectId, start, end)
   where
     q =
@@ -1153,7 +1154,7 @@ ORDER BY
     |]
 
 
-getDBQueryStats :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
+getDBQueryStats :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
 getDBQueryStats projectId start end = PG.query q (projectId, start, end)
   where
     q =
@@ -1174,7 +1175,7 @@ ORDER BY avg_duration DESC LIMIT 10;
       |]
 
 
-getTraceShapes :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> V.Vector Text -> Eff es [(Text, Text, Int, Int)]
+getTraceShapes :: DB es => Projects.ProjectId -> V.Vector Text -> Eff es [(Text, Text, Int, Int)]
 getTraceShapes pid trIds = PG.query q (pid, trIds, pid, pid)
   where
     q =

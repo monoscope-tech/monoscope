@@ -15,9 +15,9 @@ import Database.PostgreSQL.Entity (_insert, _selectWhere)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple hiding (execute, query)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Effectful (Eff, IOE, type (:>))
-import Effectful.PostgreSQL (WithConnection)
+import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
+import System.Types (DB)
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
@@ -56,15 +56,15 @@ data ReportListItem = ReportListItem
     via (GenericEntity '[Schema "apis", TableName "reports", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ReportListItem)
 
 
-addReport :: (IOE :> es, WithConnection :> es) => Report -> Eff es ()
+addReport :: DB es => Report -> Eff es ()
 addReport report = void $ PG.execute (_insert @Report) report
 
 
-getReportById :: (IOE :> es, WithConnection :> es) => ReportId -> Eff es (Maybe Report)
+getReportById :: DB es => ReportId -> Eff es (Maybe Report)
 getReportById id' = listToMaybe <$> PG.query (_selectWhere @Report [[field| id |]]) (Only id')
 
 
-reportHistoryByProject :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Int -> Eff es [ReportListItem]
+reportHistoryByProject :: DB es => Projects.ProjectId -> Int -> Eff es [ReportListItem]
 reportHistoryByProject pid page = PG.query q (pid, offset)
   where
     offset = page * 20

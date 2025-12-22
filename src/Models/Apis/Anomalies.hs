@@ -44,9 +44,9 @@ import Database.PostgreSQL.Simple.Time (parseUTCTime)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
-import Effectful (Eff, IOE, type (:>))
-import Effectful.PostgreSQL (WithConnection)
+import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
+import System.Types (DB)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields (
   FieldCategoryEnum,
@@ -203,7 +203,7 @@ data AnomalyVM = AnomalyVM
     via (GenericEntity '[Schema "apis", TableName "anomalies_vm", PrimaryKey "id", FieldModifiers '[CamelToSnake]] AnomalyVM)
 
 
-getAnomaliesVM :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> V.Vector Text -> Eff es [AnomalyVM]
+getAnomaliesVM :: DB es => Projects.ProjectId -> V.Vector Text -> Eff es [AnomalyVM]
 getAnomaliesVM pid hash
   | V.null hash = pure []
   | otherwise = PG.query q (pid, hash)
@@ -255,7 +255,7 @@ where
       |]
 
 
-countAnomalies :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es Int
+countAnomalies :: DB es => Projects.ProjectId -> Text -> Eff es Int
 countAnomalies pid report_type = do
   result <- PG.query (Query $ encodeUtf8 q) (Only pid)
   case result of
@@ -270,7 +270,7 @@ countAnomalies pid report_type = do
      |]
 
 
-acknowledgeAnomalies :: (IOE :> es, WithConnection :> es) => Users.UserId -> V.Vector Text -> Eff es [Text]
+acknowledgeAnomalies :: DB es => Users.UserId -> V.Vector Text -> Eff es [Text]
 acknowledgeAnomalies uid aids
   | V.null aids = pure []
   | otherwise = do
@@ -293,7 +293,7 @@ acknowledgeAnomalies uid aids
     qAnomaliesByHash = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where target_hash=ANY(?) |]
 
 
-acknowlegeCascade :: (IOE :> es, WithConnection :> es) => Users.UserId -> V.Vector Text -> Eff es Int64
+acknowlegeCascade :: DB es => Users.UserId -> V.Vector Text -> Eff es Int64
 acknowlegeCascade uid targets
   | V.null targets = pure 0
   | otherwise = do
@@ -584,7 +584,7 @@ data ATError = ATError
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
 
 
-errorsByHashes :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> V.Vector Text -> Eff es [ATError]
+errorsByHashes :: DB es => Projects.ProjectId -> V.Vector Text -> Eff es [ATError]
 errorsByHashes pid hashes
   | V.null hashes = pure []
   | otherwise = PG.query q (pid, hashes)

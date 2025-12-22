@@ -22,12 +22,13 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (SomePostgreSqlException)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
-import Effectful (Eff, IOE, (:>))
+import Effectful (Eff, (:>))
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log, object)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
+import System.Types (DB)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
@@ -70,7 +71,7 @@ import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, runBackground)
-import UnliftIO.Exception (catch, finally, try)
+import UnliftIO.Exception (bracket, catch, try)
 import Utils (DBField)
 
 
@@ -220,20 +221,13 @@ processBackgroundJob authCtx job bgJob =
         -- on connection close, providing a safety net if explicit unlock fails.
         withAdvisoryLock :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
         withAdvisoryLock lockName action = do
-          lockAcquired <- PG.query [sql|SELECT pg_try_advisory_lock(hashtext(?))|] (Only lockName)
-          case lockAcquired of
-            [Only True] -> do
-              -- Set statement timeout to prevent indefinite hangs (5 minutes max)
-              _ <- PG.execute [sql|SET LOCAL statement_timeout = '300000'|] ()
-              action `finally` do
-                -- Reset timeout and release lock. If unlock fails, session-level lock auto-releases on disconnect.
-                _ <- try @_ @SomeException $ PG.execute [sql|RESET statement_timeout|] ()
-                ( PG.query [sql|SELECT pg_advisory_unlock(hashtext(?))|] (Only lockName) >>= \case
-                    [Only True] -> pass
-                    other -> Log.logAttention "Advisory unlock returned unexpected result" (AE.object ["lock_name" AE..= lockName, "result" AE..= show (other :: [Only Bool])])
-                  )
-                  `catch` \(e :: SomeException) -> Log.logAttention "Failed to release advisory lock (will auto-release on disconnect)" (AE.object ["lock_name" AE..= lockName, "error" AE..= show e])
-            _ -> Log.logInfo "Daily job already running in another pod, skipping" ()
+          let acquireLock = PG.query [sql|SELECT pg_try_advisory_lock(hashtext(?))|] (Only lockName) <&> \case [Only True] -> True; _ -> False
+              releaseLock = (PG.query [sql|SELECT pg_advisory_unlock(hashtext(?))|] (Only lockName) >>= \case
+                  [Only True] -> pass
+                  other -> Log.logAttention "Advisory unlock returned unexpected result" (AE.object ["lock_name" AE..= lockName, "result" AE..= show (other :: [Only Bool])]))
+                `catch` \(e :: SomeException) -> Log.logAttention "Failed to release advisory lock (will auto-release on disconnect)" (AE.object ["lock_name" AE..= lockName, "error" AE..= show e])
+          bracket acquireLock (Relude.when ?? releaseLock) \acquired ->
+            if acquired then action else Log.logInfo "Daily job already running in another pod, skipping" ()
 
         runDailyJobScheduling = do
           Log.logInfo "Running daily job" ()
@@ -375,7 +369,7 @@ runHourlyJob scheduledTime hour = do
 
 -- | Batch process facets generation for multiple projects using 24-hour window
 -- Processes projects concurrently with individual error handling to prevent batch failures
-generateOtelFacetsBatch :: (Effectful.Reader.Static.Reader Config.AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, Tracing :> es, UUID.UUIDEff :> es, WithConnection :> es) => V.Vector Projects.ProjectId -> UTCTime -> Eff es ()
+generateOtelFacetsBatch :: (DB es, Effectful.Reader.Static.Reader Config.AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, Tracing :> es, UUID.UUIDEff :> es) => V.Vector Projects.ProjectId -> UTCTime -> Eff es ()
 generateOtelFacetsBatch projectIds timestamp = do
   Log.logInfo "Starting batch OTLP facets generation" ("project_count", AE.toJSON $ V.length projectIds)
 

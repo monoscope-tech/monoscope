@@ -73,6 +73,7 @@ import Effectful.Ki qualified as Ki
 import Effectful.Labeled (runLabeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection, runWithConnectionPool)
+import System.Types (DB)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runFrozenTime, runTime)
 import Log qualified
@@ -194,7 +195,7 @@ withExternalDBSetup f = do
 
   -- Connect to the new test database
   let testConnStr = "host=localhost port=5432 user=postgres password=postgres dbname=" <> encodeUtf8 testDbName
-  pool <- newPool (defaultPoolConfig (connectPostgreSQL testConnStr) close 60 50)
+  pool <- newPool (defaultPoolConfig (connectPostgreSQL testConnStr) close 60 10)
 
   -- Run tests and cleanup
   finally (f pool) $ do
@@ -454,7 +455,7 @@ runTestBackgroundWithLogger logger appCtx process = do
 
 
 -- | Run an effect action in test context (for non-servant handlers like Auth.sessionByID)
-runTestEffect :: Pool Connection -> Log.Logger -> TracerProvider -> (forall es. (Error ServantS.ServerError :> es, HTTP :> es, IOE :> es, Log :> es, Time :> es, Tracing :> es, UUIDEff :> es, WithConnection :> es) => Eff es a) -> IO (Either ServantS.ServerError a)
+runTestEffect :: Pool Connection -> Log.Logger -> TracerProvider -> (forall es. (DB es, Error ServantS.ServerError :> es, HTTP :> es, Log :> es, Time :> es, Tracing :> es, UUIDEff :> es) => Eff es a) -> IO (Either ServantS.ServerError a)
 runTestEffect pool logger tp action = do
   logLevel <- Logging.getLogLevelFromEnv
   action
