@@ -216,15 +216,21 @@ processBackgroundJob authCtx job bgJob =
       unless authCtx.config.enableDailyJobScheduling (Log.logInfo "Daily job scheduling is disabled, skipping" ())
         >> Relude.when authCtx.config.enableDailyJobScheduling (withAdvisoryLock "daily_job_scheduling" runDailyJobScheduling)
       where
+        -- Advisory lock for distributed coordination. Uses session-level locks which auto-release
+        -- on connection close, providing a safety net if explicit unlock fails.
         withAdvisoryLock :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
         withAdvisoryLock lockName action = do
           lockAcquired <- PG.query [sql|SELECT pg_try_advisory_lock(hashtext(?))|] (Only lockName)
           case lockAcquired of
-            [Only True] ->
+            [Only True] -> do
+              -- Set statement timeout to prevent indefinite hangs (5 minutes max)
+              _ <- PG.execute [sql|SET LOCAL statement_timeout = '300000'|] ()
               action `finally` do
+                -- Reset timeout and release lock. If unlock fails, session-level lock auto-releases on disconnect.
+                _ <- try @_ @SomeException $ PG.execute [sql|RESET statement_timeout|] ()
                 result <- try $ PG.execute [sql|SELECT pg_advisory_unlock(hashtext(?))|] (Only lockName)
                 case result of
-                  Left (e :: SomeException) -> Log.logAttention "Failed to release advisory lock" (AE.object ["lock_name" AE..= lockName, "error" AE..= show e])
+                  Left (e :: SomeException) -> Log.logAttention "Failed to release advisory lock (will auto-release on disconnect)" (AE.object ["lock_name" AE..= lockName, "error" AE..= show e])
                   Right _ -> pass
             _ -> Log.logInfo "Daily job already running in another pod, skipping" ()
 
@@ -581,19 +587,25 @@ processOneMinuteErrors scheduledTime pid = do
       -- (otel log and span, [errors])
       let errorsByTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.spanId == b.spanId) allErrors
       processProjectErrors pid allErrors
-      forM_ errorsByTrace \groupedErrors -> case V.uncons groupedErrors of
-        Nothing -> pass
-        Just (firstError, _) -> do
-          let mappedErrors = V.map (\x -> AE.object ["type" AE..= x.errorType, "message" AE..= x.message, "stack_trace" AE..= x.stackTrace]) groupedErrors
-          Relude.when (not $ V.null groupedErrors) $ do
-            rowsUpdated <-
-              PG.execute
-                [sql| UPDATE otel_logs_and_spans
-                        SET errors = ?
-                        WHERE project_id = ? AND context___trace_id = ? AND context___span_id = ? |]
-                (AE.toJSON mappedErrors, pid, firstError.traceId, firstError.spanId)
-            Relude.when (rowsUpdated == 0)
-              $ Log.logAttention "Error update had no effect - span not found" (AE.object ["project_id" AE..= pid.toText, "trace_id" AE..= firstError.traceId, "span_id" AE..= firstError.spanId])
+      -- Batch all error updates into a single query using unnest (avoids N+1 pattern)
+      let updates = mapMaybe mkErrorUpdate errorsByTrace
+          mkErrorUpdate groupedErrors = do
+            (firstError, _) <- V.uncons groupedErrors
+            sId <- firstError.spanId
+            tId <- firstError.traceId
+            let mappedErrors = V.map (\x -> AE.object ["type" AE..= x.errorType, "message" AE..= x.message, "stack_trace" AE..= x.stackTrace]) groupedErrors
+            pure (sId, tId, AE.toJSON mappedErrors)
+      unless (null updates) $ do
+        let (spanIds, traceIds, errorsJson) = V.unzip3 $ V.fromList updates
+        rowsUpdated <-
+          PG.execute
+            [sql| UPDATE otel_logs_and_spans o
+                  SET errors = u.errors
+                  FROM (SELECT unnest(?::text[]) AS span_id, unnest(?::text[]) AS trace_id, unnest(?::jsonb[]) AS errors) u
+                  WHERE o.project_id = ? AND o.context___span_id = u.span_id AND o.context___trace_id = u.trace_id |]
+            (spanIds, traceIds, errorsJson, pid)
+        Relude.when (fromIntegral rowsUpdated /= length updates)
+          $ Log.logAttention "Some error updates had no effect" (AE.object ["project_id" AE..= pid.toText, "expected" AE..= length updates, "actual" AE..= rowsUpdated])
       Relude.when (V.length spansWithErrors == 30) $ do
         processErrorsPaginated oneMinuteAgo (skip + 30)
         pass
