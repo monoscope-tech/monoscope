@@ -71,18 +71,13 @@ jobs:
       - name: Build project with HIE files
         run: cabal build all -j4 --ghc-options="-fwrite-ide-info -hiedir=.hiefiles"
 
-      - name: Upload HIE files
+      - name: Upload weeder artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: hiefiles
-          path: .hiefiles
-          retention-days: 1
-
-      - name: Upload dist-newstyle
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist-newstyle
-          path: dist-newstyle
+          name: weeder-artifacts
+          path: |
+            .hiefiles
+            dist-newstyle/**/*.conf
           retention-days: 1
 
   test:
@@ -230,20 +225,18 @@ jobs:
           cabal update
           cabal install weeder-2.9.0 --install-method=copy --installdir=$HOME/.local/bin
 
-      - name: Download HIE files
+      - name: Download weeder artifacts
         uses: actions/download-artifact@v4
         with:
-          name: hiefiles
-          path: .hiefiles
-
-      - name: Download dist-newstyle
-        uses: actions/download-artifact@v4
-        with:
-          name: dist-newstyle
-          path: dist-newstyle
+          name: weeder-artifacts
 
       - name: Run weeder
-        run: ~/.local/bin/weeder --config config/weeder.toml
+        run: |
+          if [ ! -d ".hiefiles" ]; then
+            echo "Error: HIE files not found"
+            exit 1
+          fi
+          ~/.local/bin/weeder --config config/weeder.toml
 
   ui-tests:
     name: UI Tests
