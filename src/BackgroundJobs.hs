@@ -221,7 +221,11 @@ processBackgroundJob authCtx job bgJob =
           lockAcquired <- V.fromList <$> PG.query [sql|SELECT pg_try_advisory_lock(hashtext(?))|] (Only lockName)
           case V.headM lockAcquired of
             Just (Only True) ->
-              action `finally` void (PG.execute [sql|SELECT pg_advisory_unlock(hashtext(?))|] (Only lockName))
+              action `finally` do
+                result <- try $ PG.execute [sql|SELECT pg_advisory_unlock(hashtext(?))|] (Only lockName)
+                case result of
+                  Left (e :: SomeException) -> Log.logAttention "Failed to release advisory lock" (AE.object ["lock_name" AE..= lockName, "error" AE..= show e])
+                  Right _ -> pass
             _ -> Log.logInfo "Daily job already running in another pod, skipping" ()
 
         runDailyJobScheduling = do
@@ -586,13 +590,14 @@ processOneMinuteErrors scheduledTime pid = do
         Just (firstError, _) -> do
           let mappedErrors = V.map (\x -> AE.object ["type" AE..= x.errorType, "message" AE..= x.message, "stack_trace" AE..= x.stackTrace]) groupedErrors
           Relude.when (not $ V.null groupedErrors) $ do
-            _ <-
+            rowsUpdated <-
               PG.execute
                 [sql| UPDATE otel_logs_and_spans
                         SET errors = ?
                         WHERE project_id = ? AND context___trace_id = ? AND context___span_id = ? |]
                 (AE.toJSON mappedErrors, pid, firstError.traceId, firstError.spanId)
-            pass
+            Relude.when (rowsUpdated == 0) $
+              Log.logAttention "Error update had no effect - span not found" (AE.object ["project_id" AE..= pid.toText, "trace_id" AE..= firstError.traceId, "span_id" AE..= firstError.spanId])
       Relude.when (V.length spansWithErrors == 30) $ do
         processErrorsPaginated oneMinuteAgo (skip + 30)
         pass
@@ -696,10 +701,11 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
       -- Batch update spans with computed hashes using a single query
       let spansWithHashes = V.filter (\(_, hashes) -> not $ V.null hashes) $ V.zip spans spanUpdates
       Relude.when (V.length spansWithHashes > 0) $ do
-        Log.logInfo "Updating spans with computed hashes" ("span_count", AE.toJSON $ V.length spansWithHashes)
+        let expectedCount = V.length spansWithHashes
+        Log.logInfo "Updating spans with computed hashes" ("span_count", AE.toJSON expectedCount)
         let dbSpanIds = PGArray $ V.toList $ V.map ((.id) . fst) spansWithHashes
             hashValues = PGArray $ V.toList $ V.map (AE.toJSON . snd) spansWithHashes
-        _ <-
+        rowsUpdated <-
           PG.execute
             [sql| UPDATE otel_logs_and_spans
                   SET hashes = converted.arr
@@ -712,6 +718,8 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
                     AND otel_logs_and_spans.timestamp >= ?
                     AND otel_logs_and_spans.timestamp < ? |]
             (dbSpanIds, hashValues, pid, fiveMinutesAgo, scheduledTime)
+        Relude.when (fromIntegral rowsUpdated /= expectedCount) $
+          Log.logAttention "Span hash update count mismatch" (AE.object ["project_id" AE..= pid.toText, "expected" AE..= expectedCount, "actual" AE..= rowsUpdated])
         Log.logInfo "Completed span processing for project" ("project_id", AE.toJSON pid.toText)
   where
     projectCacheDefault :: Projects.ProjectCache
