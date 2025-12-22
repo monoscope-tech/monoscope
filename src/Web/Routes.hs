@@ -13,9 +13,9 @@ import GHC.TypeLits (Symbol)
 import Relude
 
 -- Database imports
-import Database.PostgreSQL.Simple qualified as PG
+import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Effectful.PostgreSQL.Transact (queryOne_)
+import Effectful.PostgreSQL qualified as PG
 
 -- Effectful imports
 import Effectful (runPureEff)
@@ -360,7 +360,7 @@ data ProjectsRoutes' mode = ProjectsRoutes'
 -- =============================================================================
 
 -- Main server for the root routes
-server :: Pool PG.Connection -> Routes (AsServerT ATBaseCtx)
+server :: Pool PGS.Connection -> Routes (AsServerT ATBaseCtx)
 server pool =
   Routes
     { public = Servant.serveDirectoryWebApp "./static/public"
@@ -550,9 +550,9 @@ data Status = Status
 
 statusH :: ATBaseCtx Status
 statusH = do
-  let query = [sql| select version(); |]
-  versionM <- queryOne_ query
-  let version = versionM <&> \(PG.Only v) -> v
+  let q = [sql| select version(); |]
+  versionM <- listToMaybe <$> PG.query_ q
+  let version = versionM <&> \(PGS.Only v) -> v
   let gi = $$tGitInfoCwd
   pure
     Status

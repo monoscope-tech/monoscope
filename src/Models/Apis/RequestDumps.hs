@@ -31,7 +31,6 @@ import Data.Time.Format
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField (fromField))
@@ -40,12 +39,11 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact (DBT)
-import Database.PostgreSQL.Transact qualified as DBT
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.Log (Log)
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Time qualified as Time
 import Models.Apis.Fields.Types ()
 import Models.Projects.Projects qualified as Projects
@@ -365,8 +363,8 @@ requestDumpLogUrlPath pid q cols cursor since fromV toV layout source recent = "
         ]
 
 
-getRequestDumpForReports :: Projects.ProjectId -> Text -> DBT IO (V.Vector RequestForReport)
-getRequestDumpForReports pid report_type = query (Query $ encodeUtf8 q) pid
+getRequestDumpForReports :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Text -> Eff es (V.Vector RequestForReport)
+getRequestDumpForReports pid report_type = V.fromList <$> PG.query (Query $ encodeUtf8 q) (Only pid)
   where
     report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
     q =
@@ -390,8 +388,8 @@ getRequestDumpForReports pid report_type = query (Query $ encodeUtf8 q) pid
     |]
 
 
-getRequestDumpsForPreviousReportPeriod :: Projects.ProjectId -> Text -> DBT IO (V.Vector EndpointPerf)
-getRequestDumpsForPreviousReportPeriod pid report_type = query (Query $ encodeUtf8 q) pid
+getRequestDumpsForPreviousReportPeriod :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Text -> Eff es (V.Vector EndpointPerf)
+getRequestDumpsForPreviousReportPeriod pid report_type = V.fromList <$> PG.query (Query $ encodeUtf8 q) (Only pid)
   where
     (start, end) = if report_type == "daily" then ("'48 hours'" :: Text, "'24 hours'") else ("'14 days'", "'7 days'")
     q =
@@ -453,15 +451,15 @@ instance FromField FieldValue where
 -- | Execute arbitrary SQL query and return results as vector of vectors
 -- Each inner vector represents a row with all columns as JSON values
 -- This is a pure Haskell solution that doesn't modify the SQL query
-executeArbitraryQuery :: DB :> es => Text -> Eff es (V.Vector (V.Vector AE.Value))
+executeArbitraryQuery :: (WithConnection :> es, IOE :> es) => Text -> Eff es (V.Vector (V.Vector AE.Value))
 executeArbitraryQuery queryText = do
   -- Execute the query and parse each field using our FieldValue type
-  results <- dbtToEff $ V.fromList <$> DBT.query_ @[FieldValue] (Query $ encodeUtf8 queryText)
+  results :: [[FieldValue]] <- PG.query_ (Query $ encodeUtf8 queryText)
   -- Convert each row of FieldValues to a vector of JSON values
-  pure $ V.map (V.fromList . map fieldValueToJson) results
+  pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
 
 
-selectLogTable :: (DB :> es, IOE :> es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
+selectLogTable :: (WithConnection :> es, IOE :> es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
 selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser source targetSpansM = do
   now <- Time.currentTime
   let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) queryAST
@@ -489,7 +487,7 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
   pure $ Right (logItemsV, queryComponents.toColNames, c)
 
 
-selectChildSpansAndLogs :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Text] -> V.Vector Text -> (Maybe UTCTime, Maybe UTCTime) -> V.Vector Text -> Eff es (V.Vector (V.Vector AE.Value))
+selectChildSpansAndLogs :: (WithConnection :> es, IOE :> es, Time.Time :> es) => Projects.ProjectId -> [Text] -> V.Vector Text -> (Maybe UTCTime, Maybe UTCTime) -> V.Vector Text -> Eff es (V.Vector (V.Vector AE.Value))
 selectChildSpansAndLogs pid projectedColsByUser traceIds dateRange excludedSpanIds = do
   now <- Time.currentTime
   let fmtTime = toText . iso8601Show
@@ -505,7 +503,7 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds dateRange excludedSpanI
              WHERE project_id= ?  $dateRangeStr and  context___trace_id=Any(?) and parent_id IS NOT NULL AND id::text != ALL(?)
              ORDER BY timestamp DESC;
            |]
-  results <- dbtToEff $ V.fromList <$> DBT.query (Query $ encodeUtf8 q) (pid, traceIds, excludedSpanIds)
+  results <- V.fromList <$> PG.query (Query $ encodeUtf8 q) (pid, traceIds, excludedSpanIds)
   pure $ V.mapMaybe valueToVector results
 
 
@@ -515,7 +513,7 @@ valueToVector (Only val) = case val of
   _ -> Nothing
 
 
-fetchLogPatterns :: (DB :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Maybe Text -> Int -> Eff es (V.Vector (Text, Int))
+fetchLogPatterns :: (WithConnection :> es, IOE :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Maybe Text -> Int -> Eff es (V.Vector (Text, Int))
 fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
   now <- Time.currentTime
   let (_, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now sourceM Nothing){dateRange}) queryAST
@@ -523,23 +521,23 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
       whereCondition = fromMaybe [text|project_id=${pidTxt}|] queryComponents.whereClause
       target = fromMaybe "log_pattern" targetM
       q = [text|select $target, count(*) as p_count from otel_logs_and_spans where project_id='${pidTxt}' and ${whereCondition} and $target is not null GROUP BY $target ORDER BY p_count desc offset ? limit 15;|]
-  dbtToEff $ query (Query $ encodeUtf8 q) (Only skip)
+  V.fromList <$> PG.query (Query $ encodeUtf8 q) (Only skip)
 
 
-queryCount :: DB :> es => Text -> Eff es (Maybe (Only Int))
-queryCount q = dbtToEff $ DBT.queryOne_ (Query $ encodeUtf8 q)
+queryCount :: (WithConnection :> es, IOE :> es) => Text -> Eff es (Maybe (Only Int))
+queryCount q = listToMaybe <$> PG.query_ (Query $ encodeUtf8 q)
 
 
-getLast24hTotalRequest :: Projects.ProjectId -> DBT IO Int
+getLast24hTotalRequest :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Eff es Int
 getLast24hTotalRequest = getRequestCountForInterval "1 day"
 
 
-getLastSevenDaysTotalRequest :: Projects.ProjectId -> DBT IO Int
+getLastSevenDaysTotalRequest :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Eff es Int
 getLastSevenDaysTotalRequest = getRequestCountForInterval "7 days"
 
 
-getRequestCountForInterval :: Text -> Projects.ProjectId -> DBT IO Int
+getRequestCountForInterval :: (WithConnection :> es, IOE :> es) => Text -> Projects.ProjectId -> Eff es Int
 getRequestCountForInterval interval pid = do
-  maybe 0 (\(Only c) -> c) <$> queryOne q (pid, interval)
+  maybe 0 (\(Only c) -> c) . listToMaybe <$> PG.query q (pid, interval)
   where
     q = [sql| SELECT count(*) FROM otel_logs_and_spans WHERE project_id=? AND timestamp > NOW() - interval ?;|]

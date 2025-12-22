@@ -26,11 +26,11 @@ import Data.Time (UTCTime, getCurrentTime)
 import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (execute)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.Newtypes (getAeson)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -71,11 +71,11 @@ acknowledgeAnomalyGetH pid aid hostM = do
   -- Convert to Issues.IssueId for new system
   let issueId = UUIDId aid.unUUIDId
   -- Use new Issues acknowledge function
-  _ <- dbtToEff $ Issues.acknowledgeIssue issueId sess.user.id
+  _ <- Issues.acknowledgeIssue issueId sess.user.id
   -- Still use old cascade for compatibility
   let text_id = V.fromList [UUID.toText aid.unUUIDId]
-  v <- dbtToEff $ Anomalies.acknowledgeAnomalies sess.user.id text_id
-  _ <- dbtToEff $ Anomalies.acknowlegeCascade sess.user.id v
+  v <- Anomalies.acknowledgeAnomalies sess.user.id text_id
+  _ <- Anomalies.acknowlegeCascade sess.user.id v
   addRespHeaders $ Acknowlege pid (UUIDId aid.unUUIDId) True
 
 
@@ -84,8 +84,8 @@ unAcknowledgeAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set acknowledged_by=null, acknowledged_at=null where id=? |]
   let qI = [sql| update apis.issues set acknowledged_by=null, acknowledged_at=null where id=? |]
-  _ <- dbtToEff $ execute qI (Only aid)
-  _ <- dbtToEff $ execute q (Only aid)
+  _ <- PG.execute qI (Only aid)
+  _ <- PG.execute q (Only aid)
   addRespHeaders $ Acknowlege pid (UUIDId aid.unUUIDId) False
 
 
@@ -94,8 +94,8 @@ archiveAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set archived_at=NOW() where id=? |]
   let qI = [sql| update apis.issues set archived_at=NOW() where id=? |]
-  _ <- dbtToEff $ execute qI (Only aid)
-  _ <- dbtToEff $ execute q (Only aid)
+  _ <- PG.execute qI (Only aid)
+  _ <- PG.execute q (Only aid)
   addRespHeaders $ Archive pid (UUIDId aid.unUUIDId) True
 
 
@@ -104,8 +104,8 @@ unArchiveAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set archived_at=null where id=? |]
   let qI = [sql| update apis.issues set archived_at=null where id=? |]
-  _ <- dbtToEff $ execute qI (Only aid)
-  _ <- dbtToEff $ execute q (Only aid)
+  _ <- PG.execute qI (Only aid)
+  _ <- PG.execute q (Only aid)
   addRespHeaders $ Archive pid (UUIDId aid.unUUIDId) False
 
 
@@ -135,11 +135,11 @@ anomalyBulkActionsPostH pid action items = do
     else do
       _ <- case action of
         "acknowledge" -> do
-          v <- dbtToEff $ Anomalies.acknowledgeAnomalies sess.user.id (V.fromList items.anomalyId)
-          _ <- dbtToEff $ Anomalies.acknowlegeCascade sess.user.id v
+          v <- Anomalies.acknowledgeAnomalies sess.user.id (V.fromList items.anomalyId)
+          _ <- Anomalies.acknowlegeCascade sess.user.id v
           pass
         "archive" -> do
-          _ <- dbtToEff $ execute [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ V.fromList items.anomalyId)
+          _ <- PG.execute [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ V.fromList items.anomalyId)
           pass
         _ -> error $ "unhandled anomaly bulk action state " <> action
       addSuccessToast (action <> "d items Successfully") Nothing
@@ -173,10 +173,10 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
       perPage = maybe 25 (Unsafe.read . toString) perPageM
       currentSort = fromMaybe "-created_at" sortM
 
-  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
+  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
   currTime <- liftIO getCurrentTime
 
-  (issues, totalCount) <- dbtToEff $ Issues.selectIssues pid Nothing (Just ackd) (Just archived) perPage (pageInt * perPage) Nothing (Just currentSort)
+  (issues, totalCount) <- Issues.selectIssues pid Nothing (Just ackd) (Just archived) perPage (pageInt * perPage) Nothing (Just currentSort)
 
   let baseUrl = "/p/" <> pid.toText <> "/anomalies?filter=" <> currentFilterTab <> "&sort=" <> currentSort
       paginationConfig =

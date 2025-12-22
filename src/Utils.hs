@@ -68,7 +68,9 @@ import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
-import Database.PostgreSQL.Transact
+import Effectful (Eff, IOE)
+import Effectful qualified
+import Effectful.PostgreSQL (WithConnection)
 import Lucid
 import Lucid.Hyperscript (__)
 import Lucid.Svg qualified as Svg
@@ -430,7 +432,7 @@ freeTierLimitExceededBanner pid =
     a_ [class_ "underline underline-offset-2 link", href_ $ "/p/" <> pid <> "/manage_billing"] "See pricing"
 
 
-checkFreeTierExceeded :: Projects.ProjectId -> Text -> DBT IO Bool
+checkFreeTierExceeded :: (WithConnection Effectful.:> es, IOE Effectful.:> es) => Projects.ProjectId -> Text -> Eff es Bool
 checkFreeTierExceeded pid paymentPlan =
   if paymentPlan == "Free"
     then (> fromIntegral freeTierDailyMaxEvents) <$> RequestDumps.getLast24hTotalRequest pid

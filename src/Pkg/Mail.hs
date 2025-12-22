@@ -16,7 +16,7 @@ import Effectful (
   type (:>),
  )
 import Effectful.Log (Log)
-import Effectful.PostgreSQL.Transact.Effect (DB)
+import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Static (Reader, ask)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Slack (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
@@ -33,7 +33,7 @@ sendPostmarkEmail receiver tmpOptionsM subMsg =
   Notify.sendNotification $ Notify.emailNotification receiver tmpOptionsM subMsg
 
 
-sendSlackMessage :: (DB :> es, IOE :> es, Log :> es, Notify.Notify :> es) => Projects.ProjectId -> Text -> Eff es ()
+sendSlackMessage :: (WithConnection :> es, IOE :> es, Log :> es, Notify.Notify :> es) => Projects.ProjectId -> Text -> Eff es ()
 sendSlackMessage pid message = do
   slackData <- getProjectSlackData pid
   case slackData of
@@ -64,7 +64,7 @@ data NotificationAlerts
       }
 
 
-sendDiscordAlert :: (DB :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es ()
+sendDiscordAlert :: (WithConnection :> es, IOE :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es ()
 sendDiscordAlert alert pid pTitle channelIdM' = do
   appCtx <- ask @Config.AuthContext
   channelIdM <- case channelIdM' of
@@ -93,7 +93,7 @@ sendDiscordAlert alert pid pTitle channelIdM' = do
         Notify.sendNotification $ Notify.discordNotification cid content
 
 
-sendSlackAlert :: (DB :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es ()
+sendSlackAlert :: (WithConnection :> es, IOE :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es ()
 sendSlackAlert alert pid pTitle channelM = do
   appCtx <- ask @Config.AuthContext
   channelIdM <- case channelM of

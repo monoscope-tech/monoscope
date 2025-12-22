@@ -10,7 +10,6 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful.Error.Static (throwError)
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
 import Models.Apis.Slack (DiscordData (..), getDashboardsForDiscord, getDiscordData, insertDiscordData, updateDiscordNotificationChannel)
 import Models.Projects.Projects qualified as Projects
@@ -35,6 +34,7 @@ import Effectful.Time qualified as Time
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Dashboards qualified as Dashboards
 import Network.HTTP.Types (urlEncode)
+import Pkg.DeriveUtils (idFromText)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import Pages.Bots.Utils (BotResponse (..), BotType (..), Channel, authHeader, chartImageUrl, contentTypeHeader, handleTableResponse)
@@ -69,7 +69,7 @@ linkDiscordGetH pidM' codeM guildIdM = do
       r' <- exchangeCodeForTokenDiscord envCfg.discordClientId envCfg.discordClientSecret code envCfg.discordRedirectUri
       case r' of
         Just t -> do
-          _ <- dbtToEff $ insertDiscordData pid guildId
+          _ <- insertDiscordData pid guildId
           _ <- registerDiscordCommands envCfg.discordClientId envCfg.discordBotToken guildId
           if isOnboarding
             then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
@@ -260,7 +260,7 @@ discordInteractionsH rawBody signatureM timestampM = do
             "dashboard-select" -> do
               _ <- sendDeferredResponse interaction.id interaction.token envCfg.discordBotToken
               let dashboardId = fromMaybe "" $ viaNonEmpty head values
-              dashboardVMM <- Dashboards.getDashboardById dashboardId
+              dashboardVMM <- maybe (pure Nothing) Dashboards.getDashboardById (idFromText dashboardId)
               case dashboardVMM of
                 Nothing -> pass
                 Just dashboardVM -> do
@@ -275,7 +275,7 @@ discordInteractionsH rawBody signatureM timestampM = do
               let val = T.splitOn "___" $ fromMaybe "" $ viaNonEmpty head values
               case val of
                 [widget, dashboardId] -> do
-                  dashboardVMM <- Dashboards.getDashboardById dashboardId
+                  dashboardVMM <- maybe (pure Nothing) Dashboards.getDashboardById (idFromText dashboardId)
                   case dashboardVMM of
                     Nothing -> pass
                     Just dashboardVM -> do

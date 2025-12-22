@@ -19,7 +19,8 @@ import Data.Time.Clock (UTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
@@ -118,28 +119,28 @@ alertUpsertPostH pid form = do
   now <- Time.currentTime
   let queryMonitor = convertToQueryMonitor pid now queryMonitorId form
 
-  _ <- dbtToEff $ Monitors.queryMonitorUpsert queryMonitor
+  _ <- Monitors.queryMonitorUpsert queryMonitor
   addSuccessToast "Monitor was updated successfully" Nothing
   addRespHeaders $ AlertNoContent ""
 
 
 alertListGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders Alert)
 alertListGetH pid = do
-  monitors <- dbtToEff $ Monitors.queryMonitorsAll pid
+  monitors <- Monitors.queryMonitorsAll pid
   addRespHeaders $ AlertListGet monitors
 
 
 alertSingleToggleActiveH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders Alert)
 alertSingleToggleActiveH pid monitorId = do
-  _ <- dbtToEff $ Monitors.monitorToggleActiveById monitorId
+  _ <- Monitors.monitorToggleActiveById monitorId
 
-  monitors <- dbtToEff $ Monitors.queryMonitorsAll pid
+  monitors <- Monitors.queryMonitorsAll pid
   addRespHeaders $ AlertListGet monitors
 
 
 alertSingleGetH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders Alert)
 alertSingleGetH pid monitorId = do
-  monitor <- dbtToEff $ Monitors.queryMonitorById monitorId
+  monitor <- Monitors.queryMonitorById monitorId
   addRespHeaders $ AlertSingle pid monitor
 
 
@@ -221,8 +222,8 @@ monitorsPageGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders Alert)
 monitorsPageGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  monitors <- dbtToEff $ Monitors.queryMonitorsAll pid
-  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
+  monitors <- Monitors.queryMonitorsAll pid
+  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess

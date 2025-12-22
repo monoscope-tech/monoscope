@@ -16,10 +16,10 @@ import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Transact (executeMany)
 import Deriving.Aeson qualified as DAE
 import Effectful
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL qualified as PG
 import Models.Apis.Fields.Types
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Projects.Projects qualified as Projects
@@ -68,8 +68,8 @@ data Shape = Shape
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Shape
 
 
-bulkInsertShapes :: DB :> es => V.Vector Shape -> Eff es ()
-bulkInsertShapes shapes = void $ dbtToEff $ executeMany q $ V.toList rowsToInsert
+bulkInsertShapes :: (WithConnection :> es, IOE :> es) => V.Vector Shape -> Eff es ()
+bulkInsertShapes shapes = void $ PG.executeMany q $ V.toList rowsToInsert
   where
     q =
       [sql| 

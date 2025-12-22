@@ -19,16 +19,16 @@ import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTim
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (execute, query, withPool)
 import Database.PostgreSQL.Simple (SomePostgreSqlException)
+import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
-import Database.PostgreSQL.Transact qualified as PTR
 import Effectful (Eff, IOE, (:>))
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log, object)
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.PostgreSQL (WithConnection, withConnection)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
@@ -168,8 +168,8 @@ processBackgroundJob authCtx job bgJob =
              "project_url": #{project_url}
           }|]
         sendPostmarkEmail reciever (Just ("project-invite", templateVars)) Nothing
-    SendDiscordData userId projectId fullName stack foundUsFrom -> whenJustM (dbtToEff $ Projects.projectById projectId) \project -> do
-      users <- dbtToEff $ Projects.usersByProjectId projectId
+    SendDiscordData userId projectId fullName stack foundUsFrom -> whenJustM (Projects.projectById projectId) \project -> do
+      users <- Projects.usersByProjectId projectId
       let stackString = intercalate ", " $ map toString stack
       forM_ users \user -> do
         let userEmail = CI.original user.email
@@ -200,8 +200,8 @@ processBackgroundJob authCtx job bgJob =
           }|]
         sendPostmarkEmail reciever (Just ("project-created", templateVars)) Nothing
     DeletedProject pid -> do
-      users <- dbtToEff $ Projects.usersByProjectId pid
-      projectM <- dbtToEff $ Projects.projectById pid
+      users <- Projects.usersByProjectId pid
+      projectM <- Projects.projectById pid
       forM_ projectM \pr -> do
         forM_ users \user -> do
           let firstName = user.firstName
@@ -219,10 +219,10 @@ processBackgroundJob authCtx job bgJob =
       where
         withAdvisoryLock :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
         withAdvisoryLock lockName action = do
-          lockAcquired <- dbtToEff $ query [sql|SELECT pg_try_advisory_lock(hashtext(?))|] (Only lockName)
+          lockAcquired <- V.fromList <$> PG.query [sql|SELECT pg_try_advisory_lock(hashtext(?))|] (Only lockName)
           case V.headM lockAcquired of
             Just (Only True) ->
-              action `finally` void (dbtToEff $ execute [sql|SELECT pg_advisory_unlock(hashtext(?))|] (Only lockName))
+              action `finally` void (PG.execute [sql|SELECT pg_advisory_unlock(hashtext(?))|] (Only lockName))
             _ -> Log.logInfo "Daily job already running in another pod, skipping" ()
 
         runDailyJobScheduling = do
@@ -231,8 +231,8 @@ processBackgroundJob authCtx job bgJob =
           currentTime <- Time.currentTime
           -- Check if app-wide jobs already scheduled for today (idempotent check)
           existingHourlyJobs <-
-            dbtToEff
-              $ query
+            V.fromList
+              <$> PG.query
                 [sql|SELECT COUNT(*) FROM background_jobs
                  WHERE payload->>'tag' = 'HourlyJob'
                    AND run_at >= date_trunc('day', now())
@@ -264,13 +264,13 @@ processBackgroundJob authCtx job bgJob =
           Relude.when hourlyJobsExist
             $ Log.logInfo "Hourly jobs already scheduled for today, skipping" ()
 
-          projects <- dbtToEff $ query [sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > now() - interval '24 hours'|] ()
+          projects <- V.fromList <$> PG.query [sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > now() - interval '24 hours'|] ()
           Log.logInfo "Scheduling jobs for projects" ("project_count", V.length projects)
           forM_ projects \p -> do
             -- Check if this project's jobs already scheduled for today (per-project idempotent check)
             existingProjectJobs <-
-              dbtToEff
-                $ query
+              V.fromList
+                <$> PG.query
                   [sql|SELECT COUNT(*) FROM background_jobs
                    WHERE payload->>'tag' = 'FiveMinuteSpanProcessing'
                      AND payload->>'projectId' = ?
@@ -310,7 +310,7 @@ processBackgroundJob authCtx job bgJob =
     HourlyJob scheduledTime hour -> runHourlyJob scheduledTime hour
     DailyReports pid -> sendReportForProject pid DailyReport
     WeeklyReports pid -> sendReportForProject pid WeeklyReport
-    ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
+    ReportUsage pid -> whenJustM (Projects.projectById pid) \project -> do
       Log.logInfo "Reporting usage for project" ("project_id", pid.toText)
       Relude.when (project.paymentPlan /= "Free" && project.paymentPlan /= "ONBOARDING") $ whenJust project.firstSubItemId \fSubId -> do
         currentTime <- liftIO getZonedTime
@@ -319,18 +319,18 @@ processBackgroundJob authCtx job bgJob =
         Log.logInfo "Total events to report" ("events_count", totalToReport + totalMetricsCount)
         Relude.when (totalToReport > 0) do
           liftIO $ reportUsageToLemonsqueezy fSubId (totalToReport + totalMetricsCount) authCtx.config.lemonSqueezyApiKey
-          _ <- dbtToEff $ Projects.addDailyUsageReport pid totalToReport
-          _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
+          _ <- Projects.addDailyUsageReport pid totalToReport
+          _ <- Projects.updateUsageLastReported pid currentTime
           pass
       Log.logInfo "Completed usage report for project" ("project_id", pid.toText)
     CleanupDemoProject -> do
       let pid = UUIDId UUID.nil
       -- DELETE PROJECT members
-      _ <- withPool authCtx.pool $ PTR.execute [sql| DELETE FROM projects.project_members WHERE project_id = ? |] (Only pid)
+      _ <- withConnection \conn -> liftIO $ PGS.execute conn [sql| DELETE FROM projects.project_members WHERE project_id = ? |] (Only pid)
       -- SOFT DELETE test collections
-      _ <- withPool authCtx.pool $ PTR.execute [sql|DELETE FROM tests.collections  WHERE project_id = ? and title != 'Default Health check' |] (Only pid)
+      _ <- withConnection \conn -> liftIO $ PGS.execute conn [sql|DELETE FROM tests.collections  WHERE project_id = ? and title != 'Default Health check' |] (Only pid)
       -- DELETE API KEYS
-      _ <- withPool authCtx.pool $ PTR.execute [sql| DELETE FROM projects.project_api_keys WHERE project_id = ? AND title != 'Default API Key' |] (Only pid)
+      _ <- withConnection \conn -> liftIO $ PGS.execute conn [sql| DELETE FROM projects.project_api_keys WHERE project_id = ? AND title != 'Default API Key' |] (Only pid)
       pass
     FiveMinuteSpanProcessing scheduledTime pid -> processFiveMinuteSpans scheduledTime pid
     OneMinuteErrorProcessing scheduledTime pid -> processOneMinuteErrors scheduledTime pid
@@ -346,9 +346,8 @@ runHourlyJob scheduledTime hour = do
   ctx <- ask @Config.AuthContext
   let oneHourAgo = addUTCTime (-3600) scheduledTime
   activeProjects <-
-    dbtToEff
-      $ V.map (\(Only pid) -> pid)
-      <$> query
+    V.map (\(Only pid) -> pid) . V.fromList
+      <$> PG.query
         [sql| SELECT DISTINCT project_id
               FROM otel_logs_and_spans ols
               WHERE ols.timestamp >= ?
@@ -373,7 +372,7 @@ runHourlyJob scheduledTime hour = do
 
 -- | Batch process facets generation for multiple projects using 24-hour window
 -- Processes projects concurrently with individual error handling to prevent batch failures
-generateOtelFacetsBatch :: (DB :> es, Effectful.Reader.Static.Reader Config.AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" DB :> es, Log :> es, Tracing :> es, UUID.UUIDEff :> es) => V.Vector Text -> UTCTime -> Eff es ()
+generateOtelFacetsBatch :: (WithConnection :> es, Effectful.Reader.Static.Reader Config.AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, Tracing :> es, UUID.UUIDEff :> es) => V.Vector Text -> UTCTime -> Eff es ()
 generateOtelFacetsBatch projectIds timestamp = do
   Log.logInfo "Starting batch OTLP facets generation" ("project_count", AE.toJSON $ V.length projectIds)
 
@@ -437,8 +436,8 @@ processFiveMinuteSpans scheduledTime pid = do
     processSpansWithPagination fiveMinutesAgo skip = do
       -- Get APIToolkit-specific HTTP spans (excludes generic telemetry)
       httpSpans <-
-        dbtToEff
-          $ query
+        V.fromList
+          <$> PG.query
             [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
                          hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
                   FROM otel_logs_and_spans
@@ -464,7 +463,7 @@ logsPatternExtraction scheduledTime pid = do
     limitVal = 250
     paginate :: Int -> UTCTime -> ATBackgroundCtx ()
     paginate offset startTime = do
-      otelEvents <- dbtToEff $ query [sql| SELECT kind, id::text, coalesce(body::text,''), coalesce(summary::text,'') FROM otel_logs_and_spans WHERE project_id = ?   AND timestamp >= ?   AND timestamp < ?   AND (summary_pattern IS NULL  OR log_pattern IS NULL) OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
+      otelEvents <- V.fromList <$> PG.query [sql| SELECT kind, id::text, coalesce(body::text,''), coalesce(summary::text,'') FROM otel_logs_and_spans WHERE project_id = ?   AND timestamp >= ?   AND timestamp < ?   AND (summary_pattern IS NULL  OR log_pattern IS NULL) OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
       let count = V.length otelEvents
       -- Only log if there are actually events to process (reduces noise in tests)
       unless (V.null otelEvents) $ do
@@ -485,7 +484,7 @@ processPatterns kind fieldName events pid scheduledTime since = do
   -- Only process and log if there are events to process (reduces noise in tests)
   Relude.when (V.length events > 0) $ do
     let qq = [text| select $fieldName from otel_logs_and_spans where project_id= ? AND timestamp >= now() - interval '1 hour' and $fieldName is not null GROUP BY $fieldName ORDER BY count(*) desc limit 20|]
-    existingPatterns <- dbtToEff $ V.map (\(Only p) -> p) <$> query (Query $ encodeUtf8 qq) pid
+    existingPatterns <- V.map (\(Only p) -> p) . V.fromList <$> PG.query (Query $ encodeUtf8 qq) pid
     let known = fmap ("",) existingPatterns
         combined = known <> events
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
@@ -498,8 +497,7 @@ processPatterns kind fieldName events pid scheduledTime since = do
       let q = [text|UPDATE otel_logs_and_spans SET $fieldName = ?  WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|]
       unless (V.null ids)
         $ void
-        $ dbtToEff
-        $ execute (Query $ encodeUtf8 q) (patternTxt, pid, since, V.filter (/= "") ids)
+        $ PG.execute (Query $ encodeUtf8 q) (patternTxt, pid, since, V.filter (/= "") ids)
 
 
 -- | Process a batch of (id, content) pairs through Drain
@@ -551,11 +549,11 @@ processOneMinuteErrors scheduledTime pid = do
       -- 2. Spans with exception events (OpenTelemetry standard)
       -- 3. Spans with error attributes
       spansWithErrors <-
-        dbtToEff
-          $ query
-            [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource, 
+        V.fromList
+          <$> PG.query
+            [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
                              hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
-                      FROM otel_logs_and_spans 
+                      FROM otel_logs_and_spans
                   WHERE project_id = ? AND timestamp >= ? AND timestamp < ?
                   AND (
                     -- Check for error status
@@ -566,7 +564,7 @@ processOneMinuteErrors scheduledTime pid = do
                       AND EXISTS (
                         SELECT 1 FROM jsonb_array_elements(events) AS event
                         WHERE event->>'event_name' = 'exception'
-                           OR event->>'event_name' ILIKE '%exception%' 
+                           OR event->>'event_name' ILIKE '%exception%'
                            OR event->>'event_name' ILIKE '%error%'
                       )
                     )
@@ -592,12 +590,11 @@ processOneMinuteErrors scheduledTime pid = do
           let mappedErrors = V.map (\x -> AE.object ["type" AE..= x.errorType, "message" AE..= x.message, "stack_trace" AE..= x.stackTrace]) groupedErrors
           Relude.when (not $ V.null groupedErrors) $ do
             _ <-
-              dbtToEff
-                $ execute
-                  [sql| UPDATE otel_logs_and_spans 
-                          SET errors = ? 
-                          WHERE project_id = ? AND context___trace_id = ? AND context___span_id = ? |]
-                  (AE.toJSON mappedErrors, pid, firstError.traceId, firstError.spanId)
+              PG.execute
+                [sql| UPDATE otel_logs_and_spans
+                        SET errors = ?
+                        WHERE project_id = ? AND context___trace_id = ? AND context___span_id = ? |]
+                (AE.toJSON mappedErrors, pid, firstError.traceId, firstError.spanId)
             pass
       Relude.when (V.length spansWithErrors == 30) $ do
         processErrorsPaginated oneMinuteAgo (skip + 30)
@@ -616,7 +613,7 @@ processProjectErrors pid errors = do
   let (_, queries, paramsList) = V.unzip3 processedErrors
 
   -- Bulk insert errors
-  result <- try $ V.zipWithM_ (\q params -> dbtToEff $ execute q params) queries paramsList
+  result <- try $ V.zipWithM_ (\q params -> PG.execute q params) queries paramsList
 
   case result of
     Left (e :: SomePostgreSqlException) ->
@@ -656,7 +653,7 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
 
   -- Get project cache to filter out known entities
   projectCacheVal <- liftIO $ Cache.fetchWithCache ctx.projectCache pid \pid' -> do
-    mpjCache <- withPool ctx.jobsPool $ Projects.projectCacheById pid'
+    mpjCache <- Projects.projectCacheByIdIO ctx.jobsPool pid'
     pure $ fromMaybe projectCacheDefault mpjCache
 
   -- Batch generate all UUIDs upfront to avoid repeated IO
@@ -706,19 +703,18 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
         let dbSpanIds = PGArray $ V.toList $ V.map ((.id) . fst) spansWithHashes
             hashValues = PGArray $ V.toList $ V.map (AE.toJSON . snd) spansWithHashes
         _ <-
-          dbtToEff
-            $ execute
-              [sql| UPDATE otel_logs_and_spans
-                    SET hashes = converted.arr
-                    FROM (SELECT unnest(?::uuid[]) as id, unnest(?::jsonb[]) as hashes_json) updates
-                    CROSS JOIN LATERAL (
-                      SELECT ARRAY(SELECT jsonb_array_elements_text(updates.hashes_json)) as arr
-                    ) converted
-                    WHERE otel_logs_and_spans.id = updates.id
-                      AND otel_logs_and_spans.project_id = ?
-                      AND otel_logs_and_spans.timestamp >= ?
-                      AND otel_logs_and_spans.timestamp < ? |]
-              (dbSpanIds, hashValues, pid, fiveMinutesAgo, scheduledTime)
+          PG.execute
+            [sql| UPDATE otel_logs_and_spans
+                  SET hashes = converted.arr
+                  FROM (SELECT unnest(?::uuid[]) as id, unnest(?::jsonb[]) as hashes_json) updates
+                  CROSS JOIN LATERAL (
+                    SELECT ARRAY(SELECT jsonb_array_elements_text(updates.hashes_json)) as arr
+                  ) converted
+                  WHERE otel_logs_and_spans.id = updates.id
+                    AND otel_logs_and_spans.project_id = ?
+                    AND otel_logs_and_spans.timestamp >= ?
+                    AND otel_logs_and_spans.timestamp < ? |]
+            (dbSpanIds, hashValues, pid, fiveMinutesAgo, scheduledTime)
         Log.logInfo "Completed span processing for project" ("project_id", AE.toJSON pid.toText)
   where
     projectCacheDefault :: Projects.ProjectCache
@@ -749,7 +745,7 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
 
 queryMonitorsTriggered :: V.Vector Monitors.QueryMonitorId -> Config.AuthContext -> ATBackgroundCtx ()
 queryMonitorsTriggered queryMonitorIds authCtx = do
-  monitorsEvaled <- dbtToEff $ Monitors.queryMonitorsById queryMonitorIds
+  monitorsEvaled <- Monitors.queryMonitorsById queryMonitorIds
   forM_ monitorsEvaled \monitorE ->
     if (monitorE.triggerLessThan && monitorE.evalResult >= monitorE.alertThreshold)
       || (not monitorE.triggerLessThan && monitorE.evalResult <= monitorE.alertThreshold)
@@ -767,9 +763,9 @@ queryMonitorsTriggered queryMonitorIds authCtx = do
 handleQueryMonitorThreshold :: Monitors.QueryMonitorEvaled -> Bool -> Text -> ATBackgroundCtx ()
 handleQueryMonitorThreshold monitorE isAlert hostUrl = do
   Log.logTrace "Query Monitors Triggered " monitorE
-  _ <- dbtToEff $ Monitors.updateQMonitorTriggeredState monitorE.id isAlert
-  whenJustM (dbtToEff $ Projects.projectById monitorE.projectId) \p -> do
-    teams <- dbtToEff $ ProjectMembers.getTeamsById monitorE.projectId monitorE.teams
+  _ <- Monitors.updateQMonitorTriggeredState monitorE.id isAlert
+  whenJustM (Projects.projectById monitorE.projectId) \p -> do
+    teams <- ProjectMembers.getTeamsById monitorE.projectId monitorE.teams
     logMissingTeams monitorE teams
     issue <- createAndInsertIssue monitorE hostUrl
     let alert = buildMonitorAlert monitorE issue hostUrl
@@ -801,7 +797,7 @@ createAndInsertIssue monitorE hostUrl = do
         threshold
         (fromIntegral monitorE.evalResult :: Double)
         thresholdType
-  dbtToEff $ Issues.insertIssue issue
+  Issues.insertIssue issue
   pure issue
 
 
@@ -829,7 +825,7 @@ sendNotifications monitorE teams p alert = do
 sendFallbackNotifications :: Monitors.QueryMonitorEvaled -> ATBackgroundCtx ()
 sendFallbackNotifications monitorE = do
   Relude.when monitorE.alertConfig.emailAll do
-    users <- dbtToEff $ Projects.usersByProjectId monitorE.projectId
+    users <- Projects.usersByProjectId monitorE.projectId
     forM_ users \u -> emailQueryMonitorAlert monitorE u.email (Just u)
   forM_ monitorE.alertConfig.emails \email -> emailQueryMonitorAlert monitorE email Nothing
   unless (null monitorE.alertConfig.slackChannels) $ sendSlackMessage monitorE.projectId [fmtTrim| 🤖 *Log Alert triggered for `{monitorE.alertConfig.title}`*|]
@@ -921,14 +917,14 @@ sendReportForProject :: Projects.ProjectId -> ReportType -> ATBackgroundCtx ()
 sendReportForProject pid rType = do
   Log.logInfo "Generating report for project" pid
   ctx <- ask @Config.AuthContext
-  users <- dbtToEff $ Projects.usersByProjectId pid
+  users <- Projects.usersByProjectId pid
   currentTime <- Time.currentTime
   let (prv, typTxt, intv) = case rType of
         WeeklyReport -> (6 * 86400, "weekly", "1d")
         _ -> (86400, "daily", "1h")
 
   let startTime = addUTCTime (negate prv) currentTime
-  projectM <- dbtToEff $ Projects.projectById pid
+  projectM <- Projects.projectById pid
   forM_ projectM \pr -> do
     stats <- Telemetry.getProjectStatsForReport pid startTime currentTime
     statsPrev <- Telemetry.getProjectStatsForReport pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
@@ -959,16 +955,16 @@ sendReportForProject pid rType = do
     chartDataEvents <- liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "| summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx
     chartDataErrors <- liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx
 
-    (anomalies, _) <- dbtToEff $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing
+    (anomalies, _) <- Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing
 
     let anomalies' = (\x -> (x.id, x.title, x.critical, x.severity, x.issueType)) <$> anomalies
 
     endpointStats <- Telemetry.getEndpointStats pid startTime currentTime
     endpointStatsPrev <- Telemetry.getEndpointStats pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
-    endpoint_rp <- dbtToEff $ RequestDumps.getRequestDumpForReports pid typTxt
+    endpoint_rp <- RequestDumps.getRequestDumpForReports pid typTxt
     let endpointPerformance = computeDurationChanges endpointStats endpointStatsPrev
-    total_anomalies <- dbtToEff $ Anomalies.countAnomalies pid typTxt
-    previous_week <- dbtToEff $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid typTxt
+    total_anomalies <- Anomalies.countAnomalies pid typTxt
+    previous_week <- RequestDumps.getRequestDumpsForPreviousReportPeriod pid typTxt
     let rp_json = RP.buildReportJson' totalEvents totalErrors eventsChange errorsChange spanStatsDiff endpointPerformance slowDbQueries chartDataEvents chartDataErrors anomalies'
     timeZone <- liftIO getCurrentTimeZone
     reportId <- UUIDId <$> liftIO UUIDV4.nextRandom
@@ -983,7 +979,7 @@ sendReportForProject pid rType = do
             , endTime = currentTime
             , reportType = typTxt
             }
-    res <- dbtToEff $ Reports.addReport report
+    res <- Reports.addReport report
     Log.logInfo "Completed report generation for" pid
     unless ((typTxt == "daily" && not pr.dailyNotif) || (typTxt == "weekly" && not pr.weeklyNotif)) $ do
       Log.logInfo "Sending report notifications for" pid
@@ -1003,7 +999,7 @@ sendReportForProject pid rType = do
         Projects.NPhone -> do
           sendWhatsAppAlert alert pid pr.title pr.whatsappNumbers
         _ -> do
-          totalRequest <- dbtToEff $ RequestDumps.getLastSevenDaysTotalRequest pid
+          totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
           Relude.when (totalRequest > 0) do
             forM_ users \user -> do
               let firstName = user.firstName
@@ -1092,14 +1088,14 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
     -- Runtime exceptions get individual issues
     -- Each unique error pattern gets its own issue for tracking
     Anomalies.ATRuntimeException -> do
-      project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-      errors <- dbtToEff $ Anomalies.errorsByHashes pid targetHashes
-      users <- dbtToEff $ Projects.usersByProjectId pid
+      project <- fromMaybe (error "Project not found") <$> Projects.projectById pid
+      errors <- Anomalies.errorsByHashes pid targetHashes
+      users <- Projects.usersByProjectId pid
 
       -- Create one issue per error
       forM_ errors \err -> do
         issue <- liftIO $ Issues.createRuntimeExceptionIssue pid err.errorData
-        dbtToEff $ Issues.insertIssue issue
+        Issues.insertIssue issue
 
         -- Queue enhancement job
         _ <- liftIO $ withResource authCtx.jobsPool \conn ->
@@ -1161,7 +1157,7 @@ processAPIChangeAnomalies pid targetHashes = do
   authCtx <- ask @Config.AuthContext
 
   -- Get all anomalies
-  anomaliesVM <- dbtToEff $ Anomalies.getAnomaliesVM pid targetHashes
+  anomaliesVM <- Anomalies.getAnomaliesVM pid targetHashes
 
   -- Group by endpoint hash to consolidate related changes
   let anomaliesByEndpoint = groupAnomaliesByEndpointHash anomaliesVM
@@ -1169,7 +1165,7 @@ processAPIChangeAnomalies pid targetHashes = do
   -- Process each endpoint group
   forM_ anomaliesByEndpoint \(endpointHash, anomalies) -> do
     -- Check for existing open issue to avoid duplicates
-    existingIssueM <- dbtToEff $ Issues.findOpenIssueForEndpoint pid endpointHash
+    existingIssueM <- Issues.findOpenIssueForEndpoint pid endpointHash
 
     case existingIssueM of
       Just existingIssue -> do
@@ -1186,11 +1182,11 @@ processAPIChangeAnomalies pid targetHashes = do
                 , deletedFields = V.concatMap (.shapeDeletedFields) anomalies
                 , modifiedFields = V.concatMap (.shapeUpdatedFieldFormats) anomalies
                 }
-        dbtToEff $ Issues.updateIssueWithNewAnomaly existingIssue.id apiChangeData
+        Issues.updateIssueWithNewAnomaly existingIssue.id apiChangeData
       Nothing -> do
         -- Create new issue
         issue <- liftIO $ Issues.createAPIChangeIssue pid endpointHash anomalies
-        dbtToEff $ Issues.insertIssue issue
+        Issues.insertIssue issue
 
         -- Queue enhancement job
         _ <- liftIO $ withResource authCtx.jobsPool \conn ->
@@ -1198,9 +1194,9 @@ processAPIChangeAnomalies pid targetHashes = do
         pass
 
   -- Send notifications
-  projectM <- dbtToEff $ Projects.projectById pid
+  projectM <- Projects.projectById pid
   whenJust projectM \project -> do
-    users <- dbtToEff $ Projects.usersByProjectId pid
+    users <- Projects.usersByProjectId pid
     let endpointInfo =
           map
             ( \(_, anoms) ->
@@ -1252,10 +1248,10 @@ processIssuesEnhancement scheduledTime = do
 
   -- Find issues created in the last hour that haven't been enhanced yet
   issuesToEnhance <-
-    dbtToEff
-      $ query
+    V.fromList
+      <$> PG.query
         [sql| SELECT id, project_id
-              FROM apis.issues 
+              FROM apis.issues
               WHERE created_at >= ? AND created_at < ?
                 AND llm_enhanced_at IS NULL
                 AND acknowledged_at IS NULL
@@ -1291,7 +1287,7 @@ enhanceIssuesWithLLM pid issueIds = do
 
       -- Process each issue
       forM_ issueIds \issueId -> do
-        issueM <- dbtToEff $ Issues.selectIssueById issueId
+        issueM <- Issues.selectIssueById issueId
         case issueM of
           Nothing -> Log.logAttention "Issue not found for enhancement" issueId
           Just issue -> do
@@ -1302,19 +1298,18 @@ enhanceIssuesWithLLM pid issueIds = do
               Right enhancement -> do
                 -- Update the issue with enhanced data
                 _ <-
-                  dbtToEff
-                    $ Issues.updateIssueEnhancement
-                      enhancement.issueId
-                      enhancement.enhancedTitle
-                      enhancement.recommendedAction
-                      enhancement.migrationComplexity
+                  Issues.updateIssueEnhancement
+                    enhancement.issueId
+                    enhancement.enhancedTitle
+                    enhancement.recommendedAction
+                    enhancement.migrationComplexity
 
                 -- Also classify and update criticality
                 criticalityResult <- Enhancement.classifyIssueCriticality ctx issue
                 case criticalityResult of
                   Left err -> Log.logAttention "Failed to classify issue criticality" (issueId, err)
                   Right (isCritical, breakingCount, incrementalCount) -> do
-                    _ <- dbtToEff $ Enhancement.updateIssueClassification issue.id isCritical breakingCount incrementalCount
+                    _ <- Enhancement.updateIssueClassification issue.id isCritical breakingCount incrementalCount
                     Log.logInfo "Successfully enhanced and classified issue" (issueId, isCritical, breakingCount)
 
                 Log.logInfo "Successfully enhanced issue" issueId

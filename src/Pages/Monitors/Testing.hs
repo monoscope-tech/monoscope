@@ -14,7 +14,8 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Fmt.Internal.Core (fmt)
@@ -73,7 +74,7 @@ teamAlertsGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Tab
 teamAlertsGetH pid teamId = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  alerts <- dbtToEff $ Monitors.getAlertsByTeamHandle pid teamId
+  alerts <- Monitors.getAlertsByTeamHandle pid teamId
   currTime <- Time.currentTime
   let alerts' = V.map (toUnifiedMonitorItem pid currTime) alerts
 
@@ -95,7 +96,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
   let filterType = fromMaybe "Active" filterTM
 
   -- Fetch alerts (query monitors)
-  allAlerts <- dbtToEff $ Monitors.queryMonitorsAll pid
+  allAlerts <- Monitors.queryMonitorsAll pid
   let activeAlerts = V.filter (isNothing . (.deactivatedAt)) allAlerts
       inactiveAlerts = V.filter (isJust . (.deactivatedAt)) allAlerts
 
@@ -108,7 +109,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
 
   let totalInactive = V.length inactiveAlerts
 
-  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
+  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
 
   let currentURL = "/p/" <> pid.toText <> "/monitors?"
   let monitorsTable =
@@ -350,12 +351,12 @@ unifiedMonitorOverviewH pid monitorId = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   currTime <- Time.currentTime
-  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
+  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
 
   -- Try to find as alert first
   alertM <- case UUID.fromText monitorId of
     Just uuid -> do
-      alerts <- dbtToEff $ Monitors.queryMonitorsById (V.singleton $ Monitors.QueryMonitorId uuid)
+      alerts <- Monitors.queryMonitorsById (V.singleton $ Monitors.QueryMonitorId uuid)
       pure $ alerts V.!? 0
     Nothing -> pure Nothing
 

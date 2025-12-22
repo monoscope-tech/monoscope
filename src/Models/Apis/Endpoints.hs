@@ -19,7 +19,6 @@ import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Time (UTCTime, ZonedTime)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (query)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -27,11 +26,11 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (toField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact (DBT, executeMany)
-import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
 import Effectful
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Database.PostgreSQL.Simple qualified as PGS
+import Effectful.PostgreSQL (WithConnection, withConnection)
+import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (UUIDId (..))
@@ -66,8 +65,8 @@ data Endpoint = Endpoint
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Endpoint
 
 
-bulkInsertEndpoints :: DB :> es => V.Vector Endpoint -> Eff es ()
-bulkInsertEndpoints endpoints = void $ dbtToEff $ executeMany q $ V.toList rowsToInsert
+bulkInsertEndpoints :: (WithConnection :> es, IOE :> es) => V.Vector Endpoint -> Eff es ()
+bulkInsertEndpoints endpoints = void $ PG.executeMany q $ V.toList rowsToInsert
   where
     q =
       [sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing)
@@ -102,8 +101,8 @@ data EndpointRequestStats = EndpointRequestStats
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
-endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Text -> PgT.DBT IO (V.Vector EndpointRequestStats)
-endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = query (Query $ encodeUtf8 q) queryParams
+endpointRequestStatsByProject :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Text -> Eff es (V.Vector EndpointRequestStats)
+endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = withConnection \conn -> liftIO $ V.fromList <$> PGS.query conn (Query $ encodeUtf8 q) queryParams
   where
     -- Construct the list of parameters conditionally
     pHostParams = maybe [] (\h -> [toField h]) pHostM
@@ -163,9 +162,8 @@ data HostEvents = HostEvents
   deriving anyclass (FromRow, NFData, ToRow)
 
 
-dependenciesAndEventsCount :: Projects.ProjectId -> Text -> Text -> Int -> Text -> DBT IO (V.Vector HostEvents)
-dependenciesAndEventsCount pid requestType sortT skip timeF = do
-  query (Query $ encodeUtf8 q) (pid, isOutgoing, isOutgoing, pid, skip)
+dependenciesAndEventsCount :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Text -> Text -> Int -> Text -> Eff es (V.Vector HostEvents)
+dependenciesAndEventsCount pid requestType sortT skip timeF = V.fromList <$> PG.query (Query $ encodeUtf8 q) (pid, isOutgoing, isOutgoing, pid, skip)
   where
     orderBy = case sortT of
       "first_seen" -> "first_seen ASC"
@@ -211,9 +209,9 @@ LIMIT 20 OFFSET ?
       |]
 
 
-countEndpointInbox :: Projects.ProjectId -> Text -> Text -> DBT IO Int
+countEndpointInbox :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Text -> Text -> Eff es Int
 countEndpointInbox pid host requestType = do
-  result <- query (Query $ encodeUtf8 q) (pid, host)
+  result <- PG.query (Query $ encodeUtf8 q) (pid, host)
   case result of
     [Only count] -> return count
     v -> return $ length v

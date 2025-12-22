@@ -40,17 +40,13 @@ import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity qualified as DBT
-import Database.PostgreSQL.Entity.DBT (query_)
-import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Entity.Types qualified as DBT
 import Database.PostgreSQL.Simple (Only (Only))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson.Stock qualified as DAE
-import Effectful (Eff, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (Error, throwError)
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
@@ -379,9 +375,9 @@ processVariable pid now timeRange@(sinceStr, fromDStr, toDStr) allParams variabl
 
   case variable._vType of
     Dashboards.VTQuery | Just sqlQuery <- variable.sql -> do
-      result <- try $ dbtToEff $ query_ (Query $ encodeUtf8 sqlQuery)
+      result <- try $ PG.query_ (Query $ encodeUtf8 sqlQuery)
       case result of
-        Right queryResults -> pure variable{Dashboards.options = Just $ V.toList queryResults}
+        Right queryResults -> pure variable{Dashboards.options = Just queryResults}
         Left (_ :: SomeException) -> pure variable -- Return unchanged on error
     _ -> pure variable
 
@@ -406,7 +402,7 @@ processWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widgetBas
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
 processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case widget.wType of
   Widget.WTAnomalies -> do
-    (issues, _) <- dbtToEff $ Issues.selectIssues pid Nothing (Just False) (Just False) 2 0 Nothing Nothing
+    (issues, _) <-  Issues.selectIssues pid Nothing (Just False) (Just False) 2 0 Nothing Nothing
     let issuesVM = V.map (AnomalyList.IssueVM False True now "24h") issues
     pure $ widget
       & #html
@@ -484,7 +480,7 @@ dashboardWidgetPutH pid dashId widgetIdM widget = do
           let widgetUpdated = widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just uid, Widget._centerTitle = Nothing}
           ((dash :: Dashboards.Dashboard) & #widgets %~ (<> [widgetUpdated]), widgetUpdated)
 
-  _ <- dbtToEff $ DBT.updateFieldsBy @Dashboards.DashboardVM [[DBT.field| schema |]] ([DBT.field| id |], dashId) (Only dash')
+  _ <- Dashboards.updateSchema dashId dash'
 
   let successMsg = case widgetIdM of
         Just _ -> "Widget updated successfully"
@@ -519,12 +515,7 @@ dashboardWidgetReorderPatchH pid dashId widgetOrder = do
   let sortedWidgets = reorderWidgets widgetOrder (dash :: Dashboards.Dashboard).widgets
       newDash = (dash :: Dashboards.Dashboard) & #widgets .~ sortedWidgets
 
-  _ <-
-    dbtToEff
-      $ DBT.updateFieldsBy @Dashboards.DashboardVM
-        [[DBT.field| schema |]]
-        ([DBT.field| id |], dashId)
-        (Only newDash)
+  _ <- Dashboards.updateSchema dashId newDash
 
   addRespHeaders NoContent
 
@@ -556,10 +547,10 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
     widgetId w = fromMaybe (maybeToMonoid $ slugify <$> w.title) w.id
 
 
-getDashAndVM :: (DB :> es, Error ServerError :> es, Wreq.HTTP :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
+getDashAndVM :: (WithConnection :> es, IOE :> es, Error ServerError :> es, Wreq.HTTP :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
 getDashAndVM dashId fileM = do
   dashVM <-
-    dbtToEff (DBT.selectById @Dashboards.DashboardVM (Only dashId)) >>= \case
+    Dashboards.getDashboardById dashId >>= \case
       Just v -> pure v
       Nothing -> throwError $ err404{errBody = "Dashboard with ID not found. ID:" <> encodeUtf8 dashId.toText}
 
@@ -590,7 +581,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
   -- Also process widgets in tabs if they exist
   dash''' <- forOf (#tabs . _Just . traverse . #widgets . traverse) dash'' processWidgetWithDashboardId
 
-  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
+  freeTierExceeded <-  checkFreeTierExceeded pid project.paymentPlan
 
   let bwconf =
         (def :: BWConfig)
@@ -1088,7 +1079,7 @@ dashboardsGetH pid sortM embeddedM teamIdM filters = do
   -- Apply tag filtering
   let dashboards = if null filters.tag then dashboards' else V.filter (\d -> any (`elem` filters.tag) (V.toList d.tags)) dashboards'
 
-  teams <- dbtToEff $ ManageMembers.getTeams pid
+  teams <-  ManageMembers.getTeams pid
 
   -- Check if we're requesting in embedded mode (for modals, etc.)
   let embedded = embeddedM == Just "true" || embeddedM == Just "1" || embeddedM == Just "yes"
@@ -1098,7 +1089,7 @@ dashboardsGetH pid sortM embeddedM teamIdM filters = do
     then -- For embedded/team mode, use a minimal BWConfig that will still work with ToHtml instance
       addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded, hideActions = isTeamView, teams, tableActions = Nothing, filters, availableTags}
     else do
-      freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
+      freeTierExceeded <-  checkFreeTierExceeded pid project.paymentPlan
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
@@ -1192,31 +1183,29 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
   let mkPath p d = "/p/" <> pid.toText <> p <> d <> "?" <> toQueryParams qparams
-      q = [sql|select id::text from projects.dashboards where project_id=? and (homepage_since is not null or base_template=?)|]
       shouldBeStarred = baseTemplate `elem` ["_overview.yaml", "endpoint-stats.yaml"]
       newDashboard = do
         did <- UUIDId <$> UUID.genUUID
-        dbtToEff
-          $ DBT.insert @Dashboards.DashboardVM
-            Dashboards.DashboardVM
-              { id = did
-              , projectId = pid
-              , createdAt = now
-              , updatedAt = now
-              , createdBy = sess.user.id
-              , baseTemplate = Just baseTemplate
-              , schema = Nothing
-              , starredSince = if shouldBeStarred then Just now else Nothing
-              , homepageSince = Nothing
-              , tags = V.fromList tags
-              , title = title
-              , teams = V.empty
-              }
+        _ <- Dashboards.insert
+          Dashboards.DashboardVM
+            { id = did
+            , projectId = pid
+            , createdAt = now
+            , updatedAt = now
+            , createdBy = sess.user.id
+            , baseTemplate = Just baseTemplate
+            , schema = Nothing
+            , starredSince = if shouldBeStarred then Just now else Nothing
+            , homepageSince = Nothing
+            , tags = V.fromList tags
+            , title = title
+            , teams = V.empty
+            }
         pure did.toText
   redirectTo <-
     if project.paymentPlan == "ONBOARDING"
       then pure $ mkPath "/onboarding" ""
-      else mkPath "/dashboards/" <$> (maybe newDashboard pure =<< dbtToEff (fmap (\(Only t) -> t) <$> DBT.queryOne q (pid, baseTemplate)))
+      else mkPath "/dashboards/" <$> (maybe newDashboard pure =<< fmap (.toText) <$> Dashboards.getDashboardByBaseTemplate pid baseTemplate)
   pure $ addHeader redirectTo NoContent
 
 
@@ -1241,21 +1230,16 @@ newtype DashboardRenameForm = DashboardRenameForm
 -- It updates the title of the specified dashboard.
 dashboardRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardRenameForm -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardRenamePatchH pid dashId form = do
-  mDashboard <- dbtToEff $ DBT.selectOneByField @Dashboards.DashboardVM [DBT.field| id |] (Only dashId)
+  mDashboard <- Dashboards.getDashboardById dashId
   case mDashboard of
     Nothing -> do
       addErrorToast "Dashboard not found or does not belong to this project" Nothing
       addRespHeaders $ DashboardPostError "Dashboard not found or does not belong to this project"
     Just dashVM -> do
-      _ <- dbtToEff $ DBT.updateFieldsBy @Dashboards.DashboardVM [[DBT.field| title |]] ([DBT.field| id |], dashId) (Only form.title)
+      _ <- Dashboards.updateTitle dashId form.title
 
       whenJust dashVM.schema \_ ->
-        void
-          $ dbtToEff
-          $ DBT.updateFieldsBy @Dashboards.DashboardVM
-            [[DBT.field| schema |]]
-            ([DBT.field| id |], dashId)
-            (Only $ dashVM.schema & _Just . #title ?~ form.title)
+        void $ Dashboards.updateSchema dashId (fromMaybe def dashVM.schema & #title ?~ form.title)
 
       addSuccessToast "Dashboard renamed successfully" Nothing
       addTriggerEvent "closeModal" ""
@@ -1266,7 +1250,7 @@ dashboardRenamePatchH pid dashId form = do
 -- It creates a new dashboard with the same content but with "(Copy)" appended to the title.
 dashboardDuplicatePostH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardDuplicatePostH pid dashId = do
-  mDashboard <- dbtToEff $ DBT.selectOneByField @Dashboards.DashboardVM [DBT.field| id |] (Only dashId)
+  mDashboard <- Dashboards.getDashboardById dashId
   case mDashboard of
     Nothing -> do
       addErrorToast "Dashboard not found or does not belong to this project" Nothing
@@ -1280,8 +1264,7 @@ dashboardDuplicatePostH pid dashId = do
           updatedSchema = dashVM.schema & _Just . #title %~ fmap (<> " (Copy)") . (<|> Just "Untitled")
 
       _ <-
-        dbtToEff
-          $ DBT.insert @Dashboards.DashboardVM
+        Dashboards.insert
           $ dashVM
             { Dashboards.id = newDashId
             , Dashboards.createdAt = now
@@ -1304,12 +1287,12 @@ dashboardStarPostH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx 
 dashboardStarPostH pid dashId = do
   _ <- Sessions.sessionAndProject pid
   now <- Time.currentTime
-  mDashboard <- dbtToEff $ DBT.selectOneByField @Dashboards.DashboardVM [DBT.field| id |] (Only dashId)
+  mDashboard <- Dashboards.getDashboardById dashId
   case mDashboard of
     Nothing -> throwError $ err404{errBody = "Dashboard not found"}
     Just dashVM -> do
       let newStarredSince = if isJust dashVM.starredSince then Nothing else Just now
-      _ <- dbtToEff $ DBT.updateFieldsBy @Dashboards.DashboardVM [[DBT.field| starred_since |]] ([DBT.field| id |], dashId) (Only newStarredSince)
+      _ <- Dashboards.updateStarredSince dashId newStarredSince
       let msg = if isJust newStarredSince then "Dashboard starred" else "Dashboard unstarred"
       addSuccessToast msg Nothing
       addRespHeaders $ starButton_ pid dashId (isJust newStarredSince)
@@ -1320,12 +1303,11 @@ dashboardStarPostH pid dashId = do
 -- After deletion, redirects to the dashboard list page.
 dashboardDeleteH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardDeleteH pid dashId = do
-  mDashboard <- dbtToEff $ DBT.selectOneByField @Dashboards.DashboardVM [DBT.field| id |] (Only dashId)
+  mDashboard <- Dashboards.getDashboardById dashId
   case mDashboard of
     Nothing -> throwError $ err404{errBody = "Dashboard not found or does not belong to this project"}
     Just _ -> do
-      dbtToEff $ DBT.delete @Dashboards.DashboardVM (Only dashId)
-
+      _ <- Dashboards.deleteDashboard dashId
       let redirectURI = "/p/" <> pid.toText <> "/dashboards"
       redirectCS redirectURI
       addSuccessToast "Dashboard was deleted successfully" Nothing
@@ -1347,7 +1329,7 @@ dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
       _ <- Dashboards.deleteDashboardsByIds pid $ V.fromList itemId
       addSuccessToast "Selected dashboards were deleted successfully" Nothing
     "add_teams" -> do
-      teams <- dbtToEff $ ManageMembers.getTeamsById pid (V.fromList teamHandles)
+      teams <-  ManageMembers.getTeamsById pid (V.fromList teamHandles)
       if V.length teams /= length teamHandles
         then addErrorToast "Some teams not found or don't belong to this project" Nothing
         else
@@ -1392,12 +1374,7 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
 
       let updatedDash = (dash :: Dashboards.Dashboard) & #widgets %~ (<> [widgetCopy])
       now <- Time.currentTime
-      _ <-
-        dbtToEff
-          $ DBT.updateFieldsBy @Dashboards.DashboardVM
-            [[DBT.field| schema |], [DBT.field| updated_at |]]
-            ([DBT.field| id |], dashId)
-            (updatedDash, now)
+      _ <- Dashboards.updateSchemaAndUpdatedAt dashId updatedDash now
 
       addWidgetJSON $ decodeUtf8 $ fromLazy $ AE.encode widgetCopy
       addSuccessToast "Widget duplicated successfully" Nothing

@@ -24,7 +24,6 @@ import Data.Text.Display
 import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple hiding (execute)
 import Database.PostgreSQL.Simple.FromField
@@ -34,7 +33,8 @@ import Database.PostgreSQL.Simple.ToField
 import Effectful
 import Effectful.Error.Static (throwError)
 import Effectful.Error.Static qualified as EffError
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (Reader, asks)
 import Effectful.Reader.Static qualified as EffReader
 import Models.Projects.Projects qualified as Projects
@@ -115,22 +115,22 @@ newPersistentSessionId :: UUIDEff :> es => Eff es PersistentSessionId
 newPersistentSessionId = PersistentSessionId <$> UUID.genUUID
 
 
-insertSession :: DB :> es => PersistentSessionId -> UserId -> SessionData -> Eff es ()
-insertSession pid userId sessionData = void <$> dbtToEff $ DBT.execute q (pid, userId, sessionData)
+insertSession :: (WithConnection :> es, IOE :> es) => PersistentSessionId -> UserId -> SessionData -> Eff es ()
+insertSession pid userId sessionData = void $ PG.execute q (pid, userId, sessionData)
   where
     q = [sql| insert into users.persistent_sessions(id, user_id, session_data) VALUES (?, ?, ?) |]
 
 
 -- TODO: getting persistent session happens very frequently, so we should create a view for this, when our user base grows.
-getPersistentSession :: DB :> es => PersistentSessionId -> Eff es (Maybe PersistentSession)
-getPersistentSession sessionId = dbtToEff $ DBT.queryOne q value
+getPersistentSession :: (WithConnection :> es, IOE :> es) => PersistentSessionId -> Eff es (Maybe PersistentSession)
+getPersistentSession sessionId = listToMaybe <$> PG.query q value
   where
     q =
       [sql| select ps.id, ps.created_at, ps.updated_at, ps.user_id, ps.session_data, row_to_json(u) as user, u.is_sudo,
         COALESCE(json_agg(pp.* ORDER BY pp.updated_at DESC) FILTER (WHERE pp.id is not NULL AND pp.deleted_at IS NULL),'[]') as projects
-        from users.persistent_sessions as ps 
+        from users.persistent_sessions as ps
         left join users.users u on (u.id=ps.user_id)
-        left join projects.project_members ppm on (ps.user_id=ppm.user_id) 
+        left join projects.project_members ppm on (ps.user_id=ppm.user_id)
         left join projects.projects pp on (pp.id=ppm.project_id)
         where ps.id=?
         GROUP BY ps.created_at, ps.updated_at, ps.id, ps.user_id, ps.session_data, u.* ,u.is_sudo; |]
@@ -187,7 +187,7 @@ data Session = Session
 
 
 sessionAndProject
-  :: (DB :> es, EffError.Error ServerError :> es, EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Session) :> es)
+  :: (WithConnection :> es, IOE :> es, EffError.Error ServerError :> es, EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Session) :> es)
   => Projects.ProjectId
   -> Eff es (Session, Projects.Project)
 sessionAndProject pid = do
@@ -199,7 +199,7 @@ sessionAndProject pid = do
     -- Fetch fresh from DB for: onboarding projects, not found in cache, nil project, or sudo users
     _
       | pid == UUIDId UUID.nil || sess.user.isSudo ->
-          dbtToEff (Projects.projectById pid) >>= \case
+          Projects.projectById pid >>= \case
             Just p -> pure (sess, p)
             Nothing -> throwError $ err302{errHeaders = [("Location", "/p/?missingProjectPermission")]}
     _ -> throwError $ err302{errHeaders = [("Location", "/p/?missingProjectPermission")]}

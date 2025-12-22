@@ -20,7 +20,8 @@ import Data.Text qualified as T
 import Data.Time (defaultTimeLocale, formatTime)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
 import Data.Vector qualified as V
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
@@ -138,7 +139,7 @@ getAnomaliesEmailTemplate = V.map (\(i, t, c, s, tp) -> AE.object ["id" AE..= i,
 reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders ReportsPost)
 reportsPostH pid t = do
   _ <- Sessions.sessionAndProject pid
-  apiKeys <- dbtToEff $ Projects.updateProjectReportNotif pid t
+  apiKeys <- Projects.updateProjectReportNotif pid t
   addSuccessToast "Report notifications updated Successfully" Nothing
   addRespHeaders $ ReportsPost "updated"
 
@@ -155,8 +156,8 @@ singleReportGetH :: Projects.ProjectId -> Reports.ReportId -> Maybe Text -> ATAu
 singleReportGetH pid rid hxRequestM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  report <- dbtToEff $ Reports.getReportById rid
-  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
+  report <- Reports.getReportById rid
+  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
@@ -177,8 +178,8 @@ reportsGetH pid page hxRequest hxBoosted = do
   let p = toString (fromMaybe "0" page)
   let pg = fromMaybe 0 (readMaybe p :: Maybe Int)
 
-  reports <- dbtToEff $ Reports.reportHistoryByProject pid pg
-  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
+  reports <- Reports.reportHistoryByProject pid pg
+  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
   let nextUrl =
         if V.length reports < 20
           then Nothing

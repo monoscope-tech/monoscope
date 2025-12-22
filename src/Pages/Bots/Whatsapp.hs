@@ -10,7 +10,6 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Effectful
 import Effectful.Concurrent (forkIO)
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -23,6 +22,7 @@ import Pages.Bots.Utils (BotType (..), handleTableResponse)
 import Pkg.AI (callOpenAIAPI, systemPrompt)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DeriveUtils (idFromText)
 import Pkg.Parser (parseQueryToAST)
 import Relude
 import System.Config (AuthContext, EnvConfig)
@@ -42,7 +42,7 @@ whatsappIncomingPostH val = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   let envCfg = authCtx.config
   let fromN = T.dropWhile (/= '+') val.from
-  projectM <- dbtToEff $ Projects.getProjectByPhoneNumber fromN
+  projectM <- Projects.getProjectByPhoneNumber fromN
   let bodyType = parseWhatsappBody val.body
   case projectM of
     Just p -> do
@@ -60,7 +60,7 @@ whatsappIncomingPostH val = do
   where
     handleDashboard :: Text -> Int -> TwilioWhatsAppMessage -> Projects.Project -> EnvConfig -> ATBaseCtx ()
     handleDashboard dashboardId skip v p envCfg = do
-      dashboardVMM <- Dashboards.getDashboardById dashboardId
+      dashboardVMM <- maybe (pure Nothing) Dashboards.getDashboardById (idFromText dashboardId)
       case dashboardVMM of
         Nothing -> pass
         Just dashboardVM -> do
@@ -74,7 +74,7 @@ whatsappIncomingPostH val = do
 
     handleWidget :: Text -> Text -> TwilioWhatsAppMessage -> Projects.Project -> EnvConfig -> ATBaseCtx ()
     handleWidget widget dashboardId reqBody project envCfg = do
-      dashboardVMM <- Dashboards.getDashboardById dashboardId
+      dashboardVMM <- maybe (pure Nothing) Dashboards.getDashboardById (idFromText dashboardId)
       case dashboardVMM of
         Nothing -> pass
         Just dashboardVM -> do

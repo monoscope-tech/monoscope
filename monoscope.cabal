@@ -288,8 +288,7 @@ library
     , parallel
     , parser-combinators
     , pg-entity
-    , pg-transact
-    , pg-transact-effectful
+    , effectful-postgresql
     , postgresql-libpq
     , postgresql-migration
     , postgresql-simple
@@ -496,7 +495,7 @@ test-suite integration-tests
     , monoscope
     , odd-jobs
     , pg-entity
-    , pg-transact
+    , effectful-postgresql
     , postgresql-simple
     , proto-lens
     , relude >=1.2.0.0

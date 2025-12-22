@@ -42,7 +42,7 @@ import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, runLabeled)
 import Effectful.Log (Log)
-import Effectful.PostgreSQL.Transact.Effect (DB, runDB)
+import Effectful.PostgreSQL (WithConnection, runWithConnectionPool)
 import Effectful.Reader.Static (Reader, runReader)
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time (Time, runFrozenTime, runTime)
@@ -82,8 +82,8 @@ type CommonWebEffects =
   '[ Effectful.Reader.Static.Reader AuthContext
    , UUIDEff
    , HTTP
-   , DB
-   , Labeled "timefusion" DB
+   , WithConnection
+   , Labeled "timefusion" WithConnection
    , Time
    , Log
    , Tracing
@@ -123,8 +123,8 @@ effToServantHandler env logger tp app =
     & Effectful.Reader.Static.runReader env
     & runUUID
     & runHTTPWreq
-    & runDB env.pool
-    & runLabeled @"timefusion" (runDB env.timefusionPgPool)
+    & runWithConnectionPool env.pool
+    & runLabeled @"timefusion" (runWithConnectionPool env.timefusionPgPool)
     & runTime
     & Logging.runLog (show env.config.environment) logger env.config.logLevel
     & Tracing.runTracing tp
@@ -141,8 +141,8 @@ effToServantHandlerTest env logger tp app =
     & Effectful.Reader.Static.runReader env
     & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 10])
     & runHTTPGolden "./golden/"
-    & runDB env.pool
-    & runLabeled @"timefusion" (runDB env.timefusionPgPool)
+    & runWithConnectionPool env.pool
+    & runLabeled @"timefusion" (runWithConnectionPool env.timefusionPgPool)
     & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
     & Logging.runLog (show env.config.environment) logger env.config.logLevel
     & Tracing.runTracing tp
@@ -166,8 +166,8 @@ type ATBackgroundCtx =
   Effectful.Eff
     '[ Data.Effectful.Notify.Notify
      , Effectful.Reader.Static.Reader AuthContext
-     , DB
-     , Labeled "timefusion" DB
+     , WithConnection
+     , Labeled "timefusion" WithConnection
      , Time
      , Log
      , Tracing
@@ -185,8 +185,8 @@ runBackground logger appCtx tp process =
   process
     & Data.Effectful.Notify.runNotifyProduction
     & Effectful.Reader.Static.runReader appCtx
-    & runDB appCtx.pool
-    & runLabeled @"timefusion" (runDB appCtx.timefusionPgPool)
+    & runWithConnectionPool appCtx.pool
+    & runLabeled @"timefusion" (runWithConnectionPool appCtx.timefusionPgPool)
     & runTime
     & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
     & Tracing.runTracing tp

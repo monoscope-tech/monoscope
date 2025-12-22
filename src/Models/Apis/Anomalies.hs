@@ -35,9 +35,7 @@ import Data.Text qualified as T
 import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (execute, query)
-import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
+import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -45,8 +43,10 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Time (parseUTCTime)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
+import Effectful (Eff, IOE, type (:>))
+import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL qualified as PG
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields (
   FieldCategoryEnum,
@@ -203,10 +203,10 @@ data AnomalyVM = AnomalyVM
     via (GenericEntity '[Schema "apis", TableName "anomalies_vm", PrimaryKey "id", FieldModifiers '[CamelToSnake]] AnomalyVM)
 
 
-getAnomaliesVM :: Projects.ProjectId -> V.Vector Text -> DBT IO (V.Vector AnomalyVM)
+getAnomaliesVM :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector AnomalyVM)
 getAnomaliesVM pid hash
   | V.null hash = pure V.empty
-  | otherwise = query q (pid, hash)
+  | otherwise = V.fromList <$> PG.query q (pid, hash)
   where
     q =
       [sql|
@@ -255,9 +255,9 @@ where
       |]
 
 
-countAnomalies :: Projects.ProjectId -> Text -> DBT IO Int
+countAnomalies :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Text -> Eff es Int
 countAnomalies pid report_type = do
-  result <- query (Query $ encodeUtf8 q) pid
+  result <- PG.query (Query $ encodeUtf8 q) (Only pid)
   case result of
     [Only countt] -> return countt
     v -> return $ length v
@@ -270,22 +270,22 @@ countAnomalies pid report_type = do
      |]
 
 
-acknowledgeAnomalies :: Users.UserId -> V.Vector Text -> DBT IO (V.Vector Text)
+acknowledgeAnomalies :: (WithConnection :> es, IOE :> es) => Users.UserId -> V.Vector Text -> Eff es (V.Vector Text)
 acknowledgeAnomalies uid aids
   | V.null aids = pure V.empty
   | otherwise = do
       -- Get anomaly hashes from the issues being acknowledged
-      anomalyHashesResult <- query qGetHashes (Only aids) :: DBT IO (V.Vector (Only (V.Vector Text)))
-      let allAnomalyHashes = V.concat $ V.toList $ V.map (\(Only hashes) -> hashes) anomalyHashesResult
+      anomalyHashesResult :: [Only (V.Vector Text)] <- PG.query qGetHashes (Only aids)
+      let allAnomalyHashes = V.concat $ map (\(Only hashes) -> hashes) anomalyHashesResult
       -- Update issues
-      _ <- query qIssues (uid, aids) :: DBT IO (V.Vector (Only Text))
+      (_ :: [Only Text]) <- PG.query qIssues (uid, aids)
       -- Update anomalies - both directly referenced and those tracked by the issues
-      _ <- query q (uid, aids) :: DBT IO (V.Vector (Only Text))
+      (_ :: [Only Text]) <- PG.query q (uid, aids)
       -- Also update anomalies referenced by the issues' anomaly_hashes arrays
       unless (V.null allAnomalyHashes) $ do
-        _ <- execute qAnomaliesByHash (uid, allAnomalyHashes)
+        _ <- PG.execute qAnomaliesByHash (uid, allAnomalyHashes)
         pass
-      V.map (\(Only t) -> t) <$> query q (uid, aids)
+      V.fromList . map (\(Only t) -> t) <$> PG.query q (uid, aids)
   where
     qGetHashes = [sql| SELECT anomaly_hashes FROM apis.issues WHERE id=ANY(?::uuid[]) |]
     qIssues = [sql| update apis.issues set acknowledged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
@@ -293,12 +293,12 @@ acknowledgeAnomalies uid aids
     qAnomaliesByHash = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where target_hash=ANY(?) |]
 
 
-acknowlegeCascade :: Users.UserId -> V.Vector Text -> DBT IO Int64
+acknowlegeCascade :: (WithConnection :> es, IOE :> es) => Users.UserId -> V.Vector Text -> Eff es Int64
 acknowlegeCascade uid targets
   | V.null targets = pure 0
   | otherwise = do
-      _ <- execute qIssues (uid, hashes)
-      execute q (uid, hashes)
+      _ <- PG.execute qIssues (uid, hashes)
+      PG.execute q (uid, hashes)
   where
     hashes = (<> "%") <$> targets
     qIssues = [sql| UPDATE apis.issues SET acknowledged_by = ?, acknowleged_at = NOW() WHERE target_hash=ANY (?); |]
@@ -584,10 +584,10 @@ data ATError = ATError
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
 
 
-errorsByHashes :: Projects.ProjectId -> V.Vector Text -> DBT IO (V.Vector ATError)
+errorsByHashes :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector ATError)
 errorsByHashes pid hashes
   | V.null hashes = pure V.empty
-  | otherwise = query q (pid, hashes)
+  | otherwise = V.fromList <$> PG.query q (pid, hashes)
   where
     q =
       [sql| SELECT id, created_at, updated_at, project_id, hash, error_type, message, error_data

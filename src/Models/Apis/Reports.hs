@@ -11,12 +11,13 @@ import Data.Aeson qualified as AE
 import Data.Default.Instances ()
 import Data.Time (UTCTime, ZonedTime)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity (insert, selectById)
-import Database.PostgreSQL.Entity.DBT (query)
+import Database.PostgreSQL.Entity (_insert, _selectWhere)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple hiding (execute, query)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Transact (DBT)
+import Effectful (Eff, IOE, type (:>))
+import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
@@ -55,16 +56,16 @@ data ReportListItem = ReportListItem
     via (GenericEntity '[Schema "apis", TableName "reports", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ReportListItem)
 
 
-addReport :: Report -> DBT IO ()
-addReport = insert @Report
+addReport :: (WithConnection :> es, IOE :> es) => Report -> Eff es ()
+addReport report = void $ PG.execute (_insert @Report) report
 
 
-getReportById :: ReportId -> DBT IO (Maybe Report)
-getReportById id' = selectById (Only id')
+getReportById :: (WithConnection :> es, IOE :> es) => ReportId -> Eff es (Maybe Report)
+getReportById id' = listToMaybe <$> PG.query (_selectWhere @Report [[field| id |]]) (Only id')
 
 
-reportHistoryByProject :: Projects.ProjectId -> Int -> DBT IO (V.Vector ReportListItem)
-reportHistoryByProject pid page = query q (pid, offset)
+reportHistoryByProject :: (WithConnection :> es, IOE :> es) => Projects.ProjectId -> Int -> Eff es (V.Vector ReportListItem)
+reportHistoryByProject pid page = V.fromList <$> PG.query q (pid, offset)
   where
     offset = page * 20
     q =

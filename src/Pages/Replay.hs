@@ -13,7 +13,8 @@ import Data.Time (UTCTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful (Eff, IOE, (:>))
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified
 import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
@@ -101,9 +102,9 @@ getMinioFile conn bucket object = do
   whenRight V.empty res pure
 
 
-saveReplayMinio :: (DB :> es, IOE :> es) => EnvConfig -> (Text, ReplayPost') -> Eff es (Maybe Text)
+saveReplayMinio :: (WithConnection :> es, IOE :> es) => EnvConfig -> (Text, ReplayPost') -> Eff es (Maybe Text)
 saveReplayMinio envCfg (ackId, replayData) = do
-  project <- dbtToEff $ Projects.projectById replayData.projectId
+  project <- Projects.projectById replayData.projectId
   case project of
     Just p -> do
       let session = UUID.toText replayData.sessionId
@@ -131,7 +132,7 @@ replaySessionGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders A
 replaySessionGetH pid sessionId = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let envCfg = ctx.config
-  project <- dbtToEff $ Projects.projectById pid
+  project <- Projects.projectById pid
   case project of
     Just p -> do
       let (acc, sec, region, bucket, endpoint) = maybe (envCfg.s3AccessKey, envCfg.s3SecretKey, envCfg.s3Region, envCfg.s3Bucket, envCfg.s3Endpoint) (\x -> (x.accessKey, x.secretKey, x.region, x.bucket, x.endpointUrl)) p.s3Bucket
