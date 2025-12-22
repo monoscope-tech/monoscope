@@ -17,7 +17,7 @@ import Data.Default.Instances ()
 import Data.Effectful.UUID (UUIDEff)
 import Data.Effectful.UUID qualified as UUID
 import Data.Time (UTCTime)
-import Database.PostgreSQL.Entity (Entity, insert, selectById, selectOneByField)
+import Database.PostgreSQL.Entity (Entity, _insert, _selectWhere)
 import Database.PostgreSQL.Entity.Types (
   CamelToSnake,
   FieldModifiers,
@@ -31,14 +31,14 @@ import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Time (Time, currentTime)
 import GHC.Records (HasField (getField))
 import Relude
 import Servant (FromHttpApiData)
+import System.DB (DB)
 
 
 instance AE.FromJSON (CI.CI Text) where
@@ -109,26 +109,25 @@ createUser firstName lastName picture email = do
       }
 
 
-insertUser :: DB :> es => User -> Eff es ()
-insertUser user = dbtToEff $ insert @User user
+insertUser :: DB es => User -> Eff es ()
+insertUser user = void $ PG.execute (_insert @User) user
 
 
-userById :: DB :> es => UserId -> Eff es (Maybe User)
-userById userId = dbtToEff $ selectById (Only userId)
+userById :: DB es => UserId -> Eff es (Maybe User)
+userById userId = listToMaybe <$> PG.query (_selectWhere @User [[field| id |]]) (Only userId)
 
 
-userByEmail :: DB :> es => Text -> Eff es (Maybe User)
-userByEmail email = dbtToEff $ selectOneByField @User [field| email |] (Only email)
+userByEmail :: DB es => Text -> Eff es (Maybe User)
+userByEmail email = listToMaybe <$> PG.query (_selectWhere @User [[field| email |]]) (Only email)
 
 
--- TODO: switch to the Eff monad
-userIdByEmail :: Text -> PgT.DBT IO (Maybe UserId)
-userIdByEmail email = PgT.queryOne q (Only email)
+userIdByEmail :: DB es => Text -> Eff es (Maybe UserId)
+userIdByEmail email = listToMaybe <$> PG.query q (Only email)
   where
     q = [sql|select id from users.users where email=?|]
 
 
-createEmptyUser :: Text -> PgT.DBT IO (Maybe UserId)
-createEmptyUser email = PgT.queryOne q (Only email)
+createEmptyUser :: DB es => Text -> Eff es (Maybe UserId)
+createEmptyUser email = listToMaybe <$> PG.query q (Only email)
   where
     q = [sql| insert into users.users (email, active) values (?, TRUE) on conflict do nothing returning id |]

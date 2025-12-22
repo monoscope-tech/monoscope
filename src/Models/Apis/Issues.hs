@@ -52,17 +52,17 @@ import Data.Time (UTCTime, getCurrentTime)
 import Data.Time.LocalTime (ZonedTime, utcToLocalZonedTime)
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (execute, query, queryOne)
-import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
+import Database.PostgreSQL.Entity (_selectWhere)
+import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (..), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
+import Effectful (Eff, type (:>))
+import Effectful.PostgreSQL qualified as PG
 import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -71,6 +71,7 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (UUIDId (..), idToText)
 import Relude hiding (id)
+import System.Types (DB)
 import Utils (formatUTC)
 
 
@@ -276,8 +277,8 @@ data IssueL = IssueL
 -- | Insert a single issue
 -- Note: ON CONFLICT only applies to api_change issues that are open (not acknowledged/archived)
 -- Other issue types will fail on duplicate inserts as intended
-insertIssue :: Issue -> DBT IO ()
-insertIssue issue = void $ execute q issue
+insertIssue :: DB es => Issue -> Eff es ()
+insertIssue issue = void $ PG.execute q issue
   where
     q =
       [sql|
@@ -304,16 +305,16 @@ DO UPDATE SET
 
 
 -- | Select issue by ID
-selectIssueById :: IssueId -> DBT IO (Maybe Issue)
-selectIssueById = selectOneByField [field| id |] . Only
+selectIssueById :: DB es => IssueId -> Eff es (Maybe Issue)
+selectIssueById iid = listToMaybe <$> PG.query (_selectWhere @Issue [[field| id |]]) (Only iid)
 
 
 -- | Select issues with filters, returns issues and total count for pagination
-selectIssues :: Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> DBT IO (V.Vector IssueL, Int)
+selectIssues :: DB es => Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> Eff es ([IssueL], Int)
 selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM = do
-  issues <- query (Query $ encodeUtf8 q) (pid, limit, offset)
-  countResult <- query (Query $ encodeUtf8 countQ) (Only pid)
-  pure (issues, maybe 0 (\(Only c) -> c) $ V.headM countResult)
+  issues <- PG.query (Query $ encodeUtf8 q) (pid, limit, offset)
+  countResult <- coerce @(Maybe (Only Int)) @(Maybe Int) . listToMaybe <$> PG.query (Query $ encodeUtf8 countQ) (Only pid)
+  pure (issues, fromMaybe 0 countResult)
   where
     timefilter = maybe "" (\(st, end) -> " AND created_at >= '" <> formatUTC st <> "' AND created_at <= '" <> formatUTC end <> "'") timeRangeM
     ackF = maybe "" (\ack -> if ack then " AND acknowledged_at IS NOT NULL" else " AND acknowledged_at IS NULL") isAcknowledged
@@ -337,8 +338,8 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
 
 
 -- | Find open issue for endpoint
-findOpenIssueForEndpoint :: Projects.ProjectId -> Text -> DBT IO (Maybe Issue)
-findOpenIssueForEndpoint pid endpointHash = queryOne q (pid, "api_change" :: Text, endpointHash)
+findOpenIssueForEndpoint :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
+findOpenIssueForEndpoint pid endpointHash = listToMaybe <$> PG.query q (pid, "api_change" :: Text, endpointHash)
   where
     q =
       [sql|
@@ -353,8 +354,8 @@ findOpenIssueForEndpoint pid endpointHash = queryOne q (pid, "api_change" :: Tex
 
 
 -- | Update issue with new anomaly data
-updateIssueWithNewAnomaly :: IssueId -> APIChangeData -> DBT IO ()
-updateIssueWithNewAnomaly issueId newData = void $ execute q (Aeson newData, issueId)
+updateIssueWithNewAnomaly :: DB es => IssueId -> APIChangeData -> Eff es ()
+updateIssueWithNewAnomaly issueId newData = void $ PG.execute q (Aeson newData, issueId)
   where
     q =
       [sql|
@@ -368,8 +369,8 @@ updateIssueWithNewAnomaly issueId newData = void $ execute q (Aeson newData, iss
 
 
 -- | Update issue enhancement
-updateIssueEnhancement :: IssueId -> Text -> Text -> Text -> DBT IO ()
-updateIssueEnhancement issueId title action complexity = void $ execute q params
+updateIssueEnhancement :: DB es => IssueId -> Text -> Text -> Text -> Eff es ()
+updateIssueEnhancement issueId title action complexity = void $ PG.execute q params
   where
     q =
       [sql|
@@ -385,8 +386,8 @@ updateIssueEnhancement issueId title action complexity = void $ execute q params
 
 
 -- | Update issue criticality and severity
-updateIssueCriticality :: IssueId -> Bool -> Text -> DBT IO ()
-updateIssueCriticality issueId isCritical severity = void $ execute q params
+updateIssueCriticality :: DB es => IssueId -> Bool -> Text -> Eff es ()
+updateIssueCriticality issueId isCritical severity = void $ PG.execute q params
   where
     q =
       [sql|
@@ -400,8 +401,8 @@ updateIssueCriticality issueId isCritical severity = void $ execute q params
 
 
 -- | Acknowledge issue
-acknowledgeIssue :: IssueId -> Users.UserId -> DBT IO ()
-acknowledgeIssue issueId userId = void $ execute q (userId, issueId)
+acknowledgeIssue :: DB es => IssueId -> Users.UserId -> Eff es ()
+acknowledgeIssue issueId userId = void $ PG.execute q (userId, issueId)
   where
     q =
       [sql|

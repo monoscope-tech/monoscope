@@ -21,7 +21,8 @@ import Data.Time (UTCTime, addUTCTime)
 import Data.Vector qualified as V
 import Effectful.Error.Static (throwError)
 import Effectful.Labeled (labeled)
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Lucid
@@ -436,7 +437,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   alertDM <- case alertM of
     Nothing -> return Nothing
     Just alertIdText -> case UUID.fromText alertIdText of
-      Just alertId -> dbtToEff $ Monitors.queryMonitorById (Monitors.QueryMonitorId alertId)
+      Just alertId -> Monitors.queryMonitorById (Monitors.QueryMonitorId alertId)
       Nothing -> return Nothing
 
   -- Use alert's visualization type if no vizType specified and alert is loaded
@@ -446,7 +447,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   let shouldSkipLoad = isNothing layoutM && isNothing hxRequestM && jsonM /= Just "true" || effectiveVizType == Just "patterns"
       fetchLogs =
         if authCtx.env.enableTimefusionReads
-          then labeled @"timefusion" @DB $ RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+          then labeled @"timefusion" @WithConnection $ RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
           else RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
 
   tableAsVecE <-
@@ -457,19 +458,19 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   -- FIXME: we're silently ignoring parse errors and the likes.
   let tableAsVecM = hush tableAsVecE
 
-  (queryLibRecent, queryLibSaved) <- V.partition (\x -> Projects.QLTHistory == x.queryType) <$> Projects.queryLibHistoryForUser pid sess.persistentSession.userId
+  (queryLibRecent, queryLibSaved) <- bimap V.fromList V.fromList . L.partition (\x -> Projects.QLTHistory == x.queryType) <$> Projects.queryLibHistoryForUser pid sess.persistentSession.userId
 
   -- Get facet summary for the time range specified
   facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
 
-  freeTierExceeded <- dbtToEff $ checkFreeTierExceeded pid project.paymentPlan
+  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
 
   -- Fetch teams
-  teams <- dbtToEff $ ManageMembers.getTeams pid
+  teams <- V.fromList <$> ManageMembers.getTeams pid
 
   patterns <- case effectiveVizType of
     Just "patterns" -> do
-      patternsResult <- RequestDumps.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
+      patternsResult <- V.fromList <$> RequestDumps.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
       return $ Just patternsResult
     _ -> return Nothing
 
@@ -526,10 +527,11 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
               requestVecs
           (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
 
-      childSpans <- case queryM' of
+      childSpansList <- case queryM' of
         Nothing -> RequestDumps.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD) alreadyLoadedChildSpanIds
-        _ -> pure V.empty
+        _ -> pure []
       let
+        childSpans = V.fromList childSpansList
         finalVecs = requestVecs <> childSpans
         lastFM = reqLastCreatedAtM >>= textToUTC >>= Just . toText . iso8601Show . addUTCTime (-0.001)
         nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False

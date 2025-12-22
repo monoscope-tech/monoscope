@@ -27,13 +27,13 @@ import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Effectful
 import Effectful.Concurrent (Concurrent)
 import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
-import Effectful.PostgreSQL.Transact.Effect (DB)
+import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Static qualified as Eff
+import System.Types (DB)
 
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields
@@ -126,8 +126,7 @@ defaultProjectCache =
 
 
 processMessages
-  -- :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
-  :: (Concurrent :> es, DB :> es, Eff.Reader AuthContext :> es, IOE :> es, Labeled "timefusion" DB :> es, Log :> es, UUIDEff :> es)
+  :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es)
   => [(Text, ByteString)]
   -> HashMap Text Text
   -> Eff es [Text]
@@ -153,7 +152,7 @@ processMessages msgs attrs = do
         let projectIds = (\(_, m) -> UUIDId m.projectId) <$> rMsgs
         cachePairs <- forM projectIds $ \pid ->
           Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-            mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
+            mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
             pure $! fromMaybe defaultProjectCache mpjCache
         -- Force evaluation of cache pairs
         pure (zip projectIds cachePairs `using` parList rpar)

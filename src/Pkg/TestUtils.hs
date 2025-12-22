@@ -51,21 +51,19 @@ import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
 import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPWreq)
 import Data.Either.Extra
 import Data.HashMap.Strict qualified as HashMap
-import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool)
+import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, withResource)
 import Data.ProtoLens.Encoding (decodeMessage)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Connection, Only (..), close, connectPostgreSQL, execute, execute_, query)
+import Database.PostgreSQL.Simple (Connection, Only (..), close, connectPostgreSQL, execute, execute_)
+import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory, MigrationInitialization))
 import Database.PostgreSQL.Simple.Migration qualified as Migration
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact qualified as PgT
 import Database.Postgres.Temp (cacheAction, cacheConfig, toConnectionString, withConfig, withDbCache)
 import Database.Postgres.Temp qualified as TmpPostgres
 import Effectful
@@ -74,7 +72,7 @@ import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (runLabeled)
 import Effectful.Log (Log)
-import Effectful.PostgreSQL.Transact.Effect qualified as DB
+import Effectful.PostgreSQL (WithConnection, runWithConnectionPool)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runFrozenTime, runTime)
 import Log qualified
@@ -108,7 +106,7 @@ import System.Envy (DefConfig (..), decodeWithDefaults)
 import System.Logging qualified as Logging
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
-import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, effToServantHandlerTest)
+import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, atAuthToBase, effToServantHandlerTest)
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 
@@ -196,7 +194,7 @@ withExternalDBSetup f = do
 
   -- Connect to the new test database
   let testConnStr = "host=localhost port=5432 user=postgres password=postgres dbname=" <> encodeUtf8 testDbName
-  pool <- newPool (defaultPoolConfig (connectPostgreSQL testConnStr) close 60 50)
+  pool <- newPool (defaultPoolConfig (connectPostgreSQL testConnStr) close 60 10)
 
   -- Run tests and cleanup
   finally (f pool) $ do
@@ -220,7 +218,7 @@ ensureTemplateDatabase masterConnStr templateDbName = do
 
   -- Check if template database exists
   [Only exists] <-
-    query
+    PGS.query
       masterConn
       "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = ?)"
       (Only templateDbName)
@@ -239,7 +237,7 @@ ensureTemplateDatabase masterConnStr templateDbName = do
 
         -- Check if our migration checksum marker exists and matches
         markerExists <-
-          query
+          PGS.query
             templateConn
             "SELECT EXISTS(SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'template_db_info')"
             ()
@@ -248,7 +246,7 @@ ensureTemplateDatabase masterConnStr templateDbName = do
         case markerExists of
           [Only True] -> do
             checksums <-
-              query
+              PGS.query
                 templateConn
                 "SELECT migration_checksum FROM template_db_info LIMIT 1"
                 ()
@@ -354,35 +352,38 @@ testSessionHeader pool = do
     Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@monoscope.tech"
       & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 100])
       & runHTTPGolden "./tests/golden/"
-      & DB.runDB pool
+      & runWithConnectionPool pool
       & runTime
       & runEff
       & liftIO
 
   -- Grant sudo privileges to test user
-  _ <-
-    withPool pool
-      $ DBT.execute
+  _ <- liftIO
+    $ withResource pool \conn ->
+      PGS.execute
+        conn
         [sql|UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000001'|]
         ()
 
   -- Create a test project and add it to the user's session
   let testProjectId = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
-  _ <-
-    withPool pool
-      $ DBT.execute
+  _ <- liftIO
+    $ withResource pool \conn ->
+      PGS.execute
+        conn
         [sql|INSERT INTO projects.projects (id, title, description, payment_plan, active, deleted_at, weekly_notif, daily_notif)
          VALUES (?, 'Test Project', 'Test Description', 'FREE', true, NULL, true, true)
          ON CONFLICT (id) DO UPDATE SET title = 'Test Project', description = 'Test Description', payment_plan = 'FREE', active = true, deleted_at = NULL, weekly_notif = true, daily_notif = true|]
         (Only testProjectId)
 
-  -- Add project member permissions
-  _ <-
-    withPool pool
-      $ DBT.execute
+  -- Add project member permissions (test project and nil UUID project used by many tests)
+  _ <- liftIO
+    $ withResource pool \conn ->
+      PGS.execute
+        conn
         [sql|INSERT INTO projects.project_members (project_id, user_id, permission)
-         VALUES (?, '00000000-0000-0000-0000-000000000001', 'admin')
-         ON CONFLICT (project_id, user_id) DO UPDATE SET permission = 'admin'|]
+         VALUES (?, '00000000-0000-0000-0000-000000000001', 'admin'), ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000001', 'admin')
+         ON CONFLICT (project_id, user_id) DO UPDATE SET permission = 'admin', active = TRUE|]
         (Only testProjectId)
 
   tp <- liftIO getGlobalTracerProvider
@@ -421,8 +422,8 @@ runTestBackgroundWithLogger logger appCtx process = do
     process
       & Data.Effectful.Notify.runNotifyTest
       & Effectful.Reader.Static.runReader appCtx
-      & DB.runDB appCtx.pool
-      & runLabeled @"timefusion" (DB.runDB appCtx.timefusionPgPool)
+      & runWithConnectionPool appCtx.pool
+      & runLabeled @"timefusion" (runWithConnectionPool appCtx.timefusionPgPool)
       & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
       & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
       & Tracing.runTracing tp
@@ -453,12 +454,12 @@ runTestBackgroundWithLogger logger appCtx process = do
 
 
 -- | Run an effect action in test context (for non-servant handlers like Auth.sessionByID)
-runTestEffect :: Pool Connection -> Log.Logger -> TracerProvider -> (forall es. (DB.DB :> es, Error ServantS.ServerError :> es, HTTP :> es, IOE :> es, Log :> es, Time :> es, Tracing :> es, UUIDEff :> es) => Eff es a) -> IO (Either ServantS.ServerError a)
+runTestEffect :: Pool Connection -> Log.Logger -> TracerProvider -> (forall es. (DB es, Error ServantS.ServerError :> es, HTTP :> es, Log :> es, Time :> es, Tracing :> es, UUIDEff :> es) => Eff es a) -> IO (Either ServantS.ServerError a)
 runTestEffect pool logger tp action = do
   logLevel <- Logging.getLogLevelFromEnv
   action
     & runErrorNoCallStack @ServantS.ServerError
-    & DB.runDB pool
+    & runWithConnectionPool pool
     & runTime
     & Logging.runLog "test" logger logLevel
     & Tracing.runTracing tp
@@ -660,7 +661,7 @@ convert val = case AE.fromJSON val of
 -- This is useful for assertions and debugging in tests
 getPendingBackgroundJobs :: AuthContext -> IO (V.Vector (Job, BackgroundJobs.BgJobs))
 getPendingBackgroundJobs authCtx = do
-  jobs <- withPool authCtx.pool getBackgroundJobs
+  jobs <- withResource authCtx.pool getBackgroundJobs
   V.forM jobs \job -> do
     bgJob <- BackgroundJobs.throwParsePayload job
     pure (job, bgJob)
@@ -683,7 +684,7 @@ logBackgroundJobsInfo logger jobs = do
 
 runAllBackgroundJobs :: AuthContext -> IO (V.Vector Job)
 runAllBackgroundJobs authCtx = do
-  jobs <- withPool authCtx.pool getBackgroundJobs
+  jobs <- withResource authCtx.pool getBackgroundJobs
   LogBulk.withBulkStdOutLogger \logger ->
     -- Run jobs concurrently using Ki structured concurrency
     runEff $ runConcurrent $ Ki.runStructuredConcurrency $ Ki.scoped \scope -> do
@@ -696,7 +697,7 @@ runAllBackgroundJobs authCtx = do
 -- Useful for running only specific job types in tests
 runBackgroundJobsWhere :: AuthContext -> (BackgroundJobs.BgJobs -> Bool) -> IO (V.Vector Job)
 runBackgroundJobsWhere authCtx predicate = do
-  jobs <- withPool authCtx.pool getBackgroundJobs
+  jobs <- withResource authCtx.pool getBackgroundJobs
   jobsWithParsed <- V.forM jobs \job -> do
     bgJob <- BackgroundJobs.throwParsePayload job
     pure (job, bgJob)
@@ -716,20 +717,20 @@ testJobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJ
   void $ runTestBackgroundWithLogger logger authCtx (BackgroundJobs.processBackgroundJob authCtx job bgJob)
 
 
-getBackgroundJobs :: PgT.DBT IO (V.Vector Job)
-getBackgroundJobs = DBT.query q ()
+getBackgroundJobs :: Connection -> IO (V.Vector Job)
+getBackgroundJobs conn = V.fromList <$> PGS.query conn q ()
   where
     q = [sql|SELECT id, created_at, updated_at, run_at, status, payload,last_error, attempts, locked_at, locked_by FROM background_jobs|]
 
 
-setBjRunAtInThePast :: PgT.DBT IO ()
-setBjRunAtInThePast = void $ PgT.execute q ()
+setBjRunAtInThePast :: Connection -> IO ()
+setBjRunAtInThePast conn = void $ PGS.execute conn q ()
   where
     q = [sql|UPDATE background_jobs SET run_at = CURRENT_DATE - INTERVAL '1 day' WHERE status = 'pending'|]
 
 
-refreshMaterializedView :: Text -> PgT.DBT IO Int64
-refreshMaterializedView name = PgT.execute (Query $ encodeUtf8 q) ()
+refreshMaterializedView :: Text -> Connection -> IO Int64
+refreshMaterializedView name conn = PGS.execute conn (Query $ encodeUtf8 q) ()
   where
     q = [text|REFRESH MATERIALIZED VIEW $name|]
 
@@ -753,15 +754,17 @@ processMessagesAndBackgroundJobs tr@TestResources{..} msgs = do
 createRequestDumps :: TestResources -> Projects.ProjectId -> Int -> IO ()
 createRequestDumps TestResources{..} projectId numRequestsPerEndpoint = do
   endpoints <-
-    withPool trPool
-      $ DBT.query
-        [sql|
+    withResource trPool \conn ->
+      V.fromList
+        <$> PGS.query
+          conn
+          [sql|
     SELECT url_path, url_params, method, host, hash
     FROM apis.endpoints
     WHERE project_id = ?
   |]
-        (Only projectId)
-      :: IO (V.Vector (Text, AE.Value, Text, Text, Text))
+          (Only projectId)
+        :: IO (V.Vector (Text, AE.Value, Text, Text, Text))
 
   currentTime <- getCurrentTime
   forM_ endpoints $ \(path, _, method, host, hash) -> do
@@ -818,11 +821,12 @@ createRequestDumps TestResources{..} projectId numRequestsPerEndpoint = do
               , errors = Nothing
               }
       let summary = SummaryGenerator.generateSummary otelRecord
-      withPool trPool
-        $ DBT.execute
+      void $ withResource trPool \conn ->
+        PGS.execute
+          conn
           [sql|
-        INSERT INTO otel_logs_and_spans 
-        (id, project_id, timestamp, start_time, name, kind, status_code, 
+        INSERT INTO otel_logs_and_spans
+        (id, project_id, timestamp, start_time, name, kind, status_code,
          duration, hashes, attributes, context, resource, resource___service___name, date, summary)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       |]

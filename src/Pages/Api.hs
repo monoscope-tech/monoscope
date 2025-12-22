@@ -8,7 +8,8 @@ import Data.Text qualified as T
 import Data.UUID as UUID (toText)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxPatch_, hxPost_, hxTarget_)
@@ -43,9 +44,9 @@ apiPostH pid apiKeyForm = do
   let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 authCtx.config.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
   let encryptedKeyB64 = B64.extractBase64 $ B64.encodeBase64 encryptedKey
   pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) encryptedKeyB64
-  apiKeys <- dbtToEff do
+  apiKeys <- do
     ProjectApiKeys.insertProjectApiKey pApiKey
-    ProjectApiKeys.projectApiKeysByProjectId pid
+    V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
   addSuccessToast "Created API Key Successfully" Nothing
   addTriggerEvent "closeModal" ""
   case from apiKeyForm of
@@ -56,8 +57,8 @@ apiPostH pid apiKeyForm = do
 apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
 apiDeleteH pid keyid = do
   (sess, project) <- Sessions.sessionAndProject pid
-  res <- dbtToEff $ ProjectApiKeys.revokeApiKey keyid
-  apikeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
+  res <- ProjectApiKeys.revokeApiKey keyid
+  apikeys <- V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
   if res > 0
     then addSuccessToast "Revoked API Key Successfully" Nothing
     else addErrorToast "Something went wrong" Nothing
@@ -67,8 +68,8 @@ apiDeleteH pid keyid = do
 apiActivateH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
 apiActivateH pid keyid = do
   (sess, project) <- Sessions.sessionAndProject pid
-  res <- dbtToEff $ ProjectApiKeys.activateApiKey keyid
-  apikeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
+  res <- ProjectApiKeys.activateApiKey keyid
+  apikeys <- V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
   if res > 0
     then addSuccessToast "Activated API Key Successfully" Nothing
     else addErrorToast "Something went wrong" Nothing
@@ -91,7 +92,7 @@ apiGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ApiGet)
 apiGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  apiKeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
+  apiKeys <- V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess

@@ -145,10 +145,10 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
   if tab == "datapoints"
     then do
       dataPoints <- Telemetry.getDataPointsData pid (from, to)
-      addRespHeaders $ MetricsOVDataPointMain $ PageCtx bwconf (pid, dataPoints)
+      addRespHeaders $ MetricsOVDataPointMain $ PageCtx bwconf (pid, V.fromList dataPoints)
     else do
       let cursor = fromMaybe 0 cursorM
-      metricList <- Telemetry.getMetricChartListData pid sourceM prefixM (from, to) cursor
+      metricList <- V.fromList <$> Telemetry.getMetricChartListData pid sourceM prefixM (from, to) cursor
       let sourceQ = maybe "" ("&source=" <>) sourceM
           fromQ = maybe "" ("&from=" <>) fromM
           toQ = maybe "" ("&from=" <>) toM
@@ -159,7 +159,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
             if V.length metricList < 20
               then Nothing
               else Just $ "/p/" <> pid.toText <> "/metrics?tab=charts" <> sourceQ <> fromQ <> toQ <> sinceQ <> prfixQ <> cursorQ
-      serviceNames <- Telemetry.getMetricServiceNames pid
+      serviceNames <- V.fromList <$> Telemetry.getMetricServiceNames pid
       if cursor == 0
         then do
           addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf (pid, metricList, serviceNames, fromMaybe "all" sourceM, fromMaybe "all" prefixM, nextFetchUrl)
@@ -192,7 +192,7 @@ metricBreakdownGetH pid metricName labelM = do
           addRespHeaders $ metricBreakdown pid Nothing metric.metricLabels
         Nothing -> addRespHeaders $ metricBreakdown pid Nothing []
     else do
-      lableValues <- Telemetry.getMetricLabelValues pid metricName label
+      lableValues <- V.fromList <$> Telemetry.getMetricLabelValues pid metricName label
       addRespHeaders $ metricBreakdown pid labelM lableValues
 
 
@@ -201,8 +201,9 @@ traceH :: Projects.ProjectId -> Text -> Maybe UTCTime -> Maybe Text -> Maybe Tex
 traceH pid trId timestamp spanIdM nav = do
   if isJust nav
     then do
-      spanRecords' <- Telemetry.getSpanRecordsByTraceId pid trId timestamp
-      let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
+      spanRecordsList <- Telemetry.getSpanRecordsByTraceId pid trId timestamp
+      let spanRecords' = V.fromList spanRecordsList
+          spanRecords = V.mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord spanRecords'
       let sid = fromMaybe "" spanIdM
           targetSpan = fromMaybe (V.head spanRecords') (V.find (\x -> maybe False (\s -> s.span_id == Just sid) x.context) spanRecords')
           targetIndex = fromMaybe 0 (V.findIndex (\x -> maybe False (\s -> s.span_id == Just sid) x.context) spanRecords')
@@ -220,8 +221,8 @@ traceH pid trId timestamp spanIdM nav = do
       traceItemM <- Telemetry.getTraceDetails pid trId timestamp
       case traceItemM of
         Just traceItem -> do
-          spanRecords' <- Telemetry.getSpanRecordsByTraceId pid trId timestamp
-          let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
+          spanRecordsList <- Telemetry.getSpanRecordsByTraceId pid trId timestamp
+          let spanRecords = V.fromList $ mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord spanRecordsList
               pageProps = PageProps pid traceItem spanRecords
           addRespHeaders $ TraceDetails pageProps
         Nothing -> addRespHeaders $ TraceDetailsNotFound "Trace not found"

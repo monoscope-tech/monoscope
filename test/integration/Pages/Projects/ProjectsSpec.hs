@@ -46,10 +46,11 @@ spec = aroundAll withTestResources do
       (_, pg) <-
         testServant tr ListProjects.listProjectsGetH
       let (projects, _demoProject, _showDemoProject) = pg.unwrap.content
-      length projects `shouldBe` 1
-      -- Should have test project created in testSessionHeader (demo project is returned separately)
+      -- User is member of both demo project and test project (added in testSessionHeader)
+      length projects `shouldBe` 2
       let projectIds = map (.id.toText) (V.toList projects)
       projectIds `shouldContain` ["12345678-9abc-def0-1234-56789abcdef0"] -- test project from testSessionHeader
+      projectIds `shouldContain` ["00000000-0000-0000-0000-000000000000"] -- demo project
     -- TODO: add more checks for the info we we display on list page
 
     it "Should update project with new details and verify in list" \tr -> do

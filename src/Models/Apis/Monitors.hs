@@ -18,13 +18,10 @@ import Data.Default (Default)
 import Data.Time.Clock (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity (Entity, selectById, selectManyByField)
-import Database.PostgreSQL.Entity.DBT (
-  execute,
-  query,
- )
+import Database.PostgreSQL.Entity (_selectWhere)
 import Database.PostgreSQL.Entity.Types (
   CamelToSnake,
+  Entity,
   FieldModifiers,
   GenericEntity,
   PrimaryKey,
@@ -37,12 +34,14 @@ import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (..))
-import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
+import Effectful (Eff, type (:>))
+import Effectful.PostgreSQL qualified as PG
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Relude
 import Servant (FromHttpApiData)
+import System.Types (DB)
 
 
 newtype QueryMonitorId = QueryMonitorId {unQueryMonitorId :: UUID.UUID}
@@ -123,9 +122,9 @@ data QueryMonitorEvaled = QueryMonitorEvaled
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] QueryMonitorEvaled
 
 
-queryMonitorUpsert :: QueryMonitor -> DBT IO Int64
+queryMonitorUpsert :: DB es => QueryMonitor -> Eff es Int64
 queryMonitorUpsert qm =
-  execute
+  PG.execute
     q
     ( qm.id
     , qm.projectId
@@ -166,14 +165,14 @@ queryMonitorUpsert qm =
     |]
 
 
-queryMonitorById :: QueryMonitorId -> DBT IO (Maybe QueryMonitor)
-queryMonitorById id' = selectById @QueryMonitor (Only id')
+queryMonitorById :: DB es => QueryMonitorId -> Eff es (Maybe QueryMonitor)
+queryMonitorById id' = listToMaybe <$> PG.query (_selectWhere @QueryMonitor [[DAT.field| id |]]) (Only id')
 
 
-queryMonitorsById :: V.Vector QueryMonitorId -> DBT IO (V.Vector QueryMonitorEvaled)
+queryMonitorsById :: DB es => V.Vector QueryMonitorId -> Eff es [QueryMonitorEvaled]
 queryMonitorsById ids
-  | V.null ids = pure V.empty
-  | otherwise = query q (Only ids)
+  | V.null ids = pure []
+  | otherwise = PG.query q (Only ids)
   where
     q =
       [sql|
@@ -184,8 +183,8 @@ queryMonitorsById ids
     |]
 
 
-updateQMonitorTriggeredState :: QueryMonitorId -> Bool -> DBT IO Int64
-updateQMonitorTriggeredState qmId isAlert = execute q (Only qmId)
+updateQMonitorTriggeredState :: DB es => QueryMonitorId -> Bool -> Eff es Int64
+updateQMonitorTriggeredState qmId isAlert = PG.execute q (Only qmId)
   where
     q =
       if isAlert
@@ -193,8 +192,8 @@ updateQMonitorTriggeredState qmId isAlert = execute q (Only qmId)
         else [sql|UPDATE monitors.query_monitors SET warning_last_triggered=NOW() where id=?|]
 
 
-monitorToggleActiveById :: QueryMonitorId -> DBT IO Int64
-monitorToggleActiveById id' = execute q (Only id')
+monitorToggleActiveById :: DB es => QueryMonitorId -> Eff es Int64
+monitorToggleActiveById id' = PG.execute q (Only id')
   where
     q =
       [sql| 
@@ -205,12 +204,12 @@ monitorToggleActiveById id' = execute q (Only id')
         where id=?|]
 
 
-queryMonitorsAll :: Projects.ProjectId -> DBT IO (V.Vector QueryMonitor)
-queryMonitorsAll pid = selectManyByField @QueryMonitor [DAT.field| project_id |] pid
+queryMonitorsAll :: DB es => Projects.ProjectId -> Eff es [QueryMonitor]
+queryMonitorsAll pid = PG.query (_selectWhere @QueryMonitor [[DAT.field| project_id |]]) (Only pid)
 
 
-getAlertsByTeamHandle :: Projects.ProjectId -> UUID.UUID -> DBT IO (V.Vector QueryMonitor)
-getAlertsByTeamHandle pid teamId = query q (pid, teamId)
+getAlertsByTeamHandle :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [QueryMonitor]
+getAlertsByTeamHandle pid teamId = PG.query q (pid, teamId)
   where
     q =
       [sql|

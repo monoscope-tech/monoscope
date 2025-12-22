@@ -4,7 +4,7 @@ import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HashMap
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
-import Database.PostgreSQL.Entity.DBT (withPool)
+import Data.Vector qualified as V
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
@@ -59,7 +59,7 @@ spec = aroundAll withTestResources do
       logBackgroundJobsInfo tr.trLogger pendingJobs
 
       _ <- runAllBackgroundJobs tr.trATCtx
-      endpoints <- withPool tr.trPool $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0 "Incoming"
-      length endpoints `shouldBe` 3
+      endpoints <- runTestBg tr $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0 "Incoming"
+      V.length endpoints `shouldBe` 3
       forM_ endpoints \enp ->
         ["/", "/api/v1/user/login", "/service/extension/backup/mboximport"] `shouldContain` [enp.urlPath]
