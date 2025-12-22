@@ -26,8 +26,9 @@ testPid :: Projects.ProjectId
 testPid = Unsafe.fromJust $ UUIDId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"
 
 
+-- The test user created by testSessionHeader has UUID 1 (00000000-0000-0000-0000-000000000001)
 userID :: Users.UserId
-userID = Users.UserId testPid.unUUIDId
+userID = Users.UserId $ Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-0000-000000000001"
 
 
 spec :: Spec
@@ -74,11 +75,12 @@ spec = aroundAll withTestResources do
         testServant tr $ ManageMembers.manageMembersGetH testPid
 
       -- Check if the response contains the expected members
+      -- Note: 2 members expected - the test user from setup + example@gmail.com
       case pg of
         ManageMembers.ManageMembersGet (PageCtx _ (_, projMembers)) -> do
           let emails = projMembers & V.toList & map (.email)
           "example@gmail.com" `shouldSatisfy` (`elem` emails)
-          length projMembers `shouldBe` 1
+          length projMembers `shouldBe` 2
         _ -> fail "Expected ManageMembersGet response"
 
     it "Delete member" \tr -> do
@@ -188,7 +190,7 @@ spec = aroundAll withTestResources do
               let updatedTeam = Unsafe.fromJust updatedTeamM
               length updatedTeam.members `shouldBe` 1
               let fm = V.head updatedTeam.members
-              fm.memberEmail `shouldBe` "hello@monoscope.tech"
+              fm.memberEmail `shouldBe` "test@monoscope.tech"
             _ -> fail "Expected ManageTeamsGet' response"
         _ -> fail "Expected ManageTeamsGet' response"
 

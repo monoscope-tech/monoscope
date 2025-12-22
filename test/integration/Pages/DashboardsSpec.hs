@@ -98,9 +98,11 @@ spec = aroundAll withTestResources do
 
     it "Should handle bulk add teams to dashboards" \tr -> do
       let team = ManageMembers.TeamForm{teamName = "Hello", teamDescription = "", teamHandle = "hello", notifEmails = V.empty, teamMembers = V.empty, discordChannels = V.empty, slackChannels = V.empty, phoneNumbers = V.empty, teamId = Nothing}
-      _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team Nothing
-      _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team{teamHandle = "hi"} Nothing
-      _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team{teamHandle = "broo"} Nothing
+      -- Create all teams in a single testServant call to avoid UUID sequence reset
+      _ <- testServant tr do
+        _ <- ManageMembers.manageTeamPostH testPid team Nothing
+        _ <- ManageMembers.manageTeamPostH testPid team{teamHandle = "hi"} Nothing
+        ManageMembers.manageTeamPostH testPid team{teamHandle = "broo"} Nothing
       (_, tm) <- testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
       case tm of
         ManageMembers.ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams') -> do
@@ -165,6 +167,9 @@ spec = aroundAll withTestResources do
                 Dashboards.DashboardsGet (PageCtx _ d'') -> do
                   let unstarredDash = Unsafe.fromJust $ V.find (\x -> x.id == dash.id) d''.dashboards
                   unstarredDash.starredSince `shouldSatisfy` isNothing
+                  -- Cleanup: delete the dashboard to avoid UUID conflicts with subsequent tests
+                  _ <- testServant tr $ Dashboards.dashboardDeleteH testPid dash.id
+                  pass
                 _ -> fail "Expected DashboardsGet response"
             _ -> fail "Expected DashboardsGet response"
         _ -> fail "Expected DashboardsGet response"
@@ -173,9 +178,11 @@ spec = aroundAll withTestResources do
       let dashboard1 = dashboard{title = "Dashboard A"} :: Dashboards.DashboardForm
       let dashboard2 = dashboard{title = "Dashboard B"} :: Dashboards.DashboardForm
       let dashboard3 = dashboard{title = "Dashboard C"} :: Dashboards.DashboardForm
-      _ <- testServant tr $ Dashboards.dashboardsPostH testPid dashboard1
-      _ <- testServant tr $ Dashboards.dashboardsPostH testPid dashboard2
-      _ <- testServant tr $ Dashboards.dashboardsPostH testPid dashboard3
+      -- Create all dashboards in a single testServant call to avoid UUID sequence reset
+      _ <- testServant tr do
+        _ <- Dashboards.dashboardsPostH testPid dashboard1
+        _ <- Dashboards.dashboardsPostH testPid dashboard2
+        Dashboards.dashboardsPostH testPid dashboard3
 
       (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing (DashboardFilters [])
       case pg of
