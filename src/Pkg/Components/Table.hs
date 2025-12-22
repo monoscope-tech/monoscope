@@ -293,6 +293,7 @@ renderTableRows tr
   | V.null tr.rows = whenJust tr.emptyState renderSimpleZeroState
   | tr.renderAsTable = do
       let getRowAttrs row = maybe [] ($ row) tr.rowAttrs
+
       V.forM_ tr.rows \row -> tr_ (getRowAttrs row) do
         whenJust tr.rowId \getId -> td_ [class_ "w-8 align-top pt-4"] $ input_ [term "aria-label" "Select Item", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "itemId", value_ $ getId row]
         forM_ tr.columns \c -> td_ c.attrs $ c.render row
@@ -402,9 +403,6 @@ renderRows tbl =
                     whenJust tbl.features.tableHeaderActions renderHeaderTableActions
       tbody_ [id_ $ tbl.config.elemID <> "_tbody"] do
         V.mapM_ (renderTableRow tbl) tbl.rows
-        -- Pagination inside tbody for table mode
-        whenJust tbl.features.pagination \(url, trigger) ->
-          tr_ [] $ td_ [colspan_ $ show $ columnCount tbl.columns tbl.features.rowId] $ renderPaginationLink (Just "closest tr") url trigger
     else V.mapM_ (renderListRow tbl) tbl.rows
 
 
@@ -431,7 +429,7 @@ renderTableRow tbl row =
               , name_ "itemId"
               , value_ $ getId row
               ]
-            <> [checked_ | isSelected]
+              <> [checked_ | isSelected]
 
     forM_ tbl.columns \c -> td_ (c.attrs <> colAttrs c) $ c.render row
   where
@@ -587,7 +585,7 @@ renderFilterOption actions menu opt = label_ [class_ "flex items-center gap-3 px
       , hxSwap_ "outerHTML"
       , hxTrigger_ "change"
       ]
-    <> [checked_ | opt.isActive]
+      <> [checked_ | opt.isActive]
   span_ [class_ "text-sm"] $ toHtml opt.label
 
 
