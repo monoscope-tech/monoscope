@@ -4,13 +4,13 @@ jobs:
   format:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache fourmolu
         id: cache-fourmolu
-        uses: actions/cache@v3
+        uses: actions/cache@v5
         with:
           path: ~/.local/bin/fourmolu
           key: fourmolu-0.19.0.0

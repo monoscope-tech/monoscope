@@ -33,7 +33,7 @@ jobs:
       matrix:
         test: [doctests, unit-tests, integration-tests]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Free up disk space
       - name: Free Disk Space
@@ -67,7 +67,7 @@ jobs:
 
       # Cache Haskell dependencies
       - name: Cache Haskell dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cabal/store
@@ -79,7 +79,7 @@ jobs:
             ${{ runner.os }}-
 
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v6
         with:
           node-version: '18'
 
@@ -128,7 +128,7 @@ jobs:
       contents: 'read'
       id-token: 'write'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -161,7 +161,7 @@ jobs:
             BUILDKIT_INLINE_CACHE=1
 
       - name: Deploy Image to CapRrover
-        uses: caprover/deploy-from-github@v1.1.2
+        uses: caprover/deploy-from-github@v1.2.0
         with:
           server: '${{ secrets.CAPTAINROVER_SERVER }}'
           app: '${{ secrets.CAPTAINROVER_APP_NAME }}'
