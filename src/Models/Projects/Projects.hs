@@ -283,8 +283,8 @@ getProjectByPhoneNumber number = listToMaybe <$> PG.query q (Only number)
     q = [sql| select p.* from projects.projects p where ?=Any(p.whatsapp_numbers) |]
 
 
-selectProjectsForUser :: (IOE :> es, WithConnection :> es) => Users.UserId -> Eff es (V.Vector Project')
-selectProjectsForUser uid = V.fromList <$> PG.query q (Only uid)
+selectProjectsForUser :: (IOE :> es, WithConnection :> es) => Users.UserId -> Eff es [Project']
+selectProjectsForUser uid = PG.query q (Only uid)
   where
     q =
       [sql|
@@ -304,8 +304,8 @@ selectProjectsForUser uid = V.fromList <$> PG.query q (Only uid)
       |]
 
 
-usersByProjectId :: (IOE :> es, WithConnection :> es) => ProjectId -> Eff es (V.Vector Users.User)
-usersByProjectId pid = V.fromList <$> PG.query q (Only pid)
+usersByProjectId :: (IOE :> es, WithConnection :> es) => ProjectId -> Eff es [Users.User]
+usersByProjectId pid = PG.query q (Only pid)
   where
     q =
       [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number, u.is_sudo
@@ -391,8 +391,8 @@ data QueryLibItem = QueryLibItem
   deriving anyclass (AE.FromJSON, AE.ToJSON, FromRow, NFData, ToRow)
 
 
-queryLibHistoryForUser :: (IOE :> es, WithConnection :> es) => ProjectId -> Users.UserId -> Eff es (V.Vector QueryLibItem)
-queryLibHistoryForUser pid uid = V.fromList <$> PG.query q (uid, uid, pid, uid, uid, pid, uid, pid, uid)
+queryLibHistoryForUser :: (IOE :> es, WithConnection :> es) => ProjectId -> Users.UserId -> Eff es [QueryLibItem]
+queryLibHistoryForUser pid uid = PG.query q (uid, uid, pid, uid, uid, pid, uid, pid, uid)
   where
     q =
       [sql|

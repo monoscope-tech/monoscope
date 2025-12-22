@@ -178,7 +178,8 @@ reportsGetH pid page hxRequest hxBoosted = do
   let p = toString (fromMaybe "0" page)
   let pg = fromMaybe 0 (readMaybe p :: Maybe Int)
 
-  reports <- Reports.reportHistoryByProject pid pg
+  reportsList <- Reports.reportHistoryByProject pid pg
+  let reports = V.fromList reportsList
   freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
   let nextUrl =
         if V.length reports < 20

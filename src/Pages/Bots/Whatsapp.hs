@@ -49,7 +49,7 @@ whatsappIncomingPostH val = do
       case bodyType of
         DashboardLoad skip -> do
           dashboards' <- getDashboardsForWhatsapp fromN
-          let dashboards = V.map (\(k, v) -> (k, "dash" <> joiner <> v)) dashboards'
+          let dashboards = V.fromList $ map (\(k, v) -> (k, "dash" <> joiner <> v)) dashboards'
           let contentVars = getWhatsappList "dashboard" "Please select a dashboard" dashboards 0
           sendWhatsappResponse contentVars val.from envCfg.whatsappDashboardList Nothing
         WidgetsLoad dashboardId skip -> handleDashboard dashboardId skip val p envCfg

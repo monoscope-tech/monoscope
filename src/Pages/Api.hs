@@ -46,7 +46,7 @@ apiPostH pid apiKeyForm = do
   pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) encryptedKeyB64
   apiKeys <- do
     ProjectApiKeys.insertProjectApiKey pApiKey
-    ProjectApiKeys.projectApiKeysByProjectId pid
+    V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
   addSuccessToast "Created API Key Successfully" Nothing
   addTriggerEvent "closeModal" ""
   case from apiKeyForm of
@@ -58,7 +58,7 @@ apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx 
 apiDeleteH pid keyid = do
   (sess, project) <- Sessions.sessionAndProject pid
   res <- ProjectApiKeys.revokeApiKey keyid
-  apikeys <- ProjectApiKeys.projectApiKeysByProjectId pid
+  apikeys <- V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
   if res > 0
     then addSuccessToast "Revoked API Key Successfully" Nothing
     else addErrorToast "Something went wrong" Nothing
@@ -69,7 +69,7 @@ apiActivateH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCt
 apiActivateH pid keyid = do
   (sess, project) <- Sessions.sessionAndProject pid
   res <- ProjectApiKeys.activateApiKey keyid
-  apikeys <- ProjectApiKeys.projectApiKeysByProjectId pid
+  apikeys <- V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
   if res > 0
     then addSuccessToast "Activated API Key Successfully" Nothing
     else addErrorToast "Something went wrong" Nothing
@@ -92,7 +92,7 @@ apiGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ApiGet)
 apiGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
+  apiKeys <- V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess

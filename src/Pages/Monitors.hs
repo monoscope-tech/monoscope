@@ -126,7 +126,7 @@ alertUpsertPostH pid form = do
 
 alertListGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders Alert)
 alertListGetH pid = do
-  monitors <- Monitors.queryMonitorsAll pid
+  monitors <- V.fromList <$> Monitors.queryMonitorsAll pid
   addRespHeaders $ AlertListGet monitors
 
 
@@ -134,7 +134,7 @@ alertSingleToggleActiveH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATA
 alertSingleToggleActiveH pid monitorId = do
   _ <- Monitors.monitorToggleActiveById monitorId
 
-  monitors <- Monitors.queryMonitorsAll pid
+  monitors <- V.fromList <$> Monitors.queryMonitorsAll pid
   addRespHeaders $ AlertListGet monitors
 
 
@@ -222,7 +222,7 @@ monitorsPageGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders Alert)
 monitorsPageGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  monitors <- Monitors.queryMonitorsAll pid
+  monitors <- V.fromList <$> Monitors.queryMonitorsAll pid
   freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
   let bwconf =
         (def :: BWConfig)

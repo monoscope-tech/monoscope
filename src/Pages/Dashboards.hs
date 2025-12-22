@@ -403,7 +403,7 @@ processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, 
 processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case widget.wType of
   Widget.WTAnomalies -> do
     (issues, _) <- Issues.selectIssues pid Nothing (Just False) (Just False) 2 0 Nothing Nothing
-    let issuesVM = V.map (AnomalyList.IssueVM False True now "24h") issues
+    let issuesVM = V.fromList $ map (AnomalyList.IssueVM False True now "24h") issues
     pure $ widget
       & #html
         ?~ renderText
@@ -431,11 +431,10 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
     tracesD <- Charts.queryMetrics (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     let trIds = V.map V.last tracesD.dataText
     shapeWithDuration <- Telemetry.getTraceShapes pid trIds
-    -- group shapes by trace id (convert Vector to list and bind the result)
-    let grouped = M.fromListWith (++) [(trId, [(spanName, duration, events)]) | (trId, spanName, duration, events) <- V.toList shapeWithDuration]
+    let grouped = M.fromListWith (++) [(trId, [(spanName, duration, events)]) | (trId, spanName, duration, events) <- shapeWithDuration]
 
     spanRecords' <- Telemetry.getSpanRecordsByTraceIds pid trIds Nothing
-    let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
+    let spanRecords = V.fromList $ mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord spanRecords'
         serviceColors = getServiceColors ((\x -> getServiceName x.resource) <$> spanRecords)
     let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
     let spansGrouped = M.fromListWith (++) [(sp.traceId, [sp]) | sp <- V.toList spanRecords]
@@ -1071,7 +1070,7 @@ dashboardsGetH pid sortM embeddedM teamIdM filters = do
 
   dashboards' <- case teamIdM of
     Just teamId -> V.fromList <$> Dashboards.selectDashboardsByTeam pid teamId
-    Nothing -> Dashboards.selectDashboardsSortedBy pid orderByClause
+    Nothing -> V.fromList <$> Dashboards.selectDashboardsSortedBy pid orderByClause
 
   -- Collect all available tags from all dashboards (before filtering)
   let availableTags = L.nub $ concatMap (V.toList . (.tags)) (V.toList dashboards')
@@ -1079,7 +1078,7 @@ dashboardsGetH pid sortM embeddedM teamIdM filters = do
   -- Apply tag filtering
   let dashboards = if null filters.tag then dashboards' else V.filter (\d -> any (`elem` filters.tag) (V.toList d.tags)) dashboards'
 
-  teams <- ManageMembers.getTeams pid
+  teams <- V.fromList <$> ManageMembers.getTeams pid
 
   -- Check if we're requesting in embedded mode (for modals, etc.)
   let embedded = embeddedM == Just "true" || embeddedM == Just "1" || embeddedM == Just "yes"
@@ -1330,7 +1329,7 @@ dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
       _ <- Dashboards.deleteDashboardsByIds pid $ V.fromList itemId
       addSuccessToast "Selected dashboards were deleted successfully" Nothing
     "add_teams" -> do
-      teams <- ManageMembers.getTeamsById pid (V.fromList teamHandles)
+      teams <- V.fromList <$> ManageMembers.getTeamsById pid (V.fromList teamHandles)
       if V.length teams /= length teamHandles
         then addErrorToast "Some teams not found or don't belong to this project" Nothing
         else

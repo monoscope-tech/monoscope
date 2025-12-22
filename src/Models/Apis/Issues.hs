@@ -310,9 +310,9 @@ selectIssueById iid = listToMaybe <$> PG.query (_selectWhere @Issue [[field| id 
 
 
 -- | Select issues with filters, returns issues and total count for pagination
-selectIssues :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> Eff es (V.Vector IssueL, Int)
+selectIssues :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> Eff es ([IssueL], Int)
 selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM = do
-  issues <- V.fromList <$> PG.query (Query $ encodeUtf8 q) (pid, limit, offset)
+  issues <- PG.query (Query $ encodeUtf8 q) (pid, limit, offset)
   countResult <- PG.query (Query $ encodeUtf8 countQ) (Only pid)
   pure (issues, maybe 0 (\(Only c) -> c) $ listToMaybe countResult)
   where

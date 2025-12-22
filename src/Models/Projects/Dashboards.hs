@@ -237,8 +237,8 @@ selectDashboardsByTeam pid teamId = PG.query (Query $ encodeUtf8 q) (pid, teamId
     q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE project_id = ? AND teams @> ARRAY[?::uuid] ORDER BY starred_since DESC NULLS LAST, updated_at DESC|]
 
 
-selectDashboardsSortedBy :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es (V.Vector DashboardVM)
-selectDashboardsSortedBy pid orderBy = V.fromList <$> PG.query (Query $ encodeUtf8 q) (Only pid)
+selectDashboardsSortedBy :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es [DashboardVM]
+selectDashboardsSortedBy pid orderBy = PG.query (Query $ encodeUtf8 q) (Only pid)
   where
     defaultOrder = "ORDER BY starred_since DESC NULLS LAST, updated_at DESC"
     -- Reject if contains dangerous SQL chars; only allow alphanumeric, underscore, space, comma, and ORDER BY keywords
@@ -251,7 +251,7 @@ selectDashboardsSortedBy pid orderBy = V.fromList <$> PG.query (Query $ encodeUt
 
 
 updateSchema :: (IOE :> es, WithConnection :> es) => DashboardId -> Dashboard -> Eff es Int64
-updateSchema dashId schema = PG.execute (Query "UPDATE projects.dashboards SET schema = ? WHERE id = ?") (schema, dashId)
+updateSchema dashId dashboard = PG.execute (Query "UPDATE projects.dashboards SET schema = ? WHERE id = ?") (dashboard, dashId)
 
 
 updateTitle :: (IOE :> es, WithConnection :> es) => DashboardId -> Text -> Eff es Int64
@@ -259,7 +259,7 @@ updateTitle dashId title = PG.execute (Query "UPDATE projects.dashboards SET tit
 
 
 updateSchemaAndUpdatedAt :: (IOE :> es, WithConnection :> es) => DashboardId -> Dashboard -> UTCTime -> Eff es Int64
-updateSchemaAndUpdatedAt dashId schema updatedAt = PG.execute (Query "UPDATE projects.dashboards SET schema = ?, updated_at = ? WHERE id = ?") (schema, updatedAt, dashId)
+updateSchemaAndUpdatedAt dashId dashboard updatedAt = PG.execute (Query "UPDATE projects.dashboards SET schema = ?, updated_at = ? WHERE id = ?") (dashboard, updatedAt, dashId)
 
 
 updateStarredSince :: (IOE :> es, WithConnection :> es) => DashboardId -> Maybe UTCTime -> Eff es Int64

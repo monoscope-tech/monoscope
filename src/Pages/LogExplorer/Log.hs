@@ -10,6 +10,7 @@ module Pages.LogExplorer.Log (
 where
 
 import Control.Error (hush)
+import Data.Bifunctor (bimap)
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.Containers.ListUtils (nubOrd)
@@ -458,7 +459,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   -- FIXME: we're silently ignoring parse errors and the likes.
   let tableAsVecM = hush tableAsVecE
 
-  (queryLibRecent, queryLibSaved) <- V.partition (\x -> Projects.QLTHistory == x.queryType) <$> Projects.queryLibHistoryForUser pid sess.persistentSession.userId
+  (queryLibRecent, queryLibSaved) <- bimap V.fromList V.fromList . L.partition (\x -> Projects.QLTHistory == x.queryType) <$> Projects.queryLibHistoryForUser pid sess.persistentSession.userId
 
   -- Get facet summary for the time range specified
   facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
@@ -466,11 +467,11 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
 
   -- Fetch teams
-  teams <- ManageMembers.getTeams pid
+  teams <- V.fromList <$> ManageMembers.getTeams pid
 
   patterns <- case effectiveVizType of
     Just "patterns" -> do
-      patternsResult <- RequestDumps.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
+      patternsResult <- V.fromList <$> RequestDumps.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
       return $ Just patternsResult
     _ -> return Nothing
 
@@ -527,10 +528,11 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
               requestVecs
           (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
 
-      childSpans <- case queryM' of
+      childSpansList <- case queryM' of
         Nothing -> RequestDumps.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD) alreadyLoadedChildSpanIds
-        _ -> pure V.empty
+        _ -> pure []
       let
+        childSpans = V.fromList childSpansList
         finalVecs = requestVecs <> childSpans
         lastFM = reqLastCreatedAtM >>= textToUTC >>= Just . toText . iso8601Show . addUTCTime (-0.001)
         nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False

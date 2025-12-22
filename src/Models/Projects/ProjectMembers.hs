@@ -138,8 +138,8 @@ data ProjectMemberVM = ProjectMemberVM
   deriving anyclass (FromRow, NFData)
 
 
-selectActiveProjectMembers :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es (V.Vector ProjectMemberVM)
-selectActiveProjectMembers pid = V.fromList <$> PG.query q (Only pid)
+selectActiveProjectMembers :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es [ProjectMemberVM]
+selectActiveProjectMembers pid = PG.query q (Only pid)
   where
     q =
       [sql| SELECT pm.id, pm.user_id, pm.permission,us.email, us.first_name, us.last_name from projects.project_members pm
@@ -228,8 +228,8 @@ data Team = Team
   deriving anyclass (FromRow, NFData)
 
 
-getTeams :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es (V.Vector Team)
-getTeams pid = V.fromList <$> PG.query q (Only pid)
+getTeams :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es [Team]
+getTeams pid = PG.query q (Only pid)
   where
     q =
       [sql|
@@ -239,8 +239,8 @@ getTeams pid = V.fromList <$> PG.query q (Only pid)
     |]
 
 
-getTeamsVM :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es (V.Vector TeamVM)
-getTeamsVM pid = V.fromList <$> PG.query q (Only pid)
+getTeamsVM :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es [TeamVM]
+getTeamsVM pid = PG.query q (Only pid)
   where
     q =
       [sql|
@@ -358,8 +358,8 @@ deleteTeams pid tids
       [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND id = ANY(?::uuid[]) |]
 
 
-getTeamsById :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es (V.Vector Team)
-getTeamsById pid tids = if V.null tids then pure V.empty else V.fromList <$> PG.query q (pid, tids)
+getTeamsById :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es [Team]
+getTeamsById pid tids = if V.null tids then pure [] else PG.query q (pid, tids)
   where
     q =
       [sql|

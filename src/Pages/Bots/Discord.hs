@@ -298,7 +298,7 @@ discordInteractionsH rawBody signatureM timestampM = do
     handleDashboard cmData interaction envCfg authCtx discordData = do
       _ <- sendDeferredResponse interaction.id interaction.token envCfg.discordBotToken
       dashboards <- getDashboardsForDiscord (fromMaybe "" interaction.guild_id)
-      let content = discordSelectContent dashboards "dashboard-select" "Select a dashboard"
+      let content = discordSelectContent (V.fromList dashboards) "dashboard-select" "Select a dashboard"
       sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
 
     handleAskCommand :: Maybe [InteractionOption] -> DiscordInteraction -> EnvConfig -> AuthContext -> DiscordData -> ATBaseCtx ()

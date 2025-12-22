@@ -169,10 +169,10 @@ queryMonitorById :: (IOE :> es, WithConnection :> es) => QueryMonitorId -> Eff e
 queryMonitorById id' = listToMaybe <$> PG.query (_selectWhere @QueryMonitor [[DAT.field| id |]]) (Only id')
 
 
-queryMonitorsById :: (IOE :> es, WithConnection :> es) => V.Vector QueryMonitorId -> Eff es (V.Vector QueryMonitorEvaled)
+queryMonitorsById :: (IOE :> es, WithConnection :> es) => V.Vector QueryMonitorId -> Eff es [QueryMonitorEvaled]
 queryMonitorsById ids
-  | V.null ids = pure V.empty
-  | otherwise = V.fromList <$> PG.query q (Only ids)
+  | V.null ids = pure []
+  | otherwise = PG.query q (Only ids)
   where
     q =
       [sql|
@@ -204,12 +204,12 @@ monitorToggleActiveById id' = PG.execute q (Only id')
         where id=?|]
 
 
-queryMonitorsAll :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es (V.Vector QueryMonitor)
-queryMonitorsAll pid = V.fromList <$> PG.query (_selectWhere @QueryMonitor [[DAT.field| project_id |]]) (Only pid)
+queryMonitorsAll :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es [QueryMonitor]
+queryMonitorsAll pid = PG.query (_selectWhere @QueryMonitor [[DAT.field| project_id |]]) (Only pid)
 
 
-getAlertsByTeamHandle :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UUID.UUID -> Eff es (V.Vector QueryMonitor)
-getAlertsByTeamHandle pid teamId = V.fromList <$> PG.query q (pid, teamId)
+getAlertsByTeamHandle :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UUID.UUID -> Eff es [QueryMonitor]
+getAlertsByTeamHandle pid teamId = PG.query q (pid, teamId)
   where
     q =
       [sql|

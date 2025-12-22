@@ -203,10 +203,10 @@ data AnomalyVM = AnomalyVM
     via (GenericEntity '[Schema "apis", TableName "anomalies_vm", PrimaryKey "id", FieldModifiers '[CamelToSnake]] AnomalyVM)
 
 
-getAnomaliesVM :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector AnomalyVM)
+getAnomaliesVM :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> V.Vector Text -> Eff es [AnomalyVM]
 getAnomaliesVM pid hash
-  | V.null hash = pure V.empty
-  | otherwise = V.fromList <$> PG.query q (pid, hash)
+  | V.null hash = pure []
+  | otherwise = PG.query q (pid, hash)
   where
     q =
       [sql|
@@ -270,9 +270,9 @@ countAnomalies pid report_type = do
      |]
 
 
-acknowledgeAnomalies :: (IOE :> es, WithConnection :> es) => Users.UserId -> V.Vector Text -> Eff es (V.Vector Text)
+acknowledgeAnomalies :: (IOE :> es, WithConnection :> es) => Users.UserId -> V.Vector Text -> Eff es [Text]
 acknowledgeAnomalies uid aids
-  | V.null aids = pure V.empty
+  | V.null aids = pure []
   | otherwise = do
       -- Get anomaly hashes from the issues being acknowledged
       anomalyHashesResult :: [Only (V.Vector Text)] <- PG.query qGetHashes (Only aids)
@@ -285,7 +285,7 @@ acknowledgeAnomalies uid aids
       unless (V.null allAnomalyHashes) $ do
         _ <- PG.execute qAnomaliesByHash (uid, allAnomalyHashes)
         pass
-      V.fromList . map (\(Only t) -> t) <$> PG.query q (uid, aids)
+      map (\(Only t) -> t) <$> PG.query q (uid, aids)
   where
     qGetHashes = [sql| SELECT anomaly_hashes FROM apis.issues WHERE id=ANY(?::uuid[]) |]
     qIssues = [sql| update apis.issues set acknowledged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
@@ -584,10 +584,10 @@ data ATError = ATError
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
 
 
-errorsByHashes :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector ATError)
+errorsByHashes :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> V.Vector Text -> Eff es [ATError]
 errorsByHashes pid hashes
-  | V.null hashes = pure V.empty
-  | otherwise = V.fromList <$> PG.query q (pid, hashes)
+  | V.null hashes = pure []
+  | otherwise = PG.query q (pid, hashes)
   where
     q =
       [sql| SELECT id, created_at, updated_at, project_id, hash, error_type, message, error_data

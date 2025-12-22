@@ -162,8 +162,8 @@ data HostEvents = HostEvents
   deriving anyclass (FromRow, NFData, ToRow)
 
 
-dependenciesAndEventsCount :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Text -> Int -> Text -> Eff es (V.Vector HostEvents)
-dependenciesAndEventsCount pid requestType sortT skip timeF = V.fromList <$> PG.query (Query $ encodeUtf8 q) (pid, isOutgoing, isOutgoing, pid, skip)
+dependenciesAndEventsCount :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Text -> Int -> Text -> Eff es [HostEvents]
+dependenciesAndEventsCount pid requestType sortT skip timeF = PG.query (Query $ encodeUtf8 q) (pid, isOutgoing, isOutgoing, pid, skip)
   where
     orderBy = case sortT of
       "first_seen" -> "first_seen ASC"

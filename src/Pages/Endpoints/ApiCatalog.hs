@@ -46,7 +46,7 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
   currTime <- Time.currentTime
 
   let baseUrl = "/p/" <> pid.toText <> "/api_catalog?request_type=" <> requestType <> "&sort=" <> currentSort
-      hostsVM = V.map (\host -> HostEventsVM pid host filterV requestType) hostsAndEvents
+      hostsVM = V.fromList $ map (\host -> HostEventsVM pid host filterV requestType) hostsAndEvents
       tableActions =
         TableHeaderActions
           { baseUrl

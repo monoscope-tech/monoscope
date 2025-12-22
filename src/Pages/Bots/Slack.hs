@@ -137,8 +137,9 @@ slackInteractionsH interaction = do
       _ <- updateSlackNotificationChannel interaction.team_id interaction.channel_id
       pure $ AE.object ["response_type" AE..= "in_channel", "text" AE..= "Done, you'll be receiving project notifcations here going forward", "replace_original" AE..= True, "delete_original" AE..= True]
     "/dashboard" -> do
-      dashboards <- getDashboardsForSlack interaction.team_id
-      when (null dashboards) $ throwError err400{errBody = "No dashboards found for this project"}
+      dashboardsList <- getDashboardsForSlack interaction.team_id
+      let dashboards = V.fromList dashboardsList
+      when (V.null dashboards) $ throwError err400{errBody = "No dashboards found for this project"}
       _ <- triggerSlackModal authCtx.env.slackBotToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView interaction.channel_id (V.fromList [dashboardViewOne dashboards])]
       pure $ AE.object ["text" AE..= "modal opened", "replace_original" AE..= True, "delete_original" AE..= True]
     _ -> do

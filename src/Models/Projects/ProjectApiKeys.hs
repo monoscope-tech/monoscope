@@ -85,8 +85,8 @@ insertProjectApiKey :: (IOE :> es, WithConnection :> es) => ProjectApiKey -> Eff
 insertProjectApiKey apiKey = void $ PG.execute (_insert @ProjectApiKey) apiKey
 
 
-projectApiKeysByProjectId :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es (V.Vector ProjectApiKey)
-projectApiKeysByProjectId projectId = V.fromList <$> PG.query (_selectWhere @ProjectApiKey [[field| project_id |]]) (Only projectId)
+projectApiKeysByProjectId :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es [ProjectApiKey]
+projectApiKeysByProjectId projectId = PG.query (_selectWhere @ProjectApiKey [[field| project_id |]]) (Only projectId)
 
 
 revokeApiKey :: (IOE :> es, WithConnection :> es) => ProjectApiKeyId -> Eff es Int64

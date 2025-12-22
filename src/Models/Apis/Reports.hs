@@ -64,8 +64,8 @@ getReportById :: (IOE :> es, WithConnection :> es) => ReportId -> Eff es (Maybe 
 getReportById id' = listToMaybe <$> PG.query (_selectWhere @Report [[field| id |]]) (Only id')
 
 
-reportHistoryByProject :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Int -> Eff es (V.Vector ReportListItem)
-reportHistoryByProject pid page = V.fromList <$> PG.query q (pid, offset)
+reportHistoryByProject :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Int -> Eff es [ReportListItem]
+reportHistoryByProject pid page = PG.query q (pid, offset)
   where
     offset = page * 20
     q =

@@ -75,7 +75,7 @@ acknowledgeAnomalyGetH pid aid hostM = do
   -- Still use old cascade for compatibility
   let text_id = V.fromList [UUID.toText aid.unUUIDId]
   v <- Anomalies.acknowledgeAnomalies sess.user.id text_id
-  _ <- Anomalies.acknowlegeCascade sess.user.id v
+  _ <- Anomalies.acknowlegeCascade sess.user.id (V.fromList v)
   addRespHeaders $ Acknowlege pid (UUIDId aid.unUUIDId) True
 
 
@@ -136,7 +136,7 @@ anomalyBulkActionsPostH pid action items = do
       _ <- case action of
         "acknowledge" -> do
           v <- Anomalies.acknowledgeAnomalies sess.user.id (V.fromList items.anomalyId)
-          _ <- Anomalies.acknowlegeCascade sess.user.id v
+          _ <- Anomalies.acknowlegeCascade sess.user.id (V.fromList v)
           pass
         "archive" -> do
           _ <- PG.execute [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ V.fromList items.anomalyId)
@@ -187,7 +187,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
           , baseUrl = baseUrl
           , targetId = "anomalyListContainer"
           }
-  let issuesVM = V.map (IssueVM False False currTime filterV) issues
+  let issuesVM = V.fromList $ map (IssueVM False False currTime filterV) issues
       tableActions =
         TableHeaderActions
           { baseUrl
@@ -253,7 +253,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
                   }
           }
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
-    (Just "slider", Just "true", _, _) -> ALSlider currTime pid endpointM (Just $ V.map (IssueVM True False currTime filterV) issues)
+    (Just "slider", Just "true", _, _) -> ALSlider currTime pid endpointM (Just $ V.fromList $ map (IssueVM True False currTime filterV) issues)
     (_, _, _, Just "true") -> ALRows $ TableRows{columns = issueColumns pid, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(IssueVM _ _ _ _ issue) -> Issues.issueIdText issue.id, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], pagination = if totalCount > 0 then Just paginationConfig else Nothing}
     _ -> ALPage $ PageCtx bwconf issuesTable
 
@@ -316,7 +316,7 @@ anomalyListSlider currTime _ _ (Just issues) = do
       [ class_ "parent-slider"
       , [__|init setAnomalySliderPag() then show #{$anomalyIds[$currentAnomaly]} |]
       ]
-      $ V.mapM_ renderIssueForSlider issues
+      $ forM_ issues renderIssueForSlider
   where
     renderIssueForSlider vm@(IssueVM hideByDefault _ _ _ issue) =
       renderRowWithColumns

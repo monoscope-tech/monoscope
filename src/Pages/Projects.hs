@@ -124,7 +124,7 @@ listProjectsGetH = do
           , config = appCtx.env
           }
 
-  projects <- Projects.selectProjectsForUser sess.persistentSession.userId
+  projects <- V.fromList <$> Projects.selectProjectsForUser sess.persistentSession.userId
   let demoProject =
         (def :: Projects.Project')
           { Projects.title = project.title
@@ -467,7 +467,7 @@ manageMembersPostH pid onboardingM form = do
       let uAndPNew = filter (\(email, _) -> not $ any (\a -> original a.email == email) projMembers) usersAndPermissions
 
       let deletedUAndP =
-            V.toList projMembers
+            projMembers
               & filter (\pm -> not $ any (\(email, _) -> original pm.email == email) usersAndPermissions)
               & filter (\a -> a.userId /= currUserId)
               & map (.id)
@@ -503,7 +503,7 @@ manageMembersPostH pid onboardingM form = do
         $ void
         . ProjectMembers.softDeleteProjectMembers
 
-      projMembersLatest <- ProjectMembers.selectActiveProjectMembers pid
+      projMembersLatest <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
       if isJust onboardingM
         then do
           redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
@@ -513,7 +513,7 @@ manageMembersPostH pid onboardingM form = do
           addRespHeaders $ ManageMembersPost (pid, projMembersLatest)
     else do
       addErrorToast "Only one member allowed on Free plan" Nothing
-      addRespHeaders $ ManageMembersPost (pid, projMembers)
+      addRespHeaders $ ManageMembersPost (pid, V.fromList projMembers)
 
 
 data TeamForm = TeamForm
@@ -557,7 +557,7 @@ manageTeamPostH pid TeamForm{teamName, teamDescription, teamHandle, teamMembers,
   (sess, _) <- Sessions.sessionAndProject pid
   let currUserId = sess.persistentSession.userId
   userPermission <- ProjectMembers.getUserPermission pid currUserId
-  projMembers <- ProjectMembers.selectActiveProjectMembers pid
+  projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
   let validMemberIds = V.map (.userId) projMembers
       invalidMembers = V.filter (`V.notElem` validMemberIds) teamMembers
       teamDetails = ProjectMembers.TeamDetails teamName teamDescription teamHandle teamMembers notifEmails slackChannels discordChannels phoneNumbers
@@ -631,7 +631,7 @@ manageTeamsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders Ma
 manageTeamsGetH pid layoutM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  projMembers <- ProjectMembers.selectActiveProjectMembers pid
+  projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
   slackDataM <- Slack.getProjectSlackData pid
   channels <- case slackDataM of
     Just slackData -> do
@@ -645,7 +645,7 @@ manageTeamsGetH pid layoutM = do
   discordChannels <- case discordDataM of
     Just discordData -> Discord.getDiscordChannels appCtx.env.discordBotToken discordData.guildId
     Nothing -> return []
-  teams <- ProjectMembers.getTeamsVM pid
+  teams <- V.fromList <$> ProjectMembers.getTeamsVM pid
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
@@ -741,7 +741,7 @@ teamGetH pid handle layoutM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   teamVm <- ProjectMembers.getTeamByHandle pid handle
-  projMembers <- ProjectMembers.selectActiveProjectMembers pid
+  projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
   slackDataM <- Slack.getProjectSlackData pid
   channels <- case slackDataM of
     Just slackData -> do
@@ -828,7 +828,7 @@ manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ManageMembers)
 manageMembersGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  projMembers <- ProjectMembers.selectActiveProjectMembers pid
+  projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
@@ -924,7 +924,7 @@ deleteMemberH pid memberId = do
   (sess, project) <- Sessions.sessionAndProject pid
   let currUserId = sess.persistentSession.userId
   projMembers <- ProjectMembers.selectActiveProjectMembers pid
-  let memberM = V.find (\m -> m.id == memberId) projMembers
+  let memberM = find (\m -> m.id == memberId) projMembers
   case memberM of
     Nothing -> do
       addErrorToast "Member not found" Nothing
@@ -1037,7 +1037,7 @@ projectOnboardingH = do
   let envCfg = appCtx.config
   sess <- Sessions.getSession
   projects <- Projects.selectProjectsForUser sess.persistentSession.userId
-  let projectM = V.find (\pr -> pr.paymentPlan == "ONBOARDING") projects
+  let projectM = find (\pr -> pr.paymentPlan == "ONBOARDING") projects
       bwconf = (def :: BWConfig){sessM = Just sess, currProject = Nothing, pageTitle = "New Project", config = appCtx.config}
   case projectM of
     Just p -> do
@@ -1237,7 +1237,7 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan} = do
         _ <- updatePricing "Free" "" "" ""
         handleOnboarding "Free"
         users <- ProjectMembers.selectActiveProjectMembers pid
-        let usersToDel = V.toList $ V.map (.id) $ V.tail users
+        let usersToDel = map (.id) $ drop 1 users
         whenJust (nonEmpty usersToDel)
           $ void
           . ProjectMembers.softDeleteProjectMembers

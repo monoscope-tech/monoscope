@@ -106,19 +106,19 @@ updateSlackNotificationChannel teamId channelId = PG.execute q (channelId, teamI
     q = [sql|Update apis.slack SET channel_id =? WHERE team_id = ? |]
 
 
-getDashboardsForSlack :: (IOE :> es, WithConnection :> es) => Text -> Eff es (V.Vector (Text, Text))
-getDashboardsForSlack teamId = V.fromList <$> PG.query q (Only teamId)
+getDashboardsForSlack :: (IOE :> es, WithConnection :> es) => Text -> Eff es [(Text, Text)]
+getDashboardsForSlack teamId = PG.query q (Only teamId)
   where
     q = [sql|SELECT d.title, d.id::text FROM projects.dashboards d JOIN apis.slack s ON d.project_id = s.project_id WHERE  s.team_id = ?|]
 
 
-getDashboardsForWhatsapp :: (IOE :> es, WithConnection :> es) => Text -> Eff es (V.Vector (Text, Text))
-getDashboardsForWhatsapp number = V.fromList <$> PG.query q (Only number)
+getDashboardsForWhatsapp :: (IOE :> es, WithConnection :> es) => Text -> Eff es [(Text, Text)]
+getDashboardsForWhatsapp number = PG.query q (Only number)
   where
     q = [sql|SELECT d.title, d.id::text FROM projects.dashboards d JOIN projects.projects p ON d.project_id = p.id where ?=Any(p.whatsapp_numbers)|]
 
 
-getDashboardsForDiscord :: (IOE :> es, WithConnection :> es) => Text -> Eff es (V.Vector (Text, Text))
-getDashboardsForDiscord guildId = V.fromList <$> PG.query q (Only guildId)
+getDashboardsForDiscord :: (IOE :> es, WithConnection :> es) => Text -> Eff es [(Text, Text)]
+getDashboardsForDiscord guildId = PG.query q (Only guildId)
   where
     q = [sql|SELECT d.title, d.id::text FROM projects.dashboards d JOIN apis.discord dd ON d.project_id = dd.project_id where guild_id=?|]

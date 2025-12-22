@@ -498,8 +498,8 @@ logRecordByProjectAndId pid createdAt rdId = listToMaybe <$> PG.query q (created
              FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
-getSpanRecordsByTraceId :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Maybe UTCTime -> Eff es (V.Vector OtelLogsAndSpans)
-getSpanRecordsByTraceId pid trId tme = V.fromList <$> PG.query (Query $ encodeUtf8 q) (pid.toText, trId)
+getSpanRecordsByTraceId :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Maybe UTCTime -> Eff es [OtelLogsAndSpans]
+getSpanRecordsByTraceId pid trId tme = PG.query (Query $ encodeUtf8 q) (pid.toText, trId)
   where
     (start, end) = case tme of
       Nothing -> ("now() - interval '1 day'", "now()")
@@ -512,8 +512,8 @@ getSpanRecordsByTraceId pid trId tme = V.fromList <$> PG.query (Query $ encodeUt
     |]
 
 
-getSpanRecordsByTraceIds :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> V.Vector Text -> Maybe UTCTime -> Eff es (V.Vector OtelLogsAndSpans)
-getSpanRecordsByTraceIds pid traceIds tme = V.fromList <$> PG.query (Query $ encodeUtf8 q) (pid.toText, traceIds)
+getSpanRecordsByTraceIds :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> V.Vector Text -> Maybe UTCTime -> Eff es [OtelLogsAndSpans]
+getSpanRecordsByTraceIds pid traceIds tme = PG.query (Query $ encodeUtf8 q) (pid.toText, traceIds)
   where
     (start, end) =
       case tme of
@@ -552,8 +552,8 @@ spanRecordByName pid trId spanName = listToMaybe <$> PG.query q (pid.toText, trI
               FROM otel_logs_and_spans where project_id=? and context___trace_id = ? and name=? LIMIT 1|]
 
 
-getDataPointsData :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es (V.Vector MetricDataPoint)
-getDataPointsData pid dateRange = V.fromList <$> PG.query (Query $ Relude.encodeUtf8 q) (pid, pid)
+getDataPointsData :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es [MetricDataPoint]
+getDataPointsData pid dateRange = PG.query (Query $ Relude.encodeUtf8 q) (pid, pid)
   where
     dateRangeStr = toText $ case dateRange of
       (Nothing, Just b) -> "AND timestamp BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
@@ -646,8 +646,8 @@ getTotalMetricsCount pid lastReported = do
       [sql| SELECT count(*) FROM telemetry.metrics WHERE project_id=? AND timestamp > ?|]
 
 
-getMetricChartListData :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime) -> Int -> Eff es (V.Vector MetricChartListData)
-getMetricChartListData pid sourceM prefixM dateRange cursor = V.fromList <$> PG.query (Query $ Relude.encodeUtf8 q) pid
+getMetricChartListData :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime) -> Int -> Eff es [MetricChartListData]
+getMetricChartListData pid sourceM prefixM dateRange cursor = PG.query (Query $ Relude.encodeUtf8 q) pid
   where
     dateRangeStr = toText $ case dateRange of
       (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
@@ -667,14 +667,14 @@ getMetricChartListData pid sourceM prefixM dateRange cursor = V.fromList <$> PG.
      |]
 
 
-getMetricLabelValues :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Text -> Eff es (V.Vector Text)
-getMetricLabelValues pid metricName labelName = V.fromList . map (\(Only t) -> t) <$> PG.query q (labelName, pid, metricName)
+getMetricLabelValues :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Text -> Eff es [Text]
+getMetricLabelValues pid metricName labelName = map (\(Only t) -> t) <$> PG.query q (labelName, pid, metricName)
   where
     q = [sql| SELECT DISTINCT attributes->>? FROM telemetry.metrics WHERE project_id = ? AND metric_name = ?|]
 
 
-getMetricServiceNames :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es (V.Vector Text)
-getMetricServiceNames pid = V.fromList . map (\(Only t) -> t) <$> PG.query q pid
+getMetricServiceNames :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Eff es [Text]
+getMetricServiceNames pid = map (\(Only t) -> t) <$> PG.query q pid
   where
     q =
       [sql| SELECT DISTINCT service_name FROM telemetry.metrics_meta WHERE project_id = ?|]
@@ -1091,8 +1091,8 @@ extractATError spanObj (AE.Object o) = do
 extractATError _ _ = Nothing
 
 
-getProjectStatsForReport :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es (V.Vector (Text, Int, Int))
-getProjectStatsForReport projectId start end = V.fromList <$> PG.query q (projectId, start, end)
+getProjectStatsForReport :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
+getProjectStatsForReport projectId start end = PG.query q (projectId, start, end)
   where
     q =
       [sql| SELECT resource___service___name AS service_name,  COUNT(*) FILTER ( WHERE status_code = 'ERROR' OR attributes___exception___type IS NOT NULL) AS total_error_events, COUNT(*) AS total_events
@@ -1103,8 +1103,8 @@ getProjectStatsForReport projectId start end = V.fromList <$> PG.query q (projec
         |]
 
 
-getProjectStatsBySpanType :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es (V.Vector (Text, Int, Int))
-getProjectStatsBySpanType projectId start end = V.fromList <$> PG.query q (projectId, start, end)
+getProjectStatsBySpanType :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
+getProjectStatsBySpanType projectId start end = PG.query q (projectId, start, end)
   where
     q =
       [sql|
@@ -1129,8 +1129,8 @@ getProjectStatsBySpanType projectId start end = V.fromList <$> PG.query q (proje
       |]
 
 
-getEndpointStats :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es (V.Vector (Text, Text, Text, Int, Int))
-getEndpointStats projectId start end = V.fromList <$> PG.query q (projectId, start, end)
+getEndpointStats :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Text, Text, Int, Int)]
+getEndpointStats projectId start end = PG.query q (projectId, start, end)
   where
     q =
       [sql|
@@ -1153,8 +1153,8 @@ ORDER BY
     |]
 
 
-getDBQueryStats :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es (V.Vector (Text, Int, Int))
-getDBQueryStats projectId start end = V.fromList <$> PG.query q (projectId, start, end)
+getDBQueryStats :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
+getDBQueryStats projectId start end = PG.query q (projectId, start, end)
   where
     q =
       [sql| SELECT
@@ -1174,8 +1174,8 @@ ORDER BY avg_duration DESC LIMIT 10;
       |]
 
 
-getTraceShapes :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> V.Vector Text -> Eff es (V.Vector (Text, Text, Int, Int))
-getTraceShapes pid trIds = V.fromList <$> PG.query q (pid, trIds, pid, pid)
+getTraceShapes :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> V.Vector Text -> Eff es [(Text, Text, Int, Int)]
+getTraceShapes pid trIds = PG.query q (pid, trIds, pid, pid)
   where
     q =
       [sql|

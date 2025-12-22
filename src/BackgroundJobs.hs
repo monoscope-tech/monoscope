@@ -266,8 +266,8 @@ processBackgroundJob authCtx job bgJob =
           Relude.when hourlyJobsExist
             $ Log.logInfo "Hourly jobs already scheduled for today, skipping" ()
 
-          projects <- V.fromList <$> PG.query [sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > now() - interval '24 hours'|] ()
-          Log.logInfo "Scheduling jobs for projects" ("project_count", V.length projects)
+          projects <- PG.query [sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > now() - interval '24 hours'|] ()
+          Log.logInfo "Scheduling jobs for projects" ("project_count", length projects)
           forM_ projects \p -> do
             -- Check if this project's jobs already scheduled for today (per-project idempotent check)
             existingProjectJobs <-
@@ -462,16 +462,15 @@ logsPatternExtraction scheduledTime pid = do
     limitVal = 250
     paginate :: Int -> UTCTime -> ATBackgroundCtx ()
     paginate offset startTime = do
-      otelEvents <- V.fromList <$> PG.query [sql| SELECT kind, id::text, coalesce(body::text,''), coalesce(summary::text,'') FROM otel_logs_and_spans WHERE project_id = ?   AND timestamp >= ?   AND timestamp < ?   AND (summary_pattern IS NULL  OR log_pattern IS NULL) OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
-      let count = V.length otelEvents
-      -- Only log if there are actually events to process (reduces noise in tests)
-      unless (V.null otelEvents) $ do
+      otelEvents <- PG.query [sql| SELECT kind, id::text, coalesce(body::text,''), coalesce(summary::text,'') FROM otel_logs_and_spans WHERE project_id = ?   AND timestamp >= ?   AND timestamp < ?   AND (summary_pattern IS NULL  OR log_pattern IS NULL) OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
+      let count = length otelEvents
+      unless (null otelEvents) $ do
         Log.logInfo "Fetching events for pattern extraction" ("offset", AE.toJSON offset, "count", AE.toJSON count)
-        let logEvents = V.filter ((== "log") . (\(k, _, _, _) -> k)) otelEvents
-            logPairs = logEvents <&> (\(_, idTxt, body, _) -> (idTxt, body))
+        let logEvents = filter ((== "log") . (\(k, _, _, _) -> k)) otelEvents
+            logPairs = V.fromList $ map (\(_, idTxt, body, _) -> (idTxt, body)) logEvents
         processPatterns "log" "log_pattern" logPairs pid scheduledTime startTime
-        let summaryEvents = V.filter ((/= "log") . (\(k, _, _, _) -> k)) otelEvents
-            summaryPairs = summaryEvents <&> (\(_, idTxt, _, summary) -> (idTxt, summary))
+        let summaryEvents = filter ((/= "log") . (\(k, _, _, _) -> k)) otelEvents
+            summaryPairs = V.fromList $ map (\(_, idTxt, _, summary) -> (idTxt, summary)) summaryEvents
         processPatterns "summary" "summary_pattern" summaryPairs pid scheduledTime startTime
         Log.logInfo "Completed events pattern extraction for page" ("offset", AE.toJSON offset)
       Relude.when (count == limitVal) $ paginate (offset + limitVal) startTime
@@ -480,11 +479,10 @@ logsPatternExtraction scheduledTime pid = do
 -- | Generic pattern extraction for logs or summaries
 processPatterns :: Text -> Text -> V.Vector (Text, Text) -> Projects.ProjectId -> UTCTime -> UTCTime -> ATBackgroundCtx ()
 processPatterns kind fieldName events pid scheduledTime since = do
-  -- Only process and log if there are events to process (reduces noise in tests)
-  Relude.when (V.length events > 0) $ do
+  Relude.when (not $ V.null events) $ do
     let qq = [text| select $fieldName from otel_logs_and_spans where project_id= ? AND timestamp >= now() - interval '1 hour' and $fieldName is not null GROUP BY $fieldName ORDER BY count(*) desc limit 20|]
-    existingPatterns <- V.map (\(Only p) -> p) . V.fromList <$> PG.query (Query $ encodeUtf8 qq) pid
-    let known = fmap ("",) existingPatterns
+    existingPatterns <- map (\(Only p) -> p) <$> PG.query (Query $ encodeUtf8 qq) pid
+    let known = V.fromList $ map ("",) existingPatterns
         combined = known <> events
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
         newPatterns = Drain.getAllLogGroups drainTree
@@ -775,16 +773,16 @@ handleQueryMonitorThreshold monitorE isAlert hostUrl = do
     sendNotifications monitorE teams p alert
 
 
-logMissingTeams :: Monitors.QueryMonitorEvaled -> V.Vector ProjectMembers.Team -> ATBackgroundCtx ()
+logMissingTeams :: Monitors.QueryMonitorEvaled -> [ProjectMembers.Team] -> ATBackgroundCtx ()
 logMissingTeams monitorE teams = do
-  Relude.when (not (V.null monitorE.teams) && V.null teams)
+  Relude.when (not (V.null monitorE.teams) && null teams)
     $ Log.logAttention
       "Monitor configured with teams but none found (possibly deleted)"
       (monitorE.id, monitorE.projectId, V.length monitorE.teams)
-  Relude.when (not (V.null monitorE.teams) && V.length teams < V.length monitorE.teams)
+  Relude.when (not (V.null monitorE.teams) && length teams < V.length monitorE.teams)
     $ Log.logAttention
       "Some monitor teams not found (possibly deleted)"
-      (monitorE.id, monitorE.projectId, "expected" :: Text, V.length monitorE.teams, "found" :: Text, V.length teams)
+      (monitorE.id, monitorE.projectId, "expected" :: Text, V.length monitorE.teams, "found" :: Text, length teams)
 
 
 createAndInsertIssue :: Monitors.QueryMonitorEvaled -> Text -> ATBackgroundCtx Issues.Issue
@@ -819,10 +817,10 @@ buildMonitorAlert monitorE issue hostUrl =
     }
 
 
-sendNotifications :: Monitors.QueryMonitorEvaled -> V.Vector ProjectMembers.Team -> Projects.Project -> Pkg.Mail.NotificationAlerts -> ATBackgroundCtx ()
+sendNotifications :: Monitors.QueryMonitorEvaled -> [ProjectMembers.Team] -> Projects.Project -> Pkg.Mail.NotificationAlerts -> ATBackgroundCtx ()
 sendNotifications monitorE teams p alert = do
   for_ teams \team -> dispatchTeamNotifications team alert monitorE.projectId p.title (emailQueryMonitorAlert monitorE)
-  Relude.when (V.null teams) $ sendFallbackNotifications monitorE
+  Relude.when (null teams) $ sendFallbackNotifications monitorE
 
 
 sendFallbackNotifications :: Monitors.QueryMonitorEvaled -> ATBackgroundCtx ()
@@ -931,12 +929,12 @@ sendReportForProject pid rType = do
   forM_ projectM \pr -> do
     stats <- Telemetry.getProjectStatsForReport pid startTime currentTime
     statsPrev <- Telemetry.getProjectStatsForReport pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
-    statsBySpanType <- Telemetry.getProjectStatsBySpanType pid startTime currentTime
-    statsBySpanTypePrev <- Telemetry.getProjectStatsBySpanType pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
-    let totalErrors = sum $ map (\(_, x, _) -> x) (V.toList stats)
-        totalEvents = sum $ map (\(_, _, x) -> x) (V.toList stats)
-        totalErrorsPrev = sum $ map (\(_, x, _) -> x) (V.toList statsPrev)
-        totalEventsPrev = sum $ map (\(_, _, x) -> x) (V.toList statsPrev)
+    statsBySpanType <- V.fromList <$> Telemetry.getProjectStatsBySpanType pid startTime currentTime
+    statsBySpanTypePrev <- V.fromList <$> Telemetry.getProjectStatsBySpanType pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
+    let totalErrors = sum $ map (\(_, x, _) -> x) stats
+        totalEvents = sum $ map (\(_, _, x) -> x) stats
+        totalErrorsPrev = sum $ map (\(_, x, _) -> x) statsPrev
+        totalEventsPrev = sum $ map (\(_, _, x) -> x) statsPrev
         -- roundto two decimal places
         errorsChange' = if totalErrorsPrev == 0 then 0.00 else fromIntegral (totalErrors - totalErrorsPrev) / fromIntegral totalErrorsPrev * 100
         eventsChange' = if totalEventsPrev == 0 then 0.00 else fromIntegral (totalEvents - totalEventsPrev) / fromIntegral totalEventsPrev * 100
@@ -944,7 +942,7 @@ sendReportForProject pid rType = do
         eventsChange = fromIntegral (round (eventsChange' * 100)) / 100
         spanStatsDiff = getSpanTypeStats statsBySpanType statsBySpanTypePrev
 
-    slowDbQueries <- Telemetry.getDBQueryStats pid startTime currentTime
+    slowDbQueries <- V.fromList <$> Telemetry.getDBQueryStats pid startTime currentTime
 
     let parseQ q =
           let qAST = Unsafe.fromRight [] (parseQueryToAST q)
@@ -960,10 +958,10 @@ sendReportForProject pid rType = do
 
     (anomalies, _) <- Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing
 
-    let anomalies' = (\x -> (x.id, x.title, x.critical, x.severity, x.issueType)) <$> anomalies
+    let anomalies' = V.fromList $ (\x -> (x.id, x.title, x.critical, x.severity, x.issueType)) <$> anomalies
 
-    endpointStats <- Telemetry.getEndpointStats pid startTime currentTime
-    endpointStatsPrev <- Telemetry.getEndpointStats pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
+    endpointStats <- V.fromList <$> Telemetry.getEndpointStats pid startTime currentTime
+    endpointStatsPrev <- V.fromList <$> Telemetry.getEndpointStats pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
     endpoint_rp <- RequestDumps.getRequestDumpForReports pid typTxt
     let endpointPerformance = computeDurationChanges endpointStats endpointStatsPrev
     total_anomalies <- Anomalies.countAnomalies pid typTxt
@@ -992,7 +990,7 @@ sendReportForProject pid rType = do
           chartShotUrl = ctx.env.chartShotUrl <> "?t=bar&p=" <> pid.toText <> "&from=" <> stmTxt <> "&to=" <> currentTimeTxt
           allQ = chartShotUrl <> "&q=" <> decodeUtf8 (urlEncode True (encodeUtf8 "summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
           errQ = chartShotUrl <> "&theme=roma" <> "&q=" <> decodeUtf8 (urlEncode True (encodeUtf8 "status_code == \"ERROR\" | summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
-          alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents stats reportUrl allQ errQ
+          alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ
 
       Relude.when pr.weeklyNotif $ forM_ pr.notificationsChannel \case
         Projects.NDiscord -> do
@@ -1159,7 +1157,8 @@ processAPIChangeAnomalies pid targetHashes = do
   authCtx <- ask @Config.AuthContext
 
   -- Get all anomalies
-  anomaliesVM <- Anomalies.getAnomaliesVM pid targetHashes
+  anomaliesList <- Anomalies.getAnomaliesVM pid targetHashes
+  let anomaliesVM = V.fromList anomaliesList
 
   -- Group by endpoint hash to consolidate related changes
   let anomaliesByEndpoint = groupAnomaliesByEndpointHash anomaliesVM

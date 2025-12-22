@@ -363,8 +363,8 @@ requestDumpLogUrlPath pid q cols cursor since fromV toV layout source recent = "
         ]
 
 
-getRequestDumpForReports :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es (V.Vector RequestForReport)
-getRequestDumpForReports pid report_type = V.fromList <$> PG.query (Query $ encodeUtf8 q) (Only pid)
+getRequestDumpForReports :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es [RequestForReport]
+getRequestDumpForReports pid report_type = PG.query (Query $ encodeUtf8 q) (Only pid)
   where
     report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
     q =
@@ -388,8 +388,8 @@ getRequestDumpForReports pid report_type = V.fromList <$> PG.query (Query $ enco
     |]
 
 
-getRequestDumpsForPreviousReportPeriod :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es (V.Vector EndpointPerf)
-getRequestDumpsForPreviousReportPeriod pid report_type = V.fromList <$> PG.query (Query $ encodeUtf8 q) (Only pid)
+getRequestDumpsForPreviousReportPeriod :: (IOE :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es [EndpointPerf]
+getRequestDumpsForPreviousReportPeriod pid report_type = PG.query (Query $ encodeUtf8 q) (Only pid)
   where
     (start, end) = if report_type == "daily" then ("'48 hours'" :: Text, "'24 hours'") else ("'14 days'", "'7 days'")
     q =
@@ -487,7 +487,7 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
   pure $ Right (logItemsV, queryComponents.toColNames, c)
 
 
-selectChildSpansAndLogs :: (IOE :> es, Time.Time :> es, WithConnection :> es) => Projects.ProjectId -> [Text] -> V.Vector Text -> (Maybe UTCTime, Maybe UTCTime) -> V.Vector Text -> Eff es (V.Vector (V.Vector AE.Value))
+selectChildSpansAndLogs :: (IOE :> es, Time.Time :> es, WithConnection :> es) => Projects.ProjectId -> [Text] -> V.Vector Text -> (Maybe UTCTime, Maybe UTCTime) -> V.Vector Text -> Eff es [V.Vector AE.Value]
 selectChildSpansAndLogs pid projectedColsByUser traceIds dateRange excludedSpanIds = do
   now <- Time.currentTime
   let fmtTime = toText . iso8601Show
@@ -503,8 +503,8 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds dateRange excludedSpanI
              WHERE project_id= ?  $dateRangeStr and  context___trace_id=Any(?) and parent_id IS NOT NULL AND id::text != ALL(?)
              ORDER BY timestamp DESC;
            |]
-  results <- V.fromList <$> PG.query (Query $ encodeUtf8 q) (pid, traceIds, excludedSpanIds)
-  pure $ V.mapMaybe valueToVector results
+  results <- PG.query (Query $ encodeUtf8 q) (pid, traceIds, excludedSpanIds)
+  pure $ mapMaybe valueToVector results
 
 
 valueToVector :: Only AE.Value -> Maybe (V.Vector AE.Value)
@@ -513,7 +513,7 @@ valueToVector (Only val) = case val of
   _ -> Nothing
 
 
-fetchLogPatterns :: (IOE :> es, Time.Time :> es, WithConnection :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Maybe Text -> Int -> Eff es (V.Vector (Text, Int))
+fetchLogPatterns :: (IOE :> es, Time.Time :> es, WithConnection :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Maybe Text -> Int -> Eff es [(Text, Int)]
 fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
   now <- Time.currentTime
   let (_, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now sourceM Nothing){dateRange}) queryAST
@@ -521,7 +521,7 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
       whereCondition = fromMaybe [text|project_id=${pidTxt}|] queryComponents.whereClause
       target = fromMaybe "log_pattern" targetM
       q = [text|select $target, count(*) as p_count from otel_logs_and_spans where project_id='${pidTxt}' and ${whereCondition} and $target is not null GROUP BY $target ORDER BY p_count desc offset ? limit 15;|]
-  V.fromList <$> PG.query (Query $ encodeUtf8 q) (Only skip)
+  PG.query (Query $ encodeUtf8 q) (Only skip)
 
 
 queryCount :: (IOE :> es, WithConnection :> es) => Text -> Eff es (Maybe (Only Int))

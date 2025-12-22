@@ -76,7 +76,7 @@ teamAlertsGetH pid teamId = do
   appCtx <- ask @AuthContext
   alerts <- Monitors.getAlertsByTeamHandle pid teamId
   currTime <- Time.currentTime
-  let alerts' = V.map (toUnifiedMonitorItem pid currTime) alerts
+  let alerts' = V.fromList $ map (toUnifiedMonitorItem pid currTime) alerts
 
   addRespHeaders $ TableRows{columns = [], rows = alerts', emptyState = Just $ simpleZeroState "bell-slash" "No alerts linked to this team", renderAsTable = False, rowId = Nothing, rowAttrs = Nothing, pagination = Nothing}
 
@@ -96,8 +96,9 @@ unifiedMonitorsGetH pid filterTM sinceM = do
   let filterType = fromMaybe "Active" filterTM
 
   -- Fetch alerts (query monitors)
-  allAlerts <- Monitors.queryMonitorsAll pid
-  let activeAlerts = V.filter (isNothing . (.deactivatedAt)) allAlerts
+  allAlertsList <- Monitors.queryMonitorsAll pid
+  let allAlerts = V.fromList allAlertsList
+      activeAlerts = V.filter (isNothing . (.deactivatedAt)) allAlerts
       inactiveAlerts = V.filter (isJust . (.deactivatedAt)) allAlerts
 
   alerts <- case filterType of
@@ -357,7 +358,7 @@ unifiedMonitorOverviewH pid monitorId = do
   alertM <- case UUID.fromText monitorId of
     Just uuid -> do
       alerts <- Monitors.queryMonitorsById (V.singleton $ Monitors.QueryMonitorId uuid)
-      pure $ alerts V.!? 0
+      pure $ listToMaybe alerts
     Nothing -> pure Nothing
 
   let bwconf =

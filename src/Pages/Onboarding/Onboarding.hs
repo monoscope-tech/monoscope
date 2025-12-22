@@ -99,7 +99,7 @@ onboardingGetH pid onboardingStepM = do
       pure $ NotifChannelStep pid slackUrl discordUrl phone emails hasSlack hasDiscord
     "Integration" -> do
       apiKey <- ProjectApiKeys.projectApiKeysByProjectId pid
-      let key = if V.length apiKey > 0 then let defKey = V.head apiKey in defKey.keyPrefix else "<API_KEY>"
+      let key = maybe "<API_KEY>" (.keyPrefix) (listToMaybe apiKey)
       pure $ IntegrationStep pid key
     "Pricing" -> do
       let lemonUrl = appCtx.config.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
@@ -277,7 +277,7 @@ phoneEmailPostH pid form = do
   projectMembers <- Projects.usersByProjectId pid
   let emails' = (\u -> CI.original u.email) <$> projectMembers
   _ <- PG.execute q (V.fromList notifsTxt, phone, V.fromList emails, newCompleted, pid)
-  addRespHeaders $ OnboardingPhoneEmailsPost pid (V.fromList $ ordNub $ emails <> V.toList emails')
+  addRespHeaders $ OnboardingPhoneEmailsPost pid (V.fromList $ ordNub $ emails <> emails')
 
 
 checkIntegrationGet :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
