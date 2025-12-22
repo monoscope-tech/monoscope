@@ -4,14 +4,14 @@ import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as BL
-import Data.Pool (Pool)
+import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Connection, Only (..))
+import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
 import OddJobs.Job (Job (..))
@@ -205,7 +205,7 @@ settingsTests = do
   it "should load manage members page" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     result <- testServant tr $ ManageMembers.manageMembersGetH testPid
     case result of
-      (_, ManageMembers.ManageMembersGet (PageCtx _ members)) -> do
+      (_, ManageMembers.ManageMembersGet (PageCtx _ (_, members))) -> do
         V.length members `shouldSatisfy` (>= 0)
       _ -> fail "Expected ManageMembersGet response"
 
@@ -263,7 +263,7 @@ webhookTestCases =
     , createWebhookPayload "subscription_created"
     , \testPid pool callWebhook -> do
         _ <- callWebhook
-        subs <- DBT.withPool pool $ DBT.query [sql|SELECT COUNT(*) FROM apis.subscriptions WHERE project_id = ?|] (Only testPid.toText)
+        subs <- withResource pool \conn -> PGS.query conn [sql|SELECT COUNT(*) FROM apis.subscriptions WHERE project_id = ?|] (Only testPid.toText)
         case subs of
           [Only (count :: Int)] -> count `shouldBe` 1
           _ -> fail "Failed to query subscriptions"
@@ -282,11 +282,11 @@ webhookTestCases =
     , "should upgrade to paid on subscription_resumed event"
     , createWebhookPayload "subscription_resumed"
     , \testPid pool callWebhook -> do
-        _ <- DBT.withPool pool $ DBT.execute [sql|UPDATE projects.projects SET payment_plan = 'FREE', order_id = '67890', sub_id = '12345', first_sub_item_id = '111' WHERE id = ?|] (Only testPid)
+        _ <- withResource pool \conn -> PGS.execute conn [sql|UPDATE projects.projects SET payment_plan = 'FREE', order_id = '67890', sub_id = '12345', first_sub_item_id = '111' WHERE id = ?|] (Only testPid)
         _ <- callWebhook
-        paymentPlan <- DBT.withPool pool $ DBT.queryOne [sql|SELECT payment_plan FROM projects.projects WHERE id = ?|] (Only testPid)
+        paymentPlan <- withResource pool \conn -> PGS.query conn [sql|SELECT payment_plan FROM projects.projects WHERE id = ?|] (Only testPid)
         case paymentPlan of
-          Just (Only (plan :: Text)) -> plan `shouldNotBe` "FREE"
+          [Only (plan :: Text)] -> plan `shouldNotBe` "FREE"
           _ -> fail "Failed to query payment plan"
     )
   ,
@@ -303,19 +303,21 @@ webhookTestCases =
 
 setupProjectWithSubscription :: Pool Connection -> Projects.ProjectId -> Text -> IO ()
 setupProjectWithSubscription pool testPid plan = do
-  _ <- DBT.withPool pool $ do
-    subId <- Projects.LemonSubId <$> liftIO UUIDV4.nextRandom
-    currentZonedTime <- liftIO getZonedTime
-    Projects.addSubscription $ Projects.LemonSub subId currentZonedTime currentZonedTime testPid.toText 12345 67890 111 "Test Plan" "test@example.com"
-  _ <- DBT.withPool pool $ DBT.execute [sql|UPDATE projects.projects SET payment_plan = ?, order_id = '67890', sub_id = '12345', first_sub_item_id = '111' WHERE id = ?|] (plan, testPid)
+  subId <- Projects.LemonSubId <$> UUIDV4.nextRandom
+  currentZonedTime <- getZonedTime
+  _ <- withResource pool \conn -> PGS.execute conn [sql|
+    INSERT INTO apis.subscriptions (id, created_at, updated_at, project_id, order_id, sub_id, first_sub_item_id, variant_name, user_email)
+    VALUES (?, ?, ?, ?, 12345, 67890, 111, 'Test Plan', 'test@example.com')
+  |] (subId, currentZonedTime, currentZonedTime, testPid.toText)
+  _ <- withResource pool \conn -> PGS.execute conn [sql|UPDATE projects.projects SET payment_plan = ?, order_id = '67890', sub_id = '12345', first_sub_item_id = '111' WHERE id = ?|] (plan, testPid)
   pass
 
 
 verifyPaymentPlan :: Pool Connection -> Projects.ProjectId -> Text -> IO ()
 verifyPaymentPlan pool testPid expected = do
-  paymentPlan <- DBT.withPool pool $ DBT.queryOne [sql|SELECT payment_plan FROM projects.projects WHERE id = ?|] (Only testPid)
+  paymentPlan <- withResource pool \conn -> PGS.query conn [sql|SELECT payment_plan FROM projects.projects WHERE id = ?|] (Only testPid)
   case paymentPlan of
-    Just (Only (plan :: Text)) -> plan `shouldBe` expected
+    [Only (plan :: Text)] -> plan `shouldBe` expected
     _ -> fail "Failed to query payment plan"
 
 
@@ -357,11 +359,10 @@ billingUsageTests = do
     let cycleStart = addUTCTime (-10 * 24 * 60 * 60) currentTime -- 10 days ago
 
     -- Configure project for billing: set payment_plan, first_sub_item_id, billing_day, and usage_last_reported
-    _ <-
-      DBT.withPool tr.trPool
-        $ DBT.execute
-          [sql|UPDATE projects.projects SET payment_plan = 'Pro', first_sub_item_id = 12345, billing_day = ?, usage_last_reported = ? WHERE id = ?|]
-          (cycleStart, cycleStart, testPid)
+    _ <- withResource tr.trPool \conn ->
+      PGS.execute conn
+        [sql|UPDATE projects.projects SET payment_plan = 'Pro', first_sub_item_id = 12345, billing_day = ?, usage_last_reported = ? WHERE id = ?|]
+        (cycleStart, cycleStart, testPid)
 
     -- Ingest some test usage data
     apiKey <- createTestAPIKey tr testPid "billing-test-key"
@@ -383,11 +384,10 @@ billingUsageTests = do
         oldTime = addUTCTime (-35 * 24 * 60 * 60) currentTime
 
     -- Configure project for billing: set payment_plan, first_sub_item_id, billing_day, and usage_last_reported
-    _ <-
-      DBT.withPool tr.trPool
-        $ DBT.execute
-          [sql|UPDATE projects.projects SET payment_plan = 'Pro', first_sub_item_id = 12345, billing_day = ?, usage_last_reported = ? WHERE id = ?|]
-          (cycleStart, cycleStart, testPid)
+    _ <- withResource tr.trPool \conn ->
+      PGS.execute conn
+        [sql|UPDATE projects.projects SET payment_plan = 'Pro', first_sub_item_id = 12345, billing_day = ?, usage_last_reported = ? WHERE id = ?|]
+        (cycleStart, cycleStart, testPid)
 
     -- Ingest old data (outside current cycle) and new data (within current cycle)
     apiKey <- createTestAPIKey tr testPid "cycle-test-key"
@@ -498,20 +498,18 @@ s3ConfigTests = do
             , endpointUrl = ""
             }
 
-    _ <-
-      DBT.withPool tr.trPool
-        $ DBT.execute
-          [sql|UPDATE projects.projects SET s3_bucket = ? WHERE id = ?|]
-          (Just s3Form, testPid)
+    _ <- withResource tr.trPool \conn ->
+      PGS.execute conn
+        [sql|UPDATE projects.projects SET s3_bucket = ? WHERE id = ?|]
+        (Just s3Form, testPid)
 
     -- Now remove it
     _ <- testServant tr $ S3.brings3RemoveH testPid
 
     -- Verify it was removed
-    savedConfigM <-
-      DBT.withPool tr.trPool
-        $ DBT.queryOne [sql|SELECT s3_bucket FROM projects.projects WHERE id = ?|] (Only testPid)
-    let savedConfig = fmap fromOnly savedConfigM
+    savedConfigM <- withResource tr.trPool \conn ->
+      PGS.query conn [sql|SELECT s3_bucket FROM projects.projects WHERE id = ?|] (Only testPid) :: IO [(Only (Maybe Projects.ProjectS3Bucket))]
+    let savedConfig = fmap fromOnly (listToMaybe savedConfigM)
 
     case savedConfig of
       Just (Nothing :: Maybe Projects.ProjectS3Bucket) -> pass -- Successfully removed

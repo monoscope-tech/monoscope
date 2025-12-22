@@ -1205,7 +1205,7 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
   redirectTo <-
     if project.paymentPlan == "ONBOARDING"
       then pure $ mkPath "/onboarding" ""
-      else mkPath "/dashboards/" <$> (maybe newDashboard pure =<< fmap (.toText) <$> Dashboards.getDashboardByBaseTemplate pid baseTemplate)
+      else mkPath "/dashboards/" <$> (maybe newDashboard (pure . (.toText)) =<< Dashboards.getDashboardByBaseTemplate pid baseTemplate)
   pure $ addHeader redirectTo NoContent
 
 

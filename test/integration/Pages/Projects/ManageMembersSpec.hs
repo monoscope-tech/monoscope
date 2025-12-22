@@ -46,8 +46,8 @@ spec = aroundAll withTestResources do
         testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
       -- Check if the response contains the newly added member
       case pg of
-        ManageMembers.ManageMembersPost p -> do
-          "example@gmail.com" `shouldSatisfy` (`elem` (p & V.toList & map (.email)))
+        ManageMembers.ManageMembersPost (_, projMembers) -> do
+          "example@gmail.com" `shouldSatisfy` (`elem` (projMembers & V.toList & map (.email)))
         _ -> fail "Expected ManageMembersPost response"
 
     it "Update member permissions" \tr -> do
@@ -61,7 +61,7 @@ spec = aroundAll withTestResources do
 
       -- Check if the member's permission is updated
       case pg of
-        ManageMembers.ManageMembersPost projMembers -> do
+        ManageMembers.ManageMembersPost (_, projMembers) -> do
           let memberM = projMembers & V.toList & find (\pm -> pm.email == "example@gmail.com")
           isJust memberM `shouldBe` True
           let mem = memberM & Unsafe.fromJust
@@ -75,7 +75,7 @@ spec = aroundAll withTestResources do
 
       -- Check if the response contains the expected members
       case pg of
-        ManageMembers.ManageMembersGet (PageCtx _ projMembers) -> do
+        ManageMembers.ManageMembersGet (PageCtx _ (_, projMembers)) -> do
           let emails = projMembers & V.toList & map (.email)
           "example@gmail.com" `shouldSatisfy` (`elem` emails)
           length projMembers `shouldBe` 1
@@ -92,7 +92,7 @@ spec = aroundAll withTestResources do
 
       -- Check if the member is deleted
       case pg of
-        ManageMembers.ManageMembersPost projMembers -> do
+        ManageMembers.ManageMembersPost (_, projMembers) -> do
           let emails = projMembers & V.toList & map (.email)
           "example@gmail.com" `shouldNotSatisfy` (`elem` emails)
         _ -> fail "Expected ManageMembersPost response"
@@ -107,8 +107,8 @@ spec = aroundAll withTestResources do
         testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
       -- Check if the response contains the newly added member
       case pg of
-        ManageMembers.ManageMembersPost p -> do
-          "example@gmail.com" `shouldSatisfy` (`elem` (p & V.toList & map (.email)))
+        ManageMembers.ManageMembersPost (_, projMembers) -> do
+          "example@gmail.com" `shouldSatisfy` (`elem` (projMembers & V.toList & map (.email)))
         _ -> fail "Expected ManageMembersPost response"
 
   describe "Teams Creation, Update and Consumption" do
@@ -117,10 +117,11 @@ spec = aroundAll withTestResources do
             { teamName = "Hello"
             , teamDescription = ""
             , teamHandle = "hello"
-            , notifEmails = []
-            , teamMembers = []
-            , discordChannels = []
-            , slackChannels = []
+            , notifEmails = V.empty
+            , teamMembers = V.empty
+            , discordChannels = V.empty
+            , slackChannels = V.empty
+            , phoneNumbers = V.empty
             , teamId = Nothing
             }
 

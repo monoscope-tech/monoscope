@@ -243,6 +243,7 @@ library
     , dotenv
     , effectful
     , effectful-core
+    , effectful-postgresql
     , effectful-th
     , envy
     , errors
@@ -290,7 +291,6 @@ library
     , parser-combinators
     , pg-entity
     , pg-transact
-    , pg-transact-effectful
     , postgresql-libpq
     , postgresql-migration
     , postgresql-simple

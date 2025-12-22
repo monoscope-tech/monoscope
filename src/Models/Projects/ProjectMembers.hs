@@ -120,7 +120,7 @@ data CreateProjectMembers = CreateProjectMembers
 
 
 insertProjectMembers :: DB es => [CreateProjectMembers] -> Eff es Int64
-insertProjectMembers members = PG.executeMany q members
+insertProjectMembers = PG.executeMany q
   where
     q =
       [sql| INSERT INTO projects.project_members(project_id, user_id, permission) VALUES (?,?,?) ON CONFLICT (project_id, user_id) DO UPDATE SET active = TRUE |]

@@ -6,12 +6,13 @@ module Web.ClientMetadataSpec (spec) where
 import Data.Aeson.QQ (aesonQQ)
 import Data.Base64.Types qualified as B64
 import "base64" Data.ByteString.Base64 qualified as B64
-import Data.Pool (Pool)
+import Data.Pool (Pool, withResource)
 import Data.Time (getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection)
+import Database.PostgreSQL.Simple qualified as PGS
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
@@ -65,23 +66,15 @@ spec = aroundAll withTestResources do
 
 createAndSaveApiKey :: Pool Connection -> AuthContext -> IO Text
 createAndSaveApiKey pool authCtx = do
-  projectKeyUUID <- liftIO UUIDV4.nextRandom
-  let title = "Test API Key"
+  projectKeyUUID <- UUIDV4.nextRandom
+  let title = "Test API Key" :: Text
   let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 authCtx.config.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
   let encryptedKeyB64 = B64.extractBase64 $ B64.encodeBase64 encryptedKey
   let keyId = ProjectApiKeys.ProjectApiKeyId projectKeyUUID
 
-  currentTime <- liftIO getCurrentTime
-  let pApiKey =
-        ProjectApiKeys.ProjectApiKey
-          { keyPrefix = encryptedKeyB64
-          , active = True
-          , title = title
-          , projectId = testId
-          , deletedAt = Nothing
-          , createdAt = currentTime
-          , updatedAt = currentTime
-          , id = keyId
-          }
-  v <- liftIO $ withPool pool $ ProjectApiKeys.insertProjectApiKey pApiKey
+  currentTime <- getCurrentTime
+  _ <- withResource pool \conn -> PGS.execute conn [sql|
+    INSERT INTO projects.project_api_keys (id, key_prefix, active, title, project_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  |] (keyId, encryptedKeyB64, True :: Bool, title, testId, currentTime, currentTime)
   pure encryptedKeyB64
