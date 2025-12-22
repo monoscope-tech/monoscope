@@ -10,9 +10,9 @@ module Pages.LogExplorer.Log (
 where
 
 import Control.Error (hush)
-import Data.Bifunctor (bimap)
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
+import Data.Bifunctor (bimap)
 import Data.Containers.ListUtils (nubOrd)
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
