@@ -196,10 +196,10 @@ traceH pid trId timestamp spanIdM nav = do
   if isJust nav
     then do
       spanRecords' <- Telemetry.getSpanRecordsByTraceId pid trId timestamp now
-      let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
+      let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> (V.fromList spanRecords')
       let sid = fromMaybe "" spanIdM
-          targetSpan = fromMaybe (V.head spanRecords') (V.find (\x -> maybe False (\s -> s.span_id == Just sid) x.context) spanRecords')
-          targetIndex = fromMaybe 0 (V.findIndex (\x -> maybe False (\s -> s.span_id == Just sid) x.context) spanRecords')
+          targetSpan = fromMaybe (V.head (V.fromList spanRecords')) (V.find (\x -> maybe False (\s -> s.span_id == Just sid) x.context) (V.fromList spanRecords'))
+          targetIndex = fromMaybe 0 (V.findIndex (\x -> maybe False (\s -> s.span_id == Just sid) x.context) (V.fromList spanRecords'))
           prevSpan =
             if targetIndex > 0
               then Just (spanRecords V.! (targetIndex - 1))
@@ -208,14 +208,14 @@ traceH pid trId timestamp spanIdM nav = do
             if targetIndex < V.length spanRecords - 1
               then Just (spanRecords V.! (targetIndex + 1))
               else Nothing
-      let atpSpan = V.find (\x -> x.name == Just "monoscope.http") spanRecords'
+      let atpSpan = V.find (\x -> x.name == Just "monoscope.http") (V.fromList spanRecords')
       addRespHeaders $ SpanDetails pid targetSpan atpSpan (prevSpan >>= \s -> Just s.spanId) (nextSpan >>= \s -> Just s.spanId)
     else do
       traceItemM <- Telemetry.getTraceDetails pid trId timestamp now
       case traceItemM of
         Just traceItem -> do
           spanRecords' <- Telemetry.getSpanRecordsByTraceId pid trId timestamp now
-          let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
+          let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> (V.fromList spanRecords')
           addRespHeaders $ TraceDetails pid traceItem spanRecords
         Nothing -> addRespHeaders $ TraceDetailsNotFound "Trace not found"
 

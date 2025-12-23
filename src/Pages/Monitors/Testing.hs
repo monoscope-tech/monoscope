@@ -387,7 +387,7 @@ unifiedMonitorOverviewH pid monitorId = do
 
   case alertM of
     Just alert -> do
-      teams <- dbtToEff $ ManageMembers.getTeamsById pid alert.teams
+      teams <- ManageMembers.getTeamsById pid alert.teams
       slackDataM <- Slack.getProjectSlackData pid
       channels <- case slackDataM of
         Just slackData -> do
@@ -403,7 +403,7 @@ unifiedMonitorOverviewH pid monitorId = do
       let bwconf' = bwconf{navTabs = Just $ monitorOverviewTabs pid monitorId "alert"}
       let findChannel xx x = fromMaybe x (find (\c -> c.channelId == x) xx >>= (\a -> Just a.channelName))
       let teams' = (\x -> x{slack_channels = findChannel channels <$> x.slack_channels, discord_channels = (\xx -> fromMaybe xx (find (\c -> c.channelId == xx) discordChannels >>= (\a -> Just a.channelName))) <$> x.discord_channels}) <$> teams
-      addRespHeaders $ PageCtx bwconf' $ unifiedOverviewPage pid alert currTime teams' slackDataM discordDataM
+      addRespHeaders $ PageCtx bwconf' $ unifiedOverviewPage pid alert currTime (V.fromList teams') slackDataM discordDataM
     _ -> addRespHeaders $ PageCtx bwconf $ div_ [class_ "p-6 text-center"] "Alert not found"
 
 

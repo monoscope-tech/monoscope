@@ -470,8 +470,8 @@ data MetricChartListData = MetricChartListData
   deriving anyclass (FromRow, NFData, ToRow)
 
 
-getTraceDetails :: DB :> es => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe Trace)
-getTraceDetails pid trId tme now = dbtToEff $ queryOne q (pid.toText, start, end, trId)
+getTraceDetails :: DB es => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe Trace)
+getTraceDetails pid trId tme now = listToMaybe <$> PG.query q (pid.toText, start, end, trId)
   where
     (start, end) = case tme of
       Nothing -> (addUTCTime (-14 * 24 * 3600) now, now)
@@ -499,9 +499,8 @@ logRecordByProjectAndId pid createdAt rdId = listToMaybe <$> PG.query q (created
              FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
-getSpanRecordsByTraceId :: DB :> es => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (V.Vector OtelLogsAndSpans)
-getSpanRecordsByTraceId pid trId tme now = do
-  dbtToEff $ query q (pid.toText, start, end, trId)
+getSpanRecordsByTraceId :: DB es => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]
+getSpanRecordsByTraceId pid trId tme now = PG.query q (pid.toText, start, end, trId)
   where
     (start, end) = case tme of
       Nothing -> (addUTCTime (-14 * 24 * 3600) now, now)

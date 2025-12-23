@@ -222,8 +222,8 @@ getAlertsByTeamHandle pid teamId = PG.query q (pid, teamId)
     |]
 
 
-monitorRemoveTeam :: Projects.ProjectId -> QueryMonitorId -> UUID.UUID -> DBT IO Int64
-monitorRemoveTeam pid monitorId teamId = execute q (teamId, pid, monitorId)
+monitorRemoveTeam :: DB es => Projects.ProjectId -> QueryMonitorId -> UUID.UUID -> Eff es Int64
+monitorRemoveTeam pid monitorId teamId = PG.execute q (teamId, pid, monitorId)
   where
     q =
       [sql|

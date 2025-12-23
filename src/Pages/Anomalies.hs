@@ -157,7 +157,7 @@ anomalyDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> ATAut
 anomalyDetailGetH pid issueId firstM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  issueM <- dbtToEff $ Issues.selectIssueById issueId
+  issueM <- Issues.selectIssueById issueId
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
@@ -173,7 +173,7 @@ anomalyDetailGetH pid issueId firstM = do
     Just issue -> do
       errorM <-
         issue.issueType & \case
-          Issues.RuntimeException -> dbtToEff $ Anomalies.errorByHash pid issue.endpointHash
+          Issues.RuntimeException -> Anomalies.errorByHash pid issue.endpointHash
           _ -> pure Nothing
       (trItem, spanRecs) <- case errorM of
         Just err -> do
@@ -185,7 +185,7 @@ anomalyDetailGetH pid issueId firstM = do
               case trM of
                 Just traceItem -> do
                   spanRecords' <- Telemetry.getSpanRecordsByTraceId pid traceItem.traceId (Just traceItem.traceStartTime) now
-                  pure (Just traceItem, spanRecords')
+                  pure (Just traceItem, V.fromList spanRecords')
                 Nothing -> pure (Nothing, V.empty)
             Nothing -> return (Nothing, V.empty)
         _ -> return (Nothing, V.empty)
@@ -884,7 +884,7 @@ anomalyAcknowledgeButton pid aid acked host = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
-        <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+          <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" "acknowledge issue"
     , hxGet_ acknowledgeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -900,7 +900,7 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
-        <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+          <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"

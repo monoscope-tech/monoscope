@@ -344,10 +344,6 @@ runHourlyJob scheduledTime hour = do
   ctx <- ask @Config.AuthContext
   let oneHourAgo = addUTCTime (-3600) scheduledTime
   activeProjects <-
-    dbtToEff
-      $ V.map (\(Only pid) -> pid)
-      <$> query
-        [sql| SELECT DISTINCT project_id
     coerce @[Only Projects.ProjectId] @[Projects.ProjectId]
       <$> PG.query
         [sql| SELECT DISTINCT project_id

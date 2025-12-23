@@ -632,7 +632,7 @@ flamegraphGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHea
 flamegraphGetH pid trId shapeViewM = do
   now <- Time.currentTime
   spanRecords' <- Telemetry.getSpanRecordsByTraceId pid trId Nothing now
-  let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
+  let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> V.fromList spanRecords'
       serviceColors = getServiceColors ((\x -> getServiceName x.resource) <$> spanRecords)
   let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
   sp <- case shapeViewM of

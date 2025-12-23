@@ -270,8 +270,8 @@ ensureTemplateDatabase masterConnStr templateDbName = do
           ( Query
               $ encodeUtf8
               $ "DO $$ BEGIN  PERFORM pg_terminate_backend(pid) FROM pg_stat_activity  WHERE datname = '"
-              <> templateDbName
-              <> "' AND pid <> pg_backend_pid(); END $$;"
+                <> templateDbName
+                <> "' AND pid <> pg_backend_pid(); END $$;"
           )
           ()
 
@@ -358,13 +358,11 @@ testSessionHeader pool = do
       & liftIO
 
   -- Insert test user into users table
-  _ <-
-    withPool pool
-      $ DBT.execute
-        [sql|INSERT INTO users.users (id, email, first_name, last_name)
-         VALUES ('00000000-0000-0000-0000-000000000001', 'test@monoscope.tech', 'Test', 'User')
-          ON CONFLICT (id) DO UPDATE SET email = 'test@monoscope.tech', first_name = 'Test', last_name = 'User'
-         |]
+  _ <- liftIO
+    $ withResource pool \conn ->
+      PGS.execute
+        conn
+        [sql|UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000001'|]
         ()
 
   -- Grant sudo privileges to test user

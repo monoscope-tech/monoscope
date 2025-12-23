@@ -68,7 +68,6 @@ import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.Error.Static (throwError)
 import Effectful.Log qualified as Log
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Fmt
 import GHC.Records (HasField (getField))
@@ -500,12 +499,11 @@ manageMembersPostH pid onboardingM form = do
 
       unless (null uAndPOldAndChanged)
         $ void
-        . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       whenJust (nonEmpty deletedUAndP)
         $ void
-        . ProjectMembers.softDeleteProjectMembers
+          . ProjectMembers.softDeleteProjectMembers
 
       projMembersLatest <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
       if isJust onboardingM
@@ -1244,7 +1242,7 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan} = do
         let usersToDel = map (.id) $ drop 1 users
         whenJust (nonEmpty usersToDel)
           $ void
-          . ProjectMembers.softDeleteProjectMembers
+            . ProjectMembers.softDeleteProjectMembers
   if project.paymentPlan == "ONBOARDING"
     then do
       redirectCS $ "/p/" <> pid.toText <> "/"

@@ -597,10 +597,10 @@ errorsByHashes pid hashes
             FROM apis.errors WHERE project_id=? AND hash=ANY(?); |]
 
 
-errorByHash :: Projects.ProjectId -> Text -> DBT IO (Maybe ATError)
+errorByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ATError)
 errorByHash pid hash = do
-  results <- query q (pid, hash)
-  return $ listToMaybe $ V.toList results
+  results <- PG.query q (pid, hash)
+  return $ listToMaybe results
   where
     q =
       [sql| SELECT id, created_at, updated_at, project_id, hash, error_type, message, error_data, first_trace_id, recent_trace_id
