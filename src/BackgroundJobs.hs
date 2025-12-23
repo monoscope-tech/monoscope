@@ -422,10 +422,8 @@ generateOtelFacetsBatch projectIds timestamp = do
 -- 5. Update spans with computed hashes for tracking
 processFiveMinuteSpans :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
 processFiveMinuteSpans scheduledTime pid = do
-  Log.logAttention "Starting 5-minute span processing for project" ("project_id", pid.toText)
   ctx <- ask @Config.AuthContext
   let fiveMinutesAgo = addUTCTime (-300) scheduledTime
-
   Relude.when ctx.config.enableEventsTableUpdates $ do
     processSpansWithPagination fiveMinutesAgo 0
   Log.logInfo "Completed 5-minute span processing" ()
