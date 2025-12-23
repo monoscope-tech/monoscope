@@ -53,6 +53,7 @@ type VirtualListItem = EventLine | { type: 'fetchRecent' } | { type: 'loadMore' 
 @customElement('log-list')
 export class LogList extends LitElement {
   @property({ type: String }) projectId: string = '';
+  @property({ type: String }) initialFetchUrl: string = '';
 
   @state() private expandedTraces: Record<string, boolean> = {};
   @state() private flipDirection: boolean = false;
@@ -253,11 +254,18 @@ export class LogList extends LitElement {
   }
 
   private buildJsonUrl(): string {
+    console.log(this.initialFetchUrl);
     // Preserve all existing query parameters and add json=true
-    const p = new URLSearchParams(window.location.search);
-    p.set('json', 'true');
-    const pathName = window.location.pathname;
-    return `${window.location.origin}${pathName}?${p.toString()}`;
+    if (this.initialFetchUrl) {
+      const url = new URL(this.initialFetchUrl, window.location.origin);
+      url.searchParams.set('json', 'true');
+      return url.toString();
+    } else {
+      const p = new URLSearchParams(window.location.search);
+      p.set('json', 'true');
+      const pathName = window.location.pathname;
+      return `${window.location.origin}${pathName}?${p.toString()}`;
+    }
   }
 
   private buildRecentFetchUrl(): string {
@@ -815,6 +823,7 @@ export class LogList extends LitElement {
         setTimeout(() => this.updateColumnMaxWidthMap(tree.map((t) => t.data).filter(Boolean)), 100);
       }
     } catch (error) {
+      console.log(error);
       this.showErrorToast(error instanceof Error ? error.message : 'Network error');
     } finally {
       this.isLoading = false;

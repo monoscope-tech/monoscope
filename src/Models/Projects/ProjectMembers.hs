@@ -38,7 +38,7 @@ import Database.PostgreSQL.Entity.Types (
   Schema,
   TableName,
  )
-import Database.PostgreSQL.Simple (FromRow, In, Only (Only), ResultError (..), ToRow)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)

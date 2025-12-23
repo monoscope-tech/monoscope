@@ -9,7 +9,6 @@ import Database.PostgreSQL.Transact qualified as PGT
 import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-
 import Models.Users.Users (UserId (..))
 import Models.Users.Users qualified as Users
 import Pages.BodyWrapper
@@ -26,9 +25,8 @@ testPid :: Projects.ProjectId
 testPid = Unsafe.fromJust $ UUIDId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"
 
 
--- The test user created by testSessionHeader has UUID 1 (00000000-0000-0000-0000-000000000001)
 userID :: Users.UserId
-userID = Users.UserId $ Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-0000-000000000001"
+userID = Users.UserId (Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-0000-000000000001")
 
 
 spec :: Spec
@@ -47,8 +45,8 @@ spec = aroundAll withTestResources do
         testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
       -- Check if the response contains the newly added member
       case pg of
-        ManageMembers.ManageMembersPost (_, projMembers) -> do
-          "example@gmail.com" `shouldSatisfy` (`elem` (projMembers & V.toList & map (.email)))
+        ManageMembers.ManageMembersPost (pid, p) -> do
+          "example@gmail.com" `shouldSatisfy` (`elem` (p <&> (.email)))
         _ -> fail "Expected ManageMembersPost response"
 
     it "Update member permissions" \tr -> do
@@ -62,7 +60,7 @@ spec = aroundAll withTestResources do
 
       -- Check if the member's permission is updated
       case pg of
-        ManageMembers.ManageMembersPost (_, projMembers) -> do
+        ManageMembers.ManageMembersPost (pid, projMembers) -> do
           let memberM = projMembers & V.toList & find (\pm -> pm.email == "example@gmail.com")
           isJust memberM `shouldBe` True
           let mem = memberM & Unsafe.fromJust
@@ -77,8 +75,8 @@ spec = aroundAll withTestResources do
       -- Check if the response contains the expected members
       -- Note: 2 members expected - the test user from setup + example@gmail.com
       case pg of
-        ManageMembers.ManageMembersGet (PageCtx _ (_, projMembers)) -> do
-          let emails = projMembers & V.toList & map (.email)
+        ManageMembers.ManageMembersGet (PageCtx _ (pid, projMembers)) -> do
+          let emails = (.email) <$> projMembers
           "example@gmail.com" `shouldSatisfy` (`elem` emails)
           length projMembers `shouldBe` 2
         _ -> fail "Expected ManageMembersGet response"
@@ -94,8 +92,8 @@ spec = aroundAll withTestResources do
 
       -- Check if the member is deleted
       case pg of
-        ManageMembers.ManageMembersPost (_, projMembers) -> do
-          let emails = projMembers & V.toList & map (.email)
+        ManageMembers.ManageMembersPost (pid, projMembers) -> do
+          let emails = (.email) <$> projMembers
           "example@gmail.com" `shouldNotSatisfy` (`elem` emails)
         _ -> fail "Expected ManageMembersPost response"
 
@@ -109,8 +107,8 @@ spec = aroundAll withTestResources do
         testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
       -- Check if the response contains the newly added member
       case pg of
-        ManageMembers.ManageMembersPost (_, projMembers) -> do
-          "example@gmail.com" `shouldSatisfy` (`elem` (projMembers & V.toList & map (.email)))
+        ManageMembers.ManageMembersPost (pid, p) -> do
+          "example@gmail.com" `shouldSatisfy` (`elem` (p <&> (.email)))
         _ -> fail "Expected ManageMembersPost response"
 
   describe "Teams Creation, Update and Consumption" do
@@ -128,8 +126,7 @@ spec = aroundAll withTestResources do
             }
 
     it "Should create team" \tr -> do
-      (_, pg) <-
-        testServant tr $ ManageMembers.manageTeamPostH testPid team Nothing
+      (_, pg) <- testServant tr $ ManageMembers.manageTeamPostH testPid team Nothing
       case pg of
         ManageMembers.ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams) -> do
           length teams `shouldBe` 1

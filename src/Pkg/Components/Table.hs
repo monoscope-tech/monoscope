@@ -293,6 +293,7 @@ renderTableRows tr
   | V.null tr.rows = whenJust tr.emptyState renderSimpleZeroState
   | tr.renderAsTable = do
       let getRowAttrs row = maybe [] ($ row) tr.rowAttrs
+
       V.forM_ tr.rows \row -> tr_ (getRowAttrs row) do
         whenJust tr.rowId \getId -> td_ [class_ "w-8 align-top pt-4"] $ input_ [term "aria-label" "Select Item", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "itemId", value_ $ getId row]
         forM_ tr.columns \c -> td_ c.attrs $ c.render row

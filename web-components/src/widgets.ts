@@ -690,6 +690,13 @@ window.bindFunctionsToObjects = bindFunctionsToObjects;
       return dir === 'asc' ? aNum - bNum : bNum - aNum;
     }
 
+    // Then try date comparison
+    const aDate = new Date(aVal);
+    const bDate = new Date(bVal);
+    if (!isNaN(aDate.getTime()) && !isNaN(bDate.getTime())) {
+      return dir === 'asc' ? aDate.getTime() - bDate.getTime() : bDate.getTime() - aDate.getTime();
+    }
+
     // Fall back to string comparison
     return dir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
   });

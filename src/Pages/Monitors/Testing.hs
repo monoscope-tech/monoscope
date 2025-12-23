@@ -23,15 +23,24 @@ import Fmt.Internal.Numeric (commaizeF)
 import Lucid
 import Lucid.Htmx
 import Models.Apis.Monitors qualified as Monitors
+import Models.Apis.Slack qualified as Slack
+import Models.Projects.ProjectMembers (Team (discord_channels, slack_channels))
+import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.Bots.Discord qualified as Discord
+import Pages.Bots.Slack qualified as Slack
+import Pages.Bots.Slack qualified as SlackP
+import Pages.Bots.Utils (Channel (channelId, channelName))
 import Pages.Components (statBox_)
-import Pkg.Components.Table (Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, simpleZeroState, withAttrs)
+import Pages.LogExplorer.Log (virtualTable)
+import Pkg.Components.Table (Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
-import System.Config (AuthContext (..))
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (checkFreeTierExceeded, faSprite_, toUriStr)
@@ -78,7 +87,7 @@ teamAlertsGetH pid teamId = do
   currTime <- Time.currentTime
   let alerts' = V.fromList $ map (toUnifiedMonitorItem pid currTime) alerts
 
-  addRespHeaders $ TableRows{columns = [], rows = alerts', emptyState = Just $ simpleZeroState "bell-slash" "No alerts linked to this team", renderAsTable = False, rowId = Nothing, rowAttrs = Nothing, pagination = Nothing}
+  addRespHeaders $ TableRows [] alerts' Nothing False Nothing Nothing Nothing
 
 
 -- | Unified handler for monitors endpoint showing both alerts and multi-step monitors
@@ -319,9 +328,12 @@ statusBadge_ isLarge status = do
         "Failing" -> ("badge-error", Just "xmark")
         "Active" -> ("badge-success", Nothing)
         "Inactive" -> ("badge-ghost", Nothing)
+        "Alerting" -> ("badge-error", Nothing)
+        "Warning" -> ("badge-warning", Nothing)
+        "alert" -> ("badge-error", Nothing)
         _ -> ("badge-ghost", Nothing)
       sizeClass = if isLarge then "" else "badge-sm"
-  span_ [class_ $ "badge " <> sizeClass <> " " <> badgeClass <> " gap-1"] do
+  span_ [class_ $ sizeClass <> " " <> badgeClass <> " gap-1 badge"] do
     whenJust icon $ \i -> faSprite_ i "regular" "h-3 w-3"
     toHtml status
 
@@ -375,8 +387,23 @@ unifiedMonitorOverviewH pid monitorId = do
 
   case alertM of
     Just alert -> do
+      teams <- ManageMembers.getTeamsById pid alert.teams
+      slackDataM <- Slack.getProjectSlackData pid
+      channels <- case slackDataM of
+        Just slackData -> do
+          channels' <- SlackP.getSlackChannels appCtx.env.slackBotToken slackData.teamId
+          case channels' of
+            Just chs -> return chs.channels
+            Nothing -> return []
+        Nothing -> return []
+      discordDataM <- Slack.getDiscordDataByProjectId pid
+      discordChannels <- case discordDataM of
+        Just discordData -> Discord.getDiscordChannels appCtx.env.discordBotToken discordData.guildId
+        Nothing -> return []
       let bwconf' = bwconf{navTabs = Just $ monitorOverviewTabs pid monitorId "alert"}
-      addRespHeaders $ PageCtx bwconf' $ unifiedOverviewPage pid alert currTime
+      let findChannel xx x = fromMaybe x (find (\c -> c.channelId == x) xx >>= (\a -> Just a.channelName))
+      let teams' = (\x -> x{slack_channels = findChannel channels <$> x.slack_channels, discord_channels = (\xx -> fromMaybe xx (find (\c -> c.channelId == xx) discordChannels >>= (\a -> Just a.channelName))) <$> x.discord_channels}) <$> teams
+      addRespHeaders $ PageCtx bwconf' $ unifiedOverviewPage pid alert currTime (V.fromList teams') slackDataM discordDataM
     _ -> addRespHeaders $ PageCtx bwconf $ div_ [class_ "p-6 text-center"] "Alert not found"
 
 
@@ -393,9 +420,9 @@ monitorOverviewTabs pid monitorId monitorType = do
 
 
 -- | Unified overview page that handles both monitor types
-unifiedOverviewPage :: Projects.ProjectId -> Monitors.QueryMonitorEvaled -> UTCTime -> Html ()
-unifiedOverviewPage pid alert currTime = do
-  section_ [class_ "pt-2 mx-auto px-14 w-full flex flex-col gap-4 h-full"] do
+unifiedOverviewPage :: Projects.ProjectId -> Monitors.QueryMonitorEvaled -> UTCTime -> V.Vector ManageMembers.Team -> Maybe Slack.SlackData -> Maybe Slack.DiscordData -> Html ()
+unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
+  section_ [class_ "pt-2 mx-auto px-6 w-full flex flex-col gap-6 h-full overflow-y-auto"] do
     -- Header section
     div_ [class_ "flex justify-between items-center"] do
       monitorHeader alert.alertConfig.title (isJust alert.deactivatedAt) ("Severity: " <> alert.alertConfig.severity)
@@ -412,7 +439,7 @@ unifiedOverviewPage pid alert currTime = do
             then "Activate"
             else "Deactivate"
         a_
-          [href_ $ "/p/" <> pid.toText <> "/monitors/alerts/" <> alert.id.toText, class_ "btn btn-sm btn-primary"]
+          [href_ $ "/p/" <> pid.toText <> "/log_explorer?alert=" <> alert.id.toText <> "&query=" <> alert.logQuery, class_ "btn btn-sm btn-primary"]
           do
             faSprite_ "pen-to-square" "regular" "h-4 w-4"
             "Edit Alert"
@@ -422,7 +449,7 @@ unifiedOverviewPage pid alert currTime = do
       alertStats_ pid alert currTime
 
     -- Content tabs
-    tabbedSection_ "monitor-tabs" [("Query & Visualization", alertQueryTab_ pid alert), ("Execution History", monitorHistoryTab_ "Alert execution history"), ("Notifications", alertNotificationsTab_ alert)]
+    tabbedSection_ "monitor-tabs" [("Query & Visualization", alertQueryTab_ pid alert), ("Execution History", monitorHistoryTab_ pid alert.id), ("Notification Channels", alertNotificationsTab_ alert teams)]
   where
     monitorHeader title isInactive subtitle = do
       div_ [class_ "flex flex-col gap-2"] do
@@ -436,44 +463,42 @@ unifiedOverviewPage pid alert currTime = do
 -- | Reusable tabbed section component
 tabbedSection_ :: Text -> [(Text, Html ())] -> Html ()
 tabbedSection_ containerId tabs = do
-  div_ [role_ "tablist", class_ "w-full rounded-3xl border", id_ containerId] do
+  div_ [role_ "tablist", class_ "w-full", id_ containerId] do
     div_ [class_ "w-full flex"] do
       forM_ (zip [0 ..] tabs) $ \(idx, (label, _)) -> do
         let tabId = containerId <> "-tab-" <> show idx
         button_
-          [ class_ $ "cursor-pointer tab-btn px-5 pt-2 pb-1.5 text-sm text-textWeak border-b" <> if idx == 0 then " tab-active" else ""
+          [ class_ $ "cursor-pointer shrink-0 tab-btn  tab-box  text-sm font-medium p-2 text-textWeak border-b-2 border-b-transparent" <> if idx == 0 then " t-tab-active" else ""
           , role_ "tab"
           , term "aria-label" label
           , onclick_ $ "navigateTab(this, '#" <> tabId <> "', '#" <> containerId <> "')"
           ]
           $ toHtml label
-      div_ [class_ "w-full border-b"] pass
-
     forM_ (zip [0 ..] tabs) $ \(idx, (_, content)) -> do
       let tabId = containerId <> "-tab-" <> show idx
-      div_ [role_ "tabpanel", class_ $ "h-[65vh] overflow-y-auto tab-content" <> if idx /= 0 then " hidden" else "", id_ tabId] content
+      div_ [role_ "tabpanel", class_ $ "overflow-y-auto t-tab-content" <> if idx /= 0 then " hidden" else "", id_ tabId] do
+        content
 
   -- Add navigation script once
   script_
-    []
-    "function navigateTab(tab, contentId, containerId) { \
-    \const container = document.querySelector(containerId); \
-    \container.querySelectorAll('.tab-active').forEach(t => t.classList.remove('tab-active')); \
-    \tab.classList.add('tab-active'); \
-    \container.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden')); \
-    \document.querySelector(contentId).classList.remove('hidden'); \
-    \}"
+    [text|
+    function navigateTab(tab, contentId, containerId) { 
+        const container = document.querySelector(containerId); 
+        container.querySelectorAll('.t-tab-active').forEach(t => t.classList.remove('t-tab-active')); 
+        tab.classList.add('t-tab-active'); 
+        container.querySelectorAll('.t-tab-content').forEach(c => c.classList.add('hidden')); 
+        document.querySelector(contentId).classList.remove('hidden'); 
+      }
+    |]
 
 
 -- | Shared history tab
-monitorHistoryTab_ :: Text -> Html ()
-monitorHistoryTab_ description = do
-  div_ [class_ "p-6"] do
-    h3_ [class_ "text-lg font-medium text-textStrong mb-4"] "Execution History"
-    div_ [class_ "text-center text-textWeak py-12"] do
-      faSprite_ "clock-rotate-left" "regular" "h-12 w-12 mb-3 text-iconNeutral"
-      p_ [] "Execution history coming soon"
-      p_ [class_ "text-sm mt-2"] $ toHtml description
+monitorHistoryTab_ :: Projects.ProjectId -> Monitors.QueryMonitorId -> Html ()
+monitorHistoryTab_ pid alertId = do
+  let query = "kind==\"alert\" and context___trace_id==\"" <> alertId.toText <> "\""
+      initialUrl = "/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr query
+  div_ [class_ "mt-2 p-2 border border-strokeWeak rounded-lg"] do
+    virtualTable pid (Just initialUrl)
 
 
 -- | Alert statistics boxes (copied from Alerts module for consolidation)
@@ -481,51 +506,12 @@ alertStats_ :: Projects.ProjectId -> Monitors.QueryMonitorEvaled -> UTCTime -> H
 alertStats_ pid alert currTime = do
   section_ [class_ "space-y-3 shrink-0 w-full"] do
     div_ [class_ "flex gap-2"] do
-      statBox_
-        (Just pid)
-        Nothing
-        "Check Interval"
-        "How often the alert query is evaluated"
-        (show alert.checkIntervalMins <> " min")
-        Nothing
-        Nothing
-
-      statBox_
-        (Just pid)
-        Nothing
-        "Alert Threshold"
-        ("Trigger alert when value is " <> direction)
-        (fmt (commaizeF alert.alertThreshold))
-        Nothing
-        Nothing
-
+      statBox_ (Just pid) Nothing "Check Interval" "How often the alert query is evaluated" (show alert.checkIntervalMins <> " min") Nothing Nothing
+      statBox_ (Just pid) Nothing "Alert Threshold" ("Trigger alert when value is " <> direction) (fmt (commaizeF alert.alertThreshold)) Nothing Nothing
       whenJust alert.warningThreshold $ \warning ->
-        statBox_
-          (Just pid)
-          Nothing
-          "Warning Threshold"
-          ("Trigger warning when value is " <> direction)
-          (fmt (commaizeF warning))
-          Nothing
-          Nothing
-
-      statBox_
-        (Just pid)
-        Nothing
-        "Last Evaluated"
-        "When the alert was last checked"
-        (toText $ prettyTimeAuto currTime alert.lastEvaluated)
-        Nothing
-        Nothing
-
-      statBox_
-        (Just pid)
-        Nothing
-        "Last Triggered"
-        "When the alert was last triggered"
-        (maybe "Never" (toText . prettyTimeAuto currTime) alert.alertLastTriggered)
-        Nothing
-        Nothing
+        statBox_ (Just pid) Nothing "Warning Threshold" ("Trigger warning when value is " <> direction) (fmt (commaizeF warning)) Nothing Nothing
+      statBox_ (Just pid) Nothing "Last Evaluated" "When the alert was last checked" (toText $ prettyTimeAuto currTime alert.lastEvaluated) Nothing Nothing
+      statBox_ (Just pid) Nothing "Last Triggered" "When the alert was last triggered" (maybe "Never" (toText . prettyTimeAuto currTime) alert.alertLastTriggered) Nothing Nothing
   where
     direction = if alert.triggerLessThan then "below" else "above"
 
@@ -533,21 +519,21 @@ alertStats_ pid alert currTime = do
 -- | Alert query tab content (copied from Alerts module)
 alertQueryTab_ :: Projects.ProjectId -> Monitors.QueryMonitorEvaled -> Html ()
 alertQueryTab_ pid alert = do
-  div_ [class_ "p-6"] do
+  div_ [class_ "pt-6 pb-3"] do
     -- Query display
     div_ [class_ "mb-6"] do
-      h3_ [class_ "text-lg font-medium text-textStrong mb-3"] "Alert Query"
-      div_ [class_ "bg-bgAlternate rounded-lg p-4"] do
-        pre_ [class_ "text-sm monospace text-textWeak overflow-x-auto"] $ toHtml alert.logQuery
+      h3_ [class_ "font-medium text-textStrong mb-2 text-sm"] "Alert query"
+      div_ [class_ "bg-fillWeaker rounded-lg p-2 border-strokeWeak"] do
+        pre_ [class_ "text-sm font-mono text-textWeak overflow-x-auto"] $ toHtml alert.logQuery
 
     -- Visualization
     div_ [] do
-      h3_ [class_ "text-lg font-medium text-textStrong mb-3"] "Query Visualization"
-      div_ [class_ "bg-bgBase rounded-lg border p-4", style_ "aspect-ratio: 4 / 2;"] do
+      div_ [class_ "", style_ "aspect-ratio: 4 / 2;"] do
         Widget.widget_
           $ (def :: Widget)
-            { Widget.query = Just alert.logQuery
-            , Widget.title = Just "Alert Query Results"
+            { Widget.wType = Widget.mapChatTypeToWidgetType alert.visualizationType
+            , Widget.query = Just alert.logQuery
+            , Widget.title = Just "Alert Query Visualization"
             , Widget.standalone = Just True
             , Widget._projectId = Just pid
             , Widget.layout = Just (def{Widget.w = Just 12, Widget.h = Just 6})
@@ -555,39 +541,49 @@ alertQueryTab_ pid alert = do
 
 
 -- | Alert notifications tab content (copied from Alerts module)
-alertNotificationsTab_ :: Monitors.QueryMonitorEvaled -> Html ()
-alertNotificationsTab_ alert = do
-  div_ [class_ "p-6"] do
-    h3_ [class_ "text-lg font-medium text-textStrong mb-4"] "Notification Settings"
-
+alertNotificationsTab_ :: Monitors.QueryMonitorEvaled -> V.Vector ManageMembers.Team -> Html ()
+alertNotificationsTab_ alert teams = do
+  div_ [class_ "pt-6 pb-3"] do
     -- Email recipients
     div_ [class_ "mb-6"] do
-      h4_ [class_ "text-base font-medium text-textStrong mb-2"] "Email Recipients"
-      if alert.alertConfig.emailAll
-        then div_ [class_ "text-sm text-textWeak"] "All team members will receive notifications"
-        else
-          if null alert.alertConfig.emails
-            then div_ [class_ "text-sm text-textWeak"] "No email recipients configured"
-            else div_ [class_ "flex flex-wrap gap-2"] do
-              forM_ alert.alertConfig.emails $ \email ->
-                span_ [class_ "badge badge-ghost"] $ toHtml (CI.original email)
-
-    -- Slack channels
-    div_ [class_ "mb-6"] do
-      h4_ [class_ "text-base font-medium text-textStrong mb-2"] "Slack Channels"
-      if null alert.alertConfig.slackChannels
-        then div_ [class_ "text-sm text-textWeak"] "No Slack channels configured"
-        else div_ [class_ "flex flex-wrap gap-2"] do
-          forM_ alert.alertConfig.slackChannels $ \channel ->
-            span_ [class_ "badge badge-ghost"] $ toHtml channel
+      h4_ [class_ "text-base font-medium text-textStrong mb-2 flex items-center"] $ faSprite_ "users" "regular" "h-4 w-4 mr-2" >> "Teams"
+      when (null teams) $ do
+        div_ [class_ "text-sm text-textWeak"] "No teams configured for this alert."
+        div_ [class_ "pt-2 flex items-center gap-1"] do
+          span_ [class_ "text-sm text-textWeak"] "Project level notification integrations will be used."
+          a_ [href_ $ "/p/" <> alert.projectId.toText <> "/integrations", class_ "text-sm text-textBrand hover:underline"] "Configure integrations"
+      unless (V.null teams) $ do
+        div_ [class_ "flex flex-wrap gap-6 mb-4"] do
+          forM_ teams $ \team -> do
+            div_ [class_ "flex flex-col border rounded-lg gap-4 border-strokeWeak p-6 relative w-96", id_ team.handle] do
+              button_
+                [ type_ "button"
+                , class_ "absolute top-3 cursor-pointer right-3 text-red-600 text-textWeak hover:text-textBrand transition-colors"
+                , term "data-tippy-content" "Remove team"
+                , hxDelete_ $ "/p/" <> alert.projectId.toText <> "/monitors/alerts/" <> alert.id.toText <> "/teams/" <> UUID.toText team.id
+                , hxTarget_ $ "#" <> team.handle
+                , hxSwap_ "outerHTML"
+                ]
+                do
+                  faSprite_ "trash" "regular" "h-3 w-3 stroke-red-400"
+              span_ [class_ "text-sm font-medium"] $ toHtml team.name
+              forM_ team.notify_emails $ \email ->
+                div_ [class_ "flex items-center gap-2"] do
+                  span_ [class_ "text-sm text-textWeak"] $ faSprite_ "envelope" "regular" "h-3 w-3 mr-2" >> toHtml email
+              forM_ team.slack_channels $ \channel ->
+                div_ [class_ "flex items-center gap-2"] do
+                  span_ [class_ "text-sm text-textWeak"] $ faSprite_ "slack" "solid" "h-3 w-3 mr-2" >> toHtml ("#" <> channel)
+              forM_ team.discord_channels $ \channel ->
+                div_ [class_ "flex items-center gap-2"] do
+                  span_ [class_ "text-sm text-textWeak"] $ faSprite_ "discord" "brand" "h-3 w-3 mr-2" >> toHtml ("#" <> channel)
 
     -- Message template
-    div_ [] do
-      h4_ [class_ "text-base font-medium text-textStrong mb-2"] "Notification Template"
-      div_ [class_ "bg-bgAlternate rounded-lg p-4 space-y-2"] do
-        div_ [] do
+    div_ [class_ "pt-6 pb-3"] do
+      h4_ [class_ "font-medium text-textStrong mb-2"] "Notification Template"
+      div_ [class_ "rounded-lg py-2 space-y-2"] do
+        div_ [class_ "flex items-center gap-1"] do
           span_ [class_ "text-sm font-medium text-textStrong"] "Subject: "
           span_ [class_ "text-sm text-textWeak"] $ toHtml alert.alertConfig.subject
-        div_ [] do
-          span_ [class_ "text-sm font-medium text-textStrong"] "Message: "
+        div_ [class_ "flex flex-col gap-1"] do
+          span_ [class_ "text-sm font-medium text-textStrong"] "Message"
           p_ [class_ "text-sm text-textWeak mt-1"] $ toHtml alert.alertConfig.message

@@ -73,6 +73,7 @@ import Data.Aeson.Key qualified as AEKey
 import Data.HashMap.Lazy qualified as HM
 import Data.Vector qualified as V
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Issues qualified as Anomalies
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.Anomalies qualified as AnomalyList
@@ -275,6 +276,7 @@ data AnomaliesRoutes' mode = AnomaliesRoutes'
   , unarchiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] AnomalyList.AnomalyBulkForm :> Post '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , listGet :: mode :- QPT "layout" :> QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QEID "endpoint" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders AnomalyList.AnomalyListGet)
+  , anomalyGet :: mode :- Capture "anomalyID" Anomalies.IssueId :> QPT "first_occurrence" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   }
   deriving stock (Generic)
 
@@ -308,6 +310,7 @@ data MonitorsRoutes' mode = MonitorsRoutes'
   , alertSingleToggleActive :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[HTML] (RespHeaders Alerts.Alert)
   , alertOverviewGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "overview" :> Get '[HTML] (RespHeaders Alerts.Alert)
   , teamAlertsGetH :: mode :- "alerts" :> "team" :> Capture "team_id" UUID.UUID :> Get '[HTML] (RespHeaders (Table.TableRows Testing.UnifiedMonitorItem))
+  , alertTeamDeleteH :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "teams" :> Capture "team_id" UUID.UUID :> Delete '[HTML] (RespHeaders Alerts.Alert)
   }
   deriving stock (Generic)
 
@@ -472,6 +475,7 @@ anomaliesServer pid =
     , unarchiveGet = AnomalyList.unArchiveAnomalyGetH pid
     , bulkActionsPost = AnomalyList.anomalyBulkActionsPostH pid
     , listGet = AnomalyList.anomalyListGetH pid
+    , anomalyGet = AnomalyList.anomalyDetailGetH pid
     }
 
 
@@ -497,6 +501,7 @@ monitorsServer pid =
     , alertSingleToggleActive = Alerts.alertSingleToggleActiveH pid
     , alertOverviewGet = Alerts.alertOverviewGetH pid
     , teamAlertsGetH = Testing.teamAlertsGetH pid
+    , alertTeamDeleteH = Alerts.alertTeamDeleteH pid
     }
 
 
@@ -625,8 +630,9 @@ widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
 -- flamegraph GET handler
 flamegraphGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 flamegraphGetH pid trId shapeViewM = do
-  spanRecords' <- Telemetry.getSpanRecordsByTraceId pid trId Nothing
-  let spanRecords = V.fromList $ mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord spanRecords'
+  now <- Time.currentTime
+  spanRecords' <- Telemetry.getSpanRecordsByTraceId pid trId Nothing now
+  let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> V.fromList spanRecords'
       serviceColors = getServiceColors ((\x -> getServiceName x.resource) <$> spanRecords)
   let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
   sp <- case shapeViewM of

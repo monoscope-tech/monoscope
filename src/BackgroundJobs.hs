@@ -424,7 +424,6 @@ processFiveMinuteSpans :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
 processFiveMinuteSpans scheduledTime pid = do
   ctx <- ask @Config.AuthContext
   let fiveMinutesAgo = addUTCTime (-300) scheduledTime
-
   Relude.when ctx.config.enableEventsTableUpdates $ do
     processSpansWithPagination fiveMinutesAgo 0
   Log.logInfo "Completed 5-minute span processing" ()

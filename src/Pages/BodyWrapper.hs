@@ -154,12 +154,12 @@ bodyWrapper bcfg child = do
           [raw|
 
 
-        function navigatable(me, target, container, activeClass, excl)  {
-            const exCls = excl ? ":not(" + excl + ".a-tab)" : "";
-            const exClsC = excl ? ":not(" + excl + ".a-tab-content)" : "";
+        function navigatable(me, target, container, activeClass, tabPrefix)  {
+            const tabeName = tabPrefix ? tabPrefix + "-tab" : "a-tab";
+            const contentName = tabPrefix ? tabPrefix + "-tab-content" : "a-tab-content";
             const nav = document.querySelector(container);
-            const tabs = nav.querySelectorAll(".a-tab" + exCls);
-            const contents = nav.querySelectorAll(".a-tab-content" + exClsC);
+            const tabs = nav.querySelectorAll("." + tabeName);
+            const contents = nav.querySelectorAll("." + contentName);
             const targetElement = document.querySelector(target);
             
             // Batch DOM updates using requestAnimationFrame

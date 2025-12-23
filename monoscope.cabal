@@ -435,11 +435,11 @@ test-suite integration-tests
       Pages.AnomaliesSpec
       Pages.ApiSpec
       Pages.BusinessFlowsSpec
-      Pages.DashboardsSpec
       Pages.Endpoints.ApiCatalogSpec
       Pages.LogExplorer.LogSpec
       Pages.MonitorsSpec
       Pages.Projects.ManageMembersSpec
+      Pages.DashboardsSpec
       Pages.Projects.ProjectsSpec
       Pages.ReportsSpec
       Pages.ShareSpec
@@ -498,6 +498,7 @@ test-suite integration-tests
     , odd-jobs
     , pg-entity
     , pg-transact
+    , log-effectful
     , postgresql-simple
     , proto-lens
     , relude >=1.2.0.0

@@ -126,8 +126,8 @@ migrate db = do
         [sql| UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000000';
 
               INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
-              VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project', 'FREE', true, NULL, true, true)
-              ON CONFLICT (id) DO UPDATE SET payment_plan = 'FREE', active = true, deleted_at = NULL;
+              VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project', 'Startup', true, NULL, true, true)
+              ON CONFLICT (id) DO UPDATE SET payment_plan = 'Startup', active = true, deleted_at = NULL;
               
               INSERT into projects.project_api_keys (active, project_id, title, key_prefix) 
               SELECT True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
@@ -357,6 +357,14 @@ testSessionHeader pool = do
       & runEff
       & liftIO
 
+  -- Insert test user into users table
+  _ <- liftIO
+    $ withResource pool \conn ->
+      PGS.execute
+        conn
+        [sql|UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000001'|]
+        ()
+
   -- Grant sudo privileges to test user
   _ <- liftIO
     $ withResource pool \conn ->
@@ -372,8 +380,8 @@ testSessionHeader pool = do
       PGS.execute
         conn
         [sql|INSERT INTO projects.projects (id, title, description, payment_plan, active, deleted_at, weekly_notif, daily_notif)
-         VALUES (?, 'Test Project', 'Test Description', 'FREE', true, NULL, true, true)
-         ON CONFLICT (id) DO UPDATE SET title = 'Test Project', description = 'Test Description', payment_plan = 'FREE', active = true, deleted_at = NULL, weekly_notif = true, daily_notif = true|]
+         VALUES (?, 'Test Project', 'Test Description', 'Startup', true, NULL, true, true)
+         ON CONFLICT (id) DO UPDATE SET title = 'Test Project', description = 'Test Description', payment_plan = 'Startup', active = true, deleted_at = NULL, weekly_notif = true, daily_notif = true|]
         (Only testProjectId)
 
   -- Add project member permissions (test project and nil UUID project used by many tests)
