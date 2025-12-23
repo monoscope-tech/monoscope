@@ -104,7 +104,7 @@ spec = aroundAll withTestResources do
         _ -> fail "Expected DashboardGet' response"
 
     it "Should handle bulk add teams to dashboards" \tr -> do
-      dlet team = ManageMembers.TeamForm{teamName = "Hello", teamDescription = "", teamHandle = "hello", notifEmails = [], teamMembers = [], discordChannels = [], slackChannels = [], teamId = Nothing}
+      let team = ManageMembers.TeamForm{teamName = "Hello", teamDescription = "", teamHandle = "hello", notifEmails = [], teamMembers = [], discordChannels = [], slackChannels = [], phoneNumbers = [], teamId = Nothing}
       _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team Nothing
       _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team{teamHandle = "hii"} Nothing
       _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team{teamHandle = "broo"} Nothing
@@ -112,8 +112,8 @@ spec = aroundAll withTestResources do
       case tm of
         ManageMembers.ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams') -> do
           -- Filter to get team-hello and team-hi (exclude team-broo)
-          let teamIds = V.toList $ V.map (\t -> t.id) $ V.filter (\t -> t.handle /= "team-broo") teams'
-          let brooId = V.find (\t -> t.handle == "team-broo") teams' & Unsafe.fromJust & \t -> t.id
+          let teamIds = V.toList $ V.map (\t -> t.id) $ V.filter (\t -> t.handle /= "broo") teams'
+          let brooId = V.find (\t -> t.handle == "broo") teams' & Unsafe.fromJust & \t -> t.id
           (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing (DashboardFilters [])
           case pg of
             Dashboards.DashboardsGet (PageCtx _ d) -> do
@@ -151,7 +151,7 @@ spec = aroundAll withTestResources do
 
     it "Should star and unstar a dashboard" \tr -> do
       let dashboard1 = dashboard{title = "Star Test Dashboard"} :: Dashboards.DashboardForm
-      let dashboardA = dashboard{title = "Dashboard A"} :: Dashboards.DashboardForm
+          dashboardA = dashboard{title = "Dashboard A"} :: Dashboards.DashboardForm
           dashboardB = dashboard{title = "Dashboard B"} :: Dashboards.DashboardForm
           dashboardC = dashboard{title = "Dashboard C"} :: Dashboards.DashboardForm
       _ <- testServant tr do
@@ -180,23 +180,12 @@ spec = aroundAll withTestResources do
                 Dashboards.DashboardsGet (PageCtx _ d'') -> do
                   let unstarredDash = Unsafe.fromJust $ V.find (\x -> x.id == dash.id) d''.dashboards
                   unstarredDash.starredSince `shouldSatisfy` isNothing
-                  -- Cleanup: delete the dashboard to avoid UUID conflicts with subsequent tests
-                  _ <- testServant tr $ Dashboards.dashboardDeleteH testPid dash.id
                   pass
                 _ -> fail "Expected DashboardsGet response"
             _ -> fail "Expected DashboardsGet response"
         _ -> fail "Expected DashboardsGet response"
 
     it "Should sort starred dashboards first" \tr -> do
-      let dashboard1 = dashboard{title = "Dashboard A"} :: Dashboards.DashboardForm
-      let dashboard2 = dashboard{title = "Dashboard B"} :: Dashboards.DashboardForm
-      let dashboard3 = dashboard{title = "Dashboard C"} :: Dashboards.DashboardForm
-      -- Create all dashboards in a single testServant call to avoid UUID sequence reset
-      _ <- testServant tr do
-        _ <- Dashboards.dashboardsPostH testPid dashboard1
-        _ <- Dashboards.dashboardsPostH testPid dashboard2
-        Dashboards.dashboardsPostH testPid dashboard3
-
       (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
       case pg of
         Dashboards.DashboardsGet (PageCtx _ d) -> do

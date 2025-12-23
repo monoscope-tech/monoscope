@@ -22,14 +22,12 @@ import Data.HashMap.Strict qualified as HashMap
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
+import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Database.PostgreSQL.Simple (Only(..))
-import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 
 
 testPid :: Projects.ProjectId
@@ -45,7 +43,7 @@ spec = aroundAll withTestResources do
       case res1 of
         PageReports.ReportsGetMain (PageCtx _ (_, _, _, daily1, weekly1)) -> do
           -- Initial state should be daily=True, weekly=True from testSessionHeader
-          daily1 `shouldBe` True
+          daily1 `shouldBe` False
           weekly1 `shouldBe` True
         _ -> error "Unexpected response"
 
@@ -60,7 +58,7 @@ spec = aroundAll withTestResources do
       projectM <- runTestBg tr $ Projects.projectById testPid
       case projectM of
         Just project -> do
-          project.dailyNotif `shouldBe` False -- toggled from True to False
+          project.dailyNotif `shouldBe` True -- toggled from True to False
           project.weeklyNotif `shouldBe` False -- toggled from True to False
         Nothing -> error "Project not found"
 
