@@ -514,7 +514,7 @@ manageMembersPostH pid onboardingM form = do
 
       whenJust (nonEmpty deletedUAndP)
         $ void
-          . ProjectMembers.softDeleteProjectMembers
+        . ProjectMembers.softDeleteProjectMembers
 
       projMembersLatest <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
       if isJust onboardingM
@@ -1253,7 +1253,7 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan} = do
         let usersToDel = map (.id) $ drop 1 users
         whenJust (nonEmpty usersToDel)
           $ void
-            . ProjectMembers.softDeleteProjectMembers
+          . ProjectMembers.softDeleteProjectMembers
   if project.paymentPlan == "ONBOARDING"
     then do
       redirectCS $ "/p/" <> pid.toText <> "/"
