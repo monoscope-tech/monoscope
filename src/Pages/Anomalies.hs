@@ -893,7 +893,7 @@ anomalyAcknowledgeButton pid aid acked host = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
-          <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+        <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" "acknowledge issue"
     , hxGet_ acknowledgeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -909,7 +909,7 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
-          <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+        <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"
