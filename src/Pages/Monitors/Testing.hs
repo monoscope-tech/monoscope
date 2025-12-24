@@ -22,8 +22,8 @@ import Fmt.Internal.Core (fmt)
 import Fmt.Internal.Numeric (commaizeF)
 import Lucid
 import Lucid.Htmx
+import Models.Apis.Bots qualified as Slack
 import Models.Apis.Monitors qualified as Monitors
-import Models.Apis.Slack qualified as Slack
 import Models.Projects.ProjectMembers (Team (discord_channels, slack_channels))
 import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects

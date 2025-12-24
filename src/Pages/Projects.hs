@@ -75,8 +75,8 @@ import Lucid
 import Lucid (href_)
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Models.Apis.Slack (SlackData, getDiscordDataByProjectId, getProjectSlackData)
-import Models.Apis.Slack qualified as Slack
+import Models.Apis.Bots (SlackData, getDiscordDataByProjectId, getProjectSlackData)
+import Models.Apis.Bots qualified as Slack
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -509,7 +509,6 @@ manageMembersPostH pid onboardingM form = do
 
       unless (null uAndPOldAndChanged)
         $ void
-        . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       whenJust (nonEmpty deletedUAndP)

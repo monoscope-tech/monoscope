@@ -80,6 +80,7 @@ import Pages.Anomalies qualified as AnomalyList
 import Pages.Api qualified as Api
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Discord qualified as Discord
+import Pages.Bots.Github qualified as Github
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils qualified as BotUtils
 import Pages.Bots.Whatsapp qualified as Whatsapp
@@ -124,6 +125,7 @@ type QPB a = QueryParam a Bool
 type QPI a = QueryParam a Int
 type QEID a = QueryParam a Endpoints.EndpointId
 type QPUUId a = QueryParam a UUID.UUID
+type QPID a = QueryParam a Projects.ProjectId
 
 
 -- Custom type for handling all query parameters
@@ -189,6 +191,7 @@ data Routes mode = Routes
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , rrwebPost :: mode :- "rrweb" :> ProjectId :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Users.UserId :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+  , githubSetupGet :: mode :- "github" :> "setup" :> QPI "installation_id" :> QPID "state" :> QPT "action" :> Get '[HTML] (PageCtx (Html ()))
   }
   deriving stock (Generic)
 
@@ -388,6 +391,7 @@ server pool =
     , chartsDataShot = Charts.queryMetrics
     , rrwebPost = Replay.replayPostH
     , avatarGet = avatarGetH
+    , githubSetupGet = Github.setupGetH
     , cookieProtected = \sessionWithCookies ->
         Servant.hoistServerWithContext
           (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))

@@ -1,4 +1,4 @@
-module Models.Apis.Slack (
+module Models.Apis.Bots (
   SlackData (..),
   DiscordData (..),
   insertAccessToken,
@@ -12,8 +12,12 @@ module Models.Apis.Slack (
   getDashboardsForSlack,
   getDashboardsForWhatsapp,
   getDiscordData,
+  insertOrUpdateGithubInstallation,
+  getGithubInstallationByProjectId,
+  GithubInstallation (..),
 ) where
 
+import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -122,3 +126,37 @@ getDashboardsForDiscord :: DB es => Text -> Eff es [(Text, Text)]
 getDashboardsForDiscord guildId = PG.query q (Only guildId)
   where
     q = [sql|SELECT d.title, d.id::text FROM projects.dashboards d JOIN apis.discord dd ON d.project_id = dd.project_id where guild_id=?|]
+
+
+data GithubInstallation = GithubInstallation
+  { installationId :: Int64
+  , projectId :: Projects.ProjectId
+  , accessToken :: Maybe Text
+  , tokenExpiresAt :: Maybe UTCTime
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (FromRow, NFData)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] GithubInstallation
+
+
+-- Additional functions for GithubInstallation can be added here
+getGithubInstallationByProjectId :: DB es => Projects.ProjectId -> Eff es (Maybe GithubInstallation)
+getGithubInstallationByProjectId pid = listToMaybe <$> PG.query q (Only pid)
+  where
+    q =
+      [sql|SELECT installation_id, project_id, access_token, token_expires_at, created_at, updated_at 
+             FROM apis.github_installations WHERE project_id =? |]
+
+
+insertOrUpdateGithubInstallation :: DB es => Int -> Projects.ProjectId -> Maybe Text -> Maybe UTCTime -> Eff es Int64
+insertOrUpdateGithubInstallation instId pid mToken mExpiresAt = PG.execute q params
+  where
+    q =
+      [sql|INSERT INTO apis.github_installations
+               (installation_id, project_id, access_token, token_expires_at)
+               VALUES (?,?,?,?)
+               ON CONFLICT (project_id)
+               DO UPDATE SET installation_id = EXCLUDED.installation_id, access_token = EXCLUDED.access_token, token_expires_at = EXCLUDED.token_expires_at |]
+    params = (instId, pid, mToken, mExpiresAt)

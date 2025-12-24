@@ -5,24 +5,31 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
 import Data.Default (Default (def))
 import Data.Text qualified as T
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Database.Postgres.Temp.Internal.Config (addErrorContext)
 import Effectful.Error.Static (throwError)
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
 import Lucid
+import Models.Apis.Bots qualified as Bots
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Relude hiding (ask, asks)
 import System.Config (AuthContext (..))
-import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
+import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Utils (faSprite_)
 
 
-setupGetH :: Maybe Text -> Maybe Projects.ProjectId -> Maybe Text -> ATBaseCtx (PageCtx (Html ()))
-setupGetH pid installationId action = do
+setupGetH :: Maybe Int -> Maybe Projects.ProjectId -> ATBaseCtx (PageCtx (Html ()))
+setupGetH installationId pid' = do
   appCtx <- asks env
   let bwconf = (def :: BWConfig){pageTitle = "GitHub Bot Setup", isSettingsPage = True}
-  pure $ PageCtx bwconf setupPage
+  case (pid', installationId) of
+    (Just p, Just iid) -> do
+      res <- Bots.insertOrUpdateGithubInstallation iid p Nothing Nothing
+      pure $ PageCtx bwconf setupPage
+    _ -> do
+      pure $ PageCtx bwconf setupPage
 
 
 setupPage :: Html ()

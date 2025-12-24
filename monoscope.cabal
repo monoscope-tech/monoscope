@@ -73,7 +73,7 @@ library
       Models.Apis.Reports
       Models.Apis.RequestDumps
       Models.Apis.Shapes
-      Models.Apis.Slack
+      Models.Apis.Bots
       Models.Projects.Dashboards
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
