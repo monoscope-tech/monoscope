@@ -1079,7 +1079,7 @@ newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> V.Vector Tex
 newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
   authCtx <- ask @Config.AuthContext
   let anomalyType = fromMaybe (error "parseAnomalyTypes returned Nothing") $ Anomalies.parseAnomalyTypes anomalyTypesT
-
+  Log.logInfo "Processing new anomalies" ()
   case anomalyType of
     -- API Change anomalies (endpoint, shape, format) - group into single issue per endpoint
     -- This prevents notification spam when multiple related changes occur
@@ -1089,6 +1089,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
     -- Runtime exceptions get individual issues
     -- Each unique error pattern gets its own issue for tracking
     Anomalies.ATRuntimeException -> do
+      Log.logInfo "Processing runtime exception anomaliesxxxxxxxxxxxxxxxxxxx" ()
       errors <- Anomalies.errorsByHashes pid targetHashes
 
       -- Create one issue per error
