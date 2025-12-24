@@ -11,7 +11,8 @@ const MS_10 = 10000;
 @customElement('session-replay')
 export class SessionReplay extends LitElement {
   @property({ type: String }) private projectId: string = '';
-  @property({ type: String }) private containerId: String = '';
+  @property({ type: String }) private containerId: string = '';
+  @property({ type: String }) private initialSession: string = '';
 
   @state() private activityWidth = 0;
   @query('#replayerOuterContainer') private replayerOuterContainer: HTMLElement;
@@ -305,10 +306,9 @@ export class SessionReplay extends LitElement {
   protected firstUpdated(_changedProperties: PropertyValues): void {
     const mContainer = Number(getComputedStyle(this.replayerOuterContainer).width.replace('px', ''));
     this.containerWidth = mContainer - this.activityWidth;
-
-    // TODO: Remove auto-initialization to improve performance
-    // const events = JSON.parse(localStorage.getItem('qq') || '[]').events;
-    // this.initiatePlayer(events);
+    if (this.initialSession) {
+      this.fetchNewSessionData(this.initialSession);
+    }
   }
 
   handleTimeSeek(e: any) {

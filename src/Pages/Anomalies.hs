@@ -22,6 +22,7 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Default (def)
+import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Data.Time.LocalTime (zonedTimeToUTC)
@@ -36,6 +37,7 @@ import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Aria qualified as Aria
+import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx (hxGet_, hxIndicator_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies (FieldChange (..), PayloadChange (..))
@@ -60,7 +62,7 @@ import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (changeTypeFillColor, checkFreeTierExceeded, escapedQueryPartial, faSprite_, formatUTC, methodFillColor, statusFillColor, toUriStr)
+import Utils (changeTypeFillColor, checkFreeTierExceeded, escapedQueryPartial, faSprite_, formatUTC, lookupValueText, methodFillColor, statusFillColor, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -312,8 +314,8 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
           h4_ [class_ "text-textStrong text-lg font-medium"] "Overview"
           div_ [class_ "flex items-center"] do
             let aUrl = "/p/" <> pid.toText <> "/anomalies/" <> issueId <> ""
-            a_ [href_ $ aUrl <> "?first_occurrence=true", class_ $ if isFirst then "text-textBrand font-medium" else "" <> " text-xs py-3 px-3 border-b border-b-transparent cursor-pointer font-medium", term "data-tippy-content" "Show first trace the error occured"] "First"
-            a_ [href_ aUrl, class_ $ if isFirst then "" else "text-textBrand font-medium" <> " text-xs py-3 px-3 border-b border-b-transparent cursor-pointer font-medium", term "data-tippy-content" "Show recent trace the error occured"] "Recent"
+            a_ [href_ $ aUrl <> "?first_occurrence=true", class_ $ (if isFirst then "text-textBrand font-medium" else "") <> " text-xs py-3 px-3 border-b border-b-transparent cursor-pointer font-medium", term "data-tippy-content" "Show first trace the error occured"] "First"
+            a_ [href_ aUrl, class_ $ (if isFirst then "" else "text-textBrand font-medium") <> " text-xs py-3 px-3 border-b border-b-transparent cursor-pointer font-medium", term "data-tippy-content" "Show recent trace the error occured"] "Recent"
             span_ [class_ "mx-6 text-textWeak w-1 h-3 bg-fillWeak"] pass
             button_ [class_ "text-xs py-3 px-3 border-b border-b-transparent cursor-pointer err-tab  t-tab-active font-medium", onclick_ "navigatable(this, '#span-content', '#error-details-container', 't-tab-active', 'err')"] "Trace"
             button_ [class_ "text-xs py-3 px-3 border-b border-b-transparent cursor-pointer err-tab font-medium", onclick_ "navigatable(this, '#log-content', '#error-details-container', 't-tab-active', 'err')"] "Logs"
@@ -341,8 +343,15 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
               virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr ("kind==\"log\" AND context___trace_id==\"" <> fromMaybe "" (errM >>= (\x -> x.recentTraceId)) <> "\"")))
 
           div_ [id_ "replay-content", class_ "hidden err-tab-content"] do
-            div_ [class_ "flex flex-col gap-4"] do
-              emptyState_ "No Replay Available" "No session replays associated with this trace" (Just "https://monoscope.tech/docs/sdks/javascript/session-replay/") "Session Replay Guide"
+            let withSessionIds = V.catMaybes $ V.map (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) spanRecs
+            unless (V.null withSessionIds) do
+              let sessionId = V.head withSessionIds
+              div_ [class_ "border border-r border-l w-max mx-auto"]
+                $ termRaw "session-replay" [id_ "sessionReplay", term "initialSession" sessionId, class_ "shrink-1 flex flex-col", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
+
+            when (V.null withSessionIds)
+              $ div_ [class_ "flex flex-col gap-4"] do
+                emptyState_ "No Replay Available" "No session replays associated with this trace" (Just "https://monoscope.tech/docs/sdks/Javascript/browser/") "Session Replay Guide"
 
 
 anomalyListGetH
@@ -884,7 +893,7 @@ anomalyAcknowledgeButton pid aid acked host = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl  "
-        <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+          <> (if acked then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" "acknowledge issue"
     , hxGet_ acknowledgeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -900,7 +909,7 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_
         $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
-        <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+          <> (if archived then " bg-fillSuccess-weak text-textSuccess" else "btn-primary")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"
