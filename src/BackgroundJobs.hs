@@ -1089,7 +1089,6 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
     -- Runtime exceptions get individual issues
     -- Each unique error pattern gets its own issue for tracking
     Anomalies.ATRuntimeException -> do
-      Log.logInfo "Processing runtime exception anomaliesxxxxxxxxxxxxxxxxxxx" ()
       errors <- Anomalies.errorsByHashes pid targetHashes
 
       -- Create one issue per error
@@ -1099,47 +1098,46 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
         -- Queue enhancement job
         _ <- liftIO $ withResource authCtx.jobsPool \conn ->
           createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
-        pass
-
-      -- Send notifications only if project exists and has alerts enabled
-      projectM <- Projects.projectById pid
-      whenJust projectM \project -> Relude.when project.errorAlerts do
-        users <- Projects.usersByProjectId pid
-        forM_ project.notificationsChannel \case
-          Projects.NSlack ->
-            forM_ errors \err -> sendSlackAlert (RuntimeErrorAlert err.errorData) pid project.title Nothing
-          Projects.NDiscord ->
-            forM_ errors \err -> sendDiscordAlert (RuntimeErrorAlert err.errorData) pid project.title Nothing
-          Projects.NPhone ->
-            forM_ errors \err ->
-              sendWhatsAppAlert (RuntimeErrorAlert err.errorData) pid project.title project.whatsappNumbers
-          Projects.NEmail ->
-            forM_ users \u -> do
-              let errosJ =
-                    ( \ee ->
-                        let e = ee.errorData
-                         in AE.object
-                              [ "root_error_message" AE..= e.rootErrorMessage
-                              , "error_type" AE..= e.errorType
-                              , "error_message" AE..= e.message
-                              , "stack_trace" AE..= e.stackTrace
-                              , "when" AE..= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
-                              , "hash" AE..= e.hash
-                              , "tech" AE..= e.technology
-                              , "request_info" AE..= (fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
-                              , "root_error_type" AE..= e.rootErrorType
-                              ]
-                    )
-                      <$> errors
-                  title = project.title
-                  errors_url = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
-                  templateVars =
-                    [aesonQQ|{
-                        "project_name": #{title},
-                        "errors_url": #{errors_url},
-                        "errors": #{errosJ}
-                   }|]
-              sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
+        -- Send notifications only if project exists and has alerts enabled
+        projectM <- Projects.projectById pid
+        whenJust projectM \project -> Relude.when project.errorAlerts do
+          users <- Projects.usersByProjectId pid
+          let issueId = UUID.toText issue.id.unUUIDId
+          forM_ project.notificationsChannel \case
+            Projects.NSlack ->
+              forM_ errors \err' -> sendSlackAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData}) pid project.title Nothing
+            Projects.NDiscord ->
+              forM_ errors \err' -> sendDiscordAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData}) pid project.title Nothing
+            Projects.NPhone ->
+              forM_ errors \err' ->
+                sendWhatsAppAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData}) pid project.title project.whatsappNumbers
+            Projects.NEmail ->
+              forM_ users \u -> do
+                let errosJ =
+                      ( \ee ->
+                          let e = ee.errorData
+                           in AE.object
+                                [ "root_error_message" AE..= e.rootErrorMessage
+                                , "error_type" AE..= e.errorType
+                                , "error_message" AE..= e.message
+                                , "stack_trace" AE..= e.stackTrace
+                                , "when" AE..= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
+                                , "hash" AE..= e.hash
+                                , "tech" AE..= e.technology
+                                , "request_info" AE..= (fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
+                                , "root_error_type" AE..= e.rootErrorType
+                                ]
+                      )
+                        <$> errors
+                    title = project.title
+                    errors_url = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
+                    templateVars =
+                      [aesonQQ|{
+                          "project_name": #{title},
+                          "errors_url": #{errors_url},
+                          "errors": #{errosJ}
+                     }|]
+                sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
     -- Ignore other anomaly types
     _ -> pass
 
@@ -1208,7 +1206,7 @@ processAPIChangeAnomalies pid targetHashes = do
             anomaliesByEndpoint
     -- Only send notifications if we have valid endpoint info
     Relude.when (project.endpointAlerts && not (null endpointInfo)) do
-      let alert = EndpointAlert project.title (V.fromList endpointInfo) (fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes)
+      let alert = EndpointAlert{project = project.title, endpoints = V.fromList endpointInfo, endpointHash = fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes}
 
       forM_ project.notificationsChannel \case
         Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
