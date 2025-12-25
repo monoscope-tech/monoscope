@@ -9,10 +9,9 @@ import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as W
 import Data.Either qualified as Unsafe
 import Data.HashMap.Strict qualified as HM
-import Data.List as L (foldl, foldl', partition)
+import Data.List as L (foldl, partition)
 import Data.List.Extra (chunksOf, groupBy)
 import Data.Map.Lazy qualified as Map
-import Data.Map.Strict qualified as M
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
@@ -1342,7 +1341,7 @@ gitSyncFromRepo pid = do
           let actions = GitSync.buildSyncPlan entries dbState
               creates = [a | a@GitSync.SyncCreate{} <- actions]
               updates = [a | a@GitSync.SyncUpdate{} <- actions]
-              deletes = [a | a@GitSync.SyncDelete{} <- actions]
+              deletes = [(path, dashId) | GitSync.SyncDelete path dashId <- actions]
           Log.logInfo "Git sync plan" ("creates" :: Text, length creates, "updates" :: Text, length updates, "deletes" :: Text, length deletes)
           -- Fetch file contents in parallel for creates and updates
           let fetchActions = creates <> updates
@@ -1350,11 +1349,9 @@ gitSyncFromRepo pid = do
             threads <- forM fetchActions \action -> Ki.fork scope $ processGitSyncAction pid sync action
             traverse_ (Ki.atomically . Ki.await) threads
           -- Process deletes (no HTTP needed)
-          forM_ deletes \case
-            GitSync.SyncDelete path dashId -> do
-              _ <- Dashboards.deleteDashboard dashId
-              Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
-            _ -> pass
+          forM_ deletes \(path, dashId) -> do
+            _ <- Dashboards.deleteDashboard dashId
+            Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
           _ <- GitSync.updateLastTreeSha sync.id treeSha
           Log.logInfo "Completed GitHub sync for project" pid
 

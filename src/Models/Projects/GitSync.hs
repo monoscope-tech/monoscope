@@ -126,13 +126,18 @@ getGitHubSync :: DB es => ProjectId -> Eff es (Maybe GitHubSync)
 getGitHubSync pid = listToMaybe <$> PG.query (_selectWhere @GitHubSync [[field| project_id |]]) (Only pid)
 
 
-getGitHubSyncDecrypted :: (DB es, Log :> es) => ByteString -> ProjectId -> Eff es (Maybe GitHubSync)
-getGitHubSyncDecrypted encKey pid =
-  getGitHubSync pid >>= \case
+-- | Helper to decrypt sync config, logging on failure
+withDecryption :: (AE.ToJSON ctx, DB es, Log :> es) => ByteString -> ctx -> Eff es (Maybe GitHubSync) -> Eff es (Maybe GitHubSync)
+withDecryption encKey ctx fetch =
+  fetch >>= \case
     Nothing -> pure Nothing
     Just sync -> case decryptSync encKey sync of
-      Left err -> logWarn "GitHub sync token decryption failed" (pid, err) >> pure Nothing
+      Left err -> logWarn "GitHub sync token decryption failed" (ctx, err) >> pure Nothing
       Right decrypted -> pure $ Just decrypted
+
+
+getGitHubSyncDecrypted :: (DB es, Log :> es) => ByteString -> ProjectId -> Eff es (Maybe GitHubSync)
+getGitHubSyncDecrypted encKey pid = withDecryption encKey pid $ getGitHubSync pid
 
 
 getGitHubSyncByRepo :: DB es => Text -> Text -> Eff es (Maybe GitHubSync)
@@ -140,12 +145,7 @@ getGitHubSyncByRepo owner repo = listToMaybe <$> PG.query (_selectWhere @GitHubS
 
 
 getGitHubSyncByRepoDecrypted :: (DB es, Log :> es) => ByteString -> Text -> Text -> Eff es (Maybe GitHubSync)
-getGitHubSyncByRepoDecrypted encKey ownerVal repoVal =
-  getGitHubSyncByRepo ownerVal repoVal >>= \case
-    Nothing -> pure Nothing
-    Just sync -> case decryptSync encKey sync of
-      Left err -> logWarn "GitHub sync token decryption failed" (ownerVal, repoVal, err) >> pure Nothing
-      Right decrypted -> pure $ Just decrypted
+getGitHubSyncByRepoDecrypted encKey ownerVal repoVal = withDecryption encKey (ownerVal, repoVal) $ getGitHubSyncByRepo ownerVal repoVal
 
 
 insertGitHubSync :: DB es => ByteString -> ProjectId -> Text -> Text -> Text -> Text -> Maybe Text -> Eff es (Maybe GitHubSync)
@@ -279,9 +279,9 @@ buildSyncPlan :: [TreeEntry] -> M.Map Text (DashboardId, Text) -> [SyncAction]
 buildSyncPlan entries dbState = creates <> updates <> deletes
   where
     gitFiles = M.fromList [(e.path, e.sha) | e <- entries, isDashboardFile e]
-    creates = [SyncCreate p s | (p, s) <- M.toList $ gitFiles `M.difference` dbState]
-    updates = [SyncUpdate p s rid | (p, s) <- M.toList gitFiles, Just (rid, oldSha) <- [M.lookup p dbState], s /= oldSha]
-    deletes = [SyncDelete p rid | (p, (rid, _)) <- M.toList $ dbState `M.difference` gitFiles]
+    creates = M.foldMapWithKey (\p s -> [SyncCreate p s]) $ gitFiles `M.difference` dbState
+    updates = M.foldMapWithKey (\p s -> case M.lookup p dbState of Just (rid, oldSha) | s /= oldSha -> [SyncUpdate p s rid]; _ -> []) gitFiles
+    deletes = M.foldMapWithKey (\p (rid, _) -> [SyncDelete p rid]) $ dbState `M.difference` gitFiles
 
 
 dashboardToYaml :: Dashboard -> ByteString

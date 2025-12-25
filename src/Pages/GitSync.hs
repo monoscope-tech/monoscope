@@ -109,18 +109,20 @@ handlePayload signatureM eventTypeM rawBody payload = do
           Left err -> do
             Log.logAttention "GitHub webhook signature validation failed" (ownerName, repoName, err)
             pure $ AE.object ["status" AE..= ("error" :: Text), "message" AE..= err]
-          Right () -> case eventTypeM of
-            Just "push" -> do
-              liftIO $ withResource ctx.jobsPool \conn ->
-                void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo sync.projectId
-              Log.logInfo "Triggered git sync from webhook" (sync.projectId, ownerName, repoName)
-              pure $ AE.object ["status" AE..= ("ok" :: Text)]
-            Just event -> do
-              Log.logInfo "Ignoring GitHub event type" event
-              pure $ AE.object ["status" AE..= ("ignored" :: Text), "event" AE..= event]
-            Nothing -> do
-              Log.logInfo "GitHub webhook missing event type" ()
-              pure $ AE.object ["status" AE..= ("error" :: Text)]
+          Right () -> do
+            when (isNothing sync.webhookSecret) $ Log.logWarn "GitHub webhook accepted without secret validation" (ownerName, repoName)
+            case eventTypeM of
+              Just "push" -> do
+                liftIO $ withResource ctx.jobsPool \conn ->
+                  void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo sync.projectId
+                Log.logInfo "Triggered git sync from webhook" (sync.projectId, ownerName, repoName)
+                pure $ AE.object ["status" AE..= ("ok" :: Text)]
+              Just event -> do
+                Log.logInfo "Ignoring GitHub event type" event
+                pure $ AE.object ["status" AE..= ("ignored" :: Text), "event" AE..= event]
+              Nothing -> do
+                Log.logInfo "GitHub webhook missing event type" ()
+                pure $ AE.object ["status" AE..= ("error" :: Text)]
 
 
 validateWebhookSignature :: Maybe Text -> Maybe Text -> ByteString -> Either Text ()
