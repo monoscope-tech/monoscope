@@ -294,7 +294,7 @@ yamlToDashboard = first (toText . show) . Yaml.decodeEither'
 
 -- | Convert dashboard title to kebab-case file path
 titleToFilePath :: Text -> Text
-titleToFilePath title = toText (toKebab $ fromAny $ toString $ T.strip title) <> ".yaml"
+titleToFilePath = (<> ".yaml") . toText . toKebab . fromAny . toString . T.strip
 
 
 -- | Compute Git blob SHA (SHA1 of "blob <size>\0<content>")
