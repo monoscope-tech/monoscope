@@ -53,6 +53,7 @@ import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxPatch_, hxPost_, hxP
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards qualified as Dashboards
+import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -82,6 +83,22 @@ import Text.Slugify (slugify)
 import UnliftIO.Exception (try)
 import Utils
 import Web.FormUrlEncoded (FromForm)
+
+
+-- | Sync file_path and file_sha for a dashboard after any update
+syncDashboardFileInfo :: DB es => Dashboards.DashboardId -> Eff es ()
+syncDashboardFileInfo dashId = do
+  dashM <- Dashboards.getDashboardById dashId
+  forM_ dashM \dash -> do
+    teams <- ManageMembers.getTeamsById dash.projectId dash.teams
+    let schema =
+          fromMaybe def dash.schema
+            & #title ?~ dash.title
+            & #tags ?~ V.toList dash.tags
+            & #teams ?~ map (.handle) teams
+        filePath = Dashboards.titleToFilePath dash.title
+        fileSha = Dashboards.computeContentSha $ GitSync.dashboardToYaml schema
+    void $ Dashboards.updateFileInfo dashId filePath fileSha
 
 
 -- Filter record for dashboard list
@@ -479,6 +496,7 @@ dashboardWidgetPutH pid dashId widgetIdM widget = do
           ((dash :: Dashboards.Dashboard) & #widgets %~ (<> [widgetUpdated]), widgetUpdated)
 
   _ <- Dashboards.updateSchema dashId dash'
+  syncDashboardFileInfo dashId
 
   let successMsg = case widgetIdM of
         Just _ -> "Widget updated successfully"
@@ -514,6 +532,7 @@ dashboardWidgetReorderPatchH pid dashId widgetOrder = do
       newDash = (dash :: Dashboards.Dashboard) & #widgets .~ sortedWidgets
 
   _ <- Dashboards.updateSchema dashId newDash
+  syncDashboardFileInfo dashId
 
   addRespHeaders NoContent
 
@@ -1158,8 +1177,11 @@ dashboardsPostH pid form = do
               , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
               , title = form.title
               , teams = V.fromList form.teams
+              , filePath = Nothing
+              , fileSha = Nothing
               }
       _ <- Dashboards.insert dbd
+      syncDashboardFileInfo dbd.id
       redirectCS redirectURI
       addRespHeaders DashboardNoContent
 
@@ -1199,7 +1221,10 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
               , tags = V.fromList tags
               , title = title
               , teams = V.empty
+              , filePath = Nothing
+              , fileSha = Nothing
               }
+        syncDashboardFileInfo did
         pure did.toText
   redirectTo <-
     if project.paymentPlan == "ONBOARDING"
@@ -1240,6 +1265,7 @@ dashboardRenamePatchH pid dashId form = do
       whenJust dashVM.schema \_ ->
         void $ Dashboards.updateSchema dashId (fromMaybe def dashVM.schema & #title ?~ form.title)
 
+      syncDashboardFileInfo dashId
       addSuccessToast "Dashboard renamed successfully" Nothing
       addTriggerEvent "closeModal" ""
       addRespHeaders DashboardNoContent
@@ -1274,6 +1300,7 @@ dashboardDuplicatePostH pid dashId = do
             , Dashboards.starredSince = Nothing
             , Dashboards.homepageSince = Nothing
             }
+      syncDashboardFileInfo newDashId
 
       -- Redirect to the new dashboard
       let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> newDashId.toText
@@ -1374,6 +1401,7 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
       let updatedDash = (dash :: Dashboards.Dashboard) & #widgets %~ (<> [widgetCopy])
       now <- Time.currentTime
       _ <- Dashboards.updateSchemaAndUpdatedAt dashId updatedDash now
+      syncDashboardFileInfo dashId
 
       addWidgetJSON $ decodeUtf8 $ fromLazy $ AE.encode widgetCopy
       addSuccessToast "Widget duplicated successfully" Nothing

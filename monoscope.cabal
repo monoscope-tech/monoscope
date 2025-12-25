@@ -43,6 +43,9 @@ extra-source-files:
     static/migrations/0016_drop_overly_restrictive_issues_constraint.sql
     static/migrations/0016_reports_start_and_end_time.sql
     static/migrations/0017_teams_table.sql
+    static/migrations/0018_store_monitor_runs_as_events.sql
+    static/migrations/0019_add_trace_id.sql
+    static/migrations/0020_github_sync.sql
 
 source-repository head
   type: git
@@ -75,6 +78,7 @@ library
       Models.Apis.Shapes
       Models.Apis.Slack
       Models.Projects.Dashboards
+      Models.Projects.GitSync
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
@@ -97,6 +101,7 @@ library
       Pages.Components
       Pages.Dashboards
       Pages.Endpoints.ApiCatalog
+      Pages.GitSync
       Pages.LemonSqueezy
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
@@ -435,11 +440,12 @@ test-suite integration-tests
       Pages.AnomaliesSpec
       Pages.ApiSpec
       Pages.BusinessFlowsSpec
+      Pages.DashboardsSpec
+      Pages.GitSyncSpec
       Pages.Endpoints.ApiCatalogSpec
       Pages.LogExplorer.LogSpec
       Pages.MonitorsSpec
       Pages.Projects.ManageMembersSpec
-      Pages.DashboardsSpec
       Pages.Projects.ProjectsSpec
       Pages.ReportsSpec
       Pages.ShareSpec
@@ -498,7 +504,6 @@ test-suite integration-tests
     , odd-jobs
     , pg-entity
     , pg-transact
-    , log-effectful
     , postgresql-simple
     , proto-lens
     , relude >=1.2.0.0

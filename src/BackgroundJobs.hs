@@ -1,16 +1,19 @@
 module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload) where
 
-import Control.Lens ((.~))
+import Control.Lens ((&), (.~), (?~))
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
+import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
+import Data.Effectful.Wreq qualified as W
 import Data.Either qualified as Unsafe
 import Data.HashMap.Strict qualified as HM
 import Data.List as L (foldl, partition)
 import Data.List.Extra (chunksOf, groupBy)
 import Data.Map.Lazy qualified as Map
+import Data.Map.Strict qualified as M
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
@@ -44,6 +47,8 @@ import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps (ATError (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
+import Models.Projects.Dashboards qualified as Dashboards
+import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -101,6 +106,8 @@ data BgJobs
   | EnhanceIssuesWithLLM Projects.ProjectId (V.Vector Issues.IssueId)
   | ProcessIssuesEnhancement UTCTime
   | FifteenMinutesLogsPatternProcessing UTCTime Projects.ProjectId
+  | GitSyncFromRepo Projects.ProjectId
+  | GitSyncPushDashboard Projects.ProjectId UUID.UUID Text -- projectId, dashboardId, filePath
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -336,6 +343,8 @@ processBackgroundJob authCtx job bgJob =
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> processIssuesEnhancement scheduledTime
     FifteenMinutesLogsPatternProcessing scheduledTime pid -> logsPatternExtraction scheduledTime pid
+    GitSyncFromRepo pid -> gitSyncFromRepo pid
+    GitSyncPushDashboard pid dashboardId filePath -> gitSyncPushDashboard pid (UUIDId dashboardId) filePath
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -1089,7 +1098,6 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
     -- Runtime exceptions get individual issues
     -- Each unique error pattern gets its own issue for tracking
     Anomalies.ATRuntimeException -> do
-      Log.logInfo "Processing runtime exception anomaliesxxxxxxxxxxxxxxxxxxx" ()
       errors <- Anomalies.errorsByHashes pid targetHashes
 
       -- Create one issue per error
@@ -1099,47 +1107,46 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
         -- Queue enhancement job
         _ <- liftIO $ withResource authCtx.jobsPool \conn ->
           createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
-        pass
-
-      -- Send notifications only if project exists and has alerts enabled
-      projectM <- Projects.projectById pid
-      whenJust projectM \project -> Relude.when project.errorAlerts do
-        users <- Projects.usersByProjectId pid
-        forM_ project.notificationsChannel \case
-          Projects.NSlack ->
-            forM_ errors \err -> sendSlackAlert (RuntimeErrorAlert err.errorData) pid project.title Nothing
-          Projects.NDiscord ->
-            forM_ errors \err -> sendDiscordAlert (RuntimeErrorAlert err.errorData) pid project.title Nothing
-          Projects.NPhone ->
-            forM_ errors \err ->
-              sendWhatsAppAlert (RuntimeErrorAlert err.errorData) pid project.title project.whatsappNumbers
-          Projects.NEmail ->
-            forM_ users \u -> do
-              let errosJ =
-                    ( \ee ->
-                        let e = ee.errorData
-                         in AE.object
-                              [ "root_error_message" AE..= e.rootErrorMessage
-                              , "error_type" AE..= e.errorType
-                              , "error_message" AE..= e.message
-                              , "stack_trace" AE..= e.stackTrace
-                              , "when" AE..= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
-                              , "hash" AE..= e.hash
-                              , "tech" AE..= e.technology
-                              , "request_info" AE..= (fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
-                              , "root_error_type" AE..= e.rootErrorType
-                              ]
-                    )
-                      <$> errors
-                  title = project.title
-                  errors_url = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
-                  templateVars =
-                    [aesonQQ|{
-                        "project_name": #{title},
-                        "errors_url": #{errors_url},
-                        "errors": #{errosJ}
-                   }|]
-              sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
+        -- Send notifications only if project exists and has alerts enabled
+        projectM <- Projects.projectById pid
+        whenJust projectM \project -> Relude.when project.errorAlerts do
+          users <- Projects.usersByProjectId pid
+          let issueId = UUID.toText issue.id.unUUIDId
+          forM_ project.notificationsChannel \case
+            Projects.NSlack ->
+              forM_ errors \err' -> sendSlackAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData}) pid project.title Nothing
+            Projects.NDiscord ->
+              forM_ errors \err' -> sendDiscordAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData}) pid project.title Nothing
+            Projects.NPhone ->
+              forM_ errors \err' ->
+                sendWhatsAppAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData}) pid project.title project.whatsappNumbers
+            Projects.NEmail ->
+              forM_ users \u -> do
+                let errosJ =
+                      ( \ee ->
+                          let e = ee.errorData
+                           in AE.object
+                                [ "root_error_message" AE..= e.rootErrorMessage
+                                , "error_type" AE..= e.errorType
+                                , "error_message" AE..= e.message
+                                , "stack_trace" AE..= e.stackTrace
+                                , "when" AE..= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
+                                , "hash" AE..= e.hash
+                                , "tech" AE..= e.technology
+                                , "request_info" AE..= (fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
+                                , "root_error_type" AE..= e.rootErrorType
+                                ]
+                      )
+                        <$> errors
+                    title = project.title
+                    errors_url = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
+                    templateVars =
+                      [aesonQQ|{
+                          "project_name": #{title},
+                          "errors_url": #{errors_url},
+                          "errors": #{errosJ}
+                     }|]
+                sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
     -- Ignore other anomaly types
     _ -> pass
 
@@ -1208,7 +1215,7 @@ processAPIChangeAnomalies pid targetHashes = do
             anomaliesByEndpoint
     -- Only send notifications if we have valid endpoint info
     Relude.when (project.endpointAlerts && not (null endpointInfo)) do
-      let alert = EndpointAlert project.title (V.fromList endpointInfo) (fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes)
+      let alert = EndpointAlert{project = project.title, endpoints = V.fromList endpointInfo, endpointHash = fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes}
 
       forM_ project.notificationsChannel \case
         Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
@@ -1315,3 +1322,100 @@ enhanceIssuesWithLLM pid issueIds = do
                     Log.logInfo "Successfully enhanced and classified issue" (issueId, isCritical, breakingCount)
 
                 Log.logInfo "Successfully enhanced issue" issueId
+
+
+-- | Sync dashboards from GitHub repo to Monoscope
+gitSyncFromRepo :: Projects.ProjectId -> ATBackgroundCtx ()
+gitSyncFromRepo pid = do
+  Log.logInfo "Starting GitHub sync for project" pid
+  ctx <- ask @Config.AuthContext
+  let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
+  syncM <- GitSync.getGitHubSyncDecrypted encKey pid
+  case syncM of
+    Nothing -> Log.logAttention "No GitHub sync configured for project" pid
+    Just sync | not sync.syncEnabled -> Log.logInfo "GitHub sync disabled for project" pid
+    Just sync -> W.runHTTPWreq do
+      treeResult <- GitSync.fetchGitTree sync
+      case treeResult of
+        Left err -> Log.logAttention "Failed to fetch git tree" (pid, err)
+        Right entries -> do
+          dbState <- GitSync.getDashboardGitState pid
+          let actions = GitSync.buildSyncPlan entries dbState
+          Log.logInfo "Git sync plan" ("creates" :: Text, length [() | GitSync.SyncCreate{} <- actions], "updates" :: Text, length [() | GitSync.SyncUpdate{} <- actions], "deletes" :: Text, length [() | GitSync.SyncDelete{} <- actions])
+          forM_ actions \case
+            GitSync.SyncCreate path sha -> do
+              contentResult <- GitSync.fetchFileContent sync path
+              case contentResult of
+                Left err -> Log.logAttention "Failed to fetch file content" (path, err)
+                Right content -> case GitSync.yamlToDashboard content of
+                  Left err -> Log.logAttention "Failed to parse dashboard YAML" (path, err)
+                  Right schema -> do
+                    now <- Time.currentTime
+                    dashId <- UUIDId <$> liftIO UUIDV4.nextRandom
+                    teamVMs <- catMaybes <$> mapM (ProjectMembers.getTeamByHandle pid) (fromMaybe [] schema.teams)
+                    let dashboard =
+                          Dashboards.DashboardVM
+                            { Dashboards.id = dashId
+                            , Dashboards.projectId = pid
+                            , Dashboards.createdAt = now
+                            , Dashboards.updatedAt = now
+                            , Dashboards.createdBy = Users.UserId UUID.nil
+                            , Dashboards.baseTemplate = Just path
+                            , Dashboards.schema = Just schema
+                            , Dashboards.starredSince = Nothing
+                            , Dashboards.homepageSince = Nothing
+                            , Dashboards.tags = V.fromList $ fromMaybe [] schema.tags
+                            , Dashboards.title = fromMaybe "Untitled" schema.title
+                            , Dashboards.teams = V.fromList $ map (.id) teamVMs
+                            , Dashboards.filePath = Just path
+                            , Dashboards.fileSha = Just sha
+                            }
+                    _ <- Dashboards.insert dashboard
+                    Log.logInfo "Created dashboard from git" (path, dashId)
+            GitSync.SyncUpdate path sha dashId -> do
+              contentResult <- GitSync.fetchFileContent sync path
+              case contentResult of
+                Left err -> Log.logAttention "Failed to fetch file content for update" (path, err)
+                Right content -> case GitSync.yamlToDashboard content of
+                  Left err -> Log.logAttention "Failed to parse dashboard YAML for update" (path, err)
+                  Right schema -> do
+                    now <- Time.currentTime
+                    _ <- Dashboards.updateSchemaAndUpdatedAt dashId schema now
+                    whenJust schema.title $ void . Dashboards.updateTitle dashId
+                    _ <- GitSync.updateDashboardGitInfo dashId path sha
+                    Log.logInfo "Updated dashboard from git" (path, dashId)
+            GitSync.SyncDelete path dashId -> do
+              _ <- Dashboards.deleteDashboard dashId
+              Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
+          _ <- GitSync.updateLastTreeSha sync.id (maybe "" (.sha) $ listToMaybe entries)
+          Log.logInfo "Completed GitHub sync for project" pid
+
+
+-- | Push a dashboard change to GitHub
+gitSyncPushDashboard :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATBackgroundCtx ()
+gitSyncPushDashboard pid dashId filePath = do
+  Log.logInfo "Pushing dashboard to GitHub" (pid, dashId, filePath)
+  ctx <- ask @Config.AuthContext
+  let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
+  syncM <- GitSync.getGitHubSyncDecrypted encKey pid
+  dashM <- Dashboards.getDashboardById dashId
+  case (syncM, dashM) of
+    (Nothing, _) -> Log.logAttention "No GitHub sync configured for project" pid
+    (Just sync, _) | not sync.syncEnabled -> Log.logInfo "GitHub sync disabled, skipping push" pid
+    (_, Nothing) -> Log.logAttention "Dashboard not found for git push" dashId
+    (Just sync, Just dash) -> do
+      teams <- ProjectMembers.getTeamsById pid dash.teams
+      let schema =
+            fromMaybe def dash.schema
+              & #title ?~ dash.title
+              & #tags ?~ V.toList dash.tags
+              & #teams ?~ map (.handle) teams
+          yamlContent = GitSync.dashboardToYaml schema
+          existingSha = dash.fileSha
+          message = "Update dashboard: " <> dash.title
+      pushResult <- W.runHTTPWreq $ GitSync.pushFileToGit sync filePath yamlContent existingSha message
+      case pushResult of
+        Left err -> Log.logAttention "Failed to push dashboard to git" (dashId, err)
+        Right newSha -> do
+          _ <- GitSync.updateDashboardGitInfo dashId filePath newSha
+          Log.logInfo "Successfully pushed dashboard to git" (dashId, newSha)

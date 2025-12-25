@@ -14,6 +14,7 @@ module Pages.Anomalies (
   AnomalyListGet (..),
   anomalyAcknowledgeButton,
   anomalyArchiveButton,
+  anomalyDetailHashGetH,
   AnomalyAction (..),
   IssueVM (..),
   issueColumns,
@@ -155,8 +156,8 @@ anomalyBulkActionsPostH pid action items = do
       addRespHeaders Bulk
 
 
-anomalyDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-anomalyDetailGetH pid issueId firstM = do
+anomalyDetailGetH' :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+anomalyDetailGetH' pid issueId firstM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   issueM <- Issues.selectIssueById issueId
@@ -192,6 +193,56 @@ anomalyDetailGetH pid issueId firstM = do
             Nothing -> return (Nothing, V.empty)
         _ -> return (Nothing, V.empty)
       pass
+      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM)
+
+
+anomalyDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+anomalyDetailGetH pid issueId firstM =
+  anomalyDetailCore pid firstM $ \_ ->
+    Issues.selectIssueById issueId
+
+
+anomalyDetailHashGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+anomalyDetailHashGetH pid issueId firstM =
+  anomalyDetailCore pid firstM $ \_ ->
+    Issues.selectIssueByHash pid issueId
+
+
+anomalyDetailCore :: Projects.ProjectId -> Maybe Text -> (Projects.ProjectId -> ATAuthCtx (Maybe Issues.Issue)) -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+anomalyDetailCore pid firstM fetchIssue = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
+
+  issueM <- fetchIssue pid
+
+  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Anomaly Detail", config = appCtx.config}
+  now <- Time.currentTime
+  case issueM of
+    Nothing -> do
+      addErrorToast "Issue not found" Nothing
+      addRespHeaders
+        $ PageCtx bwconf
+        $ toHtml ("Issue not found" :: Text)
+    Just issue -> do
+      errorM <-
+        issue.issueType & \case
+          Issues.RuntimeException -> Anomalies.errorByHash pid issue.endpointHash
+          _ -> pure Nothing
+      (trItem, spanRecs) <- case errorM of
+        Just err -> do
+          let targetTIdM = maybe err.recentTraceId (const err.firstTraceId) firstM
+              targetTme = maybe (zonedTimeToUTC err.updatedAt) (const $ zonedTimeToUTC err.createdAt) firstM
+          case targetTIdM of
+            Just x -> do
+              trM <- Telemetry.getTraceDetails pid x (Just targetTme) now
+              case trM of
+                Just traceItem -> do
+                  spanRecords' <-
+                    Telemetry.getSpanRecordsByTraceId pid traceItem.traceId (Just traceItem.traceStartTime) now
+                  pure (Just traceItem, V.fromList spanRecords')
+                Nothing -> pure (Nothing, V.empty)
+            Nothing -> pure (Nothing, V.empty)
+        Nothing -> pure (Nothing, V.empty)
       addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM)
 
 

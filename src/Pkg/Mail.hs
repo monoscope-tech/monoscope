@@ -45,7 +45,7 @@ sendSlackMessage pid message = do
 
 data NotificationAlerts
   = EndpointAlert {project :: Text, endpoints :: V.Vector Text, endpointHash :: Text}
-  | RuntimeErrorAlert RequestDumps.ATError
+  | RuntimeErrorAlert {issueId :: Text, errorData :: RequestDumps.ATError}
   | ShapeAlert
   | ReportAlert
       { reportType :: Text
@@ -77,7 +77,7 @@ sendDiscordAlert alert pid pTitle channelIdM' = do
     let send = sendAlert (Just cid)
     let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
     case alert of
-      RuntimeErrorAlert a -> send $ discordErrorAlert a pTitle projectUrl
+      RuntimeErrorAlert{..} -> send $ discordErrorAlert errorData pTitle projectUrl
       EndpointAlert{..} -> send $ discordNewEndpointAlert project endpoints endpointHash projectUrl
       ShapeAlert -> pass
       ReportAlert{..} -> send $ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
@@ -104,7 +104,7 @@ sendSlackAlert alert pid pTitle channelM = do
   whenJust channelIdM \cid -> do
     let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
     case alert of
-      RuntimeErrorAlert a -> sendAlert cid $ slackErrorAlert a pTitle cid projectUrl
+      RuntimeErrorAlert{..} -> sendAlert cid $ slackErrorAlert errorData pTitle cid projectUrl
       EndpointAlert{..} -> sendAlert cid $ slackNewEndpointsAlert project endpoints cid endpointHash projectUrl
       ShapeAlert -> pass
       ReportAlert{..} -> sendAlert cid $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle cid reportUrl allChartUrl errorChartUrl
@@ -121,10 +121,10 @@ sendWhatsAppAlert :: (Notify.Notify :> es, Reader Config.AuthContext :> es) => N
 sendWhatsAppAlert alert pid pTitle tos = do
   appCtx <- ask @Config.AuthContext
   case alert of
-    RuntimeErrorAlert err -> do
+    RuntimeErrorAlert{..} -> do
       let template = appCtx.config.whatsappErrorTemplate
-          url = pid.toText <> "/anomalies/by_hash/" <> fromMaybe "" err.hash
-          contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= ("*" <> err.errorType <> "*"), "3" AE..= ("`" <> err.message <> "`"), "4" AE..= url]
+          url = pid.toText <> "/anomalies/by_hash/" <> fromMaybe "" errorData.hash
+          contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= ("*" <> errorData.errorType <> "*"), "3" AE..= ("`" <> errorData.message <> "`"), "4" AE..= url]
       sendAlert template contentVars
       pass
     EndpointAlert{..} -> do
@@ -238,7 +238,7 @@ slackErrorAlert err project channelId projectUrl =
     , "channel" AE..= channelId
     ]
   where
-    targetUrl = projectUrl <> "/anomalies/by_hash/" <> fromMaybe "" err.hash
+    targetUrl = projectUrl <> "/anomalies/"
     title = "<" <> targetUrl <> "|:red_circle: " <> err.errorType <> ">"
     method = fromMaybe "" err.requestMethod
     path = fromMaybe "" err.requestPath

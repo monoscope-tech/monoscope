@@ -1,3 +1,5 @@
+{-# LANGUAGE PackageImports #-}
+
 module Models.Projects.Dashboards (
   Dashboard (..),
   DashboardVM (..),
@@ -21,6 +23,9 @@ module Models.Projects.Dashboards (
   updateStarredSince,
   deleteDashboard,
   getDashboardByBaseTemplate,
+  titleToFilePath,
+  computeContentSha,
+  updateFileInfo,
 ) where
 
 import Control.Exception (try)
@@ -63,6 +68,8 @@ import Relude
 import Servant (ServerError (..), err404)
 import System.Directory (listDirectory)
 import System.Types (DB)
+import Text.Casing (fromAny, toKebab)
+import "cryptonite" Crypto.Hash (Digest, SHA256, hash)
 
 
 data DashboardVM = DashboardVM
@@ -78,6 +85,8 @@ data DashboardVM = DashboardVM
   , tags :: V.Vector Text
   , title :: Text
   , teams :: V.Vector UUID.UUID
+  , filePath :: Maybe Text
+  , fileSha :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
@@ -90,17 +99,18 @@ type DashboardId = UUIDId "dashboard"
 
 
 data Dashboard = Dashboard
-  { title :: Maybe Text -- Dashboard title
+  { title :: Maybe Text
   , description :: Maybe Text
   , preview :: Maybe Text
   , icon :: Maybe Text
   , file :: Maybe Text
   , tags :: Maybe [Text]
-  , refreshInterval :: Maybe Text -- Refresh interval
+  , teams :: Maybe [Text]
+  , refreshInterval :: Maybe Text
   , timeRange :: Maybe TimePicker.TimePicker
   , variables :: Maybe [Variable]
-  , tabs :: Maybe [Tab] -- List of tabs
-  , widgets :: [Widget.Widget] -- List of widgets (for backward compatibility)
+  , tabs :: Maybe [Tab]
+  , widgets :: [Widget.Widget]
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, NFData)
@@ -148,8 +158,8 @@ insert :: DB es => DashboardVM -> Eff es Int64
 insert dashboardVM = PG.execute (Query $ encodeUtf8 q) params
   where
     q =
-      [text| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::uuid[]) |]
+      [text| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::uuid[], ?, ?) |]
     params =
       ( dashboardVM.id
       , dashboardVM.projectId
@@ -163,6 +173,8 @@ insert dashboardVM = PG.execute (Query $ encodeUtf8 q) params
       , dashboardVM.tags
       , dashboardVM.title
       , dashboardVM.teams
+      , dashboardVM.filePath
+      , dashboardVM.fileSha
       )
 
 
@@ -210,7 +222,7 @@ replaceQueryVariables pid mf mt allParams currentTime variable =
 getDashboardById :: DB es => DashboardId -> Eff es (Maybe DashboardVM)
 getDashboardById did = listToMaybe <$> PG.query (Query $ encodeUtf8 q) (Only did)
   where
-    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE id = ?|]
+    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha FROM projects.dashboards WHERE id = ?|]
 
 
 deleteDashboardsByIds :: DB es => Projects.ProjectId -> V.Vector DashboardId -> Eff es Int64
@@ -233,7 +245,7 @@ addTeamsToDashboards pid dids teamIds = PG.execute (Query $ encodeUtf8 q) (teamI
 selectDashboardsByTeam :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [DashboardVM]
 selectDashboardsByTeam pid teamId = PG.query (Query $ encodeUtf8 q) (pid, teamId)
   where
-    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE project_id = ? AND teams @> ARRAY[?::uuid] ORDER BY starred_since DESC NULLS LAST, updated_at DESC|]
+    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha FROM projects.dashboards WHERE project_id = ? AND teams @> ARRAY[?::uuid] ORDER BY starred_since DESC NULLS LAST, updated_at DESC|]
 
 
 selectDashboardsSortedBy :: DB es => Projects.ProjectId -> Text -> Eff es [DashboardVM]
@@ -246,7 +258,7 @@ selectDashboardsSortedBy pid orderBy = PG.query (Query $ encodeUtf8 q) (Only pid
     safeOrder
       | orderBy == "" || not (isSafe orderBy) = defaultOrder
       | otherwise = T.replace "ORDER BY " "ORDER BY starred_since DESC NULLS LAST, " orderBy
-    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE project_id = ? |] <> safeOrder
+    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha FROM projects.dashboards WHERE project_id = ? |] <> safeOrder
 
 
 updateSchema :: DB es => DashboardId -> Dashboard -> Eff es Int64
@@ -271,3 +283,17 @@ deleteDashboard dashId = PG.execute (Query "DELETE FROM projects.dashboards WHER
 
 getDashboardByBaseTemplate :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe DashboardId)
 getDashboardByBaseTemplate pid baseTemplate = coerce @(Maybe (Only DashboardId)) @(Maybe DashboardId) . listToMaybe <$> PG.query (Query "SELECT id FROM projects.dashboards WHERE project_id = ? AND base_template = ?") (pid, baseTemplate)
+
+
+titleToFilePath :: Text -> Text
+titleToFilePath title = toText (toKebab $ fromAny $ toString $ T.strip title) <> ".yaml"
+
+
+-- | Compute SHA256 hash of content and return as hex string
+computeContentSha :: ByteString -> Text
+computeContentSha content = show (hash content :: Digest SHA256)
+
+
+-- | Update file_path and file_sha for a dashboard
+updateFileInfo :: DB es => DashboardId -> Text -> Text -> Eff es Int64
+updateFileInfo dashId path sha = PG.execute (Query "UPDATE projects.dashboards SET file_path = ?, file_sha = ?, updated_at = now() WHERE id = ?") (path, sha, dashId)
