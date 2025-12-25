@@ -15,7 +15,6 @@ module Pages.GitSync (
 
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as AEK
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
 import Data.Pool (withResource)
@@ -24,6 +23,7 @@ import Data.UUID qualified as UUID
 import Deriving.Aeson.Stock qualified as DAES
 import Effectful.Reader.Static (ask)
 import Lucid
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxSwap_, hxTarget_)
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
@@ -130,7 +130,7 @@ validateWebhookSignature Nothing _ _ = Right () -- No secret configured, skip va
 validateWebhookSignature _ Nothing _ = Left "signature required but not provided"
 validateWebhookSignature (Just secret) (Just sig) body =
   let expectedSig = "sha256=" <> decodeUtf8 (B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) body :: HMAC.HMAC SHA256))
-   in if sig == expectedSig then Right () else Left "invalid signature"
+   in if BA.constEq (encodeUtf8 sig) (encodeUtf8 expectedSig) then Right () else Left "invalid signature"
 
 
 gitSyncSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
@@ -175,7 +175,7 @@ gitSyncSettingsDeleteH pid = do
 gitSyncSettingsView :: Text -> Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
 gitSyncSettingsView hostUrl pid syncM = do
   let webhookUrl = hostUrl <> "webhook/github"
-  div_ [class_ "space-y-6"] do
+  div_ [id_ "git-sync-content", class_ "space-y-6"] do
     -- Main settings card
     div_ [class_ "card bg-base-100 shadow-lg"] do
       div_ [class_ "card-body"] do
@@ -229,7 +229,7 @@ gitSyncSettingsView hostUrl pid syncM = do
                   label_ [class_ "label"] $ span_ [class_ "label-text"] "Access Token"
                   input_ [class_ "input input-bordered", type_ "password", name_ "accessToken", placeholder_ "Leave empty to keep current", value_ ""]
                 div_ [class_ "card-actions justify-between"] do
-                  button_ [class_ "btn btn-error btn-outline", type_ "button", onclick_ ("fetch('/p/" <> pid.toText <> "/settings/git-sync', {method: 'DELETE'}).then(() => location.reload())")] "Disconnect"
+                  button_ [class_ "btn btn-error btn-outline", type_ "button", hxDelete_ ("/p/" <> pid.toText <> "/settings/git-sync"), hxTarget_ "#git-sync-content", hxSwap_ "innerHTML", hxConfirm_ "Are you sure you want to disconnect GitHub sync?"] "Disconnect"
                   button_ [class_ "btn btn-primary", type_ "submit"] "Update"
 
     -- Setup instructions card
