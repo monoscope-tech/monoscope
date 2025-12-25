@@ -222,7 +222,7 @@ fetchFileContent sync path = do
     Left (err :: HttpException) -> Left $ formatHttpError err
     Right resp -> case resp ^. W.responseBody . key "content" . _String of
       "" -> Left "No content field"
-      b64Content -> first (toText . show) $ B64.decodeBase64Untyped $ encodeUtf8 $ T.replace "\n" "" b64Content
+      b64Content -> first (toText . show) $ B64.decodeBase64Untyped $ encodeUtf8 $ T.filter (/= '\n') b64Content
 
 
 pushFileToGit :: (IOE :> es, W.HTTP :> es) => GitHubSync -> Text -> ByteString -> Maybe Text -> Text -> Eff es (Either Text Text)
