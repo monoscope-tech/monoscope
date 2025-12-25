@@ -96,13 +96,11 @@ handlePayload signatureM eventTypeM rawBody payload = do
         Nothing -> do
           Log.logInfo "GitHub webhook for untracked repo" (ownerName, repoName)
           pure $ AE.object ["status" AE..= ("ignored" :: Text)]
-        Just sync -> do
-          let signatureValid = validateWebhookSignature sync.webhookSecret signatureM rawBody
-          unless signatureValid do
-            Log.logAttention "GitHub webhook signature validation failed" (ownerName, repoName)
-          if not signatureValid
-            then pure $ AE.object ["status" AE..= ("error" :: Text), "message" AE..= ("invalid signature" :: Text)]
-            else case eventTypeM of
+        Just sync -> case validateWebhookSignature sync.webhookSecret signatureM rawBody of
+          Left err -> do
+            Log.logAttention "GitHub webhook signature validation failed" (ownerName, repoName, err)
+            pure $ AE.object ["status" AE..= ("error" :: Text), "message" AE..= err]
+          Right () -> case eventTypeM of
               Just "push" -> do
                 liftIO $ withResource ctx.jobsPool \conn ->
                   void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo sync.projectId
@@ -116,12 +114,12 @@ handlePayload signatureM eventTypeM rawBody payload = do
                 pure $ AE.object ["status" AE..= ("error" :: Text)]
 
 
-validateWebhookSignature :: Maybe Text -> Maybe Text -> ByteString -> Bool
-validateWebhookSignature Nothing _ _ = True -- No secret configured, skip validation
-validateWebhookSignature _ Nothing _ = False -- Secret configured but no signature provided
+validateWebhookSignature :: Maybe Text -> Maybe Text -> ByteString -> Either Text ()
+validateWebhookSignature Nothing _ _ = Right () -- No secret configured, skip validation (logged at call site for visibility)
+validateWebhookSignature _ Nothing _ = Left "signature required but not provided"
 validateWebhookSignature (Just secret) (Just sig) body =
   let expectedSig = "sha256=" <> decodeUtf8 (B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) body :: HMAC.HMAC SHA256))
-   in sig == expectedSig
+   in if sig == expectedSig then Right () else Left "invalid signature"
 
 
 gitSyncSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))

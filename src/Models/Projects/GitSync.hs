@@ -42,6 +42,7 @@ import Data.Vector qualified as V
 import Data.Yaml qualified as Yaml
 import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.PostgreSQL qualified as PG
@@ -117,10 +118,12 @@ decryptSync key sync = (\token -> sync{accessToken = token}) <$> decryptToken ke
 
 
 -- DB Operations
+githubSyncCols :: ByteString
+githubSyncCols = "id, project_id, owner, repo, branch, access_token, webhook_secret, last_tree_sha, sync_enabled, created_at, updated_at"
+
+
 getGitHubSync :: DB es => ProjectId -> Eff es (Maybe GitHubSync)
-getGitHubSync pid = listToMaybe <$> PG.query q (Only pid)
-  where
-    q = [sql|SELECT id, project_id, owner, repo, branch, access_token, webhook_secret, last_tree_sha, sync_enabled, created_at, updated_at FROM projects.github_sync WHERE project_id = ?|]
+getGitHubSync pid = listToMaybe <$> PG.query (Query $ "SELECT " <> githubSyncCols <> " FROM projects.github_sync WHERE project_id = ?") (Only pid)
 
 
 getGitHubSyncDecrypted :: DB es => ByteString -> ProjectId -> Eff es (Maybe GitHubSync)
@@ -128,9 +131,7 @@ getGitHubSyncDecrypted key pid = (decryptSync key =<<) <$> getGitHubSync pid
 
 
 getGitHubSyncByRepo :: DB es => Text -> Text -> Eff es (Maybe GitHubSync)
-getGitHubSyncByRepo owner repo = listToMaybe <$> PG.query q (owner, repo)
-  where
-    q = [sql|SELECT id, project_id, owner, repo, branch, access_token, webhook_secret, last_tree_sha, sync_enabled, created_at, updated_at FROM projects.github_sync WHERE owner = ? AND repo = ?|]
+getGitHubSyncByRepo owner repo = listToMaybe <$> PG.query (Query $ "SELECT " <> githubSyncCols <> " FROM projects.github_sync WHERE owner = ? AND repo = ?") (owner, repo)
 
 
 getGitHubSyncByRepoDecrypted :: DB es => ByteString -> Text -> Text -> Eff es (Maybe GitHubSync)
@@ -138,21 +139,18 @@ getGitHubSyncByRepoDecrypted key owner repo = (decryptSync key =<<) <$> getGitHu
 
 
 insertGitHubSync :: DB es => ByteString -> ProjectId -> Text -> Text -> Text -> Text -> Maybe Text -> Eff es (Maybe GitHubSync)
-insertGitHubSync key pid owner repo branch token webhookSecret = listToMaybe <$> PG.query q (pid, owner, repo, branch, encryptToken key token, webhookSecret)
-  where
-    q = [sql|INSERT INTO projects.github_sync (project_id, owner, repo, branch, access_token, webhook_secret) VALUES (?, ?, ?, ?, ?, ?) RETURNING id, project_id, owner, repo, branch, access_token, webhook_secret, last_tree_sha, sync_enabled, created_at, updated_at|]
+insertGitHubSync key pid owner repo branch token webhookSecret =
+  listToMaybe <$> PG.query (Query $ "INSERT INTO projects.github_sync (project_id, owner, repo, branch, access_token, webhook_secret) VALUES (?, ?, ?, ?, ?, ?) RETURNING " <> githubSyncCols) (pid, owner, repo, branch, encryptToken key token, webhookSecret)
 
 
 updateGitHubSync :: DB es => ByteString -> GitHubSyncId -> Text -> Text -> Text -> Text -> Bool -> Eff es (Maybe GitHubSync)
-updateGitHubSync key sid owner repo branch token enabled = listToMaybe <$> PG.query q (owner, repo, branch, encryptToken key token, enabled, sid)
-  where
-    q = [sql|UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, access_token = ?, sync_enabled = ?, updated_at = now() WHERE id = ? RETURNING id, project_id, owner, repo, branch, access_token, webhook_secret, last_tree_sha, sync_enabled, created_at, updated_at|]
+updateGitHubSync key sid owner repo branch token enabled =
+  listToMaybe <$> PG.query (Query $ "UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, access_token = ?, sync_enabled = ?, updated_at = now() WHERE id = ? RETURNING " <> githubSyncCols) (owner, repo, branch, encryptToken key token, enabled, sid)
 
 
 updateGitHubSyncKeepToken :: DB es => GitHubSyncId -> Text -> Text -> Text -> Bool -> Eff es (Maybe GitHubSync)
-updateGitHubSyncKeepToken sid owner repo branch enabled = listToMaybe <$> PG.query q (owner, repo, branch, enabled, sid)
-  where
-    q = [sql|UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, sync_enabled = ?, updated_at = now() WHERE id = ? RETURNING id, project_id, owner, repo, branch, access_token, webhook_secret, last_tree_sha, sync_enabled, created_at, updated_at|]
+updateGitHubSyncKeepToken sid owner repo branch enabled =
+  listToMaybe <$> PG.query (Query $ "UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, sync_enabled = ?, updated_at = now() WHERE id = ? RETURNING " <> githubSyncCols) (owner, repo, branch, enabled, sid)
 
 
 updateLastTreeSha :: DB es => GitHubSyncId -> Text -> Eff es Int64
@@ -168,11 +166,9 @@ deleteGitHubSync sid = PG.execute q (Only sid)
 
 
 getDashboardGitState :: DB es => ProjectId -> Eff es (M.Map Text (DashboardId, Text))
-getDashboardGitState pid = M.fromList . map toTuple <$> PG.query q (Only pid)
+getDashboardGitState pid = M.fromList . fmap (\(did, path, sha) -> (path, (did, sha))) <$> PG.query q (Only pid)
   where
     q = [sql|SELECT id, file_path, file_sha FROM projects.dashboards WHERE project_id = ? AND file_path IS NOT NULL AND file_sha IS NOT NULL|]
-    toTuple :: (DashboardId, Text, Text) -> (Text, (DashboardId, Text))
-    toTuple (did, path, sha) = (path, (did, sha))
 
 
 updateDashboardGitInfo :: DB es => DashboardId -> Text -> Text -> Eff es Int64
