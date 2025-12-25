@@ -32,6 +32,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _Array, _Bool, _String)
 import Data.Aeson.Types (parseMaybe)
 import Data.Base64.Types (extractBase64)
+import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.Default (def)
 import Data.Effectful.Wreq qualified as W
@@ -60,7 +61,7 @@ import System.Logging (logWarn)
 import Text.Casing (fromAny, toKebab)
 import UnliftIO.Exception (try)
 import "base64" Data.ByteString.Base64 qualified as B64
-import "cryptonite" Crypto.Hash (Digest, SHA256, hash)
+import "cryptonite" Crypto.Hash (Digest, SHA1, hash)
 import "memory" Data.ByteArray qualified as BA
 
 
@@ -105,7 +106,7 @@ data SyncAction
 
 -- Token encryption helpers
 encryptToken :: ByteString -> Text -> Text
-encryptToken encKey token = extractBase64 $ B64.encodeBase64 $ encryptAPIKey encKey (encodeUtf8 token)
+encryptToken encKey = extractBase64 . B64.encodeBase64 . encryptAPIKey encKey . encodeUtf8
 
 
 -- | Decrypt an access token. Returns Left with error description if decryption fails.
@@ -294,9 +295,11 @@ titleToFilePath :: Text -> Text
 titleToFilePath title = toText (toKebab $ fromAny $ toString $ T.strip title) <> ".yaml"
 
 
--- | Compute SHA256 hash of content and return as hex string
+-- | Compute Git blob SHA (SHA1 of "blob <size>\0<content>")
 computeContentSha :: ByteString -> Text
-computeContentSha content = decodeUtf8 $ B16.encode $ BA.convert (hash content :: Digest SHA256)
+computeContentSha content =
+  let blobHeader = "blob " <> show (BS.length content) <> "\0"
+   in decodeUtf8 $ B16.encode $ BA.convert (hash (encodeUtf8 blobHeader <> content) :: Digest SHA1)
 
 
 -- | Build a Dashboard schema with title, tags, and team handles populated
