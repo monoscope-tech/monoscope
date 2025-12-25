@@ -1,3 +1,5 @@
+{-# LANGUAGE LambdaCase #-}
+
 module Opentelemetry.GrpcIngestionSpec (spec) where
 
 import BackgroundJobs qualified
@@ -50,8 +52,8 @@ expectLogsJson = \case
   Log.LogPage _ -> fail "Got LogPage instead of LogsGetJson - json parameter not working?"
   Log.LogsGetError (PageCtx _ err) -> fail $ "Got LogsGetError: " <> toString err
   Log.LogsGetErrorSimple err -> fail $ "Got LogsGetErrorSimple: " <> toString err
-  Log.LogsQueryLibrary _ _ _ -> fail "Got LogsQueryLibrary instead of LogsGetJson"
-  Log.LogsPatternList _ _ _ _ -> fail "Got LogsPatternList instead of LogsGetJson"
+  Log.LogsQueryLibrary{} -> fail "Got LogsQueryLibrary instead of LogsGetJson"
+  Log.LogsPatternList{} -> fail "Got LogsPatternList instead of LogsGetJson"
 
 
 spec :: Spec
@@ -73,7 +75,7 @@ spec = aroundAll withTestResources do
       logBytes <- OtlpMock.createOtelLogAtTime "invalid-key-that-does-not-exist" "Should not be stored" frozenTime
       let logReq = either (error . toText) id (decodeMessage logBytes :: Either String LS.ExportLogsServiceRequest)
       OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto logReq)
-        `shouldThrow` (\e -> case e of GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False)
+        `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
 
     it "Test 3.1: should ingest traces via all 3 keys using traceServiceExport" $ \tr -> do
       keys <- traverse (createTestAPIKey tr pid) ["trace-key-1", "trace-key-2", "trace-key-3"]
@@ -88,7 +90,7 @@ spec = aroundAll withTestResources do
       traceBytes <- OtlpMock.createOtelTraceAtTime "" "Test Span" frozenTime
       let traceReq = either (error . toText) id (decodeMessage traceBytes :: Either String TS.ExportTraceServiceRequest)
       OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto traceReq)
-        `shouldThrow` (\e -> case e of GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False)
+        `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
 
     it "Test 4.1: should ingest metrics via all 3 keys using metricsServiceExport" $ \tr -> do
       keys <- traverse (createTestAPIKey tr pid) ["metric-key-1", "metric-key-2", "metric-key-3"]
@@ -102,7 +104,7 @@ spec = aroundAll withTestResources do
       metricBytes <- OtlpMock.createGaugeMetricAtTime "definitely-not-a-valid-key" "rejected.metric" 99.9 frozenTime
       let metricReq = either (error . toText) id (decodeMessage metricBytes :: Either String MS.ExportMetricsServiceRequest)
       OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto metricReq)
-        `shouldThrow` (\e -> case e of GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False)
+        `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
 
     it "Test 5.1: should query ingested logs via apiLogH handler" $ \tr -> do
       key <- createTestAPIKey tr pid "query-key-1"
@@ -193,7 +195,7 @@ spec = aroundAll withTestResources do
         let logReq = either (error . toText) id (decodeMessage logBytes :: Either String LS.ExportLogsServiceRequest)
         -- Try with invalid key in header
         runTestBg tr (OtlpServer.processLogsRequest (Just "invalid-header-key") logReq)
-          `shouldThrow` (\e -> case e of GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False)
+          `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
 
       it "Test 9.6: should handle mixed authentication methods in bulk" $ \tr -> do
         key <- createTestAPIKey tr pid "mixed-auth-key"

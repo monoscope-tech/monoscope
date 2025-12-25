@@ -693,6 +693,7 @@ navBottomList pidTxt =
   , ("dollar", "Manage billing", "/p/" <> pidTxt <> "/manage_billing", Nothing, Nothing, Nothing)
   , ("arrows-turn-right", "Integrations", "/p/" <> pidTxt <> "/integrations", Nothing, Nothing, Nothing)
   , ("bucket", "Your S3 bucket", "/p/" <> pidTxt <> "/byob_s3", Nothing, Nothing, Nothing)
+  , ("github", "GitHub Sync", "/p/" <> pidTxt <> "/settings/git-sync", Nothing, Nothing, Nothing)
   , ("trash", "Delete project", "/p/" <> pidTxt <> "/settings/delete", Nothing, Nothing, Nothing)
   ]
 

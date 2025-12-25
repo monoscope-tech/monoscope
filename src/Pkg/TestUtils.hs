@@ -72,7 +72,7 @@ import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (runLabeled)
 import Effectful.Log (Log)
-import Effectful.PostgreSQL (WithConnection, runWithConnectionPool)
+import Effectful.PostgreSQL (runWithConnectionPool)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runFrozenTime, runTime)
 import Log qualified

@@ -31,7 +31,7 @@ import Relude.Unsafe qualified as Unsafe
 
 
 testPid :: Projects.ProjectId
-testPid = UUIDId $ UUID.nil
+testPid = UUIDId UUID.nil
 
 
 spec :: Spec

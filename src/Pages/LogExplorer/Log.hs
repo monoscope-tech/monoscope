@@ -21,7 +21,6 @@ import Data.Time (UTCTime, addUTCTime)
 import Data.Vector qualified as V
 import Effectful.Error.Static (throwError)
 import Effectful.Labeled (labeled)
-import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
@@ -381,7 +380,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   let shouldSkipLoad = isNothing layoutM && isNothing hxRequestM && jsonM /= Just "true" || effectiveVizType == Just "patterns"
       fetchLogs =
         if authCtx.env.enableTimefusionReads
-          then labeled @"timefusion" @WithConnection $ RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+          then labeled @"timefusion" @PG.WithConnection $ RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
           else RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
 
   tableAsVecE <-

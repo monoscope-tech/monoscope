@@ -14,7 +14,6 @@ module Models.Apis.Slack (
   getDiscordData,
 ) where
 
-import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Deriving.Aeson qualified as AE

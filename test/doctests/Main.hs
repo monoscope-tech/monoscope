@@ -1,8 +1,7 @@
 module Main (main) where
 
-import Relude hiding (getArgs)
+import Relude
 import Test.DocTest (doctest)
-import System.Environment (getArgs)
 
 main :: IO ()
 main = do

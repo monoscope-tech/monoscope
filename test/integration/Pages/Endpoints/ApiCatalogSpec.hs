@@ -82,8 +82,8 @@ prepareTestMessages = do
   let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
   let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
   pure $ concat $ replicate 100
-    [ ("m1", BL.toStrict $ AE.encode reqMsg1)
-    , ("m2", BL.toStrict $ AE.encode reqMsg2)
+    [ ("m1", toStrict $ AE.encode reqMsg1)
+    , ("m2", toStrict $ AE.encode reqMsg2)
     ]
 
 spec :: Spec
@@ -106,7 +106,7 @@ spec = aroundAll withTestResources do
       |] (Only testPid) :: IO (V.Vector (Only Int))
       
       case projectExists of
-        [(Only 0)] -> error $ "Demo project with ID " <> show testPid <> " does not exist in database"
+        [Only 0] -> error $ "Demo project with ID " <> show testPid <> " does not exist in database"
         _ -> pass
       
       msgs <- prepareTestMessages
@@ -119,7 +119,7 @@ spec = aroundAll withTestResources do
       |] () :: IO (V.Vector (Only Int))
       
       case allSpansCount of
-        [(Only totalCount)] -> if totalCount == 0
+        [Only totalCount] -> if totalCount == 0
           then error "No spans at all in otel_logs_and_spans table"
           else pass
         _ -> pass
@@ -132,7 +132,7 @@ spec = aroundAll withTestResources do
       |] (Only testPid) :: IO (V.Vector (Only Int))
       
       case spanCount of
-        [(Only count)] -> if count == 0
+        [Only count] -> if count == 0
           then error $ "No spans found in otel_logs_and_spans table after processing messages for project " <> show testPid
           else pass
         _ -> error "Unexpected span count result"
@@ -156,7 +156,7 @@ spec = aroundAll withTestResources do
       |] (Only testPid) :: IO (V.Vector (Only Int))
       
       case anomaliesCount of
-        [(Only count)] -> count `shouldSatisfy` (> 0)
+        [Only count] -> count `shouldSatisfy` (> 0)
         _ -> error "Unexpected anomalies count result"
 
     it "processes anomaly background jobs to create issues" \tr -> do
@@ -177,7 +177,7 @@ spec = aroundAll withTestResources do
       |] (Only testPid) :: IO (V.Vector (Only Int))
 
       case issuesCount of
-        [(Only count)] -> count `shouldBe` 2
+        [Only count] -> count `shouldBe` 2
         _ -> error "Unexpected issues count result"
 
     it "returns endpoints in inbox filter after creating issues" \tr -> do

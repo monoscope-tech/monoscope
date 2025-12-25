@@ -5,13 +5,17 @@ module Models.Projects.GitSync (
   GitHubSyncId,
   TreeEntry (..),
   SyncAction (..),
+  isAppInstallation,
   getGitHubSync,
   getGitHubSyncDecrypted,
   getGitHubSyncByRepo,
   getGitHubSyncByRepoDecrypted,
+  getGitHubSyncByInstallation,
   insertGitHubSync,
+  insertGitHubAppSync,
   updateGitHubSync,
   updateGitHubSyncKeepToken,
+  updateGitHubSyncRepo,
   updateLastTreeSha,
   deleteGitHubSync,
   getDashboardGitState,
@@ -25,6 +29,8 @@ module Models.Projects.GitSync (
   titleToFilePath,
   computeContentSha,
   buildSchemaWithMeta,
+  getDashboardsPath,
+  detectDefaultBranch,
 ) where
 
 import Control.Lens ((.~), (?~), (^.), (^?))
@@ -34,12 +40,12 @@ import Data.Aeson.Types (parseMaybe)
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
-import Data.Default (def)
+import Data.Default (Default (..), def)
 import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
-import Data.Time (UTCTime)
+import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
 import Data.Vector qualified as V
 import Data.Yaml qualified as Yaml
 import Database.PostgreSQL.Entity (Entity, _selectWhere)
@@ -53,7 +59,9 @@ import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Dashboards (Dashboard, DashboardId)
 import Models.Projects.ProjectApiKeys (decryptAPIKey, encryptAPIKey)
 import Models.Projects.Projects (ProjectId)
-import Network.HTTP.Client (HttpException (..))
+import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), responseStatus)
+import Network.HTTP.Types.Status (statusCode)
+import Data.UUID qualified as UUID
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import System.DB (DB)
@@ -74,7 +82,9 @@ data GitHubSync = GitHubSync
   , owner :: Text
   , repo :: Text
   , branch :: Text
-  , accessToken :: Text
+  , accessToken :: Maybe Text -- Encrypted PAT (for manual setup)
+  , installationId :: Maybe Int64 -- GitHub App installation ID
+  , pathPrefix :: Text -- Directory prefix for dashboards (default: "")
   , webhookSecret :: Maybe Text
   , lastTreeSha :: Maybe Text
   , syncEnabled :: Bool
@@ -84,6 +94,15 @@ data GitHubSync = GitHubSync
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "projects", TableName "github_sync", PrimaryKey "id", FieldModifiers '[CamelToSnake]] GitHubSync)
+
+instance Default GitHubSync where
+  def = GitHubSync (UUIDId UUID.nil) (UUIDId UUID.nil) "" "" "main" Nothing Nothing "" Nothing Nothing True epoch epoch
+    where epoch = UTCTime (fromGregorian 1970 1 1) (secondsToDiffTime 0)
+
+
+-- | Check if sync uses GitHub App (has installation_id)
+isAppInstallation :: GitHubSync -> Bool
+isAppInstallation sync = isJust sync.installationId
 
 
 data TreeEntry = TreeEntry
@@ -119,9 +138,12 @@ decryptToken encKey encryptedB64 =
     <$> B64.decodeBase64Untyped (encodeUtf8 encryptedB64)
 
 
--- | Decrypt a GitHubSync's access token. Returns Left with error if decryption fails.
+-- | Decrypt a GitHubSync's access token if present. Returns Left with error if decryption fails.
+-- For GitHub App installations (no accessToken), returns the sync unchanged.
 decryptSync :: ByteString -> GitHubSync -> Either Text GitHubSync
-decryptSync encKey sync = decryptToken encKey sync.accessToken <&> (sync &) . (#accessToken .~)
+decryptSync encKey sync = case sync.accessToken of
+  Nothing -> Right sync -- GitHub App installation, no token to decrypt
+  Just token -> decryptToken encKey token <&> \decrypted -> sync & #accessToken ?~ decrypted
 
 
 -- DB Operations
@@ -132,8 +154,7 @@ getGitHubSync pid = listToMaybe <$> PG.query (_selectWhere @GitHubSync [[field| 
 -- | Helper to decrypt sync config, logging on failure
 withDecryption :: (AE.ToJSON ctx, DB es, Log :> es) => ByteString -> ctx -> Eff es (Maybe GitHubSync) -> Eff es (Maybe GitHubSync)
 withDecryption encKey ctx fetch =
-  fetch >>= maybe (pure Nothing) \sync ->
-    either (\err -> logWarn "GitHub sync token decryption failed" (ctx, err) $> Nothing) (pure . Just) $ decryptSync encKey sync
+  fetch >>= maybe (pure Nothing) (either (\err -> logWarn "GitHub sync token decryption failed" (ctx, err) $> Nothing) (pure . Just) . decryptSync encKey)
 
 
 getGitHubSyncDecrypted :: (DB es, Log :> es) => ByteString -> ProjectId -> Eff es (Maybe GitHubSync)
@@ -148,13 +169,31 @@ getGitHubSyncByRepoDecrypted :: (DB es, Log :> es) => ByteString -> Text -> Text
 getGitHubSyncByRepoDecrypted encKey ownerVal repoVal = withDecryption encKey (ownerVal, repoVal) $ getGitHubSyncByRepo ownerVal repoVal
 
 
-insertGitHubSync :: DB es => ByteString -> ProjectId -> Text -> Text -> Text -> Text -> Maybe Text -> Eff es (Maybe GitHubSync)
-insertGitHubSync encKey pid ownerVal repoVal branchVal token webhookSecret =
-  listToMaybe <$> PG.query q (pid, ownerVal, repoVal, branchVal, encryptToken encKey token, webhookSecret)
+-- | Insert a new GitHub sync config using PAT authentication
+insertGitHubSync :: DB es => ByteString -> ProjectId -> Text -> Text -> Text -> Text -> Maybe Text -> Text -> Eff es (Maybe GitHubSync)
+insertGitHubSync encKey pid ownerVal repoVal branchVal token webhookSecretVal prefix =
+  listToMaybe <$> PG.query q (pid, ownerVal, repoVal, branchVal, encryptToken encKey token, webhookSecretVal, prefix)
   where
     q =
-      [sql| INSERT INTO projects.github_sync (project_id, owner, repo, branch, access_token, webhook_secret)
-              VALUES (?, ?, ?, ?, ?, ?) RETURNING id, project_id, owner, repo, branch, access_token, webhook_secret, last_tree_sha, sync_enabled, created_at, updated_at |]
+      [sql| INSERT INTO projects.github_sync (project_id, owner, repo, branch, access_token, webhook_secret, path_prefix)
+              VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING * |]
+
+
+-- | Insert a new GitHub sync config using GitHub App installation
+insertGitHubAppSync :: DB es => ProjectId -> Int64 -> Text -> Text -> Text -> Text -> Eff es (Maybe GitHubSync)
+insertGitHubAppSync pid instId ownerVal repoVal branchVal prefix =
+  listToMaybe <$> PG.query q (pid, ownerVal, repoVal, branchVal, instId, prefix)
+  where
+    q =
+      [sql| INSERT INTO projects.github_sync (project_id, owner, repo, branch, installation_id, path_prefix)
+              VALUES (?, ?, ?, ?, ?, ?) RETURNING * |]
+
+
+-- | Get GitHub sync by installation ID (for webhook handling)
+getGitHubSyncByInstallation :: DB es => Int64 -> Eff es (Maybe GitHubSync)
+getGitHubSyncByInstallation instId = listToMaybe <$> PG.query q (Only instId)
+  where
+    q = [sql| SELECT * FROM projects.github_sync WHERE installation_id = ? |]
 
 
 updateGitHubSync :: DB es => ByteString -> GitHubSyncId -> Text -> Text -> Text -> Text -> Bool -> Eff es (Maybe GitHubSync)
@@ -163,7 +202,7 @@ updateGitHubSync encKey sid ownerVal repoVal branchVal token enabled =
   where
     q =
       [sql| UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, access_token = ?, sync_enabled = ?, updated_at = now()
-              WHERE id = ? RETURNING id, project_id, owner, repo, branch, access_token, webhook_secret, last_tree_sha, sync_enabled, created_at, updated_at |]
+              WHERE id = ? RETURNING * |]
 
 
 updateGitHubSyncKeepToken :: DB es => GitHubSyncId -> Text -> Text -> Text -> Bool -> Eff es (Maybe GitHubSync)
@@ -172,7 +211,17 @@ updateGitHubSyncKeepToken sid ownerVal repoVal branchVal enabled =
   where
     q =
       [sql| UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, sync_enabled = ?, updated_at = now()
-              WHERE id = ? RETURNING id, project_id, owner, repo, branch, access_token, webhook_secret, last_tree_sha, sync_enabled, created_at, updated_at |]
+              WHERE id = ? RETURNING * |]
+
+
+-- | Update repo selection for GitHub App installation
+updateGitHubSyncRepo :: DB es => GitHubSyncId -> Text -> Text -> Text -> Text -> Eff es (Maybe GitHubSync)
+updateGitHubSyncRepo sid ownerVal repoVal branchVal prefix =
+  listToMaybe <$> PG.query q (ownerVal, repoVal, branchVal, prefix, sid)
+  where
+    q =
+      [sql| UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, path_prefix = ?, updated_at = now()
+              WHERE id = ? RETURNING * |]
 
 
 updateLastTreeSha :: DB es => GitHubSyncId -> Text -> Eff es Int64
@@ -200,11 +249,12 @@ updateDashboardGitInfo did path sha = PG.execute q (path, sha, did)
 
 
 -- GitHub API Operations
-fetchGitTree :: (IOE :> es, W.HTTP :> es) => GitHubSync -> Eff es (Either Text (Text, [TreeEntry]))
-fetchGitTree sync = do
+fetchGitTree :: (IOE :> es, W.HTTP :> es) => Text -> GitHubSync -> Eff es (Either Text (Text, [TreeEntry]))
+fetchGitTree token sync = do
   let url = "https://api.github.com/repos/" <> sync.owner <> "/" <> sync.repo <> "/git/trees/" <> sync.branch <> "?recursive=1"
-  result <- try $ W.getWith (githubOpts sync.accessToken) (toString url)
+  result <- try $ W.getWith (githubOpts token) (toString url)
   pure $ case result of
+    Left (HttpExceptionRequest _ (StatusCodeException resp _)) | statusCode (responseStatus resp) == 404 -> Right ("", [])  -- Empty repo = empty tree
     Left (err :: HttpException) -> Left $ formatHttpError err
     Right resp ->
       let body = resp ^. W.responseBody
@@ -214,10 +264,10 @@ fetchGitTree sync = do
             _ -> Left $ "Invalid tree response: " <> decodeUtf8 body
 
 
-fetchFileContent :: (IOE :> es, W.HTTP :> es) => GitHubSync -> Text -> Eff es (Either Text ByteString)
-fetchFileContent sync path = do
+fetchFileContent :: (IOE :> es, W.HTTP :> es) => Text -> GitHubSync -> Text -> Eff es (Either Text ByteString)
+fetchFileContent token sync path = do
   let url = "https://api.github.com/repos/" <> sync.owner <> "/" <> sync.repo <> "/contents/" <> path <> "?ref=" <> sync.branch
-  result <- try $ W.getWith (githubOpts sync.accessToken) (toString url)
+  result <- try $ W.getWith (githubOpts token) (toString url)
   pure $ case result of
     Left (err :: HttpException) -> Left $ formatHttpError err
     Right resp -> case resp ^. W.responseBody . key "content" . _String of
@@ -225,8 +275,8 @@ fetchFileContent sync path = do
       b64Content -> first (toText . show) $ B64.decodeBase64Untyped $ encodeUtf8 $ T.filter (/= '\n') b64Content
 
 
-pushFileToGit :: (IOE :> es, W.HTTP :> es) => GitHubSync -> Text -> ByteString -> Maybe Text -> Text -> Eff es (Either Text Text)
-pushFileToGit sync path content existingSha message = do
+pushFileToGit :: (IOE :> es, W.HTTP :> es) => Text -> GitHubSync -> Text -> ByteString -> Maybe Text -> Text -> Eff es (Either Text Text)
+pushFileToGit token sync path content existingSha message = do
   let url = "https://api.github.com/repos/" <> sync.owner <> "/" <> sync.repo <> "/contents/" <> path
       b64Content = extractBase64 $ B64.encodeBase64 content
       payload =
@@ -237,7 +287,7 @@ pushFileToGit sync path content existingSha message = do
             , Just $ "branch" AE..= sync.branch
             , ("sha" AE..=) <$> existingSha
             ]
-  result <- try $ W.putWith (githubOpts sync.accessToken) (toString url) payload
+  result <- try $ W.putWith (githubOpts token) (toString url) payload
   pure $ case result of
     Left (err :: HttpException) -> Left $ formatHttpError err
     Right resp -> maybeToRight "No sha in response" $ resp ^? W.responseBody . key "content" . key "sha" . _String
@@ -261,24 +311,38 @@ githubOpts token =
     .~ ["2022-11-28"]
 
 
+-- | Detect the default branch of a repo, or return "main" for empty repos
+-- Tries to get repo info first, falls back to checking main/master branches
+detectDefaultBranch :: (IOE :> es, W.HTTP :> es) => Text -> Text -> Text -> Eff es Text
+detectDefaultBranch token owner repo = do
+  let repoUrl = "https://api.github.com/repos/" <> owner <> "/" <> repo
+  result <- try $ W.getWith (githubOpts token) (toString repoUrl)
+  pure $ case result of
+    Left (_ :: HttpException) -> "main" -- Default to main if can't access repo
+    Right resp -> fromMaybe "main" $ resp ^? W.responseBody . key "default_branch" . _String
+
+
 -- Constants
-dashboardsPrefix :: Text
-dashboardsPrefix = "dashboards/"
-
-
 yamlExtensions :: [Text]
 yamlExtensions = [".yaml", ".yml"]
 
 
-isDashboardFile :: TreeEntry -> Bool
-isDashboardFile e = e._teType == "blob" && dashboardsPrefix `T.isPrefixOf` e.path && any (`T.isSuffixOf` e.path) yamlExtensions
+-- | Get the dashboards folder path including prefix
+getDashboardsPath :: GitHubSync -> Text
+getDashboardsPath sync
+  | T.null sync.pathPrefix = "dashboards/"
+  | otherwise = sync.pathPrefix <> "/dashboards/"
+
+
+isDashboardFile :: Text -> TreeEntry -> Bool
+isDashboardFile prefix e = e._teType == "blob" && prefix `T.isPrefixOf` e.path && any (`T.isSuffixOf` e.path) yamlExtensions
 
 
 -- Sync Logic
-buildSyncPlan :: [TreeEntry] -> M.Map Text (DashboardId, Text) -> [SyncAction]
-buildSyncPlan entries dbState = creates <> updates <> deletes
+buildSyncPlan :: Text -> [TreeEntry] -> M.Map Text (DashboardId, Text) -> [SyncAction]
+buildSyncPlan prefix entries dbState = creates <> updates <> deletes
   where
-    gitFiles = M.fromList [(e.path, e.sha) | e <- entries, isDashboardFile e]
+    gitFiles = M.fromList [(e.path, e.sha) | e <- entries, isDashboardFile prefix e]
     creates = M.foldMapWithKey (\p s -> [SyncCreate p s]) $ gitFiles `M.difference` dbState
     updates = M.foldMapWithKey (\p s -> case M.lookup p dbState of Just (rid, oldSha) | s /= oldSha -> [SyncUpdate p s rid]; _ -> []) gitFiles
     deletes = M.foldMapWithKey (\p (rid, _) -> [SyncDelete p rid]) $ dbState `M.difference` gitFiles

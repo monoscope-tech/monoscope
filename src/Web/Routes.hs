@@ -243,6 +243,11 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , gitSyncSettings :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Get '[HTML] (RespHeaders (Html ()))
   , gitSyncSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Post '[HTML] (RespHeaders (Html ()))
   , gitSyncSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Delete '[HTML] (RespHeaders (Html ()))
+  , -- GitHub App routes
+    githubAppInstall :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "install" :> Get '[HTML] (RespHeaders (Html ()))
+  , githubAppCallback :: mode :- "github" :> "callback" :> QueryParam "installation_id" Int64 :> QueryParam "setup_action" Text :> QueryParam "state" Text :> Get '[HTML] (RespHeaders (Html ()))
+  , githubAppRepos :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "repos" :> QueryParam "installationId" Int64 :> Get '[HTML] (RespHeaders (Html ()))
+  , githubAppSelectRepo :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "select" :> ReqBody '[FormUrlEncoded] GitSync.RepoSelectForm :> Post '[HTML] (RespHeaders (Html ()))
   , -- Sub-route groups
     projects :: mode :- ProjectsRoutes
   , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes
@@ -450,6 +455,10 @@ cookieProtectedServer =
     , gitSyncSettings = GitSync.gitSyncSettingsGetH
     , gitSyncSettingsPost = GitSync.gitSyncSettingsPostH
     , gitSyncSettingsDelete = GitSync.gitSyncSettingsDeleteH
+    , githubAppInstall = GitSync.githubAppInstallH
+    , githubAppCallback = GitSync.githubAppCallbackH
+    , githubAppRepos = GitSync.githubAppReposH
+    , githubAppSelectRepo = GitSync.githubAppSelectRepoH
     , -- Billing handlers
       manageBillingGet = LemonSqueezy.manageBillingGetH
     , -- Endpoint handlers

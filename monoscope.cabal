@@ -125,6 +125,7 @@ library
       Pkg.DBUtils
       Pkg.DeriveUtils
       Pkg.Drain
+      Pkg.GitHub
       Pkg.Mail
       Pkg.Parser
       Pkg.Parser.Expr
@@ -241,6 +242,9 @@ library
     , containers
     , cookie
     , cryptohash-md5
+    , crypton
+    , crypton-x509
+    , crypton-x509-store
     , cryptonite
     , data-default
     , deriving-aeson
@@ -272,6 +276,7 @@ library
     , http-client
     , http-types
     , hw-kafka-client
+    , jose-jwt
     , ki-effectful
     , langchain-hs
     , lens
@@ -321,6 +326,7 @@ library
     , servant-server
     , slugify
     , template-haskell
+    , temporary
     , text
     , text-builder-linear
     , text-display
@@ -492,15 +498,19 @@ test-suite integration-tests
     , aeson-qq
     , base
     , base64
+    , bytestring
     , cache
     , clock
+    , containers
     , data-default
     , effectful
     , generic-lens
     , grapesy
     , hs-opentelemetry-instrumentation-auto
     , hspec
+    , http-client
     , lens
+    , lens-aeson
     , monoscope
     , odd-jobs
     , pg-entity
@@ -512,10 +522,13 @@ test-suite integration-tests
     , servant
     , servant-htmx
     , servant-server
+    , text
     , time
+    , unliftio
     , uuid
     , uuid-quasi
     , vector
+    , wreq
   default-language: GHC2021
 
 test-suite unit-tests

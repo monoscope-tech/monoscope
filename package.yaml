@@ -181,6 +181,11 @@ library:
     - annotated-exception
     - safe
     - cryptonite
+    - jose-jwt
+    - crypton
+    - crypton-x509
+    - crypton-x509-store
+    - temporary
     - memory
     - data-default
     - deriving-aeson
@@ -343,8 +348,15 @@ tests:
       - data-default
       - clock
       - lens
+      - lens-aeson
       - proto-lens
       - grapesy
+      - wreq
+      - http-client
+      - unliftio
+      - bytestring
+      - containers
+      - text
   unit-tests:
     main: Main.hs
     source-dirs: test/unit

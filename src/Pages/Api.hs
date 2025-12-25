@@ -8,8 +8,6 @@ import Data.Text qualified as T
 import Data.UUID as UUID (toText)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Effectful.PostgreSQL (WithConnection)
-import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxPatch_, hxPost_, hxTarget_)

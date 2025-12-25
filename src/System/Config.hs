@@ -71,6 +71,11 @@ data EnvConfig = EnvConfig
   , discordBotToken :: Text
   , discordPublicKey :: Text
   , discordWebhookUrl :: Text
+  , githubAppId :: Text
+  , githubAppPrivateKey :: Text
+  , githubAppName :: Text
+  , githubClientId :: Text
+  , githubClientSecret :: Text
   , courierClientKey :: Text
   , courierApiKey :: Text
   , environment :: Text

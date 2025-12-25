@@ -12,8 +12,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.Time (UTCTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Effectful (Eff, IOE, (:>))
-import Effectful.PostgreSQL qualified as PG
+import Effectful (Eff, IOE, type (:>))
 import Effectful.Reader.Static qualified
 import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio

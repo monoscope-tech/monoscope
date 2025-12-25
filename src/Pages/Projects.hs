@@ -67,7 +67,6 @@ import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.Error.Static (throwError)
-import Effectful.Log qualified as Log
 import Effectful.Reader.Static (ask)
 import Fmt
 import GHC.Records (HasField (getField))
@@ -79,7 +78,6 @@ import Models.Apis.Slack qualified as Slack
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Models.Projects.ProjectMembers qualified as ProjectsMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users

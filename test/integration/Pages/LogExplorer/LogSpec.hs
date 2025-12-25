@@ -1,4 +1,6 @@
 {-# LANGUAGE BlockArguments #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TupleSections #-}
 
 module Pages.LogExplorer.LogSpec (spec) where
 
@@ -54,7 +56,7 @@ spec = aroundAll withTestResources do
       let reqMsg3 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 yesterdayTxt
       let reqMsg4 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 twoDaysAgoTxt
 
-      let msgs = concat (replicate 100 [("m1", BL.toStrict $ AE.encode reqMsg1), ("m2", BL.toStrict $ AE.encode reqMsg2)]) ++ [("m3", BL.toStrict $ AE.encode reqMsg3), ("m4", BL.toStrict $ AE.encode reqMsg4)]
+      let msgs = concat (replicate 100 [("m1", toStrict $ AE.encode reqMsg1), ("m2", toStrict $ AE.encode reqMsg2)]) ++ [("m3", toStrict $ AE.encode reqMsg3), ("m4", toStrict $ AE.encode reqMsg4)]
       res <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
       length res `shouldBe` 202
       
@@ -89,7 +91,7 @@ spec = aroundAll withTestResources do
       let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
 
       -- Process some test messages
-      let msgs = [("m1", BL.toStrict $ AE.encode reqMsg1), ("m2", BL.toStrict $ AE.encode reqMsg2)]
+      let msgs = [("m1", toStrict $ AE.encode reqMsg1), ("m2", toStrict $ AE.encode reqMsg2)]
       res <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
       length res `shouldBe` 2
       
@@ -115,7 +117,7 @@ spec = aroundAll withTestResources do
       let reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
 
       -- Create many messages to test pagination
-      let msgs = take 200 $ zip (map (\i -> "m" <> show i) [1..]) (repeat $ BL.toStrict $ AE.encode reqMsg)
+      let msgs = take 200 $ map ((, toStrict $ AE.encode reqMsg) . (\i -> "m" <> show i)) [1..]
       res <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
       length res `shouldBe` 200
       
@@ -140,7 +142,7 @@ spec = aroundAll withTestResources do
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
       let reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
       
-      let msgs = [("m1", BL.toStrict $ AE.encode reqMsg)]
+      let msgs = [("m1", toStrict $ AE.encode reqMsg)]
       _ <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
       
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
@@ -166,7 +168,7 @@ spec = aroundAll withTestResources do
       let frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
       let reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
-      let msgs = [("m1", BL.toStrict $ AE.encode reqMsg)]
+      let msgs = [("m1", toStrict $ AE.encode reqMsg)]
       _ <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
       
       (_, pg) <- testServant tr $ 
@@ -200,7 +202,7 @@ spec = aroundAll withTestResources do
       let reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
 
       -- Create 1000 messages to ensure multiple pages (limit is 500)
-      let msgs = take 1000 $ zip (map (\i -> "m" <> show i) [1..]) (repeat $ BL.toStrict $ AE.encode reqMsg)
+      let msgs = take 1000 $ map ((, toStrict $ AE.encode reqMsg) . (\i -> "m" <> show i)) [1..]
       _ <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
 
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
@@ -222,7 +224,7 @@ spec = aroundAll withTestResources do
               let timestampIdx = HashMap.lookup "timestamp" colIdxMap1
               case timestampIdx of
                 Just idx -> do
-                  let cursorM = (lastItem V.!? idx) >>= (\v -> case v of AE.String t -> Just t; _ -> Nothing)
+                  let cursorM = (lastItem V.!? idx) >>= \case AE.String t -> Just t; _ -> Nothing
                   cursorM `shouldSatisfy` isJust
                 _ -> error "timestamp column not found"
             Nothing -> error "No items in first page"
@@ -237,7 +239,7 @@ spec = aroundAll withTestResources do
       let msg2Time = toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-30) frozenTime
       let msg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 msg2Time
       
-      let msgs = [("m1", BL.toStrict $ AE.encode msg1), ("m2", BL.toStrict $ AE.encode msg2)]
+      let msgs = [("m1", toStrict $ AE.encode msg1), ("m2", toStrict $ AE.encode msg2)]
       _ <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
       
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-120) frozenTime
@@ -270,7 +272,7 @@ spec = aroundAll withTestResources do
       let msg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 msg2Txt
       let msg3 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 msg3Txt
       
-      let msgs = [("m1", BL.toStrict $ AE.encode msg1), ("m2", BL.toStrict $ AE.encode msg2), ("m3", BL.toStrict $ AE.encode msg3)]
+      let msgs = [("m1", toStrict $ AE.encode msg1), ("m2", toStrict $ AE.encode msg2), ("m3", toStrict $ AE.encode msg3)]
       _ <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
       
       -- Query for messages between 2.5 and 1.5 hours ago (should only get msg2)
@@ -299,9 +301,9 @@ spec = aroundAll withTestResources do
       let msgHourBeforeMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 oneHourBefore  
       let msgTwoDaysBeforeMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 twoDaysBefore
       
-      let msgs = [("m1", BL.toStrict $ AE.encode msgNow), 
-                  ("m2", BL.toStrict $ AE.encode msgHourBeforeMsg),
-                  ("m3", BL.toStrict $ AE.encode msgTwoDaysBeforeMsg)]
+      let msgs = [("m1", toStrict $ AE.encode msgNow),
+                  ("m2", toStrict $ AE.encode msgHourBeforeMsg),
+                  ("m3", toStrict $ AE.encode msgTwoDaysBeforeMsg)]
       
       _ <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
       

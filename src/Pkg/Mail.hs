@@ -15,7 +15,6 @@ import Effectful (
   type (:>),
  )
 import Effectful.Log (Log)
-import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Static (Reader, ask)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Slack (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)

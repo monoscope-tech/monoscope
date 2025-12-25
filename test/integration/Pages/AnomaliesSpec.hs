@@ -76,10 +76,10 @@ spec = aroundAll withTestResources do
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
       let msgs =
-            [ ("m1", BL.toStrict $ AE.encode reqMsg1)
-            , ("m2", BL.toStrict $ AE.encode reqMsg1) -- same message
-            , ("m3", BL.toStrict $ AE.encode reqMsg1) -- same message
-            , ("m4", BL.toStrict $ AE.encode reqMsg1) -- same message
+            [ ("m1", toStrict $ AE.encode reqMsg1)
+            , ("m2", toStrict $ AE.encode reqMsg1) -- same message
+            , ("m3", toStrict $ AE.encode reqMsg1) -- same message
+            , ("m4", toStrict $ AE.encode reqMsg1) -- same message
             ]
 
       processMessagesAndBackgroundJobs tr msgs
@@ -87,7 +87,7 @@ spec = aroundAll withTestResources do
       -- Check that endpoint was created in database
       endpoints <- withResource tr.trPool \conn -> PGS.query conn [sql|
         SELECT hash FROM apis.endpoints WHERE project_id = ?
-      |] (Only testPid) :: IO [(Only Text)]
+      |] (Only testPid) :: IO [Only Text]
       length endpoints `shouldBe` 1
 
       -- Check what background jobs were created and run only NewAnomaly jobs
@@ -103,7 +103,7 @@ spec = aroundAll withTestResources do
       -- Check that API change issue was created for the endpoint
       apiChangeIssues <- withResource tr.trPool \conn -> PGS.query conn [sql|
         SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
-      |] (Only testPid) :: IO [(Only Issues.IssueId)]
+      |] (Only testPid) :: IO [Only Issues.IssueId]
       length apiChangeIssues `shouldBe` 1
       
       -- Anomaly list should show the API change issue
@@ -115,7 +115,7 @@ spec = aroundAll withTestResources do
       -- Find the API change issue for the endpoint
       apiChangeIssues <- withResource tr.trPool \conn -> PGS.query conn [sql|
         SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
-      |] (Only testPid) :: IO [(Only Issues.IssueId)]
+      |] (Only testPid) :: IO [Only Issues.IssueId]
       length apiChangeIssues `shouldBe` 1
       issueId <- case apiChangeIssues of
         (Only iid) : _ -> pure iid
@@ -131,7 +131,7 @@ spec = aroundAll withTestResources do
 
       -- Acknowledge the endpoint anomaly directly using Issues module
       let sess = Servant.getResponse tr.trSessAndHeader
-      runTestBg tr $ Issues.acknowledgeIssue issueId (sess.user).id
+      runTestBg tr $ Issues.acknowledgeIssue issueId sess.user.id
 
       -- Verify it was acknowledged
       acknowledgedIssue <- runTestBg tr $ Issues.selectIssueById issueId
@@ -155,10 +155,10 @@ spec = aroundAll withTestResources do
       let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
       let reqMsg3 = Unsafe.fromJust $ convert $ msg3 nowTxt -- Same endpoint, different shape
       let msgs =
-            [ ("m1", BL.toStrict $ AE.encode reqMsg1)
-            , ("m2", BL.toStrict $ AE.encode reqMsg2)
-            , ("m3", BL.toStrict $ AE.encode reqMsg3)
-            , ("m4", BL.toStrict $ AE.encode reqMsg2)
+            [ ("m1", toStrict $ AE.encode reqMsg1)
+            , ("m2", toStrict $ AE.encode reqMsg2)
+            , ("m3", toStrict $ AE.encode reqMsg3)
+            , ("m4", toStrict $ AE.encode reqMsg2)
             ]
 
       processMessagesAndBackgroundJobs tr msgs
@@ -195,7 +195,7 @@ spec = aroundAll withTestResources do
       -- Find and acknowledge the API change issues
       apiChangeIssuesForAck <- withResource tr.trPool \conn -> PGS.query conn [sql|
         SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
-      |] (Only testPid) :: IO [(Only Issues.IssueId)]
+      |] (Only testPid) :: IO [Only Issues.IssueId]
 
       length apiChangeIssuesForAck `shouldSatisfy` (>= 1)
 
@@ -204,12 +204,12 @@ spec = aroundAll withTestResources do
         Just (Only issueId) -> do
           -- Acknowledge directly using Issues module
           let sess = Servant.getResponse tr.trSessAndHeader
-          runTestBg tr $ Issues.acknowledgeIssue issueId (sess.user).id
+          runTestBg tr $ Issues.acknowledgeIssue issueId sess.user.id
         Nothing -> error "No API change issue found"
 
       -- Now send a message with different format
       let reqMsg4 = Unsafe.fromJust $ convert $ msg4 nowTxt
-      let msgs = [("m4", BL.toStrict $ AE.encode reqMsg4)]
+      let msgs = [("m4", toStrict $ AE.encode reqMsg4)]
       processMessagesAndBackgroundJobs tr msgs
 
       -- Get and run format anomaly jobs

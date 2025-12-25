@@ -17,6 +17,7 @@ module Models.Projects.Dashboards (
   selectDashboardsSortedBy,
   updateSchema,
   updateTitle,
+  updateTags,
   updateSchemaAndUpdatedAt,
   updateStarredSince,
   deleteDashboard,
@@ -250,6 +251,10 @@ updateSchema dashId dashboard = PG.execute (Query "UPDATE projects.dashboards SE
 
 updateTitle :: DB es => DashboardId -> Text -> Eff es Int64
 updateTitle dashId title = PG.execute (Query "UPDATE projects.dashboards SET title = ? WHERE id = ?") (title, dashId)
+
+
+updateTags :: DB es => DashboardId -> V.Vector Text -> Eff es Int64
+updateTags dashId tags = PG.execute (Query "UPDATE projects.dashboards SET tags = ? WHERE id = ?") (tags, dashId)
 
 
 updateSchemaAndUpdatedAt :: DB es => DashboardId -> Dashboard -> UTCTime -> Eff es Int64
