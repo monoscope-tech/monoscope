@@ -1,6 +1,7 @@
 module Pages.GitSyncSpec (spec) where
 
 import BackgroundJobs qualified
+import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Maybe (fromJust)
 import Data.Map.Strict qualified as M
@@ -241,7 +242,7 @@ spec = aroundAll withTestResources do
             , pusher = Nothing
             , commits = Nothing
             }
-      _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ GitSyncPage.githubWebhookPostH Nothing (Just "push") payload
+      _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ GitSyncPage.githubWebhookPostH Nothing (Just "push") (toStrict $ AE.encode payload)
       pendingJobs <- getPendingBackgroundJobs tr.trATCtx
       let gitSyncJobs = V.filter isGitSyncFromRepo pendingJobs
       V.length gitSyncJobs `shouldSatisfy` (>= 1)
@@ -255,7 +256,7 @@ spec = aroundAll withTestResources do
             , pusher = Nothing
             , commits = Nothing
             }
-      _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ GitSyncPage.githubWebhookPostH Nothing (Just "ping") payload
+      _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ GitSyncPage.githubWebhookPostH Nothing (Just "ping") (toStrict $ AE.encode payload)
       pendingJobs <- getPendingBackgroundJobs tr.trATCtx
       let gitSyncJobs = V.filter isGitSyncFromRepo pendingJobs
       V.length gitSyncJobs `shouldBe` 0

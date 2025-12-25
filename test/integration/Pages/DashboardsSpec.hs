@@ -1,10 +1,9 @@
 module Pages.DashboardsSpec (spec) where
 
-import Control.Lens ((.~), (&))
-import Data.Generics.Labels ()
+import Data.Aeson qualified as AE
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Models.Projects.Dashboards (Dashboard (tags), DashboardVM (..))
+import Models.Projects.Dashboards (Dashboard (tags), DashboardVM)
 import Models.Projects.ProjectMembers (TeamVM (..))
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
@@ -42,8 +41,8 @@ spec = aroundAll withTestResources do
 
     it "Should create a dashboard" \tr -> do
       (_, pg) <- testServant tr do
-        let dashboard1 = dashboard & #title .~ "Dashboard 1"
-            dashboard2 = dashboard & #title .~ "Dashboard 2"
+        let dashboard1 = dashboard{title = "Dashboard 1"}
+            dashboard2 = dashboard{title = "Dashboard 2"}
         _ <- Dashboards.dashboardsPostH testPid dashboard1
         _ <- Dashboards.dashboardsPostH testPid dashboard2
         Dashboards.dashboardsPostH testPid dashboard
@@ -52,7 +51,7 @@ spec = aroundAll withTestResources do
         _ -> fail "Expected DashboardGet' response"
 
     it "Should not create a dashboard with an empty title" \tr -> do
-      let invalidDashboard = dashboard & #title .~ ""
+      let invalidDashboard = dashboard{title = ""}
       (_, pg) <- testServant tr $ Dashboards.dashboardsPostH testPid invalidDashboard
       case pg of
         Dashboards.DashboardPostError message -> do
@@ -152,10 +151,10 @@ spec = aroundAll withTestResources do
         _ -> fail "Expected DashboardGet' response"
 
     it "Should star and unstar a dashboard" \tr -> do
-      let dashboard1 = dashboard & #title .~ "Star Test Dashboard"
-          dashboardA = dashboard & #title .~ "Dashboard A"
-          dashboardB = dashboard & #title .~ "Dashboard B"
-          dashboardC = dashboard & #title .~ "Dashboard C"
+      let dashboard1 = dashboard{title = "Star Test Dashboard"}
+          dashboardA = dashboard{title = "Dashboard A"}
+          dashboardB = dashboard{title = "Dashboard B"}
+          dashboardC = dashboard{title = "Dashboard C"}
       _ <- testServant tr do
         _ <- Dashboards.dashboardsPostH testPid dashboardA
         _ <- Dashboards.dashboardsPostH testPid dashboardB

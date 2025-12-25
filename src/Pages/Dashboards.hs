@@ -96,7 +96,7 @@ syncDashboardFileInfo dashId = do
         newSha = GitSync.computeContentSha $ GitSync.dashboardToYaml schema
     when (dash.fileSha /= Just newSha || dash.filePath /= Just filePath)
       $ void
-      $ Dashboards.updateFileInfo dashId filePath newSha
+      $ GitSync.updateDashboardGitInfo dashId filePath newSha
 
 
 -- Filter record for dashboard list
@@ -1054,21 +1054,6 @@ activeFilters_ pid baseUrl filters = div_ [class_ "flex items-center gap-2 mb-4"
     , hxSwap_ "outerHTML"
     ]
     "Clear all"
-
-
-addTeamsDrowndown_ :: Projects.ProjectId -> V.Vector ManageMembers.Team -> Html ()
-addTeamsDrowndown_ pid teams = div_ [class_ "dropdown dropdown-end"] do
-  label_ [tabindex_ "0", role_ "button", class_ "flex items-center gap-2 btn btn-sm"] do
-    faSprite_ "plus" "regular" "w-3 h-3"
-    span_ "Add teams"
-  ul_ [tabindex_ "0", class_ "dropdown-content rounded w-52 px-0 py-3"] do
-    h6_ [class_ "font-medium mb-2 px-2"] "Add up to 5 teams"
-    forM_ teams \team -> do
-      li_ [class_ "p-0"] do
-        label_ [class_ "flex flex-row items-center gap-1 px-2 text-sm hover:bg-fillWeak"] do
-          input_ [type_ "checkbox", class_ "checkbox checkbox-xs", name_ "teamHandles", value_ $ UUID.toText team.id]
-          span_ [class_ "px-2 py-1"] $ toHtml team.handle
-    button_ [class_ "btn btn-primary btn-xs float-right", hxPost_ $ "/p/" <> pid.toText <> "/dashboards/bulk_action/add_teams", hxSwap_ "none"] "Add teams"
 
 
 dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UUID.UUID -> DashboardFilters -> ATAuthCtx (RespHeaders DashboardsGet)
