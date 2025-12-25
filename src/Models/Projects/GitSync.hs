@@ -27,9 +27,9 @@ module Models.Projects.GitSync (
   buildSchemaWithMeta,
 ) where
 
-import Control.Lens ((.~), (?~), (^.))
+import Control.Lens ((.~), (?~), (^.), (^?))
 import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as AEK
+import Data.Aeson.Lens (key, _Array, _Bool, _String)
 import Data.Aeson.Types (parseMaybe)
 import Data.Base64.Types (extractBase64)
 import Data.Default (def)
@@ -40,9 +40,10 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Data.Yaml qualified as Yaml
+import Database.PostgreSQL.Entity (Entity, _selectWhere)
+import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.PostgreSQL qualified as PG
@@ -79,6 +80,7 @@ data GitHubSync = GitHubSync
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
+  deriving (Entity) via (GenericEntity '[Schema "projects", TableName "github_sync", PrimaryKey "id", FieldModifiers '[CamelToSnake]] GitHubSync)
 
 
 data TreeEntry = TreeEntry
@@ -101,56 +103,61 @@ data SyncAction
 
 -- Token encryption helpers
 encryptToken :: ByteString -> Text -> Text
-encryptToken key token = extractBase64 $ B64.encodeBase64 $ encryptAPIKey key (encodeUtf8 token)
+encryptToken encKey token = extractBase64 $ B64.encodeBase64 $ encryptAPIKey encKey (encodeUtf8 token)
 
 
 -- | Decrypt an access token. Returns Nothing if decryption fails (invalid format or key).
 -- SECURITY: Never falls back to plaintext - callers must handle Nothing appropriately.
 decryptToken :: ByteString -> Text -> Maybe Text
-decryptToken key encryptedB64 = case B64.decodeBase64Untyped (encodeUtf8 encryptedB64) of
+decryptToken encKey encryptedB64 = case B64.decodeBase64Untyped (encodeUtf8 encryptedB64) of
   Left _ -> Nothing
-  Right encrypted -> Just $ decodeUtf8 $ decryptAPIKey key encrypted
+  Right encrypted -> Just $ decodeUtf8 $ decryptAPIKey encKey encrypted
 
 
 -- | Decrypt a GitHubSync's access token. Returns Nothing if decryption fails.
 decryptSync :: ByteString -> GitHubSync -> Maybe GitHubSync
-decryptSync key sync = (\token -> sync{accessToken = token}) <$> decryptToken key sync.accessToken
+decryptSync encKey sync = (\token -> sync{accessToken = token}) <$> decryptToken encKey sync.accessToken
 
 
 -- DB Operations
-githubSyncCols :: ByteString
-githubSyncCols = "id, project_id, owner, repo, branch, access_token, webhook_secret, last_tree_sha, sync_enabled, created_at, updated_at"
-
-
 getGitHubSync :: DB es => ProjectId -> Eff es (Maybe GitHubSync)
-getGitHubSync pid = listToMaybe <$> PG.query (Query $ "SELECT " <> githubSyncCols <> " FROM projects.github_sync WHERE project_id = ?") (Only pid)
+getGitHubSync pid = listToMaybe <$> PG.query (_selectWhere @GitHubSync [[field| project_id |]]) (Only pid)
 
 
 getGitHubSyncDecrypted :: DB es => ByteString -> ProjectId -> Eff es (Maybe GitHubSync)
-getGitHubSyncDecrypted key pid = (decryptSync key =<<) <$> getGitHubSync pid
+getGitHubSyncDecrypted encKey pid = (decryptSync encKey =<<) <$> getGitHubSync pid
 
 
 getGitHubSyncByRepo :: DB es => Text -> Text -> Eff es (Maybe GitHubSync)
-getGitHubSyncByRepo owner repo = listToMaybe <$> PG.query (Query $ "SELECT " <> githubSyncCols <> " FROM projects.github_sync WHERE owner = ? AND repo = ?") (owner, repo)
+getGitHubSyncByRepo owner repo = listToMaybe <$> PG.query (_selectWhere @GitHubSync [[field| owner |], [field| repo |]]) (owner, repo)
 
 
 getGitHubSyncByRepoDecrypted :: DB es => ByteString -> Text -> Text -> Eff es (Maybe GitHubSync)
-getGitHubSyncByRepoDecrypted key owner repo = (decryptSync key =<<) <$> getGitHubSyncByRepo owner repo
+getGitHubSyncByRepoDecrypted encKey ownerVal repoVal = (decryptSync encKey =<<) <$> getGitHubSyncByRepo ownerVal repoVal
 
 
 insertGitHubSync :: DB es => ByteString -> ProjectId -> Text -> Text -> Text -> Text -> Maybe Text -> Eff es (Maybe GitHubSync)
-insertGitHubSync key pid owner repo branch token webhookSecret =
-  listToMaybe <$> PG.query (Query $ "INSERT INTO projects.github_sync (project_id, owner, repo, branch, access_token, webhook_secret) VALUES (?, ?, ?, ?, ?, ?) RETURNING " <> githubSyncCols) (pid, owner, repo, branch, encryptToken key token, webhookSecret)
+insertGitHubSync encKey pid ownerVal repoVal branchVal token webhookSecret =
+  listToMaybe <$> PG.query q (pid, ownerVal, repoVal, branchVal, encryptToken encKey token, webhookSecret)
+  where
+    q = [sql| INSERT INTO projects.github_sync (project_id, owner, repo, branch, access_token, webhook_secret)
+              VALUES (?, ?, ?, ?, ?, ?) RETURNING id, project_id, owner, repo, branch, access_token, webhook_secret, last_tree_sha, sync_enabled, created_at, updated_at |]
 
 
 updateGitHubSync :: DB es => ByteString -> GitHubSyncId -> Text -> Text -> Text -> Text -> Bool -> Eff es (Maybe GitHubSync)
-updateGitHubSync key sid owner repo branch token enabled =
-  listToMaybe <$> PG.query (Query $ "UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, access_token = ?, sync_enabled = ?, updated_at = now() WHERE id = ? RETURNING " <> githubSyncCols) (owner, repo, branch, encryptToken key token, enabled, sid)
+updateGitHubSync encKey sid ownerVal repoVal branchVal token enabled =
+  listToMaybe <$> PG.query q (ownerVal, repoVal, branchVal, encryptToken encKey token, enabled, sid)
+  where
+    q = [sql| UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, access_token = ?, sync_enabled = ?, updated_at = now()
+              WHERE id = ? RETURNING id, project_id, owner, repo, branch, access_token, webhook_secret, last_tree_sha, sync_enabled, created_at, updated_at |]
 
 
 updateGitHubSyncKeepToken :: DB es => GitHubSyncId -> Text -> Text -> Text -> Bool -> Eff es (Maybe GitHubSync)
-updateGitHubSyncKeepToken sid owner repo branch enabled =
-  listToMaybe <$> PG.query (Query $ "UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, sync_enabled = ?, updated_at = now() WHERE id = ? RETURNING " <> githubSyncCols) (owner, repo, branch, enabled, sid)
+updateGitHubSyncKeepToken sid ownerVal repoVal branchVal enabled =
+  listToMaybe <$> PG.query q (ownerVal, repoVal, branchVal, enabled, sid)
+  where
+    q = [sql| UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, sync_enabled = ?, updated_at = now()
+              WHERE id = ? RETURNING id, project_id, owner, repo, branch, access_token, webhook_secret, last_tree_sha, sync_enabled, created_at, updated_at |]
 
 
 updateLastTreeSha :: DB es => GitHubSyncId -> Text -> Eff es Int64
@@ -184,14 +191,12 @@ fetchGitTree sync = do
   result <- try $ W.getWith (githubOpts sync.accessToken) (toString url)
   pure $ case result of
     Left (err :: HttpException) -> Left $ formatHttpError err
-    Right resp -> case AE.decode (resp ^. W.responseBody) of
-      Nothing -> Left "Failed to parse tree response"
-      Just obj -> case (AEK.lookup "sha" obj, AEK.lookup "tree" obj) of
-        (Just (AE.String treeSha), Just (AE.Array entries)) ->
-          Right (treeSha, mapMaybe (parseMaybe AE.parseJSON) $ V.toList entries)
-        _ -> case AEK.lookup "truncated" obj of
-          Just (AE.Bool True) -> Left "Repository too large (>100k files)"
-          _ -> Left $ "Invalid tree response: " <> decodeUtf8 (toStrict $ resp ^. W.responseBody)
+    Right resp ->
+      let body = resp ^. W.responseBody
+       in case (body ^? key "sha" . _String, body ^? key "tree" . _Array) of
+            (Just treeSha, Just entries) -> Right (treeSha, mapMaybe (parseMaybe AE.parseJSON) $ V.toList entries)
+            _ | body ^? key "truncated" . _Bool == Just True -> Left "Repository too large (>100k files)"
+            _ -> Left $ "Invalid tree response: " <> decodeUtf8 (toStrict body)
 
 
 fetchFileContent :: (IOE :> es, W.HTTP :> es) => GitHubSync -> Text -> Eff es (Either Text ByteString)
@@ -200,13 +205,9 @@ fetchFileContent sync path = do
   result <- try $ W.getWith (githubOpts sync.accessToken) (toString url)
   pure $ case result of
     Left (err :: HttpException) -> Left $ formatHttpError err
-    Right resp -> case AE.decode (resp ^. W.responseBody) of
-      Nothing -> Left "Failed to parse content response"
-      Just obj -> case AEK.lookup "content" obj of
-        Just (AE.String b64Content) ->
-          let cleaned = T.replace "\n" "" b64Content
-           in first (toText . show) $ B64.decodeBase64Untyped (encodeUtf8 cleaned)
-        _ -> Left "No content field"
+    Right resp -> case resp ^. W.responseBody . key "content" . _String of
+      "" -> Left "No content field"
+      b64Content -> first (toText . show) $ B64.decodeBase64Untyped $ encodeUtf8 $ T.replace "\n" "" b64Content
 
 
 pushFileToGit :: (IOE :> es, W.HTTP :> es) => GitHubSync -> Text -> ByteString -> Maybe Text -> Text -> Eff es (Either Text Text)
@@ -224,11 +225,7 @@ pushFileToGit sync path content existingSha message = do
   result <- try $ W.putWith (githubOpts sync.accessToken) (toString url) payload
   pure $ case result of
     Left (err :: HttpException) -> Left $ formatHttpError err
-    Right resp -> case AE.decode (resp ^. W.responseBody) of
-      Nothing -> Left "Failed to parse push response"
-      Just obj -> case AEK.lookup "content" obj >>= \c -> AEK.lookup "sha" c of
-        Just (AE.String newSha) -> Right newSha
-        _ -> Left "No sha in response"
+    Right resp -> maybeToRight "No sha in response" $ resp ^? W.responseBody . key "content" . key "sha" . _String
 
 
 formatHttpError :: HttpException -> Text

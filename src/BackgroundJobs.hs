@@ -9,7 +9,7 @@ import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as W
 import Data.Either qualified as Unsafe
 import Data.HashMap.Strict qualified as HM
-import Data.List as L (foldl, partition)
+import Data.List as L (foldl, foldl', partition)
 import Data.List.Extra (chunksOf, groupBy)
 import Data.Map.Lazy qualified as Map
 import Data.Map.Strict qualified as M
@@ -24,7 +24,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (SomePostgreSqlException)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
-import Effectful (Eff, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log, object)
@@ -1340,56 +1340,73 @@ gitSyncFromRepo pid = do
         Right (treeSha, entries) -> do
           dbState <- GitSync.getDashboardGitState pid
           let actions = GitSync.buildSyncPlan entries dbState
-          let (creates, rest) = L.partition (\case GitSync.SyncCreate{} -> True; _ -> False) actions
-              (updates, deletes) = L.partition (\case GitSync.SyncUpdate{} -> True; _ -> False) rest
+          -- Single-pass partition using foldl'
+          let (creates, updates, deletes) = L.foldl' categorize ([], [], []) actions
+                where
+                  categorize (!cs, !us, !ds) = \case
+                    a@GitSync.SyncCreate{} -> (a : cs, us, ds)
+                    a@GitSync.SyncUpdate{} -> (cs, a : us, ds)
+                    a@GitSync.SyncDelete{} -> (cs, us, a : ds)
           Log.logInfo "Git sync plan" ("creates" :: Text, length creates, "updates" :: Text, length updates, "deletes" :: Text, length deletes)
-          forM_ actions \case
-            GitSync.SyncCreate path sha -> do
-              contentResult <- GitSync.fetchFileContent sync path
-              case contentResult of
-                Left err -> Log.logAttention "Failed to fetch file content" (path, err)
-                Right content -> case GitSync.yamlToDashboard content of
-                  Left err -> Log.logAttention "Failed to parse dashboard YAML" (path, err)
-                  Right schema -> do
-                    now <- Time.currentTime
-                    dashId <- UUIDId <$> liftIO UUIDV4.nextRandom
-                    teamVMs <- ProjectMembers.getTeamsByHandles pid (fold schema.teams)
-                    let dashboard =
-                          Dashboards.DashboardVM
-                            { Dashboards.id = dashId
-                            , Dashboards.projectId = pid
-                            , Dashboards.createdAt = now
-                            , Dashboards.updatedAt = now
-                            , Dashboards.createdBy = Users.UserId UUID.nil
-                            , Dashboards.baseTemplate = Just path
-                            , Dashboards.schema = Just schema
-                            , Dashboards.starredSince = Nothing
-                            , Dashboards.homepageSince = Nothing
-                            , Dashboards.tags = V.fromList $ fold schema.tags
-                            , Dashboards.title = fromMaybe "Untitled" schema.title
-                            , Dashboards.teams = V.fromList $ map (.id) teamVMs
-                            , Dashboards.filePath = Just path
-                            , Dashboards.fileSha = Just sha
-                            }
-                    _ <- Dashboards.insert dashboard
-                    Log.logInfo "Created dashboard from git" (path, dashId)
-            GitSync.SyncUpdate path sha dashId -> do
-              contentResult <- GitSync.fetchFileContent sync path
-              case contentResult of
-                Left err -> Log.logAttention "Failed to fetch file content for update" (path, err)
-                Right content -> case GitSync.yamlToDashboard content of
-                  Left err -> Log.logAttention "Failed to parse dashboard YAML for update" (path, err)
-                  Right schema -> do
-                    now <- Time.currentTime
-                    _ <- Dashboards.updateSchemaAndUpdatedAt dashId schema now
-                    whenJust schema.title $ void . Dashboards.updateTitle dashId
-                    _ <- GitSync.updateDashboardGitInfo dashId path sha
-                    Log.logInfo "Updated dashboard from git" (path, dashId)
+          -- Fetch file contents in parallel for creates and updates
+          let fetchActions = creates <> updates
+          Ki.scoped \scope -> do
+            threads <- forM fetchActions \action -> Ki.fork scope $ processGitSyncAction pid sync action
+            traverse_ (Ki.atomically . Ki.await) threads
+          -- Process deletes (no HTTP needed)
+          forM_ deletes \case
             GitSync.SyncDelete path dashId -> do
               _ <- Dashboards.deleteDashboard dashId
               Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
+            _ -> pass
           _ <- GitSync.updateLastTreeSha sync.id treeSha
           Log.logInfo "Completed GitHub sync for project" pid
+
+
+processGitSyncAction :: (W.HTTP :> es, DB es, Time.Time :> es, Log :> es) => Projects.ProjectId -> GitSync.GitHubSync -> GitSync.SyncAction -> Eff es ()
+processGitSyncAction pid sync = \case
+  GitSync.SyncCreate path sha -> do
+    contentResult <- GitSync.fetchFileContent sync path
+    case contentResult of
+      Left err -> Log.logAttention "Failed to fetch file content" (path, err)
+      Right content -> case GitSync.yamlToDashboard content of
+        Left err -> Log.logAttention "Failed to parse dashboard YAML" (path, err)
+        Right schema -> do
+          now <- Time.currentTime
+          dashId <- UUIDId <$> liftIO UUIDV4.nextRandom
+          teamVMs <- ProjectMembers.getTeamsByHandles pid (fold schema.teams)
+          let dashboard =
+                Dashboards.DashboardVM
+                  { Dashboards.id = dashId
+                  , Dashboards.projectId = pid
+                  , Dashboards.createdAt = now
+                  , Dashboards.updatedAt = now
+                  , Dashboards.createdBy = Users.UserId UUID.nil
+                  , Dashboards.baseTemplate = Just path
+                  , Dashboards.schema = Just schema
+                  , Dashboards.starredSince = Nothing
+                  , Dashboards.homepageSince = Nothing
+                  , Dashboards.tags = V.fromList $ fold schema.tags
+                  , Dashboards.title = fromMaybe "Untitled" schema.title
+                  , Dashboards.teams = V.fromList $ map (.id) teamVMs
+                  , Dashboards.filePath = Just path
+                  , Dashboards.fileSha = Just sha
+                  }
+          _ <- Dashboards.insert dashboard
+          Log.logInfo "Created dashboard from git" (path, dashId)
+  GitSync.SyncUpdate path sha dashId -> do
+    contentResult <- GitSync.fetchFileContent sync path
+    case contentResult of
+      Left err -> Log.logAttention "Failed to fetch file content for update" (path, err)
+      Right content -> case GitSync.yamlToDashboard content of
+        Left err -> Log.logAttention "Failed to parse dashboard YAML for update" (path, err)
+        Right schema -> do
+          now <- Time.currentTime
+          _ <- Dashboards.updateSchemaAndUpdatedAt dashId schema now
+          whenJust schema.title $ void . Dashboards.updateTitle dashId
+          _ <- GitSync.updateDashboardGitInfo dashId path sha
+          Log.logInfo "Updated dashboard from git" (path, dashId)
+  GitSync.SyncDelete{} -> pass -- Handled separately
 
 
 -- | Push a dashboard change to GitHub
