@@ -32,6 +32,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _Array, _Bool, _String)
 import Data.Aeson.Types (parseMaybe)
 import Data.Base64.Types (extractBase64)
+import Data.ByteString.Base16 qualified as B16
 import Data.Default (def)
 import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
@@ -58,7 +59,6 @@ import System.DB (DB)
 import System.Logging (logWarn)
 import Text.Casing (fromAny, toKebab)
 import UnliftIO.Exception (try)
-import Data.ByteString.Base16 qualified as B16
 import "base64" Data.ByteString.Base64 qualified as B64
 import "cryptonite" Crypto.Hash (Digest, SHA256, hash)
 import "memory" Data.ByteArray qualified as BA
