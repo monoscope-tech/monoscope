@@ -47,7 +47,6 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
-import Pkg.GitHub qualified as GitHub
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -63,6 +62,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Reports qualified as RP
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Drain qualified as Drain
+import Pkg.GitHub qualified as GitHub
 import Pkg.Mail (NotificationAlerts (..), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import ProcessMessage (processSpanToEntities)
@@ -1327,9 +1327,10 @@ enhanceIssuesWithLLM pid issueIds = do
 -- | Get access token for GitHub sync (either PAT or GitHub App installation token)
 getGitSyncToken :: (IOE :> es, W.HTTP :> es) => Config.EnvConfig -> GitSync.GitHubSync -> Eff es (Either Text Text)
 getGitSyncToken config sync = case (sync.installationId, sync.accessToken) of
-  (Just instId, _) -> GitHub.getInstallationToken config.githubAppId config.githubAppPrivateKey instId <&> \case
-    Left err -> Left $ "Failed to get installation token: " <> err
-    Right tok -> Right tok.token
+  (Just instId, _) ->
+    GitHub.getInstallationToken config.githubAppId config.githubAppPrivateKey instId <&> \case
+      Left err -> Left $ "Failed to get installation token: " <> err
+      Right tok -> Right tok.token
   (_, Just token) -> pure $ Right token
   (Nothing, Nothing) -> pure $ Left "No authentication method configured"
 

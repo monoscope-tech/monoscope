@@ -22,15 +22,14 @@ module Pages.GitSync (
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.ByteArray qualified as BA
-import Data.Effectful.Wreq qualified as W
-import Pkg.GitHub qualified as GitHub
 import Data.ByteString.Base16 qualified as B16
+import Data.Default (def)
+import Data.Effectful.Wreq qualified as W
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Deriving.Aeson.Stock qualified as DAES
 import Effectful.Reader.Static (ask)
-import Data.Default (def)
 import Lucid
 import Lucid.Htmx (hxDelete_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
 import Models.Projects.GitSync qualified as GitSync
@@ -39,12 +38,13 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pkg.GitHub qualified as GitHub
 import Relude hiding (ask)
 import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_)
 import Text.MMark qualified as MMark
+import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
 import "cryptonite" Crypto.Hash (SHA256)
@@ -161,9 +161,10 @@ gitSyncSettingsPostH pid form = do
   ctx <- ask @Config.AuthContext
   let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
   -- Auto-detect branch if not specified or empty
-  branch <- if T.null form.branch
-    then GitSync.detectDefaultBranch form.accessToken form.owner form.repo
-    else pure form.branch
+  branch <-
+    if T.null form.branch
+      then GitSync.detectDefaultBranch form.accessToken form.owner form.repo
+      else pure form.branch
   existingM <- GitSync.getGitHubSync pid
   syncM <- case existingM of
     Nothing -> do

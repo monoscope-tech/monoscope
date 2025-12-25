@@ -46,6 +46,7 @@ import Data.Generics.Labels ()
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Data.Yaml qualified as Yaml
 import Database.PostgreSQL.Entity (Entity, _selectWhere)
@@ -61,7 +62,6 @@ import Models.Projects.ProjectApiKeys (decryptAPIKey, encryptAPIKey)
 import Models.Projects.Projects (ProjectId)
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), responseStatus)
 import Network.HTTP.Types.Status (statusCode)
-import Data.UUID qualified as UUID
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import System.DB (DB)
@@ -95,9 +95,11 @@ data GitHubSync = GitHubSync
   deriving anyclass (FromRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "projects", TableName "github_sync", PrimaryKey "id", FieldModifiers '[CamelToSnake]] GitHubSync)
 
+
 instance Default GitHubSync where
   def = GitHubSync (UUIDId UUID.nil) (UUIDId UUID.nil) "" "" "main" Nothing Nothing "" Nothing Nothing True epoch epoch
-    where epoch = UTCTime (fromGregorian 1970 1 1) (secondsToDiffTime 0)
+    where
+      epoch = UTCTime (fromGregorian 1970 1 1) (secondsToDiffTime 0)
 
 
 -- | Check if sync uses GitHub App (has installation_id)
@@ -254,7 +256,7 @@ fetchGitTree token sync = do
   let url = "https://api.github.com/repos/" <> sync.owner <> "/" <> sync.repo <> "/git/trees/" <> sync.branch <> "?recursive=1"
   result <- try $ W.getWith (githubOpts token) (toString url)
   pure $ case result of
-    Left (HttpExceptionRequest _ (StatusCodeException resp _)) | statusCode (responseStatus resp) == 404 -> Right ("", [])  -- Empty repo = empty tree
+    Left (HttpExceptionRequest _ (StatusCodeException resp _)) | statusCode (responseStatus resp) == 404 -> Right ("", []) -- Empty repo = empty tree
     Left (err :: HttpException) -> Left $ formatHttpError err
     Right resp ->
       let body = resp ^. W.responseBody
