@@ -1,4 +1,5 @@
 {-# LANGUAGE PackageImports #-}
+{-# LANGUAGE QuasiQuotes #-}
 
 module Pages.GitSync (
   githubWebhookPostH,
@@ -25,14 +26,22 @@ import Effectful.Reader.Static (ask)
 import Lucid
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
+import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Relude hiding (ask)
 import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
+import Text.MMark qualified as MMark
 import Web.FormUrlEncoded (FromForm)
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
+
+
+renderMarkdown :: Text -> Html ()
+renderMarkdown md = case MMark.parse "" md of
+  Left _ -> toHtml md
+  Right doc -> toHtmlRaw $ MMark.render doc
 
 
 data GitHubWebhookPayload = GitHubWebhookPayload
@@ -223,75 +232,66 @@ gitSyncSettingsView hostUrl pid syncM = do
 
     -- Setup instructions card
     div_ [class_ "card bg-base-100 shadow-lg"] do
-      div_ [class_ "card-body"] do
-        h3_ [class_ "card-title text-lg"] "Setup Instructions"
+      div_ [class_ "card-body prose prose-sm max-w-none"] do
+        renderMarkdown $ setupInstructions webhookUrl
 
-        div_ [class_ "space-y-6"] do
-          -- Step 1: Create token
-          div_ do
-            h4_ [class_ "font-semibold flex items-center gap-2"] do
-              span_ [class_ "badge badge-neutral badge-sm"] "1"
-              "Create a GitHub Personal Access Token"
-            div_ [class_ "ml-6 mt-2 text-sm space-y-2"] do
-              p_ do
-                "Go to "
-                a_ [class_ "link link-primary", href_ "https://github.com/settings/tokens?type=beta", target_ "_blank"] "GitHub Settings → Developer settings → Personal access tokens → Fine-grained tokens"
-              ul_ [class_ "list-disc list-inside space-y-1 opacity-80"] do
-                li_ "Click \"Generate new token\""
-                li_ "Set an expiration (or no expiration for long-term use)"
-                li_ "Under \"Repository access\", select the specific repository"
-                li_ [class_ "font-semibold"] "Under \"Permissions → Repository permissions\", set \"Contents\" to \"Read and write\""
-                li_ "Click \"Generate token\" and copy it"
 
-          -- Step 2: Repository structure
-          div_ do
-            h4_ [class_ "font-semibold flex items-center gap-2"] do
-              span_ [class_ "badge badge-neutral badge-sm"] "2"
-              "Set up your repository structure"
-            div_ [class_ "ml-6 mt-2 text-sm"] do
-              p_ [class_ "mb-2"] "Create a dashboards folder in your repository with YAML files:"
-              div_ [class_ "mockup-code text-xs"] do
-                pre_ [data_ "prefix" ""] $ code_ "your-repo/"
-                pre_ [data_ "prefix" "├──"] $ code_ "dashboards/"
-                pre_ [data_ "prefix" "│  ├──"] $ code_ "api-overview.yaml"
-                pre_ [data_ "prefix" "│  ├──"] $ code_ "error-tracking.yaml"
-                pre_ [data_ "prefix" "│  └──"] $ code_ "performance.yaml"
-                pre_ [data_ "prefix" "└──"] $ code_ "README.md"
+setupInstructions :: Text -> Text
+setupInstructions webhookUrl =
+  [text|
+## Setup Instructions
 
-          -- Step 3: Dashboard YAML format
-          div_ do
-            h4_ [class_ "font-semibold flex items-center gap-2"] do
-              span_ [class_ "badge badge-neutral badge-sm"] "3"
-              "Dashboard YAML format"
-            div_ [class_ "ml-6 mt-2 text-sm"] do
-              p_ [class_ "mb-2"] "Each dashboard file should have this structure:"
-              div_ [class_ "mockup-code text-xs"] do
-                pre_ [data_ "prefix" ""] $ code_ "title: API Overview"
-                pre_ [data_ "prefix" ""] $ code_ "description: Monitor API health and performance"
-                pre_ [data_ "prefix" ""] $ code_ "tags:"
-                pre_ [data_ "prefix" ""] $ code_ "  - api"
-                pre_ [data_ "prefix" ""] $ code_ "  - monitoring"
-                pre_ [data_ "prefix" ""] $ code_ "widgets:"
-                pre_ [data_ "prefix" ""] $ code_ "  - type: chart"
-                pre_ [data_ "prefix" ""] $ code_ "    title: Request Count"
-                pre_ [data_ "prefix" ""] $ code_ "    query: \"| summarize count() by bin(timestamp, 1h)\""
+### 1. Create a GitHub Personal Access Token
 
-          -- Step 4: Webhook (optional)
-          div_ do
-            h4_ [class_ "font-semibold flex items-center gap-2"] do
-              span_ [class_ "badge badge-neutral badge-sm"] "4"
-              "Set up webhook (optional but recommended)"
-            div_ [class_ "ml-6 mt-2 text-sm space-y-2"] do
-              p_ "For automatic syncing when you push changes:"
-              ol_ [class_ "list-decimal list-inside space-y-1 opacity-80"] do
-                li_ "Go to your repository → Settings → Webhooks → Add webhook"
-                li_ do
-                  "Set Payload URL to: "
-                  code_ [class_ "bg-base-200 px-1 rounded"] $ toHtml webhookUrl
-                li_ "Set Content type to: application/json"
-                li_ "Select \"Just the push event\""
-                li_ "Click \"Add webhook\""
-              p_ [class_ "text-xs opacity-60 mt-2"] "Without a webhook, syncing happens on a schedule or can be triggered manually."
+Go to [GitHub Fine-grained tokens](https://github.com/settings/tokens?type=beta) and:
+
+1. Click **Generate new token**
+2. Set an expiration (or no expiration for long-term use)
+3. Under **Repository access**, select the specific repository
+4. Under **Permissions → Repository permissions**, set **Contents** to **Read and write**
+5. Click **Generate token** and copy it
+
+### 2. Repository Structure
+
+Create a `dashboards/` folder in your repository with YAML files:
+
+```
+your-repo/
+├── dashboards/
+│   ├── api-overview.yaml
+│   ├── error-tracking.yaml
+│   └── performance.yaml
+└── README.md
+```
+
+### 3. Dashboard YAML Format
+
+Each dashboard file should have this structure:
+
+```yaml
+title: API Overview
+description: Monitor API health and performance
+tags:
+  - api
+  - monitoring
+widgets:
+  - type: chart
+    title: Request Count
+    query: "| summarize count() by bin(timestamp, 1h)"
+```
+
+### 4. Set Up Webhook (Optional)
+
+For automatic syncing when you push changes:
+
+1. Go to your repository → **Settings** → **Webhooks** → **Add webhook**
+2. Set **Payload URL** to: `${webhookUrl}`
+3. Set **Content type** to: `application/json`
+4. Select **Just the push event**
+5. Click **Add webhook**
+
+*Without a webhook, syncing happens on a schedule or can be triggered manually.*
+|]
 
 
 -- | Queue a git sync push for a dashboard if git sync is configured
