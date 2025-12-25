@@ -32,17 +32,13 @@ filters =
 spec :: Spec
 spec = aroundAll withTestResources do
   describe "Dashboards Tests" do
-    let dashboard =
-          Dashboards.DashboardForm
-            { Dashboards.title = "Test Dashboard"
-            , Dashboards.file = "overview.yaml"
-            , Dashboards.teams = []
-            }
+    let mkDashboard t = Dashboards.DashboardForm{Dashboards.title = t, Dashboards.file = "overview.yaml", Dashboards.teams = []}
+        dashboard = mkDashboard "Test Dashboard"
 
     it "Should create a dashboard" \tr -> do
       (_, pg) <- testServant tr do
-        let dashboard1 = dashboard{Dashboards.title = "Dashboard 1"}
-            dashboard2 = dashboard{Dashboards.title = "Dashboard 2"}
+        let dashboard1 = mkDashboard "Dashboard 1"
+            dashboard2 = mkDashboard "Dashboard 2"
         _ <- Dashboards.dashboardsPostH testPid dashboard1
         _ <- Dashboards.dashboardsPostH testPid dashboard2
         Dashboards.dashboardsPostH testPid dashboard
@@ -51,7 +47,7 @@ spec = aroundAll withTestResources do
         _ -> fail "Expected DashboardGet' response"
 
     it "Should not create a dashboard with an empty title" \tr -> do
-      let invalidDashboard = dashboard{Dashboards.title = ""}
+      let invalidDashboard = mkDashboard ""
       (_, pg) <- testServant tr $ Dashboards.dashboardsPostH testPid invalidDashboard
       case pg of
         Dashboards.DashboardPostError message -> do
@@ -151,10 +147,10 @@ spec = aroundAll withTestResources do
         _ -> fail "Expected DashboardGet' response"
 
     it "Should star and unstar a dashboard" \tr -> do
-      let dashboard1 = dashboard{Dashboards.title = "Star Test Dashboard"}
-          dashboardA = dashboard{Dashboards.title = "Dashboard A"}
-          dashboardB = dashboard{Dashboards.title = "Dashboard B"}
-          dashboardC = dashboard{Dashboards.title = "Dashboard C"}
+      let dashboard1 = mkDashboard "Star Test Dashboard"
+          dashboardA = mkDashboard "Dashboard A"
+          dashboardB = mkDashboard "Dashboard B"
+          dashboardC = mkDashboard "Dashboard C"
       _ <- testServant tr do
         _ <- Dashboards.dashboardsPostH testPid dashboardA
         _ <- Dashboards.dashboardsPostH testPid dashboardB
