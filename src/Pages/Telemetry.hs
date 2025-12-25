@@ -615,7 +615,7 @@ tracePage pid traceItem spanRecords = do
               div_ [class_ "shrink-0 px-2"] do
                 div_
                   [ class_ "w-xl sticky top-0 border-b border-b-strokeWeak h-10 text-xs relative"
-                  , id_ "waterfall-time-container"
+                  , id_ $ "waterfall-time-container-" <> traceItem.traceId
                   ]
                   pass
                 div_ [class_ "w-xl overflow-x-hidden py-2 relative flex flex-col gap-2", id_ $ "waterfall-" <> traceItem.traceId] pass
@@ -648,10 +648,12 @@ tracePage pid traceItem spanRecords = do
   |]
   script_
     [text|
-   window.addEventListener('DOMContentLoaded', function() {
+    document.addEventListener("DOMContentLoaded", function() {
       flameGraphChart($spanJson, "$trId", $colorsJson);
-      waterFallGraphChart($waterFallJson, "waterfall-$trId", $colorsJson);
+      waterFallGraphChart($waterFallJson, "$trId", $colorsJson);
    });
+    flameGraphChart($spanJson, "$trId", $colorsJson);
+    waterFallGraphChart($waterFallJson, "$trId", $colorsJson);
   |]
 
 

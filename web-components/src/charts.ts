@@ -263,9 +263,8 @@ function buildHierachy(spans: FlameGraphItem[]) {
 function generateTimeIntervals(duration: number, target: string) {
   const container = document.querySelector('#' + target) as HTMLElement;
   if (!container) return;
-  console.log(container.offsetWidth);
   // Cache width calculation
-  const containerWidth = target === 'waterfall-time-container' ? 550 : container.offsetWidth - SCROLL_BAR_WIDTH;
+  const containerWidth = target.startsWith('waterfall-time-container') ? 550 : container.offsetWidth - SCROLL_BAR_WIDTH;
   const intervalWidth = containerWidth / 9;
 
   // Clear container after reading width
@@ -349,7 +348,7 @@ function waterFallGraphChart(fData: WaterfallItem[], renderAt: string, serviceCo
 window.waterFallGraphChart = waterFallGraphChart;
 
 function buildWaterfall(spans: WaterfallItem[], target: string, serviceColors: Record<string, string>, start: number, maxDuration: number) {
-  const container = document.querySelector('#ba' + target);
+  const container = document.querySelector('#waterfall-' + target);
   if (container) {
     const containerWidth = 550;
     container.innerHTML = '';
