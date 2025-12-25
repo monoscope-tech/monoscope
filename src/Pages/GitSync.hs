@@ -124,8 +124,9 @@ validateWebhookSignature (Just secret) (Just sig) body =
 
 gitSyncSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 gitSyncSettingsGetH pid = do
+  ctx <- ask @Config.AuthContext
   syncM <- GitSync.getGitHubSync pid
-  addRespHeaders $ gitSyncSettingsView pid syncM
+  addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid syncM
 
 
 gitSyncSettingsPostH :: Projects.ProjectId -> GitSyncForm -> ATAuthCtx (RespHeaders (Html ()))
@@ -145,72 +146,152 @@ gitSyncSettingsPostH pid form = do
           else GitSync.updateGitHubSync encKey existing.id form.owner form.repo form.branch form.accessToken True
       Log.logInfo "Updated GitHub sync config" (pid, form.owner, form.repo)
       pure result
-  addRespHeaders $ gitSyncSettingsView pid syncM
+  addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid syncM
 
 
 gitSyncSettingsDeleteH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 gitSyncSettingsDeleteH pid = do
+  ctx <- ask @Config.AuthContext
   existingM <- GitSync.getGitHubSync pid
   case existingM of
     Nothing -> pass
     Just existing -> do
       _ <- GitSync.deleteGitHubSync existing.id
       Log.logInfo "Deleted GitHub sync config" pid
-  addRespHeaders $ gitSyncSettingsView pid Nothing
+  addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid Nothing
 
 
-gitSyncSettingsView :: Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
-gitSyncSettingsView pid syncM = do
-  div_ [class_ "card bg-base-100 shadow-lg"] do
-    div_ [class_ "card-body"] do
-      h2_ [class_ "card-title"] "GitHub Sync"
-      p_ [class_ "text-sm opacity-70"] "Sync dashboards with a GitHub repository. Changes pushed to the repo will be synced automatically."
+gitSyncSettingsView :: Text -> Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
+gitSyncSettingsView hostUrl pid syncM = do
+  let webhookUrl = hostUrl <> "webhook/github"
+  div_ [class_ "space-y-6"] do
+    -- Main settings card
+    div_ [class_ "card bg-base-100 shadow-lg"] do
+      div_ [class_ "card-body"] do
+        h2_ [class_ "card-title"] "GitHub Sync"
+        p_ [class_ "text-sm opacity-70"] "Sync dashboards with a GitHub repository. Changes pushed to the repo will be synced automatically."
 
-      case syncM of
-        Nothing -> do
-          form_ [class_ "space-y-4", method_ "POST", action_ ("/p/" <> pid.toText <> "/settings/git-sync")] do
-            div_ [class_ "form-control"] do
-              label_ [class_ "label"] $ span_ [class_ "label-text"] "Repository Owner"
-              input_ [class_ "input input-bordered", type_ "text", name_ "owner", placeholder_ "acme-corp", required_ ""]
-            div_ [class_ "form-control"] do
-              label_ [class_ "label"] $ span_ [class_ "label-text"] "Repository Name"
-              input_ [class_ "input input-bordered", type_ "text", name_ "repo", placeholder_ "observability-config", required_ ""]
-            div_ [class_ "form-control"] do
-              label_ [class_ "label"] $ span_ [class_ "label-text"] "Branch"
-              input_ [class_ "input input-bordered", type_ "text", name_ "branch", value_ "main", required_ ""]
-            div_ [class_ "form-control"] do
-              label_ [class_ "label"] $ span_ [class_ "label-text"] "Access Token"
-              input_ [class_ "input input-bordered", type_ "password", name_ "accessToken", placeholder_ "ghp_...", required_ ""]
-              label_ [class_ "label"] $ span_ [class_ "label-text-alt opacity-70"] "Personal access token with repo read/write permissions"
-            div_ [class_ "card-actions justify-end"] do
-              button_ [class_ "btn btn-primary", type_ "submit"] "Connect Repository"
-        Just sync -> do
-          div_ [class_ "space-y-4"] do
-            div_ [class_ "flex items-center gap-2"] do
-              span_ [class_ "badge badge-success"] "Connected"
-              span_ [class_ "font-mono"] $ toHtml $ sync.owner <> "/" <> sync.repo
-              span_ [class_ "text-sm opacity-70"] $ toHtml $ "(" <> sync.branch <> ")"
-
-            div_ [class_ "alert alert-info"] do
-              span_ "Webhook URL:"
-              code_ [class_ "ml-2 font-mono text-sm"] "/webhook/github"
-
-            form_ [class_ "space-y-4", method_ "POST", action_ ("/p/" <> pid.toText <> "/settings/git-sync")] do
+        case syncM of
+          Nothing -> do
+            form_ [class_ "space-y-4 mt-4", method_ "POST", action_ ("/p/" <> pid.toText <> "/settings/git-sync")] do
               div_ [class_ "form-control"] do
                 label_ [class_ "label"] $ span_ [class_ "label-text"] "Repository Owner"
-                input_ [class_ "input input-bordered", type_ "text", name_ "owner", value_ sync.owner, required_ ""]
+                input_ [class_ "input input-bordered", type_ "text", name_ "owner", placeholder_ "acme-corp", required_ ""]
               div_ [class_ "form-control"] do
                 label_ [class_ "label"] $ span_ [class_ "label-text"] "Repository Name"
-                input_ [class_ "input input-bordered", type_ "text", name_ "repo", value_ sync.repo, required_ ""]
+                input_ [class_ "input input-bordered", type_ "text", name_ "repo", placeholder_ "observability-config", required_ ""]
               div_ [class_ "form-control"] do
                 label_ [class_ "label"] $ span_ [class_ "label-text"] "Branch"
-                input_ [class_ "input input-bordered", type_ "text", name_ "branch", value_ sync.branch, required_ ""]
+                input_ [class_ "input input-bordered", type_ "text", name_ "branch", value_ "main", required_ ""]
               div_ [class_ "form-control"] do
                 label_ [class_ "label"] $ span_ [class_ "label-text"] "Access Token"
-                input_ [class_ "input input-bordered", type_ "password", name_ "accessToken", placeholder_ "Leave empty to keep current", value_ ""]
-              div_ [class_ "card-actions justify-between"] do
-                button_ [class_ "btn btn-error btn-outline", type_ "button", onclick_ ("fetch('/p/" <> pid.toText <> "/settings/git-sync', {method: 'DELETE'}).then(() => location.reload())")] "Disconnect"
-                button_ [class_ "btn btn-primary", type_ "submit"] "Update"
+                input_ [class_ "input input-bordered", type_ "password", name_ "accessToken", placeholder_ "ghp_...", required_ ""]
+                label_ [class_ "label"] $ span_ [class_ "label-text-alt opacity-70"] "Personal access token with Contents read/write permission"
+              div_ [class_ "card-actions justify-end mt-2"] do
+                button_ [class_ "btn btn-primary", type_ "submit"] "Connect Repository"
+          Just sync -> do
+            div_ [class_ "space-y-4 mt-4"] do
+              div_ [class_ "flex items-center gap-2"] do
+                span_ [class_ "badge badge-success"] "Connected"
+                span_ [class_ "font-mono"] $ toHtml $ sync.owner <> "/" <> sync.repo
+                span_ [class_ "text-sm opacity-70"] $ toHtml $ "(" <> sync.branch <> ")"
+
+              -- Webhook URL with copy button
+              div_ [class_ "bg-base-200 p-4 rounded-lg"] do
+                div_ [class_ "flex items-center justify-between"] do
+                  div_ do
+                    span_ [class_ "text-sm font-semibold"] "Webhook URL"
+                    div_ [class_ "font-mono text-sm mt-1", id_ "webhook-url"] $ toHtml webhookUrl
+                  button_ [class_ "btn btn-sm btn-ghost", onclick_ ("navigator.clipboard.writeText('" <> webhookUrl <> "'); this.innerHTML='Copied!'; setTimeout(() => this.innerHTML='Copy', 2000)")] "Copy"
+
+              form_ [class_ "space-y-4", method_ "POST", action_ ("/p/" <> pid.toText <> "/settings/git-sync")] do
+                div_ [class_ "form-control"] do
+                  label_ [class_ "label"] $ span_ [class_ "label-text"] "Repository Owner"
+                  input_ [class_ "input input-bordered", type_ "text", name_ "owner", value_ sync.owner, required_ ""]
+                div_ [class_ "form-control"] do
+                  label_ [class_ "label"] $ span_ [class_ "label-text"] "Repository Name"
+                  input_ [class_ "input input-bordered", type_ "text", name_ "repo", value_ sync.repo, required_ ""]
+                div_ [class_ "form-control"] do
+                  label_ [class_ "label"] $ span_ [class_ "label-text"] "Branch"
+                  input_ [class_ "input input-bordered", type_ "text", name_ "branch", value_ sync.branch, required_ ""]
+                div_ [class_ "form-control"] do
+                  label_ [class_ "label"] $ span_ [class_ "label-text"] "Access Token"
+                  input_ [class_ "input input-bordered", type_ "password", name_ "accessToken", placeholder_ "Leave empty to keep current", value_ ""]
+                div_ [class_ "card-actions justify-between"] do
+                  button_ [class_ "btn btn-error btn-outline", type_ "button", onclick_ ("fetch('/p/" <> pid.toText <> "/settings/git-sync', {method: 'DELETE'}).then(() => location.reload())")] "Disconnect"
+                  button_ [class_ "btn btn-primary", type_ "submit"] "Update"
+
+    -- Setup instructions card
+    div_ [class_ "card bg-base-100 shadow-lg"] do
+      div_ [class_ "card-body"] do
+        h3_ [class_ "card-title text-lg"] "Setup Instructions"
+
+        div_ [class_ "space-y-6"] do
+          -- Step 1: Create token
+          div_ do
+            h4_ [class_ "font-semibold flex items-center gap-2"] do
+              span_ [class_ "badge badge-neutral badge-sm"] "1"
+              "Create a GitHub Personal Access Token"
+            div_ [class_ "ml-6 mt-2 text-sm space-y-2"] do
+              p_ do
+                "Go to "
+                a_ [class_ "link link-primary", href_ "https://github.com/settings/tokens?type=beta", target_ "_blank"] "GitHub Settings → Developer settings → Personal access tokens → Fine-grained tokens"
+              ul_ [class_ "list-disc list-inside space-y-1 opacity-80"] do
+                li_ "Click \"Generate new token\""
+                li_ "Set an expiration (or no expiration for long-term use)"
+                li_ "Under \"Repository access\", select the specific repository"
+                li_ [class_ "font-semibold"] "Under \"Permissions → Repository permissions\", set \"Contents\" to \"Read and write\""
+                li_ "Click \"Generate token\" and copy it"
+
+          -- Step 2: Repository structure
+          div_ do
+            h4_ [class_ "font-semibold flex items-center gap-2"] do
+              span_ [class_ "badge badge-neutral badge-sm"] "2"
+              "Set up your repository structure"
+            div_ [class_ "ml-6 mt-2 text-sm"] do
+              p_ [class_ "mb-2"] "Create a dashboards folder in your repository with YAML files:"
+              div_ [class_ "mockup-code text-xs"] do
+                pre_ [data_ "prefix" ""] $ code_ "your-repo/"
+                pre_ [data_ "prefix" "├──"] $ code_ "dashboards/"
+                pre_ [data_ "prefix" "│  ├──"] $ code_ "api-overview.yaml"
+                pre_ [data_ "prefix" "│  ├──"] $ code_ "error-tracking.yaml"
+                pre_ [data_ "prefix" "│  └──"] $ code_ "performance.yaml"
+                pre_ [data_ "prefix" "└──"] $ code_ "README.md"
+
+          -- Step 3: Dashboard YAML format
+          div_ do
+            h4_ [class_ "font-semibold flex items-center gap-2"] do
+              span_ [class_ "badge badge-neutral badge-sm"] "3"
+              "Dashboard YAML format"
+            div_ [class_ "ml-6 mt-2 text-sm"] do
+              p_ [class_ "mb-2"] "Each dashboard file should have this structure:"
+              div_ [class_ "mockup-code text-xs"] do
+                pre_ [data_ "prefix" ""] $ code_ "title: API Overview"
+                pre_ [data_ "prefix" ""] $ code_ "description: Monitor API health and performance"
+                pre_ [data_ "prefix" ""] $ code_ "tags:"
+                pre_ [data_ "prefix" ""] $ code_ "  - api"
+                pre_ [data_ "prefix" ""] $ code_ "  - monitoring"
+                pre_ [data_ "prefix" ""] $ code_ "widgets:"
+                pre_ [data_ "prefix" ""] $ code_ "  - type: chart"
+                pre_ [data_ "prefix" ""] $ code_ "    title: Request Count"
+                pre_ [data_ "prefix" ""] $ code_ "    query: \"| summarize count() by bin(timestamp, 1h)\""
+
+          -- Step 4: Webhook (optional)
+          div_ do
+            h4_ [class_ "font-semibold flex items-center gap-2"] do
+              span_ [class_ "badge badge-neutral badge-sm"] "4"
+              "Set up webhook (optional but recommended)"
+            div_ [class_ "ml-6 mt-2 text-sm space-y-2"] do
+              p_ "For automatic syncing when you push changes:"
+              ol_ [class_ "list-decimal list-inside space-y-1 opacity-80"] do
+                li_ "Go to your repository → Settings → Webhooks → Add webhook"
+                li_ do
+                  "Set Payload URL to: "
+                  code_ [class_ "bg-base-200 px-1 rounded"] $ toHtml webhookUrl
+                li_ "Set Content type to: application/json"
+                li_ "Select \"Just the push event\""
+                li_ "Click \"Add webhook\""
+              p_ [class_ "text-xs opacity-60 mt-2"] "Without a webhook, syncing happens on a schedule or can be triggered manually."
 
 
 -- | Queue a git sync push for a dashboard if git sync is configured
