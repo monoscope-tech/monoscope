@@ -370,7 +370,7 @@ billingUsageTests = do
       ingestTrace tr apiKey ("test-span-" <> show i) currentTime
 
     -- Run the ReportUsage background job to populate daily_usage
-    void $ runTestBg tr $ BackgroundJobs.processBackgroundJob tr.trATCtx undefined (BackgroundJobs.ReportUsage testPid)
+    void $ runTestBg tr $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.ReportUsage testPid)
 
     -- Get billing info
     (_, result) <- testServant tr $ LemonSqueezy.manageBillingGetH testPid Nothing
@@ -395,7 +395,7 @@ billingUsageTests = do
     ingestTrace tr apiKey "new-span" currentTime
 
     -- Run the ReportUsage background job to populate daily_usage
-    void $ runTestBg tr $ BackgroundJobs.processBackgroundJob tr.trATCtx undefined (BackgroundJobs.ReportUsage testPid)
+    void $ runTestBg tr $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.ReportUsage testPid)
 
     -- Get billing info - should only count data from current cycle
     (_, result) <- testServant tr $ LemonSqueezy.manageBillingGetH testPid Nothing

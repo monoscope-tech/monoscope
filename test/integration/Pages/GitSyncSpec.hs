@@ -2,6 +2,7 @@ module Pages.GitSyncSpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Default (def)
+import Data.Maybe (fromJust)
 import Data.Map.Strict qualified as M
 import Data.Pool (withResource)
 import Data.Time (getCurrentTime)

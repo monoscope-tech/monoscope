@@ -722,7 +722,7 @@ runBackgroundJobsWhere authCtx predicate = do
 testJobsRunner :: Log.Logger -> Config.AuthContext -> Job -> IO ()
 testJobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs $ do
   bgJob <- BackgroundJobs.throwParsePayload job
-  void $ runTestBackgroundWithLogger logger authCtx (BackgroundJobs.processBackgroundJob authCtx job bgJob)
+  void $ runTestBackgroundWithLogger logger authCtx (BackgroundJobs.processBackgroundJob authCtx bgJob)
 
 
 getBackgroundJobs :: Connection -> IO (V.Vector Job)

@@ -140,7 +140,7 @@ jobsRunner logger authCtx tp job = Relude.when authCtx.config.enableBackgroundJo
         addEvent sp "job.started" []
 
         -- Execute the job
-        result <- try $ processBackgroundJob authCtx job bgJob
+        result <- try $ processBackgroundJob authCtx bgJob
 
         -- Set span status based on result
         case result of
@@ -154,8 +154,8 @@ jobsRunner logger authCtx tp job = Relude.when authCtx.config.enableBackgroundJo
 
 
 -- | Process a background job - extracted so it can be run with different effect interpreters
-processBackgroundJob :: Config.AuthContext -> Job -> BgJobs -> ATBackgroundCtx ()
-processBackgroundJob authCtx job bgJob =
+processBackgroundJob :: Config.AuthContext -> BgJobs -> ATBackgroundCtx ()
+processBackgroundJob authCtx bgJob =
   case bgJob of
     GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
     QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds authCtx
