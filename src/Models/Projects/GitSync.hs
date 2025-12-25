@@ -53,7 +53,9 @@ import Models.Projects.Projects (ProjectId)
 import Network.HTTP.Client (HttpException (..))
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
+import Effectful.Log (Log)
 import System.DB (DB)
+import System.Logging (logWarn)
 import Text.Casing (fromAny, toKebab)
 import UnliftIO.Exception (try)
 import "base16-bytestring" Data.ByteString.Base16 qualified as B16
@@ -106,16 +108,16 @@ encryptToken :: ByteString -> Text -> Text
 encryptToken encKey token = extractBase64 $ B64.encodeBase64 $ encryptAPIKey encKey (encodeUtf8 token)
 
 
--- | Decrypt an access token. Returns Nothing if decryption fails (invalid format or key).
--- SECURITY: Never falls back to plaintext - callers must handle Nothing appropriately.
-decryptToken :: ByteString -> Text -> Maybe Text
+-- | Decrypt an access token. Returns Left with error description if decryption fails.
+-- SECURITY: Never falls back to plaintext - callers must handle Left appropriately.
+decryptToken :: ByteString -> Text -> Either Text Text
 decryptToken encKey encryptedB64 = case B64.decodeBase64Untyped (encodeUtf8 encryptedB64) of
-  Left _ -> Nothing
-  Right encrypted -> Just $ decodeUtf8 $ decryptAPIKey encKey encrypted
+  Left b64Err -> Left $ "Base64 decode failed: " <> toText (show b64Err)
+  Right encrypted -> Right $ decodeUtf8 $ decryptAPIKey encKey encrypted
 
 
--- | Decrypt a GitHubSync's access token. Returns Nothing if decryption fails.
-decryptSync :: ByteString -> GitHubSync -> Maybe GitHubSync
+-- | Decrypt a GitHubSync's access token. Returns Left with error if decryption fails.
+decryptSync :: ByteString -> GitHubSync -> Either Text GitHubSync
 decryptSync encKey sync = (\token -> sync{accessToken = token}) <$> decryptToken encKey sync.accessToken
 
 
@@ -124,16 +126,24 @@ getGitHubSync :: DB es => ProjectId -> Eff es (Maybe GitHubSync)
 getGitHubSync pid = listToMaybe <$> PG.query (_selectWhere @GitHubSync [[field| project_id |]]) (Only pid)
 
 
-getGitHubSyncDecrypted :: DB es => ByteString -> ProjectId -> Eff es (Maybe GitHubSync)
-getGitHubSyncDecrypted encKey pid = (decryptSync encKey =<<) <$> getGitHubSync pid
+getGitHubSyncDecrypted :: (DB es, Log :> es) => ByteString -> ProjectId -> Eff es (Maybe GitHubSync)
+getGitHubSyncDecrypted encKey pid = getGitHubSync pid >>= \case
+  Nothing -> pure Nothing
+  Just sync -> case decryptSync encKey sync of
+    Left err -> logWarn "GitHub sync token decryption failed" (pid, err) >> pure Nothing
+    Right decrypted -> pure $ Just decrypted
 
 
 getGitHubSyncByRepo :: DB es => Text -> Text -> Eff es (Maybe GitHubSync)
 getGitHubSyncByRepo owner repo = listToMaybe <$> PG.query (_selectWhere @GitHubSync [[field| owner |], [field| repo |]]) (owner, repo)
 
 
-getGitHubSyncByRepoDecrypted :: DB es => ByteString -> Text -> Text -> Eff es (Maybe GitHubSync)
-getGitHubSyncByRepoDecrypted encKey ownerVal repoVal = (decryptSync encKey =<<) <$> getGitHubSyncByRepo ownerVal repoVal
+getGitHubSyncByRepoDecrypted :: (DB es, Log :> es) => ByteString -> Text -> Text -> Eff es (Maybe GitHubSync)
+getGitHubSyncByRepoDecrypted encKey ownerVal repoVal = getGitHubSyncByRepo ownerVal repoVal >>= \case
+  Nothing -> pure Nothing
+  Just sync -> case decryptSync encKey sync of
+    Left err -> logWarn "GitHub sync token decryption failed" (ownerVal, repoVal, err) >> pure Nothing
+    Right decrypted -> pure $ Just decrypted
 
 
 insertGitHubSync :: DB es => ByteString -> ProjectId -> Text -> Text -> Text -> Text -> Maybe Text -> Eff es (Maybe GitHubSync)

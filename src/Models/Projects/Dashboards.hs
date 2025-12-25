@@ -258,21 +258,13 @@ parseSortField t = case T.toLower $ T.strip t of
 
 
 selectDashboardsSortedBy :: DB es => Projects.ProjectId -> Text -> Eff es [DashboardVM]
-selectDashboardsSortedBy pid orderByParam = PG.query q (Only pid)
+selectDashboardsSortedBy pid orderByParam = PG.query (_selectWhere @DashboardVM [[field| project_id |]] <> orderClause) (Only pid)
   where
-    q = case parseSortField orderByParam of
-      Just SortByTitle ->
-        [SqlQQ.sql| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha
-                                FROM projects.dashboards WHERE project_id = ? ORDER BY starred_since DESC NULLS LAST, title ASC |]
-      Just SortByCreatedAt ->
-        [SqlQQ.sql| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha
-                                    FROM projects.dashboards WHERE project_id = ? ORDER BY starred_since DESC NULLS LAST, created_at DESC |]
-      Just SortByUpdatedAt ->
-        [SqlQQ.sql| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha
-                                    FROM projects.dashboards WHERE project_id = ? ORDER BY starred_since DESC NULLS LAST, updated_at DESC |]
-      Nothing ->
-        [SqlQQ.sql| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha
-                       FROM projects.dashboards WHERE project_id = ? ORDER BY starred_since DESC NULLS LAST, updated_at DESC |]
+    orderClause = " ORDER BY starred_since DESC NULLS LAST, " <> case parseSortField orderByParam of
+      Just SortByTitle -> "title ASC"
+      Just SortByCreatedAt -> "created_at DESC"
+      Just SortByUpdatedAt -> "updated_at DESC"
+      Nothing -> "updated_at DESC"
 
 
 updateSchema :: DB es => DashboardId -> Dashboard -> Eff es Int64
@@ -296,7 +288,7 @@ deleteDashboard dashId = PG.execute (_delete @DashboardVM) (Only dashId)
 
 
 getDashboardByBaseTemplate :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe DashboardId)
-getDashboardByBaseTemplate pid baseTemplate = fmap fromOnly . listToMaybe <$> PG.query (Query "SELECT id FROM projects.dashboards WHERE project_id = ? AND base_template = ?") (pid, baseTemplate)
+getDashboardByBaseTemplate pid baseTemplate = fmap (.id) . listToMaybe <$> (PG.query (_selectWhere @DashboardVM [[field| project_id |], [field| base_template |]]) (pid, baseTemplate) :: DB es => Eff es [DashboardVM])
 
 
 -- | Update file_path and file_sha for a dashboard

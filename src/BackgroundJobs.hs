@@ -1340,13 +1340,9 @@ gitSyncFromRepo pid = do
         Right (treeSha, entries) -> do
           dbState <- GitSync.getDashboardGitState pid
           let actions = GitSync.buildSyncPlan entries dbState
-          -- Single-pass partition using foldl'
-          let (creates, updates, deletes) = L.foldl' categorize ([], [], []) actions
-                where
-                  categorize (!cs, !us, !ds) = \case
-                    a@GitSync.SyncCreate{} -> (a : cs, us, ds)
-                    a@GitSync.SyncUpdate{} -> (cs, a : us, ds)
-                    a@GitSync.SyncDelete{} -> (cs, us, a : ds)
+              creates = [a | a@GitSync.SyncCreate{} <- actions]
+              updates = [a | a@GitSync.SyncUpdate{} <- actions]
+              deletes = [a | a@GitSync.SyncDelete{} <- actions]
           Log.logInfo "Git sync plan" ("creates" :: Text, length creates, "updates" :: Text, length updates, "deletes" :: Text, length deletes)
           -- Fetch file contents in parallel for creates and updates
           let fetchActions = creates <> updates
