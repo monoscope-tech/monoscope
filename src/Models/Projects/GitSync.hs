@@ -58,7 +58,7 @@ import System.DB (DB)
 import System.Logging (logWarn)
 import Text.Casing (fromAny, toKebab)
 import UnliftIO.Exception (try)
-import "base16-bytestring" Data.ByteString.Base16 qualified as B16
+import Data.ByteString.Base16 qualified as B16
 import "base64" Data.ByteString.Base64 qualified as B64
 import "cryptonite" Crypto.Hash (Digest, SHA256, hash)
 import "memory" Data.ByteArray qualified as BA
