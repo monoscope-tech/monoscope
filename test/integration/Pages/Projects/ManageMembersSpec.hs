@@ -123,6 +123,7 @@ spec = aroundAll withTestResources do
             , slackChannels = V.empty
             , phoneNumbers = V.empty
             , teamId = Nothing
+            , phoneNumbers = []
             }
 
     it "Should create team" \tr -> do

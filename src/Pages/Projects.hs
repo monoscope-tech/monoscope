@@ -72,10 +72,11 @@ import Effectful.Reader.Static (ask)
 import Fmt
 import GHC.Records (HasField (getField))
 import Lucid
+import Lucid (href_)
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Models.Apis.Slack (SlackData, getDiscordDataByProjectId, getProjectSlackData)
-import Models.Apis.Slack qualified as Slack
+import Models.Apis.Bots (SlackData, getDiscordDataByProjectId, getProjectSlackData)
+import Models.Apis.Bots qualified as Slack
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -370,6 +371,15 @@ integrationsBody IntegrationsConfig{..} = do
           h2_ [class_ "text-textStrong text-3xl font-medium mb-5"] "Project Notifications"
           div_ [class_ "flex flex-col gap-4"] do
             p_ [] "Select channels to receive updates on this project."
+            div_ [class_ "flex flex-col gap-2 p-6 bg-bgRaised rounded-lg border border-strokeWeak shadow-xs"] do
+              div_ [class_ "flex items-center gap-2"] do
+                faSprite_ "github" "solid " "h-6 w-6 text-textBrand"
+                div_ [class_ "flex flex-col gap-2"] do
+                  span_ [class_ "text-textStrong text-lg font-semibold"] "GitHub"
+                  p_ [class_ "text-textWeak text-sm"] "Integrate with github for syncing dashboards with your repositories."
+              let ghInstallUrl = envConfig.githubAppInstallUrl <> "?state=" <> pid
+              a_ [class_ "btn text-white bg-black w-max", href_ ghInstallUrl] "Connect GitHub"
+
             renderNotificationOption "Email Notifications" "Receive project updates via email" "email" Projects.NEmail notifChannel (faSprite_ "envelope" "solid" "h-6 w-6") ""
             renderNotificationOption "Slack" "Send notifications to Slack channels" "slack" Projects.NSlack notifChannel (faSprite_ "slack" "solid" "h-6 w-6") (renderSlackIntegration envConfig "" slackData)
             renderNotificationOption "Discord" "Send notifications to Discord servers" "discord" Projects.NDiscord notifChannel (faSprite_ "discord" "solid" "h-6 w-6") (renderDiscordIntegration envConfig "")

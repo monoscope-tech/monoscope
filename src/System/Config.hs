@@ -127,6 +127,7 @@ data EnvConfig = EnvConfig
   , enableDailyJobScheduling :: Bool
   , maxConcurrentJobs :: Int
   , showDemoProject :: Bool
+  , githubAppInstallUrl :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)
