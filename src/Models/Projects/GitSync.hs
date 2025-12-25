@@ -119,7 +119,7 @@ decryptToken encKey encryptedB64 = case B64.decodeBase64Untyped (encodeUtf8 encr
 
 -- | Decrypt a GitHubSync's access token. Returns Left with error if decryption fails.
 decryptSync :: ByteString -> GitHubSync -> Either Text GitHubSync
-decryptSync encKey sync = (\token -> sync{accessToken = token}) <$> decryptToken encKey sync.accessToken
+decryptSync encKey sync = decryptToken encKey sync.accessToken <&> (sync &) . (#accessToken .~)
 
 
 -- DB Operations

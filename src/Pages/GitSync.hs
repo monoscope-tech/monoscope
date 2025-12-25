@@ -130,7 +130,7 @@ validateWebhookSignature Nothing _ _ = Right () -- No secret configured, skip va
 validateWebhookSignature _ Nothing _ = Left "signature required but not provided"
 validateWebhookSignature (Just secret) (Just sig) body =
   let expectedSig = "sha256=" <> decodeUtf8 (B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) body :: HMAC.HMAC SHA256))
-   in if BA.constEq (encodeUtf8 sig) (encodeUtf8 expectedSig) then Right () else Left "invalid signature"
+   in if BA.constEq (encodeUtf8 sig :: ByteString) (encodeUtf8 expectedSig :: ByteString) then Right () else Left "invalid signature"
 
 
 gitSyncSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
