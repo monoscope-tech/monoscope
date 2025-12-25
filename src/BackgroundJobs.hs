@@ -1403,21 +1403,19 @@ gitSyncPushDashboard pid dashId filePath = do
   let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
   syncM <- GitSync.getGitHubSyncDecrypted encKey pid
   dashM <- Dashboards.getDashboardById dashId
-  case syncM of
-    Nothing -> Log.logAttention "No GitHub sync configured for project" pid
-    Just sync
-      | not sync.syncEnabled -> Log.logInfo "GitHub sync disabled, skipping push" pid
-      | otherwise -> case dashM of
-          Nothing -> Log.logAttention "Dashboard not found for git push" dashId
-          Just dash -> do
-            teams <- ProjectMembers.getTeamsById pid dash.teams
-            let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
-                yamlContent = GitSync.dashboardToYaml schema
-                existingSha = dash.fileSha
-                message = "Update dashboard: " <> dash.title
-            pushResult <- W.runHTTPWreq $ GitSync.pushFileToGit sync filePath yamlContent existingSha message
-            case pushResult of
-              Left err -> Log.logAttention "Failed to push dashboard to git" (dashId, err)
-              Right newSha -> do
-                _ <- GitSync.updateDashboardGitInfo dashId filePath newSha
-                Log.logInfo "Successfully pushed dashboard to git" (dashId, newSha)
+  case (syncM, dashM) of
+    (Nothing, _) -> Log.logAttention "No GitHub sync configured for project" pid
+    (Just sync, _) | not sync.syncEnabled -> Log.logInfo "GitHub sync disabled, skipping push" pid
+    (_, Nothing) -> Log.logAttention "Dashboard not found for git push" dashId
+    (Just sync, Just dash) -> do
+      teams <- ProjectMembers.getTeamsById pid dash.teams
+      let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
+          yamlContent = GitSync.dashboardToYaml schema
+          existingSha = dash.fileSha
+          message = "Update dashboard: " <> dash.title
+      pushResult <- W.runHTTPWreq $ GitSync.pushFileToGit sync filePath yamlContent existingSha message
+      case pushResult of
+        Left err -> Log.logAttention "Failed to push dashboard to git" (dashId, err)
+        Right newSha -> do
+          _ <- GitSync.updateDashboardGitInfo dashId filePath newSha
+          Log.logInfo "Successfully pushed dashboard to git" (dashId, newSha)
