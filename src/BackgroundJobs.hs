@@ -67,7 +67,6 @@ import Pkg.Parser
 import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask)
-import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
 import System.Config qualified as Config
 import System.Logging qualified as Log
@@ -1358,48 +1357,42 @@ gitSyncFromRepo pid = do
 
 processGitSyncAction :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Projects.ProjectId -> GitSync.GitHubSync -> GitSync.SyncAction -> Eff es ()
 processGitSyncAction pid sync = \case
-  GitSync.SyncCreate path sha -> do
-    contentResult <- GitSync.fetchFileContent sync path
-    case contentResult of
-      Left err -> Log.logAttention "Failed to fetch file content" (path, err)
-      Right content -> case GitSync.yamlToDashboard content of
-        Left err -> Log.logAttention "Failed to parse dashboard YAML" (path, err)
-        Right schema -> do
-          now <- Time.currentTime
-          dashId <- UUIDId <$> liftIO UUIDV4.nextRandom
-          teamVMs <- ProjectMembers.getTeamsByHandles pid (fold schema.teams)
-          let dashboard =
-                Dashboards.DashboardVM
-                  { Dashboards.id = dashId
-                  , Dashboards.projectId = pid
-                  , Dashboards.createdAt = now
-                  , Dashboards.updatedAt = now
-                  , Dashboards.createdBy = Users.UserId UUID.nil
-                  , Dashboards.baseTemplate = Just path
-                  , Dashboards.schema = Just schema
-                  , Dashboards.starredSince = Nothing
-                  , Dashboards.homepageSince = Nothing
-                  , Dashboards.tags = V.fromList $ fold schema.tags
-                  , Dashboards.title = fromMaybe "Untitled" schema.title
-                  , Dashboards.teams = V.fromList $ map (.id) teamVMs
-                  , Dashboards.filePath = Just path
-                  , Dashboards.fileSha = Just sha
-                  }
-          _ <- Dashboards.insert dashboard
-          Log.logInfo "Created dashboard from git" (path, dashId)
-  GitSync.SyncUpdate path sha dashId -> do
-    contentResult <- GitSync.fetchFileContent sync path
-    case contentResult of
-      Left err -> Log.logAttention "Failed to fetch file content for update" (path, err)
-      Right content -> case GitSync.yamlToDashboard content of
-        Left err -> Log.logAttention "Failed to parse dashboard YAML for update" (path, err)
-        Right schema -> do
-          now <- Time.currentTime
-          _ <- Dashboards.updateSchemaAndUpdatedAt dashId schema now
-          whenJust schema.title $ void . Dashboards.updateTitle dashId
-          _ <- GitSync.updateDashboardGitInfo dashId path sha
-          Log.logInfo "Updated dashboard from git" (path, dashId)
+  GitSync.SyncCreate path sha ->
+    fetchAndParseDashboard sync path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
+      now <- Time.currentTime
+      dashId <- UUIDId <$> liftIO UUIDV4.nextRandom
+      teamVMs <- ProjectMembers.getTeamsByHandles pid (fold schema.teams)
+      let dashboard =
+            Dashboards.DashboardVM
+              { Dashboards.id = dashId
+              , Dashboards.projectId = pid
+              , Dashboards.createdAt = now
+              , Dashboards.updatedAt = now
+              , Dashboards.createdBy = Users.UserId UUID.nil
+              , Dashboards.baseTemplate = Just path
+              , Dashboards.schema = Just schema
+              , Dashboards.starredSince = Nothing
+              , Dashboards.homepageSince = Nothing
+              , Dashboards.tags = V.fromList $ fold schema.tags
+              , Dashboards.title = fromMaybe "Untitled" schema.title
+              , Dashboards.teams = V.fromList $ map (.id) teamVMs
+              , Dashboards.filePath = Just path
+              , Dashboards.fileSha = Just sha
+              }
+      _ <- Dashboards.insert dashboard
+      Log.logInfo "Created dashboard from git" (path, dashId)
+  GitSync.SyncUpdate path sha dashId ->
+    fetchAndParseDashboard sync path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
+      now <- Time.currentTime
+      _ <- Dashboards.updateSchemaAndUpdatedAt dashId schema now
+      whenJust schema.title $ void . Dashboards.updateTitle dashId
+      _ <- GitSync.updateDashboardGitInfo dashId path sha
+      Log.logInfo "Updated dashboard from git" (path, dashId)
   GitSync.SyncDelete{} -> pass -- Handled separately
+
+
+fetchAndParseDashboard :: (IOE :> es, W.HTTP :> es) => GitSync.GitHubSync -> Text -> Eff es (Either Text Dashboards.Dashboard)
+fetchAndParseDashboard sync path = GitSync.fetchFileContent sync path <&> (>>= GitSync.yamlToDashboard)
 
 
 -- | Push a dashboard change to GitHub
