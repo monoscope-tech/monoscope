@@ -260,11 +260,12 @@ parseSortField t = case T.toLower $ T.strip t of
 selectDashboardsSortedBy :: DB es => Projects.ProjectId -> Text -> Eff es [DashboardVM]
 selectDashboardsSortedBy pid orderByParam = PG.query (_selectWhere @DashboardVM [[field| project_id |]] <> orderClause) (Only pid)
   where
-    orderClause = " ORDER BY starred_since DESC NULLS LAST, " <> case parseSortField orderByParam of
-      Just SortByTitle -> "title ASC"
-      Just SortByCreatedAt -> "created_at DESC"
-      Just SortByUpdatedAt -> "updated_at DESC"
-      Nothing -> "updated_at DESC"
+    orderClause =
+      " ORDER BY starred_since DESC NULLS LAST, " <> case parseSortField orderByParam of
+        Just SortByTitle -> "title ASC"
+        Just SortByCreatedAt -> "created_at DESC"
+        Just SortByUpdatedAt -> "updated_at DESC"
+        Nothing -> "updated_at DESC"
 
 
 updateSchema :: DB es => DashboardId -> Dashboard -> Eff es Int64

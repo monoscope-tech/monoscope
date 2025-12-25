@@ -46,6 +46,7 @@ import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
+import Effectful.Log (Log)
 import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Dashboards (Dashboard, DashboardId)
 import Models.Projects.ProjectApiKeys (decryptAPIKey, encryptAPIKey)
@@ -53,7 +54,6 @@ import Models.Projects.Projects (ProjectId)
 import Network.HTTP.Client (HttpException (..))
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
-import Effectful.Log (Log)
 import System.DB (DB)
 import System.Logging (logWarn)
 import Text.Casing (fromAny, toKebab)
@@ -127,11 +127,12 @@ getGitHubSync pid = listToMaybe <$> PG.query (_selectWhere @GitHubSync [[field| 
 
 
 getGitHubSyncDecrypted :: (DB es, Log :> es) => ByteString -> ProjectId -> Eff es (Maybe GitHubSync)
-getGitHubSyncDecrypted encKey pid = getGitHubSync pid >>= \case
-  Nothing -> pure Nothing
-  Just sync -> case decryptSync encKey sync of
-    Left err -> logWarn "GitHub sync token decryption failed" (pid, err) >> pure Nothing
-    Right decrypted -> pure $ Just decrypted
+getGitHubSyncDecrypted encKey pid =
+  getGitHubSync pid >>= \case
+    Nothing -> pure Nothing
+    Just sync -> case decryptSync encKey sync of
+      Left err -> logWarn "GitHub sync token decryption failed" (pid, err) >> pure Nothing
+      Right decrypted -> pure $ Just decrypted
 
 
 getGitHubSyncByRepo :: DB es => Text -> Text -> Eff es (Maybe GitHubSync)
@@ -139,11 +140,12 @@ getGitHubSyncByRepo owner repo = listToMaybe <$> PG.query (_selectWhere @GitHubS
 
 
 getGitHubSyncByRepoDecrypted :: (DB es, Log :> es) => ByteString -> Text -> Text -> Eff es (Maybe GitHubSync)
-getGitHubSyncByRepoDecrypted encKey ownerVal repoVal = getGitHubSyncByRepo ownerVal repoVal >>= \case
-  Nothing -> pure Nothing
-  Just sync -> case decryptSync encKey sync of
-    Left err -> logWarn "GitHub sync token decryption failed" (ownerVal, repoVal, err) >> pure Nothing
-    Right decrypted -> pure $ Just decrypted
+getGitHubSyncByRepoDecrypted encKey ownerVal repoVal =
+  getGitHubSyncByRepo ownerVal repoVal >>= \case
+    Nothing -> pure Nothing
+    Just sync -> case decryptSync encKey sync of
+      Left err -> logWarn "GitHub sync token decryption failed" (ownerVal, repoVal, err) >> pure Nothing
+      Right decrypted -> pure $ Just decrypted
 
 
 insertGitHubSync :: DB es => ByteString -> ProjectId -> Text -> Text -> Text -> Text -> Maybe Text -> Eff es (Maybe GitHubSync)
