@@ -69,7 +69,9 @@ import Servant (ServerError (..), err404)
 import System.Directory (listDirectory)
 import System.Types (DB)
 import Text.Casing (fromAny, toKebab)
+import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 import "cryptonite" Crypto.Hash (Digest, SHA256, hash)
+import "memory" Data.ByteArray qualified as BA
 
 
 data DashboardVM = DashboardVM
@@ -291,7 +293,7 @@ titleToFilePath title = toText (toKebab $ fromAny $ toString $ T.strip title) <>
 
 -- | Compute SHA256 hash of content and return as hex string
 computeContentSha :: ByteString -> Text
-computeContentSha content = show (hash content :: Digest SHA256)
+computeContentSha content = decodeUtf8 $ B16.encode $ BA.convert (hash content :: Digest SHA256)
 
 
 -- | Update file_path and file_sha for a dashboard

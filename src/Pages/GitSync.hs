@@ -1,3 +1,5 @@
+{-# LANGUAGE PackageImports #-}
+
 module Pages.GitSync (
   githubWebhookPostH,
   GitHubWebhookPayload (..),
@@ -14,6 +16,7 @@ import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.ByteArray qualified as BA
+import Data.ByteString.Base16 qualified as B16
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
@@ -117,14 +120,8 @@ validateWebhookSignature :: Maybe Text -> Maybe Text -> ByteString -> Bool
 validateWebhookSignature Nothing _ _ = True -- No secret configured, skip validation
 validateWebhookSignature _ Nothing _ = False -- Secret configured but no signature provided
 validateWebhookSignature (Just secret) (Just sig) body =
-  let expectedSig = "sha256=" <> toHex (HMAC.hmac (encodeUtf8 secret) body :: HMAC.HMAC SHA256)
+  let expectedSig = "sha256=" <> decodeUtf8 (B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) body :: HMAC.HMAC SHA256))
    in sig == expectedSig
-  where
-    toHex :: HMAC.HMAC SHA256 -> Text
-    toHex = decodeUtf8 . toStrict . toLazy . mconcat . map (toHexByte . fromIntegral) . BA.unpack
-    toHexByte :: Int -> ByteString
-    toHexByte n = encodeUtf8 $ T.pack [hexDigit (n `div` 16), hexDigit (n `mod` 16)]
-    hexDigit n = if n < 10 then toEnum (fromEnum '0' + n) else toEnum (fromEnum 'a' + n - 10)
 
 
 gitSyncSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
@@ -144,7 +141,10 @@ gitSyncSettingsPostH pid form = do
       Log.logInfo "Created GitHub sync config" (pid, form.owner, form.repo)
       pure result
     Just existing -> do
-      result <- GitSync.updateGitHubSync encKey existing.id form.owner form.repo form.branch form.accessToken True
+      result <-
+        if T.null form.accessToken
+          then GitSync.updateGitHubSyncKeepToken existing.id form.owner form.repo form.branch True
+          else GitSync.updateGitHubSync encKey existing.id form.owner form.repo form.branch form.accessToken True
       Log.logInfo "Updated GitHub sync config" (pid, form.owner, form.repo)
       pure result
   addRespHeaders $ gitSyncSettingsView pid syncM

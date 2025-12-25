@@ -11,6 +11,7 @@ module Models.Projects.GitSync (
   getGitHubSyncByRepoDecrypted,
   insertGitHubSync,
   updateGitHubSync,
+  updateGitHubSyncKeepToken,
   updateLastTreeSha,
   deleteGitHubSync,
   getDashboardGitState,
@@ -26,6 +27,7 @@ module Models.Projects.GitSync (
 import Control.Lens ((&), (.~), (^.))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
+import Data.Aeson.Types (parseMaybe)
 import Data.Base64.Types qualified as B64
 import Data.Effectful.Wreq qualified as W
 import Data.Map.Strict qualified as M
@@ -92,14 +94,17 @@ encryptToken :: ByteString -> Text -> Text
 encryptToken key token = B64.extractBase64 $ B64.encodeBase64 $ encryptAPIKey key (encodeUtf8 token)
 
 
-decryptToken :: ByteString -> Text -> Text
+-- | Decrypt an access token. Returns Nothing if decryption fails (invalid format or key).
+-- SECURITY: Never falls back to plaintext - callers must handle Nothing appropriately.
+decryptToken :: ByteString -> Text -> Maybe Text
 decryptToken key encryptedB64 = case B64.decodeBase64Untyped (encodeUtf8 encryptedB64) of
-  Left _ -> encryptedB64 -- Return as-is if not base64 (for backwards compatibility with unencrypted tokens)
-  Right encrypted -> decodeUtf8 $ decryptAPIKey key encrypted
+  Left _ -> Nothing
+  Right encrypted -> Just $ decodeUtf8 $ decryptAPIKey key encrypted
 
 
-decryptSync :: ByteString -> GitHubSync -> GitHubSync
-decryptSync key sync = sync{accessToken = decryptToken key sync.accessToken}
+-- | Decrypt a GitHubSync's access token. Returns Nothing if decryption fails.
+decryptSync :: ByteString -> GitHubSync -> Maybe GitHubSync
+decryptSync key sync = (\token -> sync{accessToken = token}) <$> decryptToken key sync.accessToken
 
 
 -- DB Operations
@@ -110,7 +115,7 @@ getGitHubSync pid = listToMaybe <$> PG.query q (Only pid)
 
 
 getGitHubSyncDecrypted :: DB es => ByteString -> ProjectId -> Eff es (Maybe GitHubSync)
-getGitHubSyncDecrypted key pid = fmap (decryptSync key) <$> getGitHubSync pid
+getGitHubSyncDecrypted key pid = (decryptSync key =<<) <$> getGitHubSync pid
 
 
 getGitHubSyncByRepo :: DB es => Text -> Text -> Eff es (Maybe GitHubSync)
@@ -120,7 +125,7 @@ getGitHubSyncByRepo owner repo = listToMaybe <$> PG.query q (owner, repo)
 
 
 getGitHubSyncByRepoDecrypted :: DB es => ByteString -> Text -> Text -> Eff es (Maybe GitHubSync)
-getGitHubSyncByRepoDecrypted key owner repo = fmap (decryptSync key) <$> getGitHubSyncByRepo owner repo
+getGitHubSyncByRepoDecrypted key owner repo = (decryptSync key =<<) <$> getGitHubSyncByRepo owner repo
 
 
 insertGitHubSync :: DB es => ByteString -> ProjectId -> Text -> Text -> Text -> Text -> Maybe Text -> Eff es (Maybe GitHubSync)
@@ -133,6 +138,12 @@ updateGitHubSync :: DB es => ByteString -> GitHubSyncId -> Text -> Text -> Text 
 updateGitHubSync key sid owner repo branch token enabled = listToMaybe <$> PG.query q (owner, repo, branch, encryptToken key token, enabled, sid)
   where
     q = [sql|UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, access_token = ?, sync_enabled = ?, updated_at = now() WHERE id = ? RETURNING id, project_id, owner, repo, branch, access_token, webhook_secret, last_tree_sha, sync_enabled, created_at, updated_at|]
+
+
+updateGitHubSyncKeepToken :: DB es => GitHubSyncId -> Text -> Text -> Text -> Bool -> Eff es (Maybe GitHubSync)
+updateGitHubSyncKeepToken sid owner repo branch enabled = listToMaybe <$> PG.query q (owner, repo, branch, enabled, sid)
+  where
+    q = [sql|UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, sync_enabled = ?, updated_at = now() WHERE id = ? RETURNING id, project_id, owner, repo, branch, access_token, webhook_secret, last_tree_sha, sync_enabled, created_at, updated_at|]
 
 
 updateLastTreeSha :: DB es => GitHubSyncId -> Text -> Eff es Int64
@@ -162,7 +173,7 @@ updateDashboardGitInfo did path sha = PG.execute q (path, sha, did)
 
 
 -- GitHub API Operations
-fetchGitTree :: (IOE :> es, W.HTTP :> es) => GitHubSync -> Eff es (Either Text [TreeEntry])
+fetchGitTree :: (IOE :> es, W.HTTP :> es) => GitHubSync -> Eff es (Either Text (Text, [TreeEntry]))
 fetchGitTree sync = do
   let url = "https://api.github.com/repos/" <> sync.owner <> "/" <> sync.repo <> "/git/trees/" <> sync.branch <> "?recursive=1"
   result <- try $ W.getWith (githubOpts sync.accessToken) (toString url)
@@ -170,11 +181,12 @@ fetchGitTree sync = do
     Left (err :: HttpException) -> Left $ formatHttpError err
     Right resp -> case AE.decode (resp ^. W.responseBody) of
       Nothing -> Left "Failed to parse tree response"
-      Just obj -> case AEK.lookup "tree" obj of
-        Just (AE.Array entries) -> Right $ mapMaybe (AE.decode . AE.encode) (V.toList entries)
+      Just obj -> case (AEK.lookup "sha" obj, AEK.lookup "tree" obj) of
+        (Just (AE.String treeSha), Just (AE.Array entries)) ->
+          Right (treeSha, mapMaybe (parseMaybe AE.parseJSON) $ V.toList entries)
         _ -> case AEK.lookup "truncated" obj of
           Just (AE.Bool True) -> Left "Repository too large (>100k files)"
-          _ -> Left $ "Invalid tree response: " <> maybe "" decodeUtf8 (resp ^. W.responseBody & toStrict)
+          _ -> Left $ "Invalid tree response: " <> decodeUtf8 (toStrict $ resp ^. W.responseBody)
 
 
 fetchFileContent :: (IOE :> es, W.HTTP :> es) => GitHubSync -> Text -> Eff es (Either Text ByteString)
@@ -246,9 +258,9 @@ buildSyncPlan :: [TreeEntry] -> M.Map Text (DashboardId, Text) -> [SyncAction]
 buildSyncPlan entries dbState = creates <> updates <> deletes
   where
     gitFiles = M.fromList [(e.path, e.sha) | e <- entries, isDashboardFile e]
-    creates = [SyncCreate p s | (p, s) <- M.toList gitFiles, p `M.notMember` dbState]
+    creates = [SyncCreate p s | (p, s) <- M.toList $ gitFiles `M.difference` dbState]
     updates = [SyncUpdate p s rid | (p, s) <- M.toList gitFiles, Just (rid, oldSha) <- [M.lookup p dbState], s /= oldSha]
-    deletes = [SyncDelete p rid | (p, (rid, _)) <- M.toList dbState, p `M.notMember` gitFiles]
+    deletes = [SyncDelete p rid | (p, (rid, _)) <- M.toList $ dbState `M.difference` gitFiles]
 
 
 dashboardToYaml :: Dashboard -> ByteString

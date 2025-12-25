@@ -284,6 +284,7 @@ library
     , lucid-hyperscript >=0.1.0.2
     , lucid-svg >=0.7.1.1
     , megaparsec
+    , memory
     , minio-hs
     , mmark
     , monad-time-effectful
@@ -441,8 +442,8 @@ test-suite integration-tests
       Pages.ApiSpec
       Pages.BusinessFlowsSpec
       Pages.DashboardsSpec
-      Pages.GitSyncSpec
       Pages.Endpoints.ApiCatalogSpec
+      Pages.GitSyncSpec
       Pages.LogExplorer.LogSpec
       Pages.MonitorsSpec
       Pages.Projects.ManageMembersSpec
@@ -513,6 +514,7 @@ test-suite integration-tests
     , servant-server
     , time
     , uuid
+    , uuid-quasi
     , vector
   default-language: GHC2021
 
@@ -573,5 +575,6 @@ test-suite unit-tests
     , relude >=1.2.0.0
     , time
     , uuid
+    , uuid-quasi
     , vector
   default-language: GHC2021

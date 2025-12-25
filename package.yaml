@@ -181,6 +181,7 @@ library:
     - annotated-exception
     - safe
     - cryptonite
+    - memory
     - data-default
     - deriving-aeson
     - dotenv
@@ -335,6 +336,7 @@ tests:
       - base64
       - time
       - uuid
+      - uuid-quasi
       - pg-transact
       - vector
       - cache
@@ -357,6 +359,7 @@ tests:
       - relude >= 1.2.0.0
       - aeson
       - uuid
+      - uuid-quasi
       - neat-interpolation
       - aeson-qq
       - extra

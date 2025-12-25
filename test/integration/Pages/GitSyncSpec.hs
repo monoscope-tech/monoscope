@@ -3,10 +3,10 @@ module Pages.GitSyncSpec (spec) where
 import BackgroundJobs qualified
 import Data.Default (def)
 import Data.Map.Strict qualified as M
-import Data.Maybe (fromJust)
 import Data.Pool (withResource)
 import Data.Time (getCurrentTime)
 import Data.UUID qualified as UUID
+import Data.UUID.Quasi (uuid)
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (execute)
@@ -93,7 +93,7 @@ spec = aroundAll withTestResources do
       length [() | GitSync.SyncDelete{} <- plan] `shouldBe` 0
 
     it "should build sync plan with updates for changed SHAs" \_ -> do
-      let dashId = UUIDId $ fromJust $ UUID.fromString "11111111-1111-1111-1111-111111111111"
+      let dashId = UUIDId [uuid|11111111-1111-1111-1111-111111111111|]
           entries = [GitSync.TreeEntry "dashboards/existing.yaml" "blob" "newsha" (Just 100)]
           dbState = M.singleton "dashboards/existing.yaml" (dashId, "oldsha")
           plan = GitSync.buildSyncPlan entries dbState
@@ -102,7 +102,7 @@ spec = aroundAll withTestResources do
       length [() | GitSync.SyncDelete{} <- plan] `shouldBe` 0
 
     it "should build sync plan with deletes for removed files" \_ -> do
-      let dashId = UUIDId $ fromJust $ UUID.fromString "22222222-2222-2222-2222-222222222222"
+      let dashId = UUIDId [uuid|22222222-2222-2222-2222-222222222222|]
           entries = []
           dbState = M.singleton "dashboards/deleted.yaml" (dashId, "sha123")
           plan = GitSync.buildSyncPlan entries dbState

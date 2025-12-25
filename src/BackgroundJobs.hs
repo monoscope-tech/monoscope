@@ -1338,10 +1338,12 @@ gitSyncFromRepo pid = do
       treeResult <- GitSync.fetchGitTree sync
       case treeResult of
         Left err -> Log.logAttention "Failed to fetch git tree" (pid, err)
-        Right entries -> do
+        Right (treeSha, entries) -> do
           dbState <- GitSync.getDashboardGitState pid
           let actions = GitSync.buildSyncPlan entries dbState
-          Log.logInfo "Git sync plan" ("creates" :: Text, length [() | GitSync.SyncCreate{} <- actions], "updates" :: Text, length [() | GitSync.SyncUpdate{} <- actions], "deletes" :: Text, length [() | GitSync.SyncDelete{} <- actions])
+          let (creates, rest) = L.partition (\case GitSync.SyncCreate{} -> True; _ -> False) actions
+              (updates, deletes) = L.partition (\case GitSync.SyncUpdate{} -> True; _ -> False) rest
+          Log.logInfo "Git sync plan" ("creates" :: Text, length creates, "updates" :: Text, length updates, "deletes" :: Text, length deletes)
           forM_ actions \case
             GitSync.SyncCreate path sha -> do
               contentResult <- GitSync.fetchFileContent sync path
@@ -1352,7 +1354,7 @@ gitSyncFromRepo pid = do
                   Right schema -> do
                     now <- Time.currentTime
                     dashId <- UUIDId <$> liftIO UUIDV4.nextRandom
-                    teamVMs <- catMaybes <$> mapM (ProjectMembers.getTeamByHandle pid) (fromMaybe [] schema.teams)
+                    teamVMs <- ProjectMembers.getTeamsByHandles pid (fold schema.teams)
                     let dashboard =
                           Dashboards.DashboardVM
                             { Dashboards.id = dashId
@@ -1364,7 +1366,7 @@ gitSyncFromRepo pid = do
                             , Dashboards.schema = Just schema
                             , Dashboards.starredSince = Nothing
                             , Dashboards.homepageSince = Nothing
-                            , Dashboards.tags = V.fromList $ fromMaybe [] schema.tags
+                            , Dashboards.tags = V.fromList $ fold schema.tags
                             , Dashboards.title = fromMaybe "Untitled" schema.title
                             , Dashboards.teams = V.fromList $ map (.id) teamVMs
                             , Dashboards.filePath = Just path
@@ -1387,7 +1389,7 @@ gitSyncFromRepo pid = do
             GitSync.SyncDelete path dashId -> do
               _ <- Dashboards.deleteDashboard dashId
               Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
-          _ <- GitSync.updateLastTreeSha sync.id (maybe "" (.sha) $ listToMaybe entries)
+          _ <- GitSync.updateLastTreeSha sync.id treeSha
           Log.logInfo "Completed GitHub sync for project" pid
 
 
