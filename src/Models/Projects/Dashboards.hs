@@ -44,9 +44,9 @@ import Database.PostgreSQL.Entity (_delete, _selectWhere)
 import Database.PostgreSQL.Entity qualified as DBT
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, ToRow)
-import Database.PostgreSQL.Simple.SqlQQ qualified as SqlQQ
 import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+import Database.PostgreSQL.Simple.SqlQQ qualified as SqlQQ
 import Database.PostgreSQL.Simple.ToField
 import Database.PostgreSQL.Simple.Types (Only (Only), Query (Query), fromOnly)
 import Deriving.Aeson qualified as DAE
@@ -240,7 +240,8 @@ addTeamsToDashboards pid dids teamIds = PG.execute (Query $ encodeUtf8 q) (teamI
 selectDashboardsByTeam :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [DashboardVM]
 selectDashboardsByTeam pid teamId = PG.query q (pid, teamId)
   where
-    q = [SqlQQ.sql| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha
+    q =
+      [SqlQQ.sql| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha
               FROM projects.dashboards WHERE project_id = ? AND teams @> ARRAY[?::uuid] ORDER BY starred_since DESC NULLS LAST, updated_at DESC |]
 
 
@@ -260,13 +261,17 @@ selectDashboardsSortedBy :: DB es => Projects.ProjectId -> Text -> Eff es [Dashb
 selectDashboardsSortedBy pid orderByParam = PG.query q (Only pid)
   where
     q = case parseSortField orderByParam of
-      Just SortByTitle -> [SqlQQ.sql| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha
+      Just SortByTitle ->
+        [SqlQQ.sql| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha
                                 FROM projects.dashboards WHERE project_id = ? ORDER BY starred_since DESC NULLS LAST, title ASC |]
-      Just SortByCreatedAt -> [SqlQQ.sql| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha
+      Just SortByCreatedAt ->
+        [SqlQQ.sql| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha
                                     FROM projects.dashboards WHERE project_id = ? ORDER BY starred_since DESC NULLS LAST, created_at DESC |]
-      Just SortByUpdatedAt -> [SqlQQ.sql| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha
+      Just SortByUpdatedAt ->
+        [SqlQQ.sql| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha
                                     FROM projects.dashboards WHERE project_id = ? ORDER BY starred_since DESC NULLS LAST, updated_at DESC |]
-      Nothing -> [SqlQQ.sql| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha
+      Nothing ->
+        [SqlQQ.sql| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha
                        FROM projects.dashboards WHERE project_id = ? ORDER BY starred_since DESC NULLS LAST, updated_at DESC |]
 
 

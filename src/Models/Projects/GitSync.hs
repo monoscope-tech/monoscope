@@ -140,7 +140,8 @@ insertGitHubSync :: DB es => ByteString -> ProjectId -> Text -> Text -> Text -> 
 insertGitHubSync encKey pid ownerVal repoVal branchVal token webhookSecret =
   listToMaybe <$> PG.query q (pid, ownerVal, repoVal, branchVal, encryptToken encKey token, webhookSecret)
   where
-    q = [sql| INSERT INTO projects.github_sync (project_id, owner, repo, branch, access_token, webhook_secret)
+    q =
+      [sql| INSERT INTO projects.github_sync (project_id, owner, repo, branch, access_token, webhook_secret)
               VALUES (?, ?, ?, ?, ?, ?) RETURNING id, project_id, owner, repo, branch, access_token, webhook_secret, last_tree_sha, sync_enabled, created_at, updated_at |]
 
 
@@ -148,7 +149,8 @@ updateGitHubSync :: DB es => ByteString -> GitHubSyncId -> Text -> Text -> Text 
 updateGitHubSync encKey sid ownerVal repoVal branchVal token enabled =
   listToMaybe <$> PG.query q (ownerVal, repoVal, branchVal, encryptToken encKey token, enabled, sid)
   where
-    q = [sql| UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, access_token = ?, sync_enabled = ?, updated_at = now()
+    q =
+      [sql| UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, access_token = ?, sync_enabled = ?, updated_at = now()
               WHERE id = ? RETURNING id, project_id, owner, repo, branch, access_token, webhook_secret, last_tree_sha, sync_enabled, created_at, updated_at |]
 
 
@@ -156,7 +158,8 @@ updateGitHubSyncKeepToken :: DB es => GitHubSyncId -> Text -> Text -> Text -> Bo
 updateGitHubSyncKeepToken sid ownerVal repoVal branchVal enabled =
   listToMaybe <$> PG.query q (ownerVal, repoVal, branchVal, enabled, sid)
   where
-    q = [sql| UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, sync_enabled = ?, updated_at = now()
+    q =
+      [sql| UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, sync_enabled = ?, updated_at = now()
               WHERE id = ? RETURNING id, project_id, owner, repo, branch, access_token, webhook_secret, last_tree_sha, sync_enabled, created_at, updated_at |]
 
 

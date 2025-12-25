@@ -1363,7 +1363,7 @@ gitSyncFromRepo pid = do
           Log.logInfo "Completed GitHub sync for project" pid
 
 
-processGitSyncAction :: (W.HTTP :> es, DB es, Time.Time :> es, Log :> es) => Projects.ProjectId -> GitSync.GitHubSync -> GitSync.SyncAction -> Eff es ()
+processGitSyncAction :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Projects.ProjectId -> GitSync.GitHubSync -> GitSync.SyncAction -> Eff es ()
 processGitSyncAction pid sync = \case
   GitSync.SyncCreate path sha -> do
     contentResult <- GitSync.fetchFileContent sync path
