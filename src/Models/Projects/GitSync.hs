@@ -113,8 +113,10 @@ encryptToken encKey = extractBase64 . B64.encodeBase64 . encryptAPIKey encKey . 
 -- SECURITY: Never falls back to plaintext - callers must handle Left appropriately.
 decryptToken :: ByteString -> Text -> Either Text Text
 decryptToken encKey encryptedB64 =
-  first (("Base64 decode failed: " <>) . toText . show) $
-    decodeUtf8 . decryptAPIKey encKey <$> B64.decodeBase64Untyped (encodeUtf8 encryptedB64)
+  first (("Base64 decode failed: " <>) . toText . show)
+    $ decodeUtf8
+    . decryptAPIKey encKey
+    <$> B64.decodeBase64Untyped (encodeUtf8 encryptedB64)
 
 
 -- | Decrypt a GitHubSync's access token. Returns Left with error if decryption fails.
