@@ -1337,7 +1337,9 @@ gitSyncFromRepo pid = do
         Left err -> Log.logAttention "Failed to fetch git tree" (pid, err)
         Right (treeSha, entries) -> do
           dbState <- GitSync.getDashboardGitState pid
-          let actions = GitSync.buildSyncPlan entries dbState
+          allTeams <- ProjectMembers.getTeamsVM pid
+          let teamMap = Map.fromList [(t.handle, t.id) | t <- allTeams]
+              actions = GitSync.buildSyncPlan entries dbState
               creates = [a | a@GitSync.SyncCreate{} <- actions]
               updates = [a | a@GitSync.SyncUpdate{} <- actions]
               deletes = [(path, dashId) | GitSync.SyncDelete path dashId <- actions]
@@ -1345,7 +1347,7 @@ gitSyncFromRepo pid = do
           -- Fetch file contents in parallel for creates and updates
           let fetchActions = creates <> updates
           Ki.scoped \scope -> do
-            forM_ fetchActions $ Ki.fork scope . processGitSyncAction pid sync
+            forM_ fetchActions $ Ki.fork scope . processGitSyncAction pid sync teamMap
             Ki.atomically $ Ki.awaitAll scope
           -- Process deletes (no HTTP needed)
           forM_ deletes \(path, dashId) -> do
@@ -1355,14 +1357,14 @@ gitSyncFromRepo pid = do
           Log.logInfo "Completed GitHub sync for project" pid
 
 
-processGitSyncAction :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Projects.ProjectId -> GitSync.GitHubSync -> GitSync.SyncAction -> Eff es ()
-processGitSyncAction pid sync = \case
+processGitSyncAction :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Projects.ProjectId -> GitSync.GitHubSync -> Map.Map Text UUID.UUID -> GitSync.SyncAction -> Eff es ()
+processGitSyncAction pid sync teamMap = \case
   GitSync.SyncCreate path sha ->
     fetchAndParseDashboard sync path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
       now <- Time.currentTime
       dashId <- UUIDId <$> liftIO UUIDV4.nextRandom
-      teamVMs <- ProjectMembers.getTeamsByHandles pid (fold schema.teams)
-      let dashboard =
+      let teamIds = mapMaybe (`Map.lookup` teamMap) (fold schema.teams)
+          dashboard =
             Dashboards.DashboardVM
               { Dashboards.id = dashId
               , Dashboards.projectId = pid
@@ -1375,7 +1377,7 @@ processGitSyncAction pid sync = \case
               , Dashboards.homepageSince = Nothing
               , Dashboards.tags = V.fromList $ fold schema.tags
               , Dashboards.title = fromMaybe "Untitled" schema.title
-              , Dashboards.teams = V.fromList $ map (.id) teamVMs
+              , Dashboards.teams = V.fromList teamIds
               , Dashboards.filePath = Just path
               , Dashboards.fileSha = Just sha
               }
