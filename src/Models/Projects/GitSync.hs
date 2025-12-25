@@ -243,10 +243,14 @@ formatHttpError (InvalidUrlException url reason) = "Invalid URL (" <> toText url
 githubOpts :: Text -> W.Options
 githubOpts token =
   W.defaults
-    & W.header "Authorization" .~ [encodeUtf8 $ "Bearer " <> token]
-    & W.header "Accept" .~ ["application/vnd.github+json"]
-    & W.header "User-Agent" .~ ["Monoscope"]
-    & W.header "X-GitHub-Api-Version" .~ ["2022-11-28"]
+    & W.header "Authorization"
+    .~ [encodeUtf8 $ "Bearer " <> token]
+      & W.header "Accept"
+    .~ ["application/vnd.github+json"]
+      & W.header "User-Agent"
+    .~ ["Monoscope"]
+      & W.header "X-GitHub-Api-Version"
+    .~ ["2022-11-28"]
 
 
 -- Constants
@@ -294,6 +298,9 @@ computeContentSha content = decodeUtf8 $ B16.encode $ BA.convert (hash content :
 buildSchemaWithMeta :: Maybe Dashboard -> Text -> [Text] -> [Text] -> Dashboard
 buildSchemaWithMeta schemaM title tags teamHandles =
   fromMaybe def schemaM
-    & #title ?~ title
-    & #tags ?~ tags
-    & #teams ?~ teamHandles
+    & #title
+    ?~ title
+      & #tags
+    ?~ tags
+      & #teams
+    ?~ teamHandles
