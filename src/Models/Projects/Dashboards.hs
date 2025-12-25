@@ -21,7 +21,6 @@ module Models.Projects.Dashboards (
   updateStarredSince,
   deleteDashboard,
   getDashboardByBaseTemplate,
-  updateFileInfo,
 ) where
 
 import Control.Exception (try)
@@ -33,7 +32,7 @@ import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
-import Data.List qualified as L (isSuffixOf)
+import Data.List qualified as L (isSuffixOf, lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
@@ -238,27 +237,11 @@ selectDashboardsByTeam :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [Da
 selectDashboardsByTeam pid teamId = PG.query (_select @DashboardVM <> " WHERE project_id = ? AND teams @> ARRAY[?::uuid] ORDER BY starred_since DESC NULLS LAST, updated_at DESC") (pid, teamId)
 
 
-data DashboardSortField = SortByTitle | SortByCreatedAt | SortByUpdatedAt
-  deriving stock (Eq)
-
-
-parseSortField :: Text -> Maybe DashboardSortField
-parseSortField t = case T.toLower $ T.strip t of
-  "title" -> Just SortByTitle
-  "created_at" -> Just SortByCreatedAt
-  "updated_at" -> Just SortByUpdatedAt
-  _ -> Nothing
-
-
 selectDashboardsSortedBy :: DB es => Projects.ProjectId -> Text -> Eff es [DashboardVM]
 selectDashboardsSortedBy pid orderByParam = PG.query (_selectWhere @DashboardVM [[field| project_id |]] <> orderClause) (Only pid)
   where
-    orderClause =
-      " ORDER BY starred_since DESC NULLS LAST, " <> case parseSortField orderByParam of
-        Just SortByTitle -> "title ASC"
-        Just SortByCreatedAt -> "created_at DESC"
-        Just SortByUpdatedAt -> "updated_at DESC"
-        Nothing -> "updated_at DESC"
+    sortFields = [("title", "title ASC"), ("created_at", "created_at DESC"), ("updated_at", "updated_at DESC")] :: [(Text, Query)]
+    orderClause = " ORDER BY starred_since DESC NULLS LAST, " <> fromMaybe "updated_at DESC" (L.lookup (T.toLower $ T.strip orderByParam) sortFields)
 
 
 updateSchema :: DB es => DashboardId -> Dashboard -> Eff es Int64
@@ -283,8 +266,3 @@ deleteDashboard dashId = PG.execute (_delete @DashboardVM) (Only dashId)
 
 getDashboardByBaseTemplate :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe DashboardId)
 getDashboardByBaseTemplate pid baseTemplate = fmap (.id) . listToMaybe <$> (PG.query (_selectWhere @DashboardVM [[field| project_id |], [field| base_template |]]) (pid, baseTemplate) :: DB es => Eff es [DashboardVM])
-
-
--- | Update file_path and file_sha for a dashboard
-updateFileInfo :: DB es => DashboardId -> Text -> Text -> Eff es Int64
-updateFileInfo dashId path sha = PG.execute (Query "UPDATE projects.dashboards SET file_path = ?, file_sha = ?, updated_at = now() WHERE id = ?") (path, sha, dashId)
