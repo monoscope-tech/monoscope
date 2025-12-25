@@ -191,7 +191,7 @@ data Routes mode = Routes
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , rrwebPost :: mode :- "rrweb" :> ProjectId :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Users.UserId :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
-  , githubSetupGet :: mode :- "github" :> "setup" :> QPI "installation_id" :> QPID "state" :>  Get '[HTML] (PageCtx (Html ()))
+  , githubSetupGet :: mode :- "github" :> "setup" :> QPI "installation_id" :> QPID "state" :> Get '[HTML] (PageCtx (Html ()))
   }
   deriving stock (Generic)
 
