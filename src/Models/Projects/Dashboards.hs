@@ -23,8 +23,6 @@ module Models.Projects.Dashboards (
   updateStarredSince,
   deleteDashboard,
   getDashboardByBaseTemplate,
-  titleToFilePath,
-  computeContentSha,
   updateFileInfo,
 ) where
 
@@ -68,10 +66,6 @@ import Relude
 import Servant (ServerError (..), err404)
 import System.Directory (listDirectory)
 import System.Types (DB)
-import Text.Casing (fromAny, toKebab)
-import "base16-bytestring" Data.ByteString.Base16 qualified as B16
-import "cryptonite" Crypto.Hash (Digest, SHA256, hash)
-import "memory" Data.ByteArray qualified as BA
 
 
 data DashboardVM = DashboardVM
@@ -285,15 +279,6 @@ deleteDashboard dashId = PG.execute (Query "DELETE FROM projects.dashboards WHER
 
 getDashboardByBaseTemplate :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe DashboardId)
 getDashboardByBaseTemplate pid baseTemplate = coerce @(Maybe (Only DashboardId)) @(Maybe DashboardId) . listToMaybe <$> PG.query (Query "SELECT id FROM projects.dashboards WHERE project_id = ? AND base_template = ?") (pid, baseTemplate)
-
-
-titleToFilePath :: Text -> Text
-titleToFilePath title = toText (toKebab $ fromAny $ toString $ T.strip title) <> ".yaml"
-
-
--- | Compute SHA256 hash of content and return as hex string
-computeContentSha :: ByteString -> Text
-computeContentSha content = decodeUtf8 $ B16.encode $ BA.convert (hash content :: Digest SHA256)
 
 
 -- | Update file_path and file_sha for a dashboard

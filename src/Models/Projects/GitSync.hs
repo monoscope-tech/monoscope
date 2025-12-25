@@ -22,14 +22,19 @@ module Models.Projects.GitSync (
   buildSyncPlan,
   dashboardToYaml,
   yamlToDashboard,
+  titleToFilePath,
+  computeContentSha,
+  buildSchemaWithMeta,
 ) where
 
-import Control.Lens ((&), (.~), (^.))
+import Control.Lens ((.~), (?~), (^.))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.Types (parseMaybe)
-import Data.Base64.Types qualified as B64
+import Data.Base64.Types (extractBase64)
+import Data.Default (def)
 import Data.Effectful.Wreq qualified as W
+import Data.Generics.Labels ()
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -47,8 +52,12 @@ import Network.HTTP.Client (HttpException (..))
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import System.DB (DB)
+import Text.Casing (fromAny, toKebab)
 import UnliftIO.Exception (try)
+import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 import "base64" Data.ByteString.Base64 qualified as B64
+import "cryptonite" Crypto.Hash (Digest, SHA256, hash)
+import "memory" Data.ByteArray qualified as BA
 
 
 type GitHubSyncId = UUIDId "github_sync"
@@ -91,7 +100,7 @@ data SyncAction
 
 -- Token encryption helpers
 encryptToken :: ByteString -> Text -> Text
-encryptToken key token = B64.extractBase64 $ B64.encodeBase64 $ encryptAPIKey key (encodeUtf8 token)
+encryptToken key token = extractBase64 $ B64.encodeBase64 $ encryptAPIKey key (encodeUtf8 token)
 
 
 -- | Decrypt an access token. Returns Nothing if decryption fails (invalid format or key).
@@ -207,7 +216,7 @@ fetchFileContent sync path = do
 pushFileToGit :: (IOE :> es, W.HTTP :> es) => GitHubSync -> Text -> ByteString -> Maybe Text -> Text -> Eff es (Either Text Text)
 pushFileToGit sync path content existingSha message = do
   let url = "https://api.github.com/repos/" <> sync.owner <> "/" <> sync.repo <> "/contents/" <> path
-      b64Content = B64.extractBase64 $ B64.encodeBase64 content
+      b64Content = extractBase64 $ B64.encodeBase64 content
       payload =
         AE.object
           $ catMaybes
@@ -269,3 +278,22 @@ dashboardToYaml = Yaml.encode
 
 yamlToDashboard :: ByteString -> Either Text Dashboard
 yamlToDashboard = first (toText . show) . Yaml.decodeEither'
+
+
+-- | Convert dashboard title to kebab-case file path
+titleToFilePath :: Text -> Text
+titleToFilePath title = toText (toKebab $ fromAny $ toString $ T.strip title) <> ".yaml"
+
+
+-- | Compute SHA256 hash of content and return as hex string
+computeContentSha :: ByteString -> Text
+computeContentSha content = decodeUtf8 $ B16.encode $ BA.convert (hash content :: Digest SHA256)
+
+
+-- | Build a Dashboard schema with title, tags, and team handles populated
+buildSchemaWithMeta :: Maybe Dashboard -> Text -> [Text] -> [Text] -> Dashboard
+buildSchemaWithMeta schemaM title tags teamHandles =
+  fromMaybe def schemaM
+    & #title ?~ title
+    & #tags ?~ tags
+    & #teams ?~ teamHandles

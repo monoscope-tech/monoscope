@@ -40,7 +40,6 @@ import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
@@ -85,20 +84,19 @@ import Utils
 import Web.FormUrlEncoded (FromForm)
 
 
--- | Sync file_path and file_sha for a dashboard after any update
+-- | Sync file_path and file_sha for a dashboard after any update.
+-- Only recomputes SHA when the schema content has actually changed.
 syncDashboardFileInfo :: DB es => Dashboards.DashboardId -> Eff es ()
 syncDashboardFileInfo dashId = do
   dashM <- Dashboards.getDashboardById dashId
   forM_ dashM \dash -> do
     teams <- ManageMembers.getTeamsById dash.projectId dash.teams
-    let schema =
-          fromMaybe def dash.schema
-            & #title ?~ dash.title
-            & #tags ?~ V.toList dash.tags
-            & #teams ?~ map (.handle) teams
-        filePath = Dashboards.titleToFilePath dash.title
-        fileSha = Dashboards.computeContentSha $ GitSync.dashboardToYaml schema
-    void $ Dashboards.updateFileInfo dashId filePath fileSha
+    let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
+        filePath = GitSync.titleToFilePath dash.title
+        newSha = GitSync.computeContentSha $ GitSync.dashboardToYaml schema
+    when (dash.fileSha /= Just newSha || dash.filePath /= Just filePath)
+      $ void
+      $ Dashboards.updateFileInfo dashId filePath newSha
 
 
 -- Filter record for dashboard list
@@ -556,7 +554,7 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
       pure
         orig
           { Widget.layout = newLayout
-          , Widget.children = item.children <&> (`reorderWidgets` fromMaybe [] orig.children)
+          , Widget.children = item.children <&> (`reorderWidgets` fold orig.children)
           }
 
     mkWidgetMap = Map.fromList . concatMap flatten
@@ -1174,7 +1172,7 @@ dashboardsPostH pid form = do
               , schema = Nothing
               , starredSince = Nothing
               , homepageSince = Nothing
-              , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
+              , tags = V.fromList $ fold $ dashM >>= (.tags)
               , title = form.title
               , teams = V.fromList form.teams
               , filePath = Nothing

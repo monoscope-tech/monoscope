@@ -1,11 +1,10 @@
 module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload) where
 
-import Control.Lens ((&), (.~), (?~))
+import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
-import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as W
 import Data.Either qualified as Unsafe
@@ -1407,11 +1406,7 @@ gitSyncPushDashboard pid dashId filePath = do
     (_, Nothing) -> Log.logAttention "Dashboard not found for git push" dashId
     (Just sync, Just dash) -> do
       teams <- ProjectMembers.getTeamsById pid dash.teams
-      let schema =
-            fromMaybe def dash.schema
-              & #title ?~ dash.title
-              & #tags ?~ V.toList dash.tags
-              & #teams ?~ map (.handle) teams
+      let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
           yamlContent = GitSync.dashboardToYaml schema
           existingSha = dash.fileSha
           message = "Update dashboard: " <> dash.title
