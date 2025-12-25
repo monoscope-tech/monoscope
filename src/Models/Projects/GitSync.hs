@@ -211,7 +211,7 @@ fetchGitTree sync = do
        in case (body ^? key "sha" . _String, body ^? key "tree" . _Array) of
             (Just treeSha, Just entries) -> Right (treeSha, mapMaybe (parseMaybe AE.parseJSON) $ V.toList entries)
             _ | body ^? key "truncated" . _Bool == Just True -> Left "Repository too large (>100k files)"
-            _ -> Left $ "Invalid tree response: " <> decodeUtf8 (toStrict body)
+            _ -> Left $ "Invalid tree response: " <> decodeUtf8 body
 
 
 fetchFileContent :: (IOE :> es, W.HTTP :> es) => GitHubSync -> Text -> Eff es (Either Text ByteString)

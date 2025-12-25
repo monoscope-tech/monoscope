@@ -1346,7 +1346,7 @@ gitSyncFromRepo pid = do
           -- Fetch file contents in parallel for creates and updates
           let fetchActions = creates <> updates
           Ki.scoped \scope -> do
-            threads <- forM fetchActions \action -> Ki.fork scope $ processGitSyncAction pid sync action
+            threads <- forM fetchActions $ Ki.fork scope . processGitSyncAction pid sync
             traverse_ (Ki.atomically . Ki.await) threads
           -- Process deletes (no HTTP needed)
           forM_ deletes \(path, dashId) -> do
