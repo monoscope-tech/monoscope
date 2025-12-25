@@ -128,8 +128,9 @@ getGitHubSync pid = listToMaybe <$> PG.query (_selectWhere @GitHubSync [[field| 
 
 -- | Helper to decrypt sync config, logging on failure
 withDecryption :: (AE.ToJSON ctx, DB es, Log :> es) => ByteString -> ctx -> Eff es (Maybe GitHubSync) -> Eff es (Maybe GitHubSync)
-withDecryption encKey ctx fetch = fetch >>= maybe (pure Nothing) \sync ->
-  either (\err -> logWarn "GitHub sync token decryption failed" (ctx, err) $> Nothing) (pure . Just) $ decryptSync encKey sync
+withDecryption encKey ctx fetch =
+  fetch >>= maybe (pure Nothing) \sync ->
+    either (\err -> logWarn "GitHub sync token decryption failed" (ctx, err) $> Nothing) (pure . Just) $ decryptSync encKey sync
 
 
 getGitHubSyncDecrypted :: (DB es, Log :> es) => ByteString -> ProjectId -> Eff es (Maybe GitHubSync)
