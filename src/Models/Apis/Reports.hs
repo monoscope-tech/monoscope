@@ -10,12 +10,11 @@ module Models.Apis.Reports (
 import Data.Aeson qualified as AE
 import Data.Default.Instances ()
 import Data.Time (UTCTime, ZonedTime)
-import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_insert, _selectWhere)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple hiding (execute, query)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Effectful (Eff, type (:>))
+import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))

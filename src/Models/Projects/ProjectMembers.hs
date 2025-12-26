@@ -13,6 +13,7 @@ module Models.Projects.ProjectMembers (
   updateTeam,
   getTeams,
   getTeamByHandle,
+  getTeamsByHandles,
   getTeamsVM,
   TeamVM (..),
   deleteTeamByHandle,
@@ -43,9 +44,7 @@ import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
-import Database.PostgreSQL.Simple.TypeInfo.Static (uuid)
-import Deriving.Aeson qualified as DAE
-import Effectful (Eff, type (:>))
+import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
@@ -376,4 +375,43 @@ getTeamsById pid tids = if V.null tids then pure [] else PG.query q (pid, tids)
         t.phone_numbers
       FROM projects.teams t
       WHERE t.project_id = ? AND t.id = ANY(?::uuid[]) AND t.deleted_at IS NULL
+    |]
+
+
+-- | Bulk fetch teams by handles - more efficient than mapping getTeamByHandle
+getTeamsByHandles :: DB es => Projects.ProjectId -> [Text] -> Eff es [TeamVM]
+getTeamsByHandles _ [] = pure []
+getTeamsByHandles pid handles = PG.query q (pid, V.fromList handles)
+  where
+    q =
+      [sql|
+      SELECT
+        t.id,
+        t.created_at,
+        t.updated_at,
+        t.created_by,
+        t.name,
+        t.handle,
+        t.description,
+        t.notify_emails,
+        t.slack_channels,
+        t.discord_channels,
+        t.phone_numbers,
+        COALESCE(
+          array_agg(
+            jsonb_build_object(
+              'memberId', u.id,
+              'memberName', concat_ws(' ', u.first_name, u.last_name),
+              'memberEmail', u.email,
+              'memberAvatar', '/api/avatar/' || u.id::text
+            ) ORDER BY u.first_name, u.last_name
+          ) FILTER (WHERE u.id IS NOT NULL),
+          '{}'
+        ) AS members
+      FROM projects.teams t
+      LEFT JOIN unnest(t.members) AS mid ON true
+      LEFT JOIN users.users u ON u.id = mid
+      WHERE t.project_id = ? AND t.handle = ANY(?) AND t.deleted_at IS NULL
+      GROUP BY t.id, t.created_at, t.updated_at, t.created_by, t.name, t.handle,
+               t.description, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers
     |]

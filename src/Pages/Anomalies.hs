@@ -32,7 +32,6 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.Newtypes (getAeson)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
@@ -154,46 +153,6 @@ anomalyBulkActionsPostH pid action items = do
         _ -> error $ "unhandled anomaly bulk action state " <> action
       addSuccessToast (action <> "d items Successfully") Nothing
       addRespHeaders Bulk
-
-
-anomalyDetailGetH' :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-anomalyDetailGetH' pid issueId firstM = do
-  (sess, project) <- Sessions.sessionAndProject pid
-  appCtx <- ask @AuthContext
-  issueM <- Issues.selectIssueById issueId
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , pageTitle = "Anomaly Detail"
-          , config = appCtx.config
-          }
-  now <- Time.currentTime
-  case issueM of
-    Nothing -> do
-      addErrorToast "Issue not found" Nothing
-      addRespHeaders $ PageCtx bwconf $ toHtml ("Issue not found" :: Text)
-    Just issue -> do
-      errorM <-
-        issue.issueType & \case
-          Issues.RuntimeException -> Anomalies.errorByHash pid issue.endpointHash
-          _ -> pure Nothing
-      (trItem, spanRecs) <- case errorM of
-        Just err -> do
-          let targetTIdM = maybe err.recentTraceId (const err.firstTraceId) firstM
-              targetTme = maybe (zonedTimeToUTC err.updatedAt) (const $ zonedTimeToUTC err.createdAt) firstM
-          case targetTIdM of
-            Just x -> do
-              trM <- Telemetry.getTraceDetails pid x (Just targetTme) now
-              case trM of
-                Just traceItem -> do
-                  spanRecords' <- Telemetry.getSpanRecordsByTraceId pid traceItem.traceId (Just traceItem.traceStartTime) now
-                  pure (Just traceItem, V.fromList spanRecords')
-                Nothing -> pure (Nothing, V.empty)
-            Nothing -> return (Nothing, V.empty)
-        _ -> return (Nothing, V.empty)
-      pass
-      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM)
 
 
 anomalyDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))

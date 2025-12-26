@@ -474,7 +474,7 @@ getTraceDetails :: DB es => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTi
 getTraceDetails pid trId tme now = listToMaybe <$> PG.query q (pid.toText, start, end, trId)
   where
     (start, end) = case tme of
-      Nothing -> (addUTCTime (-14 * 24 * 3600) now, now)
+      Nothing -> (addUTCTime (-(14 * 24 * 3600)) now, now)
       Just ts -> (addUTCTime (-(60 * 5)) ts, addUTCTime (60 * 5) ts)
     q = do
       [sql| SELECT
@@ -503,7 +503,7 @@ getSpanRecordsByTraceId :: DB es => Projects.ProjectId -> Text -> Maybe UTCTime 
 getSpanRecordsByTraceId pid trId tme now = PG.query q (pid.toText, start, end, trId)
   where
     (start, end) = case tme of
-      Nothing -> (addUTCTime (-14 * 24 * 3600) now, now)
+      Nothing -> (addUTCTime (-(14 * 24 * 3600)) now, now)
       Just ts -> (addUTCTime (-(60 * 5)) ts, addUTCTime (60 * 5) ts)
     q =
       [sql|

@@ -35,7 +35,6 @@ import Effectful (
 import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
 import Effectful.PostgreSQL (runWithConnectionPool)
-import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time (Time, runTime)
 import Log (Logger)

@@ -43,6 +43,9 @@ extra-source-files:
     static/migrations/0016_drop_overly_restrictive_issues_constraint.sql
     static/migrations/0016_reports_start_and_end_time.sql
     static/migrations/0017_teams_table.sql
+    static/migrations/0018_store_monitor_runs_as_events.sql
+    static/migrations/0019_add_trace_id.sql
+    static/migrations/0020_github_sync.sql
 
 source-repository head
   type: git
@@ -75,6 +78,7 @@ library
       Models.Apis.Shapes
       Models.Apis.Slack
       Models.Projects.Dashboards
+      Models.Projects.GitSync
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
@@ -97,6 +101,7 @@ library
       Pages.Components
       Pages.Dashboards
       Pages.Endpoints.ApiCatalog
+      Pages.GitSync
       Pages.LemonSqueezy
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
@@ -120,6 +125,7 @@ library
       Pkg.DBUtils
       Pkg.DeriveUtils
       Pkg.Drain
+      Pkg.GitHub
       Pkg.Mail
       Pkg.Parser
       Pkg.Parser.Expr
@@ -236,6 +242,9 @@ library
     , containers
     , cookie
     , cryptohash-md5
+    , crypton
+    , crypton-x509
+    , crypton-x509-store
     , cryptonite
     , data-default
     , deriving-aeson
@@ -267,6 +276,7 @@ library
     , http-client
     , http-types
     , hw-kafka-client
+    , jose-jwt
     , ki-effectful
     , langchain-hs
     , lens
@@ -279,6 +289,7 @@ library
     , lucid-hyperscript >=0.1.0.2
     , lucid-svg >=0.7.1.1
     , megaparsec
+    , memory
     , minio-hs
     , mmark
     , monad-time-effectful
@@ -315,6 +326,7 @@ library
     , servant-server
     , slugify
     , template-haskell
+    , temporary
     , text
     , text-builder-linear
     , text-display
@@ -435,11 +447,12 @@ test-suite integration-tests
       Pages.AnomaliesSpec
       Pages.ApiSpec
       Pages.BusinessFlowsSpec
+      Pages.DashboardsSpec
       Pages.Endpoints.ApiCatalogSpec
+      Pages.GitSyncSpec
       Pages.LogExplorer.LogSpec
       Pages.MonitorsSpec
       Pages.Projects.ManageMembersSpec
-      Pages.DashboardsSpec
       Pages.Projects.ProjectsSpec
       Pages.ReportsSpec
       Pages.ShareSpec
@@ -485,20 +498,23 @@ test-suite integration-tests
     , aeson-qq
     , base
     , base64
+    , bytestring
     , cache
     , clock
+    , containers
     , data-default
     , effectful
     , generic-lens
     , grapesy
     , hs-opentelemetry-instrumentation-auto
     , hspec
+    , http-client
     , lens
+    , lens-aeson
     , monoscope
     , odd-jobs
     , pg-entity
     , pg-transact
-    , log-effectful
     , postgresql-simple
     , proto-lens
     , relude >=1.2.0.0
@@ -506,9 +522,13 @@ test-suite integration-tests
     , servant
     , servant-htmx
     , servant-server
+    , text
     , time
+    , unliftio
     , uuid
+    , uuid-quasi
     , vector
+    , wreq
   default-language: GHC2021
 
 test-suite unit-tests
@@ -568,5 +588,6 @@ test-suite unit-tests
     , relude >=1.2.0.0
     , time
     , uuid
+    , uuid-quasi
     , vector
   default-language: GHC2021

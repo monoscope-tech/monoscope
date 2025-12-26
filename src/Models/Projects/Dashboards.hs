@@ -17,6 +17,7 @@ module Models.Projects.Dashboards (
   selectDashboardsSortedBy,
   updateSchema,
   updateTitle,
+  updateTags,
   updateSchemaAndUpdatedAt,
   updateStarredSince,
   deleteDashboard,
@@ -27,17 +28,17 @@ import Control.Exception (try)
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
-import Data.Char (isAlphaNum)
 import Data.Default
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
-import Data.List qualified as L (isSuffixOf)
+import Data.List qualified as L (isSuffixOf, lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Data.Yaml qualified as Yml
+import Database.PostgreSQL.Entity (_delete, _select, _selectWhere)
 import Database.PostgreSQL.Entity qualified as DBT
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, ToRow)
@@ -78,6 +79,8 @@ data DashboardVM = DashboardVM
   , tags :: V.Vector Text
   , title :: Text
   , teams :: V.Vector UUID.UUID
+  , filePath :: Maybe Text
+  , fileSha :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
@@ -90,17 +93,18 @@ type DashboardId = UUIDId "dashboard"
 
 
 data Dashboard = Dashboard
-  { title :: Maybe Text -- Dashboard title
+  { title :: Maybe Text
   , description :: Maybe Text
   , preview :: Maybe Text
   , icon :: Maybe Text
   , file :: Maybe Text
   , tags :: Maybe [Text]
-  , refreshInterval :: Maybe Text -- Refresh interval
+  , teams :: Maybe [Text]
+  , refreshInterval :: Maybe Text
   , timeRange :: Maybe TimePicker.TimePicker
   , variables :: Maybe [Variable]
-  , tabs :: Maybe [Tab] -- List of tabs
-  , widgets :: [Widget.Widget] -- List of widgets (for backward compatibility)
+  , tabs :: Maybe [Tab]
+  , widgets :: [Widget.Widget]
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, NFData)
@@ -148,8 +152,8 @@ insert :: DB es => DashboardVM -> Eff es Int64
 insert dashboardVM = PG.execute (Query $ encodeUtf8 q) params
   where
     q =
-      [text| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::uuid[]) |]
+      [text| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::uuid[], ?, ?) |]
     params =
       ( dashboardVM.id
       , dashboardVM.projectId
@@ -163,6 +167,8 @@ insert dashboardVM = PG.execute (Query $ encodeUtf8 q) params
       , dashboardVM.tags
       , dashboardVM.title
       , dashboardVM.teams
+      , dashboardVM.filePath
+      , dashboardVM.fileSha
       )
 
 
@@ -208,9 +214,7 @@ replaceQueryVariables pid mf mt allParams currentTime variable =
 
 
 getDashboardById :: DB es => DashboardId -> Eff es (Maybe DashboardVM)
-getDashboardById did = listToMaybe <$> PG.query (Query $ encodeUtf8 q) (Only did)
-  where
-    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE id = ?|]
+getDashboardById did = listToMaybe <$> PG.query (_selectWhere @DashboardVM [[field| id |]]) (Only did)
 
 
 deleteDashboardsByIds :: DB es => Projects.ProjectId -> V.Vector DashboardId -> Eff es Int64
@@ -231,22 +235,14 @@ addTeamsToDashboards pid dids teamIds = PG.execute (Query $ encodeUtf8 q) (teamI
 
 
 selectDashboardsByTeam :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [DashboardVM]
-selectDashboardsByTeam pid teamId = PG.query (Query $ encodeUtf8 q) (pid, teamId)
-  where
-    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE project_id = ? AND teams @> ARRAY[?::uuid] ORDER BY starred_since DESC NULLS LAST, updated_at DESC|]
+selectDashboardsByTeam pid teamId = PG.query (_select @DashboardVM <> " WHERE project_id = ? AND teams @> ARRAY[?::uuid] ORDER BY starred_since DESC NULLS LAST, updated_at DESC") (pid, teamId)
 
 
 selectDashboardsSortedBy :: DB es => Projects.ProjectId -> Text -> Eff es [DashboardVM]
-selectDashboardsSortedBy pid orderBy = PG.query (Query $ encodeUtf8 q) (Only pid)
+selectDashboardsSortedBy pid orderByParam = PG.query (_selectWhere @DashboardVM [[field| project_id |]] <> orderClause) (Only pid)
   where
-    defaultOrder = "ORDER BY starred_since DESC NULLS LAST, updated_at DESC"
-    -- Reject if contains dangerous SQL chars; only allow alphanumeric, underscore, space, comma, and ORDER BY keywords
-    isSafe = T.all (\c -> c `elem` ("_-, " :: String) || isAlphaNum c) . T.filter (/= ' ')
-    -- Always put starred items first, then apply the provided sort
-    safeOrder
-      | orderBy == "" || not (isSafe orderBy) = defaultOrder
-      | otherwise = T.replace "ORDER BY " "ORDER BY starred_since DESC NULLS LAST, " orderBy
-    q = [text| SELECT id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams FROM projects.dashboards WHERE project_id = ? |] <> safeOrder
+    sortFields = [("title", "title ASC"), ("created_at", "created_at DESC"), ("updated_at", "updated_at DESC")] :: [(Text, Query)]
+    orderClause = " ORDER BY starred_since DESC NULLS LAST, " <> fromMaybe "updated_at DESC" (L.lookup (T.toLower $ T.strip orderByParam) sortFields)
 
 
 updateSchema :: DB es => DashboardId -> Dashboard -> Eff es Int64
@@ -255,6 +251,10 @@ updateSchema dashId dashboard = PG.execute (Query "UPDATE projects.dashboards SE
 
 updateTitle :: DB es => DashboardId -> Text -> Eff es Int64
 updateTitle dashId title = PG.execute (Query "UPDATE projects.dashboards SET title = ? WHERE id = ?") (title, dashId)
+
+
+updateTags :: DB es => DashboardId -> V.Vector Text -> Eff es Int64
+updateTags dashId tags = PG.execute (Query "UPDATE projects.dashboards SET tags = ? WHERE id = ?") (tags, dashId)
 
 
 updateSchemaAndUpdatedAt :: DB es => DashboardId -> Dashboard -> UTCTime -> Eff es Int64
@@ -266,8 +266,8 @@ updateStarredSince dashId starredSince = PG.execute (Query "UPDATE projects.dash
 
 
 deleteDashboard :: DB es => DashboardId -> Eff es Int64
-deleteDashboard dashId = PG.execute (Query "DELETE FROM projects.dashboards WHERE id = ?") (Only dashId)
+deleteDashboard dashId = PG.execute (_delete @DashboardVM) (Only dashId)
 
 
 getDashboardByBaseTemplate :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe DashboardId)
-getDashboardByBaseTemplate pid baseTemplate = coerce @(Maybe (Only DashboardId)) @(Maybe DashboardId) . listToMaybe <$> PG.query (Query "SELECT id FROM projects.dashboards WHERE project_id = ? AND base_template = ?") (pid, baseTemplate)
+getDashboardByBaseTemplate pid baseTemplate = fmap (.id) . listToMaybe <$> (PG.query (_selectWhere @DashboardVM [[field| project_id |], [field| base_template |]]) (pid, baseTemplate) :: DB es => Eff es [DashboardVM])

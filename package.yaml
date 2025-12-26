@@ -181,6 +181,12 @@ library:
     - annotated-exception
     - safe
     - cryptonite
+    - jose-jwt
+    - crypton
+    - crypton-x509
+    - crypton-x509-store
+    - temporary
+    - memory
     - data-default
     - deriving-aeson
     - dotenv
@@ -335,14 +341,22 @@ tests:
       - base64
       - time
       - uuid
+      - uuid-quasi
       - pg-transact
       - vector
       - cache
       - data-default
       - clock
       - lens
+      - lens-aeson
       - proto-lens
       - grapesy
+      - wreq
+      - http-client
+      - unliftio
+      - bytestring
+      - containers
+      - text
   unit-tests:
     main: Main.hs
     source-dirs: test/unit
@@ -357,6 +371,7 @@ tests:
       - relude >= 1.2.0.0
       - aeson
       - uuid
+      - uuid-quasi
       - neat-interpolation
       - aeson-qq
       - extra

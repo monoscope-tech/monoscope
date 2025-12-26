@@ -72,7 +72,7 @@ import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (runLabeled)
 import Effectful.Log (Log)
-import Effectful.PostgreSQL (WithConnection, runWithConnectionPool)
+import Effectful.PostgreSQL (runWithConnectionPool)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runFrozenTime, runTime)
 import Log qualified
@@ -722,7 +722,7 @@ runBackgroundJobsWhere authCtx predicate = do
 testJobsRunner :: Log.Logger -> Config.AuthContext -> Job -> IO ()
 testJobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs $ do
   bgJob <- BackgroundJobs.throwParsePayload job
-  void $ runTestBackgroundWithLogger logger authCtx (BackgroundJobs.processBackgroundJob authCtx job bgJob)
+  void $ runTestBackgroundWithLogger logger authCtx (BackgroundJobs.processBackgroundJob authCtx bgJob)
 
 
 getBackgroundJobs :: Connection -> IO (V.Vector Job)

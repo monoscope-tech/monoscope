@@ -1,10 +1,8 @@
 module Pkg.DrainSpec (spec) where
 
 import Test.Hspec
-import qualified Data.Vector as V
-import Data.Text qualified as T
+import Data.Vector qualified as V
 import RequestMessages qualified
-import Data.Text (Text)
 import Data.Time
 import Pkg.Drain
 import Relude
@@ -21,7 +19,7 @@ testTimeOffset seconds = addUTCTime (fromIntegral seconds) testTime
 
 processNewLog :: Text -> Text -> UTCTime -> DrainTree -> DrainTree
 processNewLog logId logContent now tree = do
-  let tokensVec = V.fromList $ T.words $ RequestMessages.replaceAllFormats $ logContent
+  let tokensVec = V.fromList $ words $ RequestMessages.replaceAllFormats logContent
       tokenCount = V.length tokensVec
       firstToken = if V.null tokensVec then "" else V.head tokensVec
    in if tokenCount == 0
@@ -39,7 +37,7 @@ spec = describe "DRAIN updateTreeWithLog" $ do
           updatedTree = processBatch (V.fromList basicHttpLogs) (testTimeOffset 0) initialTree
           logGroups = getAllLogGroups updatedTree
       length logGroups `shouldBe` 3
-      let patterns = V.map (\(p,_) -> p) logGroups 
+      let patterns = V.map fst logGroups 
       V.toList patterns `shouldMatchList` 
         [ "DELETE /api/users/{integer} HTTP/{float} {integer}"
         , "POST /api/users HTTP/{float} {integer}"
@@ -63,7 +61,7 @@ spec = describe "DRAIN updateTreeWithLog" $ do
       let initialTree = emptyDrainTree
           updatedTree = processBatch (V.fromList databaseLogs) (testTimeOffset 0) initialTree
           logGroups = getAllLogGroups updatedTree
-      let patterns = V.map (\(p,_) -> p) logGroups 
+      let patterns = V.map fst logGroups 
       V.toList patterns `shouldMatchList`
         [ "Connected to database <*>"
         , "Database query executed in {integer}ms"
@@ -88,7 +86,7 @@ spec = describe "DRAIN updateTreeWithLog" $ do
           updatedTree = processBatch (V.fromList startupLogs) (testTimeOffset 0) initialTree
           logGroups = getAllLogGroups updatedTree
       length logGroups `shouldBe` 4
-      let patterns = V.map (\(p,_) -> p) logGroups 
+      let patterns = V.map fst logGroups 
       V.toList patterns `shouldMatchList`
         [ "Initializing Redis connection <*>"
         , "Application ready to serve requests"
@@ -118,7 +116,7 @@ spec = describe "DRAIN updateTreeWithLog" $ do
           updatedTree = processBatch (V.fromList errorLogs) (testTimeOffset 0) initialTree
           logGroups = getAllLogGroups updatedTree
       length logGroups `shouldBe` 4
-      let patterns = V.map (\(p,_) -> p) logGroups 
+      let patterns = V.map fst logGroups 
       V.toList patterns `shouldMatchList`
         [ "ERROR Failed to authenticate user {email}"
         , "ERROR Database connection timeout after {integer}ms"
@@ -147,7 +145,7 @@ spec = describe "DRAIN updateTreeWithLog" $ do
       let initialTree = emptyDrainTree
           updatedTree = processBatch (V.fromList timestampedLogs) (testTimeOffset 0) initialTree
           logGroups = getAllLogGroups updatedTree
-      let patterns = V.map (\(p,_) -> p) logGroups
+      let patterns = V.map fst logGroups
       V.toList patterns `shouldMatchList`
         [  "{YYYY-MM-DDThh:mm:ss.sTZD} INFO User <*> <*> <*>"
         , "{YYYY-MM-DDThh:mm:ss.sTZD} ERROR Invalid token provided <*>"
@@ -172,7 +170,7 @@ spec = describe "DRAIN updateTreeWithLog" $ do
       let initialTree = emptyDrainTree
           updatedTree = processBatch (V.fromList microserviceLogs) (testTimeOffset 0) initialTree
           logGroups = getAllLogGroups updatedTree
-      let patterns = V.map (\(p,_) -> p) logGroups
+      let patterns = V.map fst logGroups
       V.toList patterns `shouldMatchList`
         [ "payment-service processing payment amount={float} <*>"
         , "auth-service JWT validation successful for user <*>"

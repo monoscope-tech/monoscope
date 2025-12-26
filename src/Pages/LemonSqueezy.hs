@@ -9,8 +9,6 @@ import Data.Time.Clock (UTCTime (..))
 import Data.UUID.V4 qualified as UUIDV4
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
-import Effectful.PostgreSQL (WithConnection)
-import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Lucid

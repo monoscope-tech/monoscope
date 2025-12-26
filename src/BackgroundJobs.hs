@@ -6,6 +6,7 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.UUID qualified as UUID
+import Data.Effectful.Wreq qualified as W
 import Data.Either qualified as Unsafe
 import Data.HashMap.Strict qualified as HM
 import Data.List as L (foldl, partition)
@@ -22,7 +23,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (SomePostgreSqlException)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
-import Effectful (Eff, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log, object)
@@ -44,6 +45,8 @@ import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps (ATError (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
+import Models.Projects.Dashboards qualified as Dashboards
+import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -59,12 +62,12 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Reports qualified as RP
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Drain qualified as Drain
+import Pkg.GitHub qualified as GitHub
 import Pkg.Mail (NotificationAlerts (..), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask)
-import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
 import System.Config qualified as Config
 import System.Logging qualified as Log
@@ -101,6 +104,9 @@ data BgJobs
   | EnhanceIssuesWithLLM Projects.ProjectId (V.Vector Issues.IssueId)
   | ProcessIssuesEnhancement UTCTime
   | FifteenMinutesLogsPatternProcessing UTCTime Projects.ProjectId
+  | GitSyncFromRepo Projects.ProjectId
+  | GitSyncPushDashboard Projects.ProjectId UUID.UUID Text -- projectId, dashboardId, filePath
+  | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -135,7 +141,7 @@ jobsRunner logger authCtx tp job = Relude.when authCtx.config.enableBackgroundJo
         addEvent sp "job.started" []
 
         -- Execute the job
-        result <- try $ processBackgroundJob authCtx job bgJob
+        result <- try $ processBackgroundJob authCtx bgJob
 
         -- Set span status based on result
         case result of
@@ -149,8 +155,8 @@ jobsRunner logger authCtx tp job = Relude.when authCtx.config.enableBackgroundJo
 
 
 -- | Process a background job - extracted so it can be run with different effect interpreters
-processBackgroundJob :: Config.AuthContext -> Job -> BgJobs -> ATBackgroundCtx ()
-processBackgroundJob authCtx job bgJob =
+processBackgroundJob :: Config.AuthContext -> BgJobs -> ATBackgroundCtx ()
+processBackgroundJob authCtx bgJob =
   case bgJob of
     GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
     QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds authCtx
@@ -336,6 +342,9 @@ processBackgroundJob authCtx job bgJob =
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> processIssuesEnhancement scheduledTime
     FifteenMinutesLogsPatternProcessing scheduledTime pid -> logsPatternExtraction scheduledTime pid
+    GitSyncFromRepo pid -> gitSyncFromRepo pid
+    GitSyncPushDashboard pid dashboardId filePath -> gitSyncPushDashboard pid (UUIDId dashboardId) filePath
+    GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -1313,3 +1322,160 @@ enhanceIssuesWithLLM pid issueIds = do
                     Log.logInfo "Successfully enhanced and classified issue" (issueId, isCritical, breakingCount)
 
                 Log.logInfo "Successfully enhanced issue" issueId
+
+
+-- | Get access token for GitHub sync (either PAT or GitHub App installation token)
+getGitSyncToken :: (IOE :> es, W.HTTP :> es) => Config.EnvConfig -> GitSync.GitHubSync -> Eff es (Either Text Text)
+getGitSyncToken config sync = case (sync.installationId, sync.accessToken) of
+  (Just instId, _) ->
+    GitHub.getInstallationToken config.githubAppId config.githubAppPrivateKey instId <&> \case
+      Left err -> Left $ "Failed to get installation token: " <> err
+      Right tok -> Right tok.token
+  (_, Just token) -> pure $ Right token
+  (Nothing, Nothing) -> pure $ Left "No authentication method configured"
+
+
+-- | Sync dashboards from GitHub repo to Monoscope
+gitSyncFromRepo :: Projects.ProjectId -> ATBackgroundCtx ()
+gitSyncFromRepo pid = do
+  Log.logInfo "Starting GitHub sync for project" pid
+  ctx <- ask @Config.AuthContext
+  let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
+  syncM <- GitSync.getGitHubSyncDecrypted encKey pid
+  case syncM of
+    Nothing -> Log.logAttention "No GitHub sync configured for project" pid
+    Just sync | not sync.syncEnabled -> Log.logInfo "GitHub sync disabled for project" pid
+    Just sync -> W.runHTTPWreq do
+      tokenResult <- getGitSyncToken ctx.config sync
+      case tokenResult of
+        Left err -> Log.logAttention "Failed to get GitHub token" (pid, err)
+        Right token -> do
+          treeResult <- GitSync.fetchGitTree token sync
+          case treeResult of
+            Left err -> Log.logAttention "Failed to fetch git tree" (pid, err)
+            Right (treeSha, entries) -> do
+              dbState <- GitSync.getDashboardGitState pid
+              allTeams <- ProjectMembers.getTeamsVM pid
+              let teamMap = Map.fromList [(t.handle, t.id) | t <- allTeams]
+                  prefix = GitSync.getDashboardsPath sync
+                  actions = GitSync.buildSyncPlan prefix entries dbState
+                  creates = [a | a@GitSync.SyncCreate{} <- actions]
+                  updates = [a | a@GitSync.SyncUpdate{} <- actions]
+                  deletes = [(path, dashId) | GitSync.SyncDelete path dashId <- actions]
+              Log.logInfo "Git sync plan" ("creates" :: Text, length creates, "updates" :: Text, length updates, "deletes" :: Text, length deletes)
+              -- Fetch file contents in parallel for creates and updates
+              let fetchActions = creates <> updates
+              Ki.scoped \scope -> do
+                forM_ fetchActions $ Ki.fork scope . processGitSyncAction pid token sync teamMap
+                Ki.atomically $ Ki.awaitAll scope
+              -- Process deletes (no HTTP needed)
+              forM_ deletes \(path, dashId) -> do
+                _ <- Dashboards.deleteDashboard dashId
+                Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
+              _ <- GitSync.updateLastTreeSha sync.id treeSha
+              Log.logInfo "Completed GitHub sync for project" pid
+
+
+processGitSyncAction :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Projects.ProjectId -> Text -> GitSync.GitHubSync -> Map.Map Text UUID.UUID -> GitSync.SyncAction -> Eff es ()
+processGitSyncAction pid token sync teamMap = \case
+  GitSync.SyncCreate path sha ->
+    fetchAndParseDashboard token sync path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
+      now <- Time.currentTime
+      dashId <- UUIDId <$> liftIO UUIDV4.nextRandom
+      let teamIds = mapMaybe (`Map.lookup` teamMap) (fold schema.teams)
+          dashboard =
+            Dashboards.DashboardVM
+              { Dashboards.id = dashId
+              , Dashboards.projectId = pid
+              , Dashboards.createdAt = now
+              , Dashboards.updatedAt = now
+              , Dashboards.createdBy = Users.UserId UUID.nil
+              , Dashboards.baseTemplate = Just path
+              , Dashboards.schema = Just schema
+              , Dashboards.starredSince = Nothing
+              , Dashboards.homepageSince = Nothing
+              , Dashboards.tags = V.fromList $ fold schema.tags
+              , Dashboards.title = fromMaybe "Untitled" schema.title
+              , Dashboards.teams = V.fromList teamIds
+              , Dashboards.filePath = Just path
+              , Dashboards.fileSha = Just sha
+              }
+      _ <- Dashboards.insert dashboard
+      Log.logInfo "Created dashboard from git" (path, dashId)
+  GitSync.SyncUpdate path sha dashId ->
+    fetchAndParseDashboard token sync path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
+      now <- Time.currentTime
+      _ <- Dashboards.updateSchemaAndUpdatedAt dashId schema now
+      whenJust schema.title $ void . Dashboards.updateTitle dashId
+      _ <- Dashboards.updateTags dashId (V.fromList $ fold schema.tags)
+      _ <- GitSync.updateDashboardGitInfo dashId path sha
+      Log.logInfo "Updated dashboard from git" (path, dashId)
+  GitSync.SyncDelete{} -> pass -- Handled separately
+
+
+fetchAndParseDashboard :: (IOE :> es, W.HTTP :> es) => Text -> GitSync.GitHubSync -> Text -> Eff es (Either Text Dashboards.Dashboard)
+fetchAndParseDashboard token sync path = GitSync.fetchFileContent token sync path <&> (>>= GitSync.yamlToDashboard)
+
+
+-- | Push a dashboard change to GitHub
+gitSyncPushDashboard :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATBackgroundCtx ()
+gitSyncPushDashboard pid dashId filePath = do
+  Log.logInfo "Pushing dashboard to GitHub" (pid, dashId, filePath)
+  ctx <- ask @Config.AuthContext
+  let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
+  syncM <- GitSync.getGitHubSyncDecrypted encKey pid
+  dashM <- Dashboards.getDashboardById dashId
+  case (syncM, dashM) of
+    (Nothing, _) -> Log.logAttention "No GitHub sync configured for project" pid
+    (Just sync, _) | not sync.syncEnabled -> Log.logInfo "GitHub sync disabled, skipping push" pid
+    (_, Nothing) -> Log.logAttention "Dashboard not found for git push" dashId
+    (Just sync, Just dash) -> W.runHTTPWreq do
+      tokenResult <- getGitSyncToken ctx.config sync
+      case tokenResult of
+        Left err -> Log.logAttention "Failed to get GitHub token" (pid, err)
+        Right token -> do
+          teams <- ProjectMembers.getTeamsById pid dash.teams
+          let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
+              yamlContent = GitSync.dashboardToYaml schema
+              existingSha = dash.fileSha
+              message = "Update dashboard: " <> dash.title
+          pushResult <- GitSync.pushFileToGit token sync filePath yamlContent existingSha message
+          case pushResult of
+            Left err -> Log.logAttention "Failed to push dashboard to git" (dashId, err)
+            Right newSha -> do
+              _ <- GitSync.updateDashboardGitInfo dashId filePath newSha
+              Log.logInfo "Successfully pushed dashboard to git" (dashId, newSha)
+
+
+-- | Push all dashboards from a project to GitHub (used after initial repo connection)
+gitSyncPushAllDashboards :: Projects.ProjectId -> ATBackgroundCtx ()
+gitSyncPushAllDashboards pid = do
+  Log.logInfo "Pushing all dashboards to GitHub" pid
+  ctx <- ask @Config.AuthContext
+  let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
+  syncM <- GitSync.getGitHubSyncDecrypted encKey pid
+  case syncM of
+    Nothing -> Log.logAttention "No GitHub sync configured for project" pid
+    Just sync | not sync.syncEnabled -> Log.logInfo "GitHub sync disabled, skipping push" pid
+    Just sync -> W.runHTTPWreq do
+      tokenResult <- getGitSyncToken ctx.config sync
+      case tokenResult of
+        Left err -> Log.logAttention "Failed to get GitHub token" (pid, err)
+        Right token -> do
+          dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
+          Log.logInfo "Found dashboards to push" (pid, length dashboards)
+          forM_ dashboards \dash -> do
+            teams <- ProjectMembers.getTeamsById pid dash.teams
+            let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
+                yamlContent = GitSync.dashboardToYaml schema
+                -- Use existing filePath if set, otherwise generate from title
+                filePath = fromMaybe (GitSync.getDashboardsPath sync <> GitSync.titleToFilePath dash.title) dash.filePath
+                existingSha = dash.fileSha
+                message = "Sync dashboard: " <> dash.title
+            pushResult <- GitSync.pushFileToGit token sync filePath yamlContent existingSha message
+            case pushResult of
+              Left err -> Log.logAttention "Failed to push dashboard" (dash.id, err)
+              Right newSha -> do
+                _ <- GitSync.updateDashboardGitInfo dash.id filePath newSha
+                Log.logInfo "Pushed dashboard" (dash.id, dash.title)
+          Log.logInfo "Finished pushing all dashboards" pid

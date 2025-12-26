@@ -9,12 +9,7 @@ import Test.Hspec
 spec :: Spec
 spec = aroundAll withTestResources do
   describe "processList" do
-    it "should process a request" $ \_ ->
-      -- let otlpTraceB64A' = B64.decodeBase64 $ B64.assertBase64 @'B64.StdPadded $ encodeUtf8 otlpTraceB64A
-      -- resp <-
-      --   runTestBg tr
-      --     $ OtlpServer.processList [("A", otlpTraceB64A')] (HashMap.fromList [("ce-type", "org.opentelemetry.otlp.traces.v1")])
-      pending
+    it "should process a request" $ const pending
 
 --   it "processes trace messages correctly" $ do
 --     let input = [("ack1", protoToByteString mockTraceRequest)]

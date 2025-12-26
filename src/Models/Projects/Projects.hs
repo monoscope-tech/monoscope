@@ -42,14 +42,13 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Default
-import Data.Pool (Pool, withResource)
+import Data.Pool (Pool)
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity (Entity, _insert)
+import Database.PostgreSQL.Entity (_insert)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), Query, ToRow)
-import Database.PostgreSQL.Simple qualified as PGS
+import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, fromJSONField)
 import Database.PostgreSQL.Simple.Newtypes
 import Database.PostgreSQL.Simple.SqlQQ (sql)

@@ -8,14 +8,11 @@ module Pages.Monitors.Testing (
 )
 where
 
-import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Effectful.PostgreSQL (WithConnection)
-import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Fmt.Internal.Core (fmt)

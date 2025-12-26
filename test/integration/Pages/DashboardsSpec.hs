@@ -1,12 +1,13 @@
 module Pages.DashboardsSpec (spec) where
 
+import Data.Aeson qualified as AE
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Models.Projects.Dashboards (Dashboard (tags), DashboardVM (..))
 import Models.Projects.ProjectMembers (TeamVM (..))
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
-import Pages.Dashboards (DashboardFilters (..), DashboardForm (title))
+import Pages.Dashboards (DashboardFilters (..), DashboardForm)
 import Pages.Dashboards qualified as Dashboards
 import Pages.Projects (TeamForm (..))
 import Pages.Projects qualified as ManageMembers
@@ -31,17 +32,13 @@ filters =
 spec :: Spec
 spec = aroundAll withTestResources do
   describe "Dashboards Tests" do
-    let dashboard =
-          Dashboards.DashboardForm
-            { title = "Test Dashboard"
-            , file = "overview.yaml"
-            , teams = []
-            }
+    let mkDashboard t = Dashboards.DashboardForm{Dashboards.title = t, Dashboards.file = "overview.yaml", Dashboards.teams = []}
+        dashboard = mkDashboard "Test Dashboard"
 
     it "Should create a dashboard" \tr -> do
       (_, pg) <- testServant tr do
-        let dashboard1 = dashboard{title = "Dashboard 1"} :: Dashboards.DashboardForm
-            dashboard2 = dashboard{title = "Dashboard 2"} :: Dashboards.DashboardForm
+        let dashboard1 = mkDashboard "Dashboard 1"
+            dashboard2 = mkDashboard "Dashboard 2"
         _ <- Dashboards.dashboardsPostH testPid dashboard1
         _ <- Dashboards.dashboardsPostH testPid dashboard2
         Dashboards.dashboardsPostH testPid dashboard
@@ -50,7 +47,7 @@ spec = aroundAll withTestResources do
         _ -> fail "Expected DashboardGet' response"
 
     it "Should not create a dashboard with an empty title" \tr -> do
-      let invalidDashboard = (dashboard :: Dashboards.DashboardForm){title = ""}
+      let invalidDashboard = mkDashboard ""
       (_, pg) <- testServant tr $ Dashboards.dashboardsPostH testPid invalidDashboard
       case pg of
         Dashboards.DashboardPostError message -> do
@@ -62,7 +59,7 @@ spec = aroundAll withTestResources do
       case pg of
         Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) -> do
           let createdDashboard = Unsafe.fromJust $ V.find (\x -> x.title == "Test Dashboard") dashboards
-          let fm = Dashboards.DashboardRenameForm{title = "Updated Dashboard"}
+          let fm = Dashboards.DashboardRenameForm{Dashboards.title = "Updated Dashboard"}
           _ <- testServant tr $ Dashboards.dashboardRenamePatchH testPid createdDashboard.id fm
           (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
           case pg' of
@@ -117,7 +114,7 @@ spec = aroundAll withTestResources do
           (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing (DashboardFilters [])
           case pg of
             Dashboards.DashboardsGet (PageCtx _ d) -> do
-              let dIds = V.toList $ V.map (\db -> db.id) $ V.filter (\db -> db.title /= "Updated Dashboard (Copy)") d.dashboards
+              let dIds = V.toList $ V.map (.id) $ V.filter (\db -> db.title /= "Updated Dashboard (Copy)") d.dashboards
               let bulkActionForm = Dashboards.DashboardBulkActionForm{itemId = dIds, teamHandles = teamIds}
               _ <- testServant tr $ Dashboards.dashboardBulkActionPostH testPid "add_teams" bulkActionForm
               (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
@@ -139,7 +136,7 @@ spec = aroundAll withTestResources do
       (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
       case pg of
         Dashboards.DashboardsGet (PageCtx _ d) -> do
-          let dIds = V.toList $ V.map (\db -> db.id) d.dashboards
+          let dIds = V.toList $ V.map (.id) d.dashboards
           let bulkActionForm = Dashboards.DashboardBulkActionForm{itemId = dIds, teamHandles = []}
           _ <- testServant tr $ Dashboards.dashboardBulkActionPostH testPid "delete" bulkActionForm
           (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
@@ -150,10 +147,10 @@ spec = aroundAll withTestResources do
         _ -> fail "Expected DashboardGet' response"
 
     it "Should star and unstar a dashboard" \tr -> do
-      let dashboard1 = dashboard{title = "Star Test Dashboard"} :: Dashboards.DashboardForm
-          dashboardA = dashboard{title = "Dashboard A"} :: Dashboards.DashboardForm
-          dashboardB = dashboard{title = "Dashboard B"} :: Dashboards.DashboardForm
-          dashboardC = dashboard{title = "Dashboard C"} :: Dashboards.DashboardForm
+      let dashboard1 = mkDashboard "Star Test Dashboard"
+          dashboardA = mkDashboard "Dashboard A"
+          dashboardB = mkDashboard "Dashboard B"
+          dashboardC = mkDashboard "Dashboard C"
       _ <- testServant tr do
         _ <- Dashboards.dashboardsPostH testPid dashboardA
         _ <- Dashboards.dashboardsPostH testPid dashboardB

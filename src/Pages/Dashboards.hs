@@ -40,7 +40,6 @@ import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
@@ -53,6 +52,7 @@ import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxPatch_, hxPost_, hxP
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards qualified as Dashboards
+import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -82,6 +82,21 @@ import Text.Slugify (slugify)
 import UnliftIO.Exception (try)
 import Utils
 import Web.FormUrlEncoded (FromForm)
+
+
+-- | Sync file_path and file_sha for a dashboard after any update.
+-- Only recomputes SHA when the schema content has actually changed.
+syncDashboardFileInfo :: DB es => Dashboards.DashboardId -> Eff es ()
+syncDashboardFileInfo dashId = do
+  dashM <- Dashboards.getDashboardById dashId
+  forM_ dashM \dash -> do
+    teams <- ManageMembers.getTeamsById dash.projectId dash.teams
+    let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
+        filePath = GitSync.titleToFilePath dash.title
+        newSha = GitSync.computeContentSha $ GitSync.dashboardToYaml schema
+    when (dash.fileSha /= Just newSha || dash.filePath /= Just filePath)
+      $ void
+      $ GitSync.updateDashboardGitInfo dashId filePath newSha
 
 
 -- Filter record for dashboard list
@@ -479,6 +494,7 @@ dashboardWidgetPutH pid dashId widgetIdM widget = do
           ((dash :: Dashboards.Dashboard) & #widgets %~ (<> [widgetUpdated]), widgetUpdated)
 
   _ <- Dashboards.updateSchema dashId dash'
+  syncDashboardFileInfo dashId
 
   let successMsg = case widgetIdM of
         Just _ -> "Widget updated successfully"
@@ -514,6 +530,7 @@ dashboardWidgetReorderPatchH pid dashId widgetOrder = do
       newDash = (dash :: Dashboards.Dashboard) & #widgets .~ sortedWidgets
 
   _ <- Dashboards.updateSchema dashId newDash
+  syncDashboardFileInfo dashId
 
   addRespHeaders NoContent
 
@@ -537,7 +554,7 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
       pure
         orig
           { Widget.layout = newLayout
-          , Widget.children = item.children <&> (`reorderWidgets` fromMaybe [] orig.children)
+          , Widget.children = item.children <&> (`reorderWidgets` fold orig.children)
           }
 
     mkWidgetMap = Map.fromList . concatMap flatten
@@ -1039,21 +1056,6 @@ activeFilters_ pid baseUrl filters = div_ [class_ "flex items-center gap-2 mb-4"
     "Clear all"
 
 
-addTeamsDrowndown_ :: Projects.ProjectId -> V.Vector ManageMembers.Team -> Html ()
-addTeamsDrowndown_ pid teams = div_ [class_ "dropdown dropdown-end"] do
-  label_ [tabindex_ "0", role_ "button", class_ "flex items-center gap-2 btn btn-sm"] do
-    faSprite_ "plus" "regular" "w-3 h-3"
-    span_ "Add teams"
-  ul_ [tabindex_ "0", class_ "dropdown-content rounded w-52 px-0 py-3"] do
-    h6_ [class_ "font-medium mb-2 px-2"] "Add up to 5 teams"
-    forM_ teams \team -> do
-      li_ [class_ "p-0"] do
-        label_ [class_ "flex flex-row items-center gap-1 px-2 text-sm hover:bg-fillWeak"] do
-          input_ [type_ "checkbox", class_ "checkbox checkbox-xs", name_ "teamHandles", value_ $ UUID.toText team.id]
-          span_ [class_ "px-2 py-1"] $ toHtml team.handle
-    button_ [class_ "btn btn-primary btn-xs float-right", hxPost_ $ "/p/" <> pid.toText <> "/dashboards/bulk_action/add_teams", hxSwap_ "none"] "Add teams"
-
-
 dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UUID.UUID -> DashboardFilters -> ATAuthCtx (RespHeaders DashboardsGet)
 dashboardsGetH pid sortM embeddedM teamIdM filters = do
   (sess, project) <- Sessions.sessionAndProject pid
@@ -1155,11 +1157,14 @@ dashboardsPostH pid form = do
               , schema = Nothing
               , starredSince = Nothing
               , homepageSince = Nothing
-              , tags = V.fromList $ fromMaybe [] $ dashM >>= (.tags)
+              , tags = V.fromList $ fold $ dashM >>= (.tags)
               , title = form.title
               , teams = V.fromList form.teams
+              , filePath = Nothing
+              , fileSha = Nothing
               }
       _ <- Dashboards.insert dbd
+      syncDashboardFileInfo dbd.id
       redirectCS redirectURI
       addRespHeaders DashboardNoContent
 
@@ -1199,7 +1204,10 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
               , tags = V.fromList tags
               , title = title
               , teams = V.empty
+              , filePath = Nothing
+              , fileSha = Nothing
               }
+        syncDashboardFileInfo did
         pure did.toText
   redirectTo <-
     if project.paymentPlan == "ONBOARDING"
@@ -1240,6 +1248,7 @@ dashboardRenamePatchH pid dashId form = do
       whenJust dashVM.schema \_ ->
         void $ Dashboards.updateSchema dashId (fromMaybe def dashVM.schema & #title ?~ form.title)
 
+      syncDashboardFileInfo dashId
       addSuccessToast "Dashboard renamed successfully" Nothing
       addTriggerEvent "closeModal" ""
       addRespHeaders DashboardNoContent
@@ -1274,6 +1283,7 @@ dashboardDuplicatePostH pid dashId = do
             , Dashboards.starredSince = Nothing
             , Dashboards.homepageSince = Nothing
             }
+      syncDashboardFileInfo newDashId
 
       -- Redirect to the new dashboard
       let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> newDashId.toText
@@ -1374,6 +1384,7 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
       let updatedDash = (dash :: Dashboards.Dashboard) & #widgets %~ (<> [widgetCopy])
       now <- Time.currentTime
       _ <- Dashboards.updateSchemaAndUpdatedAt dashId updatedDash now
+      syncDashboardFileInfo dashId
 
       addWidgetJSON $ decodeUtf8 $ fromLazy $ AE.encode widgetCopy
       addSuccessToast "Widget duplicated successfully" Nothing

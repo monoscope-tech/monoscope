@@ -196,7 +196,7 @@ traceH pid trId timestamp spanIdM nav = do
   if isJust nav
     then do
       spanRecords' <- Telemetry.getSpanRecordsByTraceId pid trId timestamp now
-      let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> (V.fromList spanRecords')
+      let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> V.fromList spanRecords'
       let sid = fromMaybe "" spanIdM
           targetSpan = fromMaybe (V.head (V.fromList spanRecords')) (V.find (\x -> maybe False (\s -> s.span_id == Just sid) x.context) (V.fromList spanRecords'))
           targetIndex = fromMaybe 0 (V.findIndex (\x -> maybe False (\s -> s.span_id == Just sid) x.context) (V.fromList spanRecords'))
@@ -215,7 +215,7 @@ traceH pid trId timestamp spanIdM nav = do
       case traceItemM of
         Just traceItem -> do
           spanRecords' <- Telemetry.getSpanRecordsByTraceId pid trId timestamp now
-          let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> (V.fromList spanRecords')
+          let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> V.fromList spanRecords'
           addRespHeaders $ TraceDetails pid traceItem spanRecords
         Nothing -> addRespHeaders $ TraceDetailsNotFound "Trace not found"
 

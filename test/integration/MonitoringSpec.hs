@@ -55,11 +55,11 @@ spec = aroundAll withTestResources do
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
       let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
       let msgs =
-            [ ("m1", BL.toStrict $ AE.encode reqMsg1)
-            , ("m2", BL.toStrict $ AE.encode reqMsg1)
-            , ("m4", BL.toStrict $ AE.encode reqMsg1)
-            , ("m5", BL.toStrict $ AE.encode reqMsg1)
-            , ("m5", BL.toStrict $ AE.encode reqMsg2)
+            [ ("m1", toStrict $ AE.encode reqMsg1)
+            , ("m2", toStrict $ AE.encode reqMsg1)
+            , ("m4", toStrict $ AE.encode reqMsg1)
+            , ("m5", toStrict $ AE.encode reqMsg1)
+            , ("m5", toStrict $ AE.encode reqMsg2)
             ]
       r <- runTestBg tr $ processMessages msgs HashMap.empty
       r `shouldBe` ["m1", "m2", "m4", "m5", "m5"]
