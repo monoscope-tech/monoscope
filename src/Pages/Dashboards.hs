@@ -945,6 +945,9 @@ dashboardsGet_ dg = do
                 , name_ "teams"
                 , placeholder_ "Add teams"
                 ]
+            label_ [class_ "flex flex-col gap-1 w-full"] do
+              span_ [class_ "text-sm font-medium"] "Folder"
+              input_ [type_ "text", class_ "input input-sm w-full font-mono", name_ "fileDir", placeholder_ "reports/"]
 
           div_ [class_ "flex items-center justify-center shrink"] $ button_ [class_ "btn btn-primary btn-sm", type_ "submit"] "Create"
         div_ [class_ "py-2 border-b border-b-strokeWeak"] do
@@ -1140,6 +1143,7 @@ data DashboardForm = DashboardForm
   { file :: Text
   , teams :: [UUID.UUID]
   , title :: Text
+  , fileDir :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -1157,6 +1161,8 @@ dashboardsPostH pid form = do
     else do
       let dashM = find (\dashboard -> dashboard.file == Just form.file) dashboardTemplates
       let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> did.toText
+          dir = fromMaybe "" form.fileDir
+          filePath = if T.null dir then Nothing else Just $ (if T.last dir == '/' then dir else dir <> "/") <> GitSync.titleToFilePath form.title
       let dbd =
             Dashboards.DashboardVM
               { id = did
@@ -1171,7 +1177,7 @@ dashboardsPostH pid form = do
               , tags = V.fromList $ fold $ dashM >>= (.tags)
               , title = form.title
               , teams = V.fromList form.teams
-              , filePath = Nothing
+              , filePath = filePath
               , fileSha = Nothing
               }
       _ <- Dashboards.insert dbd
