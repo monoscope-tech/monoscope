@@ -1446,17 +1446,18 @@ gitSyncPushDashboard pid dashId = do
           teams <- ProjectMembers.getTeamsById pid dash.teams
           let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
               yamlContent = GitSync.dashboardToYaml schema
-              -- relativePath is the path within dashboards/ folder (e.g., "folderA/my-dash.yaml")
-              relativePath = fromMaybe (GitSync.titleToFilePath dash.title) dash.filePath
-              -- fullPath includes the dashboards/ prefix (e.g., "dashboards/folderA/my-dash.yaml")
-              fullPath = GitSync.getDashboardsPath sync <> relativePath
+              prefix = GitSync.getDashboardsPath sync
+              -- Strip any accidental prefix from DB path to ensure we don't get dashboards/dashboards/...
+              rawPath = fromMaybe (GitSync.titleToFilePath dash.title) dash.filePath
+              relativePath = fromMaybe rawPath $ T.stripPrefix "dashboards/" rawPath <|> T.stripPrefix prefix rawPath
+              fullPath = prefix <> relativePath
               existingSha = dash.fileSha
               message = "Update dashboard: " <> dash.title
           pushResult <- GitSync.pushFileToGit token sync fullPath yamlContent existingSha message
           case pushResult of
             Left err -> Log.logAttention "Failed to push dashboard to git" (dashId, err)
             Right newSha -> do
-              -- Store the relative path in DB (not full path)
+              -- Store the clean relative path in DB
               _ <- GitSync.updateDashboardGitInfo dashId relativePath newSha
               Log.logInfo "Successfully pushed dashboard to git" (dashId, newSha)
 
@@ -1478,21 +1479,20 @@ gitSyncPushAllDashboards pid = do
         Right token -> do
           dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
           Log.logInfo "Found dashboards to push" (pid, length dashboards)
+          let prefix = GitSync.getDashboardsPath sync
           forM_ dashboards \dash -> do
             teams <- ProjectMembers.getTeamsById pid dash.teams
             let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
                 yamlContent = GitSync.dashboardToYaml schema
-                -- relativePath is the path within dashboards/ folder
-                relativePath = fromMaybe (GitSync.titleToFilePath dash.title) dash.filePath
-                -- fullPath includes the dashboards/ prefix
-                fullPath = GitSync.getDashboardsPath sync <> relativePath
+                rawPath = fromMaybe (GitSync.titleToFilePath dash.title) dash.filePath
+                relativePath = fromMaybe rawPath $ T.stripPrefix "dashboards/" rawPath <|> T.stripPrefix prefix rawPath
+                fullPath = prefix <> relativePath
                 existingSha = dash.fileSha
                 message = "Sync dashboard: " <> dash.title
             pushResult <- GitSync.pushFileToGit token sync fullPath yamlContent existingSha message
             case pushResult of
               Left err -> Log.logAttention "Failed to push dashboard" (dash.id, err)
               Right newSha -> do
-                -- Store the relative path in DB (not full path)
                 _ <- GitSync.updateDashboardGitInfo dash.id relativePath newSha
                 Log.logInfo "Pushed dashboard" (dash.id, dash.title)
           Log.logInfo "Finished pushing all dashboards" pid
