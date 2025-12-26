@@ -979,8 +979,10 @@ dashboardsGet_ dg = do
 
     let renderNameCol dash = do
           let baseUrl = "/p/" <> dg.projectId.toText <> "/dashboards/" <> dash.id.toText
+              folder = maybe "" (fst . T.breakOnEnd "/") dash.filePath
           span_ [class_ "flex items-center gap-2"] do
             span_ [class_ "p-1 px-2 bg-fillWeak rounded-md", data_ "tippy-content" "Dashboard icon"] $ faSprite_ (getDashIcon dash) "regular" "w-3 h-3"
+            unless (T.null folder) $ span_ [class_ "text-xs text-textWeak font-mono", data_ "tippy-content" "Folder path for git sync"] $ toHtml folder
             a_ [href_ baseUrl, class_ "font-medium text-textStrong hover:text-textBrand hover:underline underline-offset-2"] $ toHtml $ if dash.title == "" then "Untitled" else dash.title
             starButton_ dg.projectId dash.id (isJust dash.starredSince)
 
@@ -1130,13 +1132,14 @@ dashboardsGetH pid sortM embeddedM teamIdM filters = do
       addRespHeaders $ DashboardsGet (PageCtx bwconf $ DashboardsGetD{dashboards, projectId = pid, embedded = False, hideActions = False, teams, tableActions, filters, availableTags})
 
 
-data DashboardRes = DashboardNoContent | DashboardPostError Text
+data DashboardRes = DashboardNoContent | DashboardPostError Text | DashboardRenameSuccess Text
   deriving (Generic, Show)
 
 
 instance ToHtml DashboardRes where
   toHtml DashboardNoContent = ""
   toHtml (DashboardPostError msg) = div_ [class_ "text-textError"] $ toHtml msg
+  toHtml (DashboardRenameSuccess title) = toHtml $ if title == "" then "Untitled" else title
   toHtmlRaw = toHtml
 
 
@@ -1277,7 +1280,7 @@ dashboardRenamePatchH pid dashId form = do
       syncDashboardAndQueuePush pid dashId
       addSuccessToast "Dashboard updated successfully" Nothing
       addTriggerEvent "closeModal" ""
-      addRespHeaders DashboardNoContent
+      addRespHeaders $ DashboardRenameSuccess form.title
 
 
 -- | Handler for duplicating a dashboard.
