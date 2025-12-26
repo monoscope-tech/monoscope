@@ -93,7 +93,8 @@ syncDashboardFileInfo dashId = do
   forM_ dashM \dash -> do
     teams <- ManageMembers.getTeamsById dash.projectId dash.teams
     let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
-        filePath = GitSync.titleToFilePath dash.title
+        existingDir = maybe "" (fst . T.breakOnEnd "/") dash.filePath
+        filePath = existingDir <> GitSync.titleToFilePath dash.title
         newSha = GitSync.computeContentSha $ GitSync.dashboardToYaml schema
     when (dash.fileSha /= Just newSha || dash.filePath /= Just filePath)
       $ void
