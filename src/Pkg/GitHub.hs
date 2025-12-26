@@ -61,8 +61,8 @@ generateAppJWT appId privateKeyB64 = do
   let iat = now - 60 -- 1 minute in the past to account for clock drift
       expTime = now + 300 -- 5 minutes from now (GitHub max is 10, using 5 for safety)
       payload =
-        AE.encode $
-          AE.object
+        AE.encode
+          $ AE.object
             [ "iat" AE..= iat
             , "exp" AE..= expTime
             , "iss" AE..= appId
@@ -95,10 +95,14 @@ getInstallationToken appId privateKeyB64 installationId = do
       let url = "https://api.github.com/app/installations/" <> show installationId <> "/access_tokens"
           opts =
             defaults
-              & header "Authorization" .~ ["Bearer " <> encodeUtf8 jwt]
-              & header "Accept" .~ ["application/vnd.github+json"]
-              & header "X-GitHub-Api-Version" .~ ["2022-11-28"]
-              & header "User-Agent" .~ ["Monoscope-App"]
+              & header "Authorization"
+              .~ ["Bearer " <> encodeUtf8 jwt]
+                & header "Accept"
+              .~ ["application/vnd.github+json"]
+                & header "X-GitHub-Api-Version"
+              .~ ["2022-11-28"]
+                & header "User-Agent"
+              .~ ["Monoscope-App"]
       response <- postWith opts (toString url) ("" :: ByteString)
       let body = response ^. responseBody
       case AE.eitherDecode body of
@@ -111,10 +115,14 @@ listInstallationRepos :: HTTP :> es => Text -> Eff es (Either Text [GitHubRepo])
 listInstallationRepos accessToken = do
   let opts =
         defaults
-          & header "Authorization" .~ ["Bearer " <> encodeUtf8 accessToken]
-          & header "Accept" .~ ["application/vnd.github+json"]
-          & header "X-GitHub-Api-Version" .~ ["2022-11-28"]
-          & header "User-Agent" .~ ["Monoscope-App"]
+          & header "Authorization"
+          .~ ["Bearer " <> encodeUtf8 accessToken]
+            & header "Accept"
+          .~ ["application/vnd.github+json"]
+            & header "X-GitHub-Api-Version"
+          .~ ["2022-11-28"]
+            & header "User-Agent"
+          .~ ["Monoscope-App"]
   response <- getWith opts "https://api.github.com/installation/repositories?per_page=100"
   let body = response ^. responseBody
   case AE.eitherDecode body of
