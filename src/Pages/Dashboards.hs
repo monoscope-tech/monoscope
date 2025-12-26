@@ -85,6 +85,15 @@ import Utils
 import Web.FormUrlEncoded (FromForm)
 
 
+folderFromPath :: Maybe Text -> Text
+folderFromPath = maybe "" (fst . T.breakOnEnd "/")
+
+
+dashTitle :: Text -> Text
+dashTitle "" = "Untitled"
+dashTitle t = t
+
+
 -- | Sync file_path and file_sha for a dashboard after any update.
 -- Only recomputes SHA when the schema content has actually changed.
 syncDashboardFileInfo :: DB es => Dashboards.DashboardId -> Eff es ()
@@ -93,7 +102,7 @@ syncDashboardFileInfo dashId = do
   forM_ dashM \dash -> do
     teams <- ManageMembers.getTeamsById dash.projectId dash.teams
     let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
-        existingDir = maybe "" (fst . T.breakOnEnd "/") dash.filePath
+        existingDir = folderFromPath dash.filePath
         filePath = existingDir <> GitSync.titleToFilePath dash.title
         newSha = GitSync.computeContentSha $ GitSync.dashboardToYaml schema
     when (dash.fileSha /= Just newSha || dash.filePath /= Just filePath)
@@ -141,9 +150,9 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       ]
     $ fieldset_ [class_ "fieldset min-w-xs"] do
       label_ [class_ "label"] "Dashboard Title"
-      input_ [class_ "input", name_ "title", placeholder_ "Insert new title", value_ $ if dashVM.title == "" then "Untitled" else dashVM.title]
+      input_ [class_ "input", name_ "title", placeholder_ "Insert new title", value_ $ dashTitle dashVM.title]
       label_ [class_ "label mt-2"] "Folder"
-      input_ [class_ "input font-mono text-sm", name_ "fileDir", placeholder_ "reports/", value_ $ maybe "" (fst . T.breakOnEnd "/") dashVM.filePath]
+      input_ [class_ "input font-mono text-sm", name_ "fileDir", placeholder_ "reports/", value_ $ folderFromPath dashVM.filePath]
       div_ [class_ "mt-3 flex justify-end gap-2"] do
         label_ [Lucid.for_ "pageTitleModalId", class_ "btn btn-outline cursor-pointer"] "Cancel"
         button_ [type_ "submit", class_ "btn btn-primary"] "Save"
@@ -615,7 +624,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
           { sessM = Just sess
           , currProject = Just project
           , prePageTitle = Just "Dashboards"
-          , pageTitle = if dashVM.title == "" then "Untitled" else dashVM.title
+          , pageTitle = dashTitle dashVM.title
           , pageTitleModalId = Just "pageTitleModalId"
           , config = appCtx.config
           , freeTierExceeded = freeTierExceeded
@@ -979,11 +988,11 @@ dashboardsGet_ dg = do
 
     let renderNameCol dash = do
           let baseUrl = "/p/" <> dg.projectId.toText <> "/dashboards/" <> dash.id.toText
-              folder = maybe "" (fst . T.breakOnEnd "/") dash.filePath
+              folder = folderFromPath dash.filePath
           span_ [class_ "flex items-center gap-2"] do
             span_ [class_ "p-1 px-2 bg-fillWeak rounded-md", data_ "tippy-content" "Dashboard icon"] $ faSprite_ (getDashIcon dash) "regular" "w-3 h-3"
             unless (T.null folder) $ span_ [class_ "text-xs text-textWeak font-mono", data_ "tippy-content" "Folder path for git sync"] $ toHtml folder
-            a_ [href_ baseUrl, class_ "font-medium text-textStrong hover:text-textBrand hover:underline underline-offset-2"] $ toHtml $ if dash.title == "" then "Untitled" else dash.title
+            a_ [href_ baseUrl, class_ "font-medium text-textStrong hover:text-textBrand hover:underline underline-offset-2"] $ toHtml $ dashTitle dash.title
             starButton_ dg.projectId dash.id (isJust dash.starredSince)
 
     let renderModifiedCol dash = span_ [class_ "monospace text-textWeak", data_ "tippy-content" "Last modified date"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" dash.updatedAt
@@ -1139,7 +1148,7 @@ data DashboardRes = DashboardNoContent | DashboardPostError Text | DashboardRena
 instance ToHtml DashboardRes where
   toHtml DashboardNoContent = ""
   toHtml (DashboardPostError msg) = div_ [class_ "text-textError"] $ toHtml msg
-  toHtml (DashboardRenameSuccess title) = toHtml $ if title == "" then "Untitled" else title
+  toHtml (DashboardRenameSuccess title) = toHtml $ dashTitle title
   toHtmlRaw = toHtml
 
 
@@ -1297,7 +1306,7 @@ dashboardDuplicatePostH pid dashId = do
       now <- Time.currentTime
       newDashId <- UUIDId <$> UUID.genUUID
 
-      let copyTitle = if dashVM.title == "" then "Untitled (Copy)" else dashVM.title <> " (Copy)"
+      let copyTitle = dashTitle dashVM.title <> " (Copy)"
           updatedSchema = dashVM.schema & _Just . #title %~ fmap (<> " (Copy)") . (<|> Just "Untitled")
 
       _ <-
