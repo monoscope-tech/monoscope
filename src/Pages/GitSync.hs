@@ -32,13 +32,13 @@ import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxDelete_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
 import Models.Projects.Dashboards qualified as Dashboards
-import Pkg.DeriveUtils (UUIDId (..))
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.GitHub qualified as GitHub
 import Relude hiding (ask)
 import System.Config qualified as Config
