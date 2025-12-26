@@ -1458,10 +1458,10 @@ gitSyncPushDashboard pid dashId = do
           pushResult <- GitSync.pushFileToGit token sync fullPath yamlContent existingSha message
           case pushResult of
             Left err -> Log.logAttention "Failed to push dashboard to git" (dashId, err)
-            Right newSha -> do
-              -- Store the clean relative path in DB
-              _ <- GitSync.updateDashboardGitInfo dashId relativePath newSha
-              Log.logInfo "Successfully pushed dashboard to git" (dashId, newSha)
+            Right (fileSha, treeSha) -> do
+              _ <- GitSync.updateDashboardGitInfo dashId relativePath fileSha
+              _ <- GitSync.updateLastTreeSha sync.id treeSha
+              Log.logInfo "Successfully pushed dashboard to git" (dashId, fileSha)
 
 
 -- | Push all dashboards from a project to GitHub (used after initial repo connection)
@@ -1494,7 +1494,8 @@ gitSyncPushAllDashboards pid = do
             pushResult <- GitSync.pushFileToGit token sync fullPath yamlContent existingSha message
             case pushResult of
               Left err -> Log.logAttention "Failed to push dashboard" (dash.id, err)
-              Right newSha -> do
-                _ <- GitSync.updateDashboardGitInfo dash.id relativePath newSha
+              Right (fileSha, treeSha) -> do
+                _ <- GitSync.updateDashboardGitInfo dash.id relativePath fileSha
+                _ <- GitSync.updateLastTreeSha sync.id treeSha
                 Log.logInfo "Pushed dashboard" (dash.id, dash.title)
           Log.logInfo "Finished pushing all dashboards" pid

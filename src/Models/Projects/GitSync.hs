@@ -278,7 +278,8 @@ fetchFileContent token sync path = do
       b64Content -> first (toText . show) $ B64.decodeBase64Untyped $ encodeUtf8 $ T.filter (/= '\n') b64Content
 
 
-pushFileToGit :: (IOE :> es, W.HTTP :> es) => Text -> GitHubSync -> Text -> ByteString -> Maybe Text -> Text -> Eff es (Either Text Text)
+-- | Push a file to GitHub. Returns (fileSha, treeSha) on success.
+pushFileToGit :: (IOE :> es, W.HTTP :> es) => Text -> GitHubSync -> Text -> ByteString -> Maybe Text -> Text -> Eff es (Either Text (Text, Text))
 pushFileToGit token sync path content existingSha message = do
   let url = "https://api.github.com/repos/" <> sync.owner <> "/" <> sync.repo <> "/contents/" <> path
       b64Content = extractBase64 $ B64.encodeBase64 content
@@ -293,7 +294,12 @@ pushFileToGit token sync path content existingSha message = do
   result <- try $ W.putWith (githubOpts token) (toString url) payload
   pure $ case result of
     Left (err :: HttpException) -> Left $ formatHttpError err
-    Right resp -> maybeToRight "No sha in response" $ resp ^? W.responseBody . key "content" . key "sha" . _String
+    Right resp ->
+      let fileSha = resp ^? W.responseBody . key "content" . key "sha" . _String
+          treeSha = resp ^? W.responseBody . key "commit" . key "tree" . key "sha" . _String
+       in case (fileSha, treeSha) of
+            (Just f, Just t) -> Right (f, t)
+            _ -> Left "Missing sha in response"
 
 
 formatHttpError :: HttpException -> Text
