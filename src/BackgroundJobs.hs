@@ -1382,7 +1382,9 @@ processGitSyncAction pid token sync teamMap = \case
     fetchAndParseDashboard token sync path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
       now <- Time.currentTime
       dashId <- UUIDId <$> liftIO UUIDV4.nextRandom
-      let teamIds = mapMaybe (`Map.lookup` teamMap) (fold schema.teams)
+      let prefix = GitSync.getDashboardsPath sync
+          relativePath = fromMaybe path $ T.stripPrefix prefix path
+          teamIds = mapMaybe (`Map.lookup` teamMap) (fold schema.teams)
           dashboard =
             Dashboards.DashboardVM
               { Dashboards.id = dashId
@@ -1397,19 +1399,26 @@ processGitSyncAction pid token sync teamMap = \case
               , Dashboards.tags = V.fromList $ fold schema.tags
               , Dashboards.title = fromMaybe "Untitled" schema.title
               , Dashboards.teams = V.fromList teamIds
-              , Dashboards.filePath = Just path
+              , Dashboards.filePath = Just relativePath
               , Dashboards.fileSha = Just sha
               }
       _ <- Dashboards.insert dashboard
-      Log.logInfo "Created dashboard from git" (path, dashId)
+      Log.logInfo "Created dashboard from git" (relativePath, dashId)
   GitSync.SyncUpdate path sha dashId ->
     fetchAndParseDashboard token sync path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
       now <- Time.currentTime
+      let prefix = GitSync.getDashboardsPath sync
+          relativePath = fromMaybe path $ T.stripPrefix prefix path
       _ <- Dashboards.updateSchemaAndUpdatedAt dashId schema now
       whenJust schema.title $ void . Dashboards.updateTitle dashId
       _ <- Dashboards.updateTags dashId (V.fromList $ fold schema.tags)
-      _ <- GitSync.updateDashboardGitInfo dashId path sha
-      Log.logInfo "Updated dashboard from git" (path, dashId)
+      _ <- GitSync.updateDashboardGitInfo dashId relativePath sha
+      Log.logInfo "Updated dashboard from git" (relativePath, dashId)
+  GitSync.SyncRename path sha dashId -> do
+    let prefix = GitSync.getDashboardsPath sync
+        relativePath = fromMaybe path $ T.stripPrefix prefix path
+    _ <- GitSync.updateDashboardGitInfo dashId relativePath sha
+    Log.logInfo "Renamed dashboard path from git" (relativePath, dashId)
   GitSync.SyncDelete{} -> pass -- Handled separately
 
 

@@ -122,6 +122,7 @@ data SyncAction
   = SyncCreate {path :: Text, sha :: Text}
   | SyncUpdate {path :: Text, sha :: Text, resourceId :: DashboardId}
   | SyncDelete {path :: Text, resourceId :: DashboardId}
+  | SyncRename {path :: Text, sha :: Text, resourceId :: DashboardId} -- File moved/renamed, same content
   deriving stock (Generic, Show)
 
 
@@ -342,12 +343,25 @@ isDashboardFile prefix e = e._teType == "blob" && prefix `T.isPrefixOf` e.path &
 
 -- Sync Logic
 buildSyncPlan :: Text -> [TreeEntry] -> M.Map Text (DashboardId, Text) -> [SyncAction]
-buildSyncPlan prefix entries dbState = creates <> updates <> deletes
+buildSyncPlan prefix entries dbState = renames <> realCreates <> updates <> realDeletes
   where
-    gitFiles = M.fromList [(e.path, e.sha) | e <- entries, isDashboardFile prefix e]
-    creates = M.foldMapWithKey (\p s -> [SyncCreate p s]) $ gitFiles `M.difference` dbState
-    updates = M.foldMapWithKey (\p s -> case M.lookup p dbState of Just (rid, oldSha) | s /= oldSha -> [SyncUpdate p s rid]; _ -> []) gitFiles
-    deletes = M.foldMapWithKey (\p (rid, _) -> [SyncDelete p rid]) $ dbState `M.difference` gitFiles
+    stripPrefix p = fromMaybe p $ T.stripPrefix prefix p
+    gitFiles = M.fromList [(stripPrefix e.path, (e.path, e.sha)) | e <- entries, isDashboardFile prefix e]
+    newFiles = gitFiles `M.difference` dbState
+    removedFiles = dbState `M.difference` (fst <$> gitFiles)
+    -- Build map of SHA -> (DashboardId, oldPath) for removed files to detect renames
+    removedBySha = M.fromList [(sha, (rid, p)) | (p, (rid, sha)) <- M.toList removedFiles]
+    -- Detect renames: new files whose SHA matches a removed file
+    (renameActions, unmatchedCreates) = M.foldrWithKey checkRename ([], []) newFiles
+    checkRename _ (fullPath, sha) (rens, crs) = case M.lookup sha removedBySha of
+      Just (rid, _) -> (SyncRename fullPath sha rid : rens, crs)
+      Nothing -> (rens, SyncCreate fullPath sha : crs)
+    renames = renameActions
+    realCreates = unmatchedCreates
+    -- Remove renamed files from deletes
+    renamedIds = [rid | SyncRename _ _ rid <- renames]
+    realDeletes = [SyncDelete p rid | (p, (rid, _)) <- M.toList removedFiles, rid `notElem` renamedIds]
+    updates = M.foldMapWithKey (\relPath (fullPath, s) -> case M.lookup relPath dbState of Just (rid, oldSha) | s /= oldSha -> [SyncUpdate fullPath s rid]; _ -> []) gitFiles
 
 
 dashboardToYaml :: Dashboard -> ByteString
