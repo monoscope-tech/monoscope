@@ -1429,6 +1429,7 @@ fetchAndParseDashboard token sync path = GitSync.fetchFileContent token sync pat
 
 
 -- | Push a dashboard change to GitHub
+-- Skips template-based dashboards (schema = Nothing) since they have no custom content to sync.
 gitSyncPushDashboard :: Projects.ProjectId -> Dashboards.DashboardId -> ATBackgroundCtx ()
 gitSyncPushDashboard pid dashId = do
   Log.logInfo "Pushing dashboard to GitHub" (pid, dashId)
@@ -1440,6 +1441,7 @@ gitSyncPushDashboard pid dashId = do
     (Nothing, _) -> Log.logAttention "No GitHub sync configured for project" pid
     (Just sync, _) | not sync.syncEnabled -> Log.logInfo "GitHub sync disabled, skipping push" pid
     (_, Nothing) -> Log.logAttention "Dashboard not found for git push" dashId
+    (_, Just dash) | isNothing dash.schema -> Log.logInfo "Skipping git push for template-based dashboard" dashId
     (Just sync, Just dash) -> W.runHTTPWreq do
       tokenResult <- getGitSyncToken ctx.config sync
       case tokenResult of
@@ -1465,6 +1467,7 @@ gitSyncPushDashboard pid dashId = do
 
 
 -- | Push all dashboards from a project to GitHub (used after initial repo connection)
+-- Skips template-based dashboards (schema = Nothing) since they have no custom content to sync.
 gitSyncPushAllDashboards :: Projects.ProjectId -> ATBackgroundCtx ()
 gitSyncPushAllDashboards pid = do
   Log.logInfo "Pushing all dashboards to GitHub" pid
@@ -1480,9 +1483,10 @@ gitSyncPushAllDashboards pid = do
         Left err -> Log.logAttention "Failed to get GitHub token" (pid, err)
         Right token -> do
           dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
-          Log.logInfo "Found dashboards to push" (pid, length dashboards)
+          let syncableDashboards = filter (isJust . (.schema)) dashboards
+          Log.logInfo "Found dashboards to push" (pid, length syncableDashboards)
           let prefix = GitSync.getDashboardsPath sync
-          forM_ dashboards \dash -> do
+          forM_ syncableDashboards \dash -> do
             teams <- ProjectMembers.getTeamsById pid dash.teams
             let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
                 yamlContent = GitSync.dashboardToYaml schema
