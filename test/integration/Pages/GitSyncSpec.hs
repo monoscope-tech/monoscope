@@ -254,12 +254,12 @@ spec = do
       it "updates for changed SHAs" \_ -> do
         let did = UUIDId [uuid|11111111-1111-1111-1111-111111111111|]
             entries = [GitSync.TreeEntry "dashboards/x.yaml" "blob" "newsha" (Just 100)]
-            plan = GitSync.buildSyncPlan "dashboards/" entries (one ("dashboards/x.yaml", (did, "oldsha")))
+            plan = GitSync.buildSyncPlan "dashboards/" entries (one ("x.yaml", (did, "oldsha")))
         length [() | GitSync.SyncUpdate{} <- plan] `shouldBe` 1
 
       it "deletes for removed files" \_ -> do
         let did = UUIDId [uuid|22222222-2222-2222-2222-222222222222|]
-            plan = GitSync.buildSyncPlan "dashboards/" [] (one ("dashboards/gone.yaml", (did, "sha")))
+            plan = GitSync.buildSyncPlan "dashboards/" [] (one ("gone.yaml", (did, "sha")))
         length [() | GitSync.SyncDelete{} <- plan] `shouldBe` 1
 
       it "ignores non-dashboard files" \_ -> do
