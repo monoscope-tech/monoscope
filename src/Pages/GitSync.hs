@@ -27,11 +27,12 @@ import Data.Default (def)
 import Data.Effectful.Wreq qualified as W
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.UUID qualified as UUID
 import Deriving.Aeson.Stock qualified as DAES
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxDelete_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
+import Models.Projects.Dashboards qualified as Dashboards
+import Pkg.DeriveUtils (UUIDId (..))
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -397,17 +398,16 @@ For automatic syncing when you push changes:
 
 
 -- | Queue a git sync push for a dashboard if git sync is configured
-queueGitSyncPush :: Projects.ProjectId -> UUID.UUID -> Maybe Text -> ATAuthCtx ()
-queueGitSyncPush pid dashboardId mFilePath = do
+queueGitSyncPush :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx ()
+queueGitSyncPush pid dashboardId = do
   ctx <- ask @Config.AuthContext
   syncM <- GitSync.getGitHubSync pid
   case syncM of
     Nothing -> pass
     Just sync | not sync.syncEnabled -> pass
     Just _ -> do
-      let filePath = fromMaybe ("dashboards/" <> UUID.toText dashboardId <> ".yaml") mFilePath
       liftIO $ withResource ctx.jobsPool \conn ->
-        void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncPushDashboard pid dashboardId filePath
+        void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncPushDashboard pid (unUUIDId dashboardId)
       Log.logInfo "Queued git sync push for dashboard" (pid, dashboardId)
 
 

@@ -105,7 +105,7 @@ data BgJobs
   | ProcessIssuesEnhancement UTCTime
   | FifteenMinutesLogsPatternProcessing UTCTime Projects.ProjectId
   | GitSyncFromRepo Projects.ProjectId
-  | GitSyncPushDashboard Projects.ProjectId UUID.UUID Text -- projectId, dashboardId, filePath
+  | GitSyncPushDashboard Projects.ProjectId UUID.UUID -- projectId, dashboardId
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -343,7 +343,7 @@ processBackgroundJob authCtx bgJob =
     ProcessIssuesEnhancement scheduledTime -> processIssuesEnhancement scheduledTime
     FifteenMinutesLogsPatternProcessing scheduledTime pid -> logsPatternExtraction scheduledTime pid
     GitSyncFromRepo pid -> gitSyncFromRepo pid
-    GitSyncPushDashboard pid dashboardId filePath -> gitSyncPushDashboard pid (UUIDId dashboardId) filePath
+    GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
 
 
@@ -1418,9 +1418,9 @@ fetchAndParseDashboard token sync path = GitSync.fetchFileContent token sync pat
 
 
 -- | Push a dashboard change to GitHub
-gitSyncPushDashboard :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATBackgroundCtx ()
-gitSyncPushDashboard pid dashId filePath = do
-  Log.logInfo "Pushing dashboard to GitHub" (pid, dashId, filePath)
+gitSyncPushDashboard :: Projects.ProjectId -> Dashboards.DashboardId -> ATBackgroundCtx ()
+gitSyncPushDashboard pid dashId = do
+  Log.logInfo "Pushing dashboard to GitHub" (pid, dashId)
   ctx <- ask @Config.AuthContext
   let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
   syncM <- GitSync.getGitHubSyncDecrypted encKey pid
@@ -1437,6 +1437,7 @@ gitSyncPushDashboard pid dashId filePath = do
           teams <- ProjectMembers.getTeamsById pid dash.teams
           let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
               yamlContent = GitSync.dashboardToYaml schema
+              filePath = fromMaybe (GitSync.getDashboardsPath sync <> GitSync.titleToFilePath dash.title) dash.filePath
               existingSha = dash.fileSha
               message = "Update dashboard: " <> dash.title
           pushResult <- GitSync.pushFileToGit token sync filePath yamlContent existingSha message

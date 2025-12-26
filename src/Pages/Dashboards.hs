@@ -54,6 +54,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ManageMembers
+import Pages.GitSync qualified as GitSyncPage
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
@@ -97,6 +98,14 @@ syncDashboardFileInfo dashId = do
     when (dash.fileSha /= Just newSha || dash.filePath /= Just filePath)
       $ void
       $ GitSync.updateDashboardGitInfo dashId filePath newSha
+
+
+-- | Sync dashboard file info and queue a git push if sync is configured.
+-- This is the consolidated function to use in handlers after dashboard changes.
+syncDashboardAndQueuePush :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx ()
+syncDashboardAndQueuePush pid dashId = do
+  syncDashboardFileInfo dashId
+  GitSyncPage.queueGitSyncPush pid dashId
 
 
 -- Filter record for dashboard list
@@ -494,7 +503,7 @@ dashboardWidgetPutH pid dashId widgetIdM widget = do
           ((dash :: Dashboards.Dashboard) & #widgets %~ (<> [widgetUpdated]), widgetUpdated)
 
   _ <- Dashboards.updateSchema dashId dash'
-  syncDashboardFileInfo dashId
+  syncDashboardAndQueuePush pid dashId
 
   let successMsg = case widgetIdM of
         Just _ -> "Widget updated successfully"
@@ -530,7 +539,7 @@ dashboardWidgetReorderPatchH pid dashId widgetOrder = do
       newDash = (dash :: Dashboards.Dashboard) & #widgets .~ sortedWidgets
 
   _ <- Dashboards.updateSchema dashId newDash
-  syncDashboardFileInfo dashId
+  syncDashboardAndQueuePush pid dashId
 
   addRespHeaders NoContent
 
@@ -1164,7 +1173,7 @@ dashboardsPostH pid form = do
               , fileSha = Nothing
               }
       _ <- Dashboards.insert dbd
-      syncDashboardFileInfo dbd.id
+      syncDashboardAndQueuePush pid dbd.id
       redirectCS redirectURI
       addRespHeaders DashboardNoContent
 
@@ -1207,7 +1216,7 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
               , filePath = Nothing
               , fileSha = Nothing
               }
-        syncDashboardFileInfo did
+        syncDashboardAndQueuePush pid did
         pure did.toText
   redirectTo <-
     if project.paymentPlan == "ONBOARDING"
@@ -1248,7 +1257,7 @@ dashboardRenamePatchH pid dashId form = do
       whenJust dashVM.schema \_ ->
         void $ Dashboards.updateSchema dashId (fromMaybe def dashVM.schema & #title ?~ form.title)
 
-      syncDashboardFileInfo dashId
+      syncDashboardAndQueuePush pid dashId
       addSuccessToast "Dashboard renamed successfully" Nothing
       addTriggerEvent "closeModal" ""
       addRespHeaders DashboardNoContent
@@ -1283,7 +1292,7 @@ dashboardDuplicatePostH pid dashId = do
             , Dashboards.starredSince = Nothing
             , Dashboards.homepageSince = Nothing
             }
-      syncDashboardFileInfo newDashId
+      syncDashboardAndQueuePush pid newDashId
 
       -- Redirect to the new dashboard
       let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> newDashId.toText
@@ -1384,7 +1393,7 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
       let updatedDash = (dash :: Dashboards.Dashboard) & #widgets %~ (<> [widgetCopy])
       now <- Time.currentTime
       _ <- Dashboards.updateSchemaAndUpdatedAt dashId updatedDash now
-      syncDashboardFileInfo dashId
+      syncDashboardAndQueuePush pid dashId
 
       addWidgetJSON $ decodeUtf8 $ fromLazy $ AE.encode widgetCopy
       addSuccessToast "Widget duplicated successfully" Nothing

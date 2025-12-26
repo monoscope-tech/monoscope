@@ -333,16 +333,16 @@ spec = do
       it "queues push job when sync enabled" \tr -> do
         setupSync tr GitHubTestConfig{pat = "fake", owner = "o", repo = "r", branch = "main"} Nothing
         clearJobs tr
-        dashId <- liftIO UUID.nextRandom
-        _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId (Just "dashboards/x.yaml")
+        dashId <- UUIDId <$> liftIO UUID.nextRandom
+        _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
         jobs <- getPendingBackgroundJobs tr.trATCtx
         V.length (V.filter isGitSyncPush jobs) `shouldSatisfy` (>= 1)
 
       it "skips push when sync disabled" \tr -> do
         void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
         clearJobs tr
-        dashId <- liftIO UUID.nextRandom
-        _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId Nothing
+        dashId <- UUIDId <$> liftIO UUID.nextRandom
+        _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
         jobs <- getPendingBackgroundJobs tr.trATCtx
         V.length (V.filter isGitSyncPush jobs) `shouldBe` 0
 
@@ -390,7 +390,7 @@ spec = do
             path <- uniquePath "push-create"
             dashId <- createDash tr "Push Create Test" ["e2e"]
             _ <- runTestBg tr $ GitSync.updateDashboardGitInfo dashId path ""  -- set path, empty sha = new file
-            _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid (coerce dashId) (Just path)
+            _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             runSyncJobs tr
             exists <- ghFileExists cfg path
             exists `shouldBe` True
@@ -408,7 +408,7 @@ spec = do
             dashId <- createDash tr "Updated Title" ["updated"]
             _ <- runTestBg tr $ GitSync.updateDashboardGitInfo dashId path sha1
             clearJobs tr
-            _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid (coerce dashId) (Just path)
+            _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             runSyncJobs tr
             (content, _) <- fromRightShow <$> ghGetFile cfg path
             BS.isInfixOf "Updated Title" content `shouldBe` True
@@ -418,7 +418,7 @@ spec = do
             setupSync tr cfg Nothing
             dashId <- createDash tr "SHA Test" []
             let expectedPath = "dashboards/sha-test.yaml"
-            _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid (coerce dashId) (Just expectedPath)
+            _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             runSyncJobs tr
             dashM <- runTestBg tr $ Dashboards.getDashboardById dashId
             let dash = fromJust dashM
@@ -498,7 +498,7 @@ spec = do
             -- Create and push
             dashId <- createDash tr "Round Trip Original" ["local"]
             _ <- runTestBg tr $ GitSync.updateDashboardGitInfo dashId path ""  -- set path for push
-            _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid (coerce dashId) (Just path)
+            _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             runSyncJobs tr
             -- Verify in GitHub
             (content1, sha1) <- fromRightShow <$> ghGetFile cfg path
@@ -543,7 +543,7 @@ spec = do
             setupSync tr cfg (Just "test-prefix")
             dashId <- createDash tr "Prefixed Push" []
             let path = "test-prefix/dashboards/prefixed-push.yaml"
-            _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid (coerce dashId) (Just path)
+            _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             runSyncJobs tr
             exists <- ghFileExists cfg path
             exists `shouldBe` True
@@ -561,7 +561,7 @@ spec = do
             -- Create dashboard with wrong SHA
             dashId <- createDash tr "Conflict Test" []
             _ <- runTestBg tr $ GitSync.updateDashboardGitInfo dashId path "wrong-sha-12345"
-            _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid (coerce dashId) (Just path)
+            _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             -- Should not crash, just log error
             runSyncJobs tr
             -- Original file unchanged
