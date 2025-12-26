@@ -1356,26 +1356,26 @@ gitSyncFromRepo pid = do
             Right (treeSha, entries)
               | sync.lastTreeSha == Just treeSha -> Log.logInfo "Tree unchanged, skipping sync" (pid, treeSha)
               | otherwise -> do
-              dbState <- GitSync.getDashboardGitState pid
-              allTeams <- ProjectMembers.getTeamsVM pid
-              let teamMap = Map.fromList [(t.handle, t.id) | t <- allTeams]
-                  prefix = GitSync.getDashboardsPath sync
-                  actions = GitSync.buildSyncPlan prefix entries dbState
-                  creates = [a | a@GitSync.SyncCreate{} <- actions]
-                  updates = [a | a@GitSync.SyncUpdate{} <- actions]
-                  deletes = [(path, dashId) | GitSync.SyncDelete path dashId <- actions]
-              Log.logInfo "Git sync plan" ("creates" :: Text, length creates, "updates" :: Text, length updates, "deletes" :: Text, length deletes)
-              -- Fetch file contents in parallel for creates and updates
-              let fetchActions = creates <> updates
-              Ki.scoped \scope -> do
-                forM_ fetchActions $ Ki.fork scope . processGitSyncAction pid token sync teamMap
-                Ki.atomically $ Ki.awaitAll scope
-              -- Process deletes (no HTTP needed)
-              forM_ deletes \(path, dashId) -> do
-                _ <- Dashboards.deleteDashboard dashId
-                Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
-              _ <- GitSync.updateLastTreeSha sync.id treeSha
-              Log.logInfo "Completed GitHub sync for project" pid
+                  dbState <- GitSync.getDashboardGitState pid
+                  allTeams <- ProjectMembers.getTeamsVM pid
+                  let teamMap = Map.fromList [(t.handle, t.id) | t <- allTeams]
+                      prefix = GitSync.getDashboardsPath sync
+                      actions = GitSync.buildSyncPlan prefix entries dbState
+                      creates = [a | a@GitSync.SyncCreate{} <- actions]
+                      updates = [a | a@GitSync.SyncUpdate{} <- actions]
+                      deletes = [(path, dashId) | GitSync.SyncDelete path dashId <- actions]
+                  Log.logInfo "Git sync plan" ("creates" :: Text, length creates, "updates" :: Text, length updates, "deletes" :: Text, length deletes)
+                  -- Fetch file contents in parallel for creates and updates
+                  let fetchActions = creates <> updates
+                  Ki.scoped \scope -> do
+                    forM_ fetchActions $ Ki.fork scope . processGitSyncAction pid token sync teamMap
+                    Ki.atomically $ Ki.awaitAll scope
+                  -- Process deletes (no HTTP needed)
+                  forM_ deletes \(path, dashId) -> do
+                    _ <- Dashboards.deleteDashboard dashId
+                    Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
+                  _ <- GitSync.updateLastTreeSha sync.id treeSha
+                  Log.logInfo "Completed GitHub sync for project" pid
 
 
 processGitSyncAction :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Projects.ProjectId -> Text -> GitSync.GitHubSync -> Map.Map Text UUID.UUID -> GitSync.SyncAction -> Eff es ()
