@@ -1353,7 +1353,9 @@ gitSyncFromRepo pid = do
           treeResult <- GitSync.fetchGitTree token sync
           case treeResult of
             Left err -> Log.logAttention "Failed to fetch git tree" (pid, err)
-            Right (treeSha, entries) -> do
+            Right (treeSha, entries)
+              | sync.lastTreeSha == Just treeSha -> Log.logInfo "Tree unchanged, skipping sync" (pid, treeSha)
+              | otherwise -> do
               dbState <- GitSync.getDashboardGitState pid
               allTeams <- ProjectMembers.getTeamsVM pid
               let teamMap = Map.fromList [(t.handle, t.id) | t <- allTeams]
