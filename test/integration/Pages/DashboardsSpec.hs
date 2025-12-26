@@ -59,7 +59,7 @@ spec = aroundAll withTestResources do
       case pg of
         Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) -> do
           let createdDashboard = Unsafe.fromJust $ V.find (\x -> x.title == "Test Dashboard") dashboards
-          let fm = Dashboards.DashboardRenameForm{Dashboards.title = "Updated Dashboard"}
+          let fm = Dashboards.DashboardRenameForm{Dashboards.title = "Updated Dashboard", Dashboards.filePath = Nothing}
           _ <- testServant tr $ Dashboards.dashboardRenamePatchH testPid createdDashboard.id fm
           (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
           case pg' of

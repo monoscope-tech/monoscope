@@ -139,8 +139,12 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       , hxTarget_ "#pageTitleText"
       ]
     $ fieldset_ [class_ "fieldset min-w-xs"] do
-      label_ [class_ "label"] "Change Dashboard Title"
+      label_ [class_ "label"] "Dashboard Title"
       input_ [class_ "input", name_ "title", placeholder_ "Insert new title", value_ $ if dashVM.title == "" then "Untitled" else dashVM.title]
+      label_ [class_ "label mt-2"] do
+        span_ "Git File Path"
+        span_ [class_ "label-alt text-textWeaker"] "(within dashboards/ folder)"
+      input_ [class_ "input font-mono text-sm", name_ "filePath", placeholder_ "folderA/my-dashboard.yaml", value_ $ fromMaybe "" dashVM.filePath]
       div_ [class_ "mt-3 flex justify-end gap-2"] do
         label_ [Lucid.for_ "pageTitleModalId", class_ "btn btn-outline cursor-pointer"] "Cancel"
         button_ [type_ "submit", class_ "btn btn-primary"] "Save"
@@ -1235,15 +1239,16 @@ toQueryParams qs =
 
 
 -- | Form data for renaming a dashboard
-newtype DashboardRenameForm = DashboardRenameForm
+data DashboardRenameForm = DashboardRenameForm
   { title :: Text
+  , filePath :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 
 -- | Handler for renaming a dashboard.
--- It updates the title of the specified dashboard.
+-- It updates the title and optionally the git file path.
 dashboardRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardRenameForm -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardRenamePatchH pid dashId form = do
   mDashboard <- Dashboards.getDashboardById dashId
@@ -1257,8 +1262,14 @@ dashboardRenamePatchH pid dashId form = do
       whenJust dashVM.schema \_ ->
         void $ Dashboards.updateSchema dashId (fromMaybe def dashVM.schema & #title ?~ form.title)
 
+      -- Update file path if provided (for git sync)
+      whenJust form.filePath \path ->
+        when (path /= fromMaybe "" dashVM.filePath) do
+          let cleanPath = T.strip path
+          void $ GitSync.updateDashboardGitInfo dashId cleanPath ""
+
       syncDashboardAndQueuePush pid dashId
-      addSuccessToast "Dashboard renamed successfully" Nothing
+      addSuccessToast "Dashboard updated successfully" Nothing
       addTriggerEvent "closeModal" ""
       addRespHeaders DashboardNoContent
 
