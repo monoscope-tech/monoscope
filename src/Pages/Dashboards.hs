@@ -1263,8 +1263,9 @@ dashboardRenamePatchH pid dashId form = do
       -- Update file path: directory + auto-generated filename
       let dir = fromMaybe "" form.fileDir
           newPath = (if T.null dir || T.last dir == '/' then dir else dir <> "/") <> GitSync.titleToFilePath form.title
-      when (Just newPath /= dashVM.filePath) $
-        void $ GitSync.updateDashboardGitInfo dashId newPath ""
+      when (Just newPath /= dashVM.filePath)
+        $ void
+        $ GitSync.updateDashboardGitInfo dashId newPath ""
 
       syncDashboardAndQueuePush pid dashId
       addSuccessToast "Dashboard updated successfully" Nothing
