@@ -15,6 +15,7 @@ import Data.Map.Lazy qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
+import Data.Time.Clock (diffUTCTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime)
 import Data.UUID qualified as UUID
@@ -69,6 +70,7 @@ import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask)
 import RequestMessages qualified
+import System.Clock (Clock (Monotonic), TimeSpec, diffTimeSpec, getTime, toNanoSecs)
 import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
@@ -96,6 +98,7 @@ data BgJobs
   | ReportUsage Projects.ProjectId
   | GenerateOtelFacetsBatch (V.Vector Projects.ProjectId) UTCTime
   | QueryMonitorsTriggered (V.Vector Monitors.QueryMonitorId)
+  | QueryMonitorsCheck
   | DeletedProject Projects.ProjectId
   | CleanupDemoProject
   | FiveMinuteSpanProcessing UTCTime Projects.ProjectId
@@ -345,6 +348,7 @@ processBackgroundJob authCtx bgJob =
     GitSyncFromRepo pid -> gitSyncFromRepo pid
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
+    QueryMonitorsCheck -> checkTriggeredQueryMonitors
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -1503,3 +1507,43 @@ gitSyncPushAllDashboards pid = do
                 _ <- GitSync.updateLastTreeSha sync.id treeSha
                 Log.logInfo "Pushed dashboard" (dash.id, dash.title)
           Log.logInfo "Finished pushing all dashboards" pid
+
+
+checkTriggeredQueryMonitors :: ATBackgroundCtx ()
+checkTriggeredQueryMonitors = do
+  Log.logInfo "Checking query monitors" ()
+  ctx <- ask @Config.AuthContext
+  monitors <- Monitors.getActiveQueryMonitors
+  forM_ monitors \monitor -> do
+    startWall <- Time.currentTime
+    let evalInterval = startWall `diffUTCTime` monitor.lastEvaluated
+    Relude.when (evalInterval >= fromIntegral monitor.checkIntervalMins * 60) $ do
+      Log.logInfo "Evaluating query monitor" (monitor.id, monitor.alertConfig.title)
+      start <- liftIO $ getTime Monotonic
+      results <- PG.query (Query $ encodeUtf8 monitor.logQueryAsSql) () :: ATBackgroundCtx [Only Int]
+      end <- liftIO $ getTime Monotonic
+      -- sum results values
+      let total = sum (map (\(Only v) -> v) results)
+          durationNs = toNanoSecs (diffTimeSpec end start)
+          title = monitor.alertConfig.title
+          status = monitorStatus monitor.triggerLessThan monitor.warningThreshold monitor.alertThreshold total
+          q = [sql| INSERT INTO otel_logs_and_spans ( project_id , kind , timestamp , name , duration , summary , status_message , context___trace_id , body ) VALUES (?, 'alert', NOW(), ?, ?, ?, ?, ?, ?)|]
+      _ <- PG.execute q (monitor.projectId, title, durationNs, V.singleton "Query monitor triggered", status, show monitor.id, AE.object ["value" AE..= total, "monitor_id" AE..= monitor.id])
+      if status /= "Normal"
+        then do
+          Log.logInfo "Query monitor triggered alert" (monitor.id, title, status, total)
+          let qq = [sql| INSERT INTO background_jobs (run_at, status, payload)  VALUES (NOW(), 'queued', ?) |]
+          _ <- PG.execute qq (Only $ AE.object ["tag" AE..= "QueryMonitorAlert", "contents" AE..= V.singleton monitor.id])
+          pass
+        else pass
+      _ <- Monitors.updateLastEvaluatedAt monitor.id startWall
+      pass
+
+
+monitorStatus :: Bool -> Maybe Int -> Int -> Int -> Text
+monitorStatus triggerLessThan warn alert value
+  | not triggerLessThan, alert <= value = "Alerting"
+  | not triggerLessThan, maybe False (<= value) warn = "Warning"
+  | triggerLessThan, alert >= value = "Alerting"
+  | triggerLessThan, maybe False (>= value) warn = "Warning"
+  | otherwise = "Normal"

@@ -11,6 +11,8 @@ module Models.Apis.Monitors (
   updateQMonitorTriggeredState,
   getAlertsByTeamHandle,
   monitorRemoveTeam,
+  getActiveQueryMonitors,
+  updateLastEvaluatedAt,
 ) where
 
 import Data.Aeson qualified as AE
@@ -231,3 +233,22 @@ monitorRemoveTeam pid monitorId teamId = PG.execute q (teamId, pid, monitorId)
     SET teams = array_remove(teams, ?::uuid)
     WHERE project_id = ? AND id = ?
     |]
+
+
+getActiveQueryMonitors :: DB es => Eff es [QueryMonitor]
+getActiveQueryMonitors = PG.query q ()
+  where
+    q =
+      [sql|
+    SELECT  qm.id, qm.created_at, qm.updated_at, qm.project_id, qm.check_interval_mins, qm.alert_threshold, qm.warning_threshold,
+        qm.log_query, qm.log_query_as_sql, qm.last_evaluated, qm.warning_last_triggered, qm.alert_last_triggered, qm.trigger_less_than,
+        qm.threshold_sustained_for_mins, qm.alert_config, qm.deactivated_at, qm.deleted_at, qm.visualization_type, qm.teams
+      FROM monitors.query_monitors qm
+      WHERE qm.deactivated_at IS NULL AND qm.log_query_as_sql IS NOT NULL AND qm.log_query_as_sql != ''
+    |]
+
+
+updateLastEvaluatedAt :: DB es => QueryMonitorId -> UTCTime -> Eff es Int64
+updateLastEvaluatedAt qmId time = PG.execute q (time, qmId)
+  where
+    q = [sql|UPDATE monitors.query_monitors SET last_evaluated=? where id=?|]
