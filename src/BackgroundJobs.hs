@@ -1537,6 +1537,9 @@ checkTriggeredQueryMonitors = do
       if status /= "Normal"
         then do
           Log.logInfo "Query monitor triggered alert" (monitor.id, title, status, total)
+          let warningAt = if status == "Warning" then Just startWall else Nothing
+              alertAt = if status == "Alerting" then Just startWall else Nothing
+          _ <- PG.execute [sql| UPDATE monitors.query_monitors SET warning_last_triggered = ?, alert_last_triggered = ? WHERE id = ? |] (warningAt, alertAt, monitor.id)
           let qq = [sql| INSERT INTO background_jobs (run_at, status, payload)  VALUES (NOW(), 'queued', ?) |]
           _ <- PG.execute qq (Only $ AE.object ["tag" AE..= "QueryMonitorAlert", "contents" AE..= V.singleton monitor.id])
           pass
