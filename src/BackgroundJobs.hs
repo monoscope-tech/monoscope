@@ -2,6 +2,7 @@ module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs 
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
@@ -76,7 +77,7 @@ import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, try)
-import Utils (DBField)
+import Utils (DBField, getDurationNSMS)
 
 
 data BgJobs
@@ -1527,8 +1528,12 @@ checkTriggeredQueryMonitors = do
           durationNs = toNanoSecs (diffTimeSpec end start)
           title = monitor.alertConfig.title
           status = monitorStatus monitor.triggerLessThan monitor.warningThreshold monitor.alertThreshold total
-          q = [sql| INSERT INTO otel_logs_and_spans ( project_id , kind , timestamp , name , duration , summary , status_message , context___trace_id , body ) VALUES (?, 'alert', NOW(), ?, ?, ?, ?, ?, ?)|]
-      _ <- PG.execute q (monitor.projectId, title, durationNs, V.singleton "Query monitor triggered", status, show monitor.id, AE.object ["value" AE..= total, "monitor_id" AE..= monitor.id])
+          q = [sql| INSERT INTO otel_logs_and_spans (resource___service___name, project_id , kind,  timestamp , name , duration , summary , status_message , parent_id , body ) VALUES (?, ?, 'alert', NOW(), ?, ?, ?, ?, ?, ?)|]
+          body = AE.object ["title" AE..= title, "value" AE..= total, "alert_threshold" AE..= monitor.alertThreshold, "warning_threshold" AE..= monitor.warningThreshold, "status" AE..= status, "query" AE..= monitor.logQueryAsSql]
+          attrText = decodeUtf8 (AE.encode body)
+          truncated = if T.length attrText > 500 then T.take 497 attrText <> "..." else attrText
+          summary = V.fromList ["status;" <> getStatusColor status <> "⇒" <> status, truncated, "condition;right-badge-neutral⇒" <> if monitor.triggerLessThan then "Less Than" else "Greater Than", "duration;right-badge-neutral⇒" <> toText (getDurationNSMS durationNs)]
+      _ <- PG.execute q ("query-monitor", monitor.projectId, title, durationNs, summary, status, UUID.toText monitor.id.unQueryMonitorId, body)
       if status /= "Normal"
         then do
           Log.logInfo "Query monitor triggered alert" (monitor.id, title, status, total)
@@ -1538,6 +1543,13 @@ checkTriggeredQueryMonitors = do
         else pass
       _ <- Monitors.updateLastEvaluatedAt monitor.id startWall
       pass
+
+
+getStatusColor :: Text -> Text
+getStatusColor status = case status of
+  "Alerting" -> "badge-error"
+  "Warning" -> "badge-warning"
+  _ -> "badge-success"
 
 
 monitorStatus :: Bool -> Maybe Int -> Int -> Int -> Text
