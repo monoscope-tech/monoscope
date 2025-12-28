@@ -1523,17 +1523,17 @@ checkTriggeredQueryMonitors = do
       start <- liftIO $ getTime Monotonic
       results <- PG.query (Query $ encodeUtf8 monitor.logQueryAsSql) () :: ATBackgroundCtx [Only Int]
       end <- liftIO $ getTime Monotonic
-      -- sum results values
+
       let total = sum (map (\(Only v) -> v) results)
           durationNs = toNanoSecs (diffTimeSpec end start)
           title = monitor.alertConfig.title
           status = monitorStatus monitor.triggerLessThan monitor.warningThreshold monitor.alertThreshold total
-          q = [sql| INSERT INTO otel_logs_and_spans (resource___service___name, project_id , kind,  timestamp , name , duration , summary , status_message , parent_id , body ) VALUES (?, ?, 'alert', NOW(), ?, ?, ?, ?, ?, ?)|]
+          q = [sql| INSERT INTO otel_logs_and_spans (resource___service___name, project_id, kind,  timestamp , name , duration , summary , status_message , parent_id , body, hashes, start_time, date) VALUES (?, ?, 'alert', NOW(), ?, ?, ?, ?, ?, ?, '{}'::text[], ?, ?)|]
           body = AE.object ["title" AE..= title, "value" AE..= total, "alert_threshold" AE..= monitor.alertThreshold, "warning_threshold" AE..= monitor.warningThreshold, "status" AE..= status, "query" AE..= monitor.logQueryAsSql]
           attrText = decodeUtf8 (AE.encode body)
           truncated = if T.length attrText > 500 then T.take 497 attrText <> "..." else attrText
           summary = V.fromList ["status;" <> getStatusColor status <> "⇒" <> status, truncated, "condition;right-badge-neutral⇒" <> if monitor.triggerLessThan then "Less Than" else "Greater Than", "duration;right-badge-neutral⇒" <> toText (getDurationNSMS durationNs)]
-      _ <- PG.execute q ("query-monitor", monitor.projectId, title, durationNs, summary, status, UUID.toText monitor.id.unQueryMonitorId, body)
+      _ <- PG.execute q ("query-monitor", monitor.projectId, title, durationNs, summary, status, UUID.toText monitor.id.unQueryMonitorId, body, startWall, startWall)
       if status /= "Normal"
         then do
           Log.logInfo "Query monitor triggered alert" (monitor.id, title, status, total)
@@ -1547,6 +1547,31 @@ checkTriggeredQueryMonitors = do
       _ <- Monitors.updateLastEvaluatedAt monitor.id startWall
       pass
 
+
+-- { id :: Text -- UUID
+-- , project_id :: Text
+-- , timestamp :: UTCTime
+-- , parent_id :: Maybe Text
+-- , observed_timestamp :: Maybe UTCTime
+-- , hashes :: V.Vector Text
+-- , name :: Maybe Text
+-- , kind :: Maybe Text
+-- , status_code :: Maybe Text
+-- , status_message :: Maybe Text
+-- , level :: Maybe Text
+-- , severity :: Maybe Severity
+-- , body :: Maybe (AesonText AE.Value)
+-- , duration :: Maybe Int64
+-- , start_time :: UTCTime
+-- , end_time :: Maybe UTCTime
+-- , context :: Maybe Context
+-- , events :: Maybe (AesonText AE.Value)
+-- , links :: Maybe Text
+-- , attributes :: Maybe (AesonText (Map Text AE.Value))
+-- , resource :: Maybe (AesonText (Map Text AE.Value))
+-- , summary :: V.Vector Text
+-- , date :: UTCTime
+-- , errors :: Maybe AE.Value
 
 getStatusColor :: Text -> Text
 getStatusColor status = case status of
