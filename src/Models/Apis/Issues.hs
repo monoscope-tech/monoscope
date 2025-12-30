@@ -570,16 +570,19 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
 
 -- | Conversation type for AI chats
 data ConversationType = CTAnomaly | CTTrace | CTLogExplorer | CTDashboard
-  deriving stock (Generic, Show, Eq)
+  deriving stock (Eq, Generic, Show)
+
 
 instance Default ConversationType where
   def = CTAnomaly
+
 
 instance ToField ConversationType where
   toField CTAnomaly = Escape "anomaly"
   toField CTTrace = Escape "trace"
   toField CTLogExplorer = Escape "log_explorer"
   toField CTDashboard = Escape "dashboard"
+
 
 instance FromField ConversationType where
   fromField f mdata = do
@@ -596,9 +599,9 @@ instance FromField ConversationType where
 data AIConversation = AIConversation
   { id :: UUIDId "ai_conversation"
   , projectId :: Projects.ProjectId
-  , conversationId :: UUIDId "conversation"  -- The contextual ID (issue_id, trace_id, etc.)
+  , conversationId :: UUIDId "conversation" -- The contextual ID (issue_id, trace_id, etc.)
   , conversationType :: ConversationType
-  , context :: Maybe (Aeson AE.Value)  -- Initial context for the AI
+  , context :: Maybe (Aeson AE.Value) -- Initial context for the AI
   , createdAt :: UTCTime
   , updatedAt :: UTCTime
   }
@@ -611,10 +614,10 @@ data AIChatMessage = AIChatMessage
   { id :: UUIDId "ai_chat"
   , projectId :: Projects.ProjectId
   , conversationId :: UUIDId "conversation"
-  , role :: Text  -- "user", "assistant", or "system"
+  , role :: Text -- "user", "assistant", or "system"
   , content :: Text
-  , widgets :: Maybe (Aeson AE.Value)  -- Array of widget configs
-  , metadata :: Maybe (Aeson AE.Value)  -- Additional metadata
+  , widgets :: Maybe (Aeson AE.Value) -- Array of widget configs
+  , metadata :: Maybe (Aeson AE.Value) -- Additional metadata
   , createdAt :: UTCTime
   }
   deriving stock (Generic, Show)
@@ -632,14 +635,16 @@ getOrCreateConversation pid convId convType ctx = do
       conv <- listToMaybe <$> PG.query selectQ (pid, convId)
       pure $ fromMaybe (error "Failed to create conversation") conv
   where
-    selectQ = [sql|
+    selectQ =
+      [sql|
       SELECT id, project_id, conversation_id, conversation_type, context, created_at, updated_at
       FROM apis.ai_conversations
       WHERE project_id = ? AND conversation_id = ?
       ORDER BY created_at DESC
       LIMIT 1
     |]
-    insertQ = [sql|
+    insertQ =
+      [sql|
       INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
       VALUES (?, ?, ?, ?)
     |]
@@ -649,7 +654,8 @@ getOrCreateConversation pid convId convType ctx = do
 insertChatMessage :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Text -> Text -> Maybe AE.Value -> Maybe AE.Value -> Eff es ()
 insertChatMessage pid convId role content widgetsM metadataM = void $ PG.execute q params
   where
-    q = [sql|
+    q =
+      [sql|
       INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, widgets, metadata)
       VALUES (?, ?, ?, ?, ?, ?)
     |]
@@ -660,7 +666,8 @@ insertChatMessage pid convId role content widgetsM metadataM = void $ PG.execute
 selectChatHistory :: DB es => UUIDId "conversation" -> Eff es [AIChatMessage]
 selectChatHistory convId = PG.query q (Only convId)
   where
-    q = [sql|
+    q =
+      [sql|
       SELECT id, project_id, conversation_id, role, content, widgets, metadata, created_at
       FROM apis.ai_chat_messages
       WHERE conversation_id = ?
