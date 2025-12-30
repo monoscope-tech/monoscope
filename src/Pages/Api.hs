@@ -135,7 +135,7 @@ apiKeysPage pid apiKeys = do
         span_ [class_ "text-textStrong text-2xl font-semibold mb-1"] "Generate an API key"
         form_
           [ hxPost_ $ "/p/" <> pid.toText <> "/apis"
-          , class_ "flex flex-col gap-6"
+          , class_ "flex flex-col gap-4"
           , hxTarget_ "#main-content"
           , [__|on closeModal from body set #apikey-modal.checked to false |]
           ]

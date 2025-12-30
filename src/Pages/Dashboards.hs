@@ -161,7 +161,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         button_ [type_ "submit", class_ "btn btn-primary"] "Save"
 
   -- Render variables and tabs in the same container
-  when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-fillWeaker px-6 py-2 gap-4 items-center flex-wrap"] do
+  when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-fillWeaker px-4 py-2 gap-4 items-center flex-wrap"] do
     -- Tabs section (on the left)
     whenJust dash.tabs \tabs -> do
       let activeTabIdx = fromMaybe 0 $ readMaybe . toString =<< join (L.lookup "tab" allParams)
@@ -265,7 +265,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     });
   });
     |]
-  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-5 pb-6 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-20 group/pg", id_ "dashboardPage"] do
+  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-5 pb-6 px-4 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-20 group/pg", id_ "dashboardPage"] do
     let activeTabIdx = fromMaybe 0 $ readMaybe . toString =<< join (L.lookup "tab" allParams)
     case dash.tabs of
       Just tabs -> do

@@ -231,7 +231,7 @@ overViewTabs pid tab = do
 
 chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> V.Vector Text -> Text -> Text -> Maybe Text -> Html ()
 chartsPage pid metricList sources source mFilter nextUrl = do
-  div_ [class_ "flex flex-col gap-6 px-6 h-[calc(100%-60px)] overflow-y-scroll"] $ do
+  div_ [class_ "flex flex-col gap-4 px-4 h-[calc(100%-60px)] overflow-y-scroll"] $ do
     overViewTabs pid "charts"
     div_ [class_ "w-full"] do
       Components.drawer_ "global-data-drawer" Nothing Nothing ""
@@ -307,7 +307,7 @@ chartList pid source metricList nextUrl = do
 
 dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Html ()
 dataPointsPage pid metrics = do
-  div_ [class_ "flex flex-col gap-2 px-6 h-[calc(100%-60px)] overflow-y-scroll"] $ do
+  div_ [class_ "flex flex-col gap-2 px-4 h-[calc(100%-60px)] overflow-y-scroll"] $ do
     overViewTabs pid "datapoints"
     div_
       [ class_ "w-full rounded-2xl mt-4 border flex flex-col"

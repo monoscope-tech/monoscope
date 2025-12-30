@@ -232,7 +232,7 @@ renderMonitorContent item = do
 
     -- Details row
     div_ [class_ "w-full flex"] do
-      div_ [class_ "flex flex-col gap-6 w-1/3"] do
+      div_ [class_ "flex flex-col gap-4 w-1/3"] do
         -- Hosts or query preview
         div_ [class_ "flex gap-2 items-center w-full"] do
           case item.details of
@@ -247,7 +247,7 @@ renderMonitorContent item = do
             span_ [class_ "shrink-0 text-sm"] $ toHtml item.schedule
 
       div_ [class_ "w-2/3 flex justify-between gap-10 items-center"] do
-        div_ [class_ "flex gap-6 items-center"] do
+        div_ [class_ "flex gap-4 items-center"] do
           -- Created date
           div_ [class_ "flex gap-1.5 items-center"] do
             faSprite_ "calendar" "regular" "h-6 w-6 fill-none"
@@ -419,7 +419,7 @@ monitorOverviewTabs pid monitorId monitorType = do
 -- | Unified overview page that handles both monitor types
 unifiedOverviewPage :: Projects.ProjectId -> Monitors.QueryMonitorEvaled -> UTCTime -> V.Vector ManageMembers.Team -> Maybe Slack.SlackData -> Maybe Slack.DiscordData -> Html ()
 unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
-  section_ [class_ "pt-2 mx-auto px-6 w-full flex flex-col gap-6 h-full overflow-y-auto"] do
+  section_ [class_ "pt-2 mx-auto px-4 w-full flex flex-col gap-4 h-full overflow-y-auto"] do
     -- Header section
     div_ [class_ "flex justify-between items-center"] do
       monitorHeader alert.alertConfig.title (isJust alert.deactivatedAt) ("Severity: " <> alert.alertConfig.severity)
@@ -550,7 +550,7 @@ alertNotificationsTab_ alert teams = do
           span_ [class_ "text-sm text-textWeak"] "Project level notification integrations will be used."
           a_ [href_ $ "/p/" <> alert.projectId.toText <> "/integrations", class_ "text-sm text-textBrand hover:underline"] "Configure integrations"
       unless (V.null teams) $ do
-        div_ [class_ "flex flex-wrap gap-6 mb-4"] do
+        div_ [class_ "flex flex-wrap gap-4 mb-4"] do
           forM_ teams $ \team -> do
             div_ [class_ "flex flex-col border rounded-lg gap-4 border-strokeWeak p-6 relative w-96", id_ team.handle] do
               button_

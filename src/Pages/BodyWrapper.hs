@@ -620,7 +620,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
 
 navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 navbar projectM menuL currUser prePageTitle pageTitle pageTitleMonadId docsLink tabsM pageActionsM =
-  nav_ [id_ "main-navbar", class_ "w-full px-6 py-2 flex flex-row border-strokeWeak items-center"] do
+  nav_ [id_ "main-navbar", class_ "w-full px-4 py-2 flex flex-row border-strokeWeak items-center"] do
     div_ [class_ "flex-1 flex items-center text-textStrong gap-1"] do
       whenJust prePageTitle \pt -> whenJust (find (\a -> fst3 a == pt) menuL) \(_, _, icon) -> do
         whenJust projectM \p -> a_ [class_ "p-1 hover:bg-fillWeak inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ $ "/p/" <> p.id.toText <> "/dashboards"] do

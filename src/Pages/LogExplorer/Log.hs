@@ -615,7 +615,7 @@ virtualTable pid initialFetchUrl = do
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
-  section_ [class_ "mx-auto pt-2 px-6 gap-3.5 w-full flex flex-col h-full overflow-y-hidden overflow-x-hidden pb-2 group/pg", id_ "apiLogsPage"] do
+  section_ [class_ "mx-auto pt-2 px-4 gap-3.5 w-full flex flex-col h-full overflow-y-hidden overflow-x-hidden pb-2 group/pg", id_ "apiLogsPage"] do
     template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
     div_ [class_ "fixed z-[9999] hidden right-0 w-max h-max border rounded top-32 bg-bgBase shadow-lg", id_ "sessionPlayerWrapper"] do

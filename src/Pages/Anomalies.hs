@@ -260,8 +260,8 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
           , Widget.hideLegend = Just True
           }
     -- Two Column Layout
-    div_ [class_ "flex flex-col gap-6"] do
-      div_ [class_ "grid grid-cols-2 gap-6 w-full"] do
+    div_ [class_ "flex flex-col gap-4"] do
+      div_ [class_ "grid grid-cols-2 gap-4 w-full"] do
         case issue.issueType of
           Issues.RuntimeException -> do
             case AE.fromJSON (getAeson issue.issueData) of
@@ -277,7 +277,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                     div_ [class_ "px-4 py-2 border-b border-strokeWeak flex items-center justify-between"] do
                       div_ [class_ "flex items-center gap-2"] do
                         span_ [class_ "text-sm font-medium text-textStrong"] "Error details"
-                    div_ [class_ "p-4 flex flex-col gap-6"] do
+                    div_ [class_ "p-4 flex flex-col gap-4"] do
                       case (exceptionData.requestMethod, exceptionData.requestPath) of
                         (Just method, Just path) -> do
                           div_ [class_ "mb-2"] do

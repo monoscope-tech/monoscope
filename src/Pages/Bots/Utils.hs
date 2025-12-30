@@ -156,7 +156,7 @@ installedSuccess :: Text -> Html ()
 installedSuccess botPlatform = do
   navBar
   section_ [class_ "min-h-screen  flex flex-col justify-center"] do
-    div_ [class_ "max-w-4xl mx-auto px-6"] do
+    div_ [class_ "max-w-4xl mx-auto px-4"] do
       div_ [class_ "bg-bgBase border border-strokeWeak rounded-3xl border border-fillWeak overflow-hidden"] do
         div_ [class_ "bg-gradient-to-r from-fillSuccess-weak to-fillBrand-weak px-8 py-10 text-center"] do
           div_ [class_ "inline-flex items-center justify-center w-16 h-16 bg-bgRaised rounded-full mb-4 shadow-lg"] do
@@ -169,7 +169,7 @@ installedSuccess botPlatform = do
             p_ [class_ "text-textWeak text-sm mx-auto max-w-2xl "] $ toHtml $ "Start receiving real-time alerts and interact with your API data directly from " <> botPlatform <> ". Your team can now stay on top of API performance without leaving your chat."
           div_ [class_ "max-w-3xl mx-auto"] do
             h3_ [class_ "font-semibold text-textStrong mb-8 text-center"] "Available Commands"
-            div_ [class_ "grid gap-6 md:grid-cols-2"] do
+            div_ [class_ "grid gap-4 md:grid-cols-2"] do
               div_ [class_ "bg-gradient-to-br from-fillWeaker to-fillBrand-weak rounded-2xl p-6 border border-strokeBrand-weak"] do
                 div_ [class_ "flex items-start space-x-4"] do
                   div_ [class_ "flex-shrink-0"] do

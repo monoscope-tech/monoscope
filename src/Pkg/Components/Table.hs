@@ -133,7 +133,7 @@ data Config = Config
   , elemID :: Text
   , containerId :: Maybe Text -- Outer container id for HTMX targeting
   , renderAsTable :: Bool -- True for table mode, False for list mode
-  , addPadding :: Bool -- When True, wraps table in div with px-6 pt-4 pb-2 padding
+  , addPadding :: Bool -- When True, wraps table in div with px-4 pt-4 pb-2 padding
   , bulkActionsInHeader :: Maybe Int -- Column index (0-based) to place bulk actions in header; Nothing uses toolbar
   , noSurface :: Bool -- When True, removes surface-raised class from grid wrapper (for embedded tables)
   }
@@ -259,7 +259,7 @@ instance Default Config where
     Config
       { tableClasses = "table table-sm w-full relative"
       , thClasses = "text-left bg-fillWeaker sticky top-0"
-      , tdClasses = "px-6 py-4"
+      , tdClasses = "px-4 py-4"
       , containerClasses = "w-full mx-auto space-y-4"
       , showHeader = True
       , elemID = "tableContainer"
@@ -350,7 +350,7 @@ renderTable tbl =
                 renderRows tbl
         -- Pagination footer outside the raised surface
         whenJust tbl.features.pagination renderPaginationFooter
-      paddedContent = if tbl.config.addPadding then div_ [class_ "px-6 pt-4 pb-2"] tableContent else tableContent
+      paddedContent = if tbl.config.addPadding then div_ [class_ "px-4 pt-4 pb-2"] tableContent else tableContent
    in case tbl.config.containerId of
         Just cid -> div_ [class_ "w-full", id_ cid] paddedContent
         Nothing -> paddedContent
@@ -691,7 +691,7 @@ renderSortMenu sortCfg = do
 
 -- Pagination footer with per-page selector and navigation
 renderPaginationFooter :: Pagination -> Html ()
-renderPaginationFooter pg = div_ [class_ "flex items-center justify-between px-6 py-3"] do
+renderPaginationFooter pg = div_ [class_ "flex items-center justify-between px-4 py-3"] do
   div_ [class_ "flex items-center gap-2"] do
     div_ [class_ "flex rounded-md border border-strokeWeak overflow-hidden"] $ forM_ [25, 50, 100] \pp ->
       button_ ([class_ $ "cursor-pointer px-3 py-1.5 text-sm font-medium transition-colors " <> if pp == pg.perPage then "bg-fillStrong text-textInverse-strong" else "bg-bgRaised text-textWeak hover:bg-fillWeak", type_ "button"] <> if pp == pg.perPage then [] else pgAttrs (mkUrl 0 pp)) $ toHtml (show pp)

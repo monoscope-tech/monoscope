@@ -67,7 +67,7 @@ copyLink rid = do
         span_ [class_ " text-textStrong text-2xl font-semibold"] "Copy Share Link"
         div_ [class_ "text-[#000833]/60"] "Share this link with anyone to give them access to this event. Lasts for 48 hours only."
         div_ [class_ "h-1 w-full  bg-fillWeak"] pass
-        div_ [class_ "flex-col gap-6 flex"] $ do
+        div_ [class_ "flex-col gap-4 flex"] $ do
           let url = "https://app.monoscope.tech/share/r/" <> rid
           div_ [class_ "flex flex-col gap-2 items-center"] do
             div_ [class_ "mt-2  text-textSuccess"] do

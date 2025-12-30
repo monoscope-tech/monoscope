@@ -421,7 +421,7 @@ featureRow feature =
 
 navBar :: Html ()
 navBar = do
-  nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full w-full px-6 py-4 bg-base-100 flex flex-row justify-between"] do
+  nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full w-full px-4 py-4 bg-base-100 flex flex-row justify-between"] do
     div_ [class_ "flex justify-between items-center gap-4 w-[1000px] mx-auto"] do
       a_ [href_ "https://apitoolkit.io", class_ "flex items-center text-textWeak hover:text-textStrong"] do
         -- Only show full logos (no mini version needed for navbar)

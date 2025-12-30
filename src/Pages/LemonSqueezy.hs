@@ -163,7 +163,7 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFr
         div_ [class_ "p-1.5 rounded-md bg-fillBrand-weak"] $ faSprite_ "chart-line" "regular" "h-3.5 w-3.5 text-textBrand"
         label_ [class_ "text-sm font-medium text-textStrong"] "Usage Overview"
 
-      div_ [class_ "grid grid-cols-2 gap-6"] do
+      div_ [class_ "grid grid-cols-2 gap-4"] do
         div_ [class_ "flex flex-col gap-2"] do
           div_ [class_ "text-4xl font-bold text-textStrong"] $ toHtml $ formatNumberWithCommas reqs
           div_ [class_ "text-textWeak text-sm"] "Total Requests Made"

@@ -369,7 +369,7 @@ onboardingCompleteBody pid = do
 pricingPage :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
 pricingPage pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled = do
   div_ [class_ "w-[1100px] mx-auto mt-[70px] mb-10 mx-auto"] $ do
-    div_ [class_ "flex-col gap-6 flex w-full"] $ do
+    div_ [class_ "flex-col gap-4 flex w-full"] $ do
       div_ [class_ "w-1/2"] $ do
         stepIndicator 5 "Please pick a plan" $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
       paymentPlanPicker pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled

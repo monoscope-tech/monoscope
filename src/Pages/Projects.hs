@@ -149,7 +149,7 @@ instance ToHtml ListProjectsGet where
 listProjectsBody :: Maybe Sessions.Session -> V.Vector Projects.Project' -> Projects.Project' -> Bool -> Html ()
 listProjectsBody sessM projects demoProject showDemoProject = do
   nav_ [class_ "fixed top-0 left-0 right-0 bg-bgBase border-b border-strokeWeak z-50"] do
-    div_ [class_ "flex items-center justify-between px-6 py-3"] do
+    div_ [class_ "flex items-center justify-between px-4 py-3"] do
       a_ [href_ "/", class_ "flex items-center"] do
         img_ [class_ "h-6 dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
         img_ [class_ "h-6 hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
@@ -168,18 +168,18 @@ listProjectsBody sessM projects demoProject showDemoProject = do
         a_ [class_ "btn btn-ghost btn-sm", href_ "https://monoscope.tech/docs/", target_ "_blank"] "Docs"
         a_ [class_ "btn btn-ghost btn-sm text-textError", href_ "/logout"] "Logout"
 
-  section_ [id_ "main-content", class_ "mx-auto p-6 pb-36 pt-20 overflow-y-auto h-full"] do
+  section_ [id_ "main-content", class_ "mx-auto px-4 py-6 pb-36 pt-20 overflow-y-auto h-full"] do
     div_ [class_ "flex justify-between items-center mb-8"] do
       h2_ [class_ "text-textStrong text-3xl font-semibold"] "Projects"
       a_ [class_ "btn btn-primary btn-sm", href_ "/p/new"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Project")
 
     unless (V.null projects) $ div_ [class_ "mb-12"] do
       h3_ [class_ "text-textWeak text-lg font-medium mb-4"] "Your Projects"
-      div_ [class_ "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"] $ mapM_ projectCard_ $ V.toList projects
+      div_ [class_ "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"] $ mapM_ projectCard_ $ V.toList projects
 
     when showDemoProject $ div_ [] do
       h3_ [class_ "text-textWeak text-lg font-medium mb-4"] "Demo Project"
-      div_ [class_ "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"] $ projectCard_ demoProject
+      div_ [class_ "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"] $ projectCard_ demoProject
 
 
 projectCard_ :: Projects.Project' -> Html ()
@@ -405,7 +405,7 @@ renderNotificationOption title description value channel notifChannel icon extra
             p_ [class_ "text-sm text-textWeak"] $ toHtml description
         label_ [class_ "relative inline-flex items-center cursor-pointer"] do
           input_ [type_ "checkbox", value_ value, name_ "notifChannel", if isChecked then checked_ else title_ $ "Enable notification via " <> toText value, class_ "toggle toggle-primary"]
-    div_ [class_ "px-6 pb-6"] do
+    div_ [class_ "px-4 pb-6"] do
       extraContent
 
 
@@ -788,11 +788,11 @@ teamPage pid team projMembers slackChannels discordChannels = do
         div_ [class_ "w-full max-h-96 overflow-y-auto", id_ secId] do
           unless (T.null url) $ a_ [hxGet_ url, hxTrigger_ "intersect once", hxTarget_ $ "#" <> secId, hxSwap_ "outerHTML"] ""
           div_ [class_ "flex flex-col items-center justify-center py-8 text-center gap-2"] (faSprite_ icon "regular" "h-6 w-6 text-textWeak" >> div_ [class_ "text-sm text-textWeak"] (toHtml $ "No " <> T.toLower title <> " linked"))
-  section_ [id_ "main-content", class_ "w-full py-8"] $ div_ [class_ "px-6 w-full"] do
+  section_ [id_ "main-content", class_ "w-full py-8"] $ div_ [class_ "px-4 w-full"] do
     div_ [class_ "mb-6 flex items-center gap-3"] do
       a_ [href_ ("/p/" <> pid.toText <> "/manage_teams"), class_ "text-textWeak hover:text-textStrong"] $ faSprite_ "arrow-left" "regular" "h-4 w-4"
       h2_ [class_ "text-textStrong text-3xl font-semibold"] $ toHtml team.name
-    div_ [class_ "flex gap-6 h-full"] do
+    div_ [class_ "flex gap-4 h-full"] do
       div_ [class_ "w-4/12 space-y-4"] do
         card_ (faSprite_ "circle-info" "regular" "h-4 w-4" >> "Details") do
           div_ [class_ "absolute right-4 top-4"] do
