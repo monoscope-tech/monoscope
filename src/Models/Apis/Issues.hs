@@ -44,6 +44,14 @@ module Models.Apis.Issues (
   issueIdText,
   parseIssueType,
   issueTypeToText,
+
+  -- * AI Conversations
+  AIConversation (..),
+  AIChatMessage (..),
+  ConversationType (..),
+  getOrCreateConversation,
+  insertChatMessage,
+  selectChatHistory,
 ) where
 
 import Data.Aeson qualified as AE
@@ -558,3 +566,104 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
       , llmEnhancedAt = Nothing
       , llmEnhancementVersion = Nothing
       }
+
+
+-- | Conversation type for AI chats
+data ConversationType = CTAnomaly | CTTrace | CTLogExplorer | CTDashboard
+  deriving stock (Generic, Show, Eq)
+
+instance Default ConversationType where
+  def = CTAnomaly
+
+instance ToField ConversationType where
+  toField CTAnomaly = Escape "anomaly"
+  toField CTTrace = Escape "trace"
+  toField CTLogExplorer = Escape "log_explorer"
+  toField CTDashboard = Escape "dashboard"
+
+instance FromField ConversationType where
+  fromField f mdata = do
+    txt <- fromField @Text f mdata
+    case txt of
+      "anomaly" -> pure CTAnomaly
+      "trace" -> pure CTTrace
+      "log_explorer" -> pure CTLogExplorer
+      "dashboard" -> pure CTDashboard
+      _ -> returnError ConversionFailed f "Invalid conversation type"
+
+
+-- | AI Conversation metadata
+data AIConversation = AIConversation
+  { id :: UUIDId "ai_conversation"
+  , projectId :: Projects.ProjectId
+  , conversationId :: UUIDId "conversation"  -- The contextual ID (issue_id, trace_id, etc.)
+  , conversationType :: ConversationType
+  , context :: Maybe (Aeson AE.Value)  -- Initial context for the AI
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, ToRow)
+
+
+-- | AI Chat message
+data AIChatMessage = AIChatMessage
+  { id :: UUIDId "ai_chat"
+  , projectId :: Projects.ProjectId
+  , conversationId :: UUIDId "conversation"
+  , role :: Text  -- "user", "assistant", or "system"
+  , content :: Text
+  , widgets :: Maybe (Aeson AE.Value)  -- Array of widget configs
+  , metadata :: Maybe (Aeson AE.Value)  -- Additional metadata
+  , createdAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, ToRow)
+
+
+-- | Get or create a conversation for a given context
+getOrCreateConversation :: DB es => Projects.ProjectId -> UUIDId "conversation" -> ConversationType -> AE.Value -> Eff es AIConversation
+getOrCreateConversation pid convId convType ctx = do
+  existing <- listToMaybe <$> PG.query selectQ (pid, convId)
+  case existing of
+    Just conv -> pure conv
+    Nothing -> do
+      void $ PG.execute insertQ (pid, convId, convType, Aeson ctx)
+      conv <- listToMaybe <$> PG.query selectQ (pid, convId)
+      pure $ fromMaybe (error "Failed to create conversation") conv
+  where
+    selectQ = [sql|
+      SELECT id, project_id, conversation_id, conversation_type, context, created_at, updated_at
+      FROM apis.ai_conversations
+      WHERE project_id = ? AND conversation_id = ?
+      ORDER BY created_at DESC
+      LIMIT 1
+    |]
+    insertQ = [sql|
+      INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
+      VALUES (?, ?, ?, ?)
+    |]
+
+
+-- | Insert a new chat message
+insertChatMessage :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Text -> Text -> Maybe AE.Value -> Maybe AE.Value -> Eff es ()
+insertChatMessage pid convId role content widgetsM metadataM = void $ PG.execute q params
+  where
+    q = [sql|
+      INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, widgets, metadata)
+      VALUES (?, ?, ?, ?, ?, ?)
+    |]
+    params = (pid, convId, role, content, Aeson <$> widgetsM, Aeson <$> metadataM)
+
+
+-- | Select chat history for a conversation (oldest first, limited to 20)
+selectChatHistory :: DB es => UUIDId "conversation" -> Eff es [AIChatMessage]
+selectChatHistory convId = PG.query q (Only convId)
+  where
+    q = [sql|
+      SELECT id, project_id, conversation_id, role, content, widgets, metadata, created_at
+      FROM apis.ai_chat_messages
+      WHERE conversation_id = ?
+      ORDER BY created_at ASC
+      LIMIT 20
+    |]

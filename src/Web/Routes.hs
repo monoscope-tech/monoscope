@@ -288,6 +288,8 @@ data AnomaliesRoutes' mode = AnomaliesRoutes'
   , listGet :: mode :- QPT "layout" :> QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QEID "endpoint" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders AnomalyList.AnomalyListGet)
   , anomalyGet :: mode :- Capture "anomalyID" Anomalies.IssueId :> QPT "first_occurrence" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , anomalyHashGet :: mode :- "by_hash" :> Capture "anomalyHash" Text :> QPT "first_occurrence" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , aiChatPost :: mode :- Capture "issueID" Anomalies.IssueId :> "ai_chat" :> ReqBody '[FormUrlEncoded] AnomalyList.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
+  , aiChatHistoryGet :: mode :- Capture "issueID" Anomalies.IssueId :> "ai_chat" :> "history" :> Get '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
 
@@ -496,6 +498,8 @@ anomaliesServer pid =
     , listGet = AnomalyList.anomalyListGetH pid
     , anomalyGet = AnomalyList.anomalyDetailGetH pid
     , anomalyHashGet = AnomalyList.anomalyDetailHashGetH pid
+    , aiChatPost = AnomalyList.aiChatPostH pid
+    , aiChatHistoryGet = AnomalyList.aiChatHistoryGetH pid
     }
 
 
