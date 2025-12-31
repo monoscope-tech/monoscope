@@ -282,11 +282,14 @@ sqlFromQueryComponents sqlCfg qc =
                 -- Generate LATERAL unnest query for percentiles with custom percentile values
                 let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
                     -- Generate ARRAY of percentile expressions (fieldExpr already includes any division)
-                    pctExprs = T.intercalate ",\n                          "
-                      [ "COALESCE((approx_percentile(" <> show (p / 100.0) <> ", percentile_agg((" <> fieldExpr <> ")::float)))::float, 0)"
-                      | p <- pcts ]
+                    pctExprs =
+                      T.intercalate
+                        ",\n                          "
+                        [ "COALESCE((approx_percentile(" <> show (p / 100.0) <> ", percentile_agg((" <> fieldExpr <> ")::float)))::float, 0)"
+                        | p <- pcts
+                        ]
                     -- Generate ARRAY of percentile labels
-                    pctLabels = T.intercalate "," [ "'p" <> show (round p :: Int) <> "'" | p <- pcts ]
+                    pctLabels = T.intercalate "," ["'p" <> show (round p :: Int) <> "'" | p <- pcts]
                  in [fmt|SELECT timeB, quantile, value FROM (
                       SELECT extract(epoch from {timeBucketExpr})::integer AS timeB,
                         ARRAY[{pctExprs}] AS values,

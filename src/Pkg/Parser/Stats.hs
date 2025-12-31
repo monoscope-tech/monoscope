@@ -46,10 +46,12 @@ data SubjectExpr = SubjectExpr Subject (Maybe (Text, Double))
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
+
 -- | Display a SubjectExpr as SQL
 subjectExprToSQL :: SubjectExpr -> Text
 subjectExprToSQL (SubjectExpr sub Nothing) = display sub
 subjectExprToSQL (SubjectExpr sub (Just (op, val))) = "(" <> display sub <> " " <> op <> " " <> show val <> ")"
+
 
 -- Modify Aggregation Functions to include optional aliases
 data AggFunction
@@ -142,6 +144,7 @@ data Sources = SSpans | SMetrics
 pNumericValue :: Parser Double
 pNumericValue = try L.float <|> (fromIntegral <$> (L.decimal :: Parser Int))
 
+
 -- | Parse a subject expression: field, field / number, field * number
 -- >>> parse pSubjectExpr "" "duration"
 -- Right (SubjectExpr (Subject "duration" "duration" []) Nothing)
@@ -158,6 +161,7 @@ pSubjectExpr = do
     pure (op, val)
   pure $ SubjectExpr subj opM
 
+
 -- | Parse percentile(expr, percentile) - single percentile (Microsoft KQL syntax)
 -- >>> parse pPercentileSingle "" "percentile(duration, 95)"
 -- Right (Percentile (SubjectExpr (Subject "duration" "duration" []) Nothing) 95.0 Nothing)
@@ -173,6 +177,7 @@ pPercentileSingle = do
   _ <- string ")"
   pure $ Percentile subj pct Nothing
 
+
 -- | Parse percentiles(expr, p1, p2, ...) - multiple percentiles (Microsoft KQL syntax)
 -- >>> parse pPercentilesMulti "" "percentiles(duration, 50, 75, 90, 95)"
 -- Right (Percentiles (SubjectExpr (Subject "duration" "duration" []) Nothing) [50.0,75.0,90.0,95.0] Nothing)
@@ -187,6 +192,7 @@ pPercentilesMulti = do
   pcts <- pNumericValue `sepBy1` (string "," <* space)
   _ <- string ")"
   pure $ Percentiles subj pcts Nothing
+
 
 aggFunctionParser :: Parser AggFunction
 aggFunctionParser =
