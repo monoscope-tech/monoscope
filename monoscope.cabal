@@ -115,6 +115,7 @@ library
       Pages.Share
       Pages.Telemetry
       Pkg.AI
+      Pkg.AI.Agentic
       Pkg.Components.ExternalHeadScripts
       Pkg.Components.LogQueryBox
       Pkg.Components.Table
