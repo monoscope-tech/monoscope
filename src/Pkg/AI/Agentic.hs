@@ -499,19 +499,19 @@ executeSampleLogs config args = do
 
 
 -- | Execute GetFacets tool - return precomputed facets from config
-executeGetFacets :: (Applicative f) => AgenticConfig -> AE.Value -> f ToolResult
+executeGetFacets :: Applicative f => AgenticConfig -> AE.Value -> f ToolResult
 executeGetFacets config _args =
   case config.facetContext of
     Nothing ->
-      pure $
-        ToolResult
+      pure
+        $ ToolResult
           { tool = GetFacets
           , result = "No facet data available for this project"
           , success = False
           }
     Just summary ->
-      pure $
-        ToolResult
+      pure
+        $ ToolResult
           { tool = GetFacets
           , result = formatFacetSummary summary
           , success = True
