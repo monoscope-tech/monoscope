@@ -12,10 +12,10 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.Parser.Expr
 import Pkg.Parser.Stats
 import PyF (fmt)
-import Text.Read (readMaybe)
 import Relude
 import Safe qualified
 import Text.Megaparsec (errorBundlePretty, parse)
+import Text.Read (readMaybe)
 
 
 data QueryComponents = QueryComponents
@@ -300,9 +300,10 @@ sqlFromQueryComponents sqlCfg qc =
                     ORDER BY timeB DESC {limitClause}|]
               Nothing ->
                 -- Normal summarize query
-                let groupCol = if null qc.groupByClause
-                      then "'" <> (if null qc.select then "count" else "value") <> "'"
-                      else "COALESCE(" <> fromMaybe "status_code" (listToMaybe qc.groupByClause) <> "::text, 'null')"
+                let groupCol =
+                      if null qc.groupByClause
+                        then "'" <> (if null qc.select then "count" else "value") <> "'"
+                        else "COALESCE(" <> fromMaybe "status_code" (listToMaybe qc.groupByClause) <> "::text, 'null')"
                     aggCol = if null qc.select then "count(*)" else fromMaybe "count(*)" (listToMaybe qc.select)
                     timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
                     firstGroupCol = fromMaybe "status_code" (listToMaybe qc.groupByClause)
