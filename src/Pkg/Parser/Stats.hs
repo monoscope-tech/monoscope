@@ -16,6 +16,7 @@ module Pkg.Parser.Stats (
   namedAggregation,
   pSummarizeByClause,
   pSortField,
+  extractPercentilesInfo,
 ) where
 
 import Data.Aeson qualified as AE
@@ -25,6 +26,7 @@ import Pkg.Parser.Expr (Expr, Parser, Subject (..), ToQueryText (..), kqlTimespa
 import Relude hiding (Sum, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, space, string)
+import Text.Megaparsec.Char.Lexer qualified as L
 
 
 -- $setup
@@ -47,6 +49,7 @@ data AggFunction
   | P95 Subject (Maybe Text)
   | P99 Subject (Maybe Text)
   | P100 Subject (Maybe Text)
+  | Percentiles Subject (Maybe Double) (Maybe Text) -- subject, optional divisor, optional alias
   | Sum Subject (Maybe Text)
   | Avg Subject (Maybe Text)
   | Min Subject (Maybe Text)
@@ -127,6 +130,8 @@ aggFunctionParser :: Parser AggFunction
 aggFunctionParser =
   choice @[]
     [ Sum <$> (string "sum(" *> pSubject <* string ")") <*> pure Nothing
+    , try pPercentilesWithDivisor
+    , Percentiles <$> (string "percentiles(" *> pSubject <* string ")") <*> pure Nothing <*> pure Nothing
     , P50 <$> (string "p50(" *> pSubject <* string ")") <*> pure Nothing
     , P75 <$> (string "p75(" *> pSubject <* string ")") <*> pure Nothing
     , P90 <$> (string "p90(" *> pSubject <* string ")") <*> pure Nothing
@@ -142,6 +147,15 @@ aggFunctionParser =
     , Range <$> (string "range(" *> pSubject <* string ")") <*> pure Nothing
     , Plain <$> pSubject <*> pure Nothing
     ]
+  where
+    pPercentilesWithDivisor = do
+      _ <- string "percentiles("
+      subj <- pSubject
+      _ <- string ","
+      space
+      divisor <- try L.float <|> (fromIntegral <$> (L.decimal :: Parser Int))
+      _ <- string ")"
+      pure $ Percentiles subj (Just divisor) Nothing
 
 
 instance ToQueryText AggFunction where
@@ -160,6 +174,7 @@ instance Display AggFunction where
   displayPrec _prec (P95 sub _alias) = displayBuilder $ "approx_percentile(0.95, percentile_agg((" <> display sub <> ")::float))::int"
   displayPrec _prec (P99 sub _alias) = displayBuilder $ "approx_percentile(0.99, percentile_agg((" <> display sub <> ")::float))::int"
   displayPrec _prec (P100 sub _alias) = displayBuilder $ "approx_percentile(1, percentile_agg((" <> display sub <> ")::float))::int"
+  displayPrec _prec (Percentiles sub divisorM _alias) = displayBuilder $ "__PERCENTILES__" <> display sub <> "__DIV__" <> maybe "1" show divisorM <> "__END__"
   displayPrec _prec (Sum sub _alias) = displayBuilder $ "sum((" <> display sub <> ")::float)"
   displayPrec _prec (Avg sub _alias) = displayBuilder $ "avg((" <> display sub <> ")::float)"
   displayPrec _prec (Min sub _alias) = displayBuilder $ "min((" <> display sub <> ")::float)"
@@ -338,6 +353,7 @@ namedAggregation = do
     P95 sub _ -> return $ P95 sub (Just name)
     P99 sub _ -> return $ P99 sub (Just name)
     P100 sub _ -> return $ P100 sub (Just name)
+    Percentiles sub div _ -> return $ Percentiles sub div (Just name)
     Median sub _ -> return $ Median sub (Just name)
     Stdev sub _ -> return $ Stdev sub (Just name)
     Range sub _ -> return $ Range sub (Just name)
@@ -432,3 +448,17 @@ parseQuery = do
 
 instance ToQueryText [Section] where
   toQText secs = T.intercalate " | " $ map toQText secs
+
+
+-- | Extract percentiles info from a list of sections
+-- Returns (field, divisor) if a Percentiles aggregation is found
+extractPercentilesInfo :: [Section] -> Maybe (Subject, Maybe Double)
+extractPercentilesInfo = foldr go Nothing
+  where
+    go (SummarizeCommand aggs _) acc = case findPercentiles aggs of
+      Just info -> Just info
+      Nothing -> acc
+    go _ acc = acc
+    findPercentiles [] = Nothing
+    findPercentiles (Percentiles sub div _ : _) = Just (sub, div)
+    findPercentiles (_ : rest) = findPercentiles rest

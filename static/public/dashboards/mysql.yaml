@@ -48,23 +48,7 @@ widgets:
     title: 'Query Response Time (ms)'
     hide_subtitle: true
     summarize_by: max
-    sql: |
-      SELECT timeB, quantile, value
-      FROM (
-        SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
-               ARRAY[
-                 (approx_percentile(0.50, percentile_agg(attributes___db___duration)) / 1e3)::float,
-                 (approx_percentile(0.75, percentile_agg(attributes___db___duration)) / 1e3)::float,
-                 (approx_percentile(0.90, percentile_agg(attributes___db___duration)) / 1e3)::float,
-                 (approx_percentile(0.95, percentile_agg(attributes___db___duration)) / 1e3)::float
-               ] AS values,
-               ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
-        FROM otel_logs_and_spans
-        WHERE project_id='{{project_id}}' AND attributes___db___system='mysql'
-          {{time_filter}}
-        GROUP BY timeB
-      ) s,
-      LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
+    query: attributes.db.system=="mysql" | summarize percentiles(attributes.db.duration, 1e3) by bin_auto(timestamp)
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'

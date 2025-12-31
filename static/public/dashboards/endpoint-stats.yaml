@@ -84,26 +84,8 @@ widgets:
   - type: 'timeseries_line'
     title: 'Latency percentiles (ms)'
     hide_subtitle: true
-    # query: timechart count() by status_code
-    # query: timechart p50(duration_ns) as p50, p75(duration_ns) as p75, p90(duration_ns) as p90, p95(duration_ns) as p95 by duration_ns
     summarize_by: max
-    sql: |
-      SELECT timeB, quantile, value
-      FROM (
-        SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
-               ARRAY[
-                 (approx_percentile(0.50, percentile_agg(duration)) / 1e6)::float,
-                 (approx_percentile(0.75, percentile_agg(duration)) / 1e6)::float,
-                 (approx_percentile(0.90, percentile_agg(duration)) / 1e6)::float,
-                 (approx_percentile(0.95, percentile_agg(duration)) / 1e6)::float
-               ] AS values,
-               ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
-        FROM otel_logs_and_spans 
-        WHERE project_id='{{project_id}}' AND '{{var-endpointHash}}'=ANY(hashes) AND kind='server' AND attributes___http___response___status_code IS NOT NULL
-          {{time_filter}}
-        GROUP BY timeB
-      ) s,
-      LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
+    query: hashes[*]=="{{var-endpointHash}}" AND kind=="server" AND attributes.http.response.status_code != null | summarize percentiles(duration, 1e6) by bin_auto(timestamp)
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'

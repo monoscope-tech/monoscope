@@ -12,6 +12,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.Parser.Expr
 import Pkg.Parser.Stats
 import PyF (fmt)
+import Text.Read (readMaybe)
 import Relude
 import Safe qualified
 import Text.Megaparsec (errorBundlePretty, parse)
@@ -263,58 +264,55 @@ sqlFromQueryComponents sqlCfg qc =
               WHERE {buildWhereForCount}
               {groupByClause} limit 1|]
 
+      -- Parse percentiles marker from select columns: __PERCENTILES__field__DIV__divisor__END__
+      percentilesInfo = do
+        sel <- listToMaybe qc.select
+        field <- T.stripPrefix "__PERCENTILES__" sel >>= T.stripSuffix "__END__"
+        let (fieldPart, rest) = T.breakOn "__DIV__" field
+        let divisor = T.stripPrefix "__DIV__" rest >>= readMaybe . toString :: Maybe Double
+        pure (fieldPart, fromMaybe 1.0 divisor)
+
       -- Generate the summarize query depending on bin functions and data type
       summarizeQuery =
         case qc.finalSummarizeQuery of
           Just binInterval ->
-            -- For queries with bin functions, create a time-bucketed query returning (timestamp, group, value) tuples
-            -- This format is compatible with the pivot' function in Charts.hs
-            let
-              -- Default to status_code as the group by column if none specified
-              -- This simplifies the case where we need to return the tuple (time, group, value) format
-              -- but only have a time series with no explicit grouping
-              groupCol =
-                if null qc.groupByClause
-                  then "'" <> (if null qc.select then "count" else "value") <> "'"
-                  else "COALESCE(" <> fromMaybe "status_code" (listToMaybe qc.groupByClause) <> "::text, 'null')"
-
-              -- Default to count(*) if no aggregation specified
-              aggCol =
-                if null qc.select
-                  then "count(*)"
-                  else fromMaybe "count(*)" (listToMaybe qc.select)
-
-              -- Create time bucket expression
-              timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-
-              -- Create GROUP BY clause with conditional logic outside PyF template
-              firstGroupCol = fromMaybe "status_code" (listToMaybe qc.groupByClause)
-              groupByPart =
-                if null qc.groupByClause
-                  then timeBucketExpr
-                  else timeBucketExpr <> ", " <> firstGroupCol
-             in
-              [fmt|
-                SELECT
-                  extract(epoch from {timeBucketExpr})::integer,
-                  {groupCol},
-                  ({aggCol})::float
-                FROM {fromTable}
-                WHERE {buildWhere}
-                GROUP BY {groupByPart}
-                ORDER BY {timeBucketExpr} DESC
-                {limitClause}
-              |]
+            case percentilesInfo of
+              Just (field, divisor) ->
+                -- Generate LATERAL unnest query for percentiles
+                let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
+                    divExpr = if divisor == 1.0 then "" else " / " <> show divisor
+                 in [fmt|SELECT timeB, quantile, value FROM (
+                      SELECT extract(epoch from {timeBucketExpr})::integer AS timeB,
+                        ARRAY[
+                          COALESCE((approx_percentile(0.50, percentile_agg(({field})::float)){divExpr})::float, 0),
+                          COALESCE((approx_percentile(0.75, percentile_agg(({field})::float)){divExpr})::float, 0),
+                          COALESCE((approx_percentile(0.90, percentile_agg(({field})::float)){divExpr})::float, 0),
+                          COALESCE((approx_percentile(0.95, percentile_agg(({field})::float)){divExpr})::float, 0),
+                          COALESCE((approx_percentile(0.99, percentile_agg(({field})::float)){divExpr})::float, 0)
+                        ] AS values,
+                        ARRAY['p50', 'p75', 'p90', 'p95', 'p99'] AS quantiles
+                      FROM {fromTable}
+                      WHERE {buildWhere}
+                      GROUP BY timeB
+                      HAVING COUNT(*) > 0
+                    ) s, LATERAL unnest(s.values, s.quantiles) AS u(value, quantile)
+                    WHERE value IS NOT NULL
+                    ORDER BY timeB DESC {limitClause}|]
+              Nothing ->
+                -- Normal summarize query
+                let groupCol = if null qc.groupByClause
+                      then "'" <> (if null qc.select then "count" else "value") <> "'"
+                      else "COALESCE(" <> fromMaybe "status_code" (listToMaybe qc.groupByClause) <> "::text, 'null')"
+                    aggCol = if null qc.select then "count(*)" else fromMaybe "count(*)" (listToMaybe qc.select)
+                    timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
+                    firstGroupCol = fromMaybe "status_code" (listToMaybe qc.groupByClause)
+                    groupByPart = if null qc.groupByClause then timeBucketExpr else timeBucketExpr <> ", " <> firstGroupCol
+                 in [fmt|SELECT extract(epoch from {timeBucketExpr})::integer, {groupCol}, ({aggCol})::float
+                      FROM {fromTable} WHERE {buildWhere} GROUP BY {groupByPart}
+                      ORDER BY {timeBucketExpr} DESC {limitClause}|]
           Nothing ->
-            -- For regular summarize queries without time buckets
-            [fmt|
-              SELECT {T.intercalate "," qc.select}
-              FROM {fromTable}
-              WHERE {buildWhere}
-              {groupByClause}
-              ORDER BY {timestampCol} DESC
-              {limitClause}
-            |]
+            [fmt|SELECT {T.intercalate "," qc.select} FROM {fromTable} WHERE {buildWhere}
+              {groupByClause} ORDER BY {timestampCol} DESC {limitClause}|]
 
       -- FIXME: render this based on the aggregations, but without the aliases
       alertSelect = [fmt| count(*)::integer|] :: Text
