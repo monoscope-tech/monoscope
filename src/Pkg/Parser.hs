@@ -152,7 +152,6 @@ sqlFromQueryComponents sqlCfg qc =
         ((Just a, Just b), Nothing) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
         _ -> ""
 
-
       -- Handle sort order
       sortOrder = case qc.sortFields of
         Just fields -> "ORDER BY " <> T.intercalate ", " (map displaySortField fields)
