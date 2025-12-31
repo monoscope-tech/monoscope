@@ -11,7 +11,6 @@ module Pkg.QueryCache (
   hasSummarizeWithBin,
 ) where
 
-import Data.Digest.XXHash (xxHash)
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
@@ -27,6 +26,7 @@ import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.Parser.Stats (BinFunction (..), Section (..), Sources (..), SummarizeByClause (..), defaultBinSize)
 import Relude
 import System.DB (DB)
+import Utils (toXXHash)
 
 
 data CacheKey = CacheKey
@@ -80,7 +80,7 @@ generateCacheKey pid sourceM sections sqlCfg =
   CacheKey
     { projectId = pid
     , source = maybe "spans" toQText sourceM
-    , queryHash = show $ xxHash $ encodeUtf8 $ toQText sections
+    , queryHash = toXXHash $ toQText sections
     , binInterval = extractBinInterval sqlCfg sections
     }
 
@@ -95,6 +95,7 @@ lookupCache key (reqFrom, reqTo) = do
              cached_from, cached_to, cached_data, hit_count
       FROM query_cache
       WHERE project_id = ? AND source = ? AND query_hash = ? AND bin_interval = ?
+      LIMIT 1
     |]
       (key.projectId, key.source, key.queryHash, key.binInterval)
   pure $ case results of
@@ -103,12 +104,13 @@ lookupCache key (reqFrom, reqTo) = do
       let entry = CacheEntry pid src qh bi oq cf ct cd hc
        in if
             | reqFrom >= cf && reqTo <= ct -> CacheHit entry
-            | reqTo > ct && reqFrom >= cf -> PartialHit entry
+            | reqFrom >= cf && reqTo > ct -> PartialHit entry -- extends forward
+            | reqFrom < cf && reqTo > ct -> PartialHit entry -- extends both directions
             | reqFrom < cf -> CacheBypassed "Request extends before cached range"
             | otherwise -> CacheMiss
 
 
--- | Update or insert cache entry
+-- | Update or insert cache entry (merges time ranges on conflict)
 updateCache :: DB es => CacheKey -> (UTCTime, UTCTime) -> MetricsData -> Text -> Eff es ()
 updateCache key (fromTime, toTime) metricsData originalQuery =
   void
@@ -119,8 +121,8 @@ updateCache key (fromTime, toTime) metricsData originalQuery =
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, now())
     ON CONFLICT (project_id, source, query_hash, bin_interval)
     DO UPDATE SET
-      cached_from = EXCLUDED.cached_from,
-      cached_to = EXCLUDED.cached_to,
+      cached_from = LEAST(query_cache.cached_from, EXCLUDED.cached_from),
+      cached_to = GREATEST(query_cache.cached_to, EXCLUDED.cached_to),
       cached_data = EXCLUDED.cached_data,
       original_query = EXCLUDED.original_query,
       hit_count = query_cache.hit_count + 1,
@@ -140,12 +142,12 @@ mergeTimeseriesData cached new
        in cached
             { dataset = dedupedRows
             , rowsCount = fromIntegral $ V.length dedupedRows
-            , from = min <$> cached.from <*> new.from <|> cached.from <|> new.from
-            , to = max <$> cached.to <*> new.to <|> cached.to <|> new.to
+            , from = liftA2 min cached.from new.from <|> cached.from <|> new.from
+            , to = liftA2 max cached.to new.to <|> cached.to <|> new.to
             , stats = Just $ recalculateStats dedupedRows
             }
   where
-    cmpTs a b = compare (join $ V.headM a) (join $ V.headM b)
+    cmpTs = comparing (join . V.headM)
     deduplicateByTimestamp rows
       | V.null rows = rows
       | otherwise = V.fromList $ foldr dedupe [] (V.toList rows)
@@ -155,13 +157,16 @@ mergeTimeseriesData cached new
       | otherwise = x : y : ys
 
 
--- | Recalculate stats from dataset (takes second column as values)
+-- | Recalculate stats from dataset in single pass
 recalculateStats :: V.Vector (V.Vector (Maybe Double)) -> MetricsStats
 recalculateStats rows =
-  let values = V.mapMaybe (\r -> V.headM (V.drop 1 r) >>= id) rows
+  let values = V.mapMaybe (join . V.headM . V.drop 1) rows
    in if V.null values
         then MetricsStats 0 0 0 0 0 0 0
-        else MetricsStats (V.minimum values) (V.maximum values) (V.sum values) (V.length values) (V.sum values / fromIntegral (V.length values)) (V.head values) (V.maximum values)
+        else
+          let h = V.head values
+              (!minV, !maxV, !sumV, !cnt) = V.foldl' (\(!mn, !mx, !s, !c) x -> (min mn x, max mx x, s + x, c + 1)) (h, h, 0, 0) values
+           in MetricsStats minV maxV sumV cnt (sumV / fromIntegral cnt) h maxV
 
 
 -- | Filter dataset rows by timestamp predicate

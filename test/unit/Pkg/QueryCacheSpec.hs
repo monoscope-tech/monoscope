@@ -3,7 +3,7 @@ module Pkg.QueryCacheSpec (spec) where
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Vector qualified as V
-import Pages.Charts.Types (MetricsData (..), MetricsStats (..))
+import Pages.Charts.Types (MetricsData (..))
 import Pkg.Parser (defPid, defSqlQueryCfg, fixedUTCTime)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), Section (..), SummarizeByClause (..))
@@ -16,21 +16,17 @@ mkTime :: Int -> UTCTime
 mkTime = posixSecondsToUTCTime . fromIntegral
 
 
-mkRow :: Double -> Double -> V.Vector (Maybe Double)
-mkRow ts val = V.fromList [Just ts, Just val]
-
-
 mkMetrics :: [(Double, Double)] -> MetricsData
 mkMetrics rows = MetricsData
-  { dataset = V.fromList $ map (uncurry mkRow) rows
+  { dataset = V.fromList $ map (\(ts, val) -> V.fromList [Just ts, Just val]) rows
   , dataFloat = Nothing
   , dataJSON = V.empty
   , dataText = V.empty
   , headers = V.fromList ["timestamp", "value"]
   , rowsCount = fromIntegral $ length rows
   , rowsPerMin = Nothing
-  , from = fst <$> listToMaybe rows <&> floor
-  , to = fst <$> listToMaybe (reverse rows) <&> floor
+  , from = floor . fst <$> viaNonEmpty head rows
+  , to = floor . fst <$> viaNonEmpty last rows
   , stats = Nothing
   }
 
