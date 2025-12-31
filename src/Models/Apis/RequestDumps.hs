@@ -464,14 +464,12 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
   now <- Time.currentTime
   let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) queryAST
 
-  -- Debug logging for parsed query AST and generated SQL
   Log.logTrace
     "Query Debug Info"
     ( AE.object
         [ "original_query_input" AE..= queryText
         , "parsed_query_ast" AE..= show queryAST
         , "generated_sql_query" AE..= q
-        , "count_query" AE..= queryComponents.countQuery
         , "project_id" AE..= show pid
         , "source" AE..= source
         , "target_spans" AE..= fromMaybe "" targetSpansM
@@ -481,10 +479,14 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
         ]
     )
 
-  -- Use the new flexible query execution that doesn't modify SQL
   logItemsV <- checkpoint (toAnnotation ("selectLogTable", q)) $ executeArbitraryQuery q
-  Only c <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
-  pure $ Right (logItemsV, queryComponents.toColNames, c)
+  -- Extract count from last column (_total_count via count(*) OVER()), strip it from rows
+  let dropLast v = V.take (V.length v - 1) v
+      count = fromMaybe 0 $ do
+        firstRow <- logItemsV V.!? 0
+        AE.Number n <- firstRow V.!? (V.length firstRow - 1)
+        pure $ round n
+  pure $ Right (V.map dropLast logItemsV, queryComponents.toColNames, count)
 
 
 selectChildSpansAndLogs :: (DB es, Time.Time :> es) => Projects.ProjectId -> [Text] -> V.Vector Text -> (Maybe UTCTime, Maybe UTCTime) -> V.Vector Text -> Eff es [V.Vector AE.Value]
@@ -522,10 +524,6 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
       target = fromMaybe "log_pattern" targetM
       q = [text|select $target, count(*) as p_count from otel_logs_and_spans where project_id='${pidTxt}' and ${whereCondition} and $target is not null GROUP BY $target ORDER BY p_count desc offset ? limit 15;|]
   PG.query (Query $ encodeUtf8 q) (Only skip)
-
-
-queryCount :: DB es => Text -> Eff es (Maybe (Only Int))
-queryCount q = listToMaybe <$> PG.query_ (Query $ encodeUtf8 q)
 
 
 getLast24hTotalRequest :: DB es => Projects.ProjectId -> Eff es Int
