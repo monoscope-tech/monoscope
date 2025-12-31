@@ -85,7 +85,7 @@ widgets:
     title: 'Latency percentiles (ms)'
     hide_subtitle: true
     summarize_by: max
-    query: hashes[*]=="{{var-endpointHash}}" AND kind=="server" AND attributes.http.response.status_code != null | summarize percentiles(duration, 50, 75, 90, 95, 1e6) by bin_auto(timestamp)
+    query: hashes[*]=="{{var-endpointHash}}" AND kind=="server" AND attributes.http.response.status_code != null | summarize percentiles(duration / 1e6, 50, 75, 90, 95) by bin_auto(timestamp)
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'

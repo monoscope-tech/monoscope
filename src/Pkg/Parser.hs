@@ -264,29 +264,26 @@ sqlFromQueryComponents sqlCfg qc =
               WHERE {buildWhereForCount}
               {groupByClause} limit 1|]
 
-      -- Parse percentiles marker: __PERCENTILES__field__PCTS__p1,p2,p3__DIV__divisor__END__
+      -- Parse percentiles marker: __PERCENTILES__fieldExpr__PCTS__p1,p2,p3__END__
       percentilesInfo = do
         sel <- listToMaybe qc.select
         rest1 <- T.stripPrefix "__PERCENTILES__" sel >>= T.stripSuffix "__END__"
         let (fieldPart, rest2) = T.breakOn "__PCTS__" rest1
         rest3 <- T.stripPrefix "__PCTS__" rest2
-        let (pctsPart, rest4) = T.breakOn "__DIV__" rest3
-        let pcts = mapMaybe (readMaybe . toString) $ T.splitOn "," pctsPart :: [Double]
-        let divisor = T.stripPrefix "__DIV__" rest4 >>= readMaybe . toString :: Maybe Double
-        if null pcts then Nothing else pure (fieldPart, pcts, fromMaybe 1.0 divisor)
+        let pcts = mapMaybe (readMaybe . toString) $ T.splitOn "," rest3 :: [Double]
+        if null pcts then Nothing else pure (fieldPart, pcts)
 
       -- Generate the summarize query depending on bin functions and data type
       summarizeQuery =
         case qc.finalSummarizeQuery of
           Just binInterval ->
             case percentilesInfo of
-              Just (field, pcts, divisor) ->
+              Just (fieldExpr, pcts) ->
                 -- Generate LATERAL unnest query for percentiles with custom percentile values
                 let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-                    divExpr = if divisor == 1.0 then "" else " / " <> show divisor
-                    -- Generate ARRAY of percentile expressions
+                    -- Generate ARRAY of percentile expressions (fieldExpr already includes any division)
                     pctExprs = T.intercalate ",\n                          "
-                      [ "COALESCE((approx_percentile(" <> show (p / 100.0) <> ", percentile_agg((" <> field <> ")::float))" <> divExpr <> ")::float, 0)"
+                      [ "COALESCE((approx_percentile(" <> show (p / 100.0) <> ", percentile_agg((" <> fieldExpr <> ")::float)))::float, 0)"
                       | p <- pcts ]
                     -- Generate ARRAY of percentile labels
                     pctLabels = T.intercalate "," [ "'p" <> show (round p :: Int) <> "'" | p <- pcts ]

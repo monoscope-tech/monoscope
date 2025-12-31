@@ -42,7 +42,7 @@ widgets:
     title: 'Service Latency Percentiles (ms)'
     hide_subtitle: true
     summarize_by: max
-    query: kind != null | summarize percentiles(duration, 50, 75, 90, 95, 99, 1e6) by bin_auto(timestamp)
+    query: kind != null | summarize percentiles(duration / 1e6, 50, 75, 90, 95, 99) by bin_auto(timestamp)
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
