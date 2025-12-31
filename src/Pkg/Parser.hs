@@ -23,10 +23,7 @@ data QueryComponents = QueryComponents
   , fromTable :: Maybe Text
   , select :: [Text]
   , finalColumns :: [Text]
-  , -- A query which can be run to retrieve the count
-    countQuery :: Text
-  , -- final generated sql query
-    finalSqlQuery :: Text
+  , finalSqlQuery :: Text -- includes count(*) OVER() as last column
   , finalAlertQuery :: Maybe Text
   , finalSummarizeQuery :: Maybe Text -- For summarize query commands
   , sortFields :: Maybe [SortField] -- Fields to sort by
@@ -155,16 +152,6 @@ sqlFromQueryComponents sqlCfg qc =
         ((Just a, Just b), Nothing) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
         _ -> ""
 
-      -- Date range for count queries (never uses cursor)
-      -- Count should always reflect the full user-selected time range
-      dateRangeStrForCount = case sqlCfg.dateRange of
-        (Nothing, Just b) -> timestampCol <> " <= '" <> fmtTime b <> "'"
-        (Just a, Nothing) -> timestampCol <> " >= '" <> fmtTime a <> "'"
-        (Just a, Just b) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
-        _ -> ""
-
-      -- Time-based calculations removed with timechart/stats support
-
       -- Handle sort order
       sortOrder = case qc.sortFields of
         Just fields -> "ORDER BY " <> T.intercalate ", " (map displaySortField fields)
@@ -194,9 +181,8 @@ sqlFromQueryComponents sqlCfg qc =
       -- Build complete WHERE clause for data queries (with cursor)
       buildWhere = T.intercalate " and " $ filter (not . T.null) ["project_id='" <> sqlCfg.pid.toText <> "'", dateRangeStr, "(" <> whereCondition <> ")"]
 
-      -- Build complete WHERE clause for count queries (without cursor)
-      buildWhereForCount = T.intercalate " and " $ filter (not . T.null) ["project_id='" <> sqlCfg.pid.toText <> "'", dateRangeStrForCount, "(" <> whereCondition <> ")"]
-
+      -- All queries include count(*) OVER() as last column for total count
+      countOver = "count(*) OVER() as _total_count" :: Text
       finalSqlQuery = case sqlCfg.targetSpansM of
         Just "service-entry-spans" ->
           [fmt|WITH ranked_spans AS (SELECT *, resource->'service'->>'name' AS service_name,
@@ -204,64 +190,23 @@ sqlFromQueryComponents sqlCfg qc =
                 FROM otel_logs_and_spans where {buildWhere}
                 {groupByClause}
                 )
-               SELECT {selectClause} FROM ranked_spans
+               SELECT {selectClause}, {countOver} FROM ranked_spans
                   WHERE rn = 1 {sortOrder} {limitClause} |]
         _ ->
           case qc.finalSummarizeQuery of
             Just binInterval ->
-              -- For summarize queries with bin functions, create a special format
-              let
-                -- Create time bucket expression
-                timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-               in
-                -- Include the time bucket expression as the first column
-                let selectCols = T.intercalate "," (filter (\s -> not ("time_bucket" `T.isInfixOf` s)) qc.select)
-                 in [fmt|SELECT
-                       extract(epoch from {timeBucketExpr})::integer,
-                       {selectCols}
+              let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
+                  selectCols = T.intercalate "," $ filter (not . T.isInfixOf "time_bucket") qc.select
+               in [fmt|SELECT extract(epoch from {timeBucketExpr})::integer, {selectCols}, {countOver}
                    FROM {fromTable}
                    WHERE {buildWhere}
                    GROUP BY {timeBucketExpr}
                    ORDER BY {timeBucketExpr} DESC
                    {limitClause} |]
             Nothing ->
-              [fmt|SELECT {selectClause} FROM {fromTable}
+              [fmt|SELECT {selectClause}, {countOver} FROM {fromTable}
                  WHERE {buildWhere}
                  {groupByClause} {sortOrder} {limitClause} |]
-      countQuery =
-        case qc.finalSummarizeQuery of
-          Just binInterval ->
-            -- For summarize with time bucket, count the number of unique time buckets
-            let
-              -- Create time bucket expression
-              timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-
-              -- Create the subquery column list and GROUP BY clause
-              -- Including group by columns if present
-              groupByCols = T.intercalate ", " qc.groupByClause
-
-              -- Create column selections for subquery
-              subqueryCols =
-                if null qc.groupByClause
-                  then timeBucketExpr
-                  else timeBucketExpr <> ", " <> groupByCols
-
-              -- Create GROUP BY clause
-              groupByPart =
-                if null qc.groupByClause
-                  then timeBucketExpr
-                  else timeBucketExpr <> ", " <> groupByCols
-             in
-              [fmt|SELECT count(*) FROM
-                  (SELECT {subqueryCols}
-                   FROM {fromTable}
-                   WHERE {buildWhereForCount}
-                   GROUP BY {groupByPart}) as subq|]
-          Nothing ->
-            -- For regular summarize queries
-            [fmt|SELECT count(*) FROM {fromTable}
-              WHERE {buildWhereForCount}
-              {groupByClause} limit 1|]
 
       -- Generate the summarize query depending on bin functions and data type
       summarizeQuery =
@@ -349,7 +294,6 @@ sqlFromQueryComponents sqlCfg qc =
    in ( finalSqlQuery
       , qc
           { finalColumns = listToColNames selectedCols
-          , countQuery
           , finalSqlQuery = finalSqlQuery
           , whereClause = Just whereCondition
           , finalSummarizeQuery = Just summarizeQuery
