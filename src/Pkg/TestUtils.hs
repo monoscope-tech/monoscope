@@ -100,13 +100,14 @@ import Servant qualified
 import Servant.Server qualified as ServantS
 import System.Clock (TimeSpec (TimeSpec))
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.DB (DB)
 import System.Config qualified as Config
 import System.Directory (getFileSize, listDirectory)
 import System.Envy (DefConfig (..), decodeWithDefaults)
 import System.Logging qualified as Logging
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
-import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, atAuthToBase, effToServantHandlerTest)
+import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, effToServantHandlerTest)
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 
@@ -577,11 +578,12 @@ toBaseServantResponse trATCtx trLogger k = do
 -- | Run a query effect (like Charts.queryMetrics) in test context
 -- This is for effects that return data directly (not wrapped in RespHeaders)
 -- Uses frozen time to match background job context
-runQueryEffect :: TestResources -> (forall es. (Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, IOE :> es, Time :> es) => Eff es a) -> IO a
+runQueryEffect :: TestResources -> (forall es. (Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, IOE :> es, Time :> es, DB es) => Eff es a) -> IO a
 runQueryEffect TestResources{..} action = do
   action
     & runErrorNoCallStack @ServantS.ServerError
     & Effectful.Reader.Static.runReader trATCtx
+    & runWithConnectionPool trATCtx.pool
     & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
     & runEff
     <&> fromRightShow
