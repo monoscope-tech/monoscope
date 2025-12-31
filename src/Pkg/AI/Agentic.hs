@@ -307,7 +307,6 @@ executeGetFieldValues config args = do
               [] -- user columns
               Nothing -- source
               Nothing -- target spans
-
           case resultE of
             Left err ->
               pure
@@ -362,7 +361,6 @@ executeCountQuery config args = do
               [] -- user columns
               Nothing -- source
               Nothing -- target spans
-
           case resultE of
             Left err ->
               pure
@@ -405,7 +403,6 @@ executeGetServices config _args = do
           [] -- user columns
           Nothing -- source
           Nothing -- target spans
-
       case resultE of
         Left err ->
           pure
@@ -467,7 +464,6 @@ executeSampleLogs config args = do
               sampleColumns
               Nothing -- source
               Nothing -- target spans
-
           case resultE of
             Left err ->
               pure
