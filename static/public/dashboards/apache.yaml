@@ -34,7 +34,7 @@ widgets:
     title: 'Response Time Percentiles (ms)'
     hide_subtitle: true
     summarize_by: max
-    query: attributes.service.name=="apache" OR attributes.http.server_name has "apache" | summarize percentiles(duration, 1e6) by bin_auto(timestamp)
+    query: attributes.service.name=="apache" OR attributes.http.server_name has "apache" | summarize percentiles(duration, 50, 75, 90, 95, 1e6) by bin_auto(timestamp)
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'

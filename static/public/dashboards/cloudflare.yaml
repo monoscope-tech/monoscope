@@ -39,7 +39,7 @@ widgets:
     title: 'Origin Response Time (ms)'
     hide_subtitle: true
     summarize_by: max
-    query: attributes.service.name=="cloudflare" AND attributes.origin.time != null | summarize percentiles(attributes.origin.time, 1e3) by bin_auto(timestamp)
+    query: attributes.service.name=="cloudflare" AND attributes.origin.time != null | summarize percentiles(attributes.origin.time, 50, 75, 90, 95, 1e3) by bin_auto(timestamp)
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'

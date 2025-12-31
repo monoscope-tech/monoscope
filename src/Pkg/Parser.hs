@@ -264,33 +264,36 @@ sqlFromQueryComponents sqlCfg qc =
               WHERE {buildWhereForCount}
               {groupByClause} limit 1|]
 
-      -- Parse percentiles marker from select columns: __PERCENTILES__field__DIV__divisor__END__
+      -- Parse percentiles marker: __PERCENTILES__field__PCTS__p1,p2,p3__DIV__divisor__END__
       percentilesInfo = do
         sel <- listToMaybe qc.select
-        field <- T.stripPrefix "__PERCENTILES__" sel >>= T.stripSuffix "__END__"
-        let (fieldPart, rest) = T.breakOn "__DIV__" field
-        let divisor = T.stripPrefix "__DIV__" rest >>= readMaybe . toString :: Maybe Double
-        pure (fieldPart, fromMaybe 1.0 divisor)
+        rest1 <- T.stripPrefix "__PERCENTILES__" sel >>= T.stripSuffix "__END__"
+        let (fieldPart, rest2) = T.breakOn "__PCTS__" rest1
+        rest3 <- T.stripPrefix "__PCTS__" rest2
+        let (pctsPart, rest4) = T.breakOn "__DIV__" rest3
+        let pcts = mapMaybe (readMaybe . toString) $ T.splitOn "," pctsPart :: [Double]
+        let divisor = T.stripPrefix "__DIV__" rest4 >>= readMaybe . toString :: Maybe Double
+        if null pcts then Nothing else pure (fieldPart, pcts, fromMaybe 1.0 divisor)
 
       -- Generate the summarize query depending on bin functions and data type
       summarizeQuery =
         case qc.finalSummarizeQuery of
           Just binInterval ->
             case percentilesInfo of
-              Just (field, divisor) ->
-                -- Generate LATERAL unnest query for percentiles
+              Just (field, pcts, divisor) ->
+                -- Generate LATERAL unnest query for percentiles with custom percentile values
                 let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
                     divExpr = if divisor == 1.0 then "" else " / " <> show divisor
+                    -- Generate ARRAY of percentile expressions
+                    pctExprs = T.intercalate ",\n                          "
+                      [ "COALESCE((approx_percentile(" <> show (p / 100.0) <> ", percentile_agg((" <> field <> ")::float))" <> divExpr <> ")::float, 0)"
+                      | p <- pcts ]
+                    -- Generate ARRAY of percentile labels
+                    pctLabels = T.intercalate "," [ "'p" <> show (round p :: Int) <> "'" | p <- pcts ]
                  in [fmt|SELECT timeB, quantile, value FROM (
                       SELECT extract(epoch from {timeBucketExpr})::integer AS timeB,
-                        ARRAY[
-                          COALESCE((approx_percentile(0.50, percentile_agg(({field})::float)){divExpr})::float, 0),
-                          COALESCE((approx_percentile(0.75, percentile_agg(({field})::float)){divExpr})::float, 0),
-                          COALESCE((approx_percentile(0.90, percentile_agg(({field})::float)){divExpr})::float, 0),
-                          COALESCE((approx_percentile(0.95, percentile_agg(({field})::float)){divExpr})::float, 0),
-                          COALESCE((approx_percentile(0.99, percentile_agg(({field})::float)){divExpr})::float, 0)
-                        ] AS values,
-                        ARRAY['p50', 'p75', 'p90', 'p95', 'p99'] AS quantiles
+                        ARRAY[{pctExprs}] AS values,
+                        ARRAY[{pctLabels}] AS quantiles
                       FROM {fromTable}
                       WHERE {buildWhere}
                       GROUP BY timeB

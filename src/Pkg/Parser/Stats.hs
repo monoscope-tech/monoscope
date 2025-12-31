@@ -49,7 +49,8 @@ data AggFunction
   | P95 Subject (Maybe Text)
   | P99 Subject (Maybe Text)
   | P100 Subject (Maybe Text)
-  | Percentiles Subject (Maybe Double) (Maybe Text) -- subject, optional divisor, optional alias
+  | Percentile Subject Double (Maybe Double) (Maybe Text) -- subject, single percentile value, optional divisor, optional alias
+  | Percentiles Subject [Double] (Maybe Double) (Maybe Text) -- subject, percentile values, optional divisor, optional alias
   | Sum Subject (Maybe Text)
   | Avg Subject (Maybe Text)
   | Min Subject (Maybe Text)
@@ -126,12 +127,48 @@ data Sources = SSpans | SMetrics
 --
 -- >>> parse aggFunctionParser "" "customFunc(field)"
 -- Right (Plain (Subject "customFunc" "customFunc" []) Nothing)
+-- | Parse a numeric value (float or int) for percentile values
+pNumericValue :: Parser Double
+pNumericValue = try L.float <|> (fromIntegral <$> (L.decimal :: Parser Int))
+
+-- | Parse percentile(expr, percentile) - single percentile
+-- >>> parse pPercentileSingle "" "percentile(duration, 95)"
+-- Right (Percentile (Subject "duration" "duration" []) 95.0 Nothing Nothing)
+pPercentileSingle :: Parser AggFunction
+pPercentileSingle = do
+  _ <- string "percentile("
+  subj <- pSubject
+  _ <- string ","
+  space
+  pct <- pNumericValue
+  _ <- string ")"
+  pure $ Percentile subj pct Nothing Nothing
+
+-- | Parse percentiles(expr, p1, p2, ...) with optional trailing divisor
+-- If last value > 100, it's treated as a divisor for unit conversion
+-- >>> parse pPercentilesMulti "" "percentiles(duration, 50, 75, 90, 95)"
+-- Right (Percentiles (Subject "duration" "duration" []) [50.0,75.0,90.0,95.0] Nothing Nothing)
+-- >>> parse pPercentilesMulti "" "percentiles(duration, 50, 75, 90, 95, 1e6)"
+-- Right (Percentiles (Subject "duration" "duration" []) [50.0,75.0,90.0,95.0] (Just 1000000.0) Nothing)
+pPercentilesMulti :: Parser AggFunction
+pPercentilesMulti = do
+  _ <- string "percentiles("
+  subj <- pSubject
+  _ <- string ","
+  space
+  nums <- pNumericValue `sepBy1` (string "," <* space)
+  _ <- string ")"
+  let (pcts, divisorM) = if not (null nums) && last nums > 100
+        then (init nums, Just (last nums))
+        else (nums, Nothing)
+  pure $ Percentiles subj pcts divisorM Nothing
+
 aggFunctionParser :: Parser AggFunction
 aggFunctionParser =
   choice @[]
     [ Sum <$> (string "sum(" *> pSubject <* string ")") <*> pure Nothing
-    , try pPercentilesWithDivisor
-    , Percentiles <$> (string "percentiles(" *> pSubject <* string ")") <*> pure Nothing <*> pure Nothing
+    , try pPercentilesMulti
+    , try pPercentileSingle
     , P50 <$> (string "p50(" *> pSubject <* string ")") <*> pure Nothing
     , P75 <$> (string "p75(" *> pSubject <* string ")") <*> pure Nothing
     , P90 <$> (string "p90(" *> pSubject <* string ")") <*> pure Nothing
@@ -147,15 +184,6 @@ aggFunctionParser =
     , Range <$> (string "range(" *> pSubject <* string ")") <*> pure Nothing
     , Plain <$> pSubject <*> pure Nothing
     ]
-  where
-    pPercentilesWithDivisor = do
-      _ <- string "percentiles("
-      subj <- pSubject
-      _ <- string ","
-      space
-      divisor <- try L.float <|> (fromIntegral <$> (L.decimal :: Parser Int))
-      _ <- string ")"
-      pure $ Percentiles subj (Just divisor) Nothing
 
 
 instance ToQueryText AggFunction where
@@ -174,7 +202,11 @@ instance Display AggFunction where
   displayPrec _prec (P95 sub _alias) = displayBuilder $ "approx_percentile(0.95, percentile_agg((" <> display sub <> ")::float))::int"
   displayPrec _prec (P99 sub _alias) = displayBuilder $ "approx_percentile(0.99, percentile_agg((" <> display sub <> ")::float))::int"
   displayPrec _prec (P100 sub _alias) = displayBuilder $ "approx_percentile(1, percentile_agg((" <> display sub <> ")::float))::int"
-  displayPrec _prec (Percentiles sub divisorM _alias) = displayBuilder $ "__PERCENTILES__" <> display sub <> "__DIV__" <> maybe "1" show divisorM <> "__END__"
+  -- Encode percentile(s) info as marker for Parser.hs to generate LATERAL unnest SQL
+  displayPrec _prec (Percentile sub pct divisorM _alias) =
+    displayBuilder $ "__PERCENTILES__" <> display sub <> "__PCTS__" <> show pct <> "__DIV__" <> maybe "1" show divisorM <> "__END__"
+  displayPrec _prec (Percentiles sub pcts divisorM _alias) =
+    displayBuilder $ "__PERCENTILES__" <> display sub <> "__PCTS__" <> T.intercalate "," (map show pcts) <> "__DIV__" <> maybe "1" show divisorM <> "__END__"
   displayPrec _prec (Sum sub _alias) = displayBuilder $ "sum((" <> display sub <> ")::float)"
   displayPrec _prec (Avg sub _alias) = displayBuilder $ "avg((" <> display sub <> ")::float)"
   displayPrec _prec (Min sub _alias) = displayBuilder $ "min((" <> display sub <> ")::float)"
@@ -353,7 +385,8 @@ namedAggregation = do
     P95 sub _ -> return $ P95 sub (Just name)
     P99 sub _ -> return $ P99 sub (Just name)
     P100 sub _ -> return $ P100 sub (Just name)
-    Percentiles sub div _ -> return $ Percentiles sub div (Just name)
+    Percentile sub pct div _ -> return $ Percentile sub pct div (Just name)
+    Percentiles sub pcts div _ -> return $ Percentiles sub pcts div (Just name)
     Median sub _ -> return $ Median sub (Just name)
     Stdev sub _ -> return $ Stdev sub (Just name)
     Range sub _ -> return $ Range sub (Just name)
@@ -451,8 +484,8 @@ instance ToQueryText [Section] where
 
 
 -- | Extract percentiles info from a list of sections
--- Returns (field, divisor) if a Percentiles aggregation is found
-extractPercentilesInfo :: [Section] -> Maybe (Subject, Maybe Double)
+-- Returns (field, percentiles, divisor) if a Percentile(s) aggregation is found
+extractPercentilesInfo :: [Section] -> Maybe (Subject, [Double], Maybe Double)
 extractPercentilesInfo = foldr go Nothing
   where
     go (SummarizeCommand aggs _) acc = case findPercentiles aggs of
@@ -460,5 +493,6 @@ extractPercentilesInfo = foldr go Nothing
       Nothing -> acc
     go _ acc = acc
     findPercentiles [] = Nothing
-    findPercentiles (Percentiles sub div _ : _) = Just (sub, div)
+    findPercentiles (Percentile sub pct div _ : _) = Just (sub, [pct], div)
+    findPercentiles (Percentiles sub pcts div _ : _) = Just (sub, pcts, div)
     findPercentiles (_ : rest) = findPercentiles rest

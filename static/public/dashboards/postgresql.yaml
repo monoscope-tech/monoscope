@@ -47,7 +47,7 @@ widgets:
     title: 'Query Duration Percentiles (ms)'
     hide_subtitle: true
     summarize_by: max
-    query: attributes.db.system=="postgresql" | summarize percentiles(attributes.db.duration, 1e3) by bin_auto(timestamp)
+    query: attributes.db.system=="postgresql" | summarize percentiles(attributes.db.duration, 50, 75, 90, 95, 99, 1e3) by bin_auto(timestamp)
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
