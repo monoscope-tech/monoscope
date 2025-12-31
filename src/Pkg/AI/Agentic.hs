@@ -170,7 +170,7 @@ data Tool
     GetServices
   | -- | Sample a few log entries matching a query
     SampleLogs
-  deriving (Eq, Show, Generic)
+  deriving (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
@@ -179,7 +179,7 @@ data ToolCall = ToolCall
   { tool :: Tool
   , arguments :: AE.Value
   }
-  deriving (Show, Generic)
+  deriving (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
@@ -189,7 +189,7 @@ data ToolResult = ToolResult
   , result :: Text
   , success :: Bool
   }
-  deriving (Show, Generic)
+  deriving (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
@@ -286,7 +286,7 @@ parseToolCalls val = AET.parseMaybe parser val
 
 
 -- | Execute a single tool call and return the result
-executeTool :: (DB es) => AgenticConfig -> ToolCall -> Eff es ToolResult
+executeTool :: DB es => AgenticConfig -> ToolCall -> Eff es ToolResult
 executeTool config ToolCall{..} = case tool of
   GetFieldValues -> executeGetFieldValues config arguments
   CountQuery -> executeCountQuery config arguments
@@ -315,7 +315,7 @@ timeRangeClause config =
 
 
 -- | Execute GetFieldValues tool - get distinct values for a field
-executeGetFieldValues :: (DB es) => AgenticConfig -> AE.Value -> Eff es ToolResult
+executeGetFieldValues :: DB es => AgenticConfig -> AE.Value -> Eff es ToolResult
 executeGetFieldValues config args = do
   let fieldM = AET.parseMaybe (AE.withObject "args" (AE..: "field")) args :: Maybe Text
       limitM = AET.parseMaybe (AE.withObject "args" (AE..: "limit")) args :: Maybe Int
@@ -323,8 +323,8 @@ executeGetFieldValues config args = do
 
   case fieldM of
     Nothing ->
-      pure $
-        ToolResult
+      pure
+        $ ToolResult
           { tool = GetFieldValues
           , result = "Error: 'field' argument is required"
           , success = False
@@ -347,16 +347,16 @@ executeGetFieldValues config args = do
       resultsE <- try @SomeException $ PG.query_ (Query $ encodeUtf8 queryText)
       case resultsE of
         Left err ->
-          pure $
-            ToolResult
+          pure
+            $ ToolResult
               { tool = GetFieldValues
               , result = "Error querying field '" <> field <> "': " <> show err
               , success = False
               }
         Right (results :: [(Text, Int)]) ->
           let formatted = T.intercalate ", " $ map (\(v, c) -> "\"" <> v <> "\" (" <> show c <> ")") results
-           in pure $
-                ToolResult
+           in pure
+                $ ToolResult
                   { tool = GetFieldValues
                   , result = "Values for '" <> field <> "': " <> formatted
                   , success = True
@@ -364,14 +364,14 @@ executeGetFieldValues config args = do
 
 
 -- | Execute CountQuery tool - count results for a KQL query
-executeCountQuery :: (DB es) => AgenticConfig -> AE.Value -> Eff es ToolResult
+executeCountQuery :: DB es => AgenticConfig -> AE.Value -> Eff es ToolResult
 executeCountQuery config args = do
   let queryM = AET.parseMaybe (AE.withObject "args" (AE..: "query")) args :: Maybe Text
 
   case queryM of
     Nothing ->
-      pure $
-        ToolResult
+      pure
+        $ ToolResult
           { tool = CountQuery
           , result = "Error: 'query' argument is required"
           , success = False
@@ -381,8 +381,8 @@ executeCountQuery config args = do
       let parseResult = parseQueryToAST kqlQuery
       case parseResult of
         Left parseErr ->
-          pure $
-            ToolResult
+          pure
+            $ ToolResult
               { tool = CountQuery
               , result = "Error parsing query: " <> parseErr
               , success = False
@@ -403,8 +403,8 @@ executeCountQuery config args = do
           resultsE <- try @SomeException $ PG.query_ (Query $ encodeUtf8 sqlQuery)
           case resultsE of
             Left err ->
-              pure $
-                ToolResult
+              pure
+                $ ToolResult
                   { tool = CountQuery
                   , result = "Error executing count query: " <> show err
                   , success = False
@@ -413,8 +413,8 @@ executeCountQuery config args = do
               let count = case results of
                     [(c :: Int)] -> c
                     _ -> 0
-               in pure $
-                    ToolResult
+               in pure
+                    $ ToolResult
                       { tool = CountQuery
                       , result = "Query '" <> kqlQuery <> "' matches " <> show count <> " entries"
                       , success = True
@@ -422,7 +422,7 @@ executeCountQuery config args = do
 
 
 -- | Execute GetServices tool - get list of services in the project
-executeGetServices :: (DB es) => AgenticConfig -> AE.Value -> Eff es ToolResult
+executeGetServices :: DB es => AgenticConfig -> AE.Value -> Eff es ToolResult
 executeGetServices config _args = do
   let pid = config.projectId.toText
       timeRange = timeRangeClause config
@@ -440,16 +440,16 @@ executeGetServices config _args = do
   resultsE <- try @SomeException $ PG.query_ (Query $ encodeUtf8 queryText)
   case resultsE of
     Left err ->
-      pure $
-        ToolResult
+      pure
+        $ ToolResult
           { tool = GetServices
           , result = "Error querying services: " <> show err
           , success = False
           }
     Right (results :: [(Text, Int)]) ->
       let formatted = T.intercalate ", " $ map (\(s, c) -> "\"" <> s <> "\" (" <> show c <> " events)") results
-       in pure $
-            ToolResult
+       in pure
+            $ ToolResult
               { tool = GetServices
               , result = "Available services: " <> formatted
               , success = True
@@ -457,7 +457,7 @@ executeGetServices config _args = do
 
 
 -- | Execute SampleLogs tool - get sample log entries
-executeSampleLogs :: (DB es) => AgenticConfig -> AE.Value -> Eff es ToolResult
+executeSampleLogs :: DB es => AgenticConfig -> AE.Value -> Eff es ToolResult
 executeSampleLogs config args = do
   let queryM = AET.parseMaybe (AE.withObject "args" (AE..: "query")) args :: Maybe Text
       limitM = AET.parseMaybe (AE.withObject "args" (AE..: "limit")) args :: Maybe Int
@@ -465,8 +465,8 @@ executeSampleLogs config args = do
 
   case queryM of
     Nothing ->
-      pure $
-        ToolResult
+      pure
+        $ ToolResult
           { tool = SampleLogs
           , result = "Error: 'query' argument is required"
           , success = False
@@ -475,8 +475,8 @@ executeSampleLogs config args = do
       let parseResult = parseQueryToAST kqlQuery
       case parseResult of
         Left parseErr ->
-          pure $
-            ToolResult
+          pure
+            $ ToolResult
               { tool = SampleLogs
               , result = "Error parsing query: " <> parseErr
               , success = False
@@ -502,22 +502,22 @@ executeSampleLogs config args = do
           resultsE <- try @SomeException $ PG.query_ (Query $ encodeUtf8 sqlQuery)
           case resultsE of
             Left err ->
-              pure $
-                ToolResult
+              pure
+                $ ToolResult
                   { tool = SampleLogs
                   , result = "Error sampling logs: " <> show err
                   , success = False
                   }
             Right (results :: [(Text, Text, Text, Text)]) ->
               let formatted =
-                    T.intercalate "\n" $
-                      map
+                    T.intercalate "\n"
+                      $ map
                         ( \(lvl, nm, svc, bdy) ->
                             "  - [" <> lvl <> "] " <> nm <> " (" <> svc <> "): " <> bdy
                         )
                         results
-               in pure $
-                    ToolResult
+               in pure
+                    $ ToolResult
                       { tool = SampleLogs
                       , result = "Sample logs matching '" <> kqlQuery <> "':\n" <> formatted
                       , success = True
@@ -527,10 +527,10 @@ executeSampleLogs config args = do
 -- | Format tool results for feeding back to the LLM
 formatToolResults :: [ToolResult] -> Text
 formatToolResults results =
-  T.unlines $
-    ["", "TOOL RESULTS:", ""]
-      <> map formatResult results
-      <> ["", "Now provide your final response in the standard JSON format."]
+  T.unlines
+    $ ["", "TOOL RESULTS:", ""]
+    <> map formatResult results
+    <> ["", "Now provide your final response in the standard JSON format."]
   where
     formatResult ToolResult{..} =
       "- "
@@ -554,25 +554,25 @@ buildAgenticPrompt mode userQuery previousResults =
 
 -- | Main entry point for agentic LLM queries
 -- This runs the agentic loop: LLM -> parse response -> execute tools -> feed back -> repeat
-runAgenticQuery ::
-  (DB es) =>
-  AgenticConfig ->
-  Text ->
-  Text ->
-  Eff es (Either Text AI.ChatLLMResponse)
+runAgenticQuery
+  :: DB es
+  => AgenticConfig
+  -> Text
+  -> Text
+  -> Eff es (Either Text AI.ChatLLMResponse)
 runAgenticQuery config userQuery apiKey =
   runAgenticLoop config userQuery apiKey [] 0
 
 
 -- | Internal agentic loop
-runAgenticLoop ::
-  (DB es) =>
-  AgenticConfig ->
-  Text ->
-  Text ->
-  [ToolResult] ->
-  Int ->
-  Eff es (Either Text AI.ChatLLMResponse)
+runAgenticLoop
+  :: DB es
+  => AgenticConfig
+  -> Text
+  -> Text
+  -> [ToolResult]
+  -> Int
+  -> Eff es (Either Text AI.ChatLLMResponse)
 runAgenticLoop config userQuery apiKey previousResults iteration
   | iteration >= config.maxIterations =
       -- Max iterations reached, force a final response
