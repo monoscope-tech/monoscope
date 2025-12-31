@@ -194,7 +194,8 @@ trimOldData windowStart = filterByTimestamp (>= floor (utcTimeToPOSIXSeconds win
 -- | Cleanup expired cache entries (stale data or LRU eviction)
 cleanupExpiredCache :: DB es => Eff es Int
 cleanupExpiredCache =
-  maybe 0 fromOnly . listToMaybe
+  maybe 0 fromOnly
+    . listToMaybe
     <$> PG.query
       [sql|
       WITH deleted AS (
