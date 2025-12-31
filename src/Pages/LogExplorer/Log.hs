@@ -827,6 +827,7 @@ apiLogsPage page = do
 aiSearchH :: Projects.ProjectId -> AE.Value -> ATAuthCtx (RespHeaders AE.Value)
 aiSearchH pid requestBody = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
+  now <- Time.currentTime
   let envCfg = authCtx.env
 
   let inputTextM = AET.parseMaybe (AE.withObject "request" (AE..: "input")) requestBody
@@ -840,12 +841,20 @@ aiSearchH pid requestBody = do
           addErrorToast "Please enter a search query" Nothing
           throwError Servant.err400{Servant.errBody = "Empty input"}
         else do
-          -- Determine mode based on query context
+          -- Fetch precomputed facets for context (last 24 hours)
+          let dayAgo = addUTCTime (-86400) now
+          facetSummaryM <- Facets.getFacetSummary pid "otel_logs_and_spans" dayAgo now
+
+          -- Determine mode based on query context (usually FastMode since we have facets)
           let suggestedMode = Agentic.suggestAgenticMode Agentic.WebExplorer inputText
               baseConfig = Agentic.defaultAgenticConfig pid
-              config = baseConfig{Agentic.mode = suggestedMode}
+              config =
+                baseConfig
+                  { Agentic.mode = suggestedMode
+                  , Agentic.facetContext = facetSummaryM
+                  }
 
-          -- Run the agentic query
+          -- Run the agentic query (includes facet context in prompt)
           result <- Agentic.runAgenticQuery config inputText envCfg.openaiApiKey
 
           case result of

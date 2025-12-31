@@ -27,12 +27,14 @@ module Pkg.AI.Agentic (
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
+import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
+import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.AI qualified as AI
@@ -60,18 +62,20 @@ data AgenticConfig = AgenticConfig
   -- ^ Project ID for executing queries
   , timeRange :: (Maybe UTCTime, Maybe UTCTime)
   -- ^ Time range for queries
+  , facetContext :: Maybe FacetSummary
+  -- ^ Pre-computed facets to include as context (services, status codes, etc.)
   }
-  deriving (Show)
 
 
 -- | Default configuration for agentic queries
 defaultAgenticConfig :: Projects.ProjectId -> AgenticConfig
 defaultAgenticConfig pid =
   AgenticConfig
-    { mode = AgenticMode
+    { mode = FastMode -- Default to fast mode since we include facet context
     , maxIterations = 3
     , projectId = pid
     , timeRange = (Nothing, Nothing)
+    , facetContext = Nothing
     }
 
 
@@ -96,68 +100,30 @@ data QueryContext
 suggestAgenticMode :: QueryContext -> Text -> AgenticMode
 suggestAgenticMode context userQuery =
   let query = T.toLower $ T.strip userQuery
-      -- Simple patterns that don't need agentic exploration
-      simplePatterns =
-        [ "show me errors"
-        , "show errors"
-        , "show all errors"
-        , "errors"
-        , "slow requests"
-        , "slow"
-        , "show me slow"
-        , "failed requests"
-        , "failures"
-        , "5xx"
-        , "500"
-        , "4xx"
-        , "404"
-        , "warnings"
-        , "show warnings"
-        , "debug logs"
-        , "all logs"
-        , "recent logs"
-        , "latest"
-        ]
 
-      -- Patterns that suggest the query needs context (specific values, services, etc.)
+      -- Patterns that suggest the query needs deeper exploration
+      -- (even with facets pre-included, these may need tool calls)
       complexIndicators =
-        [ "from service"
-        , "from the"
-        , "in service"
-        , "by service"
-        , "for user"
-        , "user id"
-        , "endpoint"
-        , "api endpoint"
-        , "specific"
-        , "particular"
-        , "named"
-        , "called"
-        , "what services"
-        , "which services"
-        , "list services"
-        , "what endpoints"
-        , "what fields"
-        , "what values"
-        , "compare"
-        , "between"
+        [ "compare"
         , "correlation"
+        , "what changed"
+        , "why are there"
+        , "investigate"
+        , "analyze"
+        , "sample"
+        , "show me examples"
         ]
 
-      -- Check if query is simple
-      isSimpleQuery = any (`T.isInfixOf` query) simplePatterns && not (any (`T.isInfixOf` query) complexIndicators)
-
-      -- Check if query explicitly needs context
-      needsContext = any (`T.isInfixOf` query) complexIndicators
+      -- Check if query explicitly needs exploration
+      needsExploration = any (`T.isInfixOf` query) complexIndicators
    in case context of
-        -- Bot contexts: prefer fast mode unless the query really needs exploration
-        SlackBot -> if needsContext then AgenticMode else FastMode
-        DiscordBot -> if needsContext then AgenticMode else FastMode
-        WhatsAppBot -> if needsContext then AgenticMode else FastMode
+        -- All contexts prefer fast mode by default since we pre-include facets
+        -- Only use agentic mode for queries that explicitly need exploration
+        WebExplorer -> if needsExploration then AgenticMode else FastMode
+        SlackBot -> if needsExploration then AgenticMode else FastMode
+        DiscordBot -> if needsExploration then AgenticMode else FastMode
+        WhatsAppBot -> if needsExploration then AgenticMode else FastMode
         DashboardWidget -> FastMode -- Always fast for widgets
-
-        -- Web explorer: use agentic mode unless query is very simple
-        WebExplorer -> if isSimpleQuery then FastMode else AgenticMode
 
 
 -- | Available tools the LLM can call
@@ -170,6 +136,8 @@ data Tool
     GetServices
   | -- | Sample a few log entries matching a query
     SampleLogs
+  | -- | Get precomputed facets (popular values for common fields)
+    GetFacets
   deriving (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -242,6 +210,11 @@ toolDescriptions =
     , "   Example: {\"tool\": \"SampleLogs\", \"arguments\": {\"query\": \"level == \\\"ERROR\\\"\", \"limit\": 3}}"
     , "   Use when: You need to understand the structure/content of matching logs"
     , ""
+    , "5. GetFacets - Get precomputed facets showing popular values for common fields"
+    , "   Arguments: {} (none required)"
+    , "   Example: {\"tool\": \"GetFacets\", \"arguments\": {}}"
+    , "   Use when: You need to know what values are common for services, status codes, endpoints, etc."
+    , ""
     , "IMPORTANT GUIDELINES:"
     , "- DO NOT use tools for simple, well-known queries (e.g., 'show errors', 'slow requests')"
     , "- Use tools ONLY when the query requires specific values you're uncertain about"
@@ -253,7 +226,7 @@ toolDescriptions =
 
 -- | List of available tools
 availableTools :: [Tool]
-availableTools = [GetFieldValues, CountQuery, GetServices, SampleLogs]
+availableTools = [GetFieldValues, CountQuery, GetServices, SampleLogs, GetFacets]
 
 
 -- | Parse the LLM response to determine if it's a tool call or final response
@@ -292,6 +265,7 @@ executeTool config ToolCall{..} = case tool of
   CountQuery -> executeCountQuery config arguments
   GetServices -> executeGetServices config arguments
   SampleLogs -> executeSampleLogs config arguments
+  GetFacets -> executeGetFacets config arguments
 
 
 -- | Convert field name to database column format (e.g., "resource.service.name" -> "resource___service___name")
@@ -524,6 +498,76 @@ executeSampleLogs config args = do
                       }
 
 
+-- | Execute GetFacets tool - return precomputed facets from config
+executeGetFacets :: (Applicative f) => AgenticConfig -> AE.Value -> f ToolResult
+executeGetFacets config _args =
+  case config.facetContext of
+    Nothing ->
+      pure $
+        ToolResult
+          { tool = GetFacets
+          , result = "No facet data available for this project"
+          , success = False
+          }
+    Just summary ->
+      pure $
+        ToolResult
+          { tool = GetFacets
+          , result = formatFacetSummary summary
+          , success = True
+          }
+
+
+-- | Format facet summary for LLM consumption
+formatFacetSummary :: FacetSummary -> Text
+formatFacetSummary summary =
+  let FacetData facetMap = summary.facetJson
+      formatField (fieldName, values) =
+        let columnName = T.replace "___" "." fieldName
+            valueStrs = map (\(FacetValue v c) -> "\"" <> v <> "\" (" <> show c <> ")") $ take 10 values
+         in columnName <> ": " <> T.intercalate ", " valueStrs
+      formattedFacets = map formatField $ HM.toList facetMap
+   in "Facet data (popular values for common fields):\n" <> T.intercalate "\n" formattedFacets
+
+
+-- | Format facets as context to include in the prompt
+formatFacetContext :: Maybe FacetSummary -> Text
+formatFacetContext Nothing = ""
+formatFacetContext (Just summary) =
+  let FacetData facetMap = summary.facetJson
+      -- Key fields to always include in context
+      keyFields =
+        [ "resource___service___name"
+        , "level"
+        , "status_code"
+        , "attributes___http___response___status_code"
+        , "attributes___http___request___method"
+        , "attributes___error___type"
+        , "kind"
+        , "name"
+        ]
+      formatField fieldName =
+        case HM.lookup fieldName facetMap of
+          Nothing -> Nothing
+          Just values ->
+            let columnName = T.replace "___" "." fieldName
+                valueStrs = map (\(FacetValue v _) -> "\"" <> v <> "\"") $ take 8 values
+             in Just $ columnName <> ": " <> T.intercalate ", " valueStrs
+      formattedFacets = catMaybes $ map formatField keyFields
+   in if null formattedFacets
+        then ""
+        else
+          T.unlines
+            [ ""
+            , "PROJECT DATA CONTEXT:"
+            , "The following are popular values for key fields in this project (from the last 24 hours):"
+            , T.intercalate "\n" formattedFacets
+            , ""
+            , "Use these actual values when the user's query matches them."
+            , ""
+            ]
+
+
 -- | Format tool results for feeding back to the LLM
 formatToolResults :: [ToolResult] -> Text
 formatToolResults results =
@@ -539,17 +583,19 @@ formatToolResults results =
         <> if success then result else "[ERROR] " <> result
 
 
--- | Build the full prompt with optional tool context
-buildAgenticPrompt :: AgenticMode -> Text -> [ToolResult] -> Text
-buildAgenticPrompt mode userQuery previousResults =
+-- | Build the full prompt with optional tool context and facet data
+buildAgenticPrompt :: AgenticConfig -> Text -> [ToolResult] -> Text
+buildAgenticPrompt config userQuery previousResults =
   let basePrompt = AI.systemPrompt
-      toolSection = case mode of
+      -- Include facet context for all queries (FastMode and AgenticMode)
+      facetSection = formatFacetContext config.facetContext
+      toolSection = case config.mode of
         FastMode -> ""
         AgenticMode -> toolDescriptions
       resultsSection = case previousResults of
         [] -> ""
         rs -> formatToolResults rs
-   in basePrompt <> toolSection <> resultsSection <> "\n\nUser query: " <> userQuery
+   in basePrompt <> facetSection <> toolSection <> resultsSection <> "\n\nUser query: " <> userQuery
 
 
 -- | Main entry point for agentic LLM queries
@@ -578,8 +624,8 @@ runAgenticLoop config userQuery apiKey previousResults iteration
       -- Max iterations reached, force a final response
       pure $ Left "Maximum tool iterations reached without final response"
   | otherwise = do
-      -- Build the prompt
-      let prompt = buildAgenticPrompt config.mode userQuery previousResults
+      -- Build the prompt (includes facet context automatically)
+      let prompt = buildAgenticPrompt config userQuery previousResults
 
       -- Call the LLM
       result <- liftIO $ AI.callOpenAIAPI prompt apiKey
