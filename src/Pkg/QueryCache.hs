@@ -35,7 +35,7 @@ data CacheKey = CacheKey
   , queryHash :: Text
   , binInterval :: Text
   }
-  deriving stock (Generic, Show, Eq)
+  deriving stock (Eq, Generic, Show)
 
 
 data CacheEntry = CacheEntry
@@ -65,9 +65,10 @@ hasSummarizeWithBin = any \case
 
 -- | Extract bin interval from summarize clause
 extractBinInterval :: SqlQueryCfg -> [Section] -> Text
-extractBinInterval sqlCfg = fromMaybe defaultBinSize . asum . map \case
-  SummarizeCommand _ (Just (SummarizeByClause fields)) -> asum $ map getBinInterval (rights fields)
-  _ -> Nothing
+extractBinInterval sqlCfg =
+  fromMaybe defaultBinSize . asum . map \case
+    SummarizeCommand _ (Just (SummarizeByClause fields)) -> asum $ map getBinInterval (rights fields)
+    _ -> Nothing
   where
     getBinInterval (Bin _ interval) = Just interval
     getBinInterval (BinAuto _) = Just $ calculateAutoBinWidth sqlCfg.dateRange sqlCfg.currentTime
@@ -75,39 +76,44 @@ extractBinInterval sqlCfg = fromMaybe defaultBinSize . asum . map \case
 
 -- | Generate a cache key from query components
 generateCacheKey :: Projects.ProjectId -> Maybe Sources -> [Section] -> SqlQueryCfg -> CacheKey
-generateCacheKey pid sourceM sections sqlCfg = CacheKey
-  { projectId = pid
-  , source = maybe "spans" toQText sourceM
-  , queryHash = show $ xxHash $ encodeUtf8 $ toQText sections
-  , binInterval = extractBinInterval sqlCfg sections
-  }
+generateCacheKey pid sourceM sections sqlCfg =
+  CacheKey
+    { projectId = pid
+    , source = maybe "spans" toQText sourceM
+    , queryHash = show $ xxHash $ encodeUtf8 $ toQText sections
+    , binInterval = extractBinInterval sqlCfg sections
+    }
 
 
 -- | Look up cache entry and determine cache result
 lookupCache :: DB es => CacheKey -> (UTCTime, UTCTime) -> Eff es CacheResult
 lookupCache key (reqFrom, reqTo) = do
-  results <- PG.query
-    [sql|
+  results <-
+    PG.query
+      [sql|
       SELECT project_id, source, query_hash, bin_interval, original_query,
              cached_from, cached_to, cached_data, hit_count
       FROM query_cache
       WHERE project_id = ? AND source = ? AND query_hash = ? AND bin_interval = ?
     |]
-    (key.projectId, key.source, key.queryHash, key.binInterval)
+      (key.projectId, key.source, key.queryHash, key.binInterval)
   pure $ case results of
     [] -> CacheMiss
     ((pid, src, qh, bi, oq, cf, ct, AesonText cd, hc) : _) ->
       let entry = CacheEntry pid src qh bi oq cf ct cd hc
-       in if | reqFrom >= cf && reqTo <= ct -> CacheHit entry
-             | reqTo > ct && reqFrom >= cf -> PartialHit entry
-             | reqFrom < cf -> CacheBypassed "Request extends before cached range"
-             | otherwise -> CacheMiss
+       in if
+            | reqFrom >= cf && reqTo <= ct -> CacheHit entry
+            | reqTo > ct && reqFrom >= cf -> PartialHit entry
+            | reqFrom < cf -> CacheBypassed "Request extends before cached range"
+            | otherwise -> CacheMiss
 
 
 -- | Update or insert cache entry
 updateCache :: DB es => CacheKey -> (UTCTime, UTCTime) -> MetricsData -> Text -> Eff es ()
-updateCache key (fromTime, toTime) metricsData originalQuery = void $ PG.execute
-  [sql|
+updateCache key (fromTime, toTime) metricsData originalQuery =
+  void
+    $ PG.execute
+      [sql|
     INSERT INTO query_cache (project_id, source, query_hash, bin_interval, original_query,
                              cached_from, cached_to, cached_data, hit_count, last_accessed_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, now())
@@ -121,7 +127,7 @@ updateCache key (fromTime, toTime) metricsData originalQuery = void $ PG.execute
       last_accessed_at = now(),
       updated_at = now()
   |]
-  (key.projectId, key.source, key.queryHash, key.binInterval, originalQuery, fromTime, toTime, AesonText metricsData)
+      (key.projectId, key.source, key.queryHash, key.binInterval, originalQuery, fromTime, toTime, AesonText metricsData)
 
 
 -- | Merge two MetricsData by timestamp, deduplicating by first column

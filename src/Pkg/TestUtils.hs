@@ -100,8 +100,8 @@ import Servant qualified
 import Servant.Server qualified as ServantS
 import System.Clock (TimeSpec (TimeSpec))
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.DB (DB)
 import System.Config qualified as Config
+import System.DB (DB)
 import System.Directory (getFileSize, listDirectory)
 import System.Envy (DefConfig (..), decodeWithDefaults)
 import System.Logging qualified as Logging
@@ -578,7 +578,7 @@ toBaseServantResponse trATCtx trLogger k = do
 -- | Run a query effect (like Charts.queryMetrics) in test context
 -- This is for effects that return data directly (not wrapped in RespHeaders)
 -- Uses frozen time to match background job context
-runQueryEffect :: TestResources -> (forall es. (Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, IOE :> es, Time :> es, DB es) => Eff es a) -> IO a
+runQueryEffect :: TestResources -> (forall es. (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, IOE :> es, Time :> es) => Eff es a) -> IO a
 runQueryEffect TestResources{..} action = do
   action
     & runErrorNoCallStack @ServantS.ServerError
