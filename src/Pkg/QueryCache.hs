@@ -12,6 +12,9 @@ module Pkg.QueryCache (
   cleanupExpiredCache,
 ) where
 
+import Data.Function (on)
+import Data.List (groupBy)
+import Relude.Unsafe qualified as Unsafe
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
@@ -87,36 +90,40 @@ generateCacheKey pid sourceM sections sqlCfg =
     }
 
 
+-- | Convert UTCTime to POSIX epoch seconds
+toPosix :: UTCTime -> Int
+toPosix = floor . utcTimeToPOSIXSeconds
+
+
 -- | Look up cache entry and determine cache result
 lookupCache :: DB es => CacheKey -> (UTCTime, UTCTime) -> Eff es CacheResult
-lookupCache key (reqFrom, reqTo) = do
-  results <-
-    PG.query
-      [sql|
+lookupCache key (reqFrom, reqTo) =
+  PG.query
+    [sql|
       SELECT project_id, source, query_hash, bin_interval, original_query,
              cached_from, cached_to, cached_data, hit_count
       FROM query_cache
       WHERE project_id = ? AND source = ? AND query_hash = ? AND bin_interval = ?
       LIMIT 1
     |]
-      (key.projectId, key.source, key.queryHash, key.binInterval)
-  pure $ case results of
-    [] -> CacheMiss
-    ((pid, src, qh, bi, oq, cf, ct, AesonText cd, hc) : _) ->
-      let entry = CacheEntry pid src qh bi oq cf ct cd hc
-       in if
-            | reqFrom >= cf && reqTo <= ct -> CacheHit entry
-            | reqFrom >= cf && reqTo > ct -> PartialHit entry -- extends forward
-            | reqFrom < cf && reqTo > ct -> PartialHit entry -- extends both directions
-            | reqFrom < cf -> CacheBypassed "Request extends before cached range"
-            | otherwise -> CacheMiss
+    (key.projectId, key.source, key.queryHash, key.binInterval)
+    <&> \case
+      [] -> CacheMiss
+      ((pid, src, qh, bi, oq, cf, ct, AesonText cd, hc) : _) ->
+        let entry = CacheEntry pid src qh bi oq cf ct cd hc
+         in case () of
+              _ | reqFrom >= cf && reqTo <= ct -> CacheHit entry
+                | reqFrom >= cf && reqTo > ct -> PartialHit entry
+                | reqFrom < cf && reqTo > ct -> PartialHit entry
+                | reqFrom < cf -> CacheBypassed "Request extends before cached range"
+                | otherwise -> CacheMiss
 
 
 -- | Update or insert cache entry (merges time ranges on conflict)
 updateCache :: DB es => CacheKey -> (UTCTime, UTCTime) -> MetricsData -> Text -> Eff es ()
 updateCache key (fromTime, toTime) metricsData originalQuery =
-  void
-    $ PG.execute
+  void $
+    PG.execute
       [sql|
     INSERT INTO query_cache (project_id, source, query_hash, bin_interval, original_query,
                              cached_from, cached_to, cached_data, hit_count, last_accessed_at)
@@ -140,7 +147,8 @@ mergeTimeseriesData cached new
   | V.null cached.dataset = new
   | V.null new.dataset = cached
   | otherwise =
-      let dedupedRows = deduplicateByTimestamp $ V.modify (VA.sortBy cmpTs) $ cached.dataset <> new.dataset
+      let sorted = V.modify (VA.sortBy $ comparing (join . V.headM)) $ cached.dataset <> new.dataset
+          dedupedRows = V.fromList . map Unsafe.last . groupBy ((==) `on` (join . V.headM)) $ V.toList sorted
        in cached
             { dataset = dedupedRows
             , rowsCount = fromIntegral $ V.length dedupedRows
@@ -148,15 +156,6 @@ mergeTimeseriesData cached new
             , to = liftA2 max cached.to new.to <|> cached.to <|> new.to
             , stats = Just $ recalculateStats dedupedRows
             }
-  where
-    cmpTs = comparing (join . V.headM)
-    deduplicateByTimestamp rows
-      | V.null rows = rows
-      | otherwise = V.fromList $ foldr dedupe [] (V.toList rows)
-    dedupe x [] = [x]
-    dedupe x (y : ys)
-      | join (V.headM x) == join (V.headM y) = y : ys
-      | otherwise = x : y : ys
 
 
 -- | Recalculate stats from dataset in single pass
@@ -167,7 +166,7 @@ recalculateStats rows =
         then MetricsStats 0 0 0 0 0 0 0
         else
           let h = V.head values
-              (!minV, !maxV, !sumV, !cnt) = V.foldl' (\(!mn, !mx, !s, !c) x -> (min mn x, max mx x, s + x, c + 1)) (h, h, 0, 0) values
+              (!minV, !maxV, !sumV, !cnt) = V.foldl' (\(!mn, !mx, !s, !c) x -> (min mn x, max mx x, s + x, c + 1)) (h, h, h, 1) values
            in MetricsStats minV maxV sumV cnt (sumV / fromIntegral cnt) h maxV
 
 
@@ -181,27 +180,25 @@ filterByTimestamp p metrics =
 -- | Trim data to a specific time range
 trimToRange :: MetricsData -> UTCTime -> UTCTime -> MetricsData
 trimToRange metrics fromTime toTime =
-  let fromE = floor $ utcTimeToPOSIXSeconds fromTime
-      toE = floor $ utcTimeToPOSIXSeconds toTime
+  let (fromE, toE) = (toPosix fromTime, toPosix toTime)
    in (filterByTimestamp (\ts -> ts >= fromE && ts <= toE) metrics){from = Just fromE, to = Just toE}
 
 
 -- | Trim old data outside the sliding window
 trimOldData :: UTCTime -> MetricsData -> MetricsData
-trimOldData windowStart = filterByTimestamp (>= floor (utcTimeToPOSIXSeconds windowStart))
+trimOldData windowStart = filterByTimestamp (>= toPosix windowStart)
 
 
 -- | Cleanup expired cache entries (stale data or LRU eviction)
 cleanupExpiredCache :: DB es => Eff es Int
 cleanupExpiredCache =
-  maybe 0 fromOnly
-    . listToMaybe
+  maybe 0 fromOnly . viaNonEmpty head
     <$> PG.query
       [sql|
       WITH deleted AS (
         DELETE FROM query_cache
         WHERE cached_to < now() - interval '24 hours'
-           OR last_accessed_at < now() - interval '1 hour'
+           OR last_accessed_at < now() - interval '4 hours'
         RETURNING id
       )
       SELECT COUNT(*)::int FROM deleted

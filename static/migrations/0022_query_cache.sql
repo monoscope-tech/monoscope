@@ -27,12 +27,9 @@ CREATE UNLOGGED TABLE IF NOT EXISTS query_cache (
   hit_count INT NOT NULL DEFAULT 0,
   last_accessed_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
 
-  -- Unique constraint on cache key
+  -- Unique constraint on cache key (also serves as lookup index)
   UNIQUE (project_id, source, query_hash, bin_interval)
 );
-
-CREATE INDEX IF NOT EXISTS idx_query_cache_lookup
-  ON query_cache(project_id, source, query_hash, bin_interval);
 
 CREATE INDEX IF NOT EXISTS idx_query_cache_eviction
   ON query_cache(cached_to);

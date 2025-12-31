@@ -23,15 +23,7 @@ import Models.Projects.Projects qualified as Projects
 import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.DashboardUtils qualified as DashboardUtils
-import Pkg.Parser (
-  QueryComponents (finalSummarizeQuery),
-  SqlQueryCfg (..),
-  defSqlQueryCfg,
-  pSource,
-  parseQueryToAST,
-  queryASTToComponents,
- )
-import Pkg.Parser qualified as Parser
+import Pkg.Parser (QueryComponents (finalSummarizeQuery, whereClause), SqlQueryCfg (..), defSqlQueryCfg, pSource, parseQueryToAST, queryASTToComponents)
 import Pkg.Parser.Stats (Section, Sources)
 import Pkg.QueryCache qualified as QC
 import Relude
@@ -140,7 +132,7 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
             (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM) Nothing)
               { dateRange = (fromD, toD)
               }
-      let (_, qc) = Parser.queryASTToComponents sqlQueryComponents queryAST
+      let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
       let mappng' = mappng <> M.fromList [("query_ast_filters", maybe "" (" AND " <>) qc.whereClause)]
       let sqlQuery = DashboardUtils.replacePlaceholders mappng' querySQL
       liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx
