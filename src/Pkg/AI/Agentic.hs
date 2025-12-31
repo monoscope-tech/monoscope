@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 
@@ -31,16 +32,36 @@ import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple.Types (Query (..))
 import Effectful (Eff)
 import Effectful.Log (Log)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Time qualified as Time
 import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
-import Models.Apis.RequestDumps (selectLogTable)
+import Models.Apis.RequestDumps (executeArbitraryQuery, selectLogTable)
 import Models.Projects.Projects qualified as Projects
 import Pkg.AI qualified as AI
 import Pkg.Parser (parseQueryToAST)
 import Relude
 import System.Types (DB)
+
+
+-- * Constants
+
+maxFieldValues :: Int
+maxFieldValues = 20
+
+maxSampleLogs :: Int
+maxSampleLogs = 5
+
+maxServices :: Int
+maxServices = 20
+
+defaultFieldLimit :: Int
+defaultFieldLimit = 10
+
+defaultSampleLimit :: Int
+defaultSampleLimit = 3
 
 
 -- | Mode for LLM interaction
@@ -138,6 +159,14 @@ data Tool
     SampleLogs
   | -- | Get precomputed facets (popular values for common fields)
     GetFacets
+  | -- | Run a query (KQL preferred, SQL as fallback for complex queries)
+    RunQuery
+  deriving (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | Query type for RunQuery tool
+data QueryType = KQL | SQL
   deriving (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -215,9 +244,17 @@ toolDescriptions =
     , "   Example: {\"tool\": \"GetFacets\", \"arguments\": {}}"
     , "   Use when: You need to know what values are common for services, status codes, endpoints, etc."
     , ""
+    , "6. RunQuery - Execute a query and return results (KQL preferred, SQL for complex cases)"
+    , "   Arguments: {\"query\": \"<query>\", \"type\": \"KQL\" | \"SQL\", \"limit\": <number>}"
+    , "   Example (KQL): {\"tool\": \"RunQuery\", \"arguments\": {\"query\": \"level == \\\"ERROR\\\" | take 10\", \"type\": \"KQL\"}}"
+    , "   Example (SQL): {\"tool\": \"RunQuery\", \"arguments\": {\"query\": \"SELECT level, count(*) FROM otel_logs_and_spans WHERE project_id='...' GROUP BY level\", \"type\": \"SQL\", \"limit\": 20}}"
+    , "   IMPORTANT: Prefer KQL for most queries. Only use SQL when KQL cannot express the query (e.g., complex JOINs, window functions)."
+    , "   Use when: You need to run an exploratory query to understand the data before generating the final response"
+    , ""
     , "IMPORTANT GUIDELINES:"
     , "- DO NOT use tools for simple, well-known queries (e.g., 'show errors', 'slow requests')"
     , "- Use tools ONLY when the query requires specific values you're uncertain about"
+    , "- PREFER KQL over SQL for all tools - KQL has caching and optimizations"
     , "- After receiving tool results, provide your final response in the standard JSON format"
     , "- Maximum tool calls allowed: 3 iterations"
     , ""
@@ -226,27 +263,18 @@ toolDescriptions =
 
 -- | List of available tools
 availableTools :: [Tool]
-availableTools = [GetFieldValues, CountQuery, GetServices, SampleLogs, GetFacets]
+availableTools = [GetFieldValues, CountQuery, GetServices, SampleLogs, GetFacets, RunQuery]
 
 
 -- | Parse the LLM response to determine if it's a tool call or final response
 parseAgenticResponse :: Text -> AgenticResponse
 parseAgenticResponse responseText =
   let trimmed = T.strip responseText
-      -- Try to parse as JSON
-      decoded = AE.eitherDecode @AE.Value (fromStrict $ encodeUtf8 trimmed)
-   in case decoded of
-        Left _ ->
-          -- Not valid JSON, treat as error
-          AgenticError $ "Invalid response format: " <> T.take 100 trimmed
-        Right val ->
-          case parseToolCalls val of
-            Just calls -> NeedsTools calls
-            Nothing ->
-              -- Try to parse as final response
-              case AI.getAskLLMResponse trimmed of
-                Left err -> AgenticError err
-                Right resp -> FinalResponse resp
+   in AE.eitherDecode @AE.Value (fromStrict $ encodeUtf8 trimmed) & \case
+        Left _ -> AgenticError $ "Invalid response format: " <> T.take 100 trimmed
+        Right val -> parseToolCalls val & \case
+          Just calls -> NeedsTools calls
+          Nothing -> either AgenticError FinalResponse $ AI.getAskLLMResponse trimmed
 
 
 -- | Try to parse tool calls from JSON value
@@ -266,23 +294,43 @@ executeTool config ToolCall{..} = case tool of
   GetServices -> executeGetServices config arguments
   SampleLogs -> executeSampleLogs config arguments
   GetFacets -> executeGetFacets config arguments
+  RunQuery -> executeRunQuery config arguments
+
+
+-- * Tool Result Helpers
+
+-- | Create a successful tool result
+successResult :: Tool -> Text -> ToolResult
+successResult t msg = ToolResult{tool = t, result = msg, success = True}
+
+-- | Create a failed tool result
+errorResult :: Tool -> Text -> ToolResult
+errorResult t msg = ToolResult{tool = t, result = msg, success = False}
+
+-- | Parse a required text argument from tool args
+getTextArg :: Text -> AE.Value -> Maybe Text
+getTextArg key = AET.parseMaybe (AE.withObject "args" (AE..: key))
+
+-- | Parse an optional int argument with default
+getIntArg :: Text -> Int -> AE.Value -> Int
+getIntArg key def args = fromMaybe def $ AET.parseMaybe (AE.withObject "args" (AE..: key)) args
+
+-- | Parse query type argument (defaults to KQL)
+getQueryType :: AE.Value -> QueryType
+getQueryType args = fromMaybe KQL $ AET.parseMaybe parser args
+  where
+    parser = AE.withObject "args" $ \obj -> do
+      typeStr <- obj AE..: "type" :: AET.Parser Text
+      pure $ case T.toUpper typeStr of
+        "SQL" -> SQL
+        _ -> KQL
 
 
 -- | Execute GetFieldValues tool - get distinct values for a field using KQL
 executeGetFieldValues :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
-executeGetFieldValues config args = do
-  let fieldM = AET.parseMaybe (AE.withObject "args" (AE..: "field")) args :: Maybe Text
-      limitM = AET.parseMaybe (AE.withObject "args" (AE..: "limit")) args :: Maybe Int
-      limit = min 20 $ fromMaybe 10 limitM
-
-  case fieldM of
-    Nothing ->
-      pure
-        $ ToolResult
-          { tool = GetFieldValues
-          , result = "Error: 'field' argument is required"
-          , success = False
-          }
+executeGetFieldValues config args =
+  case getTextArg "field" args of
+    Nothing -> pure $ errorResult GetFieldValues "Error: 'field' argument is required"
     Just field -> do
       -- Build KQL query: | summarize count() by <field> | sort by _count desc | take <limit>
       let kqlQuery = "| summarize count() by " <> field <> " | sort by _count desc | take " <> show limit
@@ -385,20 +433,14 @@ executeGetServices config _args = do
   let kqlQuery = "| summarize count() by resource.service.name | sort by _count desc | take 20"
 
   case parseQueryToAST kqlQuery of
-    Left parseErr ->
-      pure
-        $ ToolResult
-          { tool = GetServices
-          , result = "Error parsing services query: " <> parseErr
-          , success = False
-          }
+    Left parseErr -> pure $ errorResult t $ "Error parsing query: " <> parseErr
     Right queryAST -> do
       resultE <-
         selectLogTable
           config.projectId
           queryAST
           kqlQuery
-          Nothing -- cursor
+          Nothing
           config.timeRange
           [] -- user columns
           Nothing -- source
@@ -423,22 +465,12 @@ executeGetServices config _args = do
 
 -- | Execute SampleLogs tool - get sample log entries using KQL
 executeSampleLogs :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
-executeSampleLogs config args = do
-  let queryM = AET.parseMaybe (AE.withObject "args" (AE..: "query")) args :: Maybe Text
-      limitM = AET.parseMaybe (AE.withObject "args" (AE..: "limit")) args :: Maybe Int
-      limit = min 5 $ fromMaybe 3 limitM
-
-  case queryM of
-    Nothing ->
-      pure
-        $ ToolResult
-          { tool = SampleLogs
-          , result = "Error: 'query' argument is required"
-          , success = False
-          }
+executeSampleLogs config args =
+  case getTextArg "query" args of
+    Nothing -> pure $ errorResult SampleLogs "Error: 'query' argument is required"
     Just kqlQuery -> do
-      -- Append take limit to the query if not already present
-      let fullQuery =
+      let limit = min maxSampleLogs $ getIntArg "limit" defaultSampleLimit args
+          fullQuery =
             if "| take" `T.isInfixOf` kqlQuery
               then kqlQuery
               else kqlQuery <> " | take " <> show limit
@@ -485,65 +517,94 @@ executeSampleLogs config args = do
 -- | Execute GetFacets tool - return precomputed facets from config
 executeGetFacets :: Applicative f => AgenticConfig -> AE.Value -> f ToolResult
 executeGetFacets config _args =
-  case config.facetContext of
-    Nothing ->
-      pure
-        $ ToolResult
-          { tool = GetFacets
-          , result = "No facet data available for this project"
-          , success = False
-          }
-    Just summary ->
-      pure
-        $ ToolResult
-          { tool = GetFacets
-          , result = formatFacetSummary summary
-          , success = True
-          }
+  pure $ case config.facetContext of
+    Nothing -> errorResult GetFacets "No facet data available for this project"
+    Just summary -> successResult GetFacets (formatFacetSummary summary)
+
+
+-- | Execute RunQuery tool - supports both KQL (preferred) and raw SQL
+executeRunQuery :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
+executeRunQuery config args =
+  case getTextArg "query" args of
+    Nothing -> pure $ errorResult RunQuery "Error: 'query' argument is required"
+    Just query -> do
+      let queryType = getQueryType args
+          limit = min 100 $ getIntArg "limit" 20 args
+      case queryType of
+        KQL -> runKqlQuery config RunQuery query [] $ \(results, _, count) ->
+          formatQueryResults results count
+        SQL -> runSqlQuery config query limit
+
+
+-- | Run a raw SQL query (fallback for complex queries KQL can't express)
+runSqlQuery :: DB es => AgenticConfig -> Text -> Int -> Eff es ToolResult
+runSqlQuery config query limit = do
+  -- Validate the query doesn't contain dangerous operations
+  let lowerQuery = T.toLower query
+      dangerousPatterns = ["drop ", "delete ", "truncate ", "update ", "insert ", "alter ", "create "]
+  if any (`T.isInfixOf` lowerQuery) dangerousPatterns
+    then pure $ errorResult RunQuery "Error: Only SELECT queries are allowed"
+    else do
+      -- Add LIMIT if not present to prevent runaway queries
+      let limitedQuery =
+            if "limit" `T.isInfixOf` lowerQuery
+              then query
+              else query <> " LIMIT " <> show limit
+      resultE <- try @SomeException $ executeArbitraryQuery limitedQuery
+      pure $ case resultE of
+        Left err -> errorResult RunQuery $ "Error executing SQL: " <> show err
+        Right results -> successResult RunQuery $ formatQueryResults results (V.length results)
+
+
+-- | Format query results for display
+formatQueryResults :: V.Vector (V.Vector AE.Value) -> Int -> Text
+formatQueryResults results count =
+  let rows = V.toList results
+      formatted = T.intercalate "\n" $ take 20 $ map formatResultRow rows
+      truncated = if count > 20 then "\n... and " <> show (count - 20) <> " more rows" else ""
+   in "Results (" <> show count <> " rows):\n" <> formatted <> truncated
+
+
+-- | Format a single result row
+formatResultRow :: V.Vector AE.Value -> Text
+formatResultRow row =
+  let vals = V.toList row
+   in "  " <> T.intercalate " | " (map jsonToText vals)
 
 
 -- | Format summarize query results (from KQL | summarize count() by <field>)
 -- Results come as Vector of Vectors where each row is [field_value, count]
 formatSummarizeResults :: Text -> V.Vector (V.Vector AE.Value) -> Text
-formatSummarizeResults fieldName results =
-  let formatRow row =
-        case V.toList row of
-          [value, count] ->
-            let valText = jsonToText value
-                countText = jsonToText count
-             in "\"" <> valText <> "\" (" <> countText <> ")"
-          _ -> ""
-      rows = V.toList results
-      formatted = filter (not . T.null) $ map formatRow rows
-   in T.intercalate ", " formatted
+formatSummarizeResults _fieldName results =
+  T.intercalate ", " $ mapMaybe formatRow (V.toList results)
+  where
+    formatRow row = case V.toList row of
+      [value, count] -> Just $ "\"" <> jsonToText value <> "\" (" <> jsonToText count <> ")"
+      _ -> Nothing
 
 
 -- | Format sample log results for display
 -- Results come as Vector of Vectors containing log field values
 formatSampleLogs :: V.Vector (V.Vector AE.Value) -> Text
 formatSampleLogs results =
-  let formatRow row =
-        case V.toList row of
-          (level : name : service : bodyParts) ->
-            let lvl = jsonToText level
-                nm = jsonToText name
-                svc = jsonToText service
-                body = T.take 100 $ T.intercalate " " $ map jsonToText bodyParts
-             in "  - [" <> lvl <> "] " <> nm <> " (" <> svc <> "): " <> body
-          _ -> ""
-      rows = V.toList results
-      formatted = filter (not . T.null) $ map formatRow rows
-   in T.intercalate "\n" formatted
+  T.intercalate "\n" $ mapMaybe formatRow (V.toList results)
+  where
+    formatRow row = case V.toList row of
+      (level : name : service : bodyParts) ->
+        let body = T.take 100 $ T.intercalate " " $ map jsonToText bodyParts
+         in Just $ "  - [" <> jsonToText level <> "] " <> jsonToText name <> " (" <> jsonToText service <> "): " <> body
+      _ -> Nothing
 
 
 -- | Convert JSON value to text for display
 jsonToText :: AE.Value -> Text
-jsonToText (AE.String s) = s
-jsonToText (AE.Number n) = show n
-jsonToText (AE.Bool b) = if b then "true" else "false"
-jsonToText AE.Null = "null"
-jsonToText (AE.Array arr) = "[" <> T.intercalate ", " (map jsonToText $ V.toList arr) <> "]"
-jsonToText (AE.Object _) = "{...}"
+jsonToText = \case
+  AE.String s -> s
+  AE.Number n -> show n
+  AE.Bool b -> if b then "true" else "false"
+  AE.Null -> "null"
+  AE.Array arr -> "[" <> T.intercalate ", " (map jsonToText $ V.toList arr) <> "]"
+  AE.Object _ -> "{...}"
 
 
 -- | Format facet summary for LLM consumption
@@ -558,42 +619,43 @@ formatFacetSummary summary =
    in "Facet data (popular values for common fields):\n" <> T.intercalate "\n" formattedFacets
 
 
+-- | Key fields to include in facet context
+keyFacetFields :: [Text]
+keyFacetFields =
+  [ "resource___service___name"
+  , "level"
+  , "status_code"
+  , "attributes___http___response___status_code"
+  , "attributes___http___request___method"
+  , "attributes___error___type"
+  , "kind"
+  , "name"
+  ]
+
+
 -- | Format facets as context to include in the prompt
 formatFacetContext :: Maybe FacetSummary -> Text
-formatFacetContext Nothing = ""
-formatFacetContext (Just summary) =
-  let FacetData facetMap = summary.facetJson
-      -- Key fields to always include in context
-      keyFields =
-        [ "resource___service___name"
-        , "level"
-        , "status_code"
-        , "attributes___http___response___status_code"
-        , "attributes___http___request___method"
-        , "attributes___error___type"
-        , "kind"
-        , "name"
-        ]
-      formatField fieldName =
-        case HM.lookup fieldName facetMap of
-          Nothing -> Nothing
-          Just values ->
-            let columnName = T.replace "___" "." fieldName
-                valueStrs = map (\(FacetValue v _) -> "\"" <> v <> "\"") $ take 8 values
-             in Just $ columnName <> ": " <> T.intercalate ", " valueStrs
-      formattedFacets = catMaybes $ map formatField keyFields
-   in if null formattedFacets
-        then ""
-        else
-          T.unlines
-            [ ""
-            , "PROJECT DATA CONTEXT:"
-            , "The following are popular values for key fields in this project (from the last 24 hours):"
-            , T.intercalate "\n" formattedFacets
-            , ""
-            , "Use these actual values when the user's query matches them."
-            , ""
-            ]
+formatFacetContext = \case
+  Nothing -> ""
+  Just summary ->
+    let FacetData facetMap = summary.facetJson
+        formatField fieldName = HM.lookup fieldName facetMap <&> \values ->
+          let columnName = T.replace "___" "." fieldName
+              valueStrs = map (\(FacetValue v _) -> "\"" <> v <> "\"") $ take 8 values
+           in columnName <> ": " <> T.intercalate ", " valueStrs
+        formattedFacets = mapMaybe formatField keyFacetFields
+     in if null formattedFacets
+          then ""
+          else
+            T.unlines
+              [ ""
+              , "PROJECT DATA CONTEXT:"
+              , "The following are popular values for key fields in this project (from the last 24 hours):"
+              , T.intercalate "\n" formattedFacets
+              , ""
+              , "Use these actual values when the user's query matches them."
+              , ""
+              ]
 
 
 -- | Format tool results for feeding back to the LLM
