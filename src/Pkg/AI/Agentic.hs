@@ -30,15 +30,15 @@ import Data.Aeson.Types qualified as AET
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Time (UTCTime)
-import Data.Time.Format.ISO8601 (iso8601Show)
-import Database.PostgreSQL.Simple.Types (Query (..))
+import Data.Vector qualified as V
 import Effectful (Eff)
-import Effectful.PostgreSQL qualified as PG
+import Effectful.Log (Log)
+import Effectful.Time qualified as Time
 import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
+import Models.Apis.RequestDumps (selectLogTable)
 import Models.Projects.Projects qualified as Projects
-import NeatInterpolation (text)
 import Pkg.AI qualified as AI
-import Pkg.Parser (parseQueryToAST, toQText)
+import Pkg.Parser (parseQueryToAST)
 import Relude
 import System.Types (DB)
 
@@ -259,7 +259,7 @@ parseToolCalls val = AET.parseMaybe parser val
 
 
 -- | Execute a single tool call and return the result
-executeTool :: DB es => AgenticConfig -> ToolCall -> Eff es ToolResult
+executeTool :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> ToolCall -> Eff es ToolResult
 executeTool config ToolCall{..} = case tool of
   GetFieldValues -> executeGetFieldValues config arguments
   CountQuery -> executeCountQuery config arguments
@@ -268,28 +268,8 @@ executeTool config ToolCall{..} = case tool of
   GetFacets -> executeGetFacets config arguments
 
 
--- | Convert field name to database column format (e.g., "resource.service.name" -> "resource___service___name")
-fieldToColumn :: Text -> Text
-fieldToColumn = T.replace "." "___"
-
-
--- | Get the time range clause for queries
-timeRangeClause :: AgenticConfig -> Text
-timeRangeClause config =
-  let fmtTime = toText . iso8601Show
-   in case config.timeRange of
-        (Just from, Just to) ->
-          "AND timestamp >= '" <> fmtTime from <> "' AND timestamp < '" <> fmtTime to <> "'"
-        (Just from, Nothing) ->
-          "AND timestamp >= '" <> fmtTime from <> "'"
-        (Nothing, Just to) ->
-          "AND timestamp < '" <> fmtTime to <> "'"
-        (Nothing, Nothing) ->
-          "AND timestamp >= NOW() - INTERVAL '24 hours'"
-
-
--- | Execute GetFieldValues tool - get distinct values for a field
-executeGetFieldValues :: DB es => AgenticConfig -> AE.Value -> Eff es ToolResult
+-- | Execute GetFieldValues tool - get distinct values for a field using KQL
+executeGetFieldValues :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
 executeGetFieldValues config args = do
   let fieldM = AET.parseMaybe (AE.withObject "args" (AE..: "field")) args :: Maybe Text
       limitM = AET.parseMaybe (AE.withObject "args" (AE..: "limit")) args :: Maybe Int
@@ -304,41 +284,51 @@ executeGetFieldValues config args = do
           , success = False
           }
     Just field -> do
-      let columnName = fieldToColumn field
-          pid = config.projectId.toText
-          timeRange = timeRangeClause config
-          queryText =
-            [text|
-              SELECT ${columnName}::text as value, COUNT(*) as cnt
-              FROM otel_logs_and_spans
-              WHERE project_id = '${pid}' ${timeRange}
-                AND ${columnName} IS NOT NULL
-              GROUP BY value
-              ORDER BY cnt DESC
-              LIMIT ${show limit}
-            |]
+      -- Build KQL query: | summarize count() by <field> | sort by _count desc | take <limit>
+      let kqlQuery = "| summarize count() by " <> field <> " | sort by _count desc | take " <> show limit
 
-      resultsE <- try @SomeException $ PG.query_ (Query $ encodeUtf8 queryText)
-      case resultsE of
-        Left err ->
+      -- Parse and execute via the KQL infrastructure
+      case parseQueryToAST kqlQuery of
+        Left parseErr ->
           pure
             $ ToolResult
               { tool = GetFieldValues
-              , result = "Error querying field '" <> field <> "': " <> show err
+              , result = "Error parsing field query: " <> parseErr
               , success = False
               }
-        Right (results :: [(Text, Int)]) ->
-          let formatted = T.intercalate ", " $ map (\(v, c) -> "\"" <> v <> "\" (" <> show c <> ")") results
-           in pure
+        Right queryAST -> do
+          resultE <-
+            selectLogTable
+              config.projectId
+              queryAST
+              kqlQuery
+              Nothing -- cursor
+              config.timeRange
+              [] -- user columns
+              Nothing -- source
+              Nothing -- target spans
+
+          case resultE of
+            Left err ->
+              pure
                 $ ToolResult
                   { tool = GetFieldValues
-                  , result = "Values for '" <> field <> "': " <> formatted
-                  , success = True
+                  , result = "Error querying field '" <> field <> "': " <> err
+                  , success = False
                   }
+            Right (results, _, _) -> do
+              -- Format results: each row is [field_value, count]
+              let formatted = formatSummarizeResults field results
+               in pure
+                    $ ToolResult
+                      { tool = GetFieldValues
+                      , result = "Values for '" <> field <> "': " <> formatted
+                      , success = True
+                      }
 
 
--- | Execute CountQuery tool - count results for a KQL query
-executeCountQuery :: DB es => AgenticConfig -> AE.Value -> Eff es ToolResult
+-- | Execute CountQuery tool - count results for a KQL query using the KQL infrastructure
+executeCountQuery :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
 executeCountQuery config args = do
   let queryM = AET.parseMaybe (AE.withObject "args" (AE..: "query")) args :: Maybe Text
 
@@ -351,9 +341,8 @@ executeCountQuery config args = do
           , success = False
           }
     Just kqlQuery -> do
-      -- Parse the KQL query to get WHERE conditions
-      let parseResult = parseQueryToAST kqlQuery
-      case parseResult of
+      -- Parse the KQL query
+      case parseQueryToAST kqlQuery of
         Left parseErr ->
           pure
             $ ToolResult
@@ -362,76 +351,81 @@ executeCountQuery config args = do
               , success = False
               }
         Right queryAST -> do
-          let whereClause = toQText queryAST
-              pid = config.projectId.toText
-              timeRange = timeRangeClause config
-              -- Build a simple count query
-              sqlQuery =
-                [text|
-                  SELECT COUNT(*) as cnt
-                  FROM otel_logs_and_spans
-                  WHERE project_id = '${pid}' ${timeRange}
-                    AND (${whereClause})
-                |]
+          -- Use selectLogTable which returns the count as the third element
+          resultE <-
+            selectLogTable
+              config.projectId
+              queryAST
+              kqlQuery
+              Nothing -- cursor
+              config.timeRange
+              [] -- user columns
+              Nothing -- source
+              Nothing -- target spans
 
-          resultsE <- try @SomeException $ PG.query_ (Query $ encodeUtf8 sqlQuery)
-          case resultsE of
+          case resultE of
             Left err ->
               pure
                 $ ToolResult
                   { tool = CountQuery
-                  , result = "Error executing count query: " <> show err
+                  , result = "Error executing count query: " <> err
                   , success = False
                   }
-            Right results ->
-              let count = case results of
-                    [(c :: Int)] -> c
-                    _ -> 0
-               in pure
-                    $ ToolResult
-                      { tool = CountQuery
-                      , result = "Query '" <> kqlQuery <> "' matches " <> show count <> " entries"
-                      , success = True
-                      }
+            Right (_, _, count) ->
+              pure
+                $ ToolResult
+                  { tool = CountQuery
+                  , result = "Query '" <> kqlQuery <> "' matches " <> show count <> " entries"
+                  , success = True
+                  }
 
 
--- | Execute GetServices tool - get list of services in the project
-executeGetServices :: DB es => AgenticConfig -> AE.Value -> Eff es ToolResult
+-- | Execute GetServices tool - get list of services in the project using KQL
+executeGetServices :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
 executeGetServices config _args = do
-  let pid = config.projectId.toText
-      timeRange = timeRangeClause config
-      queryText =
-        [text|
-          SELECT resource___service___name::text as service, COUNT(*) as cnt
-          FROM otel_logs_and_spans
-          WHERE project_id = '${pid}' ${timeRange}
-            AND resource___service___name IS NOT NULL
-          GROUP BY service
-          ORDER BY cnt DESC
-          LIMIT 20
-        |]
+  -- Use KQL summarize to get services with counts
+  let kqlQuery = "| summarize count() by resource.service.name | sort by _count desc | take 20"
 
-  resultsE <- try @SomeException $ PG.query_ (Query $ encodeUtf8 queryText)
-  case resultsE of
-    Left err ->
+  case parseQueryToAST kqlQuery of
+    Left parseErr ->
       pure
         $ ToolResult
           { tool = GetServices
-          , result = "Error querying services: " <> show err
+          , result = "Error parsing services query: " <> parseErr
           , success = False
           }
-    Right (results :: [(Text, Int)]) ->
-      let formatted = T.intercalate ", " $ map (\(s, c) -> "\"" <> s <> "\" (" <> show c <> " events)") results
-       in pure
+    Right queryAST -> do
+      resultE <-
+        selectLogTable
+          config.projectId
+          queryAST
+          kqlQuery
+          Nothing -- cursor
+          config.timeRange
+          [] -- user columns
+          Nothing -- source
+          Nothing -- target spans
+
+      case resultE of
+        Left err ->
+          pure
             $ ToolResult
               { tool = GetServices
-              , result = "Available services: " <> formatted
-              , success = True
+              , result = "Error querying services: " <> err
+              , success = False
               }
+        Right (results, _, _) -> do
+          let formatted = formatSummarizeResults "resource.service.name" results
+           in pure
+                $ ToolResult
+                  { tool = GetServices
+                  , result = "Available services: " <> formatted
+                  , success = True
+                  }
 
 
--- | Execute SampleLogs tool - get sample log entries
-executeSampleLogs :: DB es => AgenticConfig -> AE.Value -> Eff es ToolResult
+-- | Execute SampleLogs tool - get sample log entries using KQL
+executeSampleLogs :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
 executeSampleLogs config args = do
   let queryM = AET.parseMaybe (AE.withObject "args" (AE..: "query")) args :: Maybe Text
       limitM = AET.parseMaybe (AE.withObject "args" (AE..: "limit")) args :: Maybe Int
@@ -446,8 +440,13 @@ executeSampleLogs config args = do
           , success = False
           }
     Just kqlQuery -> do
-      let parseResult = parseQueryToAST kqlQuery
-      case parseResult of
+      -- Append take limit to the query if not already present
+      let fullQuery =
+            if "| take" `T.isInfixOf` kqlQuery
+              then kqlQuery
+              else kqlQuery <> " | take " <> show limit
+
+      case parseQueryToAST fullQuery of
         Left parseErr ->
           pure
             $ ToolResult
@@ -456,40 +455,29 @@ executeSampleLogs config args = do
               , success = False
               }
         Right queryAST -> do
-          let whereClause = toQText queryAST
-              pid = config.projectId.toText
-              timeRange = timeRangeClause config
-              sqlQuery =
-                [text|
-                  SELECT
-                    COALESCE(level::text, 'N/A') as level,
-                    COALESCE(name::text, 'N/A') as name,
-                    COALESCE(resource___service___name::text, 'N/A') as service,
-                    COALESCE(LEFT(body::text, 100), 'N/A') as body_preview
-                  FROM otel_logs_and_spans
-                  WHERE project_id = '${pid}' ${timeRange}
-                    AND (${whereClause})
-                  ORDER BY timestamp DESC
-                  LIMIT ${show limit}
-                |]
+          -- Use selectLogTable with specific columns for sample display
+          let sampleColumns = ["level", "name", "resource.service.name", "body"]
+          resultE <-
+            selectLogTable
+              config.projectId
+              queryAST
+              fullQuery
+              Nothing -- cursor
+              config.timeRange
+              sampleColumns
+              Nothing -- source
+              Nothing -- target spans
 
-          resultsE <- try @SomeException $ PG.query_ (Query $ encodeUtf8 sqlQuery)
-          case resultsE of
+          case resultE of
             Left err ->
               pure
                 $ ToolResult
                   { tool = SampleLogs
-                  , result = "Error sampling logs: " <> show err
+                  , result = "Error sampling logs: " <> err
                   , success = False
                   }
-            Right (results :: [(Text, Text, Text, Text)]) ->
-              let formatted =
-                    T.intercalate "\n"
-                      $ map
-                        ( \(lvl, nm, svc, bdy) ->
-                            "  - [" <> lvl <> "] " <> nm <> " (" <> svc <> "): " <> bdy
-                        )
-                        results
+            Right (results, _, _) -> do
+              let formatted = formatSampleLogs results
                in pure
                     $ ToolResult
                       { tool = SampleLogs
@@ -516,6 +504,50 @@ executeGetFacets config _args =
           , result = formatFacetSummary summary
           , success = True
           }
+
+
+-- | Format summarize query results (from KQL | summarize count() by <field>)
+-- Results come as Vector of Vectors where each row is [field_value, count]
+formatSummarizeResults :: Text -> V.Vector (V.Vector AE.Value) -> Text
+formatSummarizeResults fieldName results =
+  let formatRow row =
+        case V.toList row of
+          [value, count] ->
+            let valText = jsonToText value
+                countText = jsonToText count
+             in "\"" <> valText <> "\" (" <> countText <> ")"
+          _ -> ""
+      rows = V.toList results
+      formatted = filter (not . T.null) $ map formatRow rows
+   in T.intercalate ", " formatted
+
+
+-- | Format sample log results for display
+-- Results come as Vector of Vectors containing log field values
+formatSampleLogs :: V.Vector (V.Vector AE.Value) -> Text
+formatSampleLogs results =
+  let formatRow row =
+        case V.toList row of
+          (level : name : service : bodyParts) ->
+            let lvl = jsonToText level
+                nm = jsonToText name
+                svc = jsonToText service
+                body = T.take 100 $ T.intercalate " " $ map jsonToText bodyParts
+             in "  - [" <> lvl <> "] " <> nm <> " (" <> svc <> "): " <> body
+          _ -> ""
+      rows = V.toList results
+      formatted = filter (not . T.null) $ map formatRow rows
+   in T.intercalate "\n" formatted
+
+
+-- | Convert JSON value to text for display
+jsonToText :: AE.Value -> Text
+jsonToText (AE.String s) = s
+jsonToText (AE.Number n) = show n
+jsonToText (AE.Bool b) = if b then "true" else "false"
+jsonToText AE.Null = "null"
+jsonToText (AE.Array arr) = "[" <> T.intercalate ", " (map jsonToText $ V.toList arr) <> "]"
+jsonToText (AE.Object _) = "{...}"
 
 
 -- | Format facet summary for LLM consumption
@@ -601,7 +633,7 @@ buildAgenticPrompt config userQuery previousResults =
 -- | Main entry point for agentic LLM queries
 -- This runs the agentic loop: LLM -> parse response -> execute tools -> feed back -> repeat
 runAgenticQuery
-  :: DB es
+  :: (DB es, Log :> es, Time.Time :> es)
   => AgenticConfig
   -> Text
   -> Text
@@ -612,7 +644,7 @@ runAgenticQuery config userQuery apiKey =
 
 -- | Internal agentic loop
 runAgenticLoop
-  :: DB es
+  :: (DB es, Log :> es, Time.Time :> es)
   => AgenticConfig
   -> Text
   -> Text
