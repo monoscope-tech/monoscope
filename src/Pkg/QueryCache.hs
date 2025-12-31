@@ -14,7 +14,6 @@ module Pkg.QueryCache (
 
 import Data.Function (on)
 import Data.List (groupBy)
-import Relude.Unsafe qualified as Unsafe
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
@@ -30,6 +29,7 @@ import Pkg.Parser (SqlQueryCfg (..), calculateAutoBinWidth)
 import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.Parser.Stats (BinFunction (..), Section (..), Sources (..), SummarizeByClause (..), defaultBinSize)
 import Relude
+import Relude.Unsafe qualified as Unsafe
 import System.DB (DB)
 import Utils (toXXHash)
 
@@ -112,7 +112,8 @@ lookupCache key (reqFrom, reqTo) =
       ((pid, src, qh, bi, oq, cf, ct, AesonText cd, hc) : _) ->
         let entry = CacheEntry pid src qh bi oq cf ct cd hc
          in case () of
-              _ | reqFrom >= cf && reqTo <= ct -> CacheHit entry
+              _
+                | reqFrom >= cf && reqTo <= ct -> CacheHit entry
                 | reqFrom >= cf && reqTo > ct -> PartialHit entry
                 | reqFrom < cf && reqTo > ct -> PartialHit entry
                 | reqFrom < cf -> CacheBypassed "Request extends before cached range"
@@ -122,8 +123,8 @@ lookupCache key (reqFrom, reqTo) =
 -- | Update or insert cache entry (merges time ranges on conflict)
 updateCache :: DB es => CacheKey -> (UTCTime, UTCTime) -> MetricsData -> Text -> Eff es ()
 updateCache key (fromTime, toTime) metricsData originalQuery =
-  void $
-    PG.execute
+  void
+    $ PG.execute
       [sql|
     INSERT INTO query_cache (project_id, source, query_hash, bin_interval, original_query,
                              cached_from, cached_to, cached_data, hit_count, last_accessed_at)
@@ -192,7 +193,8 @@ trimOldData windowStart = filterByTimestamp (>= toPosix windowStart)
 -- | Cleanup expired cache entries (stale data or LRU eviction)
 cleanupExpiredCache :: DB es => Eff es Int
 cleanupExpiredCache =
-  maybe 0 fromOnly . viaNonEmpty head
+  maybe 0 fromOnly
+    . viaNonEmpty head
     <$> PG.query
       [sql|
       WITH deleted AS (
