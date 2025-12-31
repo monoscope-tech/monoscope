@@ -9,6 +9,7 @@ module Pkg.QueryCache (
   trimToRange,
   trimOldData,
   hasSummarizeWithBin,
+  cleanupExpiredCache,
 ) where
 
 import Data.Time (UTCTime)
@@ -16,6 +17,7 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
@@ -187,3 +189,20 @@ trimToRange metrics fromTime toTime =
 -- | Trim old data outside the sliding window
 trimOldData :: UTCTime -> MetricsData -> MetricsData
 trimOldData windowStart = filterByTimestamp (>= floor (utcTimeToPOSIXSeconds windowStart))
+
+
+-- | Cleanup expired cache entries (stale data or LRU eviction)
+cleanupExpiredCache :: DB es => Eff es Int
+cleanupExpiredCache =
+  maybe 0 fromOnly . listToMaybe
+    <$> PG.query
+      [sql|
+      WITH deleted AS (
+        DELETE FROM query_cache
+        WHERE cached_to < now() - interval '24 hours'
+           OR last_accessed_at < now() - interval '1 hour'
+        RETURNING id
+      )
+      SELECT COUNT(*)::int FROM deleted
+    |]
+      ()
