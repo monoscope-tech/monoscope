@@ -48,17 +48,22 @@ import System.Types (DB)
 
 -- * Constants
 
+
 maxFieldValues :: Int
 maxFieldValues = 20
+
 
 maxSampleLogs :: Int
 maxSampleLogs = 5
 
+
 maxServices :: Int
 maxServices = 20
 
+
 defaultFieldLimit :: Int
 defaultFieldLimit = 10
+
 
 defaultSampleLimit :: Int
 defaultSampleLimit = 3
@@ -272,9 +277,10 @@ parseAgenticResponse responseText =
   let trimmed = T.strip responseText
    in AE.eitherDecode @AE.Value (fromStrict $ encodeUtf8 trimmed) & \case
         Left _ -> AgenticError $ "Invalid response format: " <> T.take 100 trimmed
-        Right val -> parseToolCalls val & \case
-          Just calls -> NeedsTools calls
-          Nothing -> either AgenticError FinalResponse $ AI.getAskLLMResponse trimmed
+        Right val ->
+          parseToolCalls val & \case
+            Just calls -> NeedsTools calls
+            Nothing -> either AgenticError FinalResponse $ AI.getAskLLMResponse trimmed
 
 
 -- | Try to parse tool calls from JSON value
@@ -299,21 +305,26 @@ executeTool config ToolCall{..} = case tool of
 
 -- * Tool Result Helpers
 
+
 -- | Create a successful tool result
 successResult :: Tool -> Text -> ToolResult
 successResult t msg = ToolResult{tool = t, result = msg, success = True}
+
 
 -- | Create a failed tool result
 errorResult :: Tool -> Text -> ToolResult
 errorResult t msg = ToolResult{tool = t, result = msg, success = False}
 
+
 -- | Parse a required text argument from tool args
 getTextArg :: Text -> AE.Value -> Maybe Text
 getTextArg key = AET.parseMaybe (AE.withObject "args" (AE..: key))
 
+
 -- | Parse an optional int argument with default
 getIntArg :: Text -> Int -> AE.Value -> Int
 getIntArg key def args = fromMaybe def $ AET.parseMaybe (AE.withObject "args" (AE..: key)) args
+
 
 -- | Parse query type argument (defaults to KQL)
 getQueryType :: AE.Value -> QueryType
@@ -639,10 +650,11 @@ formatFacetContext = \case
   Nothing -> ""
   Just summary ->
     let FacetData facetMap = summary.facetJson
-        formatField fieldName = HM.lookup fieldName facetMap <&> \values ->
-          let columnName = T.replace "___" "." fieldName
-              valueStrs = map (\(FacetValue v _) -> "\"" <> v <> "\"") $ take 8 values
-           in columnName <> ": " <> T.intercalate ", " valueStrs
+        formatField fieldName =
+          HM.lookup fieldName facetMap <&> \values ->
+            let columnName = T.replace "___" "." fieldName
+                valueStrs = map (\(FacetValue v _) -> "\"" <> v <> "\"") $ take 8 values
+             in columnName <> ": " <> T.intercalate ", " valueStrs
         formattedFacets = mapMaybe formatField keyFacetFields
      in if null formattedFacets
           then ""
