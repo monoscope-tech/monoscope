@@ -336,112 +336,16 @@ getQueryType args = fromMaybe KQL $ AET.parseMaybe parser args
         _ -> KQL
 
 
--- | Execute GetFieldValues tool - get distinct values for a field using KQL
-executeGetFieldValues :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
-executeGetFieldValues config args =
-  case getTextArg "field" args of
-    Nothing -> pure $ errorResult GetFieldValues "Error: 'field' argument is required"
-    Just field -> do
-      -- Build KQL query: | summarize count() by <field> | sort by _count desc | take <limit>
-      let kqlQuery = "| summarize count() by " <> field <> " | sort by _count desc | take " <> show limit
-
-      -- Parse and execute via the KQL infrastructure
-      case parseQueryToAST kqlQuery of
-        Left parseErr ->
-          pure
-            $ ToolResult
-              { tool = GetFieldValues
-              , result = "Error parsing field query: " <> parseErr
-              , success = False
-              }
-        Right queryAST -> do
-          resultE <-
-            selectLogTable
-              config.projectId
-              queryAST
-              kqlQuery
-              Nothing -- cursor
-              config.timeRange
-              [] -- user columns
-              Nothing -- source
-              Nothing -- target spans
-          case resultE of
-            Left err ->
-              pure
-                $ ToolResult
-                  { tool = GetFieldValues
-                  , result = "Error querying field '" <> field <> "': " <> err
-                  , success = False
-                  }
-            Right (results, _, _) -> do
-              -- Format results: each row is [field_value, count]
-              let formatted = formatSummarizeResults field results
-               in pure
-                    $ ToolResult
-                      { tool = GetFieldValues
-                      , result = "Values for '" <> field <> "': " <> formatted
-                      , success = True
-                      }
-
-
--- | Execute CountQuery tool - count results for a KQL query using the KQL infrastructure
-executeCountQuery :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
-executeCountQuery config args = do
-  let queryM = AET.parseMaybe (AE.withObject "args" (AE..: "query")) args :: Maybe Text
-
-  case queryM of
-    Nothing ->
-      pure
-        $ ToolResult
-          { tool = CountQuery
-          , result = "Error: 'query' argument is required"
-          , success = False
-          }
-    Just kqlQuery -> do
-      -- Parse the KQL query
-      case parseQueryToAST kqlQuery of
-        Left parseErr ->
-          pure
-            $ ToolResult
-              { tool = CountQuery
-              , result = "Error parsing query: " <> parseErr
-              , success = False
-              }
-        Right queryAST -> do
-          -- Use selectLogTable which returns the count as the third element
-          resultE <-
-            selectLogTable
-              config.projectId
-              queryAST
-              kqlQuery
-              Nothing -- cursor
-              config.timeRange
-              [] -- user columns
-              Nothing -- source
-              Nothing -- target spans
-          case resultE of
-            Left err ->
-              pure
-                $ ToolResult
-                  { tool = CountQuery
-                  , result = "Error executing count query: " <> err
-                  , success = False
-                  }
-            Right (_, _, count) ->
-              pure
-                $ ToolResult
-                  { tool = CountQuery
-                  , result = "Query '" <> kqlQuery <> "' matches " <> show count <> " entries"
-                  , success = True
-                  }
-
-
--- | Execute GetServices tool - get list of services in the project using KQL
-executeGetServices :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
-executeGetServices config _args = do
-  -- Use KQL summarize to get services with counts
-  let kqlQuery = "| summarize count() by resource.service.name | sort by _count desc | take 20"
-
+-- | Helper to run a KQL query and format the result
+runKqlQuery
+  :: (DB es, Log :> es, Time.Time :> es)
+  => AgenticConfig
+  -> Tool
+  -> Text
+  -> [Text]
+  -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> Text)
+  -> Eff es ToolResult
+runKqlQuery config t kqlQuery cols formatResult =
   case parseQueryToAST kqlQuery of
     Left parseErr -> pure $ errorResult t $ "Error parsing query: " <> parseErr
     Right queryAST -> do
@@ -452,25 +356,42 @@ executeGetServices config _args = do
           kqlQuery
           Nothing
           config.timeRange
-          [] -- user columns
-          Nothing -- source
-          Nothing -- target spans
-      case resultE of
-        Left err ->
-          pure
-            $ ToolResult
-              { tool = GetServices
-              , result = "Error querying services: " <> err
-              , success = False
-              }
-        Right (results, _, _) -> do
-          let formatted = formatSummarizeResults "resource.service.name" results
-           in pure
-                $ ToolResult
-                  { tool = GetServices
-                  , result = "Available services: " <> formatted
-                  , success = True
-                  }
+          cols
+          Nothing
+          Nothing
+      pure $ case resultE of
+        Left err -> errorResult t $ "Error executing query: " <> err
+        Right res -> successResult t (formatResult res)
+
+
+-- | Execute GetFieldValues tool - get distinct values for a field using KQL
+executeGetFieldValues :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
+executeGetFieldValues config args =
+  case getTextArg "field" args of
+    Nothing -> pure $ errorResult GetFieldValues "Error: 'field' argument is required"
+    Just field -> do
+      let limit = min maxFieldValues $ getIntArg "limit" defaultFieldLimit args
+          kqlQuery = "| summarize count() by " <> field <> " | sort by _count desc | take " <> show limit
+      runKqlQuery config GetFieldValues kqlQuery [] $ \(results, _, _) ->
+        "Values for '" <> field <> "': " <> formatSummarizeResults field results
+
+
+-- | Execute CountQuery tool - count results for a KQL query using the KQL infrastructure
+executeCountQuery :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
+executeCountQuery config args =
+  case getTextArg "query" args of
+    Nothing -> pure $ errorResult CountQuery "Error: 'query' argument is required"
+    Just kqlQuery ->
+      runKqlQuery config CountQuery kqlQuery [] $ \(_, _, count) ->
+        "Query '" <> kqlQuery <> "' matches " <> show count <> " entries"
+
+
+-- | Execute GetServices tool - get list of services in the project using KQL
+executeGetServices :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
+executeGetServices config _args =
+  let kqlQuery = "| summarize count() by resource.service.name | sort by _count desc | take " <> show maxServices
+   in runKqlQuery config GetServices kqlQuery [] $ \(results, _, _) ->
+        "Available services: " <> formatSummarizeResults "resource.service.name" results
 
 
 -- | Execute SampleLogs tool - get sample log entries using KQL
@@ -484,44 +405,9 @@ executeSampleLogs config args =
             if "| take" `T.isInfixOf` kqlQuery
               then kqlQuery
               else kqlQuery <> " | take " <> show limit
-
-      case parseQueryToAST fullQuery of
-        Left parseErr ->
-          pure
-            $ ToolResult
-              { tool = SampleLogs
-              , result = "Error parsing query: " <> parseErr
-              , success = False
-              }
-        Right queryAST -> do
-          -- Use selectLogTable with specific columns for sample display
-          let sampleColumns = ["level", "name", "resource.service.name", "body"]
-          resultE <-
-            selectLogTable
-              config.projectId
-              queryAST
-              fullQuery
-              Nothing -- cursor
-              config.timeRange
-              sampleColumns
-              Nothing -- source
-              Nothing -- target spans
-          case resultE of
-            Left err ->
-              pure
-                $ ToolResult
-                  { tool = SampleLogs
-                  , result = "Error sampling logs: " <> err
-                  , success = False
-                  }
-            Right (results, _, _) -> do
-              let formatted = formatSampleLogs results
-               in pure
-                    $ ToolResult
-                      { tool = SampleLogs
-                      , result = "Sample logs matching '" <> kqlQuery <> "':\n" <> formatted
-                      , success = True
-                      }
+          sampleColumns = ["level", "name", "resource.service.name", "body"]
+      runKqlQuery config SampleLogs fullQuery sampleColumns $ \(results, _, _) ->
+        "Sample logs matching '" <> kqlQuery <> "':\n" <> formatSampleLogs results
 
 
 -- | Execute GetFacets tool - return precomputed facets from config
