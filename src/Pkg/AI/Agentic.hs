@@ -433,21 +433,42 @@ executeRunQuery config args =
 
 
 -- | Run a raw SQL query (fallback for complex queries KQL can't express)
--- SECURITY: Uses executeSecuredQuery which enforces project_id via parameterized CTE
+-- SECURITY: Uses executeSecuredQuery which enforces project_id via parameterized query
 runSqlQuery :: DB es => AgenticConfig -> Text -> Int -> Eff es ToolResult
 runSqlQuery config query limit = do
-  -- Validate the query doesn't contain dangerous operations
   let lowerQuery = T.toLower query
-      dangerousPatterns = ["drop ", "delete ", "truncate ", "update ", "insert ", "alter ", "create "]
-  if any (`T.isInfixOf` lowerQuery) dangerousPatterns
+  -- Validate no dangerous DDL/DML operations
+  -- Using word boundaries via surrounding patterns to catch "DROP TABLE" etc.
+  let dangerousOps =
+        [ "drop"
+        , "delete"
+        , "truncate"
+        , "update"
+        , "insert"
+        , "alter"
+        , "create"
+        ]
+      -- UNION/EXCEPT/INTERSECT could bypass project_id filter on second query
+      bypassPatterns = ["union", "except", "intersect"]
+      -- Check if any dangerous word appears as a SQL keyword (surrounded by spaces/start/end)
+      containsKeyword kw =
+        kw `T.isPrefixOf` lowerQuery
+          || (" " <> kw) `T.isInfixOf` lowerQuery
+          || ("\n" <> kw) `T.isInfixOf` lowerQuery
+          || ("\t" <> kw) `T.isInfixOf` lowerQuery
+      hasDangerousOp = any containsKeyword dangerousOps
+      hasBypassPattern = any containsKeyword bypassPatterns
+  if hasDangerousOp
     then pure $ errorResult RunQuery "Error: Only SELECT queries are allowed"
-    else do
-      -- Use executeSecuredQuery which wraps the query in a CTE that
-      -- pre-filters otel_logs_and_spans by project_id using parameterized query
-      resultE <- executeSecuredQuery config.projectId query limit
-      pure $ case resultE of
-        Left err -> errorResult RunQuery $ "Error executing SQL: " <> err
-        Right results -> successResult RunQuery $ formatQueryResults results (V.length results)
+    else
+      if hasBypassPattern
+        then pure $ errorResult RunQuery "Error: UNION/EXCEPT/INTERSECT not allowed (could bypass security filter)"
+        else do
+          -- Use executeSecuredQuery which injects project_id = ? into WHERE clause
+          resultE <- executeSecuredQuery config.projectId query limit
+          pure $ case resultE of
+            Left err -> errorResult RunQuery $ "Error executing SQL: " <> err
+            Right results -> successResult RunQuery $ formatQueryResults results (V.length results)
 
 
 -- | Format query results for display
