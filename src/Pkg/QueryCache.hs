@@ -226,7 +226,7 @@ trimOldData :: UTCTime -> MetricsData -> MetricsData
 trimOldData windowStart = filterByTimestamp (>= toPosix windowStart)
 
 
--- | Cleanup expired cache entries (stale data or LRU eviction)
+-- | Cleanup expired cache entries (LRU eviction)
 cleanupExpiredCache :: DB es => Eff es Int
 cleanupExpiredCache =
   maybe 0 fromOnly
@@ -235,8 +235,7 @@ cleanupExpiredCache =
       [sql|
       WITH deleted AS (
         DELETE FROM query_cache
-        WHERE cached_to < now() - interval '24 hours'
-           OR last_accessed_at < now() - interval '4 hours'
+        WHERE last_accessed_at < now() - interval '4 hours'
         RETURNING id
       )
       SELECT COUNT(*)::int FROM deleted
