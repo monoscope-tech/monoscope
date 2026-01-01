@@ -461,25 +461,42 @@ executeArbitraryQuery queryText = do
 
 
 -- | Execute a user-provided SQL query with mandatory project_id filtering
--- SECURITY: Uses parameterized queries to prevent SQL injection
--- Creates a CTE that pre-filters otel_logs_and_spans by project_id,
--- then replaces references to the table in the user query
+-- SECURITY: Injects project_id filter using parameterized query value
+-- The project_id is passed as a query parameter (?) to prevent SQL injection
 executeSecuredQuery :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
 executeSecuredQuery pid userQuery limit = do
-  -- Create a CTE that pre-filters the table by project_id using parameterized query
-  -- The user's query references otel_logs_and_spans which is replaced by the filtered CTE
-  let wrappedQuery =
-        "WITH otel_logs_and_spans AS ( \
-        \  SELECT * FROM otel_logs_and_spans WHERE project_id = ? \
-        \) "
-          <> userQuery
-          <> " LIMIT ?"
+  -- Inject project_id = ? into the WHERE clause, with ? as a parameterized value
+  -- This is safe because: 1) project_id value is parameterized, 2) limit is parameterized
+  let lowerQuery = T.toLower userQuery
+      securedQuery =
+        if "where" `T.isInfixOf` lowerQuery
+          then -- Insert project_id right after WHERE
+            let (before, after) = T.breakOn "where" lowerQuery
+                wherePos = T.length before
+                (queryBefore, queryAfter) = T.splitAt wherePos userQuery
+                afterWhere = T.drop 5 queryAfter -- Drop "where" (5 chars)
+             in queryBefore <> "WHERE project_id = ? AND (" <> T.strip afterWhere <> ") LIMIT ?"
+          else -- No WHERE clause, find insert point before ORDER BY, GROUP BY, LIMIT, HAVING
+            case findInsertPoint lowerQuery of
+              Just pos ->
+                let (queryBefore, queryAfter) = T.splitAt pos userQuery
+                 in queryBefore <> " WHERE project_id = ? " <> queryAfter <> " LIMIT ?"
+              Nothing ->
+                -- No modifiers, append WHERE at the end
+                userQuery <> " WHERE project_id = ? LIMIT ?"
   resultE <- try @SomeException $ do
-    results :: [[FieldValue]] <- PG.query (Query $ encodeUtf8 wrappedQuery) (pid, limit)
+    results :: [[FieldValue]] <- PG.query (Query $ encodeUtf8 securedQuery) (pid, limit)
     pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
   pure $ case resultE of
     Left err -> Left $ "Query execution failed: " <> show err
     Right results -> Right results
+  where
+    -- Find position to insert WHERE clause (before ORDER BY, GROUP BY, LIMIT, HAVING)
+    findInsertPoint :: Text -> Maybe Int
+    findInsertPoint q =
+      let candidates = mapMaybe findKeyword ["order by", "group by", "limit", "having"]
+          findKeyword kw = if kw `T.isInfixOf` q then Just (T.length $ fst $ T.breakOn kw q) else Nothing
+       in if null candidates then Nothing else Just (minimum candidates)
 
 
 selectLogTable :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
