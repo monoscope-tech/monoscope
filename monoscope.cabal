@@ -46,6 +46,8 @@ extra-source-files:
     static/migrations/0018_store_monitor_runs_as_events.sql
     static/migrations/0019_add_trace_id.sql
     static/migrations/0020_github_sync.sql
+    static/migrations/0021_move_monitors_to_haskell.sql
+    static/migrations/0022_query_cache.sql
 
 source-repository head
   type: git
@@ -98,6 +100,7 @@ library
       Pages.Bots.Utils
       Pages.Bots.Whatsapp
       Pages.Charts.Charts
+      Pages.Charts.Types
       Pages.Components
       Pages.Dashboards
       Pages.Endpoints.ApiCatalog
@@ -130,6 +133,7 @@ library
       Pkg.Parser
       Pkg.Parser.Expr
       Pkg.Parser.Stats
+      Pkg.QueryCache
       Pkg.Queue
       Pkg.TestUtils
       Pkg.THUtils
@@ -454,6 +458,7 @@ test-suite integration-tests
       Pages.MonitorsSpec
       Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
+      Pages.QueryCacheSpec
       Pages.ReportsSpec
       Pages.ShareSpec
       ProcessMessageSpec
@@ -539,6 +544,7 @@ test-suite unit-tests
       Pkg.DrainSpec
       Pkg.Parser.ExprSpec
       Pkg.ParserSpec
+      Pkg.QueryCacheSpec
       RequestMessagesSpec
       Spec
   hs-source-dirs:

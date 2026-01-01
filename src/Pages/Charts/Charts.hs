@@ -3,13 +3,11 @@
 module Pages.Charts.Charts (queryMetrics, MetricsData (..), fetchMetricsData, MetricsStats (..), DataType (..)) where
 
 import Control.Exception.Annotated (checkpoint)
-import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Default
 import Data.List qualified as L (maximum)
 import Data.Map.Strict qualified as M
 import Data.Pool (withResource)
-import Data.Semigroup (Max (Max))
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
@@ -17,33 +15,23 @@ import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Simple (query_)
 import Database.PostgreSQL.Simple.Types (Only (..), Query (Query), fromOnly)
-import Deriving.Aeson qualified as DAE
-import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
-import Effectful qualified as Effectful.Internal.Monad
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
-import Language.Haskell.TH.Syntax qualified as THS
 import Models.Projects.Projects qualified as Projects
+import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.DashboardUtils qualified as DashboardUtils
-import Pkg.Parser (
-  QueryComponents (finalSummarizeQuery),
-  SqlQueryCfg (dateRange),
-  defSqlQueryCfg,
-  pSource,
-  parseQueryToAST,
-  queryASTToComponents,
- )
-import Pkg.Parser qualified as Parser
+import Pkg.Parser (QueryComponents (finalSummarizeQuery, whereClause), SqlQueryCfg (..), defSqlQueryCfg, pSource, parseQueryToAST, queryASTToComponents)
+import Pkg.Parser.Stats (Section, Sources)
+import Pkg.QueryCache qualified as QC
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Servant (FromHttpApiData (..))
 import Servant.Server (ServerError (errBody), err400)
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.DB (DB)
 import Text.Megaparsec (parseMaybe)
-import Utils (JSONHttpApiData (..))
 
 
 pivot' :: V.Vector (Int, Text, Double) -> (V.Vector Text, V.Vector (V.Vector (Maybe Double)), Double, Double)
@@ -119,45 +107,6 @@ statsTriple v
 type M = Maybe
 
 
-data MetricsStats = MetricsStats
-  { min :: Double
-  , max :: Double
-  , sum :: Double
-  , count :: Int
-  , mean :: Double
-  , mode :: Double
-  , maxGroupSum :: Double
-  }
-  deriving (Generic, Show, THS.Lift)
-  deriving anyclass (Default, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricsStats
-
-
-data MetricsData = MetricsData
-  { dataset :: V.Vector (V.Vector (Maybe Double))
-  , dataFloat :: Maybe Double
-  , dataJSON :: V.Vector (V.Vector AE.Value)
-  , dataText :: V.Vector (V.Vector Text)
-  , headers :: V.Vector Text
-  , rowsCount :: Double
-  , rowsPerMin :: Maybe Double
-  , from :: Maybe Int
-  , to :: Maybe Int
-  , stats :: Maybe MetricsStats
-  }
-  deriving (Generic, Show)
-  deriving anyclass (Default, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricsData
-
-
-data DataType = DTMetric | DTJson | DTFloat | DTText
-  deriving stock (Bounded, Enum, Eq, Generic, Ord, Show, THS.Lift)
-  deriving anyclass (NFData)
-  deriving (Monoid, Semigroup) via (Max DataType)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "DT", DAE.CamelToSnake]] DataType
-  deriving (FromHttpApiData) via Utils.JSONHttpApiData DataType
-
-
 -- Helper function: converts Just "" to Nothing.
 nonNull :: Maybe Text -> Maybe Text
 nonNull Nothing = Nothing
@@ -165,7 +114,7 @@ nonNull (Just "") = Nothing
 nonNull x = x
 
 
-queryMetrics :: (Effectful.Error.Static.Error ServerError :> es, Effectful.Internal.Monad.IOE :> es, Effectful.Reader.Static.Reader AuthContext :> es, Time.Time :> es) => M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
+queryMetrics :: (DB es, Effectful.Error.Static.Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, Time.Time :> es) => M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
 queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) allParams = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
@@ -173,7 +122,7 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
   let mappng = DashboardUtils.variablePresets (maybe "" (.toText) pidM) fromD toD allParams now
   let parseQuery q = either (\err -> throwError err400{errBody = "Invalid signature; " <> show err}) pure (parseQueryToAST $ DashboardUtils.replacePlaceholders mappng q)
 
-  sqlQuery <- case (queryM, querySQLM) of
+  case (queryM, querySQLM) of
     (_, Just querySQL) -> do
       queryAST <-
         checkpoint (toAnnotation ("queryMetrics", queryM))
@@ -183,22 +132,67 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
             (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM) Nothing)
               { dateRange = (fromD, toD)
               }
-      let (_, qc) = Parser.queryASTToComponents sqlQueryComponents queryAST
-
+      let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
       let mappng' = mappng <> M.fromList [("query_ast_filters", maybe "" (" AND " <>) qc.whereClause)]
-      pure $ DashboardUtils.replacePlaceholders mappng' querySQL
+      let sqlQuery = DashboardUtils.replacePlaceholders mappng' querySQL
+      liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx
     _ -> do
       queryAST <-
         checkpoint (toAnnotation ("queryMetrics", queryM))
           $ parseQuery
           $ maybeToMonoid queryM
-      let sqlQueryComponents =
-            (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM) Nothing)
-              { dateRange = (fromD, toD)
-              }
-      let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
-      pure $ maybeToMonoid qc.finalSummarizeQuery
-  liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx
+      let pid = Unsafe.fromJust pidM
+      let source = parseMaybe pSource =<< sourceM
+      let sqlQueryCfg = (defSqlQueryCfg pid now source Nothing){dateRange = (fromD, toD)}
+      queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg (maybeToMonoid queryM) now fromD toD
+
+
+-- | Execute query with caching support for timeseries queries
+queryMetricsWithCache
+  :: DB es
+  => AuthContext
+  -> DataType
+  -> Projects.ProjectId
+  -> Maybe Sources
+  -> [Section]
+  -> SqlQueryCfg
+  -> Text
+  -> UTCTime
+  -> Maybe UTCTime
+  -> Maybe UTCTime
+  -> Eff es MetricsData
+queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg originalQuery now fromD toD
+  | respDataType /= DTMetric = executeQueryWith sqlQueryCfg queryAST
+  | not (QC.hasSummarizeWithBin queryAST) = executeQueryWith sqlQueryCfg queryAST
+  | otherwise = do
+      let reqFrom = fromMaybe (addUTCTime (-86400) now) fromD
+      let reqTo = fromMaybe now toD
+      let cacheKey = QC.generateCacheKey pid source queryAST sqlQueryCfg
+      cacheResult <- QC.lookupCache cacheKey (reqFrom, reqTo)
+      case cacheResult of
+        QC.CacheHit entry -> pure $ QC.trimToRange entry.cachedData reqFrom reqTo
+        QC.PartialHit entry -> do
+          let deltaFromTime = entry.cachedTo
+          let deltaSqlCfg = sqlQueryCfg{dateRange = (Just deltaFromTime, Just reqTo)}
+          -- Rewrite bin_auto to fixed interval for delta fetch to match cached data
+          let deltaAST = QC.rewriteBinAutoToFixed cacheKey.binInterval queryAST
+          deltaData <- executeQueryWith deltaSqlCfg deltaAST
+          let merged = QC.mergeTimeseriesData entry.cachedData deltaData
+          let windowSecs = fromIntegral $ QC.slidingWindowSeconds cacheKey.binInterval
+          let slidingWindowStart = addUTCTime (negate windowSecs) reqTo
+          let trimmed = QC.trimOldData slidingWindowStart merged
+          QC.updateCache cacheKey (slidingWindowStart, reqTo) trimmed originalQuery
+          pure $ QC.trimToRange trimmed reqFrom reqTo
+        QC.CacheMiss -> do
+          result <- executeQueryWith sqlQueryCfg queryAST
+          QC.updateCache cacheKey (reqFrom, reqTo) result originalQuery
+          pure result
+        QC.CacheBypassed _ -> executeQueryWith sqlQueryCfg queryAST
+  where
+    executeQueryWith cfg ast = do
+      let (_, qc) = queryASTToComponents cfg ast
+      let sqlQuery = maybeToMonoid qc.finalSummarizeQuery
+      liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx
 
 
 fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> IO MetricsData
