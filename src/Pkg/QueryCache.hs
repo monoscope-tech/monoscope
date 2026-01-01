@@ -15,7 +15,6 @@ module Pkg.QueryCache (
 
 import Data.List (groupBy)
 import Data.Map.Strict qualified as M
-import Relude.Unsafe qualified as Unsafe
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
@@ -161,48 +160,52 @@ mergeTimeseriesData cached new
   | V.null cached.dataset = new
   | V.null new.dataset = cached
   | otherwise =
-      let -- Union headers: keep first (timestamp), then unique non-timestamp headers
-          cachedHdrs = V.toList cached.headers
-          newHdrs = V.toList new.headers
-          mergedHdrs = V.fromList $ take 1 cachedHdrs <> ordNub (drop 1 cachedHdrs <> drop 1 newHdrs)
-          -- Build column index maps: header -> position in source headers
-          cachedIdx = M.fromList $ zip cachedHdrs [0 ..]
-          newIdx = M.fromList $ zip newHdrs [0 ..]
-          -- Normalize row to merged header structure
-          normalizeRow srcIdx row = V.generate (V.length mergedHdrs) \i ->
-            let hdr = mergedHdrs V.! i
-             in M.lookup hdr srcIdx >>= (row V.!?) & join
-          normalizedCached = V.map (normalizeRow cachedIdx) cached.dataset
-          normalizedNew = V.map (normalizeRow newIdx) new.dataset
-          -- Sort and deduplicate by timestamp
-          sorted = V.modify (VA.sortBy $ comparing (join . V.headM)) $ normalizedCached <> normalizedNew
-          dedupedRows = V.fromList . map Unsafe.last . groupBy ((==) `on` (join . V.headM)) $ V.toList sorted
-       in cached
-            { dataset = dedupedRows
-            , headers = mergedHdrs
-            , rowsCount = fromIntegral $ V.length dedupedRows
-            , from = liftA2 min cached.from new.from <|> cached.from <|> new.from
-            , to = liftA2 max cached.to new.to <|> cached.to <|> new.to
-            , stats = Just $ recalculateStats dedupedRows
-            }
+      let
+        -- Union headers: keep first (timestamp), then unique non-timestamp headers
+        cachedHdrs = V.toList cached.headers
+        newHdrs = V.toList new.headers
+        mergedHdrs = V.fromList $ take 1 cachedHdrs <> ordNub (drop 1 cachedHdrs <> drop 1 newHdrs)
+        -- Build column index maps: header -> position in source headers
+        cachedIdx = M.fromList $ zip cachedHdrs [0 ..]
+        newIdx = M.fromList $ zip newHdrs [0 ..]
+        -- Normalize row to merged header structure
+        normalizeRow srcIdx row = V.generate (V.length mergedHdrs) \i ->
+          let hdr = mergedHdrs V.! i
+           in M.lookup hdr srcIdx >>= (row V.!?) & join
+        normalizedCached = V.map (normalizeRow cachedIdx) cached.dataset
+        normalizedNew = V.map (normalizeRow newIdx) new.dataset
+        -- Sort and deduplicate by timestamp
+        sorted = V.modify (VA.sortBy $ comparing (join . V.headM)) $ normalizedCached <> normalizedNew
+        dedupedRows = V.fromList . map Unsafe.last . groupBy ((==) `on` (join . V.headM)) $ V.toList sorted
+       in
+        cached
+          { dataset = dedupedRows
+          , headers = mergedHdrs
+          , rowsCount = fromIntegral $ V.length dedupedRows
+          , from = liftA2 min cached.from new.from <|> cached.from <|> new.from
+          , to = liftA2 max cached.to new.to <|> cached.to <|> new.to
+          , stats = Just $ recalculateStats dedupedRows
+          }
 
 
 -- | Recalculate stats from dataset - processes all value columns and calculates maxGroupSum
 recalculateStats :: V.Vector (V.Vector (Maybe Double)) -> MetricsStats
 recalculateStats rows =
-  let -- Extract all non-null values from value columns (skip timestamp at index 0)
-      allValues = V.concatMap (V.mapMaybe id . V.drop 1) rows
-      -- Sum of values per row (for maxGroupSum calculation)
-      rowSums = V.map (sum . V.mapMaybe id . V.drop 1) rows
-   in if V.null allValues
-        then MetricsStats 0 0 0 0 0 0 0
-        else
-          let h = V.head allValues
-              -- Calculate min, max, sum, count and mode frequency in single pass
-              (!minV, !maxV, !sumV, !cnt, !freq) = V.foldl' (\(!mn, !mx, !s, !c, !f) x -> (min mn x, max mx x, s + x, c + 1, M.insertWith (+) x 1 f)) (h, h, h, 1, M.singleton h 1) (V.tail allValues)
-              maxGroupSum = if V.null rowSums then 0 else V.maximum rowSums
-              mode = fst $ M.foldlWithKey' (\acc@(_, cnt') k c -> if c > cnt' then (k, c) else acc) (h, 0) freq
-           in MetricsStats minV maxV sumV cnt (sumV / fromIntegral cnt) mode maxGroupSum
+  let
+    -- Extract all non-null values from value columns (skip timestamp at index 0)
+    allValues = V.concatMap (V.mapMaybe id . V.drop 1) rows
+    -- Sum of values per row (for maxGroupSum calculation)
+    rowSums = V.map (sum . V.mapMaybe id . V.drop 1) rows
+   in
+    if V.null allValues
+      then MetricsStats 0 0 0 0 0 0 0
+      else
+        let h = V.head allValues
+            -- Calculate min, max, sum, count and mode frequency in single pass
+            (!minV, !maxV, !sumV, !cnt, !freq) = V.foldl' (\(!mn, !mx, !s, !c, !f) x -> (min mn x, max mx x, s + x, c + 1, M.insertWith (+) x 1 f)) (h, h, h, 1, M.singleton h 1) (V.tail allValues)
+            maxGroupSum = if V.null rowSums then 0 else V.maximum rowSums
+            mode = fst $ M.foldlWithKey' (\acc@(_, cnt') k c -> if c > cnt' then (k, c) else acc) (h, 0) freq
+         in MetricsStats minV maxV sumV cnt (sumV / fromIntegral cnt) mode maxGroupSum
 
 
 -- | Filter dataset rows by timestamp predicate and recalculate stats
