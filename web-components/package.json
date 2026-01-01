@@ -42,6 +42,6 @@
     "typescript": "^5.9.3",
     "vite-plugin-monaco-editor": "^1.1.0",
     "vite-plugin-node-polyfills": "^0.24.0",
-    "vitest": "^3.1.4"
+    "vitest": "^4.0.16"
   }
 }
