@@ -162,8 +162,8 @@ queryMetricsWithCache
   -> Maybe UTCTime
   -> Eff es MetricsData
 queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg originalQuery now fromD toD
-  | respDataType /= DTMetric = executeQuery sqlQueryCfg
-  | not (QC.hasSummarizeWithBin queryAST) = executeQuery sqlQueryCfg
+  | respDataType /= DTMetric = executeQueryWith sqlQueryCfg queryAST
+  | not (QC.hasSummarizeWithBin queryAST) = executeQueryWith sqlQueryCfg queryAST
   | otherwise = do
       let reqFrom = fromMaybe (addUTCTime (-86400) now) fromD
       let reqTo = fromMaybe now toD
@@ -174,20 +174,22 @@ queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg origi
         QC.PartialHit entry -> do
           let deltaFromTime = entry.cachedTo
           let deltaSqlCfg = sqlQueryCfg{dateRange = (Just deltaFromTime, Just reqTo)}
-          deltaData <- executeQuery deltaSqlCfg
+          -- Rewrite bin_auto to fixed interval for delta fetch to match cached data
+          let deltaAST = QC.rewriteBinAutoToFixed cacheKey.binInterval queryAST
+          deltaData <- executeQueryWith deltaSqlCfg deltaAST
           let merged = QC.mergeTimeseriesData entry.cachedData deltaData
           let slidingWindowStart = addUTCTime (-86400) reqTo
           let trimmed = QC.trimOldData slidingWindowStart merged
           QC.updateCache cacheKey (entry.cachedFrom, reqTo) trimmed originalQuery
           pure $ QC.trimToRange trimmed reqFrom reqTo
         QC.CacheMiss -> do
-          result <- executeQuery sqlQueryCfg
+          result <- executeQueryWith sqlQueryCfg queryAST
           QC.updateCache cacheKey (reqFrom, reqTo) result originalQuery
           pure result
-        QC.CacheBypassed _ -> executeQuery sqlQueryCfg
+        QC.CacheBypassed _ -> executeQueryWith sqlQueryCfg queryAST
   where
-    executeQuery cfg = do
-      let (_, qc) = queryASTToComponents cfg queryAST
+    executeQueryWith cfg ast = do
+      let (_, qc) = queryASTToComponents cfg ast
       let sqlQuery = maybeToMonoid qc.finalSummarizeQuery
       liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx
 
