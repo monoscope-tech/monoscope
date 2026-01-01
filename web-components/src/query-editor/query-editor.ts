@@ -816,6 +816,12 @@ export class QueryEditorComponent extends LitElement {
           bubbles: true,
         })
       );
+      // Also dispatch to window for listeners that don't use bubbling (e.g., chart widgets)
+      window.dispatchEvent(
+        new CustomEvent('update-query', {
+          detail: { value: queryValue },
+        })
+      );
     }
   };
 

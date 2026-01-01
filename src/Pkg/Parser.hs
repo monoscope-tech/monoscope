@@ -15,7 +15,6 @@ import PyF (fmt)
 import Relude
 import Safe qualified
 import Text.Megaparsec (errorBundlePretty, parse)
-import Text.Read (readMaybe)
 
 
 data QueryComponents = QueryComponents
@@ -32,6 +31,7 @@ data QueryComponents = QueryComponents
   , finalSummarizeQuery :: Maybe Text -- For summarize query commands
   , sortFields :: Maybe [SortField] -- Fields to sort by
   , takeLimit :: Maybe Int -- Limit number of results
+  , percentilesInfo :: Maybe (Text, [Double]) -- (field expr SQL, percentile values) extracted from AST
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -41,11 +41,19 @@ sectionsToComponents :: SqlQueryCfg -> [Section] -> QueryComponents
 sectionsToComponents sqlCfg = foldl' (applySectionToComponent sqlCfg) (def :: QueryComponents)
 
 
+-- | Combine where clauses using AND
+combineWhereClause :: Maybe Text -> Text -> Maybe Text
+combineWhereClause Nothing new = Just new
+combineWhereClause (Just existing) new = Just $ existing <> " AND " <> new
+
+
 applySectionToComponent :: SqlQueryCfg -> QueryComponents -> Section -> QueryComponents
-applySectionToComponent _ qc (Search expr) = qc{whereClause = Just $ display expr}
-applySectionToComponent _ qc (WhereClause expr) = qc{whereClause = Just $ display expr} -- Handle where clause same as Search
+applySectionToComponent _ qc (Search expr) = qc{whereClause = combineWhereClause qc.whereClause (display expr)}
+applySectionToComponent _ qc (WhereClause expr) = qc{whereClause = combineWhereClause qc.whereClause (display expr)}
 applySectionToComponent _ qc (Source source) = qc{fromTable = Just $ display source}
-applySectionToComponent sqlCfg qc (SummarizeCommand aggs byClauseM) = applySummarizeByClauseToQC sqlCfg byClauseM $ qc{select = qc.select <> map display aggs}
+applySectionToComponent sqlCfg qc (SummarizeCommand aggs byClauseM) =
+  let pctInfo = extractPercentilesInfo [SummarizeCommand aggs byClauseM]
+   in applySummarizeByClauseToQC sqlCfg byClauseM $ qc{select = qc.select <> map display aggs, percentilesInfo = pctInfo}
 applySectionToComponent _ qc (SortCommand sortFields) = qc{sortFields = Just sortFields}
 applySectionToComponent _ qc (TakeCommand limit) = qc{takeLimit = Just limit}
 
@@ -264,20 +272,13 @@ sqlFromQueryComponents sqlCfg qc =
               WHERE {buildWhereForCount}
               {groupByClause} limit 1|]
 
-      -- Parse percentiles marker: __PERCENTILES__fieldExpr__PCTS__p1,p2,p3__END__
-      percentilesInfo = do
-        sel <- listToMaybe qc.select
-        rest1 <- T.stripPrefix "__PERCENTILES__" sel >>= T.stripSuffix "__END__"
-        let (fieldPart, rest2) = T.breakOn "__PCTS__" rest1
-        rest3 <- T.stripPrefix "__PCTS__" rest2
-        let pcts = mapMaybe (readMaybe . toString) $ T.splitOn "," rest3 :: [Double]
-        if null pcts then Nothing else pure (fieldPart, pcts)
-
       -- Generate the summarize query depending on bin functions and data type
+      -- Percentiles info is extracted directly from AST in applySectionToComponent
+      -- The fieldExpr comes from parser-validated SubjectExpr and is safe for SQL interpolation
       summarizeQuery =
         case qc.finalSummarizeQuery of
           Just binInterval ->
-            case percentilesInfo of
+            case qc.percentilesInfo of
               Just (fieldExpr, pcts) ->
                 -- Generate LATERAL unnest query for percentiles with custom percentile values
                 let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
