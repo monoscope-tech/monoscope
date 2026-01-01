@@ -178,7 +178,8 @@ queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg origi
           let deltaAST = QC.rewriteBinAutoToFixed cacheKey.binInterval queryAST
           deltaData <- executeQueryWith deltaSqlCfg deltaAST
           let merged = QC.mergeTimeseriesData entry.cachedData deltaData
-          let slidingWindowStart = addUTCTime (-86400) reqTo
+          let windowSecs = fromIntegral $ QC.slidingWindowSeconds cacheKey.binInterval
+          let slidingWindowStart = addUTCTime (negate windowSecs) reqTo
           let trimmed = QC.trimOldData slidingWindowStart merged
           QC.updateCache cacheKey (slidingWindowStart, reqTo) trimmed originalQuery
           pure $ QC.trimToRange trimmed reqFrom reqTo

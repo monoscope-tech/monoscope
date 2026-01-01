@@ -11,10 +11,12 @@ module Pkg.QueryCache (
   hasSummarizeWithBin,
   rewriteBinAutoToFixed,
   cleanupExpiredCache,
+  slidingWindowSeconds,
 ) where
 
-import Data.List (groupBy)
+import Data.Char (isDigit)
 import Data.Map.Strict qualified as M
+import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
@@ -30,7 +32,6 @@ import Pkg.Parser (SqlQueryCfg (..), calculateAutoBinWidth)
 import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.Parser.Stats (BinFunction (..), Section (..), Sources (..), SummarizeByClause (..), defaultBinSize)
 import Relude
-import Relude.Unsafe qualified as Unsafe
 import System.DB (DB)
 import Utils (toXXHash)
 
@@ -78,6 +79,37 @@ rewriteBinAutoToFixed interval = map \case
   where
     rewriteField (Right (BinAuto subj)) = Right (Bin subj interval)
     rewriteField f = f
+
+
+-- | Parse bin interval text to seconds (e.g., "5 minutes" -> 300, "1 hour" -> 3600)
+parseBinIntervalToSeconds :: Text -> Int
+parseBinIntervalToSeconds txt =
+  let parts = T.words txt
+      firstPart = fromMaybe "" $ viaNonEmpty head parts
+      restPart = fromMaybe "" $ viaNonEmpty head (drop 1 parts)
+      num = fromMaybe 1 $ readMaybe $ toString $ T.takeWhile isDigit firstPart
+      unitPart = if T.null restPart then firstPart else restPart
+      unit = T.toLower $ T.dropWhile isDigit unitPart
+      multiplier
+        | "second" `T.isPrefixOf` unit = 1
+        | "minute" `T.isPrefixOf` unit = 60
+        | "hour" `T.isPrefixOf` unit = 3600
+        | "day" `T.isPrefixOf` unit = 86400
+        | unit == "s" = 1
+        | unit == "m" = 60
+        | unit == "h" = 3600
+        | unit == "d" = 86400
+        | otherwise = 60 -- default to minutes
+   in num * multiplier
+
+
+-- | Calculate sliding window size in seconds based on bin interval
+-- Keeps at least 48 data points or 24 hours, whichever is larger
+slidingWindowSeconds :: Text -> Int
+slidingWindowSeconds binInterval =
+  let binSecs = parseBinIntervalToSeconds binInterval
+      minPoints = 48
+   in max 86400 (binSecs * minPoints)
 
 
 -- | Extract bin interval from summarize clause
@@ -131,7 +163,7 @@ lookupCache key (reqFrom, reqTo) =
                 | otherwise -> CacheMiss
 
 
--- | Update or insert cache entry (merges time ranges on conflict)
+-- | Update or insert cache entry (replaces time range and data on conflict)
 updateCache :: DB es => CacheKey -> (UTCTime, UTCTime) -> MetricsData -> Text -> Eff es ()
 updateCache key (fromTime, toTime) metricsData originalQuery =
   void
@@ -142,8 +174,8 @@ updateCache key (fromTime, toTime) metricsData originalQuery =
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, now())
     ON CONFLICT (project_id, source, query_hash, bin_interval)
     DO UPDATE SET
-      cached_from = LEAST(query_cache.cached_from, EXCLUDED.cached_from),
-      cached_to = GREATEST(query_cache.cached_to, EXCLUDED.cached_to),
+      cached_from = EXCLUDED.cached_from,
+      cached_to = EXCLUDED.cached_to,
       cached_data = EXCLUDED.cached_data,
       original_query = EXCLUDED.original_query,
       hit_count = query_cache.hit_count + 1,
@@ -173,9 +205,9 @@ mergeTimeseriesData cached new
            in M.lookup hdr srcIdx >>= (row V.!?) & join
         normalizedCached = V.map (normalizeRow cachedIdx) cached.dataset
         normalizedNew = V.map (normalizeRow newIdx) new.dataset
-        -- Sort and deduplicate by timestamp
+        -- Sort and deduplicate by timestamp (stay in vector operations)
         sorted = V.modify (VA.sortBy $ comparing (join . V.headM)) $ normalizedCached <> normalizedNew
-        dedupedRows = V.fromList . map Unsafe.last . groupBy ((==) `on` (join . V.headM)) $ V.toList sorted
+        dedupedRows = dedupeByTimestamp sorted
        in
         cached
           { dataset = dedupedRows
@@ -185,6 +217,18 @@ mergeTimeseriesData cached new
           , to = liftA2 max cached.to new.to <|> cached.to <|> new.to
           , stats = Just $ recalculateStats dedupedRows
           }
+
+
+-- | Deduplicate sorted rows by timestamp, keeping last occurrence (stays in vector operations)
+dedupeByTimestamp :: V.Vector (V.Vector (Maybe Double)) -> V.Vector (V.Vector (Maybe Double))
+dedupeByTimestamp rows
+  | V.null rows = V.empty
+  | otherwise =
+      let n = V.length rows
+          getTs = join . V.headM
+          -- Keep row if it's the last one OR next row has different timestamp
+          shouldKeep i = i == n - 1 || getTs (rows V.! i) /= getTs (rows V.! (i + 1))
+       in V.ifilter (\i _ -> shouldKeep i) rows
 
 
 -- | Recalculate stats from dataset - processes all value columns and calculates maxGroupSum
@@ -200,8 +244,11 @@ recalculateStats rows =
       then MetricsStats 0 0 0 0 0 0 0
       else
         let h = V.head allValues
-            -- Calculate min, max, sum, count and mode frequency in single pass
-            (!minV, !maxV, !sumV, !cnt, !freq) = V.foldl' (\(!mn, !mx, !s, !c, !f) x -> (min mn x, max mx x, s + x, c + 1, M.insertWith (+) x 1 f)) (h, h, h, 1, M.singleton h 1) (V.tail allValues)
+            maxFreqEntries = 1000 -- cap frequency map to prevent memory issues with high-cardinality data
+            -- Calculate min, max, sum, count and mode frequency in single pass (capped freq map)
+            (!minV, !maxV, !sumV, !cnt, !freq) = V.foldl' (\(!mn, !mx, !s, !c, !f) x ->
+              let f' = if M.size f < maxFreqEntries || M.member x f then M.insertWith (+) x 1 f else f
+               in (min mn x, max mx x, s + x, c + 1, f')) (h, h, h, 1, M.singleton h 1) (V.tail allValues)
             maxGroupSum = if V.null rowSums then 0 else V.maximum rowSums
             mode = fst $ M.foldlWithKey' (\acc@(_, cnt') k c -> if c > cnt' then (k, c) else acc) (h, 0) freq
          in MetricsStats minV maxV sumV cnt (sumV / fromIntegral cnt) mode maxGroupSum
