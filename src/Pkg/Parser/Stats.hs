@@ -245,9 +245,10 @@ pDCount = do
 -- >>> parse pCoalesce "" "coalesce(method, \"unknown\")"
 -- Right (Coalesce [Str "method",Str "unknown"] Nothing)
 pCoalesce :: Parser AggFunction
-pCoalesce = Coalesce
-  <$> (string "coalesce(" *> pScalarExpr `sepBy1` (string "," <* space) <* string ")")
-  <*> pure Nothing
+pCoalesce =
+  Coalesce
+    <$> (string "coalesce(" *> pScalarExpr `sepBy1` (string "," <* space) <* string ")")
+    <*> pure Nothing
 
 
 -- | Parse strcat(expr1, expr2, ...) - string concatenation (1-64 args)
@@ -255,9 +256,10 @@ pCoalesce = Coalesce
 -- >>> parse pStrcat "" "strcat(method, \" \", url_path)"
 -- Right (Strcat [Str "method",Str " ",Str "url_path"] Nothing)
 pStrcat :: Parser AggFunction
-pStrcat = Strcat
-  <$> (string "strcat(" *> pScalarExpr `sepBy1` (string "," <* space) <* string ")")
-  <*> pure Nothing
+pStrcat =
+  Strcat
+    <$> (string "strcat(" *> pScalarExpr `sepBy1` (string "," <* space) <* string ")")
+    <*> pure Nothing
 
 
 -- | Parse iff(condition, then_expr, else_expr) - conditional expression
@@ -265,11 +267,12 @@ pStrcat = Strcat
 -- >>> parse pIff "" "iff(status_code == \"ERROR\", \"error\", \"ok\")"
 -- Right (Iff (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) (Str "error") (Str "ok") Nothing)
 pIff :: Parser AggFunction
-pIff = Iff
-  <$> (string "iff(" *> pExpr)
-  <*> (string "," *> space *> pScalarExpr)
-  <*> (string "," *> space *> pScalarExpr <* string ")")
-  <*> pure Nothing
+pIff =
+  Iff
+    <$> (string "iff(" *> pExpr)
+    <*> (string "," *> space *> pScalarExpr)
+    <*> (string "," *> space *> pScalarExpr <* string ")")
+    <*> pure Nothing
 
 
 -- | Parse case(pred1, val1, [pred2, val2, ...] else) - multi-branch conditional
