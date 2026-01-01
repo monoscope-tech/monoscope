@@ -22,13 +22,12 @@ module Pkg.Parser.Stats (
   pSubjectExpr,
   pPercentileSingle,
   pPercentilesMulti,
-  -- New KQL function parsers
   pCountIf,
-  pDCount,
   pCoalesce,
   pStrcat,
   pIff,
   pCase,
+  pSimpleAgg,
 ) where
 
 import Data.Aeson qualified as AE
@@ -221,41 +220,17 @@ pPercentilesMulti = do
 -- >>> parse pCountIf "" "countif(duration > 1000)"
 -- Right (CountIf (GT (Subject "duration" "duration" []) (Num "1000")) Nothing)
 pCountIf :: Parser AggFunction
-pCountIf = do
-  _ <- string "countif("
-  space
-  cond <- pExpr
-  space
-  _ <- string ")"
-  pure $ CountIf cond Nothing
-
-
--- | Parse dcount(field) - distinct count
--- >>> parse pDCount "" "dcount(resource.service.name)"
--- Right (DCount (Subject "resource.service.name" "resource" [FieldKey "service",FieldKey "name"]) Nothing)
--- >>> parse pDCount "" "dcount(user_id)"
--- Right (DCount (Subject "user_id" "user_id" []) Nothing)
-pDCount :: Parser AggFunction
-pDCount = do
-  _ <- string "dcount("
-  subj <- pSubject
-  _ <- string ")"
-  pure $ DCount subj Nothing
+pCountIf = CountIf <$> (string "countif(" *> pExpr <* string ")") <*> pure Nothing
 
 
 -- | Parse coalesce(field, default) - return first non-null value
 -- >>> parse pCoalesce "" "coalesce(attributes.http.method, \"unknown\")"
 -- Right (Coalesce (Subject "attributes.http.method" "attributes" [FieldKey "http",FieldKey "method"]) (Str "unknown") Nothing)
 pCoalesce :: Parser AggFunction
-pCoalesce = do
-  _ <- string "coalesce("
-  space
-  subj <- pSubject
-  _ <- string ","
-  space
-  defaultVal <- pValues
-  _ <- string ")"
-  pure $ Coalesce subj defaultVal Nothing
+pCoalesce = Coalesce
+  <$> (string "coalesce(" *> pSubject)
+  <*> (string "," *> space *> pValues <* string ")")
+  <*> pure Nothing
 
 
 -- | Parse strcat(arg1, arg2, ...) - string concatenation
@@ -263,12 +238,9 @@ pCoalesce = do
 -- >>> parse pStrcat "" "strcat(method, \" \", url_path)"
 -- Right (Strcat [Left (Subject "method" "method" []),Right " ",Left (Subject "url_path" "url_path" [])] Nothing)
 pStrcat :: Parser AggFunction
-pStrcat = do
-  _ <- string "strcat("
-  space
-  args <- pStrcatArg `sepBy1` (string "," <* space)
-  _ <- string ")"
-  pure $ Strcat args Nothing
+pStrcat = Strcat
+  <$> (string "strcat(" *> pStrcatArg `sepBy1` (string "," <* space) <* string ")")
+  <*> pure Nothing
   where
     pStrcatArg :: Parser (Either Subject Text)
     pStrcatArg =
@@ -281,18 +253,11 @@ pStrcat = do
 -- >>> parse pIff "" "iff(status_code == \"ERROR\", error_count, success_count)"
 -- Right (Iff (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) (Subject "error_count" "error_count" []) (Subject "success_count" "success_count" []) Nothing)
 pIff :: Parser AggFunction
-pIff = do
-  _ <- string "iff("
-  space
-  cond <- pExpr
-  _ <- string ","
-  space
-  thenVal <- pSubject
-  _ <- string ","
-  space
-  elseVal <- pSubject
-  _ <- string ")"
-  pure $ Iff cond thenVal elseVal Nothing
+pIff = Iff
+  <$> (string "iff(" *> pExpr)
+  <*> (string "," *> space *> pSubject)
+  <*> (string "," *> space *> pSubject <* string ")")
+  <*> pure Nothing
 
 
 -- | Parse case(cond1, val1, cond2, val2, ..., default) - multi-branch conditional
@@ -301,57 +266,41 @@ pIff = do
 pCase :: Parser AggFunction
 pCase = do
   _ <- string "case("
-  space
-  -- Parse condition-value pairs and the default value
-  -- Format: case(cond1, val1, cond2, val2, ..., default)
-  (pairs, defaultVal) <- pCaseArgs
-  _ <- string ")"
+  pairs <- many $ try $ (,) <$> pExpr <*> (string "," *> space *> pSubject <* string "," <* space)
+  defaultVal <- pSubject <* string ")"
   pure $ Case pairs defaultVal Nothing
-  where
-    -- Parse a single condition-value pair
-    pCasePair :: Parser (Expr, Subject)
-    pCasePair = do
-      cond <- pExpr
-      _ <- string ","
-      space
-      val <- pSubject
-      pure (cond, val)
 
-    -- Parse all case arguments: pairs and a final default value
-    pCaseArgs :: Parser ([(Expr, Subject)], Subject)
-    pCaseArgs = do
-      -- Try to parse condition-value pairs
-      pairs <- many $ try (pCasePair <* string "," <* space)
-      -- Parse the final default value
-      defaultVal <- pSubject
-      pure (pairs, defaultVal)
+
+-- | Helper for simple function(subject) parsers
+pSimpleAgg :: Text -> (Subject -> Maybe Text -> AggFunction) -> Parser AggFunction
+pSimpleAgg name ctor = ctor <$> (string (name <> "(") *> pSubject <* string ")") <*> pure Nothing
 
 
 aggFunctionParser :: Parser AggFunction
 aggFunctionParser =
   choice @[]
-    [ Sum <$> (string "sum(" *> pSubject <* string ")") <*> pure Nothing
+    [ pSimpleAgg "sum" Sum
     , try pPercentilesMulti
     , try pPercentileSingle
-    , P50 <$> (string "p50(" *> pSubject <* string ")") <*> pure Nothing
-    , P75 <$> (string "p75(" *> pSubject <* string ")") <*> pure Nothing
-    , P90 <$> (string "p90(" *> pSubject <* string ")") <*> pure Nothing
-    , P95 <$> (string "p95(" *> pSubject <* string ")") <*> pure Nothing
-    , P99 <$> (string "p99(" *> pSubject <* string ")") <*> pure Nothing
-    , P100 <$> (string "p100(" *> pSubject <* string ")") <*> pure Nothing
+    , pSimpleAgg "p50" P50
+    , pSimpleAgg "p75" P75
+    , pSimpleAgg "p90" P90
+    , pSimpleAgg "p95" P95
+    , pSimpleAgg "p99" P99
+    , pSimpleAgg "p100" P100
     , try pCountIf -- countif must come before count
     , Count <$> (string "count(" *> (pSubject <|> (string ")" $> Subject "*" "*" [])) <* optional (string ")")) <*> pure Nothing
-    , try pDCount -- dcount for distinct count
-    , try pCoalesce -- coalesce function
-    , try pStrcat -- strcat for string concatenation
-    , try pIff -- iff for simple conditionals
-    , try pCase -- case for multi-branch conditionals
-    , Avg <$> (string "avg(" *> pSubject <* string ")") <*> pure Nothing
-    , Min <$> (string "min(" *> pSubject <* string ")") <*> pure Nothing
-    , Max <$> (string "max(" *> pSubject <* string ")") <*> pure Nothing
-    , Median <$> (string "median(" *> pSubject <* string ")") <*> pure Nothing
-    , Stdev <$> (string "stdev(" *> pSubject <* string ")") <*> pure Nothing
-    , Range <$> (string "range(" *> pSubject <* string ")") <*> pure Nothing
+    , pSimpleAgg "dcount" DCount
+    , try pCoalesce
+    , try pStrcat
+    , try pIff
+    , try pCase
+    , pSimpleAgg "avg" Avg
+    , pSimpleAgg "min" Min
+    , pSimpleAgg "max" Max
+    , pSimpleAgg "median" Median
+    , pSimpleAgg "stdev" Stdev
+    , pSimpleAgg "range" Range
     , Plain <$> pSubject <*> pure Nothing
     ]
 
