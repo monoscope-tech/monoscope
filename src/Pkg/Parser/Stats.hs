@@ -31,6 +31,8 @@ module Pkg.Parser.Stats (
   pCase,
   pScalarExpr,
   pSimpleAgg,
+  pVariadicAgg,
+  comma,
 ) where
 
 import Data.Aeson qualified as AE
@@ -53,6 +55,11 @@ import Text.Megaparsec.Char.Lexer qualified as L
 -- Default bin size for auto binning if not otherwise specified
 defaultBinSize :: Text
 defaultBinSize = "5 minutes"
+
+
+-- | Comma separator with trailing space - common parser pattern
+comma :: Parser ()
+comma = void $ string "," *> space
 
 
 -- | Simple arithmetic expression for percentile functions
@@ -210,9 +217,8 @@ pPercentilesMulti :: Parser AggFunction
 pPercentilesMulti = do
   _ <- string "percentiles("
   subj <- pSubjectExpr
-  _ <- string ","
-  space
-  pcts <- pNumericValue `sepBy1` (string "," <* space)
+  comma
+  pcts <- pNumericValue `sepBy1` comma
   _ <- string ")"
   pure $ Percentiles subj pcts Nothing
 
@@ -232,12 +238,24 @@ pCountIf = CountIf <$> (string "countif(" *> pExpr <* string ")") <*> pure Nothi
 -- >>> parse pDCount "" "dcount(user_id, 2)"
 -- Right (DCount (Subject "user_id" "user_id" []) (Just 2) Nothing)
 pDCount :: Parser AggFunction
-pDCount = do
-  _ <- string "dcount("
-  subj <- pSubject
-  acc <- optional $ string "," *> space *> L.decimal
-  _ <- string ")"
-  pure $ DCount subj acc Nothing
+pDCount = DCount
+  <$> (string "dcount(" *> pSubject)
+  <*> optional (comma *> L.decimal)
+  <*  string ")"
+  <*> pure Nothing
+
+
+-- | Parse a scalar expression (field reference or literal value)
+-- Used by iff, case, coalesce, strcat for flexible value parsing
+pScalarExpr :: Parser Values
+pScalarExpr = pValues <|> (Str . display <$> pSubject)
+
+
+-- | Helper for variadic scalar functions like coalesce/strcat
+pVariadicAgg :: Text -> ([Values] -> Maybe Text -> AggFunction) -> Parser AggFunction
+pVariadicAgg name ctor = ctor
+  <$> (string (name <> "(") *> pScalarExpr `sepBy1` comma <* string ")")
+  <*> pure Nothing
 
 
 -- | Parse coalesce(expr1, expr2, ...) - return first non-null (variadic, 2-64 args)
@@ -245,10 +263,7 @@ pDCount = do
 -- >>> parse pCoalesce "" "coalesce(method, \"unknown\")"
 -- Right (Coalesce [Str "method",Str "unknown"] Nothing)
 pCoalesce :: Parser AggFunction
-pCoalesce =
-  Coalesce
-    <$> (string "coalesce(" *> pScalarExpr `sepBy1` (string "," <* space) <* string ")")
-    <*> pure Nothing
+pCoalesce = pVariadicAgg "coalesce" Coalesce
 
 
 -- | Parse strcat(expr1, expr2, ...) - string concatenation (1-64 args)
@@ -256,10 +271,7 @@ pCoalesce =
 -- >>> parse pStrcat "" "strcat(method, \" \", url_path)"
 -- Right (Strcat [Str "method",Str " ",Str "url_path"] Nothing)
 pStrcat :: Parser AggFunction
-pStrcat =
-  Strcat
-    <$> (string "strcat(" *> pScalarExpr `sepBy1` (string "," <* space) <* string ")")
-    <*> pure Nothing
+pStrcat = pVariadicAgg "strcat" Strcat
 
 
 -- | Parse iff(condition, then_expr, else_expr) - conditional expression
@@ -267,12 +279,11 @@ pStrcat =
 -- >>> parse pIff "" "iff(status_code == \"ERROR\", \"error\", \"ok\")"
 -- Right (Iff (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) (Str "error") (Str "ok") Nothing)
 pIff :: Parser AggFunction
-pIff =
-  Iff
-    <$> (string "iff(" *> pExpr)
-    <*> (string "," *> space *> pScalarExpr)
-    <*> (string "," *> space *> pScalarExpr <* string ")")
-    <*> pure Nothing
+pIff = Iff
+  <$> (string "iff(" *> pExpr)
+  <*> (comma *> pScalarExpr)
+  <*> (comma *> pScalarExpr <* string ")")
+  <*> pure Nothing
 
 
 -- | Parse case(pred1, val1, [pred2, val2, ...] else) - multi-branch conditional
@@ -282,15 +293,9 @@ pIff =
 pCase :: Parser AggFunction
 pCase = do
   _ <- string "case("
-  pairs <- many $ try $ (,) <$> pExpr <*> (string "," *> space *> pScalarExpr <* string "," <* space)
+  pairs <- many $ try $ (,) <$> pExpr <*> (comma *> pScalarExpr <* comma)
   defaultVal <- pScalarExpr <* string ")"
   pure $ Case pairs defaultVal Nothing
-
-
--- | Parse a scalar expression (field reference or literal value)
--- Used by iff, case, coalesce, strcat for flexible value parsing
-pScalarExpr :: Parser Values
-pScalarExpr = pValues <|> (Str . display <$> pSubject)
 
 
 -- | Helper for simple function(subject) parsers
@@ -311,8 +316,8 @@ aggFunctionParser =
     , pSimpleAgg "p99" P99
     , pSimpleAgg "p100" P100
     , try pCountIf -- countif must come before count
-    , Count <$> (string "count(" *> (pSubject <|> (string ")" $> Subject "*" "*" [])) <* optional (string ")")) <*> pure Nothing
-    , try pDCount -- dcount with optional accuracy
+    , try pDCount -- dcount must come before count (starts with 'd', but try for safety)
+    , try $ Count <$> (string "count(" *> (pSubject <|> (string ")" $> Subject "*" "*" [])) <* optional (string ")")) <*> pure Nothing
     , try pCoalesce
     , try pStrcat
     , try pIff
@@ -467,7 +472,7 @@ pSummarizeByClause :: Parser SummarizeByClause
 pSummarizeByClause = do
   _ <- string "by"
   space
-  fields <- sepBy (try (Right <$> pBinFunction) <|> (Left <$> pSubject)) (string "," <* space)
+  fields <- sepBy (try (Right <$> pBinFunction) <|> (Left <$> pSubject)) comma
   return $ SummarizeByClause fields
 
 
@@ -505,7 +510,7 @@ pSortSection :: Parser Section
 pSortSection = do
   _ <- string "sort by" <|> string "order by"
   space
-  fields <- sepBy pSortField (string "," <* space)
+  fields <- sepBy pSortField comma
   return $ SortCommand fields
 
 
