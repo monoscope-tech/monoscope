@@ -164,6 +164,11 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', (
       let result = parseQueryToAST "| summarize dcount(resource.service.name) by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
+    it "parses dcount with optional accuracy parameter" do
+      -- Microsoft KQL: dcount(expr [, accuracy]) where accuracy is 0-4
+      let result = parseQueryToAST "| summarize dcount(user_id, 2) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
     it "generates COUNT DISTINCT SQL for dcount" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize dcount(user_id) by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
@@ -171,12 +176,13 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', (
       "COUNT(DISTINCT" `T.isInfixOf` sql `shouldBe` True
 
   describe "coalesce parsing" do
-    it "parses coalesce with string default" do
+    it "parses coalesce with two arguments" do
       let result = parseQueryToAST "| summarize coalesce(method, \"unknown\") by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
-    it "parses coalesce with dotted field" do
-      let result = parseQueryToAST "| summarize coalesce(attributes.http.method, \"GET\") by bin_auto(timestamp)"
+    it "parses coalesce with multiple arguments (variadic)" do
+      -- Microsoft KQL: coalesce(arg, arg_2, [arg_3,...]) - up to 64 args
+      let result = parseQueryToAST "| summarize coalesce(field1, field2, \"default\") by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "generates COALESCE SQL" do
@@ -185,12 +191,13 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', (
       "COALESCE(" `T.isInfixOf` sql `shouldBe` True
 
   describe "strcat parsing" do
-    it "parses strcat with fields and literals" do
+    it "parses strcat with multiple arguments" do
+      -- Microsoft KQL: strcat(argument1, argument2 [, argument3 ... ])
       let result = parseQueryToAST "| summarize strcat(method, \" \", url_path) by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
-    it "parses strcat with multiple fields" do
-      let result = parseQueryToAST "| summarize strcat(service, \":\", operation) by bin_auto(timestamp)"
+    it "parses strcat with variadic arguments" do
+      let result = parseQueryToAST "| summarize strcat(service, \":\", operation, \"@\", host) by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "generates CONCAT SQL for strcat" do
@@ -199,16 +206,17 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', (
       "CONCAT(" `T.isInfixOf` sql `shouldBe` True
 
   describe "iff parsing" do
-    it "parses iff with simple condition" do
-      let result = parseQueryToAST "| summarize iff(status_code == \"ERROR\", error_count, success_count) by bin_auto(timestamp)"
+    it "parses iff with literal values" do
+      -- Microsoft KQL: iff(if, then, else) - all scalar types
+      let result = parseQueryToAST "| summarize iff(status_code == \"ERROR\", \"error\", \"ok\") by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
-    it "parses iff with comparison" do
+    it "parses iff with field references" do
       let result = parseQueryToAST "| summarize iff(duration > 1000, slow_count, fast_count) by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "generates CASE WHEN SQL for iff" do
-      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize iff(status_code == \"ERROR\", errors, success) by bin(timestamp, 1h)"
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize iff(status_code == \"ERROR\", \"error\", \"ok\") by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
       "CASE WHEN" `T.isInfixOf` sql `shouldBe` True
       "THEN" `T.isInfixOf` sql `shouldBe` True
@@ -216,12 +224,17 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', (
       "END" `T.isInfixOf` sql `shouldBe` True
 
   describe "case parsing" do
-    it "parses case with multiple conditions" do
-      let result = parseQueryToAST "| summarize case(status >= 500, error, status >= 400, warning, success) by bin_auto(timestamp)"
+    it "parses case with literal values" do
+      -- Microsoft KQL: case(predicate_1, then_1, [predicate_2, then_2, ...] else)
+      let result = parseQueryToAST "| summarize case(status >= 500, \"5xx\", status >= 400, \"4xx\", \"ok\") by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "parses case with field references" do
+      let result = parseQueryToAST "| summarize case(status >= 500, error_val, status >= 400, warning_val, success_val) by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "generates multi-branch CASE SQL" do
-      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize case(status >= 500, error, status >= 400, warning, success) by bin(timestamp, 1h)"
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize case(status >= 500, \"5xx\", status >= 400, \"4xx\", \"ok\") by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
       -- Should have CASE with multiple WHEN clauses
       "CASE " `T.isInfixOf` sql `shouldBe` True
@@ -238,8 +251,6 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', (
       isRight result `shouldBe` True
 
     it "parses complex query with countif for error rate calculation" do
-      -- This tests the pattern: countif(status_code == "ERROR") * 100.0 / count()
-      -- Note: Arithmetic between aggregations would require additional parser work
       let result = parseQueryToAST "kind == \"server\" | summarize countif(status_code == \"ERROR\") by resource.service.name"
       isRight result `shouldBe` True
 

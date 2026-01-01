@@ -22,11 +22,14 @@ module Pkg.Parser.Stats (
   pSubjectExpr,
   pPercentileSingle,
   pPercentilesMulti,
+  -- KQL function parsers (Microsoft KQL compatible)
   pCountIf,
+  pDCount,
   pCoalesce,
   pStrcat,
   pIff,
   pCase,
+  pScalarExpr,
   pSimpleAgg,
 ) where
 
@@ -69,7 +72,7 @@ subjectExprToSQL (SubjectExpr sub (Just (op, val))) = "(" <> display sub <> " " 
 data AggFunction
   = Count Subject (Maybe Text) -- Optional field and alias
   | CountIf Expr (Maybe Text) -- Count with condition (KQL countif)
-  | DCount Subject (Maybe Text) -- Distinct count (KQL dcount)
+  | DCount Subject (Maybe Int) (Maybe Text) -- Distinct count with optional accuracy (0-4)
   | P50 Subject (Maybe Text)
   | P75 Subject (Maybe Text)
   | P90 Subject (Maybe Text)
@@ -86,11 +89,11 @@ data AggFunction
   | Stdev Subject (Maybe Text)
   | Range Subject (Maybe Text)
   | -- | CustomAgg String [Field] (Maybe String)
-    -- Scalar functions that can be used in aggregations
-    Coalesce Subject Values (Maybe Text) -- coalesce(field, default)
-  | Strcat [Either Subject Text] (Maybe Text) -- strcat(field1, " ", field2) - list of fields or literals
-  | Iff Expr Subject Subject (Maybe Text) -- iff(condition, then_field, else_field)
-  | Case [(Expr, Subject)] Subject (Maybe Text) -- case(cond1, val1, cond2, val2, ..., default)
+    -- Scalar functions that can be used in aggregations (Microsoft KQL compatible)
+    Coalesce [Values] (Maybe Text) -- coalesce(expr1, expr2, ...) - variadic, returns first non-null
+  | Strcat [Values] (Maybe Text) -- strcat(expr1, expr2, ...) - concatenate any scalar expressions
+  | Iff Expr Values Values (Maybe Text) -- iff(condition, then_expr, else_expr)
+  | Case [(Expr, Values)] Values (Maybe Text) -- case(pred1, val1, pred2, val2, ..., else)
   | Plain Subject (Maybe Text)
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -214,64 +217,77 @@ pPercentilesMulti = do
   pure $ Percentiles subj pcts Nothing
 
 
--- | Parse countif(condition) - count with a filter condition
+-- | Parse countif(predicate) - count with a filter condition
+-- Microsoft KQL: countif(predicate)
 -- >>> parse pCountIf "" "countif(status_code == \"ERROR\")"
 -- Right (CountIf (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) Nothing)
--- >>> parse pCountIf "" "countif(duration > 1000)"
--- Right (CountIf (GT (Subject "duration" "duration" []) (Num "1000")) Nothing)
 pCountIf :: Parser AggFunction
 pCountIf = CountIf <$> (string "countif(" *> pExpr <* string ")") <*> pure Nothing
 
 
--- | Parse coalesce(field, default) - return first non-null value
--- >>> parse pCoalesce "" "coalesce(attributes.http.method, \"unknown\")"
--- Right (Coalesce (Subject "attributes.http.method" "attributes" [FieldKey "http",FieldKey "method"]) (Str "unknown") Nothing)
+-- | Parse dcount(expr [, accuracy]) - distinct count with optional accuracy
+-- Microsoft KQL: dcount(expr [, accuracy]) where accuracy is 0-4
+-- >>> parse pDCount "" "dcount(user_id)"
+-- Right (DCount (Subject "user_id" "user_id" []) Nothing Nothing)
+-- >>> parse pDCount "" "dcount(user_id, 2)"
+-- Right (DCount (Subject "user_id" "user_id" []) (Just 2) Nothing)
+pDCount :: Parser AggFunction
+pDCount = do
+  _ <- string "dcount("
+  subj <- pSubject
+  acc <- optional $ string "," *> space *> L.decimal
+  _ <- string ")"
+  pure $ DCount subj acc Nothing
+
+
+-- | Parse coalesce(expr1, expr2, ...) - return first non-null (variadic, 2-64 args)
+-- Microsoft KQL: coalesce(arg, arg_2, [arg_3,...])
+-- >>> parse pCoalesce "" "coalesce(method, \"unknown\")"
+-- Right (Coalesce [Str "method",Str "unknown"] Nothing)
 pCoalesce :: Parser AggFunction
-pCoalesce =
-  Coalesce
-    <$> (string "coalesce(" *> pSubject)
-    <*> (string "," *> space *> pValues <* string ")")
-    <*> pure Nothing
+pCoalesce = Coalesce
+  <$> (string "coalesce(" *> pScalarExpr `sepBy1` (string "," <* space) <* string ")")
+  <*> pure Nothing
 
 
--- | Parse strcat(arg1, arg2, ...) - string concatenation
--- Arguments can be fields or string literals
+-- | Parse strcat(expr1, expr2, ...) - string concatenation (1-64 args)
+-- Microsoft KQL: strcat(argument1, argument2 [, argument3 ... ])
 -- >>> parse pStrcat "" "strcat(method, \" \", url_path)"
--- Right (Strcat [Left (Subject "method" "method" []),Right " ",Left (Subject "url_path" "url_path" [])] Nothing)
+-- Right (Strcat [Str "method",Str " ",Str "url_path"] Nothing)
 pStrcat :: Parser AggFunction
-pStrcat =
-  Strcat
-    <$> (string "strcat(" *> pStrcatArg `sepBy1` (string "," <* space) <* string ")")
-    <*> pure Nothing
-  where
-    pStrcatArg :: Parser (Either Subject Text)
-    pStrcatArg =
-      (Right . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"')))
-        <|> (Right . toText <$> (char '\'' *> manyTill L.charLiteral (char '\'')))
-        <|> (Left <$> pSubject)
+pStrcat = Strcat
+  <$> (string "strcat(" *> pScalarExpr `sepBy1` (string "," <* space) <* string ")")
+  <*> pure Nothing
 
 
--- | Parse iff(condition, then_value, else_value) - conditional expression
--- >>> parse pIff "" "iff(status_code == \"ERROR\", error_count, success_count)"
--- Right (Iff (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) (Subject "error_count" "error_count" []) (Subject "success_count" "success_count" []) Nothing)
+-- | Parse iff(condition, then_expr, else_expr) - conditional expression
+-- Microsoft KQL: iff(if, then, else)
+-- >>> parse pIff "" "iff(status_code == \"ERROR\", \"error\", \"ok\")"
+-- Right (Iff (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) (Str "error") (Str "ok") Nothing)
 pIff :: Parser AggFunction
-pIff =
-  Iff
-    <$> (string "iff(" *> pExpr)
-    <*> (string "," *> space *> pSubject)
-    <*> (string "," *> space *> pSubject <* string ")")
-    <*> pure Nothing
+pIff = Iff
+  <$> (string "iff(" *> pExpr)
+  <*> (string "," *> space *> pScalarExpr)
+  <*> (string "," *> space *> pScalarExpr <* string ")")
+  <*> pure Nothing
 
 
--- | Parse case(cond1, val1, cond2, val2, ..., default) - multi-branch conditional
--- >>> parse pCase "" "case(status >= 500, error, status >= 400, warning, success)"
--- Right (Case [(GTEq (Subject "status" "status" []) (Num "500"),Subject "error" "error" []),(GTEq (Subject "status" "status" []) (Num "400"),Subject "warning" "warning" [])] (Subject "success" "success" []) Nothing)
+-- | Parse case(pred1, val1, [pred2, val2, ...] else) - multi-branch conditional
+-- Microsoft KQL: case(predicate_1, then_1, [predicate_2, then_2, ...] else)
+-- >>> parse pCase "" "case(status >= 500, \"5xx\", status >= 400, \"4xx\", \"ok\")"
+-- Right (Case [(GTEq (Subject "status" "status" []) (Num "500"),Str "5xx"),(GTEq (Subject "status" "status" []) (Num "400"),Str "4xx")] (Str "ok") Nothing)
 pCase :: Parser AggFunction
 pCase = do
   _ <- string "case("
-  pairs <- many $ try $ (,) <$> pExpr <*> (string "," *> space *> pSubject <* string "," <* space)
-  defaultVal <- pSubject <* string ")"
+  pairs <- many $ try $ (,) <$> pExpr <*> (string "," *> space *> pScalarExpr <* string "," <* space)
+  defaultVal <- pScalarExpr <* string ")"
   pure $ Case pairs defaultVal Nothing
+
+
+-- | Parse a scalar expression (field reference or literal value)
+-- Used by iff, case, coalesce, strcat for flexible value parsing
+pScalarExpr :: Parser Values
+pScalarExpr = pValues <|> (Str . display <$> pSubject)
 
 
 -- | Helper for simple function(subject) parsers
@@ -293,7 +309,7 @@ aggFunctionParser =
     , pSimpleAgg "p100" P100
     , try pCountIf -- countif must come before count
     , Count <$> (string "count(" *> (pSubject <|> (string ")" $> Subject "*" "*" [])) <* optional (string ")")) <*> pure Nothing
-    , pSimpleAgg "dcount" DCount
+    , try pDCount -- dcount with optional accuracy
     , try pCoalesce
     , try pStrcat
     , try pIff
@@ -318,10 +334,10 @@ instance ToQueryText [AggFunction] where
 
 instance Display AggFunction where
   displayPrec _prec (Count sub _alias) = displayBuilder $ "count(" <> display sub <> ")"
-  -- countif(condition) -> COUNT(*) FILTER (WHERE condition)
+  -- countif(predicate) -> COUNT(*) FILTER (WHERE predicate)
   displayPrec _prec (CountIf cond _alias) = displayBuilder $ "COUNT(*) FILTER (WHERE " <> display cond <> ")"
-  -- dcount(field) -> COUNT(DISTINCT field)
-  displayPrec _prec (DCount sub _alias) = displayBuilder $ "COUNT(DISTINCT " <> display sub <> ")"
+  -- dcount(field [, accuracy]) -> COUNT(DISTINCT field) (accuracy is ignored in SQL, used for HLL estimation)
+  displayPrec _prec (DCount sub _acc _alias) = displayBuilder $ "COUNT(DISTINCT " <> display sub <> ")"
   displayPrec _prec (P50 sub _alias) = displayBuilder $ "approx_percentile(0.50, percentile_agg((" <> display sub <> ")::float))::int"
   displayPrec _prec (P75 sub _alias) = displayBuilder $ "approx_percentile(0.75, percentile_agg((" <> display sub <> ")::float))::int"
   displayPrec _prec (P90 sub _alias) = displayBuilder $ "approx_percentile(0.90, percentile_agg((" <> display sub <> ")::float))::int"
@@ -329,7 +345,6 @@ instance Display AggFunction where
   displayPrec _prec (P99 sub _alias) = displayBuilder $ "approx_percentile(0.99, percentile_agg((" <> display sub <> ")::float))::int"
   displayPrec _prec (P100 sub _alias) = displayBuilder $ "approx_percentile(1, percentile_agg((" <> display sub <> ")::float))::int"
   -- Percentile/Percentiles are handled specially via extractPercentilesInfo and LATERAL unnest SQL
-  -- The Display output is not used for SQL generation when percentilesInfo is present in QueryComponents
   displayPrec _prec (Percentile subExpr pct _alias) =
     displayBuilder $ "approx_percentile(" <> show (pct / 100.0) <> ", percentile_agg((" <> subjectExprToSQL subExpr <> ")::float))::float"
   displayPrec _prec (Percentiles subExpr pcts _alias) =
@@ -342,24 +357,20 @@ instance Display AggFunction where
   displayPrec _prec (Median sub _alias) = displayBuilder $ "median((" <> display sub <> ")::float)"
   displayPrec _prec (Stdev sub _alias) = displayBuilder $ "stdev((" <> display sub <> ")::float)"
   displayPrec _prec (Range sub _alias) = displayBuilder $ "range((" <> display sub <> ")::float)"
-  -- coalesce(field, default) -> COALESCE(field, default)
-  displayPrec _prec (Coalesce sub defaultVal _alias) =
-    displayBuilder $ "COALESCE(" <> display sub <> ", " <> display defaultVal <> ")"
-  -- strcat(args) -> CONCAT(args) with proper handling
-  displayPrec _prec (Strcat args _alias) =
-    displayBuilder $ "CONCAT(" <> T.intercalate ", " (map displayStrcatArg args) <> ")"
-    where
-      displayStrcatArg :: Either Subject Text -> Text
-      displayStrcatArg (Left sub) = display sub
-      displayStrcatArg (Right txt) = "'" <> txt <> "'"
+  -- coalesce(expr1, expr2, ...) -> COALESCE(expr1, expr2, ...)
+  displayPrec _prec (Coalesce exprs _alias) =
+    displayBuilder $ "COALESCE(" <> T.intercalate ", " (map display exprs) <> ")"
+  -- strcat(expr1, expr2, ...) -> CONCAT(expr1, expr2, ...)
+  displayPrec _prec (Strcat exprs _alias) =
+    displayBuilder $ "CONCAT(" <> T.intercalate ", " (map display exprs) <> ")"
   -- iff(condition, then, else) -> CASE WHEN condition THEN then ELSE else END
   displayPrec _prec (Iff cond thenVal elseVal _alias) =
     displayBuilder $ "CASE WHEN " <> display cond <> " THEN " <> display thenVal <> " ELSE " <> display elseVal <> " END"
-  -- case(cond1, val1, ..., default) -> CASE WHEN cond1 THEN val1 ... ELSE default END
+  -- case(pred1, val1, ..., else) -> CASE WHEN pred1 THEN val1 ... ELSE else END
   displayPrec _prec (Case pairs defaultVal _alias) =
     displayBuilder $ "CASE " <> T.concat (map displayCasePair pairs) <> "ELSE " <> display defaultVal <> " END"
     where
-      displayCasePair :: (Expr, Subject) -> Text
+      displayCasePair :: (Expr, Values) -> Text
       displayCasePair (cond, val) = "WHEN " <> display cond <> " THEN " <> display val <> " "
   displayPrec _prec (Plain sub _alias) = displayBuilder $ "" <> display sub <> ""
 
@@ -515,7 +526,7 @@ pTakeSection = do
 setAlias :: Text -> AggFunction -> AggFunction
 setAlias name (Count sub _) = Count sub (Just name)
 setAlias name (CountIf cond _) = CountIf cond (Just name)
-setAlias name (DCount sub _) = DCount sub (Just name)
+setAlias name (DCount sub acc _) = DCount sub acc (Just name)
 setAlias name (Sum sub _) = Sum sub (Just name)
 setAlias name (Avg sub _) = Avg sub (Just name)
 setAlias name (Min sub _) = Min sub (Just name)
@@ -531,8 +542,8 @@ setAlias name (Percentiles subExpr pcts _) = Percentiles subExpr pcts (Just name
 setAlias name (Median sub _) = Median sub (Just name)
 setAlias name (Stdev sub _) = Stdev sub (Just name)
 setAlias name (Range sub _) = Range sub (Just name)
-setAlias name (Coalesce sub defVal _) = Coalesce sub defVal (Just name)
-setAlias name (Strcat args _) = Strcat args (Just name)
+setAlias name (Coalesce exprs _) = Coalesce exprs (Just name)
+setAlias name (Strcat exprs _) = Strcat exprs (Just name)
 setAlias name (Iff cond thenVal elseVal _) = Iff cond thenVal elseVal (Just name)
 setAlias name (Case pairs defVal _) = Case pairs defVal (Just name)
 setAlias name (Plain sub _) = Plain sub (Just name)
