@@ -4,11 +4,12 @@ import Data.Either.Extra (fromRight')
 import Data.Text qualified as T
 import NeatInterpolation (text)
 import Pkg.Parser (
-  QueryComponents (finalSummarizeQuery),
+  QueryComponents (finalSummarizeQuery, percentilesInfo),
   defPid,
   defSqlQueryCfg,
   fixedUTCTime,
   parseQueryToComponents,
+  parseQueryToAST,
  )
 import Relude
 import Test.Hspec (Spec, describe, it, shouldBe)
@@ -92,4 +93,50 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', (
             [text|
       SELECT extract(epoch from time_bucket('6 hours', timestamp))::integer, count(*), count(*) OVER() as _total_count FROM telemetry.metrics WHERE project_id='00000000-0000-0000-0000-000000000000' and ((metric_name = 'app_recommendations_counter')) GROUP BY time_bucket('6 hours', timestamp) ORDER BY time_bucket('6 hours', timestamp) DESC |]
       normT query `shouldBe` normT expected
+
+  describe "percentile parsing" do
+    it "parses percentile(duration, 95) via full query" do
+      let result = parseQueryToAST "| summarize percentile(duration, 95) by bin(timestamp, 1h)"
+      isRight result `shouldBe` True
+
+    it "parses percentiles(duration, 50, 75, 90, 95) via full query" do
+      let result = parseQueryToAST "| summarize percentiles(duration, 50, 75, 90, 95) by bin(timestamp, 1h)"
+      isRight result `shouldBe` True
+
+    it "parses percentile with division expression via full query" do
+      let result = parseQueryToAST "| summarize percentile(duration / 1e6, 95) by bin(timestamp, 1h)"
+      isRight result `shouldBe` True
+
+    it "extracts percentilesInfo from AST" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize percentiles(duration, 50, 75, 90, 95) by bin(timestamp, 1h)"
+      case c.percentilesInfo of
+        Just (fieldExpr, pcts) -> do
+          fieldExpr `shouldBe` "duration"
+          pcts `shouldBe` [50.0, 75.0, 90.0, 95.0]
+        Nothing -> fail "Expected percentilesInfo to be extracted"
+
+    it "extracts percentilesInfo with division from AST" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize percentile(duration / 1e6, 95) by bin(timestamp, 1h)"
+      case c.percentilesInfo of
+        Just (fieldExpr, pcts) -> do
+          fieldExpr `shouldBe` "(duration / 1000000.0)"
+          pcts `shouldBe` [95.0]
+        Nothing -> fail "Expected percentilesInfo to be extracted"
+
+    it "generates LATERAL unnest SQL for percentiles with bin" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize percentiles(duration, 50, 90) by bin(timestamp, 1h)"
+      let sql = fromMaybe "" c.finalSummarizeQuery
+      -- Check that LATERAL unnest is used
+      "LATERAL unnest" `T.isInfixOf` sql `shouldBe` True
+      -- Check that percentile aggregates are present
+      "approx_percentile" `T.isInfixOf` sql `shouldBe` True
+      "percentile_agg" `T.isInfixOf` sql `shouldBe` True
+
+    it "combines multiple where clauses with AND" do
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "resource.service.name == \"cart\" | duration != null | summarize percentiles(duration, 50, 90) by bin(timestamp, 1h)"
+      -- Check that both filters are present in the final SQL query
+      -- The resource.service.name filter should be in the WHERE clause
+      ("resource" `T.isInfixOf` query && "cart" `T.isInfixOf` query) `shouldBe` True
+      -- Duration filter should also be present
+      ("duration" `T.isInfixOf` query && "NOT NULL" `T.isInfixOf` query) `shouldBe` True
 
