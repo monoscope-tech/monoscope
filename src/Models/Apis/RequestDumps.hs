@@ -9,6 +9,7 @@ module Models.Apis.RequestDumps (
   normalizeUrlPath,
   selectLogTable,
   executeArbitraryQuery,
+  executeSecuredQuery,
   requestDumpLogUrlPath,
   getRequestDumpForReports,
   getRequestDumpsForPreviousReportPeriod,
@@ -457,6 +458,26 @@ executeArbitraryQuery queryText = do
   results :: [[FieldValue]] <- PG.query_ (Query $ encodeUtf8 queryText)
   -- Convert each row of FieldValues to a vector of JSON values
   pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
+
+
+-- | Execute a user-provided SQL query with mandatory project_id filtering
+-- SECURITY: Uses parameterized queries to prevent SQL injection
+-- Creates a CTE that pre-filters otel_logs_and_spans by project_id,
+-- then replaces references to the table in the user query
+executeSecuredQuery :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
+executeSecuredQuery pid userQuery limit = do
+  -- Create a CTE that pre-filters the table by project_id using parameterized query
+  -- The user's query references otel_logs_and_spans which is replaced by the filtered CTE
+  let wrappedQuery =
+        "WITH otel_logs_and_spans AS ( \
+        \  SELECT * FROM otel_logs_and_spans WHERE project_id = ? \
+        \) " <> userQuery <> " LIMIT ?"
+  resultE <- try @SomeException $ do
+    results :: [[FieldValue]] <- PG.query (Query $ encodeUtf8 wrappedQuery) (pid, limit)
+    pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
+  pure $ case resultE of
+    Left err -> Left $ "Query execution failed: " <> show err
+    Right results -> Right results
 
 
 selectLogTable :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))

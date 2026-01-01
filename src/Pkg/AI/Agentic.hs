@@ -32,13 +32,11 @@ import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple.Types (Query (..))
 import Effectful (Eff)
 import Effectful.Log (Log)
-import Effectful.PostgreSQL qualified as PG
 import Effectful.Time qualified as Time
 import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
-import Models.Apis.RequestDumps (executeArbitraryQuery, selectLogTable)
+import Models.Apis.RequestDumps (executeSecuredQuery, selectLogTable)
 import Models.Projects.Projects qualified as Projects
 import Pkg.AI qualified as AI
 import Pkg.Parser (parseQueryToAST)
@@ -549,7 +547,7 @@ executeRunQuery config args =
 
 
 -- | Run a raw SQL query (fallback for complex queries KQL can't express)
--- SECURITY: Always injects project_id filter to prevent cross-project data access
+-- SECURITY: Uses executeSecuredQuery which enforces project_id via parameterized CTE
 runSqlQuery :: DB es => AgenticConfig -> Text -> Int -> Eff es ToolResult
 runSqlQuery config query limit = do
   -- Validate the query doesn't contain dangerous operations
@@ -558,55 +556,12 @@ runSqlQuery config query limit = do
   if any (`T.isInfixOf` lowerQuery) dangerousPatterns
     then pure $ errorResult RunQuery "Error: Only SELECT queries are allowed"
     else do
-      -- Inject project_id filter for security (prevents cross-project data access)
-      let pid = config.projectId.toText
-          securedQuery = injectProjectFilter pid query
-          -- Add LIMIT if not present to prevent runaway queries
-          limitedQuery =
-            if "limit" `T.isInfixOf` T.toLower securedQuery
-              then securedQuery
-              else securedQuery <> " LIMIT " <> show limit
-      resultE <- try @SomeException $ executeArbitraryQuery limitedQuery
+      -- Use executeSecuredQuery which wraps the query in a CTE that
+      -- pre-filters otel_logs_and_spans by project_id using parameterized query
+      resultE <- executeSecuredQuery config.projectId query limit
       pure $ case resultE of
-        Left err -> errorResult RunQuery $ "Error executing SQL: " <> show err
+        Left err -> errorResult RunQuery $ "Error executing SQL: " <> err
         Right results -> successResult RunQuery $ formatQueryResults results (V.length results)
-
-
--- | Inject project_id filter into a SQL query for security
--- Handles both queries with and without existing WHERE clauses
-injectProjectFilter :: Text -> Text -> Text
-injectProjectFilter pid query =
-  let lowerQuery = T.toLower query
-      projectFilter = "project_id = '" <> pid <> "'"
-   in if "where" `T.isInfixOf` lowerQuery
-        then -- Insert project_id right after WHERE
-          let (before, after) = T.breakOn "where" lowerQuery
-              -- Find the actual case-preserving position
-              wherePos = T.length before
-              (queryBefore, queryAfter) = T.splitAt wherePos query
-              afterWhere = T.drop 5 queryAfter -- Drop "where" (5 chars)
-           in queryBefore <> "WHERE " <> projectFilter <> " AND (" <> T.strip afterWhere <> ")"
-        else -- No WHERE clause, need to add one before ORDER BY, GROUP BY, or LIMIT
-          let insertPoint = findInsertPoint lowerQuery
-           in case insertPoint of
-                Just pos ->
-                  let (queryBefore, queryAfter) = T.splitAt pos query
-                   in queryBefore <> " WHERE " <> projectFilter <> " " <> queryAfter
-                Nothing ->
-                  -- No ORDER BY/GROUP BY/LIMIT, append WHERE at the end
-                  query <> " WHERE " <> projectFilter
-
-
--- | Find the position to insert WHERE clause (before ORDER BY, GROUP BY, LIMIT, or end)
-findInsertPoint :: Text -> Maybe Int
-findInsertPoint lowerQuery =
-  let candidates =
-        mapMaybe
-          (\kw -> if kw `T.isInfixOf` lowerQuery then Just (fst $ T.breakOn kw lowerQuery) else Nothing)
-          ["order by", "group by", "limit", "having"]
-   in if null candidates
-        then Nothing
-        else Just $ T.length $ minimumBy (comparing T.length) candidates
 
 
 -- | Format query results for display
