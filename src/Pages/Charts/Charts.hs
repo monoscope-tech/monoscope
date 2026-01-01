@@ -180,7 +180,7 @@ queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg origi
           let merged = QC.mergeTimeseriesData entry.cachedData deltaData
           let slidingWindowStart = addUTCTime (-86400) reqTo
           let trimmed = QC.trimOldData slidingWindowStart merged
-          QC.updateCache cacheKey (entry.cachedFrom, reqTo) trimmed originalQuery
+          QC.updateCache cacheKey (slidingWindowStart, reqTo) trimmed originalQuery
           pure $ QC.trimToRange trimmed reqFrom reqTo
         QC.CacheMiss -> do
           result <- executeQueryWith sqlQueryCfg queryAST

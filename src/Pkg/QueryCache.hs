@@ -127,7 +127,6 @@ lookupCache key (reqFrom, reqTo) =
               _
                 | reqFrom >= cf && reqTo <= ct -> CacheHit entry
                 | reqFrom >= cf && reqTo > ct -> PartialHit entry
-                | reqFrom < cf && reqTo > ct -> PartialHit entry
                 | reqFrom < cf -> CacheBypassed "Request extends before cached range"
                 | otherwise -> CacheMiss
 
