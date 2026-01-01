@@ -238,11 +238,12 @@ pCountIf = CountIf <$> (string "countif(" *> pExpr <* string ")") <*> pure Nothi
 -- >>> parse pDCount "" "dcount(user_id, 2)"
 -- Right (DCount (Subject "user_id" "user_id" []) (Just 2) Nothing)
 pDCount :: Parser AggFunction
-pDCount = DCount
-  <$> (string "dcount(" *> pSubject)
-  <*> optional (comma *> L.decimal)
-  <*  string ")"
-  <*> pure Nothing
+pDCount =
+  DCount
+    <$> (string "dcount(" *> pSubject)
+    <*> optional (comma *> L.decimal)
+    <* string ")"
+    <*> pure Nothing
 
 
 -- | Parse a scalar expression (field reference or literal value)
@@ -253,9 +254,10 @@ pScalarExpr = pValues <|> (Str . display <$> pSubject)
 
 -- | Helper for variadic scalar functions like coalesce/strcat
 pVariadicAgg :: Text -> ([Values] -> Maybe Text -> AggFunction) -> Parser AggFunction
-pVariadicAgg name ctor = ctor
-  <$> (string (name <> "(") *> pScalarExpr `sepBy1` comma <* string ")")
-  <*> pure Nothing
+pVariadicAgg name ctor =
+  ctor
+    <$> (string (name <> "(") *> pScalarExpr `sepBy1` comma <* string ")")
+    <*> pure Nothing
 
 
 -- | Parse coalesce(expr1, expr2, ...) - return first non-null (variadic, 2-64 args)
@@ -279,11 +281,12 @@ pStrcat = pVariadicAgg "strcat" Strcat
 -- >>> parse pIff "" "iff(status_code == \"ERROR\", \"error\", \"ok\")"
 -- Right (Iff (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) (Str "error") (Str "ok") Nothing)
 pIff :: Parser AggFunction
-pIff = Iff
-  <$> (string "iff(" *> pExpr)
-  <*> (comma *> pScalarExpr)
-  <*> (comma *> pScalarExpr <* string ")")
-  <*> pure Nothing
+pIff =
+  Iff
+    <$> (string "iff(" *> pExpr)
+    <*> (comma *> pScalarExpr)
+    <*> (comma *> pScalarExpr <* string ")")
+    <*> pure Nothing
 
 
 -- | Parse case(pred1, val1, [pred2, val2, ...] else) - multi-branch conditional
