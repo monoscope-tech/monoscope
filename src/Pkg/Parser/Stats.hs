@@ -214,8 +214,9 @@ pSubjectExpr = do
 -- >>> parse pPercentileSingle "" "percentile(duration / 1e6, 95)"
 -- Right (Percentile (SubjectExpr (Subject "duration" "duration" []) (Just ("/",1000000.0))) 95.0 Nothing)
 pPercentileSingle :: Parser AggFunction
-pPercentileSingle = withoutAlias $
-  Percentile
+pPercentileSingle =
+  withoutAlias
+    $ Percentile
     <$> (string "percentile(" *> pSubjectExpr)
     <*> (comma *> pNumericValue <* string ")")
 
@@ -226,8 +227,9 @@ pPercentileSingle = withoutAlias $
 -- >>> parse pPercentilesMulti "" "percentiles(duration / 1e6, 50, 75, 90, 95)"
 -- Right (Percentiles (SubjectExpr (Subject "duration" "duration" []) (Just ("/",1000000.0))) [50.0,75.0,90.0,95.0] Nothing)
 pPercentilesMulti :: Parser AggFunction
-pPercentilesMulti = withoutAlias $
-  Percentiles
+pPercentilesMulti =
+  withoutAlias
+    $ Percentiles
     <$> (string "percentiles(" *> pSubjectExpr <* comma)
     <*> (commaSep1 pNumericValue <* string ")")
 
@@ -247,11 +249,12 @@ pCountIf = withoutAlias $ CountIf <$> (string "countif(" *> pExpr <* string ")")
 -- >>> parse pDCount "" "dcount(user_id, 2)"
 -- Right (DCount (Subject "user_id" "user_id" []) (Just 2) Nothing)
 pDCount :: Parser AggFunction
-pDCount = withoutAlias $
-  DCount
+pDCount =
+  withoutAlias
+    $ DCount
     <$> (string "dcount(" *> pSubject)
     <*> optional (comma *> L.decimal)
-    <*  string ")"
+    <* string ")"
 
 
 -- | Parse a scalar expression (field reference or literal value)
@@ -263,8 +266,10 @@ pScalarExpr = pValues <|> (Str . toQText <$> pSubject)
 
 -- | Helper for variadic scalar functions like coalesce/strcat
 pVariadicAgg :: Text -> ([Values] -> Maybe Text -> AggFunction) -> Parser AggFunction
-pVariadicAgg name ctor = withoutAlias $
-  ctor <$> (string (name <> "(") *> commaSep1 pScalarExpr <* string ")")
+pVariadicAgg name ctor =
+  withoutAlias
+    $ ctor
+    <$> (string (name <> "(") *> commaSep1 pScalarExpr <* string ")")
 
 
 -- | Parse coalesce(expr1, expr2, ...) - return first non-null (variadic, 2-64 args)
@@ -288,8 +293,9 @@ pStrcat = pVariadicAgg "strcat" Strcat
 -- >>> parse pIff "" "iff(status_code == \"ERROR\", \"error\", \"ok\")"
 -- Right (Iff (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) (Str "error") (Str "ok") Nothing)
 pIff :: Parser AggFunction
-pIff = withoutAlias $
-  Iff
+pIff =
+  withoutAlias
+    $ Iff
     <$> (string "iff(" *> pExpr)
     <*> (comma *> pScalarExpr)
     <*> (comma *> pScalarExpr <* string ")")
@@ -300,8 +306,9 @@ pIff = withoutAlias $
 -- >>> parse pCase "" "case(status >= 500, \"5xx\", status >= 400, \"4xx\", \"ok\")"
 -- Right (Case [(GTEq (Subject "status" "status" []) (Num "500"),Str "5xx"),(GTEq (Subject "status" "status" []) (Num "400"),Str "4xx")] (Str "ok") Nothing)
 pCase :: Parser AggFunction
-pCase = withoutAlias $
-  Case
+pCase =
+  withoutAlias
+    $ Case
     <$> (string "case(" *> many (try $ (,) <$> pExpr <*> (comma *> pScalarExpr <* comma)))
     <*> (pScalarExpr <* string ")")
 
@@ -313,8 +320,10 @@ pSimpleAgg name ctor = withoutAlias $ ctor <$> (string (name <> "(") *> pSubject
 
 -- | Parse count() or count(field) - handles both empty parens and field reference
 pCount :: Parser AggFunction
-pCount = withoutAlias $
-  Count <$> (string "count(" *> ((pSubject <* string ")") <|> (Subject "*" "*" [] <$ string ")")))
+pCount =
+  withoutAlias
+    $ Count
+    <$> (string "count(" *> ((pSubject <* string ")") <|> (Subject "*" "*" [] <$ string ")")))
 
 
 aggFunctionParser :: Parser AggFunction
