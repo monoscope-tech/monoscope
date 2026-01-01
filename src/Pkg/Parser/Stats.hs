@@ -227,10 +227,11 @@ pCountIf = CountIf <$> (string "countif(" *> pExpr <* string ")") <*> pure Nothi
 -- >>> parse pCoalesce "" "coalesce(attributes.http.method, \"unknown\")"
 -- Right (Coalesce (Subject "attributes.http.method" "attributes" [FieldKey "http",FieldKey "method"]) (Str "unknown") Nothing)
 pCoalesce :: Parser AggFunction
-pCoalesce = Coalesce
-  <$> (string "coalesce(" *> pSubject)
-  <*> (string "," *> space *> pValues <* string ")")
-  <*> pure Nothing
+pCoalesce =
+  Coalesce
+    <$> (string "coalesce(" *> pSubject)
+    <*> (string "," *> space *> pValues <* string ")")
+    <*> pure Nothing
 
 
 -- | Parse strcat(arg1, arg2, ...) - string concatenation
@@ -238,9 +239,10 @@ pCoalesce = Coalesce
 -- >>> parse pStrcat "" "strcat(method, \" \", url_path)"
 -- Right (Strcat [Left (Subject "method" "method" []),Right " ",Left (Subject "url_path" "url_path" [])] Nothing)
 pStrcat :: Parser AggFunction
-pStrcat = Strcat
-  <$> (string "strcat(" *> pStrcatArg `sepBy1` (string "," <* space) <* string ")")
-  <*> pure Nothing
+pStrcat =
+  Strcat
+    <$> (string "strcat(" *> pStrcatArg `sepBy1` (string "," <* space) <* string ")")
+    <*> pure Nothing
   where
     pStrcatArg :: Parser (Either Subject Text)
     pStrcatArg =
@@ -253,11 +255,12 @@ pStrcat = Strcat
 -- >>> parse pIff "" "iff(status_code == \"ERROR\", error_count, success_count)"
 -- Right (Iff (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) (Subject "error_count" "error_count" []) (Subject "success_count" "success_count" []) Nothing)
 pIff :: Parser AggFunction
-pIff = Iff
-  <$> (string "iff(" *> pExpr)
-  <*> (string "," *> space *> pSubject)
-  <*> (string "," *> space *> pSubject <* string ")")
-  <*> pure Nothing
+pIff =
+  Iff
+    <$> (string "iff(" *> pExpr)
+    <*> (string "," *> space *> pSubject)
+    <*> (string "," *> space *> pSubject <* string ")")
+    <*> pure Nothing
 
 
 -- | Parse case(cond1, val1, cond2, val2, ..., default) - multi-branch conditional
