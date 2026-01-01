@@ -140,3 +140,106 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', (
       -- Duration filter should also be present
       ("duration" `T.isInfixOf` query && "NOT NULL" `T.isInfixOf` query) `shouldBe` True
 
+  describe "countif parsing" do
+    it "parses countif with simple condition" do
+      let result = parseQueryToAST "| summarize countif(status_code == \"ERROR\") by bin(timestamp, 1h)"
+      isRight result `shouldBe` True
+
+    it "parses countif with comparison condition" do
+      let result = parseQueryToAST "| summarize countif(duration > 1000) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "generates COUNT FILTER SQL for countif" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize countif(status_code == \"ERROR\") by bin(timestamp, 1h)"
+      let sql = fromMaybe "" c.finalSummarizeQuery
+      -- Should generate COUNT(*) FILTER (WHERE ...) SQL
+      "FILTER (WHERE" `T.isInfixOf` sql `shouldBe` True
+
+  describe "dcount parsing" do
+    it "parses dcount with simple field" do
+      let result = parseQueryToAST "| summarize dcount(user_id) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "parses dcount with dotted field path" do
+      let result = parseQueryToAST "| summarize dcount(resource.service.name) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "generates COUNT DISTINCT SQL for dcount" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize dcount(user_id) by bin(timestamp, 1h)"
+      let sql = fromMaybe "" c.finalSummarizeQuery
+      -- Should generate COUNT(DISTINCT ...) SQL
+      "COUNT(DISTINCT" `T.isInfixOf` sql `shouldBe` True
+
+  describe "coalesce parsing" do
+    it "parses coalesce with string default" do
+      let result = parseQueryToAST "| summarize coalesce(method, \"unknown\") by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "parses coalesce with dotted field" do
+      let result = parseQueryToAST "| summarize coalesce(attributes.http.method, \"GET\") by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "generates COALESCE SQL" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize coalesce(method, \"unknown\") by bin(timestamp, 1h)"
+      let sql = fromMaybe "" c.finalSummarizeQuery
+      "COALESCE(" `T.isInfixOf` sql `shouldBe` True
+
+  describe "strcat parsing" do
+    it "parses strcat with fields and literals" do
+      let result = parseQueryToAST "| summarize strcat(method, \" \", url_path) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "parses strcat with multiple fields" do
+      let result = parseQueryToAST "| summarize strcat(service, \":\", operation) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "generates CONCAT SQL for strcat" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize strcat(method, \" \", url_path) by bin(timestamp, 1h)"
+      let sql = fromMaybe "" c.finalSummarizeQuery
+      "CONCAT(" `T.isInfixOf` sql `shouldBe` True
+
+  describe "iff parsing" do
+    it "parses iff with simple condition" do
+      let result = parseQueryToAST "| summarize iff(status_code == \"ERROR\", error_count, success_count) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "parses iff with comparison" do
+      let result = parseQueryToAST "| summarize iff(duration > 1000, slow_count, fast_count) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "generates CASE WHEN SQL for iff" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize iff(status_code == \"ERROR\", errors, success) by bin(timestamp, 1h)"
+      let sql = fromMaybe "" c.finalSummarizeQuery
+      "CASE WHEN" `T.isInfixOf` sql `shouldBe` True
+      "THEN" `T.isInfixOf` sql `shouldBe` True
+      "ELSE" `T.isInfixOf` sql `shouldBe` True
+      "END" `T.isInfixOf` sql `shouldBe` True
+
+  describe "case parsing" do
+    it "parses case with multiple conditions" do
+      let result = parseQueryToAST "| summarize case(status >= 500, error, status >= 400, warning, success) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "generates multi-branch CASE SQL" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize case(status >= 500, error, status >= 400, warning, success) by bin(timestamp, 1h)"
+      let sql = fromMaybe "" c.finalSummarizeQuery
+      -- Should have CASE with multiple WHEN clauses
+      "CASE " `T.isInfixOf` sql `shouldBe` True
+      -- Should have the default ELSE clause
+      "ELSE" `T.isInfixOf` sql `shouldBe` True
+
+  describe "combined aggregations" do
+    it "parses multiple aggregations including countif and dcount" do
+      let result = parseQueryToAST "| summarize count(), countif(status_code == \"ERROR\"), dcount(user_id) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "parses aggregation with named alias" do
+      let result = parseQueryToAST "| summarize error_count = countif(status_code == \"ERROR\") by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "parses complex query with countif for error rate calculation" do
+      -- This tests the pattern: countif(status_code == "ERROR") * 100.0 / count()
+      -- Note: Arithmetic between aggregations would require additional parser work
+      let result = parseQueryToAST "kind == \"server\" | summarize countif(status_code == \"ERROR\") by resource.service.name"
+      isRight result `shouldBe` True
+
