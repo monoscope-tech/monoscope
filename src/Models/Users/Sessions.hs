@@ -194,12 +194,17 @@ sessionAndProject pid = do
   sess <- getSession
   let projects = sess.persistentSession.projects.getProjects
   case V.find (\v -> v.id == pid) projects of
-    -- Don't use cached data for onboarding projects as they're actively being updated
+    -- Use cached data for non-onboarding projects
     Just p | p.paymentPlan /= "ONBOARDING" -> pure (sess, p)
-    -- Fetch fresh from DB for: onboarding projects, not found in cache, nil project, or sudo users
+    -- Onboarding projects: fetch fresh from DB as they're actively being updated
+    Just _ ->
+      Projects.projectById pid >>= \case
+        Just p -> pure (sess, p)
+        Nothing -> throwError $ err302{errHeaders = [("Location", "/?missingProjectPermission")]}
+    -- Not in cache: allow nil project or sudo users to fetch from DB
     _
       | pid == UUIDId UUID.nil || sess.user.isSudo ->
           Projects.projectById pid >>= \case
             Just p -> pure (sess, p)
-            Nothing -> throwError $ err302{errHeaders = [("Location", "/p/?missingProjectPermission")]}
-    _ -> throwError $ err302{errHeaders = [("Location", "/p/?missingProjectPermission")]}
+            Nothing -> throwError $ err302{errHeaders = [("Location", "/?missingProjectPermission")]}
+    _ -> throwError $ err302{errHeaders = [("Location", "/?missingProjectPermission")]}
