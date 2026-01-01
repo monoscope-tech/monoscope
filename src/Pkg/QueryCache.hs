@@ -246,9 +246,14 @@ recalculateStats rows =
         let h = V.head allValues
             maxFreqEntries = 1000 -- cap frequency map to prevent memory issues with high-cardinality data
             -- Calculate min, max, sum, count and mode frequency in single pass (capped freq map)
-            (!minV, !maxV, !sumV, !cnt, !freq) = V.foldl' (\(!mn, !mx, !s, !c, !f) x ->
-              let f' = if M.size f < maxFreqEntries || M.member x f then M.insertWith (+) x 1 f else f
-               in (min mn x, max mx x, s + x, c + 1, f')) (h, h, h, 1, M.singleton h 1) (V.tail allValues)
+            (!minV, !maxV, !sumV, !cnt, !freq) =
+              V.foldl'
+                ( \(!mn, !mx, !s, !c, !f) x ->
+                    let f' = if M.size f < maxFreqEntries || M.member x f then M.insertWith (+) x 1 f else f
+                     in (min mn x, max mx x, s + x, c + 1, f')
+                )
+                (h, h, h, 1, M.singleton h 1)
+                (V.tail allValues)
             maxGroupSum = if V.null rowSums then 0 else V.maximum rowSums
             mode = fst $ M.foldlWithKey' (\acc@(_, cnt') k c -> if c > cnt' then (k, c) else acc) (h, 0) freq
          in MetricsStats minV maxV sumV cnt (sumV / fromIntegral cnt) mode maxGroupSum
