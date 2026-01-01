@@ -452,10 +452,14 @@ runSqlQuery config query limit = do
       bypassPatterns = ["union", "except", "intersect"]
       -- Check if any dangerous word appears as a SQL keyword (surrounded by spaces/start/end)
       containsKeyword kw =
-        kw `T.isPrefixOf` lowerQuery
-          || (" " <> kw) `T.isInfixOf` lowerQuery
-          || ("\n" <> kw) `T.isInfixOf` lowerQuery
-          || ("\t" <> kw) `T.isInfixOf` lowerQuery
+        kw
+          `T.isPrefixOf` lowerQuery
+          || (" " <> kw)
+          `T.isInfixOf` lowerQuery
+          || ("\n" <> kw)
+          `T.isInfixOf` lowerQuery
+          || ("\t" <> kw)
+          `T.isInfixOf` lowerQuery
       hasDangerousOp = any containsKeyword dangerousOps
       hasBypassPattern = any containsKeyword bypassPatterns
   if hasDangerousOp
