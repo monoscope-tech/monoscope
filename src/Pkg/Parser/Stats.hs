@@ -271,9 +271,10 @@ pStrcat = do
   pure $ Strcat args Nothing
   where
     pStrcatArg :: Parser (Either Subject Text)
-    pStrcatArg = (Right . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"')))
-             <|> (Right . toText <$> (char '\'' *> manyTill L.charLiteral (char '\'')))
-             <|> (Left <$> pSubject)
+    pStrcatArg =
+      (Right . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"')))
+        <|> (Right . toText <$> (char '\'' *> manyTill L.charLiteral (char '\'')))
+        <|> (Left <$> pSubject)
 
 
 -- | Parse iff(condition, then_value, else_value) - conditional expression
