@@ -84,7 +84,7 @@ rewriteBinAutoToFixed interval = map \case
 -- | Parse bin interval text to seconds (e.g., "5 minutes" -> 300, "1 hour" -> 3600)
 parseBinIntervalToSeconds :: Text -> Int
 parseBinIntervalToSeconds txt =
-  let parts = T.words txt
+  let parts = words txt
       firstPart = fromMaybe "" $ viaNonEmpty head parts
       restPart = fromMaybe "" $ viaNonEmpty head (drop 1 parts)
       num = fromMaybe 1 $ readMaybe $ toString $ T.takeWhile isDigit firstPart
@@ -252,7 +252,7 @@ recalculateStats rows =
                     let f' = if M.size f < maxFreqEntries || M.member x f then M.insertWith (+) x 1 f else f
                      in (min mn x, max mx x, s + x, c + 1, f')
                 )
-                (h, h, h, 1, M.singleton h 1)
+                (h, h, h, 1, one (h, 1))
                 (V.tail allValues)
             maxGroupSum = if V.null rowSums then 0 else V.maximum rowSums
             mode = fst $ M.foldlWithKey' (\acc@(_, cnt') k c -> if c > cnt' then (k, c) else acc) (h, 0) freq
