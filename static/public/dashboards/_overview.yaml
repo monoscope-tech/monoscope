@@ -272,26 +272,9 @@ tabs:
         title: 'Request Latency Percentiles'
         hide_subtitle: true
         summarize_by: max
-        sql: |
-          SELECT timeB, quantile, value
-          FROM (
-            SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS timeB,
-                   ARRAY[
-                     COALESCE(approx_percentile(0.50, percentile_agg(duration))::float, 0)::float,
-                     COALESCE(approx_percentile(0.75, percentile_agg(duration))::float, 0)::float,
-                     COALESCE(approx_percentile(0.90, percentile_agg(duration))::float, 0)::float,
-                     COALESCE(approx_percentile(0.95, percentile_agg(duration))::float, 0)::float,
-                     COALESCE(approx_percentile(0.99, percentile_agg(duration))::float, 0)::float
-                   ] AS values,
-                   ARRAY['p50', 'p75', 'p90', 'p95', 'p99'] AS quantiles
-            FROM otel_logs_and_spans
-            WHERE project_id='{{project_id}}'
-              AND (kind = 'server' OR name = 'apitoolkit-http-span' OR name = 'monoscope.http')
-              AND duration IS NOT NULL
-              {{time_filter}}
-            GROUP BY timeB
-          ) s,
-          LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
+        query: |
+          (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http") and duration != null
+          | summarize percentiles(duration, 50, 75, 90, 95, 99) by bin_auto(timestamp)
         unit: ns
         layout: { w: 6, h: 4 }
 
@@ -420,27 +403,9 @@ tabs:
         title: 'Service Latency Percentiles'
         hide_subtitle: true
         summarize_by: max
-        sql: |
-          SELECT timeB, quantile, value
-          FROM (
-            SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS timeB,
-                   ARRAY[
-                     COALESCE(approx_percentile(0.50, percentile_agg(duration))::float, 0)::float,
-                     COALESCE(approx_percentile(0.75, percentile_agg(duration))::float, 0)::float,
-                     COALESCE(approx_percentile(0.90, percentile_agg(duration))::float, 0)::float,
-                     COALESCE(approx_percentile(0.95, percentile_agg(duration))::float, 0)::float,
-                     COALESCE(approx_percentile(0.99, percentile_agg(duration))::float, 0)::float
-                   ] AS values,
-                   ARRAY['p50', 'p75', 'p90', 'p95', 'p99'] AS quantiles
-            FROM otel_logs_and_spans
-            WHERE project_id='{{project_id}}'
-              AND resource___service___name = '{{var-service}}'
-              AND kind = 'server'
-              AND duration IS NOT NULL
-              {{time_filter}}
-            GROUP BY timeB
-          ) s,
-          LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
+        query: |
+          resource___service___name == "{{var-service}}" and kind == "server" and duration != null
+          | summarize percentiles(duration, 50, 75, 90, 95, 99) by bin_auto(timestamp)
         unit: ns
         layout: { w: 6, h: 4 }
 

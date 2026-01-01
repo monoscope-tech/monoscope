@@ -25,14 +25,19 @@ module Pkg.Parser.Stats (
   -- KQL function parsers (Microsoft KQL compatible)
   pCountIf,
   pDCount,
+  pCount,
   pCoalesce,
   pStrcat,
   pIff,
   pCase,
   pScalarExpr,
+  -- Parser helpers
   pSimpleAgg,
   pVariadicAgg,
   comma,
+  commaSep,
+  commaSep1,
+  withoutAlias,
 ) where
 
 import Data.Aeson qualified as AE
@@ -60,6 +65,17 @@ defaultBinSize = "5 minutes"
 -- | Comma separator with trailing space - common parser pattern
 comma :: Parser ()
 comma = void $ string "," *> space
+
+
+-- | Comma-separated list parsers for cleaner code
+commaSep, commaSep1 :: Parser a -> Parser [a]
+commaSep = (`sepBy` comma)
+commaSep1 = (`sepBy1` comma)
+
+
+-- | Helper to avoid repeating <*> pure Nothing for alias-less aggregations
+withoutAlias :: Parser (Maybe Text -> a) -> Parser a
+withoutAlias p = p <*> pure Nothing
 
 
 -- | Simple arithmetic expression for percentile functions
@@ -198,14 +214,10 @@ pSubjectExpr = do
 -- >>> parse pPercentileSingle "" "percentile(duration / 1e6, 95)"
 -- Right (Percentile (SubjectExpr (Subject "duration" "duration" []) (Just ("/",1000000.0))) 95.0 Nothing)
 pPercentileSingle :: Parser AggFunction
-pPercentileSingle = do
-  _ <- string "percentile("
-  subj <- pSubjectExpr
-  _ <- string ","
-  space
-  pct <- pNumericValue
-  _ <- string ")"
-  pure $ Percentile subj pct Nothing
+pPercentileSingle = withoutAlias $
+  Percentile
+    <$> (string "percentile(" *> pSubjectExpr)
+    <*> (comma *> pNumericValue <* string ")")
 
 
 -- | Parse percentiles(expr, p1, p2, ...) - multiple percentiles (Microsoft KQL syntax)
@@ -214,13 +226,10 @@ pPercentileSingle = do
 -- >>> parse pPercentilesMulti "" "percentiles(duration / 1e6, 50, 75, 90, 95)"
 -- Right (Percentiles (SubjectExpr (Subject "duration" "duration" []) (Just ("/",1000000.0))) [50.0,75.0,90.0,95.0] Nothing)
 pPercentilesMulti :: Parser AggFunction
-pPercentilesMulti = do
-  _ <- string "percentiles("
-  subj <- pSubjectExpr
-  comma
-  pcts <- pNumericValue `sepBy1` comma
-  _ <- string ")"
-  pure $ Percentiles subj pcts Nothing
+pPercentilesMulti = withoutAlias $
+  Percentiles
+    <$> (string "percentiles(" *> pSubjectExpr <* comma)
+    <*> (commaSep1 pNumericValue <* string ")")
 
 
 -- | Parse countif(predicate) - count with a filter condition
@@ -228,7 +237,7 @@ pPercentilesMulti = do
 -- >>> parse pCountIf "" "countif(status_code == \"ERROR\")"
 -- Right (CountIf (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) Nothing)
 pCountIf :: Parser AggFunction
-pCountIf = CountIf <$> (string "countif(" *> pExpr <* string ")") <*> pure Nothing
+pCountIf = withoutAlias $ CountIf <$> (string "countif(" *> pExpr <* string ")")
 
 
 -- | Parse dcount(expr [, accuracy]) - distinct count with optional accuracy
@@ -238,26 +247,24 @@ pCountIf = CountIf <$> (string "countif(" *> pExpr <* string ")") <*> pure Nothi
 -- >>> parse pDCount "" "dcount(user_id, 2)"
 -- Right (DCount (Subject "user_id" "user_id" []) (Just 2) Nothing)
 pDCount :: Parser AggFunction
-pDCount =
+pDCount = withoutAlias $
   DCount
     <$> (string "dcount(" *> pSubject)
     <*> optional (comma *> L.decimal)
-    <* string ")"
-    <*> pure Nothing
+    <*  string ")"
 
 
 -- | Parse a scalar expression (field reference or literal value)
 -- Used by iff, case, coalesce, strcat for flexible value parsing
+-- Note: Uses toQText instead of display to preserve KQL field notation
 pScalarExpr :: Parser Values
-pScalarExpr = pValues <|> (Str . display <$> pSubject)
+pScalarExpr = pValues <|> (Str . toQText <$> pSubject)
 
 
 -- | Helper for variadic scalar functions like coalesce/strcat
 pVariadicAgg :: Text -> ([Values] -> Maybe Text -> AggFunction) -> Parser AggFunction
-pVariadicAgg name ctor =
-  ctor
-    <$> (string (name <> "(") *> pScalarExpr `sepBy1` comma <* string ")")
-    <*> pure Nothing
+pVariadicAgg name ctor = withoutAlias $
+  ctor <$> (string (name <> "(") *> commaSep1 pScalarExpr <* string ")")
 
 
 -- | Parse coalesce(expr1, expr2, ...) - return first non-null (variadic, 2-64 args)
@@ -281,12 +288,11 @@ pStrcat = pVariadicAgg "strcat" Strcat
 -- >>> parse pIff "" "iff(status_code == \"ERROR\", \"error\", \"ok\")"
 -- Right (Iff (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) (Str "error") (Str "ok") Nothing)
 pIff :: Parser AggFunction
-pIff =
+pIff = withoutAlias $
   Iff
     <$> (string "iff(" *> pExpr)
     <*> (comma *> pScalarExpr)
     <*> (comma *> pScalarExpr <* string ")")
-    <*> pure Nothing
 
 
 -- | Parse case(pred1, val1, [pred2, val2, ...] else) - multi-branch conditional
@@ -294,16 +300,21 @@ pIff =
 -- >>> parse pCase "" "case(status >= 500, \"5xx\", status >= 400, \"4xx\", \"ok\")"
 -- Right (Case [(GTEq (Subject "status" "status" []) (Num "500"),Str "5xx"),(GTEq (Subject "status" "status" []) (Num "400"),Str "4xx")] (Str "ok") Nothing)
 pCase :: Parser AggFunction
-pCase = do
-  _ <- string "case("
-  pairs <- many $ try $ (,) <$> pExpr <*> (comma *> pScalarExpr <* comma)
-  defaultVal <- pScalarExpr <* string ")"
-  pure $ Case pairs defaultVal Nothing
+pCase = withoutAlias $
+  Case
+    <$> (string "case(" *> many (try $ (,) <$> pExpr <*> (comma *> pScalarExpr <* comma)))
+    <*> (pScalarExpr <* string ")")
 
 
 -- | Helper for simple function(subject) parsers
 pSimpleAgg :: Text -> (Subject -> Maybe Text -> AggFunction) -> Parser AggFunction
-pSimpleAgg name ctor = ctor <$> (string (name <> "(") *> pSubject <* string ")") <*> pure Nothing
+pSimpleAgg name ctor = withoutAlias $ ctor <$> (string (name <> "(") *> pSubject <* string ")")
+
+
+-- | Parse count() or count(field) - handles both empty parens and field reference
+pCount :: Parser AggFunction
+pCount = withoutAlias $
+  Count <$> (string "count(" *> ((pSubject <* string ")") <|> (Subject "*" "*" [] <$ string ")")))
 
 
 aggFunctionParser :: Parser AggFunction
@@ -320,7 +331,7 @@ aggFunctionParser =
     , pSimpleAgg "p100" P100
     , try pCountIf -- countif must come before count
     , try pDCount -- dcount must come before count (starts with 'd', but try for safety)
-    , try $ Count <$> (string "count(" *> (pSubject <|> (string ")" $> Subject "*" "*" [])) <* optional (string ")")) <*> pure Nothing
+    , try pCount
     , try pCoalesce
     , try pStrcat
     , try pIff
@@ -331,7 +342,7 @@ aggFunctionParser =
     , pSimpleAgg "median" Median
     , pSimpleAgg "stdev" Stdev
     , pSimpleAgg "range" Range
-    , Plain <$> pSubject <*> pure Nothing
+    , withoutAlias $ Plain <$> pSubject
     ]
 
 
@@ -379,11 +390,10 @@ instance Display AggFunction where
     displayBuilder $ "CASE WHEN " <> display cond <> " THEN " <> display thenVal <> " ELSE " <> display elseVal <> " END"
   -- case(pred1, val1, ..., else) -> CASE WHEN pred1 THEN val1 ... ELSE else END
   displayPrec _prec (Case pairs defaultVal _alias) =
-    displayBuilder $ "CASE " <> T.concat (map displayCasePair pairs) <> "ELSE " <> display defaultVal <> " END"
+    displayBuilder $ "CASE " <> foldMap displayCaseWhen pairs <> "ELSE " <> display defaultVal <> " END"
     where
-      displayCasePair :: (Expr, Values) -> Text
-      displayCasePair (cond, val) = "WHEN " <> display cond <> " THEN " <> display val <> " "
-  displayPrec _prec (Plain sub _alias) = displayBuilder $ "" <> display sub <> ""
+      displayCaseWhen (cond, val) = "WHEN " <> display cond <> " THEN " <> display val <> " "
+  displayPrec _prec (Plain sub _alias) = displayBuilder $ display sub
 
 
 instance ToQueryText Section where
@@ -475,8 +485,7 @@ pSummarizeByClause :: Parser SummarizeByClause
 pSummarizeByClause = do
   _ <- string "by"
   space
-  fields <- sepBy (try (Right <$> pBinFunction) <|> (Left <$> pSubject)) comma
-  return $ SummarizeByClause fields
+  SummarizeByClause <$> commaSep (try (Right <$> pBinFunction) <|> (Left <$> pSubject))
 
 
 instance ToQueryText SummarizeByClause where
