@@ -471,7 +471,9 @@ executeSecuredQuery pid userQuery limit = do
   let wrappedQuery =
         "WITH otel_logs_and_spans AS ( \
         \  SELECT * FROM otel_logs_and_spans WHERE project_id = ? \
-        \) " <> userQuery <> " LIMIT ?"
+        \) "
+          <> userQuery
+          <> " LIMIT ?"
   resultE <- try @SomeException $ do
     results :: [[FieldValue]] <- PG.query (Query $ encodeUtf8 wrappedQuery) (pid, limit)
     pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
