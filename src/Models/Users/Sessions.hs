@@ -201,5 +201,5 @@ sessionAndProject pid = do
       | pid == UUIDId UUID.nil || sess.user.isSudo ->
           Projects.projectById pid >>= \case
             Just p -> pure (sess, p)
-            Nothing -> throwError $ err302{errHeaders = [("Location", "/p/?missingProjectPermission")]}
-    _ -> throwError $ err302{errHeaders = [("Location", "/p/?missingProjectPermission")]}
+            Nothing -> throwError $ err302{errHeaders = [("Location", "/?missingProjectPermission")]}
+    _ -> throwError $ err302{errHeaders = [("Location", "/?missingProjectPermission")]}
