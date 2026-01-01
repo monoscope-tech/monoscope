@@ -83,24 +83,17 @@ rewriteBinAutoToFixed interval = map \case
 
 -- | Parse bin interval text to seconds (e.g., "5 minutes" -> 300, "1 hour" -> 3600)
 parseBinIntervalToSeconds :: Text -> Int
-parseBinIntervalToSeconds txt =
-  let parts = words txt
-      firstPart = fromMaybe "" $ viaNonEmpty head parts
-      restPart = fromMaybe "" $ viaNonEmpty head (drop 1 parts)
-      num = fromMaybe 1 $ readMaybe $ toString $ T.takeWhile isDigit firstPart
-      unitPart = if T.null restPart then firstPart else restPart
-      unit = T.toLower $ T.dropWhile isDigit unitPart
-      multiplier
-        | "second" `T.isPrefixOf` unit = 1
-        | "minute" `T.isPrefixOf` unit = 60
-        | "hour" `T.isPrefixOf` unit = 3600
-        | "day" `T.isPrefixOf` unit = 86400
-        | unit == "s" = 1
-        | unit == "m" = 60
-        | unit == "h" = 3600
-        | unit == "d" = 86400
-        | otherwise = 60 -- default to minutes
-   in num * multiplier
+parseBinIntervalToSeconds txt = num * unitToSeconds (T.toLower $ T.dropWhile isDigit unitPart)
+  where
+    (firstPart, restPart) = (fromMaybe "" $ viaNonEmpty head $ words txt, fromMaybe "" $ viaNonEmpty head $ drop 1 $ words txt)
+    num = fromMaybe 1 $ readMaybe $ toString $ T.takeWhile isDigit firstPart
+    unitPart = if T.null restPart then firstPart else restPart
+    unitToSeconds u
+      | any (`T.isPrefixOf` u) ["second", "s"] = 1
+      | any (`T.isPrefixOf` u) ["minute", "m"] = 60
+      | any (`T.isPrefixOf` u) ["hour", "h"] = 3600
+      | any (`T.isPrefixOf` u) ["day", "d"] = 86400
+      | otherwise = 60
 
 
 -- | Calculate sliding window size in seconds based on bin interval
@@ -139,6 +132,11 @@ toPosix :: UTCTime -> Int
 toPosix = floor . utcTimeToPOSIXSeconds
 
 
+-- | Extract timestamp from first column of a row
+rowTimestamp :: V.Vector (Maybe Double) -> Maybe Double
+rowTimestamp = join . V.headM
+
+
 -- | Look up cache entry and determine cache result
 lookupCache :: DB es => CacheKey -> (UTCTime, UTCTime) -> Eff es CacheResult
 lookupCache key (reqFrom, reqTo) =
@@ -155,12 +153,11 @@ lookupCache key (reqFrom, reqTo) =
       [] -> CacheMiss
       ((pid, src, qh, bi, oq, cf, ct, AesonText cd, hc) : _) ->
         let entry = CacheEntry pid src qh bi oq cf ct cd hc
-         in case () of
-              _
-                | reqFrom >= cf && reqTo <= ct -> CacheHit entry
-                | reqFrom >= cf && reqTo > ct -> PartialHit entry
-                | reqFrom < cf -> CacheBypassed "Request extends before cached range"
-                | otherwise -> CacheMiss
+         in if
+              | reqFrom >= cf && reqTo <= ct -> CacheHit entry
+              | reqFrom >= cf && reqTo > ct -> PartialHit entry
+              | reqFrom < cf -> CacheBypassed "Request extends before cached range"
+              | otherwise -> CacheMiss
 
 
 -- | Update or insert cache entry (replaces time range and data on conflict)
@@ -225,9 +222,7 @@ dedupeByTimestamp rows
   | V.null rows = V.empty
   | otherwise =
       let n = V.length rows
-          getTs = join . V.headM
-          -- Keep row if it's the last one OR next row has different timestamp
-          shouldKeep i = i == n - 1 || getTs (rows V.! i) /= getTs (rows V.! (i + 1))
+          shouldKeep i = i == n - 1 || rowTimestamp (rows V.! i) /= rowTimestamp (rows V.! (i + 1))
        in V.ifilter (\i _ -> shouldKeep i) rows
 
 
@@ -262,7 +257,7 @@ recalculateStats rows =
 -- | Filter dataset rows by timestamp predicate and recalculate stats
 filterByTimestamp :: (Int -> Bool) -> MetricsData -> MetricsData
 filterByTimestamp p metrics =
-  let filtered = V.filter (\row -> maybe False (p . floor) (join $ V.headM row)) metrics.dataset
+  let filtered = V.filter (maybe False (p . floor) . rowTimestamp) metrics.dataset
    in metrics{dataset = filtered, rowsCount = fromIntegral $ V.length filtered, stats = Just $ recalculateStats filtered}
 
 
