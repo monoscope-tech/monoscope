@@ -35,8 +35,6 @@ module Pkg.Parser.Stats (
   pSimpleAgg,
   pVariadicAgg,
   comma,
-  commaSep,
-  commaSep1,
   withoutAlias,
 ) where
 
@@ -65,12 +63,6 @@ defaultBinSize = "5 minutes"
 -- | Comma separator with trailing space - common parser pattern
 comma :: Parser ()
 comma = void $ string "," *> space
-
-
--- | Comma-separated list parsers for cleaner code
-commaSep, commaSep1 :: Parser a -> Parser [a]
-commaSep = (`sepBy` comma)
-commaSep1 = (`sepBy1` comma)
 
 
 -- | Helper to avoid repeating <*> pure Nothing for alias-less aggregations
@@ -231,7 +223,7 @@ pPercentilesMulti =
   withoutAlias
     $ Percentiles
     <$> (string "percentiles(" *> pSubjectExpr <* comma)
-    <*> (commaSep1 pNumericValue <* string ")")
+    <*> (pNumericValue `sepBy1` comma <* string ")")
 
 
 -- | Parse countif(predicate) - count with a filter condition
@@ -248,13 +240,20 @@ pCountIf = withoutAlias $ CountIf <$> (string "countif(" *> pExpr <* string ")")
 -- Right (DCount (Subject "user_id" "user_id" []) Nothing Nothing)
 -- >>> parse pDCount "" "dcount(user_id, 2)"
 -- Right (DCount (Subject "user_id" "user_id" []) (Just 2) Nothing)
+-- >>> parse pDCount "" "dcount(user_id, 5)"
+-- Left ...
 pDCount :: Parser AggFunction
-pDCount =
-  withoutAlias
-    $ DCount
-    <$> (string "dcount(" *> pSubject)
-    <*> optional (comma *> L.decimal)
-    <* string ")"
+pDCount = withoutAlias $ do
+  _ <- string "dcount("
+  sub <- pSubject
+  accM <- optional $ do
+    _ <- comma
+    acc <- L.decimal :: Parser Int
+    if acc >= 0 && acc <= 4
+      then pure acc
+      else fail "dcount accuracy must be 0-4 per KQL spec"
+  _ <- string ")"
+  pure $ DCount sub accM
 
 
 -- | Parse a scalar expression (field reference or literal value)
@@ -269,7 +268,7 @@ pVariadicAgg :: Text -> ([Values] -> Maybe Text -> AggFunction) -> Parser AggFun
 pVariadicAgg name ctor =
   withoutAlias
     $ ctor
-    <$> (string (name <> "(") *> commaSep1 pScalarExpr <* string ")")
+    <$> (string (name <> "(") *> pScalarExpr `sepBy1` comma <* string ")")
 
 
 -- | Parse coalesce(expr1, expr2, ...) - return first non-null (variadic, 2-64 args)
@@ -339,7 +338,7 @@ aggFunctionParser =
     , pSimpleAgg "p99" P99
     , pSimpleAgg "p100" P100
     , try pCountIf -- countif must come before count
-    , try pDCount -- dcount must come before count (starts with 'd', but try for safety)
+    , pDCount -- dcount commits after matching "dcount(" to enforce accuracy validation (0-4)
     , try pCount
     , try pCoalesce
     , try pStrcat
@@ -367,7 +366,9 @@ instance Display AggFunction where
   displayPrec _prec (Count sub _alias) = displayBuilder $ "count(" <> display sub <> ")"
   -- countif(predicate) -> COUNT(*) FILTER (WHERE predicate)
   displayPrec _prec (CountIf cond _alias) = displayBuilder $ "COUNT(*) FILTER (WHERE " <> display cond <> ")"
-  -- dcount(field [, accuracy]) -> COUNT(DISTINCT field) (accuracy is ignored in SQL, used for HLL estimation)
+  -- dcount(field [, accuracy]) -> COUNT(DISTINCT field)
+  -- Note: KQL accuracy parameter (0-4 for HyperLogLog precision) is intentionally ignored
+  -- because PostgreSQL's COUNT(DISTINCT) doesn't support HLL accuracy hints
   displayPrec _prec (DCount sub _acc _alias) = displayBuilder $ "COUNT(DISTINCT " <> display sub <> ")"
   displayPrec _prec (P50 sub _alias) = displayBuilder $ "approx_percentile(0.50, percentile_agg((" <> display sub <> ")::float))::int"
   displayPrec _prec (P75 sub _alias) = displayBuilder $ "approx_percentile(0.75, percentile_agg((" <> display sub <> ")::float))::int"
@@ -494,7 +495,7 @@ pSummarizeByClause :: Parser SummarizeByClause
 pSummarizeByClause = do
   _ <- string "by"
   space
-  SummarizeByClause <$> commaSep (try (Right <$> pBinFunction) <|> (Left <$> pSubject))
+  SummarizeByClause <$> (try (Right <$> pBinFunction) <|> (Left <$> pSubject)) `sepBy` comma
 
 
 instance ToQueryText SummarizeByClause where
@@ -684,7 +685,7 @@ instance ToQueryText [Section] where
 extractPercentilesInfo :: [Section] -> Maybe (Text, [Double])
 extractPercentilesInfo = foldr go Nothing
   where
-    go (SummarizeCommand aggs _) acc = maybe acc Just (findPercentiles aggs)
+    go (SummarizeCommand (findPercentiles -> Just info) _) _ = Just info
     go _ acc = acc
     findPercentiles [] = Nothing
     findPercentiles (Percentile subExpr pct _ : _) = Just (subjectExprToSQL subExpr, [pct])

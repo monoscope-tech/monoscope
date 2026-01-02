@@ -290,3 +290,35 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       let result = parseQueryToAST "kind == \"server\" | summarize countif(status_code == \"ERROR\") by resource.service.name"
       isRight result `shouldBe` True
 
+  describe "edge cases and validation" do
+    it "rejects dcount with accuracy > 4" do
+      let result = parseQueryToAST "| summarize dcount(user_id, 5) by bin_auto(timestamp)"
+      isLeft result `shouldBe` True
+
+    it "accepts dcount with accuracy 0-4" do
+      let result0 = parseQueryToAST "| summarize dcount(user_id, 0) by bin_auto(timestamp)"
+      let result4 = parseQueryToAST "| summarize dcount(user_id, 4) by bin_auto(timestamp)"
+      isRight result0 `shouldBe` True
+      isRight result4 `shouldBe` True
+
+    it "parses coalesce with multiple arguments" do
+      let result = parseQueryToAST "| summarize coalesce(field1, field2, field3, \"default\") by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "parses strcat with multiple arguments" do
+      let result = parseQueryToAST "| summarize strcat(service, \":\", operation, \"@\", host, \"/\", endpoint) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "parses nested function calls" do
+      -- Test iff with strcat in then clause
+      let result = parseQueryToAST "| summarize iff(status >= 500, \"error\", \"ok\") by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "parses dotted field paths in scalar contexts" do
+      let result = parseQueryToAST "| summarize dcount(resource.service.name) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "parses complex case with multiple branches" do
+      let result = parseQueryToAST "| summarize case(status >= 500, \"5xx\", status >= 400, \"4xx\", status >= 300, \"3xx\", \"ok\") by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
