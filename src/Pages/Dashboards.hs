@@ -192,8 +192,8 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             , hxTarget_ "#dashboard-tabs-content"
             , hxSwap_ "innerHTML"
             , hxPushUrl_ $ tabUrl <> queryStr
-            -- Update active tab styling via htmx hyperscript
-            , term "_" "on htmx:afterOnLoad remove .tab-active from .tab in #dashboard-tabs-container then add .tab-active to me"
+            , -- Update active tab styling via htmx hyperscript
+              term "_" "on htmx:afterOnLoad remove .tab-active from .tab in #dashboard-tabs-container then add .tab-active to me"
             ]
             do
               whenJust tab.icon \icon -> faSprite_ icon "regular" "w-4 h-4"
