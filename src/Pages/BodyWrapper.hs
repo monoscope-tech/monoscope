@@ -54,6 +54,7 @@ data BWConfig = BWConfig
   , currProject :: Maybe Projects.Project
   , prePageTitle :: Maybe Text
   , pageTitle :: Text
+  , pageTitleSuffix :: Maybe Text -- Additional breadcrumb after pageTitle (e.g., tab name)
   , pageTitleModalId :: Maybe Text --
   , menuItem :: Maybe Text -- Use PageTitle if menuItem is not set
   , navTabs :: Maybe (Html ())
@@ -350,7 +351,7 @@ bodyWrapper bcfg child = do
                   when
                     (currUser.email == "hello@apitoolkit.io")
                     loginBanner
-                  unless (bcfg.isSettingsPage || bcfg.hideNavbar) $ navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
+                  unless (bcfg.isSettingsPage || bcfg.hideNavbar) $ navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
                   section_ [class_ "overflow-y-auto h-full grow"] do
                     when bcfg.freeTierExceeded $ whenJust bcfg.currProject (\p -> freeTierLimitExceededBanner p.id.toText)
                     if bcfg.isSettingsPage
@@ -618,8 +619,8 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
 
 -- mapM_ renderNavBottomItem $ navBottomList project.id.toText
 
-navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
-navbar projectM menuL currUser prePageTitle pageTitle pageTitleMonadId docsLink tabsM pageActionsM =
+navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
+navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleMonadId docsLink tabsM pageActionsM =
   nav_ [id_ "main-navbar", class_ "w-full px-4 py-2 flex flex-row border-strokeWeak items-center"] do
     div_ [class_ "flex-1 flex items-center text-textStrong gap-1"] do
       whenJust prePageTitle \pt -> whenJust (find (\a -> fst3 a == pt) menuL) \(_, _, icon) -> do
@@ -628,6 +629,10 @@ navbar projectM menuL currUser prePageTitle pageTitle pageTitleMonadId docsLink 
           toHtml pt
         faSprite_ "chevron-right" "regular" "w-3 h-3"
       label_ [class_ "font-normal text-xl p-1 rounded-md cursor-pointer hover:bg-fillWeak leading-none", Lucid.for_ $ maybeToMonoid pageTitleMonadId, id_ "pageTitleText"] $ toHtml pageTitle
+      -- Show tab/suffix in breadcrumbs if present (with ID for htmx out-of-band updates)
+      span_ [id_ "pageTitleSuffix", class_ "flex items-center gap-1"] $ whenJust pageTitleSuffix \suffix -> do
+        faSprite_ "chevron-right" "regular" "w-3 h-3"
+        span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak"] $ toHtml suffix
       whenJust docsLink \link -> a_ [class_ "text-iconBrand -mt-1", href_ link, term "data-tippy-placement" "right", term "data-tippy-content" "Open Documentation"] $ faSprite_ "circle-question" "regular" "w-4 h-4"
     whenJust tabsM id
     div_ [class_ "flex-1 flex items-center justify-end text-sm"] $ whenJust pageActionsM id

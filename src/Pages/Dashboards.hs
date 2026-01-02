@@ -50,7 +50,7 @@ import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
-import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxPatch_, hxPost_, hxPushUrl_, hxPut_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxPatch_, hxPost_, hxPushUrl_, hxPut_, hxSelect_, hxSwap_, hxSwapOob_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards qualified as Dashboards
@@ -1507,9 +1507,9 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
   (dashVM, dash) <- getDashAndVM dashId fileM
 
   -- Find the active tab by slug
-  let activeTabIdx = case dash.tabs of
-        Just tabs -> maybe 0 fst (findTabBySlug tabs tabSlug)
-        Nothing -> 0
+  let activeTabInfo = dash.tabs >>= (`findTabBySlug` tabSlug)
+      activeTabIdx = maybe 0 fst activeTabInfo
+      activeTabName = fmap ((.name) . snd) activeTabInfo
 
   -- Process constants first
   processedConstants <- traverse (processConstant pid now (sinceStr, fromDStr, toDStr) allParams) (fromMaybe [] dash.constants)
@@ -1547,6 +1547,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
           , currProject = Just project
           , prePageTitle = Just "Dashboards"
           , pageTitle = dashTitle dashVM.title
+          , pageTitleSuffix = activeTabName -- Show current tab in breadcrumbs
           , pageTitleModalId = Just "pageTitleModalId"
           , config = appCtx.config
           , freeTierExceeded = freeTierExceeded
@@ -1615,6 +1616,11 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
 -- | Render a single tab content panel
 tabContentPanel_ :: Projects.ProjectId -> Text -> Int -> Text -> [Widget.Widget] -> Bool -> Html ()
 tabContentPanel_ pid dashboardId idx tabName widgets isActive = do
+  -- Out-of-band swap for updating breadcrumb with current tab name
+  span_ [id_ "pageTitleSuffix", class_ "flex items-center gap-1", hxSwapOob_ "true"] do
+    faSprite_ "chevron-right" "regular" "w-3 h-3"
+    span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak"] $ toHtml tabName
+  -- Tab content panel
   div_
     [ class_ $ "tab-panel grid-stack -m-2" <> if isActive then "" else " hidden"
     , data_ "tab-index" (show idx)
