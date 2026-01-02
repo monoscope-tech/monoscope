@@ -35,7 +35,6 @@ import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
-import Data.Generics.Product.Fields (HasField')
 import Data.List qualified as L (isSuffixOf, lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -225,24 +224,14 @@ readDashboardEndpoint uri = do
       pure
 
 
--- | Replace placeholders in sql/query fields with standard variable presets.
--- Works with both Variable and Constant types.
-replaceVariableFields
-  :: (HasField' "query" a (Maybe Text), HasField' "sql" a (Maybe Text))
-  => Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> a -> a
-replaceVariableFields pid mf mt allParams currentTime obj =
-  let mappng = DashboardUtils.variablePresets pid.toText mf mt allParams currentTime
-   in obj
-        & #sql . _Just %~ DashboardUtils.replacePlaceholders mappng
-        & #query . _Just %~ DashboardUtils.replacePlaceholders mappng
-
-
 replaceQueryVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Variable -> Variable
-replaceQueryVariables = replaceVariableFields
+replaceQueryVariables pid mf mt allParams currentTime v = v & #sql . _Just %~ replace & #query . _Just %~ replace
+  where replace = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresets pid.toText mf mt allParams currentTime)
 
 
 replaceConstantVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Constant -> Constant
-replaceConstantVariables = replaceVariableFields
+replaceConstantVariables pid mf mt allParams currentTime c = c & #sql . _Just %~ replace & #query . _Just %~ replace
+  where replace = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresets pid.toText mf mt allParams currentTime)
 
 
 getDashboardById :: DB es => DashboardId -> Eff es (Maybe DashboardVM)
