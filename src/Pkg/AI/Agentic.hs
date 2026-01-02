@@ -3,11 +3,13 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module Pkg.AI.Agentic (
   -- * Types
   AgenticConfig (..),
   AgenticMode (..),
+  ToolLimits (..),
   Tool (..),
   ToolCall (..),
   ToolResult (..),
@@ -16,6 +18,7 @@ module Pkg.AI.Agentic (
   -- * Main functions
   runAgenticQuery,
   defaultAgenticConfig,
+  defaultLimits,
 
   -- * Mode selection
   suggestAgenticMode,
@@ -27,12 +30,13 @@ module Pkg.AI.Agentic (
 ) where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEK
 import Data.Aeson.Types qualified as AET
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
-import Effectful (Eff)
+import Effectful (Eff, (:>))
 import Effectful.Log (Log)
 import Effectful.Time qualified as Time
 import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
@@ -44,27 +48,27 @@ import Relude
 import System.Types (DB)
 
 
--- * Constants
+-- | Tool execution limits (grouped for easier configuration)
+data ToolLimits = ToolLimits
+  { maxFieldValues :: Int
+  , maxSampleLogs :: Int
+  , maxServices :: Int
+  , defaultFieldLimit :: Int
+  , defaultSampleLimit :: Int
+  , maxQueryResults :: Int
+  }
 
 
-maxFieldValues :: Int
-maxFieldValues = 20
-
-
-maxSampleLogs :: Int
-maxSampleLogs = 5
-
-
-maxServices :: Int
-maxServices = 20
-
-
-defaultFieldLimit :: Int
-defaultFieldLimit = 10
-
-
-defaultSampleLimit :: Int
-defaultSampleLimit = 3
+defaultLimits :: ToolLimits
+defaultLimits =
+  ToolLimits
+    { maxFieldValues = 20
+    , maxSampleLogs = 5
+    , maxServices = 20
+    , defaultFieldLimit = 10
+    , defaultSampleLimit = 3
+    , maxQueryResults = 100
+    }
 
 
 -- | Mode for LLM interaction
@@ -88,6 +92,8 @@ data AgenticConfig = AgenticConfig
   -- ^ Time range for queries
   , facetContext :: Maybe FacetSummary
   -- ^ Pre-computed facets to include as context (services, status codes, etc.)
+  , limits :: ToolLimits
+  -- ^ Tool execution limits
   }
 
 
@@ -100,6 +106,7 @@ defaultAgenticConfig pid =
     , projectId = pid
     , timeRange = (Nothing, Nothing)
     , facetContext = Nothing
+    , limits = defaultLimits
     }
 
 
@@ -119,35 +126,11 @@ data QueryContext
 
 
 -- | Determine whether to use agentic mode based on query and context
--- Returns FastMode for simple queries or latency-sensitive contexts
--- Returns AgenticMode when the query would benefit from data exploration
 suggestAgenticMode :: QueryContext -> Text -> AgenticMode
-suggestAgenticMode context userQuery =
-  let query = T.toLower $ T.strip userQuery
-
-      -- Patterns that suggest the query needs deeper exploration
-      -- (even with facets pre-included, these may need tool calls)
-      complexIndicators =
-        [ "compare"
-        , "correlation"
-        , "what changed"
-        , "why are there"
-        , "investigate"
-        , "analyze"
-        , "sample"
-        , "show me examples"
-        ]
-
-      -- Check if query explicitly needs exploration
-      needsExploration = any (`T.isInfixOf` query) complexIndicators
-   in case context of
-        -- All contexts prefer fast mode by default since we pre-include facets
-        -- Only use agentic mode for queries that explicitly need exploration
-        WebExplorer -> if needsExploration then AgenticMode else FastMode
-        SlackBot -> if needsExploration then AgenticMode else FastMode
-        DiscordBot -> if needsExploration then AgenticMode else FastMode
-        WhatsAppBot -> if needsExploration then AgenticMode else FastMode
-        DashboardWidget -> FastMode -- Always fast for widgets
+suggestAgenticMode DashboardWidget _ = FastMode
+suggestAgenticMode _ userQuery =
+  let complexIndicators = ["compare", "correlation", "changed", "investigate", "analyze", "sample", "examples"]
+   in if any (`T.isInfixOf` T.toLower userQuery) complexIndicators then AgenticMode else FastMode
 
 
 -- | Available tools the LLM can call
@@ -317,61 +300,42 @@ errorResult t msg = ToolResult{tool = t, result = msg, success = False}
 
 -- | Parse a required text argument from tool args
 getTextArg :: Text -> AE.Value -> Maybe Text
-getTextArg key = AET.parseMaybe (AE.withObject "args" (AE..: key))
+getTextArg key = AET.parseMaybe (AE.withObject "args" (AE..: AEK.fromText key))
 
 
 -- | Parse an optional int argument with default
 getIntArg :: Text -> Int -> AE.Value -> Int
-getIntArg key def args = fromMaybe def $ AET.parseMaybe (AE.withObject "args" (AE..: key)) args
+getIntArg key def args = fromMaybe def $ AET.parseMaybe (AE.withObject "args" (AE..: AEK.fromText key)) args
 
 
 -- | Parse query type argument (defaults to KQL)
 getQueryType :: AE.Value -> QueryType
-getQueryType args = fromMaybe KQL $ AET.parseMaybe parser args
-  where
-    parser = AE.withObject "args" $ \obj -> do
-      typeStr <- obj AE..: "type" :: AET.Parser Text
-      pure $ case T.toUpper typeStr of
-        "SQL" -> SQL
-        _ -> KQL
+getQueryType = fromMaybe KQL . AET.parseMaybe (AE.withObject "args" $ \obj -> do
+  typeStr <- obj AE..: "type" :: AET.Parser Text
+  pure $ if T.toUpper typeStr == "SQL" then SQL else KQL)
 
 
 -- | Helper to run a KQL query and format the result
 runKqlQuery
   :: (DB es, Log :> es, Time.Time :> es)
-  => AgenticConfig
-  -> Tool
-  -> Text
-  -> [Text]
+  => AgenticConfig -> Tool -> Text -> [Text]
   -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> Text)
   -> Eff es ToolResult
-runKqlQuery config t kqlQuery cols formatResult =
-  case parseQueryToAST kqlQuery of
-    Left parseErr -> pure $ errorResult t $ "Error parsing query: " <> parseErr
-    Right queryAST -> do
-      resultE <-
-        selectLogTable
-          config.projectId
-          queryAST
-          kqlQuery
-          Nothing
-          config.timeRange
-          cols
-          Nothing
-          Nothing
-      pure $ case resultE of
-        Left err -> errorResult t $ "Error executing query: " <> err
-        Right res -> successResult t (formatResult res)
+runKqlQuery config t kqlQuery cols formatResult = case parseQueryToAST kqlQuery of
+  Left _ -> pure $ errorResult t "Query parse failed"
+  Right queryAST -> do
+    resultE <- selectLogTable config.projectId queryAST kqlQuery Nothing config.timeRange cols Nothing Nothing
+    pure $ either (errorResult t . const "Query failed") (successResult t . formatResult) resultE
 
 
 -- | Execute GetFieldValues tool - get distinct values for a field using KQL
 executeGetFieldValues :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
 executeGetFieldValues config args =
   case getTextArg "field" args of
-    Nothing -> pure $ errorResult GetFieldValues "Error: 'field' argument is required"
+    Nothing -> pure $ errorResult GetFieldValues "Missing 'field' argument"
     Just field -> do
-      let limit = min maxFieldValues $ getIntArg "limit" defaultFieldLimit args
-          kqlQuery = "| summarize count() by " <> field <> " | sort by _count desc | take " <> show limit
+      let lim = min config.limits.maxFieldValues $ getIntArg "limit" config.limits.defaultFieldLimit args
+          kqlQuery = "| summarize count() by " <> field <> " | sort by _count desc | take " <> show lim
       runKqlQuery config GetFieldValues kqlQuery [] $ \(results, _, _) ->
         "Values for '" <> field <> "': " <> formatSummarizeResults field results
 
@@ -380,7 +344,7 @@ executeGetFieldValues config args =
 executeCountQuery :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
 executeCountQuery config args =
   case getTextArg "query" args of
-    Nothing -> pure $ errorResult CountQuery "Error: 'query' argument is required"
+    Nothing -> pure $ errorResult CountQuery "Missing 'query' argument"
     Just kqlQuery ->
       runKqlQuery config CountQuery kqlQuery [] $ \(_, _, count) ->
         "Query '" <> kqlQuery <> "' matches " <> show count <> " entries"
@@ -389,7 +353,7 @@ executeCountQuery config args =
 -- | Execute GetServices tool - get list of services in the project using KQL
 executeGetServices :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
 executeGetServices config _args =
-  let kqlQuery = "| summarize count() by resource.service.name | sort by _count desc | take " <> show maxServices
+  let kqlQuery = "| summarize count() by resource.service.name | sort by _count desc | take " <> show config.limits.maxServices
    in runKqlQuery config GetServices kqlQuery [] $ \(results, _, _) ->
         "Available services: " <> formatSummarizeResults "resource.service.name" results
 
@@ -398,13 +362,10 @@ executeGetServices config _args =
 executeSampleLogs :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
 executeSampleLogs config args =
   case getTextArg "query" args of
-    Nothing -> pure $ errorResult SampleLogs "Error: 'query' argument is required"
+    Nothing -> pure $ errorResult SampleLogs "Missing 'query' argument"
     Just kqlQuery -> do
-      let limit = min maxSampleLogs $ getIntArg "limit" defaultSampleLimit args
-          fullQuery =
-            if "| take" `T.isInfixOf` kqlQuery
-              then kqlQuery
-              else kqlQuery <> " | take " <> show limit
+      let lim = min config.limits.maxSampleLogs $ getIntArg "limit" config.limits.defaultSampleLimit args
+          fullQuery = if "| take" `T.isInfixOf` kqlQuery then kqlQuery else kqlQuery <> " | take " <> show lim
           sampleColumns = ["level", "name", "resource.service.name", "body"]
       runKqlQuery config SampleLogs fullQuery sampleColumns $ \(results, _, _) ->
         "Sample logs matching '" <> kqlQuery <> "':\n" <> formatSampleLogs results
@@ -422,97 +383,55 @@ executeGetFacets config _args =
 executeRunQuery :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
 executeRunQuery config args =
   case getTextArg "query" args of
-    Nothing -> pure $ errorResult RunQuery "Error: 'query' argument is required"
+    Nothing -> pure $ errorResult RunQuery "Missing 'query' argument"
     Just query -> do
       let queryType = getQueryType args
-          limit = min 100 $ getIntArg "limit" 20 args
+          lim = min config.limits.maxQueryResults $ getIntArg "limit" 20 args
       case queryType of
-        KQL -> runKqlQuery config RunQuery query [] $ \(results, _, count) ->
-          formatQueryResults results count
-        SQL -> runSqlQuery config query limit
+        KQL -> runKqlQuery config RunQuery query [] $ \(results, _, count) -> formatQueryResults results count
+        SQL -> runSqlQuery config query lim
 
 
 -- | Run a raw SQL query (fallback for complex queries KQL can't express)
 -- SECURITY: Uses executeSecuredQuery which enforces project_id via parameterized query
 runSqlQuery :: DB es => AgenticConfig -> Text -> Int -> Eff es ToolResult
-runSqlQuery config query limit = do
+runSqlQuery config query lim = do
   let lowerQuery = T.toLower query
-  -- Validate no dangerous DDL/DML operations
-  -- Using word boundaries via surrounding patterns to catch "DROP TABLE" etc.
-  let dangerousOps =
-        [ "drop"
-        , "delete"
-        , "truncate"
-        , "update"
-        , "insert"
-        , "alter"
-        , "create"
-        ]
-      -- UNION/EXCEPT/INTERSECT could bypass project_id filter on second query
-      bypassPatterns = ["union", "except", "intersect"]
-      -- Check if any dangerous word appears as a SQL keyword (surrounded by spaces/start/end)
-      containsKeyword kw =
-        kw
-          `T.isPrefixOf` lowerQuery
-          || (" " <> kw)
-          `T.isInfixOf` lowerQuery
-          || ("\n" <> kw)
-          `T.isInfixOf` lowerQuery
-          || ("\t" <> kw)
-          `T.isInfixOf` lowerQuery
-      hasDangerousOp = any containsKeyword dangerousOps
-      hasBypassPattern = any containsKeyword bypassPatterns
-  if hasDangerousOp
-    then pure $ errorResult RunQuery "Error: Only SELECT queries are allowed"
-    else
-      if hasBypassPattern
-        then pure $ errorResult RunQuery "Error: UNION/EXCEPT/INTERSECT not allowed (could bypass security filter)"
-        else do
-          -- Use executeSecuredQuery which injects project_id = ? into WHERE clause
-          resultE <- executeSecuredQuery config.projectId query limit
-          pure $ case resultE of
-            Left err -> errorResult RunQuery $ "Error executing SQL: " <> err
-            Right results -> successResult RunQuery $ formatQueryResults results (V.length results)
+      -- Check if keyword appears at word boundary (start, after whitespace)
+      hasKeyword kw = kw `T.isPrefixOf` lowerQuery || any (`T.isInfixOf` lowerQuery) [" " <> kw, "\n" <> kw, "\t" <> kw]
+      hasDangerousOp = any hasKeyword ["drop", "delete", "truncate", "update", "insert", "alter", "create"]
+      hasBypassPattern = any hasKeyword ["union", "except", "intersect"]
+  if hasDangerousOp then pure $ errorResult RunQuery "Only SELECT queries allowed"
+  else if hasBypassPattern then pure $ errorResult RunQuery "UNION/EXCEPT/INTERSECT not allowed"
+  else executeSecuredQuery config.projectId query lim <&> \case
+    Left _ -> errorResult RunQuery "Query execution failed"
+    Right results -> successResult RunQuery $ formatQueryResults results (V.length results)
 
 
 -- | Format query results for display
 formatQueryResults :: V.Vector (V.Vector AE.Value) -> Int -> Text
 formatQueryResults results count =
-  let rows = V.toList results
-      formatted = T.intercalate "\n" $ take 20 $ map formatResultRow rows
-      truncated = if count > 20 then "\n... and " <> show (count - 20) <> " more rows" else ""
+  let formatted = T.intercalate "\n" $ take 20 $ V.toList $ V.map formatRow results
+      truncated = if count > 20 then "\n... +" <> show (count - 20) <> " more" else ""
    in "Results (" <> show count <> " rows):\n" <> formatted <> truncated
-
-
--- | Format a single result row
-formatResultRow :: V.Vector AE.Value -> Text
-formatResultRow row =
-  let vals = V.toList row
-   in "  " <> T.intercalate " | " (map jsonToText vals)
+  where formatRow row = "  " <> T.intercalate " | " (V.toList $ V.map jsonToText row)
 
 
 -- | Format summarize query results (from KQL | summarize count() by <field>)
--- Results come as Vector of Vectors where each row is [field_value, count]
 formatSummarizeResults :: Text -> V.Vector (V.Vector AE.Value) -> Text
-formatSummarizeResults _fieldName results =
-  T.intercalate ", " $ mapMaybe formatRow (V.toList results)
+formatSummarizeResults _ = T.intercalate ", " . mapMaybe formatRow . V.toList
   where
-    formatRow row = case V.toList row of
-      [value, count] -> Just $ "\"" <> jsonToText value <> "\" (" <> jsonToText count <> ")"
-      _ -> Nothing
+    formatRow (V.toList -> [v, c]) = Just $ "\"" <> jsonToText v <> "\" (" <> jsonToText c <> ")"
+    formatRow _ = Nothing
 
 
 -- | Format sample log results for display
--- Results come as Vector of Vectors containing log field values
 formatSampleLogs :: V.Vector (V.Vector AE.Value) -> Text
-formatSampleLogs results =
-  T.intercalate "\n" $ mapMaybe formatRow (V.toList results)
+formatSampleLogs = T.intercalate "\n" . mapMaybe formatRow . V.toList
   where
-    formatRow row = case V.toList row of
-      (level : name : service : bodyParts) ->
-        let body = T.take 100 $ T.intercalate " " $ map jsonToText bodyParts
-         in Just $ "  - [" <> jsonToText level <> "] " <> jsonToText name <> " (" <> jsonToText service <> "): " <> body
-      _ -> Nothing
+    formatRow (V.toList -> (lvl : nm : svc : body)) =
+      Just $ "  - [" <> jsonToText lvl <> "] " <> jsonToText nm <> " (" <> jsonToText svc <> "): " <> T.take 100 (T.intercalate " " $ map jsonToText body)
+    formatRow _ = Nothing
 
 
 -- | Convert JSON value to text for display
@@ -522,7 +441,7 @@ jsonToText = \case
   AE.Number n -> show n
   AE.Bool b -> if b then "true" else "false"
   AE.Null -> "null"
-  AE.Array arr -> "[" <> T.intercalate ", " (map jsonToText $ V.toList arr) <> "]"
+  AE.Array arr -> "[" <> T.intercalate ", " (V.toList $ V.map jsonToText arr) <> "]"
   AE.Object _ -> "{...}"
 
 

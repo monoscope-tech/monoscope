@@ -20,7 +20,7 @@ module Models.Apis.RequestDumps (
 )
 where
 
-import Control.Exception.Annotated (checkpoint)
+import Control.Exception.Annotated (checkpoint, try)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Default
@@ -471,7 +471,7 @@ executeSecuredQuery pid userQuery limit = do
       securedQuery =
         if "where" `T.isInfixOf` lowerQuery
           then -- Insert project_id right after WHERE
-            let (before, after) = T.breakOn "where" lowerQuery
+            let (before, _) = T.breakOn "where" lowerQuery
                 wherePos = T.length before
                 (queryBefore, queryAfter) = T.splitAt wherePos userQuery
                 afterWhere = T.drop 5 queryAfter -- Drop "where" (5 chars)
@@ -496,7 +496,7 @@ executeSecuredQuery pid userQuery limit = do
     findInsertPoint q =
       let candidates = mapMaybe findKeyword ["order by", "group by", "limit", "having"]
           findKeyword kw = if kw `T.isInfixOf` q then Just (T.length $ fst $ T.breakOn kw q) else Nothing
-       in if null candidates then Nothing else Just (minimum candidates)
+       in viaNonEmpty head $ sort candidates
 
 
 selectLogTable :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
