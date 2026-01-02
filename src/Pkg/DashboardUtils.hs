@@ -1,4 +1,4 @@
-module Pkg.DashboardUtils (replacePlaceholders, variablePresets, constantToSQLList, constantsToMap) where
+module Pkg.DashboardUtils (replacePlaceholders, variablePresets, constantToSQLList) where
 
 import Data.Map qualified as Map
 import Data.Text qualified as T
@@ -55,12 +55,6 @@ variablePresets pid mf mt allParams currentTime =
 constantToSQLList :: [[Text]] -> Text
 constantToSQLList = \case
   [] -> "(SELECT NULL::text WHERE FALSE)"
-  rows ->
-    let escapeValue v = "'" <> T.replace "'" "''" v <> "'"
-     in "(" <> T.intercalate ", " [escapeValue v | (v : _) <- rows] <> ")"
-
-
--- | Convert a list of processed constants (with results) to a map for placeholder substitution.
--- Each constant with key "foo" becomes available as "const-foo" placeholder.
-constantsToMap :: [(Text, [[Text]])] -> Map Text Text
-constantsToMap = Map.fromList . map (bimap ("const-" <>) constantToSQLList)
+  rows -> "(" <> T.intercalate ", " [escapeQuote v | (v : _) <- rows] <> ")"
+  where
+    escapeQuote v = "'" <> T.replace "'" "''" v <> "'"

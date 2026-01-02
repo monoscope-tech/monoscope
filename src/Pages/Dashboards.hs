@@ -428,28 +428,18 @@ processConstant :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, May
 processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
   let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
       constant = Dashboards.replaceConstantVariables pid fromD toD allParams now constantBase
-
+      runQuery label action transform = do
+        (result, duration) <- Log.timeAction $ try action
+        case result of
+          Right val -> do
+            Log.logDebug ("Dashboard constant " <> label <> " query completed") (constant.key, duration)
+            pure constant{Dashboards.result = Just $ transform val}
+          Left (err :: SomeException) -> do
+            Log.logWarn ("Dashboard constant " <> label <> " query failed") (constant.key, show err, duration)
+            pure constant
   case (constant.sql, constant.query) of
-    -- SQL query takes precedence
-    (Just sqlQuery, _) -> do
-      (result, duration) <- Log.timeAction $ try $ PG.query_ (Query $ encodeUtf8 sqlQuery)
-      case result of
-        Right queryResults -> do
-          Log.logDebug "Dashboard constant SQL query completed" (constant.key, duration)
-          pure constant{Dashboards.result = Just queryResults}
-        Left (err :: SomeException) -> do
-          Log.logWarn "Dashboard constant SQL query failed" (constant.key, show err, duration)
-          pure constant
-    -- KQL query support
-    (Nothing, Just kqlQuery) -> do
-      (result, duration) <- Log.timeAction $ try $ Charts.queryMetrics (Just Charts.DTText) (Just pid) (Just kqlQuery) Nothing sinceStr fromDStr toDStr Nothing allParams
-      case result of
-        Right metricsData -> do
-          Log.logDebug "Dashboard constant KQL query completed" (constant.key, duration)
-          pure constant{Dashboards.result = Just $ map V.toList $ V.toList metricsData.dataText}
-        Left (err :: SomeException) -> do
-          Log.logWarn "Dashboard constant KQL query failed" (constant.key, show err, duration)
-          pure constant
+    (Just sqlQuery, _) -> runQuery "SQL" (PG.query_ (Query $ encodeUtf8 sqlQuery)) id
+    (Nothing, Just kqlQuery) -> runQuery "KQL" (Charts.queryMetrics (Just Charts.DTText) (Just pid) (Just kqlQuery) Nothing sinceStr fromDStr toDStr Nothing allParams) (map V.toList . V.toList . (.dataText))
     _ -> pure constant
 
 
@@ -643,10 +633,8 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
   (dashVM, dash) <- getDashAndVM dashId fileM
 
   -- Process constants first - these are executed once and made available to all queries
-  processedConstants <- forM (fromMaybe [] dash.constants) (processConstant pid now (sinceStr, fromDStr, toDStr) allParams)
-  let constantsMap = DashboardUtils.constantsToMap [(c.key, fromMaybe [] c.result) | c <- processedConstants]
-      -- Merge constants into params so they're available as {{const-<key>}} placeholders
-      allParamsWithConstants = allParams <> [(k, Just v) | (k, v) <- Map.toList constantsMap]
+  processedConstants <- traverse (processConstant pid now (sinceStr, fromDStr, toDStr) allParams) (fromMaybe [] dash.constants)
+  let allParamsWithConstants = allParams <> [("const-" <> c.key, Just $ DashboardUtils.constantToSQLList $ fromMaybe [] c.result) | c <- processedConstants]
 
   -- Update dashboard with processed constants
   let dashWithConstants = dash & #constants ?~ processedConstants
