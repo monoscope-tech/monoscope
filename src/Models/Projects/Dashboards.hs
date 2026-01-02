@@ -228,12 +228,13 @@ readDashboardEndpoint uri = do
 -- | Replace placeholders in sql/query fields with standard variable presets.
 -- Works with both Variable and Constant types.
 replaceVariableFields
-  :: (HasField' "sql" a (Maybe Text), HasField' "query" a (Maybe Text))
+  :: (HasField' "query" a (Maybe Text), HasField' "sql" a (Maybe Text))
   => Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> a -> a
 replaceVariableFields pid mf mt allParams currentTime obj =
   let mappng = DashboardUtils.variablePresets pid.toText mf mt allParams currentTime
-   in obj & #sql . _Just %~ DashboardUtils.replacePlaceholders mappng
-          & #query . _Just %~ DashboardUtils.replacePlaceholders mappng
+   in obj
+        & #sql . _Just %~ DashboardUtils.replacePlaceholders mappng
+        & #query . _Just %~ DashboardUtils.replacePlaceholders mappng
 
 
 replaceQueryVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Variable -> Variable
