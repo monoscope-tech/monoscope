@@ -1,6 +1,7 @@
-module Pkg.DashboardUtils (replacePlaceholders, variablePresets) where
+module Pkg.DashboardUtils (replacePlaceholders, variablePresets, constantToSQLList) where
 
 import Data.Map qualified as Map
+import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Pkg.Parser (calculateAutoBinWidth)
 import Relude
@@ -43,3 +44,17 @@ variablePresets pid mf mt allParams currentTime =
           , ("rollup_interval", rollupInterval)
           ]
         <> allParams'
+
+
+-- | Convert constant results to a SQL list format suitable for IN clauses.
+-- For single-column results [["api/users"], ["api/orders"]],
+-- this generates: "('api/users', 'api/orders')".
+-- For multi-column results, only the first column is used (empty inner lists are skipped).
+-- For empty results, generates an empty subquery "(SELECT NULL::text WHERE FALSE)"
+-- to avoid SQL three-valued logic issues with NULL in IN clauses.
+constantToSQLList :: [[Text]] -> Text
+constantToSQLList = \case
+  [] -> "(SELECT NULL::text WHERE FALSE)"
+  rows -> "(" <> T.intercalate ", " [escapeQuote v | (v : _) <- rows] <> ")"
+  where
+    escapeQuote v = "'" <> T.replace "'" "''" v <> "'"

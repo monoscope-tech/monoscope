@@ -13,7 +13,7 @@ jobs:
       contents: 'read'
       id-token: 'write'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install system dependencies
         uses: awalsh128/cache-apt-pkgs-action@latest
@@ -31,7 +31,7 @@ jobs:
           ghc-version: 9.12.2
           cabal-version: 'latest'
       - name: Cache Haskell dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cabal/store
@@ -41,7 +41,7 @@ jobs:
             ${{ runner.os }}-cabal-
 
       - name: Setup node env
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 18
 
@@ -94,7 +94,7 @@ jobs:
       matrix:
         test-suite: [doctests, unit-tests, integration-tests]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install system dependencies
         uses: awalsh128/cache-apt-pkgs-action@latest
@@ -113,7 +113,7 @@ jobs:
           cabal-version: 'latest'
 
       - name: Cache Haskell dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cabal/store
@@ -123,7 +123,7 @@ jobs:
             ${{ runner.os }}-cabal-
 
       - name: Setup node env
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 18
 
@@ -167,7 +167,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.head_ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -194,9 +194,9 @@ jobs:
     name: UI Tests
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup node env
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
       - name: Run UI tests
