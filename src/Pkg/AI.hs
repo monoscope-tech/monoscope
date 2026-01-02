@@ -62,11 +62,11 @@ import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps (executeSecuredQuery, selectLogTable)
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..))
 import Models.Telemetry.Schema qualified as Schema
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import OpenAI.V1.Models qualified as Models
 import OpenAI.V1.Tool qualified as OAITool
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser (parseQueryToAST)
 import Relude hiding (pass)
 import System.Types (DB)

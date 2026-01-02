@@ -545,12 +545,13 @@ aiChatPostH pid issueId form = do
       facetSummaryM <- Facets.getFacetSummary pid "otel_logs_and_spans" dayAgo now
 
       -- Build agentic config with conversation ID for history persistence
-      let config = (AI.defaultAgenticConfig pid)
-            { AI.facetContext = facetSummaryM
-            , AI.customContext = Just anomalyContext
-            , AI.conversationId = Just convId
-            , AI.conversationType = Just Issues.CTAnomaly
-            }
+      let config =
+            (AI.defaultAgenticConfig pid)
+              { AI.facetContext = facetSummaryM
+              , AI.customContext = Just anomalyContext
+              , AI.conversationId = Just convId
+              , AI.conversationType = Just Issues.CTAnomaly
+              }
 
       -- Run agentic query with full tool access and history
       result <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiApiKey

@@ -35,12 +35,12 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Slack (SlackData (..), getDashboardsForSlack, getSlackDataByTeamId, insertAccessToken, updateSlackNotificationChannel)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
-import Pkg.AI qualified as AI
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, contentTypeHeader, formatHistoryAsContext, handleTableResponse, processAIQuery)
+import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
@@ -548,8 +548,12 @@ slackEventsPostH payload = do
           let convId = Issues.slackThreadToConversationId event.channel threadTs
 
           -- Ensure conversation exists
-          _ <- Issues.getOrCreateConversation slackData.projectId convId Issues.CTSlackThread
-               (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= teamId])
+          _ <-
+            Issues.getOrCreateConversation
+              slackData.projectId
+              convId
+              Issues.CTSlackThread
+              (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= teamId])
 
           -- Load existing history from DB
           existingHistory <- Issues.selectChatHistory convId
@@ -654,5 +658,3 @@ getChannelMessages token channelId ts = do
     Right res -> return $ Just res
     Left err -> do
       return Nothing
-
-

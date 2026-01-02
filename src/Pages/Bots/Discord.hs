@@ -33,12 +33,12 @@ import Effectful.Log qualified as Log
 import Effectful.Time qualified as Time
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps qualified as RequestDumps
-import Pkg.AI qualified as AI
 import Models.Projects.Dashboards qualified as Dashboards
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, authHeader, chartImageUrl, contentTypeHeader, formatHistoryAsContext, handleTableResponse, processAIQuery)
+import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
 import Pkg.Parser (parseQueryToAST)
@@ -317,8 +317,12 @@ discordInteractionsH rawBody signatureM timestampM = do
           let convId = Issues.discordThreadToConversationId threadId
 
           -- Ensure conversation exists
-          _ <- Issues.getOrCreateConversation discordData.projectId convId Issues.CTDiscordThread
-               (AE.object ["channel_id" AE..= interaction.channel_id, "guild_id" AE..= interaction.guild_id])
+          _ <-
+            Issues.getOrCreateConversation
+              discordData.projectId
+              convId
+              Issues.CTDiscordThread
+              (AE.object ["channel_id" AE..= interaction.channel_id, "guild_id" AE..= interaction.guild_id])
 
           -- Load existing history from DB
           existingHistory <- Issues.selectChatHistory convId
@@ -347,7 +351,6 @@ discordInteractionsH rawBody signatureM timestampM = do
             Right AIQueryResult{..} -> do
               Issues.insertChatMessage discordData.projectId convId "assistant" query Nothing Nothing
               sendDiscordResponse options interaction envCfg authCtx discordData query visualization fromTime toTime timeRangeStr now
-
         _ -> do
           -- Non-thread: use original flow without persistence
           result <- processAIQuery discordData.projectId userQuery Nothing envCfg.openaiApiKey
