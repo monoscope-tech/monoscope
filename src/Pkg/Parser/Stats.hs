@@ -44,7 +44,7 @@ import Data.Aeson qualified as AE
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 import Pkg.Parser.Expr (Expr, Parser, Subject (..), ToQueryText (..), Values (..), kqlTimespanToTimeBucket, pExpr, pSubject, pValues)
-import Relude hiding (Sum, some)
+import Relude hiding (Sum, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, space, string)
 import Text.Megaparsec.Char.Lexer qualified as L
@@ -684,9 +684,7 @@ instance ToQueryText [Section] where
 extractPercentilesInfo :: [Section] -> Maybe (Text, [Double])
 extractPercentilesInfo = foldr go Nothing
   where
-    go (SummarizeCommand aggs _) acc = case findPercentiles aggs of
-      Just info -> Just info
-      Nothing -> acc
+    go (SummarizeCommand aggs _) acc = maybe acc Just (findPercentiles aggs)
     go _ acc = acc
     findPercentiles [] = Nothing
     findPercentiles (Percentile subExpr pct _ : _) = Just (subjectExprToSQL subExpr, [pct])
