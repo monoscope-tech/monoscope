@@ -79,8 +79,8 @@ import Servant (NoContent (..), ServerError, err404, errBody)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import System.Config (AuthContext (..))
-import System.Logging qualified as Log
 import System.FilePath.Posix (takeDirectory)
+import System.Logging qualified as Log
 import System.Types
 import Text.Slugify (slugify)
 import UnliftIO.Exception (try)
