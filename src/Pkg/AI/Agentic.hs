@@ -230,10 +230,11 @@ getFieldValuesTool =
     "Get distinct values for a specific field. Use to discover what values exist for fields like service names, status codes, etc."
     $ AE.object
       [ "type" AE..= ("object" :: Text)
-      , "properties" AE..= AE.object
-          [ "field" AE..= AE.object ["type" AE..= ("string" :: Text), "description" AE..= ("Field name (e.g., resource.service.name, level)" :: Text)]
-          , "limit" AE..= AE.object ["type" AE..= ("integer" :: Text), "description" AE..= ("Max values to return (default 10)" :: Text)]
-          ]
+      , "properties"
+          AE..= AE.object
+            [ "field" AE..= AE.object ["type" AE..= ("string" :: Text), "description" AE..= ("Field name (e.g., resource.service.name, level)" :: Text)]
+            , "limit" AE..= AE.object ["type" AE..= ("integer" :: Text), "description" AE..= ("Max values to return (default 10)" :: Text)]
+            ]
       , "required" AE..= (["field"] :: [Text])
       ]
 
@@ -253,8 +254,9 @@ countQueryTool =
     "Get the count of results for a KQL query. Use to verify a query matches data before finalizing."
     $ AE.object
       [ "type" AE..= ("object" :: Text)
-      , "properties" AE..= AE.object
-          ["query" AE..= AE.object ["type" AE..= ("string" :: Text), "description" AE..= ("KQL query to count" :: Text)]]
+      , "properties"
+          AE..= AE.object
+            ["query" AE..= AE.object ["type" AE..= ("string" :: Text), "description" AE..= ("KQL query to count" :: Text)]]
       , "required" AE..= (["query"] :: [Text])
       ]
 
@@ -266,10 +268,11 @@ sampleLogsTool =
     "Get sample log entries matching a query. Use to understand the structure/content of matching logs."
     $ AE.object
       [ "type" AE..= ("object" :: Text)
-      , "properties" AE..= AE.object
-          [ "query" AE..= AE.object ["type" AE..= ("string" :: Text), "description" AE..= ("KQL query to match" :: Text)]
-          , "limit" AE..= AE.object ["type" AE..= ("integer" :: Text), "description" AE..= ("Max samples (default 3, max 5)" :: Text)]
-          ]
+      , "properties"
+          AE..= AE.object
+            [ "query" AE..= AE.object ["type" AE..= ("string" :: Text), "description" AE..= ("KQL query to match" :: Text)]
+            , "limit" AE..= AE.object ["type" AE..= ("integer" :: Text), "description" AE..= ("Max samples (default 3, max 5)" :: Text)]
+            ]
       , "required" AE..= (["query"] :: [Text])
       ]
 
@@ -297,10 +300,11 @@ runQueryTool =
     "Execute a KQL query and return results. Use for exploratory queries to understand data."
     $ AE.object
       [ "type" AE..= ("object" :: Text)
-      , "properties" AE..= AE.object
-          [ "query" AE..= AE.object ["type" AE..= ("string" :: Text), "description" AE..= ("KQL query to execute" :: Text)]
-          , "limit" AE..= AE.object ["type" AE..= ("integer" :: Text), "description" AE..= ("Max results (default 20)" :: Text)]
-          ]
+      , "properties"
+          AE..= AE.object
+            [ "query" AE..= AE.object ["type" AE..= ("string" :: Text), "description" AE..= ("KQL query to execute" :: Text)]
+            , "limit" AE..= AE.object ["type" AE..= ("integer" :: Text), "description" AE..= ("Max results (default 20)" :: Text)]
+            ]
       , "required" AE..= (["query"] :: [Text])
       ]
 
@@ -360,7 +364,7 @@ runAgenticQuery config userQuery apiKey = do
 
 -- | Fast mode: single LLM call without tools
 runFastMode
-  :: (DB es)
+  :: DB es
   => AgenticConfig
   -> Text
   -> Text
