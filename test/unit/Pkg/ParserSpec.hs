@@ -216,7 +216,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (COALESCE('method', 'unknown'))::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (COALESCE(method, 'unknown'))::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
 
@@ -235,7 +235,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (CONCAT('method', ' ', 'url_path'))::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (CONCAT(method, ' ', url_path))::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
 

@@ -1,7 +1,5 @@
 module Pkg.Parser.Stats (
-  pSummarizeSection,
-  pSortSection,
-  pTakeSection,
+  -- Types
   AggFunction (..),
   Section (..),
   SummarizeByClause (..),
@@ -9,20 +7,19 @@ module Pkg.Parser.Stats (
   SortField (..),
   Sources (..),
   SubjectExpr (..),
+  -- Section parsers
+  pSummarizeSection,
+  pSortSection,
+  pTakeSection,
   parseQuery,
   pSource,
-  defaultBinSize,
+  -- Aggregation parsers
   aggFunctionParser,
-  pBinFunction,
   namedAggregation,
+  pBinFunction,
   pSummarizeByClause,
   pSortField,
-  extractPercentilesInfo,
-  subjectExprToSQL,
-  pSubjectExpr,
-  pPercentileSingle,
-  pPercentilesMulti,
-  -- KQL function parsers (Microsoft KQL compatible)
+  -- KQL function parsers
   pCountIf,
   pDCount,
   pCount,
@@ -30,12 +27,14 @@ module Pkg.Parser.Stats (
   pStrcat,
   pIff,
   pCase,
+  pPercentileSingle,
+  pPercentilesMulti,
+  pSubjectExpr,
   pScalarExpr,
-  -- Parser helpers
-  pSimpleAgg,
-  pVariadicAgg,
-  comma,
-  withoutAlias,
+  -- Utilities
+  defaultBinSize,
+  extractPercentilesInfo,
+  subjectExprToSQL,
 ) where
 
 import Data.Aeson qualified as AE
@@ -258,9 +257,10 @@ pDCount = withoutAlias $ do
 
 -- | Parse a scalar expression (field reference or literal value)
 -- Used by iff, case, coalesce, strcat for flexible value parsing
--- Note: Uses toQText instead of display to preserve KQL field notation
+-- Field references are wrapped in Field constructor to output as column names (not quoted strings)
+-- Note: try is needed because pValues has a catch-all that may consume delimiters before failing
 pScalarExpr :: Parser Values
-pScalarExpr = pValues <|> (Str . toQText <$> pSubject)
+pScalarExpr = try pValues <|> (Field <$> pSubject)
 
 
 -- | Helper for variadic scalar functions like coalesce/strcat
@@ -274,9 +274,16 @@ pVariadicAgg name ctor =
 -- | Parse coalesce(expr1, expr2, ...) - return first non-null (variadic, 2-64 args)
 -- Microsoft KQL: coalesce(arg, arg_2, [arg_3,...])
 -- >>> parse pCoalesce "" "coalesce(method, \"unknown\")"
--- Right (Coalesce [Str "method",Str "unknown"] Nothing)
+-- Right (Coalesce [Field (Subject "method" "method" []),Str "unknown"] Nothing)
+-- >>> parse pCoalesce "" "coalesce(x)"
+-- Left ...
 pCoalesce :: Parser AggFunction
-pCoalesce = pVariadicAgg "coalesce" Coalesce
+pCoalesce = do
+  _ <- string "coalesce("
+  args <- pScalarExpr `sepBy1` comma
+  _ <- string ")"
+  when (length args < 2) $ fail "coalesce requires at least 2 arguments"
+  pure $ Coalesce args Nothing
 
 
 -- | Parse strcat(expr1, expr2, ...) - string concatenation (1-64 args)
