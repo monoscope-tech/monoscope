@@ -7,12 +7,24 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE ViewPatterns #-}
 
+-- |
+-- Module      : Pkg.AI.Agentic
+-- Description : Agentic LLM system for natural language to KQL query generation
+--
+-- This module implements an agentic system that uses LLM tool calling to iteratively
+-- build KQL queries from natural language. It operates in two modes:
+--
+-- * 'FastMode': Single LLM call without tools, suitable for simple queries
+-- * 'AgenticMode': Multi-turn conversation with tool access for complex analysis
+--
+-- The agentic loop uses langchain-hs native tool calling, where the LLM can invoke
+-- tools like @get_field_values@, @sample_logs@, @run_query@ to explore the data
+-- before generating the final query.
 module Pkg.AI.Agentic (
   -- * Types
   AgenticConfig (..),
   AgenticMode (..),
   ToolLimits (..),
-  AgenticResponse (..),
 
   -- * Main functions
   runAgenticQuery,
@@ -116,18 +128,11 @@ suggestAgenticMode _ userQuery =
    in if any (`T.isInfixOf` T.toLower userQuery) complexIndicators then AgenticMode else FastMode
 
 
--- | Response from the agentic system
-data AgenticResponse
-  = FinalResponse AI.ChatLLMResponse
-  | AgenticError Text
-  deriving (Show)
-
-
 -- * Helper functions
 
 
-getIntFromArgs :: Text -> Map.Map Text AE.Value -> Maybe Int
-getIntFromArgs key args = case Map.lookup key args of
+getIntArg :: Text -> Map.Map Text AE.Value -> Maybe Int
+getIntArg key args = case Map.lookup key args of
   Just (AE.Number n) -> Just $ round n
   _ -> Nothing
 
@@ -136,6 +141,11 @@ getTextArg :: Text -> Map.Map Text AE.Value -> Maybe Text
 getTextArg key args = case Map.lookup key args of
   Just (AE.String s) -> Just s
   _ -> Nothing
+
+
+-- | Get a limit argument, clamped to max and with a default value
+getLimitArg :: Text -> Int -> Int -> Map.Map Text AE.Value -> Int
+getLimitArg key maxVal defVal args = min maxVal $ fromMaybe defVal (getIntArg key args)
 
 
 formatSummarizeResults :: V.Vector (V.Vector AE.Value) -> Text
@@ -232,101 +242,45 @@ mkToolDef name desc params =
       }
 
 
-getFieldValuesTool :: OAITool.Tool
-getFieldValuesTool =
-  mkToolDef
-    "get_field_values"
-    "Get distinct values for a specific field. Use to discover what values exist for fields like service names, status codes, etc."
-    $ AE.object
-      [ "type" AE..= ("object" :: Text)
-      , "properties"
-          AE..= AE.object
-            [ "field" AE..= AE.object ["type" AE..= ("string" :: Text), "description" AE..= ("Field name (e.g., resource.service.name, level)" :: Text)]
-            , "limit" AE..= AE.object ["type" AE..= ("integer" :: Text), "description" AE..= ("Max values to return (default 10)" :: Text)]
-            ]
-      , "required" AE..= (["field"] :: [Text])
-      ]
+-- | Create a tool with no parameters
+mkSimpleTool :: Text -> Text -> OAITool.Tool
+mkSimpleTool name desc = mkToolDef name desc $ AE.object ["type" AE..= ("object" :: Text), "properties" AE..= AE.object []]
 
 
-getServicesTool :: OAITool.Tool
-getServicesTool =
-  mkToolDef
-    "get_services"
-    "Get list of services in this project"
-    $ AE.object ["type" AE..= ("object" :: Text), "properties" AE..= AE.object []]
-
-
-countQueryTool :: OAITool.Tool
-countQueryTool =
-  mkToolDef
-    "count_query"
-    "Get the count of results for a KQL query. Use to verify a query matches data before finalizing."
-    $ AE.object
-      [ "type" AE..= ("object" :: Text)
-      , "properties"
-          AE..= AE.object
-            ["query" AE..= AE.object ["type" AE..= ("string" :: Text), "description" AE..= ("KQL query to count" :: Text)]]
-      , "required" AE..= (["query"] :: [Text])
-      ]
-
-
-sampleLogsTool :: OAITool.Tool
-sampleLogsTool =
-  mkToolDef
-    "sample_logs"
-    "Get sample log entries matching a query. Use to understand the structure/content of matching logs."
-    $ AE.object
-      [ "type" AE..= ("object" :: Text)
-      , "properties"
-          AE..= AE.object
-            [ "query" AE..= AE.object ["type" AE..= ("string" :: Text), "description" AE..= ("KQL query to match" :: Text)]
-            , "limit" AE..= AE.object ["type" AE..= ("integer" :: Text), "description" AE..= ("Max samples (default 3, max 5)" :: Text)]
-            ]
-      , "required" AE..= (["query"] :: [Text])
-      ]
-
-
-getFacetsTool :: OAITool.Tool
-getFacetsTool =
-  mkToolDef
-    "get_facets"
-    "Get precomputed facets showing popular values for common fields like services, status codes, methods, etc."
-    $ AE.object ["type" AE..= ("object" :: Text), "properties" AE..= AE.object []]
-
-
-getSchemaTool :: OAITool.Tool
-getSchemaTool =
-  mkToolDef
-    "get_schema"
-    "Get the schema of available fields in the log/span data. Use when you need to know what fields are queryable."
-    $ AE.object ["type" AE..= ("object" :: Text), "properties" AE..= AE.object []]
-
-
-runQueryTool :: OAITool.Tool
-runQueryTool =
-  mkToolDef
-    "run_query"
-    "Execute a KQL query and return results. Use for exploratory queries to understand data."
-    $ AE.object
-      [ "type" AE..= ("object" :: Text)
-      , "properties"
-          AE..= AE.object
-            [ "query" AE..= AE.object ["type" AE..= ("string" :: Text), "description" AE..= ("KQL query to execute" :: Text)]
-            , "limit" AE..= AE.object ["type" AE..= ("integer" :: Text), "description" AE..= ("Max results (default 20)" :: Text)]
-            ]
-      , "required" AE..= (["query"] :: [Text])
-      ]
+-- | Create a property definition for tool parameters
+mkProp :: Text -> Text -> AE.Value
+mkProp typ desc = AE.object ["type" AE..= typ, "description" AE..= desc]
 
 
 allToolDefs :: [OAITool.Tool]
 allToolDefs =
-  [ getFieldValuesTool
-  , getServicesTool
-  , countQueryTool
-  , sampleLogsTool
-  , getFacetsTool
-  , getSchemaTool
-  , runQueryTool
+  [ mkToolDef "get_field_values" "Get distinct values for a specific field" $
+      AE.object
+        [ "type" AE..= ("object" :: Text)
+        , "properties" AE..= AE.object [("field", mkProp "string" "Field name (e.g., resource.service.name)"), ("limit", mkProp "integer" "Max values (default 10)")]
+        , "required" AE..= (["field"] :: [Text])
+        ]
+  , mkSimpleTool "get_services" "Get list of services in this project"
+  , mkToolDef "count_query" "Get count of results for a KQL query" $
+      AE.object
+        [ "type" AE..= ("object" :: Text)
+        , "properties" AE..= AE.object [("query", mkProp "string" "KQL query to count")]
+        , "required" AE..= (["query"] :: [Text])
+        ]
+  , mkToolDef "sample_logs" "Get sample log entries matching a query" $
+      AE.object
+        [ "type" AE..= ("object" :: Text)
+        , "properties" AE..= AE.object [("query", mkProp "string" "KQL query to match"), ("limit", mkProp "integer" "Max samples (default 3, max 5)")]
+        , "required" AE..= (["query"] :: [Text])
+        ]
+  , mkSimpleTool "get_facets" "Get precomputed facets for common fields like services, status codes, methods"
+  , mkSimpleTool "get_schema" "Get schema of available fields in the log/span data"
+  , mkToolDef "run_query" "Execute a KQL query and return results" $
+      AE.object
+        [ "type" AE..= ("object" :: Text)
+        , "properties" AE..= AE.object [("query", mkProp "string" "KQL query to execute"), ("limit", mkProp "integer" "Max results (default 20)")]
+        , "required" AE..= (["query"] :: [Text])
+        ]
   ]
 
 
@@ -479,19 +433,23 @@ executeToolCall config tc = do
 -- * Tool Execution (Effectful)
 
 
+-- | Error message with tool context for debugging
+toolError :: Text -> Text -> Map.Map Text AE.Value -> Text
+toolError tool msg args = "Error in " <> tool <> ": " <> msg <> " (received: " <> show (Map.keys args) <> ")"
+
+
 executeGetFieldValues
   :: (DB es, Log :> es, Time.Time :> es)
   => AgenticConfig
   -> Map.Map Text AE.Value
   -> Eff es Text
-executeGetFieldValues config args =
-  case Map.lookup "field" args of
-    Just (AE.String field) -> do
-      let lim = min config.limits.maxFieldValues $ fromMaybe config.limits.defaultFieldLimit (getIntFromArgs "limit" args)
-          kqlQuery = "| summarize count() by " <> field <> " | sort by _count desc | take " <> show lim
-      runKqlAndFormat config kqlQuery [] $ \(results, _, _) ->
-        "Values for '" <> field <> "': " <> formatSummarizeResults results
-    _ -> pure "Error: Missing or invalid 'field' argument"
+executeGetFieldValues config args = case getTextArg "field" args of
+  Just field -> do
+    let lim = getLimitArg "limit" config.limits.maxFieldValues config.limits.defaultFieldLimit args
+        kqlQuery = "| summarize count() by " <> field <> " | sort by _count desc | take " <> show lim
+    runKqlAndFormat config kqlQuery [] $ \(results, _, _) ->
+      "Values for '" <> field <> "': " <> formatSummarizeResults results
+  _ -> pure $ toolError "get_field_values" "missing 'field'" args
 
 
 executeGetServices :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> Eff es Text
@@ -510,7 +468,7 @@ executeCountQuery config args = case getTextArg "query" args of
   Just kqlQuery ->
     runKqlAndFormat config kqlQuery [] $ \(_, _, count) ->
       "Query '" <> kqlQuery <> "' matches " <> show count <> " entries"
-  _ -> pure "Error: Missing or invalid 'query' argument"
+  _ -> pure $ toolError "count_query" "missing 'query'" args
 
 
 executeSampleLogs
@@ -520,12 +478,12 @@ executeSampleLogs
   -> Eff es Text
 executeSampleLogs config args = case getTextArg "query" args of
   Just kqlQuery -> do
-    let lim = min config.limits.maxSampleLogs $ fromMaybe config.limits.defaultSampleLimit (getIntFromArgs "limit" args)
+    let lim = getLimitArg "limit" config.limits.maxSampleLogs config.limits.defaultSampleLimit args
         fullQuery = if "| take" `T.isInfixOf` kqlQuery then kqlQuery else kqlQuery <> " | take " <> show lim
         sampleColumns = ["level", "name", "resource.service.name", "body"]
     runKqlAndFormat config fullQuery sampleColumns $ \(results, _, _) ->
       "Sample logs:\n" <> formatSampleLogs config.limits.maxBodyPreview results
-  _ -> pure "Error: Missing or invalid 'query' argument"
+  _ -> pure $ toolError "sample_logs" "missing 'query'" args
 
 
 executeGetFacets :: AgenticConfig -> Text
@@ -539,11 +497,11 @@ executeRunQuery
   -> Eff es Text
 executeRunQuery config args = case getTextArg "query" args of
   Just query -> do
-    let lim = min config.limits.maxQueryResults $ fromMaybe config.limits.maxDisplayRows (getIntFromArgs "limit" args)
+    let lim = getLimitArg "limit" config.limits.maxQueryResults config.limits.maxDisplayRows args
         fullQuery = if "| take" `T.isInfixOf` query then query else query <> " | take " <> show lim
     runKqlAndFormat config fullQuery [] $ \(results, _, count) ->
       formatQueryResults config.limits.maxDisplayRows results count
-  _ -> pure "Error: Missing or invalid 'query' argument"
+  _ -> pure $ toolError "run_query" "missing 'query'" args
 
 
 -- | Helper to run KQL query and format result
