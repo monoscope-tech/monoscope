@@ -138,8 +138,7 @@ SELECT timeB, quantile, value FROM (
   GROUP BY timeB
   HAVING COUNT(*) > 0
 ) s, LATERAL unnest(s.values, s.quantiles) AS u(value, quantile)
-WHERE value IS NOT NULL
-ORDER BY timeB DESC
+WHERE value IS NOT NULL ORDER BY timeB DESC
             |]
       normT sql `shouldBe` normT expected
 
@@ -147,7 +146,7 @@ ORDER BY timeB DESC
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "resource.service.name == \"cart\" | where duration != null | summarize percentiles(duration, 50, 90) by bin(timestamp, 1h)"
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (approx_percentile(0.5, percentile_agg((duration)::float))::float)::float, count(*) OVER() as _total_count FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((resource->>'service'->>'name' = 'cart') AND (duration IS NOT NULL)) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, approx_percentile(0.5, percentile_agg((duration)::float))::float, count(*) OVER() as _total_count FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((resource___service___name = 'cart' AND duration IS NOT NULL)) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT query `shouldBe` normT expected
 
@@ -197,7 +196,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (COUNT(DISTINCT resource->>'service'->>'name'))::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (COUNT(DISTINCT resource___service___name))::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
 

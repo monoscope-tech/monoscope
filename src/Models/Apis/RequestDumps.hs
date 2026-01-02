@@ -478,7 +478,7 @@ executeSecuredQuery pid userQuery limit = do
     results :: [[FieldValue]] <- PG.query (Query $ encodeUtf8 securedQuery) (pid, limit)
     pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
   pure $ case resultE of
-    Left err -> Left $ "Query execution failed: " <> show err
+    Left _ -> Left "Query execution failed"
     Right results -> Right results
   where
     -- Case-insensitive breakOn for ASCII SQL keywords (WHERE, ORDER BY, etc.)

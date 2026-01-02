@@ -1,22 +1,30 @@
-module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), chartImageUrl, authHeader, contentTypeHeader) where
+module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), chartImageUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsPrompt) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Effectful.Wreq (header)
 import Data.Effectful.Wreq qualified
 import Data.Text qualified as T
+import Data.Time (UTCTime, addUTCTime)
 import Data.Time qualified as Time
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
+import Effectful (Eff, (:>))
+import Effectful.Log (Log)
+import Effectful.Time qualified as Time
 import Lucid
+import Models.Apis.Fields.Facets qualified as Facets
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Components (navBar)
+import Pkg.AI qualified as AI
 import Relude
 import System.Config (EnvConfig (..))
+import System.Types (DB)
 import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey)
+import Utils qualified
 
 
 data BotType = Discord | Slack | WhatsApp
@@ -203,3 +211,44 @@ data Channel = Channel
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "channel", DAE.CamelToSnake]] Channel
+
+
+data AIQueryResult = AIQueryResult
+  { query :: Text
+  , visualization :: Maybe Text
+  , fromTime :: Maybe UTCTime
+  , toTime :: Maybe UTCTime
+  , timeRangeStr :: (Text, Text)
+  }
+  deriving (Generic, Show)
+
+
+processAIQuery :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> Text -> Maybe Text -> Text -> Eff es (Either Text AIQueryResult)
+processAIQuery pid userQuery threadCtx apiKey = do
+  now <- Time.currentTime
+  let dayAgo = addUTCTime (-86400) now
+  facetSummaryM <- Facets.getFacetSummary pid "otel_logs_and_spans" dayAgo now
+  let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.customContext = threadCtx}
+  result <- AI.runAgenticQuery config userQuery apiKey
+  pure $ case result of
+    Left err -> Left err
+    Right AI.ChatLLMResponse{..} ->
+      let from' = timeRange >>= viaNonEmpty head
+          to' = timeRange >>= viaNonEmpty last
+          (fromT, toT, rangeM) = Utils.parseTime from' to' Nothing now
+          from = fromMaybe "" $ rangeM >>= Just . fst
+          to = fromMaybe "" $ rangeM >>= Just . snd
+       in Right AIQueryResult{query, visualization, fromTime = fromT, toTime = toT, timeRangeStr = (from, to)}
+
+
+formatThreadsPrompt :: (a -> AE.Value) -> Text -> [a] -> Text
+formatThreadsPrompt msgToJson platform msgs =
+  let msgs' = map msgToJson msgs
+      msgJson = decodeUtf8 $ AE.encode $ AE.Array (V.fromList msgs')
+   in unlines
+        [ "\n\nTHREADS:"
+        , "- this query is  part of a " <> platform <> " conversation thread. Use previous messages provited in the thread for additional context if needed."
+        , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
+        , "\nPrevious thread messages in json:\n"
+        , msgJson
+        ]

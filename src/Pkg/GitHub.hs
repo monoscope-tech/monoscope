@@ -11,7 +11,7 @@ module Pkg.GitHub (
 import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
-import Data.ByteString.Base64 qualified as B64
+import "base64" Data.ByteString.Base64 qualified as B64
 import Data.Effectful.Wreq (HTTP, defaults, getWith, header, postWith, responseBody)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Deriving.Aeson qualified as DAE

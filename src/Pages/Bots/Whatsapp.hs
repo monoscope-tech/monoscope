@@ -7,21 +7,18 @@ import Data.Aeson.Key qualified as KEYM
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Effectful.Wreq qualified as Wreq
 import Data.Text qualified as T
-import Data.Time (addUTCTime)
 import Data.Vector qualified as V
 import Effectful
 import Effectful.Concurrent (forkIO)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
-import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Slack (getDashboardsForWhatsapp)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq
-import Pages.Bots.Utils (BotType (..), handleTableResponse)
-import Pkg.AI qualified as AI
+import Pages.Bots.Utils (AIQueryResult (..), BotType (..), handleTableResponse, processAIQuery)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
 import Pkg.Parser (parseQueryToAST)
@@ -30,7 +27,6 @@ import System.Config (AuthContext, EnvConfig)
 import System.Config qualified as Config
 import System.Types (ATBaseCtx)
 import Utils (toUriStr)
-import Utils qualified
 import Web.Internal.FormUrlEncoded
 
 
@@ -94,20 +90,13 @@ whatsappIncomingPostH val = do
     handlePrompt :: TwilioWhatsAppMessage -> EnvConfig -> Projects.Project -> ATBaseCtx ()
     handlePrompt reqBody envCfg project = do
       now <- Time.currentTime
-      let dayAgo = addUTCTime (-86400) now
-      facetSummaryM <- Facets.getFacetSummary project.id "otel_logs_and_spans" dayAgo now
-      let config = (AI.defaultAgenticConfig project.id){AI.facetContext = facetSummaryM}
-      result <- AI.runAgenticQuery config reqBody.body envCfg.openaiApiKey
+      result <- processAIQuery project.id reqBody.body Nothing envCfg.openaiApiKey
       case result of
         Left _ -> do
           _ <- sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotChart (Just "Sorry, I couldn't proess your request")
           pass
-        Right AI.ChatLLMResponse{..} -> do
-          let from' = timeRange >>= viaNonEmpty head
-              to' = timeRange >>= viaNonEmpty last
-              (fromT, toT, rangeM) = Utils.parseTime from' to' Nothing now
-              from = fromMaybe "" $ rangeM >>= Just . fst
-              to = fromMaybe "" $ rangeM >>= Just . snd
+        Right AIQueryResult{..} -> do
+          let (from, to) = timeRangeStr
           case visualization of
             Just vizType -> do
               let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
@@ -116,19 +105,16 @@ whatsappIncomingPostH val = do
                   content' = getBotContent reqBody.body query query_url opts
               _ <- sendWhatsappResponse content' reqBody.from envCfg.whatsappBotChart Nothing
               pass
-            Nothing -> do
-              let queryAST = parseQueryToAST query
-              case queryAST of
-                Left _ -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotChart (Just "Error processing query")
-                Right query' -> do
-                  tableAsVecE <- RequestDumps.selectLogTable project.id query' query Nothing (fromT, toT) [] Nothing Nothing
-                  let content = case handleTableResponse WhatsApp tableAsVecE envCfg project.id query of
-                        AE.Object o -> case KEM.lookup "body" o of
-                          Just (AE.String c) -> c
-                          _ -> "Error processing query"
+            Nothing -> case parseQueryToAST query of
+              Left _ -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotChart (Just "Error processing query")
+              Right query' -> do
+                tableAsVecE <- RequestDumps.selectLogTable project.id query' query Nothing (fromTime, toTime) [] Nothing Nothing
+                let content = case handleTableResponse WhatsApp tableAsVecE envCfg project.id query of
+                      AE.Object o -> case KEM.lookup "body" o of
+                        Just (AE.String c) -> c
                         _ -> "Error processing query"
-                  sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just content)
-              pass
+                      _ -> "Error processing query"
+                sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just content)
 
 
 data BodyType
