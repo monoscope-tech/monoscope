@@ -153,7 +153,7 @@ data Constant = Constant
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.CamelToSnake] Constant
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Constant
 
 
 data Tab = Tab
