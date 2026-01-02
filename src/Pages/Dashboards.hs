@@ -435,7 +435,7 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
       case result of
         Right queryResults -> pure constant{Dashboards.result = Just queryResults}
         Left (_ :: SomeException) -> pure constant -- Return unchanged on error
-    -- KQL query support
+        -- KQL query support
     (Nothing, Just kqlQuery) -> do
       result <- try $ Charts.queryMetrics (Just Charts.DTText) (Just pid) (Just kqlQuery) Nothing sinceStr fromDStr toDStr Nothing allParams
       case result of
