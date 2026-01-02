@@ -71,6 +71,7 @@ import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DashboardUtils qualified as DashboardUtils
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -420,6 +421,22 @@ processVariable pid now timeRange@(sinceStr, fromDStr, toDStr) allParams variabl
     _ -> pure variable
 
 
+-- | Process a single dashboard constant by executing its SQL query and populating the result.
+-- Constants are executed once and their results are made available to all widgets.
+processConstant :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Constant -> ATAuthCtx Dashboards.Constant
+processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
+  let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
+      constant = Dashboards.replaceConstantVariables pid fromD toD allParams now constantBase
+
+  case constant.sql of
+    Just sqlQuery -> do
+      result <- try $ PG.query_ (Query $ encodeUtf8 sqlQuery)
+      case result of
+        Right queryResults -> pure constant{Dashboards.result = Just queryResults}
+        Left (_ :: SomeException) -> pure constant -- Return unchanged on error
+    _ -> pure constant
+
+
 -- Process a single widget recursively.
 processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
 processWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widgetBase = do
@@ -608,10 +625,20 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
   let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
 
   (dashVM, dash) <- getDashAndVM dashId fileM
-  dash' <- forOf (#variables . traverse . traverse) dash (processVariable pid now (sinceStr, fromDStr, toDStr) allParams)
+
+  -- Process constants first - these are executed once and made available to all queries
+  processedConstants <- forM (fold dash.constants) (processConstant pid now (sinceStr, fromDStr, toDStr) allParams)
+  let constantsMap = DashboardUtils.constantsToMap [(c.key, fold c.result) | c <- processedConstants]
+      -- Merge constants into params so they're available as {{const-<key>}} placeholders
+      allParamsWithConstants = allParams <> [(k, Just v) | (k, v) <- Map.toList constantsMap]
+
+  -- Update dashboard with processed constants
+  let dashWithConstants = dash & #constants ?~ processedConstants
+
+  dash' <- forOf (#variables . traverse . traverse) dashWithConstants (processVariable pid now (sinceStr, fromDStr, toDStr) allParamsWithConstants)
 
   let processWidgetWithDashboardId w = do
-        processed <- processWidget pid now (sinceStr, fromDStr, toDStr) allParams w
+        processed <- processWidget pid now (sinceStr, fromDStr, toDStr) allParamsWithConstants w
         pure $ processed{Widget._dashboardId = Just dashId.toText}
 
   -- Process widgets in the main widgets array

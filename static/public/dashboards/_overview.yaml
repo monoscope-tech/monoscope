@@ -4,6 +4,23 @@ preview: /public/assets/svgs/screens/http-stats.svg
 description: Comprehensive system overview with service, resource, and database insights
 refresh_interval: 60s
 
+# Constants are query results executed once and reusable across all widgets
+# They are available as {{const-<key>}} placeholders that expand to a subquery
+constants:
+  - key: top_resources
+    description: Top 20 resources by request count for the current time range
+    sql: |
+      SELECT name
+      FROM otel_logs_and_spans
+      WHERE project_id='{{project_id}}'
+        AND name IS NOT NULL
+        AND kind = 'server'
+        AND ('{{var-resource}}' = '' OR name = '{{var-resource}}')
+        {{time_filter}}
+      GROUP BY name
+      ORDER BY COUNT(*) DESC
+      LIMIT 20
+
 variables:
   - key: service
     title: Service
@@ -554,31 +571,19 @@ tabs:
   - name: Resources
     icon: routes
     widgets:
-      # Three charts in one row
+      # Three charts in one row - using {{const-top_resources}} constant for efficiency
       - type: 'timeseries'
         title: 'Requests'
         sql: |
-          WITH top_resources AS (
-            SELECT name
-            FROM otel_logs_and_spans
-            WHERE project_id='{{project_id}}'
-              AND name IS NOT NULL
-              AND kind = 'server'
-              AND ('{{var-resource}}' = '' OR name = '{{var-resource}}')
-              {{time_filter}}
-            GROUP BY name
-            ORDER BY COUNT(*) DESC
-            LIMIT 20
-          )
-          SELECT 
+          SELECT
             extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            CASE 
-              WHEN tr.name IS NOT NULL THEN o.name 
+            CASE
+              WHEN tr.name IS NOT NULL THEN o.name
               ELSE 'Others'
             END as resource,
             COUNT(*)::float as value
           FROM otel_logs_and_spans o
-          LEFT JOIN top_resources tr ON o.name = tr.name
+          LEFT JOIN {{const-top_resources}} tr ON o.name = tr.name
           WHERE o.project_id='{{project_id}}'
             AND o.name IS NOT NULL
             AND o.kind = 'server'
@@ -593,18 +598,6 @@ tabs:
       - type: 'timeseries_line'
         title: 'P95 Latency'
         sql: |
-          WITH top_resources AS (
-            SELECT name
-            FROM otel_logs_and_spans
-            WHERE project_id='{{project_id}}'
-              AND name IS NOT NULL
-              AND kind = 'server'
-              AND ('{{var-resource}}' = '' OR name = '{{var-resource}}')
-              {{time_filter}}
-            GROUP BY name
-            ORDER BY COUNT(*) DESC
-            LIMIT 20
-          )
           SELECT
             extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
             CASE
@@ -613,7 +606,7 @@ tabs:
             END as resource,
             COALESCE(approx_percentile(0.95, percentile_agg(o.duration))::float, 0)::float as value
           FROM otel_logs_and_spans o
-          LEFT JOIN top_resources tr ON o.name = tr.name
+          LEFT JOIN {{const-top_resources}} tr ON o.name = tr.name
           WHERE o.project_id='{{project_id}}'
             AND o.name IS NOT NULL
             AND o.kind = 'server'
@@ -630,27 +623,15 @@ tabs:
         title: 'Errors'
         theme: 'roma'
         sql: |
-          WITH top_resources AS (
-            SELECT name
-            FROM otel_logs_and_spans
-            WHERE project_id='{{project_id}}'
-              AND name IS NOT NULL
-              AND kind = 'server'
-              AND ('{{var-resource}}' = '' OR name = '{{var-resource}}')
-              {{time_filter}}
-            GROUP BY name
-            ORDER BY COUNT(*) DESC
-            LIMIT 20
-          )
-          SELECT 
+          SELECT
             extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            CASE 
-              WHEN tr.name IS NOT NULL THEN o.name 
+            CASE
+              WHEN tr.name IS NOT NULL THEN o.name
               ELSE 'Others'
             END as resource,
             COUNT(*)::float as value
           FROM otel_logs_and_spans o
-          LEFT JOIN top_resources tr ON o.name = tr.name
+          LEFT JOIN {{const-top_resources}} tr ON o.name = tr.name
           WHERE o.project_id='{{project_id}}'
             AND o.name IS NOT NULL
             AND o.kind = 'server'

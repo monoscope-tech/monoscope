@@ -6,10 +6,12 @@ module Models.Projects.Dashboards (
   Variable (..),
   VariableType (..),
   Tab (..),
+  Constant (..),
   getDashboardById,
   readDashboardsFromDirectory,
   readDashboardEndpoint,
   replaceQueryVariables,
+  replaceConstantVariables,
   deleteDashboardsByIds,
   addTeamsToDashboards,
   insert,
@@ -102,6 +104,7 @@ data Dashboard = Dashboard
   , teams :: Maybe [Text]
   , refreshInterval :: Maybe Text
   , timeRange :: Maybe TimePicker.TimePicker
+  , constants :: Maybe [Constant]
   , variables :: Maybe [Variable]
   , tabs :: Maybe [Tab]
   , widgets :: [Widget.Widget]
@@ -135,6 +138,22 @@ data Variable = Variable
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "_v", DAE.CamelToSnake]] Variable
+
+
+-- | Dashboard constants are query results that can be reused across widgets.
+-- Unlike variables which provide UI selection, constants execute a query once
+-- and make the results available as a CTE (Common Table Expression) that
+-- other queries can reference using {{const-<key>}}.
+data Constant = Constant
+  { key :: Text -- The name used to reference this constant, e.g., "top_resources"
+  , sql :: Maybe Text -- SQL query to execute
+  , query :: Maybe Text -- KQL query to execute (alternative to sql)
+  , description :: Maybe Text -- Optional description
+  , result :: Maybe [[Text]] -- Populated with query results after execution
+  }
+  deriving stock (Generic, Show, THS.Lift)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.CamelToSnake] Constant
 
 
 data Tab = Tab
@@ -209,6 +228,15 @@ replaceQueryVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime ->
 replaceQueryVariables pid mf mt allParams currentTime variable =
   let mappng = DashboardUtils.variablePresets pid.toText mf mt allParams currentTime
    in variable
+        & #sql . _Just %~ DashboardUtils.replacePlaceholders mappng
+        & #query . _Just %~ DashboardUtils.replacePlaceholders mappng
+
+
+-- | Replace placeholders in a constant's SQL/query with the standard variable presets
+replaceConstantVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Constant -> Constant
+replaceConstantVariables pid mf mt allParams currentTime constant =
+  let mappng = DashboardUtils.variablePresets pid.toText mf mt allParams currentTime
+   in constant
         & #sql . _Just %~ DashboardUtils.replacePlaceholders mappng
         & #query . _Just %~ DashboardUtils.replacePlaceholders mappng
 
