@@ -463,14 +463,14 @@ runAgenticQuery config userQuery apiKey = do
       sysPrompt = buildSystemPrompt config
       systemMsg = LLM.Message LLM.System sysPrompt LLM.defaultMessageData
       userMsg = LLM.Message LLM.User userQuery LLM.defaultMessageData
-      messages = systemMsg :| [userMsg]
+      chatHistory = systemMsg :| [userMsg]
       params =
         OpenAIV1._CreateChatCompletion
           { OpenAIV1.model = Models.Model "gpt-4o-mini"
           , OpenAIV1.tools = Just $ V.fromList allToolDefs
           , OpenAIV1.messages = V.empty
           }
-  runAgenticLoop config openAI messages params 0
+  runAgenticLoop config openAI chatHistory params 0
 
 
 runAgenticLoop
@@ -481,10 +481,10 @@ runAgenticLoop
   -> OpenAIV1.CreateChatCompletion
   -> Int
   -> Eff es (Either Text ChatLLMResponse)
-runAgenticLoop config openAI messages params iteration
+runAgenticLoop config openAI chatHistory params iteration
   | iteration >= config.maxIterations = pure $ Left "Maximum tool iterations reached without final response"
   | otherwise = do
-      result <- liftIO $ LLM.chat openAI messages (Just params)
+      result <- liftIO $ LLM.chat openAI chatHistory (Just params)
       case result of
         Left err -> pure $ Left $ "LLM Error: " <> show err
         Right responseMsg -> case LLM.toolCalls (LLM.messageData responseMsg) of
@@ -493,7 +493,7 @@ runAgenticLoop config openAI messages params iteration
             toolResults <- traverse (executeToolCall config) toolCallList
             let assistantMsg = responseMsg
                 toolMsgs = zipWith mkToolResultMsg toolCallList toolResults
-            newMessages <- liftIO $ addMessagesToMemory messages (assistantMsg : toolMsgs)
+            newMessages <- liftIO $ addMessagesToMemory chatHistory (assistantMsg : toolMsgs)
             runAgenticLoop config openAI newMessages params (iteration + 1)
 
 
@@ -508,7 +508,7 @@ mkToolResultMsg tc result =
 
 addMessagesToMemory :: LLM.ChatHistory -> [LLM.Message] -> IO LLM.ChatHistory
 addMessagesToMemory history newMsgs = do
-  let allMsgs = NE.fromList $ NE.toList history ++ newMsgs
+  let allMsgs = maybe history (history <>) (NE.nonEmpty newMsgs)
       memory = TokenBufferMemory{maxTokens = 8000, tokenBufferMessages = allMsgs}
   result <- messages memory
   pure $ fromMaybe allMsgs (rightToMaybe result)
@@ -635,4 +635,4 @@ runKqlAndFormat config kqlQuery cols formatResult = case parseQueryToAST kqlQuer
   Left parseErr -> pure $ "Error: Query parse failed - " <> show parseErr
   Right queryAST -> do
     resultE <- selectLogTable config.projectId queryAST kqlQuery Nothing config.timeRange cols Nothing Nothing
-    pure $ either (\e -> "Error: Query execution failed - " <> e) formatResult resultE
+    pure $ either ("Error: Query execution failed - " <>) formatResult resultE

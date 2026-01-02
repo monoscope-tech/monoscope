@@ -2,7 +2,6 @@ module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs 
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI

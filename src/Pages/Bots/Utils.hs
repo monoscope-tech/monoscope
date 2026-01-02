@@ -234,19 +234,16 @@ processAIQuery pid userQuery threadCtx apiKey = do
   facetSummaryM <- Facets.getFacetSummary pid "otel_logs_and_spans" dayAgo now
   let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.customContext = threadCtx}
   result <- AI.runAgenticQuery config userQuery apiKey
-  pure $ case result of
-    Left err -> Left err
-    Right AI.ChatLLMResponse{..} ->
-      let from' = timeRange >>= viaNonEmpty head
-          to' = timeRange >>= viaNonEmpty last
-          (fromT, toT, rangeM) = Utils.parseTime from' to' Nothing now
-          from = fromMaybe "" $ rangeM >>= Just . fst
-          to = fromMaybe "" $ rangeM >>= Just . snd
-       in Right AIQueryResult{query, visualization, fromTime = fromT, toTime = toT, timeRangeStr = (from, to)}
+  pure $ result <&> \AI.ChatLLMResponse{..} ->
+    let from' = timeRange >>= viaNonEmpty head
+        to' = timeRange >>= viaNonEmpty last
+        (fromT, toT, rangeM) = Utils.parseTime from' to' Nothing now
+        (from, to) = fromMaybe ("", "") rangeM
+     in AIQueryResult{query, visualization, fromTime = fromT, toTime = toT, timeRangeStr = (from, to)}
 
 
 formatThreadsWithMemory :: Int -> Text -> [LLM.Message] -> IO Text
-formatThreadsWithMemory maxTokens platform msgs = case NE.nonEmpty msgs of
+formatThreadsWithMemory maxTokens platform msgs = case nonEmpty msgs of
   Nothing -> pure ""
   Just history -> do
     let memory = TokenBufferMemory{maxTokens, tokenBufferMessages = history}
@@ -266,4 +263,4 @@ formatHistoryAsContext platform msgs =
     , T.intercalate "\n" $ map formatMessage msgs
     ]
   where
-    formatMessage m = "[" <> T.pack (show $ LLM.role m) <> "] " <> LLM.content m
+    formatMessage m = "[" <> show (LLM.role m) <> "] " <> LLM.content m

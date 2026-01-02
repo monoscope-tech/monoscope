@@ -461,39 +461,14 @@ executeArbitraryQuery queryText = do
 
 
 -- | Execute a user-provided SQL query with mandatory project_id filtering
--- SECURITY: Injects project_id filter using parameterized query value
--- The project_id is passed as a query parameter (?) to prevent SQL injection
+-- SECURITY: Wraps query in subquery and filters by parameterized project_id
 executeSecuredQuery :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
 executeSecuredQuery pid userQuery limit = do
-  -- Inject project_id = ? into the WHERE clause, with ? as a parameterized value
-  -- This is safe because: 1) project_id value is parameterized, 2) limit is parameterized
-  let securedQuery = case breakOnCIKeyword "where" userQuery of
-        Just (queryBefore, queryAfter) ->
-          let afterWhere = T.drop 5 queryAfter -- Drop "where" (5 chars)
-           in queryBefore <> "WHERE project_id = ? AND (" <> T.strip afterWhere <> ") LIMIT ?"
-        Nothing -> case findInsertPoint userQuery of
-          Just (queryBefore, queryAfter) -> queryBefore <> " WHERE project_id = ? " <> queryAfter <> " LIMIT ?"
-          Nothing -> userQuery <> " WHERE project_id = ? LIMIT ?"
+  let securedQuery = "SELECT * FROM (" <> userQuery <> ") WHERE project_id = ? LIMIT ?"
   resultE <- try @SomeException $ do
     results :: [[FieldValue]] <- PG.query (Query $ encodeUtf8 securedQuery) (pid, limit)
     pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
   pure $ first (\e -> "Query execution failed: " <> show e) resultE
-  where
-    -- Case-insensitive breakOn for ASCII SQL keywords (WHERE, ORDER BY, etc.)
-    -- Uses character-by-character search to avoid Unicode length mismatch issues
-    breakOnCIKeyword :: Text -> Text -> Maybe (Text, Text)
-    breakOnCIKeyword needle haystack = go 0
-      where
-        needleLen = T.length needle
-        haystackLen = T.length haystack
-        go pos
-          | pos + needleLen > haystackLen = Nothing
-          | T.toLower (T.take needleLen (T.drop pos haystack)) == T.toLower needle =
-              Just (T.take pos haystack, T.drop pos haystack)
-          | otherwise = go (pos + 1)
-    -- Find position to insert WHERE clause (before ORDER BY, GROUP BY, LIMIT, HAVING)
-    findInsertPoint :: Text -> Maybe (Text, Text)
-    findInsertPoint q = viaNonEmpty head $ sort $ mapMaybe (`breakOnCIKeyword` q) ["order by", "group by", "limit", "having"]
 
 
 selectLogTable :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
