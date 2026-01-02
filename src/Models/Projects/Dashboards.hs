@@ -141,9 +141,9 @@ data Variable = Variable
 
 
 -- | Dashboard constants are query results that can be reused across widgets.
--- Unlike variables which provide UI selection, constants execute a query once
--- and make the results available as a CTE (Common Table Expression) that
--- other queries can reference using {{const-<key>}}.
+-- Unlike variables which provide UI selection, constants execute a SQL or KQL
+-- query once and make the results available as a list that other queries can
+-- reference using {{const-<key>}} (e.g., in IN clauses).
 data Constant = Constant
   { key :: Text -- The name used to reference this constant, e.g., "top_resources"
   , sql :: Maybe Text -- SQL query to execute

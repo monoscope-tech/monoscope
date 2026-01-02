@@ -421,18 +421,25 @@ processVariable pid now timeRange@(sinceStr, fromDStr, toDStr) allParams variabl
     _ -> pure variable
 
 
--- | Process a single dashboard constant by executing its SQL query and populating the result.
+-- | Process a single dashboard constant by executing its SQL or KQL query and populating the result.
 -- Constants are executed once and their results are made available to all widgets.
 processConstant :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Constant -> ATAuthCtx Dashboards.Constant
 processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
   let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
       constant = Dashboards.replaceConstantVariables pid fromD toD allParams now constantBase
 
-  case constant.sql of
-    Just sqlQuery -> do
+  case (constant.sql, constant.query) of
+    -- SQL query takes precedence
+    (Just sqlQuery, _) -> do
       result <- try $ PG.query_ (Query $ encodeUtf8 sqlQuery)
       case result of
         Right queryResults -> pure constant{Dashboards.result = Just queryResults}
+        Left (_ :: SomeException) -> pure constant -- Return unchanged on error
+    -- KQL query support
+    (Nothing, Just kqlQuery) -> do
+      result <- try $ Charts.queryMetrics (Just Charts.DTText) (Just pid) (Just kqlQuery) Nothing sinceStr fromDStr toDStr Nothing allParams
+      case result of
+        Right metricsData -> pure constant{Dashboards.result = Just $ map V.toList $ V.toList metricsData.dataText}
         Left (_ :: SomeException) -> pure constant -- Return unchanged on error
     _ -> pure constant
 
