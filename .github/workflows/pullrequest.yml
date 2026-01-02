@@ -229,6 +229,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: weeder-artifacts
+          path: .
 
       - name: Run weeder
         run: |
