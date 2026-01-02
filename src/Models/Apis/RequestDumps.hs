@@ -467,23 +467,13 @@ executeSecuredQuery :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Eit
 executeSecuredQuery pid userQuery limit = do
   -- Inject project_id = ? into the WHERE clause, with ? as a parameterized value
   -- This is safe because: 1) project_id value is parameterized, 2) limit is parameterized
-  let lowerQuery = T.toLower userQuery
-      securedQuery =
-        if "where" `T.isInfixOf` lowerQuery
-          then -- Insert project_id right after WHERE
-            let (before, _) = T.breakOn "where" lowerQuery
-                wherePos = T.length before
-                (queryBefore, queryAfter) = T.splitAt wherePos userQuery
-                afterWhere = T.drop 5 queryAfter -- Drop "where" (5 chars)
-             in queryBefore <> "WHERE project_id = ? AND (" <> T.strip afterWhere <> ") LIMIT ?"
-          else -- No WHERE clause, find insert point before ORDER BY, GROUP BY, LIMIT, HAVING
-            case findInsertPoint lowerQuery of
-              Just pos ->
-                let (queryBefore, queryAfter) = T.splitAt pos userQuery
-                 in queryBefore <> " WHERE project_id = ? " <> queryAfter <> " LIMIT ?"
-              Nothing ->
-                -- No modifiers, append WHERE at the end
-                userQuery <> " WHERE project_id = ? LIMIT ?"
+  let securedQuery = case breakOnCI "where" userQuery of
+        Just (queryBefore, queryAfter) ->
+          let afterWhere = T.drop 5 queryAfter -- Drop "where" (5 chars)
+           in queryBefore <> "WHERE project_id = ? AND (" <> T.strip afterWhere <> ") LIMIT ?"
+        Nothing -> case findInsertPoint userQuery of
+          Just (queryBefore, queryAfter) -> queryBefore <> " WHERE project_id = ? " <> queryAfter <> " LIMIT ?"
+          Nothing -> userQuery <> " WHERE project_id = ? LIMIT ?"
   resultE <- try @SomeException $ do
     results :: [[FieldValue]] <- PG.query (Query $ encodeUtf8 securedQuery) (pid, limit)
     pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
@@ -491,12 +481,17 @@ executeSecuredQuery pid userQuery limit = do
     Left err -> Left $ "Query execution failed: " <> show err
     Right results -> Right results
   where
+    -- Case-insensitive breakOn that returns splits of the original text
+    breakOnCI :: Text -> Text -> Maybe (Text, Text)
+    breakOnCI needle haystack =
+      let lowerHaystack = T.toLower haystack
+          lowerNeedle = T.toLower needle
+       in if lowerNeedle `T.isInfixOf` lowerHaystack
+            then Just $ T.splitAt (T.length $ fst $ T.breakOn lowerNeedle lowerHaystack) haystack
+            else Nothing
     -- Find position to insert WHERE clause (before ORDER BY, GROUP BY, LIMIT, HAVING)
-    findInsertPoint :: Text -> Maybe Int
-    findInsertPoint q =
-      let candidates = mapMaybe findKeyword ["order by", "group by", "limit", "having"]
-          findKeyword kw = if kw `T.isInfixOf` q then Just (T.length $ fst $ T.breakOn kw q) else Nothing
-       in viaNonEmpty head $ sort candidates
+    findInsertPoint :: Text -> Maybe (Text, Text)
+    findInsertPoint q = viaNonEmpty head $ sort $ mapMaybe (`breakOnCI` q) ["order by", "group by", "limit", "having"]
 
 
 selectLogTable :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
