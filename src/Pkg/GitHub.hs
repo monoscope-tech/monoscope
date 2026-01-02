@@ -11,7 +11,6 @@ module Pkg.GitHub (
 import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
-import "base64" Data.ByteString.Base64 qualified as B64
 import Data.Effectful.Wreq (HTTP, defaults, getWith, header, postWith, responseBody)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Deriving.Aeson qualified as DAE
@@ -22,6 +21,7 @@ import Jose.Jwt (Jwt (..))
 import Relude
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
+import "base64" Data.ByteString.Base64 qualified as B64
 import "crypton-x509" Data.X509 (PrivKey (..))
 import "crypton-x509-store" Data.X509.File (readKeyFile)
 

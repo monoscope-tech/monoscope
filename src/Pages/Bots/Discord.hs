@@ -356,7 +356,8 @@ sendJsonFollowupResponse appId interactionToken botToken content = do
 
 threadsPrompt :: [DiscordMessage] -> Text
 threadsPrompt = formatThreadsPrompt discordMsgToJson "DISCORD" . filter (\x -> x.author.username == "APItoolkit")
-  where discordMsgToJson x = AE.object ["message" AE..= AE.object ["content" AE..= x.content, "embeds" AE..= x.embeds]]
+  where
+    discordMsgToJson x = AE.object ["message" AE..= AE.object ["content" AE..= x.content, "embeds" AE..= x.embeds]]
 
 
 verifyDiscordSignature
