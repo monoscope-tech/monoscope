@@ -266,9 +266,4 @@ formatHistoryAsContext platform msgs =
     , T.intercalate "\n" $ map formatMessage msgs
     ]
   where
-    formatMessage m = "[" <> roleToText (LLM.role m) <> "] " <> LLM.content m
-    roleToText = \case
-      LLM.User -> "User"
-      LLM.Assistant -> "Assistant"
-      LLM.System -> "System"
-      LLM.Tool -> "Tool"
+    formatMessage m = "[" <> T.pack (show $ LLM.role m) <> "] " <> LLM.content m

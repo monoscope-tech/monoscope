@@ -52,6 +52,8 @@ import Effectful.Log (Log)
 import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
 import Langchain.LLM.OpenAI qualified as OpenAI
+import Langchain.Memory.Core (BaseMemory (..))
+import Langchain.Memory.TokenBufferMemory (TokenBufferMemory (..))
 import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Apis.RequestDumps (executeSecuredQuery, selectLogTable)
 import Models.Projects.Projects qualified as Projects
@@ -491,7 +493,7 @@ runAgenticLoop config openAI messages params iteration
             toolResults <- traverse (executeToolCall config) toolCallList
             let assistantMsg = responseMsg
                 toolMsgs = zipWith mkToolResultMsg toolCallList toolResults
-                newMessages = NE.fromList $ NE.toList messages ++ [assistantMsg] ++ toolMsgs
+            newMessages <- liftIO $ addMessagesToMemory messages (assistantMsg : toolMsgs)
             runAgenticLoop config openAI newMessages params (iteration + 1)
 
 
@@ -502,6 +504,14 @@ mkToolResultMsg tc result =
     , LLM.content = result
     , LLM.messageData = LLM.defaultMessageData{LLM.name = Just $ LLM.toolCallId tc}
     }
+
+
+addMessagesToMemory :: LLM.ChatHistory -> [LLM.Message] -> IO LLM.ChatHistory
+addMessagesToMemory history newMsgs = do
+  let allMsgs = NE.fromList $ NE.toList history ++ newMsgs
+      memory = TokenBufferMemory{maxTokens = 8000, tokenBufferMessages = allMsgs}
+  result <- messages memory
+  pure $ fromMaybe allMsgs (rightToMaybe result)
 
 
 executeToolCall
