@@ -428,6 +428,7 @@ processConstant :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, May
 processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
   let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
       constant = Dashboards.replaceConstantVariables pid fromD toD allParams now constantBase
+      runQuery :: forall a. Text -> ATAuthCtx a -> (a -> [[Text]]) -> ATAuthCtx Dashboards.Constant
       runQuery label action transform = do
         (result, duration) <- Log.timeAction $ try action
         either
@@ -443,7 +444,9 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
 -- Process a single widget recursively.
 processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
 processWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widgetBase = do
-  let widget = widgetBase & #_projectId %~ (<|> Just pid)
+  let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
+      replacePlaceholders = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresets pid.toText fromD toD allParams now)
+      widget = widgetBase & #_projectId %~ (<|> Just pid) & #sql . _Just %~ replacePlaceholders & #query %~ fmap replacePlaceholders
 
   widget' <-
     if widget.eager == Just True || widget.wType == Widget.WTAnomalies
