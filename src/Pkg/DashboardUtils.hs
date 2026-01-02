@@ -49,20 +49,18 @@ variablePresets pid mf mt allParams currentTime =
 -- | Convert constant results to a SQL list format suitable for IN clauses.
 -- For single-column results [["api/users"], ["api/orders"]],
 -- this generates: "('api/users', 'api/orders')".
--- For multi-column results, only the first column is used.
+-- For multi-column results, only the first column is used (empty inner lists are skipped).
 -- For empty results, generates an empty subquery "(SELECT NULL::text WHERE FALSE)"
 -- to avoid SQL three-valued logic issues with NULL in IN clauses.
 constantToSQLList :: [[Text]] -> Text
-constantToSQLList rows
-  | null rows = "(SELECT NULL::text WHERE FALSE)" -- Empty subquery returns no rows
-  | otherwise =
-      let escapeValue v = "'" <> T.replace "'" "''" v <> "'"
-          -- Take the first column from each row using pattern matching
-          values = [escapeValue v | (v : _) <- rows]
-       in "(" <> T.intercalate ", " values <> ")"
+constantToSQLList = \case
+  [] -> "(SELECT NULL::text WHERE FALSE)"
+  rows ->
+    let escapeValue v = "'" <> T.replace "'" "''" v <> "'"
+     in "(" <> T.intercalate ", " [escapeValue v | (v : _) <- rows] <> ")"
 
 
 -- | Convert a list of processed constants (with results) to a map for placeholder substitution.
 -- Each constant with key "foo" becomes available as "const-foo" placeholder.
 constantsToMap :: [(Text, [[Text]])] -> Map Text Text
-constantsToMap constants = Map.fromList [("const-" <> key, constantToSQLList result) | (key, result) <- constants]
+constantsToMap = Map.fromList . map (bimap ("const-" <>) constantToSQLList)

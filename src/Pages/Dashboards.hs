@@ -432,19 +432,23 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
   case (constant.sql, constant.query) of
     -- SQL query takes precedence
     (Just sqlQuery, _) -> do
-      result <- try $ PG.query_ (Query $ encodeUtf8 sqlQuery)
+      (result, duration) <- Log.timeAction $ try $ PG.query_ (Query $ encodeUtf8 sqlQuery)
       case result of
-        Right queryResults -> pure constant{Dashboards.result = Just queryResults}
+        Right queryResults -> do
+          Log.logDebug "Dashboard constant SQL query completed" (constant.key, duration)
+          pure constant{Dashboards.result = Just queryResults}
         Left (err :: SomeException) -> do
-          Log.logWarn "Dashboard constant SQL query failed" (constant.key, show err)
+          Log.logWarn "Dashboard constant SQL query failed" (constant.key, show err, duration)
           pure constant
     -- KQL query support
     (Nothing, Just kqlQuery) -> do
-      result <- try $ Charts.queryMetrics (Just Charts.DTText) (Just pid) (Just kqlQuery) Nothing sinceStr fromDStr toDStr Nothing allParams
+      (result, duration) <- Log.timeAction $ try $ Charts.queryMetrics (Just Charts.DTText) (Just pid) (Just kqlQuery) Nothing sinceStr fromDStr toDStr Nothing allParams
       case result of
-        Right metricsData -> pure constant{Dashboards.result = Just $ map V.toList $ V.toList metricsData.dataText}
+        Right metricsData -> do
+          Log.logDebug "Dashboard constant KQL query completed" (constant.key, duration)
+          pure constant{Dashboards.result = Just $ map V.toList $ V.toList metricsData.dataText}
         Left (err :: SomeException) -> do
-          Log.logWarn "Dashboard constant KQL query failed" (constant.key, show err)
+          Log.logWarn "Dashboard constant KQL query failed" (constant.key, show err, duration)
           pure constant
     _ -> pure constant
 
