@@ -23,7 +23,7 @@ Monoscope has built a strong foundation with S3-native storage, OpenTelemetry su
 
 ### ✅ Strengths
 - **S3-native storage** - Unique differentiator for cost-effective long-term retention
-- **AI-powered insights** - Natural language queries and anomaly detection ahead of competitors
+- **AI-powered insights** - Natural language queries, AI conversations on issues, and anomaly detection ahead of competitors
 - **OpenTelemetry native** - Modern, future-proof ingestion with 750+ integrations
 - **Unified telemetry** - Logs, metrics, and traces in one platform
 - **Self-hostable** - Open-source (AGPL-3.0) with cloud option
@@ -245,7 +245,12 @@ Monoscope has built a strong foundation with S3-native storage, OpenTelemetry su
 #### 2.5 AI & AIOps Enhancements
 - **Priority: HIGH** (Differentiator)
 
-**P0 - Critical:**
+**Current AI Capabilities (Already Implemented):**
+- ✅ **Natural language queries** - Query telemetry data using plain English
+- ✅ **AI conversations on issues** - Chat with AI about detected anomalies and errors
+- ✅ **Basic anomaly detection** - Automatic detection of API changes, exceptions, performance issues
+
+**P0 - Critical Enhancements:**
 - [ ] **AIOps workflow builder** - Visual workflow editor for AI agents
   - Drag-and-drop nodes: query, filter, LLM analysis, alert
   - Conditional logic and branching
@@ -434,53 +439,6 @@ Monoscope has built a strong foundation with S3-native storage, OpenTelemetry su
 
 ---
 
-### 🔮 Phase 4: Innovation & Differentiation (2027+)
-**Goal:** Leapfrog competitors with unique capabilities
-
-#### 4.1 Advanced AI Capabilities
-- [ ] **AI-powered query generation from graphs** - Point to a graph spike, get MQL query
-- [ ] **Automatic dashboard generation** - Generate dashboards from service descriptions
-- [ ] **Incident response copilot** - AI assistant during incident response
-  - Suggest investigation steps
-  - Draft runbooks from incident patterns
-- [ ] **Predictive alerting** - Alert before metrics breach thresholds
-- [ ] **Cost optimization recommendations** - AI suggests ways to reduce observability costs
-  - Identify rarely-queried data for cheaper storage
-  - Suggest sampling rates for high-volume services
-
-#### 4.2 Developer Workflows
-- [ ] **CI/CD integration** - First-class CI/CD pipeline visibility
-  - Track build times, test failures, deployment frequency
-  - DORA metrics (deployment frequency, lead time, MTTR, change failure rate)
-  - Link CI/CD events to traces and errors
-- [ ] **Feature flag integration** - Track feature flag changes and impact
-  - Correlate flag changes with errors, performance
-- [ ] **Code change correlation** - Link Git commits to metrics/errors
-  - Show which commits caused errors or degradations
-
-#### 4.3 Cost Management
-- [ ] **Cost allocation** - Track observability costs per service/team
-  - Ingestion costs, storage costs, query costs
-  - Budgets and alerts per team
-- [ ] **Intelligent sampling** - AI-driven adaptive sampling
-  - Higher sampling for errors and slow traces
-  - Lower sampling for healthy, fast traces
-- [ ] **Metric aggregation rules** - Pre-aggregate high-cardinality metrics
-  - Reduce storage costs for metrics
-
-#### 4.4 eBPF & Deep Insights
-- [ ] **eBPF-based monitoring** - Zero-instrumentation observability
-  - Automatic tracing for any application
-  - Network-level insights without sidecars
-  - Kernel-level metrics (syscalls, context switches)
-
-#### 4.5 Chaos Engineering Integration
-- [ ] **Chaos experiment tracking** - Integrate with chaos tools (Chaos Mesh, Litmus)
-  - Track chaos experiments as events
-  - Correlate experiments with metrics/errors
-  - Validate system resilience
-
----
 
 ## Competitive Feature Matrix
 
@@ -580,8 +538,6 @@ These can wait until Phase 3/4:
 - **SSO adoption**: 60% of enterprise users via SSO
 - **Plugin ecosystem**: 10+ community plugins
 - **API usage**: 30% of dashboards created via API/Terraform
-
-### Phase 4 (Innovation)
 - **Market leadership**: #1 in AI-powered observability
 - **Cost savings**: Users report 70%+ cost reduction vs Datadog
 - **Community**: 10K+ GitHub stars, 100+ contributors
@@ -594,7 +550,6 @@ These can wait until Phase 3/4:
 - **Phase 1**: 8 engineers (2 frontend, 3 backend, 1 data, 1 DevOps, 1 AI/ML)
 - **Phase 2**: +4 engineers (2 APM specialists, 1 RUM, 1 AI/ML)
 - **Phase 3**: +3 engineers (1 security, 1 integrations, 1 platform)
-- **Phase 4**: +2 engineers (1 eBPF, 1 research)
 
 ### Technology Investments
 - **Infrastructure**: Scale to handle 10M+ events/sec
@@ -612,7 +567,7 @@ These can wait until Phase 3/4:
 2. **Multi-datasource complexity** - Query federation is hard
    - *Mitigation*: Start with read-only support, limit to time-series DBs
 3. **eBPF portability** - Kernel version dependencies
-   - *Mitigation*: Phase 4 feature, invest in compatibility layer
+   - *Mitigation*: Not planned for initial roadmap, defer until market demand justifies investment
 
 ### Market Risks
 1. **Datadog/Grafana acquisitions** - Competitors acquire key features
@@ -771,6 +726,6 @@ This roadmap provides a clear path for Monoscope to reach Datadog and Grafana pa
 
 By executing Phase 1 (Foundation) in Q1 2026, Phase 2 (Advanced Features) in Q2-Q3 2026, and Phase 3 (Enterprise) in Q4 2026 - Q1 2027, Monoscope will be positioned as a credible alternative to incumbents with compelling cost and AI advantages.
 
-**The key is to prioritize ruthlessly**: Ship dashboard variables, service maps, alert routing, and RBAC before venturing into RUM, synthetic monitoring, or eBPF. Build the foundation first, then differentiate.
+**The key is to prioritize ruthlessly**: Ship dashboard variables, service maps, alert routing, and RBAC before venturing into RUM or synthetic monitoring. Build the foundation first, then differentiate with AI capabilities.
 
 Let's build the future of observability. 🚀
