@@ -53,7 +53,7 @@ import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
 import Langchain.LLM.OpenAI qualified as OpenAI
 import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
-import Models.Apis.RequestDumps (selectLogTable)
+import Models.Apis.RequestDumps (executeSecuredQuery, selectLogTable)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
@@ -274,15 +274,11 @@ defaultAgenticConfig pid =
 
 
 getIntArg :: Text -> Map.Map Text AE.Value -> Maybe Int
-getIntArg key args = case Map.lookup key args of
-  Just (AE.Number n) -> Just $ round n
-  _ -> Nothing
+getIntArg key args = Map.lookup key args >>= \case AE.Number n -> Just (round n); _ -> Nothing
 
 
 getTextArg :: Text -> Map.Map Text AE.Value -> Maybe Text
-getTextArg key args = case Map.lookup key args of
-  Just (AE.String s) -> Just s
-  _ -> Nothing
+getTextArg key args = Map.lookup key args >>= \case AE.String s -> Just s; _ -> Nothing
 
 
 getLimitArg :: Text -> Int -> Int -> Map.Map Text AE.Value -> Int
@@ -290,14 +286,14 @@ getLimitArg key maxVal defVal args = min maxVal $ fromMaybe defVal (getIntArg ke
 
 
 formatSummarizeResults :: V.Vector (V.Vector AE.Value) -> Text
-formatSummarizeResults = T.intercalate ", " . mapMaybe formatRow . V.toList
+formatSummarizeResults = T.intercalate ", " . V.toList . V.mapMaybe formatRow
   where
     formatRow (V.toList -> [v, c]) = Just $ "\"" <> jsonToText v <> "\" (" <> jsonToText c <> ")"
     formatRow _ = Nothing
 
 
 formatSampleLogs :: Int -> V.Vector (V.Vector AE.Value) -> Text
-formatSampleLogs maxBody = T.intercalate "\n" . mapMaybe formatRow . V.toList
+formatSampleLogs maxBody = T.intercalate "\n" . V.toList . V.mapMaybe formatRow
   where
     formatRow (V.toList -> (lvl : nm : svc : body)) =
       Just $ "  - [" <> jsonToText lvl <> "] " <> jsonToText nm <> " (" <> jsonToText svc <> "): " <> T.take maxBody (T.intercalate " " $ map jsonToText body)
@@ -419,6 +415,12 @@ allToolDefs =
         , "properties" AE..= AE.object [("query", mkProp "string" "KQL query to execute"), ("limit", mkProp "integer" "Max results (default 20)")]
         , "required" AE..= (["query"] :: [Text])
         ]
+  , mkToolDef "run_sql_query" "Execute raw SQL on otel_logs_and_spans table. PREFER KQL queries (run_query) when possible - use SQL only for complex JOINs or aggregations not expressible in KQL"
+      $ AE.object
+        [ "type" AE..= ("object" :: Text)
+        , "properties" AE..= AE.object [("query", mkProp "string" "SQL SELECT query (project_id filter auto-injected for security)"), ("limit", mkProp "integer" "Max results (default 20, max 100)")]
+        , "required" AE..= (["query"] :: [Text])
+        ]
   ]
 
 
@@ -518,6 +520,7 @@ executeToolCall config tc = do
     "get_facets" -> pure $ executeGetFacets config
     "get_schema" -> pure $ Schema.generateSchemaForAI Schema.telemetrySchema
     "run_query" -> executeRunQuery config args
+    "run_sql_query" -> executeSqlQuery config args
     _ -> pure $ "Unknown tool: " <> funcName
 
 
@@ -594,6 +597,23 @@ executeRunQuery config args = case getTextArg "query" args of
   _ -> pure $ toolError "run_query" "missing 'query'" args
 
 
+executeSqlQuery
+  :: DB es
+  => AgenticConfig
+  -> Map.Map Text AE.Value
+  -> Eff es Text
+executeSqlQuery config args = case getTextArg "query" args of
+  Just query -> do
+    let lim = getLimitArg "limit" config.limits.maxQueryResults config.limits.maxDisplayRows args
+    resultE <- executeSecuredQuery config.projectId query lim
+    pure $ case resultE of
+      Left err -> "SQL Error: " <> err <> "\nNote: KQL queries (run_query) are preferred when possible."
+      Right results ->
+        let count = V.length results
+         in formatQueryResults config.limits.maxDisplayRows results count
+  _ -> pure $ toolError "run_sql_query" "missing 'query'" args
+
+
 runKqlAndFormat
   :: (DB es, Log :> es, Time.Time :> es)
   => AgenticConfig
@@ -602,7 +622,7 @@ runKqlAndFormat
   -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> Text)
   -> Eff es Text
 runKqlAndFormat config kqlQuery cols formatResult = case parseQueryToAST kqlQuery of
-  Left _ -> pure "Error: Query parse failed"
+  Left parseErr -> pure $ "Error: Query parse failed - " <> show parseErr
   Right queryAST -> do
     resultE <- selectLogTable config.projectId queryAST kqlQuery Nothing config.timeRange cols Nothing Nothing
-    pure $ either (const "Error: Query execution failed") formatResult resultE
+    pure $ either (\e -> "Error: Query execution failed - " <> e) formatResult resultE
