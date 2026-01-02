@@ -54,7 +54,6 @@ import Models.Apis.Monitors (MonitorAlertConfig (..))
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ManageMembers
 import Pages.Components (resizer_)
-import Pkg.AI (callOpenAIAPI, systemPrompt)
 import Pkg.AI qualified as AI
 
 
@@ -807,8 +806,9 @@ apiLogsPage page = do
 
 
 aiSearchH :: Projects.ProjectId -> AE.Value -> ATAuthCtx (RespHeaders AE.Value)
-aiSearchH _pid requestBody = do
+aiSearchH pid requestBody = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
+  now <- Time.currentTime
   let envCfg = authCtx.env
 
   let inputTextM = AET.parseMaybe (AE.withObject "request" (AE..: "input")) requestBody
@@ -822,25 +822,22 @@ aiSearchH _pid requestBody = do
           addErrorToast "Please enter a search query" Nothing
           throwError Servant.err400{Servant.errBody = "Empty input"}
         else do
-          let fullPrompt = systemPrompt <> "\n\nUser query: " <> inputText
-          result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
+          -- Fetch precomputed facets for context (last 24 hours)
+          let dayAgo = addUTCTime (-86400) now
+          facetSummaryM <- Facets.getFacetSummary pid "otel_logs_and_spans" dayAgo now
+          let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM}
+          result <- AI.runAgenticQuery config inputText envCfg.openaiApiKey
 
           case result of
             Left errMsg -> do
               addErrorToast "AI search failed" (Just errMsg)
               throwError Servant.err502{Servant.errBody = encodeUtf8 errMsg}
-            Right rs -> do
-              let resp = AI.getAskLLMResponse rs
-              case resp of
-                Left err -> do
-                  addErrorToast "AI search failed" (Just err)
-                  throwError Servant.err502{Servant.errBody = encodeUtf8 err}
-                Right AI.ChatLLMResponse{..} -> do
-                  addRespHeaders
-                    $ AE.object
-                      [ "query" AE..= query
-                      , "visualization_type" AE..= visualization
-                      ]
+            Right AI.ChatLLMResponse{..} -> do
+              addRespHeaders
+                $ AE.object
+                  [ "query" AE..= query
+                  , "visualization_type" AE..= visualization
+                  ]
 
 
 curateCols :: [Text] -> [Text] -> [Text]

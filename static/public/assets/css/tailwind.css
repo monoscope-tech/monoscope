@@ -1172,6 +1172,34 @@ code, pre, .code, .monospace {
   @apply cursor-move;
 }
 
+/* Gridstack custom resize icon - restore APItoolkit custom styling
+   (overrides the default gridstack arrow icon with a dotted grid pattern) */
+.grid-stack-placeholder > .placeholder-content {
+  background-color: rgba(0, 104, 255, 0.05);
+  border-radius: 1rem;
+  border: 2px dashed rgba(0, 104, 255, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.grid-stack-placeholder > .placeholder-content::after {
+  content: 'drop here';
+  color: rgba(0, 104, 255, 0.7);
+  font-size: 1rem;
+  pointer-events: none;
+}
+
+/* Custom resize handle icon - dotted grid pattern */
+.grid-stack-item > .ui-resizable-se {
+  background-image: url('data:image/svg+xml;utf8,<svg viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M10 10H8V8H10V10ZM10 6H8V4H10V6ZM6 10H4V8H6V10ZM6 6H4V4H6V6ZM2 10H0V8H2V10ZM10 2H8V0H10V2Z" fill="%2394A3B8"/></svg>');
+  width: 14px;
+  height: 14px;
+  margin-right: 8px;
+  margin-bottom: 8px;
+  transform: none;
+}
+
 .tagify--select::after {
   content: '›' !important;
   color: var(--color-strokeStrong);
