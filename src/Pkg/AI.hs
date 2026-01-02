@@ -508,7 +508,7 @@ mkToolResultMsg tc result =
 
 addMessagesToMemory :: LLM.ChatHistory -> [LLM.Message] -> IO LLM.ChatHistory
 addMessagesToMemory history newMsgs = do
-  let allMsgs = maybe history (history <>) (NE.nonEmpty newMsgs)
+  let allMsgs = maybe history (history <>) (nonEmpty newMsgs)
       memory = TokenBufferMemory{maxTokens = 8000, tokenBufferMessages = allMsgs}
   result <- messages memory
   pure $ fromMaybe allMsgs (rightToMaybe result)
