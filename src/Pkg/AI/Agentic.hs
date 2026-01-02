@@ -190,7 +190,7 @@ data AgenticResponse
 -- | Tool descriptions for the LLM prompt
 toolDescriptions :: Text
 toolDescriptions =
-  T.unlines
+  unlines
     [ ""
     , "AVAILABLE TOOLS:"
     , "You can optionally call tools to gather more context before generating your final query."
@@ -267,7 +267,7 @@ parseAgenticResponse responseText =
 
 -- | Try to parse tool calls from JSON value
 parseToolCalls :: AE.Value -> Maybe [ToolCall]
-parseToolCalls val = AET.parseMaybe parser val
+parseToolCalls = AET.parseMaybe parser
   where
     parser = AE.withObject "ToolCallResponse" $ \obj -> do
       calls <- obj AE..: "tool_calls"
@@ -498,7 +498,7 @@ formatFacetContext = \case
      in if null formattedFacets
           then ""
           else
-            T.unlines
+            unlines
               [ ""
               , "PROJECT DATA CONTEXT:"
               , "The following are popular values for key fields in this project (from the last 24 hours):"
@@ -512,7 +512,7 @@ formatFacetContext = \case
 -- | Format tool results for feeding back to the LLM
 formatToolResults :: [ToolResult] -> Text
 formatToolResults results =
-  T.unlines
+  unlines
     $ ["", "TOOL RESULTS:", ""]
     <> map formatResult results
     <> ["", "Now provide your final response in the standard JSON format."]
