@@ -2,6 +2,7 @@ module Pages.Dashboards (
   dashboardGetH,
   dashboardTabGetH,
   dashboardTabContentGetH,
+  dashboardTabRenamePatchH,
   entrypointRedirectGetH,
   DashboardGet (..),
   dashboardsGetH,
@@ -26,6 +27,8 @@ module Pages.Dashboards (
   visTypes,
   processEagerWidget,
   dashboardBulkActionPostH,
+  TabRenameForm (..),
+  TabRenameRes (..),
 ) where
 
 import Control.Lens
@@ -146,7 +149,7 @@ instance ToHtml DashboardGet where
 
 dashboardPage_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> [(Text, Maybe Text)] -> Html ()
 dashboardPage_ pid dashId dash dashVM allParams = do
-  -- when  $ freeTierLimitExceededBanner pid.toText
+  -- Modal for renaming dashboard
   Components.modal_ "pageTitleModalId" ""
     $ form_
       [ class_ "flex flex-col p-3 gap-3"
@@ -163,6 +166,26 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       div_ [class_ "mt-3 flex justify-end gap-2"] do
         label_ [Lucid.for_ "pageTitleModalId", class_ "btn btn-outline cursor-pointer"] "Cancel"
         button_ [type_ "submit", class_ "btn btn-primary"] "Save"
+
+  -- Modal for renaming tab (only shown for dashboards with tabs)
+  whenJust dash.tabs \tabs -> do
+    let activeTabSlug = join (L.lookup "activeTabSlug" allParams)
+        activeTabInfo = activeTabSlug >>= findTabBySlug tabs
+        activeTabName = maybe "" ((.name) . snd) activeTabInfo
+        currentTabSlug = fromMaybe "" activeTabSlug
+    Components.modal_ "tabRenameModalId" ""
+      $ form_
+        [ class_ "flex flex-col p-3 gap-3"
+        , hxPatch_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/" <> currentTabSlug <> "/rename")
+        , hxSwap_ "none"
+        , hxTrigger_ "submit"
+        ]
+      $ fieldset_ [class_ "fieldset min-w-xs"] do
+        label_ [class_ "label"] "Tab Name"
+        input_ [class_ "input", name_ "newName", placeholder_ "Enter tab name", value_ activeTabName]
+        div_ [class_ "mt-3 flex justify-end gap-2"] do
+          label_ [Lucid.for_ "tabRenameModalId", class_ "btn btn-outline cursor-pointer"] "Cancel"
+          button_ [type_ "submit", class_ "btn btn-primary"] "Save"
 
   -- Render variables and tabs in the same container
   when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-fillWeaker px-4 py-2 gap-4 items-center flex-wrap"] do
@@ -1549,6 +1572,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
           , pageTitle = dashTitle dashVM.title
           , pageTitleSuffix = activeTabName -- Show current tab in breadcrumbs
           , pageTitleModalId = Just "pageTitleModalId"
+          , pageTitleSuffixModalId = Just "tabRenameModalId" -- Modal for renaming tab
           , config = appCtx.config
           , freeTierExceeded = freeTierExceeded
           , pageActions = Just $ div_ [class_ "flex gap-3 items-center"] do
@@ -1561,6 +1585,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
                   div_ [tabindex_ "0", role_ "button", class_ "text-iconNeutral cursor-pointer  p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Context Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
                   ul_ [tabindex_ "0", class_ "dropdown-content menu menu-md bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none"] do
                     li_ $ label_ [Lucid.for_ "pageTitleModalId", class_ "p-2"] "Rename dashboard"
+                    li_ $ label_ [Lucid.for_ "tabRenameModalId", class_ "p-2"] "Rename tab"
                     li_
                       $ button_
                         [ class_ "p-2 w-full text-left"
@@ -1631,3 +1656,54 @@ tabContentPanel_ pid dashboardId idx tabName widgets isActive = do
       when (null widgets) $ label_ [id_ $ "add_widget_tab_" <> show idx, class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
         faSprite_ "plus" "regular" "h-8 w-8"
         span_ "Add a widget"
+
+
+-- | Form for renaming a tab
+newtype TabRenameForm = TabRenameForm
+  { newName :: Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+-- | Response for tab rename containing new tab name and slug
+data TabRenameRes = TabRenameRes
+  { newName :: Text
+  , newSlug :: Text
+  }
+  deriving stock (Generic, Show)
+
+
+instance ToHtml TabRenameRes where
+  toHtml res = do
+    -- Out-of-band swap for updating breadcrumb with new tab name
+    span_ [id_ "pageTitleSuffix", class_ "flex items-center gap-1", hxSwapOob_ "true"] do
+      faSprite_ "chevron-right" "regular" "w-3 h-3"
+      span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml res.newName
+  toHtmlRaw = toHtml
+
+
+-- | Handler for renaming a tab
+dashboardTabRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> TabRenameForm -> ATAuthCtx (RespHeaders TabRenameRes)
+dashboardTabRenamePatchH pid dashId tabSlug form = do
+  (dashVM, dash) <- getDashAndVM dashId Nothing
+  now <- Time.currentTime
+
+  case dash.tabs of
+    Nothing -> throwError $ err404{errBody = "Dashboard has no tabs"}
+    Just tabs -> case findTabBySlug tabs tabSlug of
+      Nothing -> throwError $ err404{errBody = "Tab not found: " <> encodeUtf8 tabSlug}
+      Just (idx, _) -> do
+        -- Update the tab name at the found index
+        let updatedTabs = zipWith (\i tab -> if i == idx then tab{Dashboards.name = form.newName} else tab) [0 ..] tabs
+            updatedDash = dash & #tabs ?~ updatedTabs
+            newSlug = tabNameToSlug form.newName
+
+        -- Update the dashboard schema
+        _ <- Dashboards.updateSchemaAndUpdatedAt dashId updatedDash now
+        syncDashboardAndQueuePush pid dashId
+
+        addSuccessToast "Tab renamed successfully" Nothing
+        -- Redirect to new tab URL after rename
+        redirectCS $ "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/" <> newSlug
+        addRespHeaders $ TabRenameRes{newName = form.newName, newSlug = newSlug}
