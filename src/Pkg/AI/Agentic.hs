@@ -57,6 +57,8 @@ data ToolLimits = ToolLimits
   , defaultFieldLimit :: Int
   , defaultSampleLimit :: Int
   , maxQueryResults :: Int
+  , maxDisplayRows :: Int
+  , maxBodyPreview :: Int
   }
 
 
@@ -69,6 +71,8 @@ defaultLimits =
     , defaultFieldLimit = 10
     , defaultSampleLimit = 3
     , maxQueryResults = 100
+    , maxDisplayRows = 20
+    , maxBodyPreview = 100
     }
 
 
@@ -128,6 +132,12 @@ getIntFromArgs key args = case Map.lookup key args of
   _ -> Nothing
 
 
+getTextArg :: Text -> Map.Map Text AE.Value -> Maybe Text
+getTextArg key args = case Map.lookup key args of
+  Just (AE.String s) -> Just s
+  _ -> Nothing
+
+
 formatSummarizeResults :: V.Vector (V.Vector AE.Value) -> Text
 formatSummarizeResults = T.intercalate ", " . mapMaybe formatRow . V.toList
   where
@@ -135,18 +145,18 @@ formatSummarizeResults = T.intercalate ", " . mapMaybe formatRow . V.toList
     formatRow _ = Nothing
 
 
-formatSampleLogs :: V.Vector (V.Vector AE.Value) -> Text
-formatSampleLogs = T.intercalate "\n" . mapMaybe formatRow . V.toList
+formatSampleLogs :: Int -> V.Vector (V.Vector AE.Value) -> Text
+formatSampleLogs maxBody = T.intercalate "\n" . mapMaybe formatRow . V.toList
   where
     formatRow (V.toList -> (lvl : nm : svc : body)) =
-      Just $ "  - [" <> jsonToText lvl <> "] " <> jsonToText nm <> " (" <> jsonToText svc <> "): " <> T.take 100 (T.intercalate " " $ map jsonToText body)
+      Just $ "  - [" <> jsonToText lvl <> "] " <> jsonToText nm <> " (" <> jsonToText svc <> "): " <> T.take maxBody (T.intercalate " " $ map jsonToText body)
     formatRow _ = Nothing
 
 
-formatQueryResults :: V.Vector (V.Vector AE.Value) -> Int -> Text
-formatQueryResults results count =
-  let formatted = T.intercalate "\n" $ take 20 $ V.toList $ V.map formatRow results
-      truncated = if count > 20 then "\n... +" <> show (count - 20) <> " more" else ""
+formatQueryResults :: Int -> V.Vector (V.Vector AE.Value) -> Int -> Text
+formatQueryResults maxRows results count =
+  let formatted = T.intercalate "\n" $ take maxRows $ V.toList $ V.map formatRow results
+      truncated = if count > maxRows then "\n... +" <> show (count - maxRows) <> " more" else ""
    in "Results (" <> show count <> " rows):\n" <> formatted <> truncated
   where
     formatRow row = "  " <> T.intercalate " | " (V.toList $ V.map jsonToText row)
@@ -156,7 +166,7 @@ jsonToText :: AE.Value -> Text
 jsonToText = \case
   AE.String s -> s
   AE.Number n -> show n
-  AE.Bool b -> if b then "true" else "false"
+  AE.Bool b -> bool "false" "true" b
   AE.Null -> "null"
   AE.Array arr -> "[" <> T.intercalate ", " (V.toList $ V.map jsonToText arr) <> "]"
   AE.Object _ -> "{...}"
@@ -496,12 +506,11 @@ executeCountQuery
   => AgenticConfig
   -> Map.Map Text AE.Value
   -> Eff es Text
-executeCountQuery config args =
-  case Map.lookup "query" args of
-    Just (AE.String kqlQuery) ->
-      runKqlAndFormat config kqlQuery [] $ \(_, _, count) ->
-        "Query '" <> kqlQuery <> "' matches " <> show count <> " entries"
-    _ -> pure "Error: Missing or invalid 'query' argument"
+executeCountQuery config args = case getTextArg "query" args of
+  Just kqlQuery ->
+    runKqlAndFormat config kqlQuery [] $ \(_, _, count) ->
+      "Query '" <> kqlQuery <> "' matches " <> show count <> " entries"
+  _ -> pure "Error: Missing or invalid 'query' argument"
 
 
 executeSampleLogs
@@ -509,15 +518,14 @@ executeSampleLogs
   => AgenticConfig
   -> Map.Map Text AE.Value
   -> Eff es Text
-executeSampleLogs config args =
-  case Map.lookup "query" args of
-    Just (AE.String kqlQuery) -> do
-      let lim = min config.limits.maxSampleLogs $ fromMaybe config.limits.defaultSampleLimit (getIntFromArgs "limit" args)
-          fullQuery = if "| take" `T.isInfixOf` kqlQuery then kqlQuery else kqlQuery <> " | take " <> show lim
-          sampleColumns = ["level", "name", "resource.service.name", "body"]
-      runKqlAndFormat config fullQuery sampleColumns $ \(results, _, _) ->
-        "Sample logs:\n" <> formatSampleLogs results
-    _ -> pure "Error: Missing or invalid 'query' argument"
+executeSampleLogs config args = case getTextArg "query" args of
+  Just kqlQuery -> do
+    let lim = min config.limits.maxSampleLogs $ fromMaybe config.limits.defaultSampleLimit (getIntFromArgs "limit" args)
+        fullQuery = if "| take" `T.isInfixOf` kqlQuery then kqlQuery else kqlQuery <> " | take " <> show lim
+        sampleColumns = ["level", "name", "resource.service.name", "body"]
+    runKqlAndFormat config fullQuery sampleColumns $ \(results, _, _) ->
+      "Sample logs:\n" <> formatSampleLogs config.limits.maxBodyPreview results
+  _ -> pure "Error: Missing or invalid 'query' argument"
 
 
 executeGetFacets :: AgenticConfig -> Text
@@ -529,14 +537,13 @@ executeRunQuery
   => AgenticConfig
   -> Map.Map Text AE.Value
   -> Eff es Text
-executeRunQuery config args =
-  case Map.lookup "query" args of
-    Just (AE.String query) -> do
-      let lim = min config.limits.maxQueryResults $ fromMaybe 20 (getIntFromArgs "limit" args)
-          fullQuery = if "| take" `T.isInfixOf` query then query else query <> " | take " <> show lim
-      runKqlAndFormat config fullQuery [] $ \(results, _, count) ->
-        formatQueryResults results count
-    _ -> pure "Error: Missing or invalid 'query' argument"
+executeRunQuery config args = case getTextArg "query" args of
+  Just query -> do
+    let lim = min config.limits.maxQueryResults $ fromMaybe config.limits.maxDisplayRows (getIntFromArgs "limit" args)
+        fullQuery = if "| take" `T.isInfixOf` query then query else query <> " | take " <> show lim
+    runKqlAndFormat config fullQuery [] $ \(results, _, count) ->
+      formatQueryResults config.limits.maxDisplayRows results count
+  _ -> pure "Error: Missing or invalid 'query' argument"
 
 
 -- | Helper to run KQL query and format result
