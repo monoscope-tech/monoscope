@@ -90,10 +90,14 @@ getNormalTupleReponse response =
                   withoutBackticks = T.takeWhile (/= '`') withoutFirstLine
                in T.strip withoutBackticks
             else queryLine
-   in if "Please provide a query" `T.isInfixOf` cleanedQuery
-        || "I need more" `T.isInfixOf` cleanedQuery
-        || "Could you please" `T.isInfixOf` cleanedQuery
-        || T.length cleanedQuery < 3
+   in if "Please provide a query"
+        `T.isInfixOf` cleanedQuery
+        || "I need more"
+        `T.isInfixOf` cleanedQuery
+        || "Could you please"
+        `T.isInfixOf` cleanedQuery
+        || T.length cleanedQuery
+        < 3
         then Left "INVALID_QUERY_ERROR"
         else Right (cleanedQuery, vizTypeM)
 

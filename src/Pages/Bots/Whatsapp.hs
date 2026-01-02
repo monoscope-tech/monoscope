@@ -7,8 +7,8 @@ import Data.Aeson.Key qualified as KEYM
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Effectful.Wreq qualified as Wreq
 import Data.Text qualified as T
-import Data.Vector qualified as V
 import Data.Time (addUTCTime)
+import Data.Vector qualified as V
 import Effectful
 import Effectful.Concurrent (forkIO)
 import Effectful.Reader.Static qualified
