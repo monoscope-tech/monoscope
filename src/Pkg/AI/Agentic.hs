@@ -254,29 +254,29 @@ mkProp typ desc = AE.object ["type" AE..= typ, "description" AE..= desc]
 
 allToolDefs :: [OAITool.Tool]
 allToolDefs =
-  [ mkToolDef "get_field_values" "Get distinct values for a specific field" $
-      AE.object
+  [ mkToolDef "get_field_values" "Get distinct values for a specific field"
+      $ AE.object
         [ "type" AE..= ("object" :: Text)
         , "properties" AE..= AE.object [("field", mkProp "string" "Field name (e.g., resource.service.name)"), ("limit", mkProp "integer" "Max values (default 10)")]
         , "required" AE..= (["field"] :: [Text])
         ]
   , mkSimpleTool "get_services" "Get list of services in this project"
-  , mkToolDef "count_query" "Get count of results for a KQL query" $
-      AE.object
+  , mkToolDef "count_query" "Get count of results for a KQL query"
+      $ AE.object
         [ "type" AE..= ("object" :: Text)
         , "properties" AE..= AE.object [("query", mkProp "string" "KQL query to count")]
         , "required" AE..= (["query"] :: [Text])
         ]
-  , mkToolDef "sample_logs" "Get sample log entries matching a query" $
-      AE.object
+  , mkToolDef "sample_logs" "Get sample log entries matching a query"
+      $ AE.object
         [ "type" AE..= ("object" :: Text)
         , "properties" AE..= AE.object [("query", mkProp "string" "KQL query to match"), ("limit", mkProp "integer" "Max samples (default 3, max 5)")]
         , "required" AE..= (["query"] :: [Text])
         ]
   , mkSimpleTool "get_facets" "Get precomputed facets for common fields like services, status codes, methods"
   , mkSimpleTool "get_schema" "Get schema of available fields in the log/span data"
-  , mkToolDef "run_query" "Execute a KQL query and return results" $
-      AE.object
+  , mkToolDef "run_query" "Execute a KQL query and return results"
+      $ AE.object
         [ "type" AE..= ("object" :: Text)
         , "properties" AE..= AE.object [("query", mkProp "string" "KQL query to execute"), ("limit", mkProp "integer" "Max results (default 20)")]
         , "required" AE..= (["query"] :: [Text])
