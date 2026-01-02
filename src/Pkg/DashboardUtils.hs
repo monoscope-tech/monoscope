@@ -50,10 +50,11 @@ variablePresets pid mf mt allParams currentTime =
 -- For single-column results [["api/users"], ["api/orders"]],
 -- this generates: "('api/users', 'api/orders')".
 -- For multi-column results, only the first column is used.
--- For empty results, generates "(NULL)" to avoid SQL syntax errors.
+-- For empty results, generates an empty subquery "(SELECT NULL::text WHERE FALSE)"
+-- to avoid SQL three-valued logic issues with NULL in IN clauses.
 constantToSQLList :: [[Text]] -> Text
 constantToSQLList rows
-  | null rows = "(NULL)" -- Empty result, return NULL to avoid syntax errors
+  | null rows = "(SELECT NULL::text WHERE FALSE)" -- Empty subquery returns no rows
   | otherwise =
       let escapeValue v = "'" <> T.replace "'" "''" v <> "'"
           -- Take the first column from each row using pattern matching

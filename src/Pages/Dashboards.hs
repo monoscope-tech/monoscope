@@ -79,6 +79,7 @@ import Servant (NoContent (..), ServerError, err404, errBody)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import System.Config (AuthContext (..))
+import System.Logging qualified as Log
 import System.FilePath.Posix (takeDirectory)
 import System.Types
 import Text.Slugify (slugify)
@@ -434,13 +435,17 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
       result <- try $ PG.query_ (Query $ encodeUtf8 sqlQuery)
       case result of
         Right queryResults -> pure constant{Dashboards.result = Just queryResults}
-        Left (_ :: SomeException) -> pure constant -- Return unchanged on error
-        -- KQL query support
+        Left (err :: SomeException) -> do
+          Log.logWarn "Dashboard constant SQL query failed" (constant.key, show err)
+          pure constant
+    -- KQL query support
     (Nothing, Just kqlQuery) -> do
       result <- try $ Charts.queryMetrics (Just Charts.DTText) (Just pid) (Just kqlQuery) Nothing sinceStr fromDStr toDStr Nothing allParams
       case result of
         Right metricsData -> pure constant{Dashboards.result = Just $ map V.toList $ V.toList metricsData.dataText}
-        Left (_ :: SomeException) -> pure constant -- Return unchanged on error
+        Left (err :: SomeException) -> do
+          Log.logWarn "Dashboard constant KQL query failed" (constant.key, show err)
+          pure constant
     _ -> pure constant
 
 
