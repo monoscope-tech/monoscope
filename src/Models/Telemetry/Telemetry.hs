@@ -495,7 +495,7 @@ logRecordByProjectAndId pid createdAt rdId = listToMaybe <$> PG.query q (created
   where
     q =
       [sql|SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
-                  COALESCE(hashes, '{}'), kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date::timestamptz
+                  COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz
              FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
@@ -508,7 +508,7 @@ getSpanRecordsByTraceId pid trId tme now = PG.query q (pid.toText, start, end, t
     q =
       [sql|
       SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
-                  COALESCE(hashes, '{}'), kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date::timestamptz
+                  COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz
               FROM otel_logs_and_spans where project_id=? and timestamp BETWEEN ? AND ? and context___trace_id=? ORDER BY start_time ASC;
         |]
 
@@ -524,7 +524,7 @@ getSpanRecordsByTraceIds pid traceIds tme = PG.query (Query $ encodeUtf8 q) (pid
       [text|
         SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity,
                body, attributes, resource, COALESCE(hashes, '{}'), kind, status_code, status_message,
-               start_time, end_time, events, links, duration, name,
+               COALESCE(start_time, timestamp), end_time, events, links, duration, name,
                parent_id, summary, date::timestamptz
         FROM otel_logs_and_spans
         WHERE project_id = ?
@@ -540,7 +540,7 @@ spanRecordByProjectAndId pid createdAt rdId = listToMaybe <$> PG.query q (create
   where
     q =
       [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
-                  COALESCE(hashes, '{}'), kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date::timestamptz
+                  COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz
               FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
 
 
@@ -549,7 +549,7 @@ spanRecordByName pid trId spanName = listToMaybe <$> PG.query q (pid.toText, trI
   where
     q =
       [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
-                  COALESCE(hashes, '{}'), kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date::timestamptz
+                  COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz
               FROM otel_logs_and_spans where project_id=? and context___trace_id = ? and name=? LIMIT 1|]
 
 
