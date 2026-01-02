@@ -289,7 +289,7 @@ pCoalesce = do
 -- | Parse strcat(expr1, expr2, ...) - string concatenation (1-64 args)
 -- Microsoft KQL: strcat(argument1, argument2 [, argument3 ... ])
 -- >>> parse pStrcat "" "strcat(method, \" \", url_path)"
--- Right (Strcat [Str "method",Str " ",Str "url_path"] Nothing)
+-- Right (Strcat [Field (Subject "method" "method" []),Str " ",Field (Subject "url_path" "url_path" [])] Nothing)
 pStrcat :: Parser AggFunction
 pStrcat = pVariadicAgg "strcat" Strcat
 
@@ -590,10 +590,15 @@ setAlias name (Plain sub _) = Plain sub (Just name)
 --
 -- >>> parse namedAggregation "" "TotalCount=count()"
 -- Right (Count (Subject "*" "*" []) (Just "TotalCount"))
+--
+-- >>> parse namedAggregation "" "error_count = countif(status_code == \"ERROR\")"
+-- Right (CountIf (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) (Just "error_count"))
 namedAggregation :: Parser AggFunction
 namedAggregation = do
   name <- toText <$> some (alphaNumChar <|> oneOf ("_" :: String))
+  space
   _ <- string "="
+  space
   setAlias name <$> aggFunctionParser
 
 

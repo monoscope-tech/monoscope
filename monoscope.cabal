@@ -541,6 +541,7 @@ test-suite unit-tests
   main-is: Main.hs
   other-modules:
       Data.Effectful.NotifySpec
+      Pkg.AI.AgenticSpec
       Pkg.DrainSpec
       Pkg.Parser.ExprSpec
       Pkg.ParserSpec

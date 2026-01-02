@@ -9,6 +9,7 @@ module Models.Apis.RequestDumps (
   normalizeUrlPath,
   selectLogTable,
   executeArbitraryQuery,
+  executeSecuredQuery,
   requestDumpLogUrlPath,
   getRequestDumpForReports,
   getRequestDumpsForPreviousReportPeriod,
@@ -19,7 +20,7 @@ module Models.Apis.RequestDumps (
 )
 where
 
-import Control.Exception.Annotated (checkpoint)
+import Control.Exception.Annotated (checkpoint, try)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Default
@@ -457,6 +458,17 @@ executeArbitraryQuery queryText = do
   results :: [[FieldValue]] <- PG.query_ (Query $ encodeUtf8 queryText)
   -- Convert each row of FieldValues to a vector of JSON values
   pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
+
+
+-- | Execute a user-provided SQL query with mandatory project_id filtering
+-- SECURITY: Wraps query in subquery and filters by parameterized project_id
+executeSecuredQuery :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
+executeSecuredQuery pid userQuery limit = do
+  let securedQuery = "SELECT * FROM (" <> userQuery <> ") WHERE project_id = ? LIMIT ?"
+  resultE <- try @SomeException $ do
+    results :: [[FieldValue]] <- PG.query (Query $ encodeUtf8 securedQuery) (pid, limit)
+    pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
+  pure $ first (\e -> "Query execution failed: " <> show e) resultE
 
 
 selectLogTable :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
