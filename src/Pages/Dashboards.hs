@@ -634,8 +634,8 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
   (dashVM, dash) <- getDashAndVM dashId fileM
 
   -- Process constants first - these are executed once and made available to all queries
-  processedConstants <- forM (fold dash.constants) (processConstant pid now (sinceStr, fromDStr, toDStr) allParams)
-  let constantsMap = DashboardUtils.constantsToMap [(c.key, fold c.result) | c <- processedConstants]
+  processedConstants <- forM (fromMaybe [] dash.constants) (processConstant pid now (sinceStr, fromDStr, toDStr) allParams)
+  let constantsMap = DashboardUtils.constantsToMap [(c.key, fromMaybe [] c.result) | c <- processedConstants]
       -- Merge constants into params so they're available as {{const-<key>}} placeholders
       allParamsWithConstants = allParams <> [(k, Just v) | (k, v) <- Map.toList constantsMap]
 

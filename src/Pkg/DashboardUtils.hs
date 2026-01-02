@@ -1,4 +1,4 @@
-module Pkg.DashboardUtils (replacePlaceholders, variablePresets, constantToList, constantsToMap) where
+module Pkg.DashboardUtils (replacePlaceholders, variablePresets, constantToSQLList, constantsToMap) where
 
 import Data.Map qualified as Map
 import Data.Text qualified as T
@@ -46,22 +46,22 @@ variablePresets pid mf mt allParams currentTime =
         <> allParams'
 
 
--- | Convert constant results to a simple SQL list format.
+-- | Convert constant results to a SQL list format suitable for IN clauses.
 -- For single-column results [["api/users"], ["api/orders"]],
--- this generates: "('api/users', 'api/orders')" - suitable for IN clauses.
+-- this generates: "('api/users', 'api/orders')".
 -- For multi-column results, only the first column is used.
 -- For empty results, generates "(NULL)" to avoid SQL syntax errors.
-constantToList :: [[Text]] -> Text
-constantToList rows
+constantToSQLList :: [[Text]] -> Text
+constantToSQLList rows
   | null rows = "(NULL)" -- Empty result, return NULL to avoid syntax errors
   | otherwise =
       let escapeValue v = "'" <> T.replace "'" "''" v <> "'"
-          -- Take the first column from each row
-          values = [escapeValue (head row) | row <- rows, not (null row)]
+          -- Take the first column from each row using pattern matching
+          values = [escapeValue v | (v : _) <- rows]
        in "(" <> T.intercalate ", " values <> ")"
 
 
 -- | Convert a list of processed constants (with results) to a map for placeholder substitution.
 -- Each constant with key "foo" becomes available as "const-foo" placeholder.
 constantsToMap :: [(Text, [[Text]])] -> Map Text Text
-constantsToMap constants = Map.fromList [("const-" <> key, constantToList result) | (key, result) <- constants]
+constantsToMap constants = Map.fromList [("const-" <> key, constantToSQLList result) | (key, result) <- constants]
