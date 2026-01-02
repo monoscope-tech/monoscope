@@ -435,7 +435,7 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
           (\val -> Log.logDebug ("Dashboard constant " <> label <> " query completed") (constant.key, duration) $> constant{Dashboards.result = Just $ transform val})
           result
   case (constant.sql, constant.query) of
-    (Just sqlQuery, _) -> runQuery "SQL" (PG.query_ (Query $ encodeUtf8 sqlQuery)) id
+    (Just sqlQuery, _) -> runQuery "SQL" (PG.query_ (Query $ encodeUtf8 sqlQuery)) identity
     (Nothing, Just kqlQuery) -> runQuery "KQL" (Charts.queryMetrics (Just Charts.DTText) (Just pid) (Just kqlQuery) Nothing sinceStr fromDStr toDStr Nothing allParams) (map V.toList . V.toList . (.dataText))
     _ -> pure constant
 
