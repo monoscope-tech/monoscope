@@ -55,7 +55,6 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ManageMembers
 import Pages.Components (resizer_)
 import Pkg.AI qualified as AI
-import Pkg.AI.Agentic qualified as Agentic
 
 
 -- $setup
@@ -826,18 +825,8 @@ aiSearchH pid requestBody = do
           -- Fetch precomputed facets for context (last 24 hours)
           let dayAgo = addUTCTime (-86400) now
           facetSummaryM <- Facets.getFacetSummary pid "otel_logs_and_spans" dayAgo now
-
-          -- Determine mode based on query context (usually FastMode since we have facets)
-          let suggestedMode = Agentic.suggestAgenticMode Agentic.WebExplorer inputText
-              baseConfig = Agentic.defaultAgenticConfig pid
-              config =
-                baseConfig
-                  { Agentic.mode = suggestedMode
-                  , Agentic.facetContext = facetSummaryM
-                  }
-
-          -- Run the agentic query (includes facet context in prompt)
-          result <- Agentic.runAgenticQuery config inputText envCfg.openaiApiKey
+          let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM}
+          result <- AI.runAgenticQuery config inputText envCfg.openaiApiKey
 
           case result of
             Left errMsg -> do

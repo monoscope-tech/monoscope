@@ -27,17 +27,18 @@ import Data.Effectful.Wreq (
   postWith,
   responseBody,
  )
+import Data.Time (addUTCTime)
 import Data.Time qualified as Time
 import Effectful (Eff, type (:>))
 import Effectful.Log qualified as Log
 import Effectful.Time qualified as Time
+import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Dashboards qualified as Dashboards
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import Pages.Bots.Utils (BotResponse (..), BotType (..), Channel, authHeader, chartImageUrl, contentTypeHeader, handleTableResponse)
-import Pkg.AI (callOpenAIAPI, systemPrompt)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
@@ -305,53 +306,49 @@ discordInteractionsH rawBody signatureM timestampM = do
     handleAskCommand options interaction envCfg authCtx discordData = do
       now <- Time.currentTime
       _ <- sendDeferredResponse interaction.id interaction.token envCfg.discordBotToken
-      fullPrompt <- buildPrompt options interaction envCfg
-      result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
+      (userQuery, threadContext) <- buildPrompt options interaction envCfg
+      let dayAgo = addUTCTime (-86400) now
+      facetSummaryM <- Facets.getFacetSummary discordData.projectId "otel_logs_and_spans" dayAgo now
+      let config = (AI.defaultAgenticConfig discordData.projectId){AI.facetContext = facetSummaryM, AI.customContext = threadContext}
+      result <- AI.runAgenticQuery config userQuery envCfg.openaiApiKey
       case result of
-        Left err -> do
-          sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= "Sorry, there was an error processing your request"])
-        Right r -> do
-          let llmJsn = AI.getAskLLMResponse r
-          case llmJsn of
-            Left errMsg -> do
-              sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= ("Error parsing LLM response: " <> errMsg)])
-            Right AI.ChatLLMResponse{..} -> do
-              let from' = timeRange >>= viaNonEmpty head
-              let to' = timeRange >>= viaNonEmpty last
-              let (fromT, toT, rangeM) = Utils.parseTime from' to' Nothing now
-                  from = fromMaybe "" $ rangeM >>= Just . fst
-                  to = fromMaybe "" $ rangeM >>= Just . snd
-              case visualization of
-                Just vizType -> do
-                  let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-
-                      query_url = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> ("&query=" <> toUriStr query)
-                      opts = "&q=" <> toUriStr query <> "&p=" <> discordData.projectId.toText <> "&t=" <> chartType <> "&from=" <> toUriStr from <> "&to=" <> toUriStr to
-                      question = case options of
-                        Just (InteractionOption{value = AE.String q} : _) -> q
-                        _ -> "[?]"
-                      content = getBotContent question query query_url opts authCtx.env.chartShotUrl now
+        Left err -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= "Sorry, there was an error processing your request"])
+        Right AI.ChatLLMResponse{..} -> do
+          let from' = timeRange >>= viaNonEmpty head
+              to' = timeRange >>= viaNonEmpty last
+              (fromT, toT, rangeM) = Utils.parseTime from' to' Nothing now
+              from = fromMaybe "" $ rangeM >>= Just . fst
+              to = fromMaybe "" $ rangeM >>= Just . snd
+          case visualization of
+            Just vizType -> do
+              let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
+                  query_url = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> ("&query=" <> toUriStr query)
+                  opts = "&q=" <> toUriStr query <> "&p=" <> discordData.projectId.toText <> "&t=" <> chartType <> "&from=" <> toUriStr from <> "&to=" <> toUriStr to
+                  question = case options of
+                    Just (InteractionOption{value = AE.String q} : _) -> q
+                    _ -> "[?]"
+                  content = getBotContent question query query_url opts authCtx.env.chartShotUrl now
+              sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
+            Nothing -> do
+              let queryAST = parseQueryToAST query
+              case queryAST of
+                Left err -> do
+                  _ <- sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= ("Error parsing query: " <> err)])
+                  pass
+                Right query' -> do
+                  tableAsVecE <- RequestDumps.selectLogTable discordData.projectId query' query Nothing (fromT, toT) [] Nothing Nothing
+                  let content = handleTableResponse Discord tableAsVecE envCfg discordData.projectId query
                   sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
-                Nothing -> do
-                  let queryAST = parseQueryToAST query
-                  case queryAST of
-                    Left err -> do
-                      _ <- sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= ("Error parsing query: " <> err)])
-                      pass
-                    Right query' -> do
-                      tableAsVecE <- RequestDumps.selectLogTable discordData.projectId query' query Nothing (fromT, toT) [] Nothing Nothing
-                      let content = handleTableResponse Discord tableAsVecE envCfg discordData.projectId query
-                      sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
 
 
-buildPrompt :: Maybe [InteractionOption] -> DiscordInteraction -> EnvConfig -> ATBaseCtx Text
+buildPrompt :: Maybe [InteractionOption] -> DiscordInteraction -> EnvConfig -> ATBaseCtx (Text, Maybe Text)
 buildPrompt cmdOptions interaction envCfg = do
   threadMsgs <- getThreadStarterMessage interaction envCfg.discordBotToken
   pure $ case cmdOptions of
     Just (InteractionOption{value = AE.String q} : _) -> case threadMsgs of
-      Just msgs -> threadsPrompt (reverse msgs) q
-      _ -> systemPrompt <> "\n\nUser query: " <> q
-    _ -> ""
+      Just msgs -> (q, Just $ threadsPrompt (reverse msgs))
+      _ -> (q, Nothing)
+    _ -> ("", Nothing)
 
 
 contentResponse :: Text -> AE.Value
@@ -373,22 +370,17 @@ sendJsonFollowupResponse appId interactionToken botToken content = do
   pass
 
 
-threadsPrompt :: [DiscordMessage] -> Text -> Text
-threadsPrompt msgs question = prompt
-  where
-    msgs' = (\x -> AE.object ["message" AE..= AE.object ["content" AE..= x.content, "embeds" AE..= x.embeds]]) <$> filter (\x -> x.author.username == "APItoolkit") msgs
-    msgJson = decodeUtf8 $ AE.encode $ AE.Array (V.fromList msgs')
-    threadPrompt =
-      unlines
-        $ [ "\n\nTHREADS:"
-          , "- this query is  part of a DISCORD conversation thread. Use previous messages provited in the thread for additional context if needed."
-          , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
-          , "\nPrevious thread messages in json:\n"
-          ]
-        <> [msgJson]
-        <> ["\n\nUser query: " <> question]
-
-    prompt = systemPrompt <> threadPrompt
+threadsPrompt :: [DiscordMessage] -> Text
+threadsPrompt msgs =
+  let msgs' = (\x -> AE.object ["message" AE..= AE.object ["content" AE..= x.content, "embeds" AE..= x.embeds]]) <$> filter (\x -> x.author.username == "APItoolkit") msgs
+      msgJson = decodeUtf8 $ AE.encode $ AE.Array (V.fromList msgs')
+   in unlines
+        [ "\n\nTHREADS:"
+        , "- this query is  part of a DISCORD conversation thread. Use previous messages provited in the thread for additional context if needed."
+        , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
+        , "\nPrevious thread messages in json:\n"
+        , msgJson
+        ]
 
 
 verifyDiscordSignature

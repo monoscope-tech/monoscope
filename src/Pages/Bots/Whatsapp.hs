@@ -8,10 +8,12 @@ import Data.Aeson.KeyMap qualified as KEM
 import Data.Effectful.Wreq qualified as Wreq
 import Data.Text qualified as T
 import Data.Vector qualified as V
+import Data.Time (addUTCTime)
 import Effectful
 import Effectful.Concurrent (forkIO)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
+import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Slack (getDashboardsForWhatsapp)
 import Models.Projects.Dashboards qualified as Dashboards
@@ -19,7 +21,6 @@ import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq
 import Pages.Bots.Utils (BotType (..), handleTableResponse)
-import Pkg.AI (callOpenAIAPI, systemPrompt)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
@@ -93,45 +94,41 @@ whatsappIncomingPostH val = do
     handlePrompt :: TwilioWhatsAppMessage -> EnvConfig -> Projects.Project -> ATBaseCtx ()
     handlePrompt reqBody envCfg project = do
       now <- Time.currentTime
-      let fullPrompt = systemPrompt <> "\n\nUser query: " <> reqBody.body
-      result <- liftIO $ callOpenAIAPI fullPrompt envCfg.openaiApiKey
+      let dayAgo = addUTCTime (-86400) now
+      facetSummaryM <- Facets.getFacetSummary project.id "otel_logs_and_spans" dayAgo now
+      let config = (AI.defaultAgenticConfig project.id){AI.facetContext = facetSummaryM}
+      result <- AI.runAgenticQuery config reqBody.body envCfg.openaiApiKey
       case result of
-        Left err -> do
+        Left _ -> do
           _ <- sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotChart (Just "Sorry, I couldn't proess your request")
           pass
-        Right r -> do
-          let response = AI.getAskLLMResponse r
-          case response of
-            Left err -> do
-              _ <- sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotChart (Just "Sorry, I couldn't proess your request")
+        Right AI.ChatLLMResponse{..} -> do
+          let from' = timeRange >>= viaNonEmpty head
+              to' = timeRange >>= viaNonEmpty last
+              (fromT, toT, rangeM) = Utils.parseTime from' to' Nothing now
+              from = fromMaybe "" $ rangeM >>= Just . fst
+              to = fromMaybe "" $ rangeM >>= Just . snd
+          case visualization of
+            Just vizType -> do
+              let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
+                  opts = "time=" <> toUriStr (show now) <> "&q=" <> toUriStr query <> "&p=" <> toUriStr project.id.toText <> "&t=" <> toUriStr chartType <> "&from=" <> toUriStr from <> "&to=" <> toUriStr to
+                  query_url = project.id.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
+                  content' = getBotContent reqBody.body query query_url opts
+              _ <- sendWhatsappResponse content' reqBody.from envCfg.whatsappBotChart Nothing
               pass
-            Right AI.ChatLLMResponse{..} -> do
-              let from' = timeRange >>= viaNonEmpty head
-              let to' = timeRange >>= viaNonEmpty last
-              let (fromT, toT, rangeM) = Utils.parseTime from' to' Nothing now
-                  from = fromMaybe "" $ rangeM >>= Just . fst
-                  to = fromMaybe "" $ rangeM >>= Just . snd
-              case visualization of
-                Just vizType -> do
-                  let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-                      opts = "time=" <> toUriStr (show now) <> "&q=" <> toUriStr query <> "&p=" <> toUriStr project.id.toText <> "&t=" <> toUriStr chartType <> "&from=" <> toUriStr from <> "&to=" <> toUriStr to
-                      query_url = project.id.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-                      content' = getBotContent reqBody.body query query_url opts
-                  _ <- sendWhatsappResponse content' reqBody.from envCfg.whatsappBotChart Nothing
-                  pass
-                Nothing -> do
-                  let queryAST = parseQueryToAST query
-                  case queryAST of
-                    Left err -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotChart (Just "Error processing query")
-                    Right query' -> do
-                      tableAsVecE <- RequestDumps.selectLogTable project.id query' query Nothing (fromT, toT) [] Nothing Nothing
-                      let content = case handleTableResponse WhatsApp tableAsVecE envCfg project.id query of
-                            AE.Object o -> case KEM.lookup "body" o of
-                              Just (AE.String c) -> c
-                              _ -> "Error processing query"
-                            _ -> "Error processing query"
-                      sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just content)
-                  pass
+            Nothing -> do
+              let queryAST = parseQueryToAST query
+              case queryAST of
+                Left _ -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotChart (Just "Error processing query")
+                Right query' -> do
+                  tableAsVecE <- RequestDumps.selectLogTable project.id query' query Nothing (fromT, toT) [] Nothing Nothing
+                  let content = case handleTableResponse WhatsApp tableAsVecE envCfg project.id query of
+                        AE.Object o -> case KEM.lookup "body" o of
+                          Just (AE.String c) -> c
+                          _ -> "Error processing query"
+                        _ -> "Error processing query"
+                  sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just content)
+              pass
 
 
 data BodyType
