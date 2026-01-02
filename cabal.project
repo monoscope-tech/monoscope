@@ -90,9 +90,9 @@ source-repository-package
   subdir: .
 
 source-repository-package
-  type: git 
+  type: git
   location: https://github.com/tusharad/langchain-hs
-  tag: f6f6b823c2d2291a067b0dcfd02dd9e6b93d35fb
+  tag: 1c25927b6142416e9042f7696c44d0643d0193a8
   subdir: .
 
 source-repository-package

@@ -1,8 +1,11 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE ViewPatterns #-}
 
 module Pkg.AI.Agentic (
@@ -10,9 +13,6 @@ module Pkg.AI.Agentic (
   AgenticConfig (..),
   AgenticMode (..),
   ToolLimits (..),
-  Tool (..),
-  ToolCall (..),
-  ToolResult (..),
   AgenticResponse (..),
 
   -- * Main functions
@@ -23,32 +23,34 @@ module Pkg.AI.Agentic (
   -- * Mode selection
   suggestAgenticMode,
   QueryContext (..),
-
-  -- * Tool definitions
-  availableTools,
-  toolDescriptions,
 ) where
 
 import Data.Aeson qualified as AE
-import Data.Aeson.Key qualified as AEK
-import Data.Aeson.Types qualified as AET
 import Data.HashMap.Strict qualified as HM
+import Data.List.NonEmpty qualified as NE
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Effectful (Eff, (:>))
 import Effectful.Log (Log)
 import Effectful.Time qualified as Time
+import Langchain.LLM.Core qualified as LLM
+import Langchain.LLM.OpenAI qualified as OpenAI
 import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
-import Models.Apis.RequestDumps (executeSecuredQuery, selectLogTable)
+import Models.Apis.RequestDumps (selectLogTable)
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Schema qualified as Schema
+import OpenAI.V1.Chat.Completions qualified as OpenAIV1
+import OpenAI.V1.Models qualified as Models
+import OpenAI.V1.Tool qualified as OAITool
 import Pkg.AI qualified as AI
 import Pkg.Parser (parseQueryToAST)
-import Relude
+import Relude hiding (pass)
 import System.Types (DB)
 
 
--- | Tool execution limits (grouped for easier configuration)
+-- | Tool execution limits
 data ToolLimits = ToolLimits
   { maxFieldValues :: Int
   , maxSampleLogs :: Int
@@ -72,36 +74,25 @@ defaultLimits =
 
 
 -- | Mode for LLM interaction
-data AgenticMode
-  = -- | Fast mode: Skip tool calling, generate query directly (for bots, simple queries)
-    FastMode
-  | -- | Agentic mode: Allow LLM to call tools to gather context before generating query
-    AgenticMode
+data AgenticMode = FastMode | AgenticMode
   deriving (Eq, Show)
 
 
 -- | Configuration for agentic LLM calls
 data AgenticConfig = AgenticConfig
   { mode :: AgenticMode
-  -- ^ Whether to use fast mode or allow tool calling
   , maxIterations :: Int
-  -- ^ Maximum number of tool-calling iterations (prevents runaway loops)
   , projectId :: Projects.ProjectId
-  -- ^ Project ID for executing queries
   , timeRange :: (Maybe UTCTime, Maybe UTCTime)
-  -- ^ Time range for queries
   , facetContext :: Maybe FacetSummary
-  -- ^ Pre-computed facets to include as context (services, status codes, etc.)
   , limits :: ToolLimits
-  -- ^ Tool execution limits
   }
 
 
--- | Default configuration for agentic queries
 defaultAgenticConfig :: Projects.ProjectId -> AgenticConfig
 defaultAgenticConfig pid =
   AgenticConfig
-    { mode = FastMode -- Default to fast mode since we include facet context
+    { mode = FastMode
     , maxIterations = 3
     , projectId = pid
     , timeRange = (Nothing, Nothing)
@@ -110,22 +101,11 @@ defaultAgenticConfig pid =
     }
 
 
--- | Context for determining whether to use agentic mode
-data QueryContext
-  = -- | Log explorer (web UI) - can afford extra latency for better results
-    WebExplorer
-  | -- | Slack bot - prefer lower latency
-    SlackBot
-  | -- | Discord bot - prefer lower latency
-    DiscordBot
-  | -- | WhatsApp bot - prefer lower latency
-    WhatsAppBot
-  | -- | Dashboard widget - prefer lower latency
-    DashboardWidget
+-- | Context for determining agentic mode
+data QueryContext = WebExplorer | SlackBot | DiscordBot | WhatsAppBot | DashboardWidget
   deriving (Eq, Show)
 
 
--- | Determine whether to use agentic mode based on query and context
 suggestAgenticMode :: QueryContext -> Text -> AgenticMode
 suggestAgenticMode DashboardWidget _ = FastMode
 suggestAgenticMode _ userQuery =
@@ -133,293 +113,37 @@ suggestAgenticMode _ userQuery =
    in if any (`T.isInfixOf` T.toLower userQuery) complexIndicators then AgenticMode else FastMode
 
 
--- | Available tools the LLM can call
-data Tool
-  = -- | Get distinct values for a field (useful for understanding what values exist)
-    GetFieldValues
-  | -- | Get a count for a given KQL query
-    CountQuery
-  | -- | Get available services in the project
-    GetServices
-  | -- | Sample a few log entries matching a query
-    SampleLogs
-  | -- | Get precomputed facets (popular values for common fields)
-    GetFacets
-  | -- | Run a query (KQL preferred, SQL as fallback for complex queries)
-    RunQuery
-  deriving (Eq, Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
-
-
--- | Query type for RunQuery tool
-data QueryType = KQL | SQL
-  deriving (Eq, Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
-
-
--- | A tool call request from the LLM
-data ToolCall = ToolCall
-  { tool :: Tool
-  , arguments :: AE.Value
-  }
-  deriving (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
-
-
--- | Result from executing a tool
-data ToolResult = ToolResult
-  { tool :: Tool
-  , result :: Text
-  , success :: Bool
-  }
-  deriving (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
-
-
 -- | Response from the agentic system
 data AgenticResponse
-  = -- | LLM wants to call tools before responding
-    NeedsTools [ToolCall]
-  | -- | LLM is ready to provide the final response
-    FinalResponse AI.ChatLLMResponse
-  | -- | Error occurred
-    AgenticError Text
+  = FinalResponse AI.ChatLLMResponse
+  | AgenticError Text
   deriving (Show)
 
 
--- | Tool descriptions for the LLM prompt
-toolDescriptions :: Text
-toolDescriptions =
-  unlines
-    [ ""
-    , "AVAILABLE TOOLS:"
-    , "You can optionally call tools to gather more context before generating your final query."
-    , "Only use tools when you genuinely need more information to generate an accurate query."
-    , ""
-    , "To call a tool, respond with a JSON object in this format:"
-    , "{"
-    , "  \"tool_calls\": ["
-    , "    {\"tool\": \"<tool_name>\", \"arguments\": {<args>}}"
-    , "  ]"
-    , "}"
-    , ""
-    , "Available tools:"
-    , ""
-    , "1. GetFieldValues - Get distinct values for a specific field"
-    , "   Arguments: {\"field\": \"<field_name>\", \"limit\": <number>}"
-    , "   Example: {\"tool\": \"GetFieldValues\", \"arguments\": {\"field\": \"resource.service.name\", \"limit\": 10}}"
-    , "   Use when: User mentions a service/field value you're not sure exists"
-    , ""
-    , "2. GetServices - Get list of services in this project"
-    , "   Arguments: {} (none required)"
-    , "   Example: {\"tool\": \"GetServices\", \"arguments\": {}}"
-    , "   Use when: User asks about services but you don't know what services exist"
-    , ""
-    , "3. CountQuery - Get the count of results for a KQL query"
-    , "   Arguments: {\"query\": \"<kql_query>\"}"
-    , "   Example: {\"tool\": \"CountQuery\", \"arguments\": {\"query\": \"level == \\\"ERROR\\\"\"}}"
-    , "   Use when: You want to verify a query returns results before finalizing"
-    , ""
-    , "4. SampleLogs - Get sample log entries matching a query"
-    , "   Arguments: {\"query\": \"<kql_query>\", \"limit\": <number>}"
-    , "   Example: {\"tool\": \"SampleLogs\", \"arguments\": {\"query\": \"level == \\\"ERROR\\\"\", \"limit\": 3}}"
-    , "   Use when: You need to understand the structure/content of matching logs"
-    , ""
-    , "5. GetFacets - Get precomputed facets showing popular values for common fields"
-    , "   Arguments: {} (none required)"
-    , "   Example: {\"tool\": \"GetFacets\", \"arguments\": {}}"
-    , "   Use when: You need to know what values are common for services, status codes, endpoints, etc."
-    , ""
-    , "6. RunQuery - Execute a query and return results (KQL preferred, SQL for complex cases)"
-    , "   Arguments: {\"query\": \"<query>\", \"type\": \"KQL\" | \"SQL\", \"limit\": <number>}"
-    , "   Example (KQL): {\"tool\": \"RunQuery\", \"arguments\": {\"query\": \"level == \\\"ERROR\\\" | take 10\", \"type\": \"KQL\"}}"
-    , "   Example (SQL): {\"tool\": \"RunQuery\", \"arguments\": {\"query\": \"SELECT level, count(*) FROM otel_logs_and_spans GROUP BY level\", \"type\": \"SQL\", \"limit\": 20}}"
-    , "   NOTE: For SQL queries, project_id filter is automatically injected - do NOT include it in your query."
-    , "   IMPORTANT: Prefer KQL for most queries. Only use SQL when KQL cannot express the query (e.g., complex JOINs, window functions)."
-    , "   Use when: You need to run an exploratory query to understand the data before generating the final response"
-    , ""
-    , "IMPORTANT GUIDELINES:"
-    , "- DO NOT use tools for simple, well-known queries (e.g., 'show errors', 'slow requests')"
-    , "- Use tools ONLY when the query requires specific values you're uncertain about"
-    , "- PREFER KQL over SQL for all tools - KQL has caching and optimizations"
-    , "- After receiving tool results, provide your final response in the standard JSON format"
-    , "- Maximum tool calls allowed: 3 iterations"
-    , ""
-    ]
+-- * Helper functions
 
 
--- | List of available tools
-availableTools :: [Tool]
-availableTools = [GetFieldValues, CountQuery, GetServices, SampleLogs, GetFacets, RunQuery]
+getIntFromArgs :: Text -> Map.Map Text AE.Value -> Maybe Int
+getIntFromArgs key args = case Map.lookup key args of
+  Just (AE.Number n) -> Just $ round n
+  _ -> Nothing
 
 
--- | Parse the LLM response to determine if it's a tool call or final response
-parseAgenticResponse :: Text -> AgenticResponse
-parseAgenticResponse responseText =
-  let trimmed = T.strip responseText
-   in AE.eitherDecode @AE.Value (fromStrict $ encodeUtf8 trimmed) & \case
-        Left _ -> AgenticError $ "Invalid response format: " <> T.take 100 trimmed
-        Right val ->
-          parseToolCalls val & \case
-            Just calls -> NeedsTools calls
-            Nothing -> either AgenticError FinalResponse $ AI.getAskLLMResponse trimmed
-
-
--- | Try to parse tool calls from JSON value
-parseToolCalls :: AE.Value -> Maybe [ToolCall]
-parseToolCalls = AET.parseMaybe parser
+formatSummarizeResults :: V.Vector (V.Vector AE.Value) -> Text
+formatSummarizeResults = T.intercalate ", " . mapMaybe formatRow . V.toList
   where
-    parser = AE.withObject "ToolCallResponse" $ \obj -> do
-      calls <- obj AE..: "tool_calls"
-      AE.parseJSON calls
+    formatRow (V.toList -> [v, c]) = Just $ "\"" <> jsonToText v <> "\" (" <> jsonToText c <> ")"
+    formatRow _ = Nothing
 
 
--- | Execute a single tool call and return the result
-executeTool :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> ToolCall -> Eff es ToolResult
-executeTool config ToolCall{..} = case tool of
-  GetFieldValues -> executeGetFieldValues config arguments
-  CountQuery -> executeCountQuery config arguments
-  GetServices -> executeGetServices config arguments
-  SampleLogs -> executeSampleLogs config arguments
-  GetFacets -> executeGetFacets config arguments
-  RunQuery -> executeRunQuery config arguments
+formatSampleLogs :: V.Vector (V.Vector AE.Value) -> Text
+formatSampleLogs = T.intercalate "\n" . mapMaybe formatRow . V.toList
+  where
+    formatRow (V.toList -> (lvl : nm : svc : body)) =
+      Just $ "  - [" <> jsonToText lvl <> "] " <> jsonToText nm <> " (" <> jsonToText svc <> "): " <> T.take 100 (T.intercalate " " $ map jsonToText body)
+    formatRow _ = Nothing
 
 
--- * Tool Result Helpers
-
-
--- | Create a successful tool result
-successResult :: Tool -> Text -> ToolResult
-successResult t msg = ToolResult{tool = t, result = msg, success = True}
-
-
--- | Create a failed tool result
-errorResult :: Tool -> Text -> ToolResult
-errorResult t msg = ToolResult{tool = t, result = msg, success = False}
-
-
--- | Parse a required text argument from tool args
-getTextArg :: Text -> AE.Value -> Maybe Text
-getTextArg key = AET.parseMaybe (AE.withObject "args" (AE..: AEK.fromText key))
-
-
--- | Parse an optional int argument with default
-getIntArg :: Text -> Int -> AE.Value -> Int
-getIntArg key def args = fromMaybe def $ AET.parseMaybe (AE.withObject "args" (AE..: AEK.fromText key)) args
-
-
--- | Parse query type argument (defaults to KQL)
-getQueryType :: AE.Value -> QueryType
-getQueryType =
-  fromMaybe KQL
-    . AET.parseMaybe
-      ( AE.withObject "args" $ \obj -> do
-          typeStr <- obj AE..: "type" :: AET.Parser Text
-          pure $ if T.toUpper typeStr == "SQL" then SQL else KQL
-      )
-
-
--- | Helper to run a KQL query and format the result
-runKqlQuery
-  :: (DB es, Log :> es, Time.Time :> es)
-  => AgenticConfig
-  -> Tool
-  -> Text
-  -> [Text]
-  -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> Text)
-  -> Eff es ToolResult
-runKqlQuery config t kqlQuery cols formatResult = case parseQueryToAST kqlQuery of
-  Left _ -> pure $ errorResult t "Query parse failed"
-  Right queryAST -> do
-    resultE <- selectLogTable config.projectId queryAST kqlQuery Nothing config.timeRange cols Nothing Nothing
-    pure $ either (errorResult t . const "Query failed") (successResult t . formatResult) resultE
-
-
--- | Execute GetFieldValues tool - get distinct values for a field using KQL
-executeGetFieldValues :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
-executeGetFieldValues config args =
-  case getTextArg "field" args of
-    Nothing -> pure $ errorResult GetFieldValues "Missing 'field' argument"
-    Just field -> do
-      let lim = min config.limits.maxFieldValues $ getIntArg "limit" config.limits.defaultFieldLimit args
-          kqlQuery = "| summarize count() by " <> field <> " | sort by _count desc | take " <> show lim
-      runKqlQuery config GetFieldValues kqlQuery [] $ \(results, _, _) ->
-        "Values for '" <> field <> "': " <> formatSummarizeResults field results
-
-
--- | Execute CountQuery tool - count results for a KQL query using the KQL infrastructure
-executeCountQuery :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
-executeCountQuery config args =
-  case getTextArg "query" args of
-    Nothing -> pure $ errorResult CountQuery "Missing 'query' argument"
-    Just kqlQuery ->
-      runKqlQuery config CountQuery kqlQuery [] $ \(_, _, count) ->
-        "Query '" <> kqlQuery <> "' matches " <> show count <> " entries"
-
-
--- | Execute GetServices tool - get list of services in the project using KQL
-executeGetServices :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
-executeGetServices config _args =
-  let kqlQuery = "| summarize count() by resource.service.name | sort by _count desc | take " <> show config.limits.maxServices
-   in runKqlQuery config GetServices kqlQuery [] $ \(results, _, _) ->
-        "Available services: " <> formatSummarizeResults "resource.service.name" results
-
-
--- | Execute SampleLogs tool - get sample log entries using KQL
-executeSampleLogs :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
-executeSampleLogs config args =
-  case getTextArg "query" args of
-    Nothing -> pure $ errorResult SampleLogs "Missing 'query' argument"
-    Just kqlQuery -> do
-      let lim = min config.limits.maxSampleLogs $ getIntArg "limit" config.limits.defaultSampleLimit args
-          fullQuery = if "| take" `T.isInfixOf` kqlQuery then kqlQuery else kqlQuery <> " | take " <> show lim
-          sampleColumns = ["level", "name", "resource.service.name", "body"]
-      runKqlQuery config SampleLogs fullQuery sampleColumns $ \(results, _, _) ->
-        "Sample logs matching '" <> kqlQuery <> "':\n" <> formatSampleLogs results
-
-
--- | Execute GetFacets tool - return precomputed facets from config
-executeGetFacets :: Applicative f => AgenticConfig -> AE.Value -> f ToolResult
-executeGetFacets config _args =
-  pure $ case config.facetContext of
-    Nothing -> errorResult GetFacets "No facet data available for this project"
-    Just summary -> successResult GetFacets (formatFacetSummary summary)
-
-
--- | Execute RunQuery tool - supports both KQL (preferred) and raw SQL
-executeRunQuery :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> AE.Value -> Eff es ToolResult
-executeRunQuery config args =
-  case getTextArg "query" args of
-    Nothing -> pure $ errorResult RunQuery "Missing 'query' argument"
-    Just query -> do
-      let queryType = getQueryType args
-          lim = min config.limits.maxQueryResults $ getIntArg "limit" 20 args
-      case queryType of
-        KQL -> runKqlQuery config RunQuery query [] $ \(results, _, count) -> formatQueryResults results count
-        SQL -> runSqlQuery config query lim
-
-
--- | Run a raw SQL query (fallback for complex queries KQL can't express)
--- SECURITY: Uses executeSecuredQuery which enforces project_id via parameterized query
-runSqlQuery :: DB es => AgenticConfig -> Text -> Int -> Eff es ToolResult
-runSqlQuery config query lim = do
-  let lowerQuery = T.toLower query
-      -- Check if keyword appears at word boundary (start, after whitespace)
-      hasKeyword kw = kw `T.isPrefixOf` lowerQuery || any (`T.isInfixOf` lowerQuery) [" " <> kw, "\n" <> kw, "\t" <> kw]
-      hasDangerousOp = any hasKeyword ["drop", "delete", "truncate", "update", "insert", "alter", "create"]
-      hasBypassPattern = any hasKeyword ["union", "except", "intersect"]
-  if hasDangerousOp
-    then pure $ errorResult RunQuery "Only SELECT queries allowed"
-    else
-      if hasBypassPattern
-        then pure $ errorResult RunQuery "UNION/EXCEPT/INTERSECT not allowed"
-        else
-          executeSecuredQuery config.projectId query lim <&> \case
-            Left _ -> errorResult RunQuery "Query execution failed"
-            Right results -> successResult RunQuery $ formatQueryResults results (V.length results)
-
-
--- | Format query results for display
 formatQueryResults :: V.Vector (V.Vector AE.Value) -> Int -> Text
 formatQueryResults results count =
   let formatted = T.intercalate "\n" $ take 20 $ V.toList $ V.map formatRow results
@@ -429,24 +153,6 @@ formatQueryResults results count =
     formatRow row = "  " <> T.intercalate " | " (V.toList $ V.map jsonToText row)
 
 
--- | Format summarize query results (from KQL | summarize count() by <field>)
-formatSummarizeResults :: Text -> V.Vector (V.Vector AE.Value) -> Text
-formatSummarizeResults _ = T.intercalate ", " . mapMaybe formatRow . V.toList
-  where
-    formatRow (V.toList -> [v, c]) = Just $ "\"" <> jsonToText v <> "\" (" <> jsonToText c <> ")"
-    formatRow _ = Nothing
-
-
--- | Format sample log results for display
-formatSampleLogs :: V.Vector (V.Vector AE.Value) -> Text
-formatSampleLogs = T.intercalate "\n" . mapMaybe formatRow . V.toList
-  where
-    formatRow (V.toList -> (lvl : nm : svc : body)) =
-      Just $ "  - [" <> jsonToText lvl <> "] " <> jsonToText nm <> " (" <> jsonToText svc <> "): " <> T.take 100 (T.intercalate " " $ map jsonToText body)
-    formatRow _ = Nothing
-
-
--- | Convert JSON value to text for display
 jsonToText :: AE.Value -> Text
 jsonToText = \case
   AE.String s -> s
@@ -457,7 +163,6 @@ jsonToText = \case
   AE.Object _ -> "{...}"
 
 
--- | Format facet summary for LLM consumption
 formatFacetSummary :: FacetSummary -> Text
 formatFacetSummary summary =
   let FacetData facetMap = summary.facetJson
@@ -465,8 +170,7 @@ formatFacetSummary summary =
         let columnName = T.replace "___" "." fieldName
             valueStrs = map (\(FacetValue v c) -> "\"" <> v <> "\" (" <> show c <> ")") $ take 10 values
          in columnName <> ": " <> T.intercalate ", " valueStrs
-      formattedFacets = map formatField $ HM.toList facetMap
-   in "Facet data (popular values for common fields):\n" <> T.intercalate "\n" formattedFacets
+   in "Facet data:\n" <> T.intercalate "\n" (map formatField $ HM.toList facetMap)
 
 
 -- | Key fields to include in facet context
@@ -483,7 +187,6 @@ keyFacetFields =
   ]
 
 
--- | Format facets as context to include in the prompt
 formatFacetContext :: Maybe FacetSummary -> Text
 formatFacetContext = \case
   Nothing -> ""
@@ -500,94 +203,351 @@ formatFacetContext = \case
           else
             unlines
               [ ""
-              , "PROJECT DATA CONTEXT:"
-              , "The following are popular values for key fields in this project (from the last 24 hours):"
+              , "PROJECT DATA CONTEXT (popular values for key fields):"
               , T.intercalate "\n" formattedFacets
-              , ""
-              , "Use these actual values when the user's query matches them."
               , ""
               ]
 
 
--- | Format tool results for feeding back to the LLM
-formatToolResults :: [ToolResult] -> Text
-formatToolResults results =
-  unlines
-    $ ["", "TOOL RESULTS:", ""]
-    <> map formatResult results
-    <> ["", "Now provide your final response in the standard JSON format."]
-  where
-    formatResult ToolResult{..} =
-      "- "
-        <> show tool
-        <> ": "
-        <> if success then result else "[ERROR] " <> result
+-- * OpenAI Tool Definitions (for native tool calling)
 
 
--- | Build the full prompt with optional tool context and facet data
-buildAgenticPrompt :: AgenticConfig -> Text -> [ToolResult] -> Text
-buildAgenticPrompt config userQuery previousResults =
+mkToolDef :: Text -> Text -> AE.Value -> OAITool.Tool
+mkToolDef name desc params =
+  OAITool.Tool_Function
+    OAITool.Function
+      { OAITool.description = Just desc
+      , OAITool.name = name
+      , OAITool.parameters = Just params
+      , OAITool.strict = Just False
+      }
+
+
+getFieldValuesTool :: OAITool.Tool
+getFieldValuesTool =
+  mkToolDef
+    "get_field_values"
+    "Get distinct values for a specific field. Use to discover what values exist for fields like service names, status codes, etc."
+    $ AE.object
+      [ "type" AE..= ("object" :: Text)
+      , "properties" AE..= AE.object
+          [ "field" AE..= AE.object ["type" AE..= ("string" :: Text), "description" AE..= ("Field name (e.g., resource.service.name, level)" :: Text)]
+          , "limit" AE..= AE.object ["type" AE..= ("integer" :: Text), "description" AE..= ("Max values to return (default 10)" :: Text)]
+          ]
+      , "required" AE..= (["field"] :: [Text])
+      ]
+
+
+getServicesTool :: OAITool.Tool
+getServicesTool =
+  mkToolDef
+    "get_services"
+    "Get list of services in this project"
+    $ AE.object ["type" AE..= ("object" :: Text), "properties" AE..= AE.object []]
+
+
+countQueryTool :: OAITool.Tool
+countQueryTool =
+  mkToolDef
+    "count_query"
+    "Get the count of results for a KQL query. Use to verify a query matches data before finalizing."
+    $ AE.object
+      [ "type" AE..= ("object" :: Text)
+      , "properties" AE..= AE.object
+          ["query" AE..= AE.object ["type" AE..= ("string" :: Text), "description" AE..= ("KQL query to count" :: Text)]]
+      , "required" AE..= (["query"] :: [Text])
+      ]
+
+
+sampleLogsTool :: OAITool.Tool
+sampleLogsTool =
+  mkToolDef
+    "sample_logs"
+    "Get sample log entries matching a query. Use to understand the structure/content of matching logs."
+    $ AE.object
+      [ "type" AE..= ("object" :: Text)
+      , "properties" AE..= AE.object
+          [ "query" AE..= AE.object ["type" AE..= ("string" :: Text), "description" AE..= ("KQL query to match" :: Text)]
+          , "limit" AE..= AE.object ["type" AE..= ("integer" :: Text), "description" AE..= ("Max samples (default 3, max 5)" :: Text)]
+          ]
+      , "required" AE..= (["query"] :: [Text])
+      ]
+
+
+getFacetsTool :: OAITool.Tool
+getFacetsTool =
+  mkToolDef
+    "get_facets"
+    "Get precomputed facets showing popular values for common fields like services, status codes, methods, etc."
+    $ AE.object ["type" AE..= ("object" :: Text), "properties" AE..= AE.object []]
+
+
+getSchemaTool :: OAITool.Tool
+getSchemaTool =
+  mkToolDef
+    "get_schema"
+    "Get the schema of available fields in the log/span data. Use when you need to know what fields are queryable."
+    $ AE.object ["type" AE..= ("object" :: Text), "properties" AE..= AE.object []]
+
+
+runQueryTool :: OAITool.Tool
+runQueryTool =
+  mkToolDef
+    "run_query"
+    "Execute a KQL query and return results. Use for exploratory queries to understand data."
+    $ AE.object
+      [ "type" AE..= ("object" :: Text)
+      , "properties" AE..= AE.object
+          [ "query" AE..= AE.object ["type" AE..= ("string" :: Text), "description" AE..= ("KQL query to execute" :: Text)]
+          , "limit" AE..= AE.object ["type" AE..= ("integer" :: Text), "description" AE..= ("Max results (default 20)" :: Text)]
+          ]
+      , "required" AE..= (["query"] :: [Text])
+      ]
+
+
+allToolDefs :: [OAITool.Tool]
+allToolDefs =
+  [ getFieldValuesTool
+  , getServicesTool
+  , countQueryTool
+  , sampleLogsTool
+  , getFacetsTool
+  , getSchemaTool
+  , runQueryTool
+  ]
+
+
+-- * Main Entry Point
+
+
+-- | Build the system prompt
+buildSystemPrompt :: AgenticConfig -> Text
+buildSystemPrompt config =
   let basePrompt = AI.systemPrompt
-      -- Include facet context for all queries (FastMode and AgenticMode)
       facetSection = formatFacetContext config.facetContext
-      toolSection = case config.mode of
-        FastMode -> ""
-        AgenticMode -> toolDescriptions
-      resultsSection = case previousResults of
-        [] -> ""
-        rs -> formatToolResults rs
-   in basePrompt <> facetSection <> toolSection <> resultsSection <> "\n\nUser query: " <> userQuery
+   in basePrompt <> facetSection
+
+
+-- | Strip markdown code blocks from response
+stripCodeBlock :: Text -> Text
+stripCodeBlock t
+  | "```json" `T.isPrefixOf` stripped = T.strip $ T.dropWhileEnd (== '`') $ T.drop 7 stripped
+  | "```" `T.isPrefixOf` stripped = T.strip $ T.dropWhileEnd (== '`') $ T.drop 3 stripped
+  | otherwise = stripped
+  where
+    stripped = T.strip t
+
+
+-- | Parse LLM response to extract the final response
+parseResponse :: Text -> Either Text AI.ChatLLMResponse
+parseResponse responseText =
+  let cleaned = stripCodeBlock responseText
+   in AI.getAskLLMResponse cleaned
 
 
 -- | Main entry point for agentic LLM queries
--- This runs the agentic loop: LLM -> parse response -> execute tools -> feed back -> repeat
 runAgenticQuery
   :: (DB es, Log :> es, Time.Time :> es)
   => AgenticConfig
   -> Text
   -> Text
   -> Eff es (Either Text AI.ChatLLMResponse)
-runAgenticQuery config userQuery apiKey =
-  runAgenticLoop config userQuery apiKey [] 0
+runAgenticQuery config userQuery apiKey = do
+  case config.mode of
+    FastMode -> runFastMode config userQuery apiKey
+    AgenticMode -> runAgenticMode config userQuery apiKey
 
 
--- | Internal agentic loop
-runAgenticLoop
+-- | Fast mode: single LLM call without tools
+runFastMode
+  :: (DB es)
+  => AgenticConfig
+  -> Text
+  -> Text
+  -> Eff es (Either Text AI.ChatLLMResponse)
+runFastMode config userQuery apiKey = do
+  let systemPrompt = buildSystemPrompt config
+      fullPrompt = systemPrompt <> "\n\nUser query: " <> userQuery
+  result <- liftIO $ AI.callOpenAIAPI fullPrompt apiKey
+  pure $ result >>= parseResponse
+
+
+-- | Agentic mode: use langchain-hs chat API with native tool calling
+runAgenticMode
   :: (DB es, Log :> es, Time.Time :> es)
   => AgenticConfig
   -> Text
   -> Text
-  -> [ToolResult]
+  -> Eff es (Either Text AI.ChatLLMResponse)
+runAgenticMode config userQuery apiKey = do
+  let openAI = OpenAI.OpenAI{apiKey = apiKey, callbacks = [], baseUrl = Nothing}
+      systemPrompt = buildSystemPrompt config
+      systemMsg = LLM.Message LLM.System systemPrompt LLM.defaultMessageData
+      userMsg = LLM.Message LLM.User userQuery LLM.defaultMessageData
+      messages = systemMsg NE.:| [userMsg]
+      params =
+        OpenAIV1._CreateChatCompletion
+          { OpenAIV1.model = Models.Model "gpt-4o-mini"
+          , OpenAIV1.tools = Just $ V.fromList allToolDefs
+          , OpenAIV1.messages = V.empty -- Will be set by langchain-hs chat
+          }
+
+  runAgenticLoop config openAI messages params 0
+
+
+-- | Internal agentic loop using langchain-hs chat API with native tool calling
+runAgenticLoop
+  :: (DB es, Log :> es, Time.Time :> es)
+  => AgenticConfig
+  -> OpenAI.OpenAI
+  -> LLM.ChatHistory
+  -> OpenAIV1.CreateChatCompletion
   -> Int
   -> Eff es (Either Text AI.ChatLLMResponse)
-runAgenticLoop config userQuery apiKey previousResults iteration
+runAgenticLoop config openAI messages params iteration
   | iteration >= config.maxIterations =
-      -- Max iterations reached, force a final response
       pure $ Left "Maximum tool iterations reached without final response"
   | otherwise = do
-      -- Build the prompt (includes facet context automatically)
-      let prompt = buildAgenticPrompt config userQuery previousResults
-
-      -- Call the LLM
-      result <- liftIO $ AI.callOpenAIAPI prompt apiKey
+      -- Call LLM using langchain-hs chat API (handles tool calling natively)
+      result <- liftIO $ LLM.chat openAI messages (Just params)
 
       case result of
-        Left err -> pure $ Left err
-        Right responseText -> do
-          -- Parse the response
-          let parsed = parseAgenticResponse responseText
+        Left err -> pure $ Left $ "LLM Error: " <> show err
+        Right responseMsg -> do
+          -- Check if there are tool calls (langchain-hs parses these from the API response)
+          case LLM.toolCalls (LLM.messageData responseMsg) of
+            Nothing -> do
+              -- No tool calls - this is the final response
+              let content = LLM.content responseMsg
+              pure $ parseResponse content
+            Just toolCallList -> do
+              -- Execute tool calls using our effectful handlers
+              toolResults <- traverse (executeToolCall config) toolCallList
 
-          case parsed of
-            AgenticError err -> pure $ Left err
-            FinalResponse resp -> pure $ Right resp
-            NeedsTools calls -> do
-              -- In FastMode, we shouldn't get here, but handle it gracefully
-              case config.mode of
-                FastMode ->
-                  -- Ignore tool calls in fast mode, try to extract response anyway
-                  pure $ Left "Tool calls not allowed in fast mode"
-                AgenticMode -> do
-                  -- Execute all tool calls
-                  toolResults <- traverse (executeTool config) calls
-                  -- Recurse with tool results
-                  runAgenticLoop config userQuery apiKey (previousResults <> toolResults) (iteration + 1)
+              -- Build messages: add assistant msg with tool calls, then tool results
+              let assistantMsg = responseMsg
+                  toolMsgs = zipWith mkToolResultMsg toolCallList toolResults
+                  newMessages = NE.fromList $ NE.toList messages ++ [assistantMsg] ++ toolMsgs
+
+              -- Continue the loop with updated conversation history
+              runAgenticLoop config openAI newMessages params (iteration + 1)
+
+
+mkToolResultMsg :: LLM.ToolCall -> Text -> LLM.Message
+mkToolResultMsg tc result =
+  LLM.Message
+    { LLM.role = LLM.Tool
+    , LLM.content = result
+    , LLM.messageData = LLM.defaultMessageData{LLM.name = Just $ LLM.toolCallId tc}
+    }
+
+
+-- | Execute a single tool call in effectful context
+executeToolCall
+  :: (DB es, Log :> es, Time.Time :> es)
+  => AgenticConfig
+  -> LLM.ToolCall
+  -> Eff es Text
+executeToolCall config tc = do
+  let funcName = LLM.toolFunctionName (LLM.toolCallFunction tc)
+      args = LLM.toolFunctionArguments (LLM.toolCallFunction tc)
+
+  case funcName of
+    "get_field_values" -> executeGetFieldValues config args
+    "get_services" -> executeGetServices config
+    "count_query" -> executeCountQuery config args
+    "sample_logs" -> executeSampleLogs config args
+    "get_facets" -> pure $ executeGetFacets config
+    "get_schema" -> pure $ Schema.generateSchemaForAI Schema.telemetrySchema
+    "run_query" -> executeRunQuery config args
+    _ -> pure $ "Unknown tool: " <> funcName
+
+
+-- * Tool Execution (Effectful)
+
+
+executeGetFieldValues
+  :: (DB es, Log :> es, Time.Time :> es)
+  => AgenticConfig
+  -> Map.Map Text AE.Value
+  -> Eff es Text
+executeGetFieldValues config args =
+  case Map.lookup "field" args of
+    Just (AE.String field) -> do
+      let lim = min config.limits.maxFieldValues $ fromMaybe config.limits.defaultFieldLimit (getIntFromArgs "limit" args)
+          kqlQuery = "| summarize count() by " <> field <> " | sort by _count desc | take " <> show lim
+      runKqlAndFormat config kqlQuery [] $ \(results, _, _) ->
+        "Values for '" <> field <> "': " <> formatSummarizeResults results
+    _ -> pure "Error: Missing or invalid 'field' argument"
+
+
+executeGetServices :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> Eff es Text
+executeGetServices config = do
+  let kqlQuery = "| summarize count() by resource.service.name | sort by _count desc | take " <> show config.limits.maxServices
+  runKqlAndFormat config kqlQuery [] $ \(results, _, _) ->
+    "Available services: " <> formatSummarizeResults results
+
+
+executeCountQuery
+  :: (DB es, Log :> es, Time.Time :> es)
+  => AgenticConfig
+  -> Map.Map Text AE.Value
+  -> Eff es Text
+executeCountQuery config args =
+  case Map.lookup "query" args of
+    Just (AE.String kqlQuery) ->
+      runKqlAndFormat config kqlQuery [] $ \(_, _, count) ->
+        "Query '" <> kqlQuery <> "' matches " <> show count <> " entries"
+    _ -> pure "Error: Missing or invalid 'query' argument"
+
+
+executeSampleLogs
+  :: (DB es, Log :> es, Time.Time :> es)
+  => AgenticConfig
+  -> Map.Map Text AE.Value
+  -> Eff es Text
+executeSampleLogs config args =
+  case Map.lookup "query" args of
+    Just (AE.String kqlQuery) -> do
+      let lim = min config.limits.maxSampleLogs $ fromMaybe config.limits.defaultSampleLimit (getIntFromArgs "limit" args)
+          fullQuery = if "| take" `T.isInfixOf` kqlQuery then kqlQuery else kqlQuery <> " | take " <> show lim
+          sampleColumns = ["level", "name", "resource.service.name", "body"]
+      runKqlAndFormat config fullQuery sampleColumns $ \(results, _, _) ->
+        "Sample logs:\n" <> formatSampleLogs results
+    _ -> pure "Error: Missing or invalid 'query' argument"
+
+
+executeGetFacets :: AgenticConfig -> Text
+executeGetFacets config = case config.facetContext of
+  Nothing -> "No facet data available"
+  Just summary -> formatFacetSummary summary
+
+
+executeRunQuery
+  :: (DB es, Log :> es, Time.Time :> es)
+  => AgenticConfig
+  -> Map.Map Text AE.Value
+  -> Eff es Text
+executeRunQuery config args =
+  case Map.lookup "query" args of
+    Just (AE.String query) -> do
+      let lim = min config.limits.maxQueryResults $ fromMaybe 20 (getIntFromArgs "limit" args)
+          fullQuery = if "| take" `T.isInfixOf` query then query else query <> " | take " <> show lim
+      runKqlAndFormat config fullQuery [] $ \(results, _, count) ->
+        formatQueryResults results count
+    _ -> pure "Error: Missing or invalid 'query' argument"
+
+
+-- | Helper to run KQL query and format result
+runKqlAndFormat
+  :: (DB es, Log :> es, Time.Time :> es)
+  => AgenticConfig
+  -> Text
+  -> [Text]
+  -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> Text)
+  -> Eff es Text
+runKqlAndFormat config kqlQuery cols formatResult = case parseQueryToAST kqlQuery of
+  Left _ -> pure "Error: Query parse failed"
+  Right queryAST -> do
+    resultE <- selectLogTable config.projectId queryAST kqlQuery Nothing config.timeRange cols Nothing Nothing
+    pure $ either (const "Error: Query execution failed") formatResult resultE
