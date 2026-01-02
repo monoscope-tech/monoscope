@@ -429,12 +429,12 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
   let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
       constant = Dashboards.replaceConstantVariables pid fromD toD allParams now constantBase
       runQuery :: forall a. Text -> ATAuthCtx a -> (a -> [[Text]]) -> ATAuthCtx Dashboards.Constant
-      runQuery label action transform = do
-        (result, duration) <- Log.timeAction $ try action
+      runQuery label action toResult = do
+        (res, duration) <- Log.timeAction $ try action
         either
           (\(err :: SomeException) -> Log.logWarn ("Dashboard constant " <> label <> " query failed") (constant.key, show err, duration) $> constant)
-          (\val -> Log.logDebug ("Dashboard constant " <> label <> " query completed") (constant.key, duration) $> constant{Dashboards.result = Just $ transform val})
-          result
+          (\val -> Log.logDebug ("Dashboard constant " <> label <> " query completed") (constant.key, duration) $> constant{Dashboards.result = Just $ toResult val})
+          res
   case (constant.sql, constant.query) of
     (Just sqlQuery, _) -> runQuery "SQL" (PG.query_ (Query $ encodeUtf8 sqlQuery)) identity
     (Nothing, Just kqlQuery) -> runQuery "KQL" (Charts.queryMetrics (Just Charts.DTText) (Just pid) (Just kqlQuery) Nothing sinceStr fromDStr toDStr Nothing allParams) (map V.toList . V.toList . (.dataText))
