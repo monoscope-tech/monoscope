@@ -28,10 +28,9 @@ where
 import Control.Lens ((?~))
 import Data.Aeson qualified as AE
 import Data.Default (def)
-import Data.Effectful.LLM (callOpenAIAPI)
 import Data.Map qualified as Map
 import Data.Text qualified as T
-import Data.Time (UTCTime, getCurrentTime)
+import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -49,6 +48,7 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies (FieldChange (..), PayloadChange (..))
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Projects.Projects qualified as Projects
@@ -61,6 +61,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (emptyState_, resizer_, statBox_)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Telemetry (tracePage)
+import Pkg.AI qualified as AI
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, renderRowWithColumns, withAttrs)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
@@ -407,7 +408,7 @@ data AIInvestigationResponse = AIInvestigationResponse
 
 -- | Build comprehensive context for AI from issue, error, and trace data
 buildAIContext :: Issues.Issue -> Maybe Anomalies.ATError -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Text
-buildAIContext issue errM traceM spans =
+buildAIContext issue errM trDataM spans =
   T.unlines
     $ catMaybes
       [ Just "## Issue Details"
@@ -433,13 +434,13 @@ buildAIContext issue errM traceM spans =
               , maybe "" (\m -> "- **Request Method**: " <> m) err.errorData.requestMethod
               , maybe "" (\p -> "- **Request Path**: " <> p) err.errorData.requestPath
               ]
-      , traceM >>= \trace ->
+      , trDataM >>= \tr ->
           Just
             $ T.unlines
               [ ""
               , "## Trace Context"
-              , "- **Trace ID**: " <> trace.traceId
-              , "- **Duration**: " <> show trace.traceDurationNs <> "ns"
+              , "- **Trace ID**: " <> tr.traceId
+              , "- **Duration**: " <> show tr.traceDurationNs <> "ns"
               , "- **Span Count**: " <> show (V.length spans)
               ]
       , if V.null spans
@@ -449,8 +450,8 @@ buildAIContext issue errM traceM spans =
               $ T.unlines
                 [ ""
                 , "## Span Breakdown"
-                , T.unlines $ V.toList $ V.take 10 $ flip V.map spans $ \span ->
-                    "- " <> fromMaybe "unknown" span.name <> " (" <> maybe "n/a" show span.duration <> "ns)"
+                , T.unlines $ V.toList $ V.take 10 $ flip V.map spans $ \s ->
+                    "- " <> fromMaybe "unknown" s.name <> " (" <> maybe "n/a" show s.duration <> "ns)"
                 ]
       ]
 
@@ -502,14 +503,15 @@ aiChatPostH pid issueId form = do
 
   let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
 
-  -- Save user message
-  Issues.insertChatMessage pid convId "user" form.query Nothing Nothing
+  -- Ensure conversation exists
+  _ <- Issues.getOrCreateConversation pid convId Issues.CTAnomaly (AE.object ["issue_id" AE..= issueId])
 
   -- Fetch issue and error context
   issueM <- Issues.selectIssueById issueId
   case issueM of
     Nothing -> do
       let response = "Issue not found. Unable to analyze."
+      Issues.insertChatMessage pid convId "user" form.query Nothing Nothing
       Issues.insertChatMessage pid convId "assistant" response Nothing Nothing
       addRespHeaders $ aiChatResponse_ pid form.query response Nothing
     Just issue -> do
@@ -519,54 +521,50 @@ aiChatPostH pid issueId form = do
         _ -> pure Nothing
 
       -- Fetch trace data if available
-      (traceM, spans) <- case errorM of
+      (traceDataM, spans) <- case errorM of
         Just err -> do
           let targetTIdM = err.recentTraceId
               targetTime = zonedTimeToUTC err.updatedAt
           case targetTIdM of
-            Just traceId -> do
-              trM <- Telemetry.getTraceDetails pid traceId (Just targetTime) now
+            Just tId -> do
+              trM <- Telemetry.getTraceDetails pid tId (Just targetTime) now
               case trM of
-                Just trace -> do
-                  spanRecs <- Telemetry.getSpanRecordsByTraceId pid trace.traceId (Just trace.traceStartTime) now
-                  pure (Just trace, V.fromList spanRecs)
+                Just trData -> do
+                  spanRecs <- Telemetry.getSpanRecordsByTraceId pid trData.traceId (Just trData.traceStartTime) now
+                  pure (Just trData, V.fromList spanRecs)
                 Nothing -> pure (Nothing, V.empty)
             Nothing -> pure (Nothing, V.empty)
         Nothing -> pure (Nothing, V.empty)
 
-      -- Build comprehensive context
-      let context = buildAIContext issue errorM traceM spans
-          fullPrompt =
-            T.unlines
-              [ anomalySystemPrompt
-              , ""
-              , "--- ISSUE CONTEXT ---"
-              , context
-              , ""
-              , "--- USER QUESTION ---"
-              , form.query
-              ]
+      -- Build comprehensive context with anomaly system prompt
+      let context = buildAIContext issue errorM traceDataM spans
+          anomalyContext = T.unlines [anomalySystemPrompt, "", "--- ISSUE CONTEXT ---", context]
 
-      -- Call OpenAI API
-      llmResult <- liftIO $ callOpenAIAPI fullPrompt appCtx.config.openaiApiKey
+      -- Get facets for tool context
+      let dayAgo = addUTCTime (-86400) now
+      facetSummaryM <- Facets.getFacetSummary pid "otel_logs_and_spans" dayAgo now
 
-      case llmResult of
-        Left err -> do
-          let response = "I encountered an error while analyzing this issue. Please try again."
-          Issues.insertChatMessage pid convId "assistant" response Nothing Nothing
-          addRespHeaders $ aiChatResponse_ pid form.query response Nothing
+      -- Build agentic config with conversation ID for history persistence
+      let config = (AI.defaultAgenticConfig pid)
+            { AI.facetContext = facetSummaryM
+            , AI.customContext = Just anomalyContext
+            , AI.conversationId = Just convId
+            , AI.conversationType = Just Issues.CTAnomaly
+            }
+
+      -- Run agentic query with full tool access and history
+      result <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiApiKey
+
+      case result of
+        Left err -> addRespHeaders $ aiChatResponse_ pid form.query ("I encountered an error while analyzing this issue: " <> err) Nothing
         Right responseText -> do
           -- Try to parse the AI response as JSON
           let parsed = AE.eitherDecode (fromStrict $ encodeUtf8 responseText) :: Either String AIInvestigationResponse
           case parsed of
-            Left _ -> do
-              -- If not valid JSON, use raw response as explanation
-              Issues.insertChatMessage pid convId "assistant" responseText Nothing Nothing
-              addRespHeaders $ aiChatResponse_ pid form.query responseText Nothing
+            Left _ -> addRespHeaders $ aiChatResponse_ pid form.query responseText Nothing
             Right aiResp -> do
-              -- Store response with widget configs
-              let widgetsJson = AE.toJSON <$> aiResp.widgets
-              Issues.insertChatMessage pid convId "assistant" aiResp.explanation widgetsJson Nothing
+              -- Update the stored response with widget configs
+              Issues.insertChatMessage pid convId "assistant" aiResp.explanation (Just $ AE.toJSON aiResp.widgets) Nothing
               addRespHeaders $ aiChatResponse_ pid form.query aiResp.explanation aiResp.widgets
 
 

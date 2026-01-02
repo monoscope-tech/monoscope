@@ -31,13 +31,14 @@ import Data.Time qualified as Time
 import Effectful (Eff, type (:>))
 import Effectful.Log qualified as Log
 import Effectful.Time qualified as Time
-import Langchain.LLM.Core qualified as LLM
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps qualified as RequestDumps
+import Pkg.AI qualified as AI
 import Models.Projects.Dashboards qualified as Dashboards
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, authHeader, chartImageUrl, contentTypeHeader, formatThreadsWithMemory, handleTableResponse, processAIQuery)
+import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, authHeader, chartImageUrl, contentTypeHeader, formatHistoryAsContext, handleTableResponse, processAIQuery)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
 import Pkg.Parser (parseQueryToAST)
@@ -303,39 +304,76 @@ discordInteractionsH rawBody signatureM timestampM = do
     handleAskCommand options interaction envCfg authCtx discordData = do
       now <- Time.currentTime
       _ <- sendDeferredResponse interaction.id interaction.token envCfg.discordBotToken
-      (userQuery, threadContext) <- buildPrompt options interaction envCfg
-      result <- processAIQuery discordData.projectId userQuery threadContext envCfg.openaiApiKey
-      case result of
-        Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= "Sorry, there was an error processing your request"])
-        Right AIQueryResult{..} -> do
-          let (from, to) = timeRangeStr
-          case visualization of
-            Just vizType -> do
-              let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-                  query_url = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> ("&query=" <> toUriStr query)
-                  opts = "&q=" <> toUriStr query <> "&p=" <> discordData.projectId.toText <> "&t=" <> chartType <> "&from=" <> toUriStr from <> "&to=" <> toUriStr to
-                  question = case options of
-                    Just (InteractionOption{value = AE.String q} : _) -> q
-                    _ -> "[?]"
-                  content = getBotContent question query query_url opts authCtx.env.chartShotUrl now
-              sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
-            Nothing -> case parseQueryToAST query of
-              Left err -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= ("Error parsing query: " <> err)])
-              Right query' -> do
-                tableAsVecE <- RequestDumps.selectLogTable discordData.projectId query' query Nothing (fromTime, toTime) [] Nothing Nothing
-                sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ handleTableResponse Discord tableAsVecE envCfg discordData.projectId query
+
+      -- Extract user query from options
+      let userQuery = case options of
+            Just (InteractionOption{value = AE.String q} : _) -> q
+            _ -> ""
+
+      -- Check if this is a thread interaction
+      case interaction.channel of
+        Just DiscordThreadChannel{type_ = 11, id = threadId} -> do
+          -- Thread conversation - use DB persistence
+          let convId = Issues.discordThreadToConversationId threadId
+
+          -- Ensure conversation exists
+          _ <- Issues.getOrCreateConversation discordData.projectId convId Issues.CTDiscordThread
+               (AE.object ["channel_id" AE..= interaction.channel_id, "guild_id" AE..= interaction.guild_id])
+
+          -- Load existing history from DB
+          existingHistory <- Issues.selectChatHistory convId
+
+          -- One-time migration: if DB is empty, fetch from Discord API
+          when (null existingHistory) $ do
+            msgs <- getThreadStarterMessage interaction envCfg.discordBotToken
+            case msgs of
+              Just messages -> forM_ messages $ \m ->
+                let role = if m.author.username == "APItoolkit" then "assistant" else "user"
+                 in Issues.insertChatMessage discordData.projectId convId role m.content Nothing Nothing
+              Nothing -> pass
+
+          -- Build thread context from DB history
+          dbMessages <- Issues.selectChatHistory convId
+          let threadContext = formatHistoryAsContext "Discord" $ map AI.dbMessageToLLMMessage dbMessages
+
+          -- Process with thread context
+          result <- processAIQuery discordData.projectId userQuery (Just threadContext) envCfg.openaiApiKey
+
+          -- Save user message
+          Issues.insertChatMessage discordData.projectId convId "user" userQuery Nothing Nothing
+
+          case result of
+            Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= "Sorry, there was an error processing your request"])
+            Right AIQueryResult{..} -> do
+              Issues.insertChatMessage discordData.projectId convId "assistant" query Nothing Nothing
+              sendDiscordResponse options interaction envCfg authCtx discordData query visualization fromTime toTime timeRangeStr now
+
+        _ -> do
+          -- Non-thread: use original flow without persistence
+          result <- processAIQuery discordData.projectId userQuery Nothing envCfg.openaiApiKey
+          case result of
+            Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= "Sorry, there was an error processing your request"])
+            Right AIQueryResult{..} -> sendDiscordResponse options interaction envCfg authCtx discordData query visualization fromTime toTime timeRangeStr now
 
 
-buildPrompt :: Maybe [InteractionOption] -> DiscordInteraction -> EnvConfig -> ATBaseCtx (Text, Maybe Text)
-buildPrompt cmdOptions interaction envCfg = do
-  threadMsgs <- getThreadStarterMessage interaction envCfg.discordBotToken
-  case cmdOptions of
-    Just (InteractionOption{value = AE.String q} : _) -> case threadMsgs of
-      Just msgs -> do
-        ctx <- liftIO $ threadsPrompt (reverse msgs)
-        pure (q, Just ctx)
-      _ -> pure (q, Nothing)
-    _ -> pure ("", Nothing)
+sendDiscordResponse :: Maybe [InteractionOption] -> DiscordInteraction -> EnvConfig -> AuthContext -> DiscordData -> Text -> Maybe Text -> Maybe Time.UTCTime -> Maybe Time.UTCTime -> (Text, Text) -> Time.UTCTime -> ATBaseCtx ()
+sendDiscordResponse options interaction envCfg authCtx discordData query visualization fromTimeM toTimeM timeRangeStr now = do
+  let (from, to) = timeRangeStr
+  case visualization of
+    Just vizType -> do
+      let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
+          query_url = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> ("&query=" <> toUriStr query)
+          opts = "&q=" <> toUriStr query <> "&p=" <> discordData.projectId.toText <> "&t=" <> chartType <> "&from=" <> toUriStr from <> "&to=" <> toUriStr to
+          question = case options of
+            Just (InteractionOption{value = AE.String q} : _) -> q
+            _ -> "[?]"
+          content = getBotContent question query query_url opts authCtx.env.chartShotUrl now
+      sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
+    Nothing -> case parseQueryToAST query of
+      Left err -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= ("Error parsing query: " <> err)])
+      Right query' -> do
+        tableAsVecE <- RequestDumps.selectLogTable discordData.projectId query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
+        sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ handleTableResponse Discord tableAsVecE envCfg discordData.projectId query
 
 
 contentResponse :: Text -> AE.Value
@@ -355,12 +393,6 @@ sendJsonFollowupResponse appId interactionToken botToken content = do
   let followupUrl = toString $ "https://discord.com/api/v10/webhooks/" <> appId <> "/" <> interactionToken
   _ <- postWith (defaults & authHeader botToken & contentTypeHeader "application/json") followupUrl content
   pass
-
-
-threadsPrompt :: [DiscordMessage] -> IO Text
-threadsPrompt = formatThreadsWithMemory 3000 "Discord" . map discordToMessage . filter (\x -> x.author.username == "APItoolkit")
-  where
-    discordToMessage m = LLM.Message LLM.Assistant m.content LLM.defaultMessageData
 
 
 verifyDiscordSignature

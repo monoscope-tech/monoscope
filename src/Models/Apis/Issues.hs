@@ -52,14 +52,20 @@ module Models.Apis.Issues (
   getOrCreateConversation,
   insertChatMessage,
   selectChatHistory,
+
+  -- * Thread ID Helpers
+  slackThreadToConversationId,
+  discordThreadToConversationId,
 ) where
 
 import Data.Aeson qualified as AE
+import Data.ByteString qualified as BS
 import Data.Default (Default, def)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Data.Time.LocalTime (ZonedTime, utcToLocalZonedTime)
-import Data.UUID.V4 qualified as UUID
+import Data.UUID.V4 qualified as UUID4
+import Data.UUID.V5 qualified as UUID5
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_selectWhere)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
@@ -428,7 +434,7 @@ acknowledgeIssue issueId userId = void $ PG.execute q (userId, issueId)
 -- | Create API Change issue from anomalies
 createAPIChangeIssue :: Projects.ProjectId -> Text -> V.Vector Anomalies.AnomalyVM -> IO Issue
 createAPIChangeIssue projectId endpointHash anomalies = do
-  issueId <- UUIDId <$> UUID.nextRandom
+  issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime
 
   let firstAnomaly = V.head anomalies
@@ -479,7 +485,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
 -- | Create Runtime Exception issue
 createRuntimeExceptionIssue :: Projects.ProjectId -> RequestDumps.ATError -> IO Issue
 createRuntimeExceptionIssue projectId atError = do
-  issueId <- UUIDId <$> UUID.nextRandom
+  issueId <- UUIDId <$> UUID4.nextRandom
   errorZonedTime <- utcToLocalZonedTime atError.when
 
   let exceptionData =
@@ -525,7 +531,7 @@ createRuntimeExceptionIssue projectId atError = do
 -- | Create Query Alert issue
 createQueryAlertIssue :: Projects.ProjectId -> Text -> Text -> Text -> Double -> Double -> Text -> IO Issue
 createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thresholdType = do
-  issueId <- UUIDId <$> UUID.nextRandom
+  issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime
   zonedNow <- utcToLocalZonedTime now
 
@@ -569,7 +575,7 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
 
 
 -- | Conversation type for AI chats
-data ConversationType = CTAnomaly | CTTrace | CTLogExplorer | CTDashboard
+data ConversationType = CTAnomaly | CTTrace | CTLogExplorer | CTDashboard | CTSlackThread | CTDiscordThread
   deriving stock (Eq, Generic, Show)
 
 
@@ -582,6 +588,8 @@ instance ToField ConversationType where
   toField CTTrace = Escape "trace"
   toField CTLogExplorer = Escape "log_explorer"
   toField CTDashboard = Escape "dashboard"
+  toField CTSlackThread = Escape "slack_thread"
+  toField CTDiscordThread = Escape "discord_thread"
 
 
 instance FromField ConversationType where
@@ -592,6 +600,8 @@ instance FromField ConversationType where
       "trace" -> pure CTTrace
       "log_explorer" -> pure CTLogExplorer
       "dashboard" -> pure CTDashboard
+      "slack_thread" -> pure CTSlackThread
+      "discord_thread" -> pure CTDiscordThread
       _ -> returnError ConversionFailed f "Invalid conversation type"
 
 
@@ -674,3 +684,17 @@ selectChatHistory convId = PG.query q (Only convId)
       ORDER BY created_at ASC
       LIMIT 20
     |]
+
+
+-- | Generate deterministic UUID from Slack thread identifiers (channel_id + thread_ts)
+slackThreadToConversationId :: Text -> Text -> UUIDId "conversation"
+slackThreadToConversationId channelId threadTs =
+  let bytes = BS.unpack $ encodeUtf8 $ channelId <> ":" <> threadTs
+   in UUIDId $ UUID5.generateNamed UUID5.namespaceDNS bytes
+
+
+-- | Generate deterministic UUID from Discord thread channel ID
+discordThreadToConversationId :: Text -> UUIDId "conversation"
+discordThreadToConversationId channelId =
+  let bytes = BS.unpack $ encodeUtf8 channelId
+   in UUIDId $ UUID5.generateNamed UUID5.namespaceDNS bytes

@@ -33,8 +33,13 @@ module Pkg.AI (
 
   -- * Agentic Query Execution
   runAgenticQuery,
+  runAgenticQueryWithHistory,
+  runAgenticChatWithHistory,
   defaultAgenticConfig,
   defaultLimits,
+
+  -- * Message Conversion
+  dbMessageToLLMMessage,
 ) where
 
 import Data.Aeson qualified as AE
@@ -54,8 +59,10 @@ import Langchain.LLM.OpenAI qualified as OpenAI
 import Langchain.Memory.Core (BaseMemory (..))
 import Langchain.Memory.TokenBufferMemory (TokenBufferMemory (..))
 import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps (executeSecuredQuery, selectLogTable)
 import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (UUIDId (..))
 import Models.Telemetry.Schema qualified as Schema
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import OpenAI.V1.Models qualified as Models
@@ -256,6 +263,8 @@ data AgenticConfig = AgenticConfig
   , facetContext :: Maybe FacetSummary
   , limits :: ToolLimits
   , customContext :: Maybe Text
+  , conversationId :: Maybe (UUIDId "conversation")
+  , conversationType :: Maybe Issues.ConversationType
   }
 
 
@@ -268,6 +277,8 @@ defaultAgenticConfig pid =
     , facetContext = Nothing
     , limits = defaultLimits
     , customContext = Nothing
+    , conversationId = Nothing
+    , conversationType = Nothing
     }
 
 
@@ -470,6 +481,114 @@ runAgenticQuery config userQuery apiKey = do
           , OpenAIV1.messages = V.empty
           }
   runAgenticLoop config openAI chatHistory params 0
+
+
+-- | Convert a DB chat message to an LLM message
+dbMessageToLLMMessage :: Issues.AIChatMessage -> LLM.Message
+dbMessageToLLMMessage msg =
+  LLM.Message
+    { LLM.role = case msg.role of
+        "user" -> LLM.User
+        "assistant" -> LLM.Assistant
+        "system" -> LLM.System
+        _ -> LLM.User
+    , LLM.content = msg.content
+    , LLM.messageData = LLM.defaultMessageData
+    }
+
+
+-- | Run agentic query with DB-persisted chat history
+runAgenticQueryWithHistory
+  :: (DB es, Log :> es, Time.Time :> es)
+  => AgenticConfig
+  -> Text
+  -> Text
+  -> Eff es (Either Text ChatLLMResponse)
+runAgenticQueryWithHistory config userQuery apiKey = do
+  let openAI = OpenAI.OpenAI{apiKey = apiKey, callbacks = [], baseUrl = Nothing}
+      sysPrompt = buildSystemPrompt config
+      systemMsg = LLM.Message LLM.System sysPrompt LLM.defaultMessageData
+      userMsg = LLM.Message LLM.User userQuery LLM.defaultMessageData
+      params =
+        OpenAIV1._CreateChatCompletion
+          { OpenAIV1.model = Models.Model "gpt-4o-mini"
+          , OpenAIV1.tools = Just $ V.fromList allToolDefs
+          , OpenAIV1.messages = V.empty
+          }
+  case config.conversationId of
+    Nothing -> runAgenticLoop config openAI (systemMsg :| [userMsg]) params 0
+    Just convId -> do
+      -- Load existing chat history from DB
+      dbMessages <- Issues.selectChatHistory convId
+      let historyMsgs = map dbMessageToLLMMessage dbMessages
+          chatHistory = systemMsg :| (historyMsgs <> [userMsg])
+      -- Save user message to DB
+      Issues.insertChatMessage config.projectId convId "user" userQuery Nothing Nothing
+      -- Run the agentic loop
+      result <- runAgenticLoop config openAI chatHistory params 0
+      -- Save assistant response to DB
+      case result of
+        Right resp -> Issues.insertChatMessage config.projectId convId "assistant" resp.query Nothing Nothing
+        Left _ -> pure ()
+      pure result
+
+
+-- | Run agentic chat with DB-persisted history, returns raw text response
+-- This is more flexible than runAgenticQueryWithHistory as it doesn't parse the response
+runAgenticChatWithHistory
+  :: (DB es, Log :> es, Time.Time :> es)
+  => AgenticConfig
+  -> Text
+  -> Text
+  -> Eff es (Either Text Text)
+runAgenticChatWithHistory config userQuery apiKey = do
+  let openAI = OpenAI.OpenAI{apiKey = apiKey, callbacks = [], baseUrl = Nothing}
+      sysPrompt = buildSystemPrompt config
+      systemMsg = LLM.Message LLM.System sysPrompt LLM.defaultMessageData
+      userMsg = LLM.Message LLM.User userQuery LLM.defaultMessageData
+      params =
+        OpenAIV1._CreateChatCompletion
+          { OpenAIV1.model = Models.Model "gpt-4o-mini"
+          , OpenAIV1.tools = Just $ V.fromList allToolDefs
+          , OpenAIV1.messages = V.empty
+          }
+  case config.conversationId of
+    Nothing -> runAgenticLoopRaw config openAI (systemMsg :| [userMsg]) params 0
+    Just convId -> do
+      dbMessages <- Issues.selectChatHistory convId
+      let historyMsgs = map dbMessageToLLMMessage dbMessages
+          chatHistory = systemMsg :| (historyMsgs <> [userMsg])
+      Issues.insertChatMessage config.projectId convId "user" userQuery Nothing Nothing
+      result <- runAgenticLoopRaw config openAI chatHistory params 0
+      case result of
+        Right resp -> Issues.insertChatMessage config.projectId convId "assistant" resp Nothing Nothing
+        Left _ -> pure ()
+      pure result
+
+
+-- | Raw agentic loop that returns the response text without parsing
+runAgenticLoopRaw
+  :: (DB es, Log :> es, Time.Time :> es)
+  => AgenticConfig
+  -> OpenAI.OpenAI
+  -> LLM.ChatHistory
+  -> OpenAIV1.CreateChatCompletion
+  -> Int
+  -> Eff es (Either Text Text)
+runAgenticLoopRaw config openAI chatHistory params iteration
+  | iteration >= config.maxIterations = pure $ Left "Maximum tool iterations reached without final response"
+  | otherwise = do
+      result <- liftIO $ LLM.chat openAI chatHistory (Just params)
+      case result of
+        Left err -> pure $ Left $ "LLM Error: " <> show err
+        Right responseMsg -> case LLM.toolCalls (LLM.messageData responseMsg) of
+          Nothing -> pure $ Right $ LLM.content responseMsg
+          Just toolCallList -> do
+            toolResults <- traverse (executeToolCall config) toolCallList
+            let assistantMsg = responseMsg
+                toolMsgs = zipWith mkToolResultMsg toolCallList toolResults
+            newMessages <- liftIO $ addMessagesToMemory chatHistory (assistantMsg : toolMsgs)
+            runAgenticLoopRaw config openAI newMessages params (iteration + 1)
 
 
 runAgenticLoop

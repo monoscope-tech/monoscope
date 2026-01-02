@@ -30,16 +30,17 @@ import Effectful.Error.Static (throwError)
 import Effectful.Log qualified as Log
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
-import Langchain.LLM.Core qualified as LLM
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Slack (SlackData (..), getDashboardsForSlack, getSlackDataByTeamId, insertAccessToken, updateSlackNotificationChannel)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
+import Pkg.AI qualified as AI
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
-import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, contentTypeHeader, formatThreadsWithMemory, handleTableResponse, processAIQuery)
+import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, contentTypeHeader, formatHistoryAsContext, handleTableResponse, processAIQuery)
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
@@ -539,24 +540,45 @@ slackEventsPostH payload = do
         Just threadTs -> processThreadedEvent envCfg event teamId threadTs now
 
     processThreadedEvent envCfg event teamId threadTs now = do
-      replies <- getChannelMessages envCfg.slackBotToken event.channel (fromMaybe "" event.thread_ts)
       slackDataM <- getSlackDataByTeamId teamId
-      handleThreadedReplies envCfg event slackDataM replies threadTs now
-
-    handleThreadedReplies envCfg event slackDataM replies threadTs now =
       case slackDataM of
         Nothing -> pass
-        Just slackData ->
-          case replies of
-            Just messages -> processMessages envCfg event slackData messages threadTs now
-            Nothing -> pass
+        Just slackData -> do
+          -- Generate deterministic conversation ID from channel + thread_ts
+          let convId = Issues.slackThreadToConversationId event.channel threadTs
 
-    processMessages envCfg event slackData messages threadTs now = do
-      threadContext <- liftIO $ threadsPrompt messages.messages
+          -- Ensure conversation exists
+          _ <- Issues.getOrCreateConversation slackData.projectId convId Issues.CTSlackThread
+               (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= teamId])
+
+          -- Load existing history from DB
+          existingHistory <- Issues.selectChatHistory convId
+
+          -- One-time migration: if DB is empty, fetch from Slack API and migrate
+          when (null existingHistory) $ do
+            replies <- getChannelMessages envCfg.slackBotToken event.channel threadTs
+            case replies of
+              Just messages -> forM_ messages.messages $ \m ->
+                Issues.insertChatMessage slackData.projectId convId "user" m.text Nothing Nothing
+              Nothing -> pass
+
+          -- Process the current message with history from DB
+          processMessages envCfg event slackData convId threadTs now
+
+    processMessages envCfg event slackData convId threadTs now = do
+      -- Build thread context from DB history
+      dbMessages <- Issues.selectChatHistory convId
+      let threadContext = formatHistoryAsContext "Slack" $ map AI.dbMessageToLLMMessage dbMessages
+
+      -- Use processAIQuery with thread context
       result <- processAIQuery slackData.projectId event.text (Just threadContext) envCfg.openaiApiKey
       case result of
         Left _ -> sendSlackChatMessage envCfg.slackBotToken (AE.object ["text" AE..= "Sorry I wasn't able to process your request", "channel" AE..= event.channel, "thread_ts" AE..= threadTs])
         Right AIQueryResult{..} -> do
+          -- Save user message and bot response to DB
+          Issues.insertChatMessage slackData.projectId convId "user" event.text Nothing Nothing
+          Issues.insertChatMessage slackData.projectId convId "assistant" query Nothing Nothing
+
           let (from, to) = timeRangeStr
           case visualization of
             Just vizType -> do
@@ -634,7 +656,3 @@ getChannelMessages token channelId ts = do
       return Nothing
 
 
-threadsPrompt :: [SlackThreadedMessage] -> IO Text
-threadsPrompt = formatThreadsWithMemory 3000 "Slack" . map slackToMessage
-  where
-    slackToMessage m = LLM.Message LLM.User m.text LLM.defaultMessageData
