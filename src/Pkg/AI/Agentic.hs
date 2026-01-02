@@ -4,7 +4,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE ViewPatterns #-}
 
@@ -388,7 +387,7 @@ runAgenticMode config userQuery apiKey = do
       systemPrompt = buildSystemPrompt config
       systemMsg = LLM.Message LLM.System systemPrompt LLM.defaultMessageData
       userMsg = LLM.Message LLM.User userQuery LLM.defaultMessageData
-      messages = systemMsg NE.:| [userMsg]
+      messages = systemMsg :| [userMsg]
       params =
         OpenAIV1._CreateChatCompletion
           { OpenAIV1.model = Models.Model "gpt-4o-mini"
@@ -522,9 +521,7 @@ executeSampleLogs config args =
 
 
 executeGetFacets :: AgenticConfig -> Text
-executeGetFacets config = case config.facetContext of
-  Nothing -> "No facet data available"
-  Just summary -> formatFacetSummary summary
+executeGetFacets config = maybe "No facet data available" formatFacetSummary config.facetContext
 
 
 executeRunQuery
