@@ -67,6 +67,7 @@ import Pkg.Drain qualified as Drain
 import Pkg.GitHub qualified as GitHub
 import Pkg.Mail (NotificationAlerts (..), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
+import Pkg.QueryCache qualified as QueryCache
 import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask)
@@ -378,6 +379,10 @@ runHourlyJob scheduledTime hour = do
     forM_ projectBatches \batch -> do
       let batchJob = BackgroundJobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime
       createJob conn "background_jobs" batchJob
+
+  -- Cleanup expired query cache entries
+  deletedCount <- QueryCache.cleanupExpiredCache
+  Relude.when (deletedCount > 0) $ Log.logInfo "Cleaned up expired query cache entries" ("deleted_count", AE.toJSON deletedCount)
 
   Log.logInfo "Completed hourly job scheduling for hour" ("hour", AE.toJSON hour)
 

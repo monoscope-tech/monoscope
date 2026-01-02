@@ -675,25 +675,7 @@ apiLogsPage page = do
             , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
             , Widget.summarizeBy = Just Widget.SBMax
             , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
-            , Widget.sql =
-                Just
-                  [text| SELECT timeB::integer, quantiles[idx] AS quantile, COALESCE(values[idx], 0)::float AS value
-                            FROM ( SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS timeB,
-                                    ARRAY[
-                                      COALESCE(approx_percentile(0.50, percentile_agg(duration))::float, 0)::float,
-                                      COALESCE(approx_percentile(0.75, percentile_agg(duration))::float, 0)::float,
-                                      COALESCE(approx_percentile(0.90, percentile_agg(duration))::float, 0)::float,
-                                      COALESCE(approx_percentile(0.95, percentile_agg(duration))::float, 0)::float
-                                    ] AS values,
-                                    ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
-                              FROM otel_logs_and_spans
-                              WHERE project_id='{{project_id}}' AND duration IS NOT NULL
-                                {{time_filter}} {{query_ast_filters}}
-                              GROUP BY timeB
-                              HAVING COUNT(*) > 0
-                            ) s
-                            CROSS JOIN (VALUES (1), (2), (3), (4)) AS t(idx)
-                            WHERE values[idx] IS NOT NULL; |]
+            , Widget.query = Just "duration != null | summarize percentiles(duration, 50, 75, 90, 95) by bin_auto(timestamp)"
             , Widget.unit = Just "ns"
             , Widget.hideLegend = Just True
             , Widget._projectId = Just page.pid

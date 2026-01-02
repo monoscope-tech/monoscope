@@ -1,35 +1,56 @@
 module Pkg.Parser.Stats (
-  pSummarizeSection,
-  pSortSection,
-  pTakeSection,
+  -- Types
   AggFunction (..),
   Section (..),
   SummarizeByClause (..),
   BinFunction (..),
   SortField (..),
   Sources (..),
+  SubjectExpr (..),
+  -- Section parsers
+  pSummarizeSection,
+  pSortSection,
+  pTakeSection,
   parseQuery,
   pSource,
-  defaultBinSize,
+  -- Aggregation parsers
   aggFunctionParser,
-  pBinFunction,
   namedAggregation,
+  pBinFunction,
   pSummarizeByClause,
   pSortField,
+  -- KQL function parsers
+  pCountIf,
+  pDCount,
+  pCount,
+  pCoalesce,
+  pStrcat,
+  pIff,
+  pCase,
+  pPercentileSingle,
+  pPercentilesMulti,
+  pSubjectExpr,
+  pScalarExpr,
+  -- Utilities
+  defaultBinSize,
+  extractPercentilesInfo,
+  subjectExprToSQL,
 ) where
 
 import Data.Aeson qualified as AE
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
-import Pkg.Parser.Expr (Expr, Parser, Subject (..), ToQueryText (..), kqlTimespanToTimeBucket, pExpr, pSubject)
-import Relude hiding (Sum, some)
+import Pkg.Parser.Expr (Expr, Parser, Subject (..), ToQueryText (..), Values (..), kqlTimespanToTimeBucket, pExpr, pSubject, pValues)
+import Relude hiding (Sum, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, space, string)
+import Text.Megaparsec.Char.Lexer qualified as L
 
 
 -- $setup
 -- >>> import Text.Megaparsec (parse)
 -- >>> import Pkg.Parser.Expr (FieldKey(..))
+-- >>> import Pkg.Parser.Stats
 -- >>> :set -XOverloadedStrings
 
 
@@ -38,15 +59,42 @@ defaultBinSize :: Text
 defaultBinSize = "5 minutes"
 
 
+-- | Comma separator with trailing space - common parser pattern
+comma :: Parser ()
+comma = void $ string "," *> space
+
+
+-- | Helper to avoid repeating <*> pure Nothing for alias-less aggregations
+withoutAlias :: Parser (Maybe Text -> a) -> Parser a
+withoutAlias p = p <*> pure Nothing
+
+
+-- | Simple arithmetic expression for percentile functions
+-- Supports: field, field / number, field * number
+data SubjectExpr = SubjectExpr Subject (Maybe (Text, Double))
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | Display a SubjectExpr as SQL
+subjectExprToSQL :: SubjectExpr -> Text
+subjectExprToSQL (SubjectExpr sub Nothing) = display sub
+subjectExprToSQL (SubjectExpr sub (Just (op, val))) = "(" <> display sub <> " " <> op <> " " <> show val <> ")"
+
+
 -- Modify Aggregation Functions to include optional aliases
 data AggFunction
   = Count Subject (Maybe Text) -- Optional field and alias
+  | CountIf Expr (Maybe Text) -- Count with condition (KQL countif)
+  | DCount Subject (Maybe Int) (Maybe Text) -- Distinct count with optional accuracy (0-4)
   | P50 Subject (Maybe Text)
   | P75 Subject (Maybe Text)
   | P90 Subject (Maybe Text)
   | P95 Subject (Maybe Text)
   | P99 Subject (Maybe Text)
   | P100 Subject (Maybe Text)
+  | Percentile SubjectExpr Double (Maybe Text) -- subject expr, single percentile value, optional alias
+  | Percentiles SubjectExpr [Double] (Maybe Text) -- subject expr, percentile values, optional alias
   | Sum Subject (Maybe Text)
   | Avg Subject (Maybe Text)
   | Min Subject (Maybe Text)
@@ -55,7 +103,12 @@ data AggFunction
   | Stdev Subject (Maybe Text)
   | Range Subject (Maybe Text)
   | -- | CustomAgg String [Field] (Maybe String)
-    Plain Subject (Maybe Text)
+    -- Scalar functions that can be used in aggregations (Microsoft KQL compatible)
+    Coalesce [Values] (Maybe Text) -- coalesce(expr1, expr2, ...) - variadic, returns first non-null
+  | Strcat [Values] (Maybe Text) -- strcat(expr1, expr2, ...) - concatenate any scalar expressions
+  | Iff Expr Values Values (Maybe Text) -- iff(condition, then_expr, else_expr)
+  | Case [(Expr, Values)] Values (Maybe Text) -- case(pred1, val1, pred2, val2, ..., else)
+  | Plain Subject (Maybe Text)
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -123,24 +176,188 @@ data Sources = SSpans | SMetrics
 --
 -- >>> parse aggFunctionParser "" "customFunc(field)"
 -- Right (Plain (Subject "customFunc" "customFunc" []) Nothing)
+
+-- | Parse a numeric value (float or int) for percentile values
+pNumericValue :: Parser Double
+pNumericValue = try L.float <|> (fromIntegral <$> (L.decimal :: Parser Int))
+
+
+-- | Parse a subject expression: field, field / number, field * number
+-- >>> parse pSubjectExpr "" "duration"
+-- Right (SubjectExpr (Subject "duration" "duration" []) Nothing)
+-- >>> parse pSubjectExpr "" "duration / 1e6"
+-- Right (SubjectExpr (Subject "duration" "duration" []) (Just ("/",1000000.0)))
+pSubjectExpr :: Parser SubjectExpr
+pSubjectExpr = do
+  subj <- pSubject
+  opM <- optional $ do
+    space
+    op <- (string "/" $> "/") <|> (string "*" $> "*")
+    space
+    val <- pNumericValue
+    pure (op, val)
+  pure $ SubjectExpr subj opM
+
+
+-- | Parse percentile(expr, percentile) - single percentile (Microsoft KQL syntax)
+-- >>> parse pPercentileSingle "" "percentile(duration, 95)"
+-- Right (Percentile (SubjectExpr (Subject "duration" "duration" []) Nothing) 95.0 Nothing)
+-- >>> parse pPercentileSingle "" "percentile(duration / 1e6, 95)"
+-- Right (Percentile (SubjectExpr (Subject "duration" "duration" []) (Just ("/",1000000.0))) 95.0 Nothing)
+pPercentileSingle :: Parser AggFunction
+pPercentileSingle =
+  withoutAlias
+    $ Percentile
+    <$> (string "percentile(" *> pSubjectExpr)
+    <*> (comma *> pNumericValue <* string ")")
+
+
+-- | Parse percentiles(expr, p1, p2, ...) - multiple percentiles (Microsoft KQL syntax)
+-- >>> parse pPercentilesMulti "" "percentiles(duration, 50, 75, 90, 95)"
+-- Right (Percentiles (SubjectExpr (Subject "duration" "duration" []) Nothing) [50.0,75.0,90.0,95.0] Nothing)
+-- >>> parse pPercentilesMulti "" "percentiles(duration / 1e6, 50, 75, 90, 95)"
+-- Right (Percentiles (SubjectExpr (Subject "duration" "duration" []) (Just ("/",1000000.0))) [50.0,75.0,90.0,95.0] Nothing)
+pPercentilesMulti :: Parser AggFunction
+pPercentilesMulti =
+  withoutAlias
+    $ Percentiles
+    <$> (string "percentiles(" *> pSubjectExpr <* comma)
+    <*> (pNumericValue `sepBy1` comma <* string ")")
+
+
+-- | Parse countif(predicate) - count with a filter condition
+-- Microsoft KQL: countif(predicate)
+-- >>> parse pCountIf "" "countif(status_code == \"ERROR\")"
+-- Right (CountIf (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) Nothing)
+pCountIf :: Parser AggFunction
+pCountIf = withoutAlias $ CountIf <$> (string "countif(" *> pExpr <* string ")")
+
+
+-- | Parse dcount(expr [, accuracy]) - distinct count with optional accuracy
+-- Microsoft KQL: dcount(expr [, accuracy]) where accuracy is 0-4
+-- >>> parse pDCount "" "dcount(user_id)"
+-- Right (DCount (Subject "user_id" "user_id" []) Nothing Nothing)
+-- >>> parse pDCount "" "dcount(user_id, 2)"
+-- Right (DCount (Subject "user_id" "user_id" []) (Just 2) Nothing)
+-- >>> parse pDCount "" "dcount(user_id, 5)"
+-- Left ...
+pDCount :: Parser AggFunction
+pDCount = withoutAlias $ do
+  _ <- string "dcount("
+  sub <- pSubject
+  accM <- optional $ do
+    _ <- comma
+    acc <- L.decimal :: Parser Int
+    if acc >= 0 && acc <= 4
+      then pure acc
+      else fail "dcount accuracy must be 0-4 per KQL spec"
+  _ <- string ")"
+  pure $ DCount sub accM
+
+
+-- | Parse a scalar expression (field reference or literal value)
+-- Used by iff, case, coalesce, strcat for flexible value parsing
+-- Field references are wrapped in Field constructor to output as column names (not quoted strings)
+-- Note: try is needed because pValues has a catch-all that may consume delimiters before failing
+pScalarExpr :: Parser Values
+pScalarExpr = try pValues <|> (Field <$> pSubject)
+
+
+-- | Helper for variadic scalar functions like coalesce/strcat
+pVariadicAgg :: Text -> ([Values] -> Maybe Text -> AggFunction) -> Parser AggFunction
+pVariadicAgg name ctor =
+  withoutAlias
+    $ ctor
+    <$> (string (name <> "(") *> pScalarExpr `sepBy1` comma <* string ")")
+
+
+-- | Parse coalesce(expr1, expr2, ...) - return first non-null (variadic, 2-64 args)
+-- Microsoft KQL: coalesce(arg, arg_2, [arg_3,...])
+-- >>> parse pCoalesce "" "coalesce(method, \"unknown\")"
+-- Right (Coalesce [Field (Subject "method" "method" []),Str "unknown"] Nothing)
+-- >>> parse pCoalesce "" "coalesce(x)"
+-- Left ...
+pCoalesce :: Parser AggFunction
+pCoalesce = do
+  _ <- string "coalesce("
+  args <- pScalarExpr `sepBy1` comma
+  _ <- string ")"
+  when (length args < 2) $ fail "coalesce requires at least 2 arguments"
+  pure $ Coalesce args Nothing
+
+
+-- | Parse strcat(expr1, expr2, ...) - string concatenation (1-64 args)
+-- Microsoft KQL: strcat(argument1, argument2 [, argument3 ... ])
+-- >>> parse pStrcat "" "strcat(method, \" \", url_path)"
+-- Right (Strcat [Str "method",Str " ",Str "url_path"] Nothing)
+pStrcat :: Parser AggFunction
+pStrcat = pVariadicAgg "strcat" Strcat
+
+
+-- | Parse iff(condition, then_expr, else_expr) - conditional expression
+-- Microsoft KQL: iff(if, then, else)
+-- >>> parse pIff "" "iff(status_code == \"ERROR\", \"error\", \"ok\")"
+-- Right (Iff (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) (Str "error") (Str "ok") Nothing)
+pIff :: Parser AggFunction
+pIff =
+  withoutAlias
+    $ Iff
+    <$> (string "iff(" *> pExpr)
+    <*> (comma *> pScalarExpr)
+    <*> (comma *> pScalarExpr <* string ")")
+
+
+-- | Parse case(pred1, val1, [pred2, val2, ...] else) - multi-branch conditional
+-- Microsoft KQL: case(predicate_1, then_1, [predicate_2, then_2, ...] else)
+-- >>> parse pCase "" "case(status >= 500, \"5xx\", status >= 400, \"4xx\", \"ok\")"
+-- Right (Case [(GTEq (Subject "status" "status" []) (Num "500"),Str "5xx"),(GTEq (Subject "status" "status" []) (Num "400"),Str "4xx")] (Str "ok") Nothing)
+pCase :: Parser AggFunction
+pCase =
+  withoutAlias
+    $ Case
+    <$> (string "case(" *> many (try $ (,) <$> pExpr <*> (comma *> pScalarExpr <* comma)))
+    <*> (pScalarExpr <* string ")")
+
+
+-- | Helper for simple function(subject) parsers
+pSimpleAgg :: Text -> (Subject -> Maybe Text -> AggFunction) -> Parser AggFunction
+pSimpleAgg name ctor = withoutAlias $ ctor <$> (string (name <> "(") *> pSubject <* string ")")
+
+
+-- | Parse count() or count(field) - handles both empty parens and field reference
+pCount :: Parser AggFunction
+pCount =
+  withoutAlias
+    $ Count
+    <$> (string "count(" *> ((pSubject <* string ")") <|> (Subject "*" "*" [] <$ string ")")))
+
+
 aggFunctionParser :: Parser AggFunction
 aggFunctionParser =
   choice @[]
-    [ Sum <$> (string "sum(" *> pSubject <* string ")") <*> pure Nothing
-    , P50 <$> (string "p50(" *> pSubject <* string ")") <*> pure Nothing
-    , P75 <$> (string "p75(" *> pSubject <* string ")") <*> pure Nothing
-    , P90 <$> (string "p90(" *> pSubject <* string ")") <*> pure Nothing
-    , P95 <$> (string "p95(" *> pSubject <* string ")") <*> pure Nothing
-    , P99 <$> (string "p99(" *> pSubject <* string ")") <*> pure Nothing
-    , P100 <$> (string "p100(" *> pSubject <* string ")") <*> pure Nothing
-    , Count <$> (string "count(" *> (pSubject <|> (string ")" $> Subject "*" "*" [])) <* optional (string ")")) <*> pure Nothing
-    , Avg <$> (string "avg(" *> pSubject <* string ")") <*> pure Nothing
-    , Min <$> (string "min(" *> pSubject <* string ")") <*> pure Nothing
-    , Max <$> (string "max(" *> pSubject <* string ")") <*> pure Nothing
-    , Median <$> (string "median(" *> pSubject <* string ")") <*> pure Nothing
-    , Stdev <$> (string "stdev(" *> pSubject <* string ")") <*> pure Nothing
-    , Range <$> (string "range(" *> pSubject <* string ")") <*> pure Nothing
-    , Plain <$> pSubject <*> pure Nothing
+    [ pSimpleAgg "sum" Sum
+    , try pPercentilesMulti
+    , try pPercentileSingle
+    , pSimpleAgg "p50" P50
+    , pSimpleAgg "p75" P75
+    , pSimpleAgg "p90" P90
+    , pSimpleAgg "p95" P95
+    , pSimpleAgg "p99" P99
+    , pSimpleAgg "p100" P100
+    , try pCountIf -- countif must come before count
+    , pDCount -- dcount commits after matching "dcount(" to enforce accuracy validation (0-4)
+    , try pCount
+    , try pCoalesce
+    , try pStrcat
+    , try pIff
+    , try pCase
+    , pSimpleAgg "avg" Avg
+    , pSimpleAgg "min" Min
+    , pSimpleAgg "max" Max
+    , pSimpleAgg "median" Median
+    , pSimpleAgg "stdev" Stdev
+    , pSimpleAgg "range" Range
+    , withoutAlias $ Plain <$> pSubject
     ]
 
 
@@ -154,12 +371,24 @@ instance ToQueryText [AggFunction] where
 
 instance Display AggFunction where
   displayPrec _prec (Count sub _alias) = displayBuilder $ "count(" <> display sub <> ")"
+  -- countif(predicate) -> COUNT(*) FILTER (WHERE predicate)
+  displayPrec _prec (CountIf cond _alias) = displayBuilder $ "COUNT(*) FILTER (WHERE " <> display cond <> ")"
+  -- dcount(field [, accuracy]) -> COUNT(DISTINCT field)
+  -- Note: KQL accuracy parameter (0-4 for HyperLogLog precision) is intentionally ignored
+  -- because PostgreSQL's COUNT(DISTINCT) doesn't support HLL accuracy hints
+  displayPrec _prec (DCount sub _acc _alias) = displayBuilder $ "COUNT(DISTINCT " <> display sub <> ")"
   displayPrec _prec (P50 sub _alias) = displayBuilder $ "approx_percentile(0.50, percentile_agg((" <> display sub <> ")::float))::int"
   displayPrec _prec (P75 sub _alias) = displayBuilder $ "approx_percentile(0.75, percentile_agg((" <> display sub <> ")::float))::int"
   displayPrec _prec (P90 sub _alias) = displayBuilder $ "approx_percentile(0.90, percentile_agg((" <> display sub <> ")::float))::int"
   displayPrec _prec (P95 sub _alias) = displayBuilder $ "approx_percentile(0.95, percentile_agg((" <> display sub <> ")::float))::int"
   displayPrec _prec (P99 sub _alias) = displayBuilder $ "approx_percentile(0.99, percentile_agg((" <> display sub <> ")::float))::int"
   displayPrec _prec (P100 sub _alias) = displayBuilder $ "approx_percentile(1, percentile_agg((" <> display sub <> ")::float))::int"
+  -- Percentile/Percentiles are handled specially via extractPercentilesInfo and LATERAL unnest SQL
+  displayPrec _prec (Percentile subExpr pct _alias) =
+    displayBuilder $ "approx_percentile(" <> show (pct / 100.0) <> ", percentile_agg((" <> subjectExprToSQL subExpr <> ")::float))::float"
+  displayPrec _prec (Percentiles subExpr pcts _alias) =
+    let firstPct = fromMaybe 50.0 (listToMaybe pcts)
+     in displayBuilder $ "approx_percentile(" <> show (firstPct / 100.0) <> ", percentile_agg((" <> subjectExprToSQL subExpr <> ")::float))::float"
   displayPrec _prec (Sum sub _alias) = displayBuilder $ "sum((" <> display sub <> ")::float)"
   displayPrec _prec (Avg sub _alias) = displayBuilder $ "avg((" <> display sub <> ")::float)"
   displayPrec _prec (Min sub _alias) = displayBuilder $ "min((" <> display sub <> ")::float)"
@@ -167,7 +396,21 @@ instance Display AggFunction where
   displayPrec _prec (Median sub _alias) = displayBuilder $ "median((" <> display sub <> ")::float)"
   displayPrec _prec (Stdev sub _alias) = displayBuilder $ "stdev((" <> display sub <> ")::float)"
   displayPrec _prec (Range sub _alias) = displayBuilder $ "range((" <> display sub <> ")::float)"
-  displayPrec _prec (Plain sub _alias) = displayBuilder $ "" <> display sub <> ""
+  -- coalesce(expr1, expr2, ...) -> COALESCE(expr1, expr2, ...)
+  displayPrec _prec (Coalesce exprs _alias) =
+    displayBuilder $ "COALESCE(" <> T.intercalate ", " (map display exprs) <> ")"
+  -- strcat(expr1, expr2, ...) -> CONCAT(expr1, expr2, ...)
+  displayPrec _prec (Strcat exprs _alias) =
+    displayBuilder $ "CONCAT(" <> T.intercalate ", " (map display exprs) <> ")"
+  -- iff(condition, then, else) -> CASE WHEN condition THEN then ELSE else END
+  displayPrec _prec (Iff cond thenVal elseVal _alias) =
+    displayBuilder $ "CASE WHEN " <> display cond <> " THEN " <> display thenVal <> " ELSE " <> display elseVal <> " END"
+  -- case(pred1, val1, ..., else) -> CASE WHEN pred1 THEN val1 ... ELSE else END
+  displayPrec _prec (Case pairs defaultVal _alias) =
+    displayBuilder $ "CASE " <> foldMap displayCaseWhen pairs <> "ELSE " <> display defaultVal <> " END"
+    where
+      displayCaseWhen (cond, val) = "WHEN " <> display cond <> " THEN " <> display val <> " "
+  displayPrec _prec (Plain sub _alias) = displayBuilder $ display sub
 
 
 instance ToQueryText Section where
@@ -259,8 +502,7 @@ pSummarizeByClause :: Parser SummarizeByClause
 pSummarizeByClause = do
   _ <- string "by"
   space
-  fields <- sepBy (try (Right <$> pBinFunction) <|> (Left <$> pSubject)) (string "," <* space)
-  return $ SummarizeByClause fields
+  SummarizeByClause <$> (try (Right <$> pBinFunction) <|> (Left <$> pSubject)) `sepBy` comma
 
 
 instance ToQueryText SummarizeByClause where
@@ -297,7 +539,7 @@ pSortSection :: Parser Section
 pSortSection = do
   _ <- string "sort by" <|> string "order by"
   space
-  fields <- sepBy pSortField (string "," <* space)
+  fields <- sepBy pSortField comma
   return $ SortCommand fields
 
 
@@ -317,6 +559,33 @@ pTakeSection = do
   return $ TakeCommand (fromMaybe 1000 limit) -- Default to 1000 if parsing fails
 
 
+-- | Set alias on an aggregation function
+setAlias :: Text -> AggFunction -> AggFunction
+setAlias name (Count sub _) = Count sub (Just name)
+setAlias name (CountIf cond _) = CountIf cond (Just name)
+setAlias name (DCount sub acc _) = DCount sub acc (Just name)
+setAlias name (Sum sub _) = Sum sub (Just name)
+setAlias name (Avg sub _) = Avg sub (Just name)
+setAlias name (Min sub _) = Min sub (Just name)
+setAlias name (Max sub _) = Max sub (Just name)
+setAlias name (P50 sub _) = P50 sub (Just name)
+setAlias name (P75 sub _) = P75 sub (Just name)
+setAlias name (P90 sub _) = P90 sub (Just name)
+setAlias name (P95 sub _) = P95 sub (Just name)
+setAlias name (P99 sub _) = P99 sub (Just name)
+setAlias name (P100 sub _) = P100 sub (Just name)
+setAlias name (Percentile subExpr pct _) = Percentile subExpr pct (Just name)
+setAlias name (Percentiles subExpr pcts _) = Percentiles subExpr pcts (Just name)
+setAlias name (Median sub _) = Median sub (Just name)
+setAlias name (Stdev sub _) = Stdev sub (Just name)
+setAlias name (Range sub _) = Range sub (Just name)
+setAlias name (Coalesce exprs _) = Coalesce exprs (Just name)
+setAlias name (Strcat exprs _) = Strcat exprs (Just name)
+setAlias name (Iff cond thenVal elseVal _) = Iff cond thenVal elseVal (Just name)
+setAlias name (Case pairs defVal _) = Case pairs defVal (Just name)
+setAlias name (Plain sub _) = Plain sub (Just name)
+
+
 -- | Parse a named aggregation like 'TotalCount = count()'
 --
 -- >>> parse namedAggregation "" "TotalCount=count()"
@@ -325,23 +594,7 @@ namedAggregation :: Parser AggFunction
 namedAggregation = do
   name <- toText <$> some (alphaNumChar <|> oneOf ("_" :: String))
   _ <- string "="
-  func <- aggFunctionParser
-  case func of
-    Count sub _ -> return $ Count sub (Just name)
-    Sum sub _ -> return $ Sum sub (Just name)
-    Avg sub _ -> return $ Avg sub (Just name)
-    Min sub _ -> return $ Min sub (Just name)
-    Max sub _ -> return $ Max sub (Just name)
-    P50 sub _ -> return $ P50 sub (Just name)
-    P75 sub _ -> return $ P75 sub (Just name)
-    P90 sub _ -> return $ P90 sub (Just name)
-    P95 sub _ -> return $ P95 sub (Just name)
-    P99 sub _ -> return $ P99 sub (Just name)
-    P100 sub _ -> return $ P100 sub (Just name)
-    Median sub _ -> return $ Median sub (Just name)
-    Stdev sub _ -> return $ Stdev sub (Just name)
-    Range sub _ -> return $ Range sub (Just name)
-    Plain sub _ -> return $ Plain sub (Just name)
+  setAlias name <$> aggFunctionParser
 
 
 -- | Parse the summarize command
@@ -432,3 +685,16 @@ parseQuery = do
 
 instance ToQueryText [Section] where
   toQText secs = T.intercalate " | " $ map toQText secs
+
+
+-- | Extract percentiles info from a list of sections
+-- Returns (subjectExpr as SQL, percentiles) if a Percentile(s) aggregation is found
+extractPercentilesInfo :: [Section] -> Maybe (Text, [Double])
+extractPercentilesInfo = foldr go Nothing
+  where
+    go (SummarizeCommand (findPercentiles -> Just info) _) _ = Just info
+    go _ acc = acc
+    findPercentiles [] = Nothing
+    findPercentiles (Percentile subExpr pct _ : _) = Just (subjectExprToSQL subExpr, [pct])
+    findPercentiles (Percentiles subExpr pcts _ : _) = Just (subjectExprToSQL subExpr, pcts)
+    findPercentiles (_ : rest) = findPercentiles rest

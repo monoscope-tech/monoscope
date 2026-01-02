@@ -46,6 +46,7 @@ symbol = L.symbol sc
 -- Duration stores original unit and nanoseconds value for precise time comparisons
 -- TimeFunction stores KQL time functions like now()
 -- AgoExpression represents KQL ago() function with the value and unit for SQL interval conversion
+-- Field represents a field reference (column name) - displayed unquoted in SQL
 data Values
   = Num Text
   | Str Text
@@ -56,6 +57,7 @@ data Values
   | TimeFunction Text
   | AgoExpression Text -- The original KQL timespan expression for direct conversion to PostgreSQL interval
   | NowExpression -- Represents now() function
+  | Field Subject -- Field reference - displayed as column name, not quoted string
   deriving stock (Eq, Generic, Ord, Show)
 
 
@@ -80,6 +82,7 @@ instance AE.ToJSON Values where
   toJSON (TimeFunction tf) = AE.String tf
   toJSON (AgoExpression expr) = AE.String ("ago(" <> expr <> ")")
   toJSON NowExpression = AE.String "now()"
+  toJSON (Field sub) = AE.toJSON sub
 
 
 instance ToQueryText Values where
@@ -366,7 +369,6 @@ pValues =
     , try pDuration
     , try (Num . toText . show <$> L.float)
     , Num . toText . show <$> L.decimal
-    , Str . toText <$> manyTill L.charLiteral space1
     ]
 
 
@@ -674,6 +676,7 @@ instance Display Values where
   displayPrec prec (List vs) =
     let arrayElements = mconcat . intersperse "," . map (displayPrec prec) $ vs
      in "ARRAY[" <> arrayElements <> "]"
+  displayPrec prec (Field sub) = displayPrec prec sub
 
 
 -- | Render the expr ast to a value. Start with Eq only, for supporting jsonpath
@@ -888,3 +891,4 @@ jsonPathQuery op' (Subject entire base keys) val =
         "!=" -> " ? (@ is not null" <> pstfx <> ")"
         _ -> " ? (@ " <> oper <> " null" <> pstfx <> ")"
     buildCondition oper (List xs) pstfx = " ? (@ " <> oper <> " [" <> (mconcat . intersperse "," . map display) xs <> "]" <> pstfx <> ")"
+    buildCondition oper (Field sub) pstfx = " ? (@ " <> oper <> " " <> display sub <> pstfx <> ")"

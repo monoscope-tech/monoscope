@@ -23,14 +23,12 @@ data QueryComponents = QueryComponents
   , fromTable :: Maybe Text
   , select :: [Text]
   , finalColumns :: [Text]
-  , -- A query which can be run to retrieve the count
-    countQuery :: Text
-  , -- final generated sql query
-    finalSqlQuery :: Text
+  , finalSqlQuery :: Text -- includes count(*) OVER() as last column
   , finalAlertQuery :: Maybe Text
   , finalSummarizeQuery :: Maybe Text -- For summarize query commands
   , sortFields :: Maybe [SortField] -- Fields to sort by
   , takeLimit :: Maybe Int -- Limit number of results
+  , percentilesInfo :: Maybe (Text, [Double]) -- (field expr SQL, percentile values) extracted from AST
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -40,11 +38,19 @@ sectionsToComponents :: SqlQueryCfg -> [Section] -> QueryComponents
 sectionsToComponents sqlCfg = foldl' (applySectionToComponent sqlCfg) (def :: QueryComponents)
 
 
+-- | Combine where clauses using AND
+combineWhereClause :: Maybe Text -> Text -> Maybe Text
+combineWhereClause Nothing new = Just new
+combineWhereClause (Just existing) new = Just $ existing <> " AND " <> new
+
+
 applySectionToComponent :: SqlQueryCfg -> QueryComponents -> Section -> QueryComponents
-applySectionToComponent _ qc (Search expr) = qc{whereClause = Just $ display expr}
-applySectionToComponent _ qc (WhereClause expr) = qc{whereClause = Just $ display expr} -- Handle where clause same as Search
+applySectionToComponent _ qc (Search expr) = qc{whereClause = combineWhereClause qc.whereClause (display expr)}
+applySectionToComponent _ qc (WhereClause expr) = qc{whereClause = combineWhereClause qc.whereClause (display expr)}
 applySectionToComponent _ qc (Source source) = qc{fromTable = Just $ display source}
-applySectionToComponent sqlCfg qc (SummarizeCommand aggs byClauseM) = applySummarizeByClauseToQC sqlCfg byClauseM $ qc{select = qc.select <> map display aggs}
+applySectionToComponent sqlCfg qc (SummarizeCommand aggs byClauseM) =
+  let pctInfo = extractPercentilesInfo [SummarizeCommand aggs byClauseM]
+   in applySummarizeByClauseToQC sqlCfg byClauseM $ qc{select = qc.select <> map display aggs, percentilesInfo = pctInfo}
 applySectionToComponent _ qc (SortCommand sortFields) = qc{sortFields = Just sortFields}
 applySectionToComponent _ qc (TakeCommand limit) = qc{takeLimit = Just limit}
 
@@ -155,16 +161,6 @@ sqlFromQueryComponents sqlCfg qc =
         ((Just a, Just b), Nothing) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
         _ -> ""
 
-      -- Date range for count queries (never uses cursor)
-      -- Count should always reflect the full user-selected time range
-      dateRangeStrForCount = case sqlCfg.dateRange of
-        (Nothing, Just b) -> timestampCol <> " <= '" <> fmtTime b <> "'"
-        (Just a, Nothing) -> timestampCol <> " >= '" <> fmtTime a <> "'"
-        (Just a, Just b) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
-        _ -> ""
-
-      -- Time-based calculations removed with timechart/stats support
-
       -- Handle sort order
       sortOrder = case qc.sortFields of
         Just fields -> "ORDER BY " <> T.intercalate ", " (map displaySortField fields)
@@ -194,9 +190,8 @@ sqlFromQueryComponents sqlCfg qc =
       -- Build complete WHERE clause for data queries (with cursor)
       buildWhere = T.intercalate " and " $ filter (not . T.null) ["project_id='" <> sqlCfg.pid.toText <> "'", dateRangeStr, "(" <> whereCondition <> ")"]
 
-      -- Build complete WHERE clause for count queries (without cursor)
-      buildWhereForCount = T.intercalate " and " $ filter (not . T.null) ["project_id='" <> sqlCfg.pid.toText <> "'", dateRangeStrForCount, "(" <> whereCondition <> ")"]
-
+      -- All queries include count(*) OVER() as last column for total count
+      countOver = "count(*) OVER() as _total_count" :: Text
       finalSqlQuery = case sqlCfg.targetSpansM of
         Just "service-entry-spans" ->
           [fmt|WITH ranked_spans AS (SELECT *, resource->'service'->>'name' AS service_name,
@@ -204,117 +199,70 @@ sqlFromQueryComponents sqlCfg qc =
                 FROM otel_logs_and_spans where {buildWhere}
                 {groupByClause}
                 )
-               SELECT {selectClause} FROM ranked_spans
+               SELECT {selectClause}, {countOver} FROM ranked_spans
                   WHERE rn = 1 {sortOrder} {limitClause} |]
         _ ->
           case qc.finalSummarizeQuery of
             Just binInterval ->
-              -- For summarize queries with bin functions, create a special format
-              let
-                -- Create time bucket expression
-                timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-               in
-                -- Include the time bucket expression as the first column
-                let selectCols = T.intercalate "," (filter (\s -> not ("time_bucket" `T.isInfixOf` s)) qc.select)
-                 in [fmt|SELECT
-                       extract(epoch from {timeBucketExpr})::integer,
-                       {selectCols}
+              let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
+                  selectCols = T.intercalate "," $ filter (not . T.isInfixOf "time_bucket") qc.select
+               in [fmt|SELECT extract(epoch from {timeBucketExpr})::integer, {selectCols}, {countOver}
                    FROM {fromTable}
                    WHERE {buildWhere}
                    GROUP BY {timeBucketExpr}
                    ORDER BY {timeBucketExpr} DESC
                    {limitClause} |]
             Nothing ->
-              [fmt|SELECT {selectClause} FROM {fromTable}
+              [fmt|SELECT {selectClause}, {countOver} FROM {fromTable}
                  WHERE {buildWhere}
                  {groupByClause} {sortOrder} {limitClause} |]
-      countQuery =
-        case qc.finalSummarizeQuery of
-          Just binInterval ->
-            -- For summarize with time bucket, count the number of unique time buckets
-            let
-              -- Create time bucket expression
-              timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-
-              -- Create the subquery column list and GROUP BY clause
-              -- Including group by columns if present
-              groupByCols = T.intercalate ", " qc.groupByClause
-
-              -- Create column selections for subquery
-              subqueryCols =
-                if null qc.groupByClause
-                  then timeBucketExpr
-                  else timeBucketExpr <> ", " <> groupByCols
-
-              -- Create GROUP BY clause
-              groupByPart =
-                if null qc.groupByClause
-                  then timeBucketExpr
-                  else timeBucketExpr <> ", " <> groupByCols
-             in
-              [fmt|SELECT count(*) FROM
-                  (SELECT {subqueryCols}
-                   FROM {fromTable}
-                   WHERE {buildWhereForCount}
-                   GROUP BY {groupByPart}) as subq|]
-          Nothing ->
-            -- For regular summarize queries
-            [fmt|SELECT count(*) FROM {fromTable}
-              WHERE {buildWhereForCount}
-              {groupByClause} limit 1|]
 
       -- Generate the summarize query depending on bin functions and data type
+      -- Percentiles info is extracted directly from AST in applySectionToComponent
+      -- The fieldExpr comes from parser-validated SubjectExpr and is safe for SQL interpolation
       summarizeQuery =
         case qc.finalSummarizeQuery of
           Just binInterval ->
-            -- For queries with bin functions, create a time-bucketed query returning (timestamp, group, value) tuples
-            -- This format is compatible with the pivot' function in Charts.hs
-            let
-              -- Default to status_code as the group by column if none specified
-              -- This simplifies the case where we need to return the tuple (time, group, value) format
-              -- but only have a time series with no explicit grouping
-              groupCol =
-                if null qc.groupByClause
-                  then "'" <> (if null qc.select then "count" else "value") <> "'"
-                  else "COALESCE(" <> fromMaybe "status_code" (listToMaybe qc.groupByClause) <> "::text, 'null')"
-
-              -- Default to count(*) if no aggregation specified
-              aggCol =
-                if null qc.select
-                  then "count(*)"
-                  else fromMaybe "count(*)" (listToMaybe qc.select)
-
-              -- Create time bucket expression
-              timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-
-              -- Create GROUP BY clause with conditional logic outside PyF template
-              firstGroupCol = fromMaybe "status_code" (listToMaybe qc.groupByClause)
-              groupByPart =
-                if null qc.groupByClause
-                  then timeBucketExpr
-                  else timeBucketExpr <> ", " <> firstGroupCol
-             in
-              [fmt|
-                SELECT
-                  extract(epoch from {timeBucketExpr})::integer,
-                  {groupCol},
-                  ({aggCol})::float
-                FROM {fromTable}
-                WHERE {buildWhere}
-                GROUP BY {groupByPart}
-                ORDER BY {timeBucketExpr} DESC
-                {limitClause}
-              |]
+            case qc.percentilesInfo of
+              Just (fieldExpr, pcts) ->
+                -- Generate LATERAL unnest query for percentiles with custom percentile values
+                let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
+                    -- Generate ARRAY of percentile expressions (fieldExpr already includes any division)
+                    pctExprs =
+                      T.intercalate
+                        ",\n                          "
+                        [ "COALESCE((approx_percentile(" <> show (p / 100.0) <> ", percentile_agg((" <> fieldExpr <> ")::float)))::float, 0)"
+                        | p <- pcts
+                        ]
+                    -- Generate ARRAY of percentile labels
+                    pctLabels = T.intercalate "," ["'p" <> show (round p :: Int) <> "'" | p <- pcts]
+                 in [fmt|SELECT timeB, quantile, value FROM (
+                      SELECT extract(epoch from {timeBucketExpr})::integer AS timeB,
+                        ARRAY[{pctExprs}] AS values,
+                        ARRAY[{pctLabels}] AS quantiles
+                      FROM {fromTable}
+                      WHERE {buildWhere}
+                      GROUP BY timeB
+                      HAVING COUNT(*) > 0
+                    ) s, LATERAL unnest(s.values, s.quantiles) AS u(value, quantile)
+                    WHERE value IS NOT NULL
+                    ORDER BY timeB DESC {limitClause}|]
+              Nothing ->
+                -- Normal summarize query
+                let groupCol =
+                      if null qc.groupByClause
+                        then "'" <> (if null qc.select then "count" else "value") <> "'"
+                        else "COALESCE(" <> fromMaybe "status_code" (listToMaybe qc.groupByClause) <> "::text, 'null')"
+                    aggCol = if null qc.select then "count(*)" else fromMaybe "count(*)" (listToMaybe qc.select)
+                    timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
+                    firstGroupCol = fromMaybe "status_code" (listToMaybe qc.groupByClause)
+                    groupByPart = if null qc.groupByClause then timeBucketExpr else timeBucketExpr <> ", " <> firstGroupCol
+                 in [fmt|SELECT extract(epoch from {timeBucketExpr})::integer, {groupCol}, ({aggCol})::float
+                      FROM {fromTable} WHERE {buildWhere} GROUP BY {groupByPart}
+                      ORDER BY {timeBucketExpr} DESC {limitClause}|]
           Nothing ->
-            -- For regular summarize queries without time buckets
-            [fmt|
-              SELECT {T.intercalate "," qc.select}
-              FROM {fromTable}
-              WHERE {buildWhere}
-              {groupByClause}
-              ORDER BY {timestampCol} DESC
-              {limitClause}
-            |]
+            [fmt|SELECT {T.intercalate "," qc.select} FROM {fromTable} WHERE {buildWhere}
+              {groupByClause} ORDER BY {timestampCol} DESC {limitClause}|]
 
       -- FIXME: render this based on the aggregations, but without the aliases
       alertSelect = [fmt| count(*)::integer|] :: Text
@@ -349,7 +297,6 @@ sqlFromQueryComponents sqlCfg qc =
    in ( finalSqlQuery
       , qc
           { finalColumns = listToColNames selectedCols
-          , countQuery
           , finalSqlQuery = finalSqlQuery
           , whereClause = Just whereCondition
           , finalSummarizeQuery = Just summarizeQuery
