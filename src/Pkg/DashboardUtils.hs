@@ -1,4 +1,4 @@
-module Pkg.DashboardUtils (replacePlaceholders, variablePresets, constantToCTE, constantsToMap) where
+module Pkg.DashboardUtils (replacePlaceholders, variablePresets, constantToList, constantsToMap) where
 
 import Data.Map qualified as Map
 import Data.Text qualified as T
@@ -46,26 +46,22 @@ variablePresets pid mf mt allParams currentTime =
         <> allParams'
 
 
--- | Convert constant results to a CTE (Common Table Expression) string.
--- For a constant named "top_resources" with results [["api/users"], ["api/orders"]],
--- this generates: "(SELECT * FROM (VALUES ('api/users'), ('api/orders')) AS t(name))"
--- For multi-column results like [["foo", "bar"], ["baz", "qux"]],
--- generates: "(SELECT * FROM (VALUES ('foo', 'bar'), ('baz', 'qux')) AS t(c1, c2))"
-constantToCTE :: Text -> [[Text]] -> Text
-constantToCTE key rows
-  | null rows = "(SELECT NULL::text AS name WHERE FALSE)" -- Empty result, return empty table
+-- | Convert constant results to a simple SQL list format.
+-- For single-column results [["api/users"], ["api/orders"]],
+-- this generates: "('api/users', 'api/orders')" - suitable for IN clauses.
+-- For multi-column results, only the first column is used.
+-- For empty results, generates "(NULL)" to avoid SQL syntax errors.
+constantToList :: [[Text]] -> Text
+constantToList rows
+  | null rows = "(NULL)" -- Empty result, return NULL to avoid syntax errors
   | otherwise =
-      let colCount = maybe 0 length (listToMaybe rows)
-          colNames = case colCount of
-            1 -> "name"
-            n -> T.intercalate ", " ["c" <> show i | i <- [1 .. n]]
-          escapeValue v = "'" <> T.replace "'" "''" v <> "'"
-          rowToValues row = "(" <> T.intercalate ", " (map escapeValue row) <> ")"
-          values = T.intercalate ", " (map rowToValues rows)
-       in "(SELECT * FROM (VALUES " <> values <> ") AS " <> key <> "(" <> colNames <> "))"
+      let escapeValue v = "'" <> T.replace "'" "''" v <> "'"
+          -- Take the first column from each row
+          values = [escapeValue (head row) | row <- rows, not (null row)]
+       in "(" <> T.intercalate ", " values <> ")"
 
 
 -- | Convert a list of processed constants (with results) to a map for placeholder substitution.
 -- Each constant with key "foo" becomes available as "const-foo" placeholder.
 constantsToMap :: [(Text, [[Text]])] -> Map Text Text
-constantsToMap constants = Map.fromList [("const-" <> key, constantToCTE key result) | (key, result) <- constants]
+constantsToMap constants = Map.fromList [("const-" <> key, constantToList result) | (key, result) <- constants]
