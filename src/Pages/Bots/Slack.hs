@@ -30,6 +30,7 @@ import Effectful.Error.Static (throwError)
 import Effectful.Log qualified as Log
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
+import Langchain.LLM.Core qualified as LLM
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Slack (SlackData (..), getDashboardsForSlack, getSlackDataByTeamId, insertAccessToken, updateSlackNotificationChannel)
 import Models.Projects.Dashboards qualified as Dashboards
@@ -38,7 +39,6 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
-import Langchain.LLM.Core qualified as LLM
 import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, contentTypeHeader, formatThreadsWithMemory, handleTableResponse, processAIQuery)
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
@@ -636,4 +636,5 @@ getChannelMessages token channelId ts = do
 
 threadsPrompt :: [SlackThreadedMessage] -> IO Text
 threadsPrompt = formatThreadsWithMemory 3000 "Slack" . map slackToMessage
-  where slackToMessage m = LLM.Message LLM.User m.text LLM.defaultMessageData
+  where
+    slackToMessage m = LLM.Message LLM.User m.text LLM.defaultMessageData

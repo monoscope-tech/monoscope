@@ -15,8 +15,8 @@ import Effectful (Eff, (:>))
 import Effectful.Log (Log)
 import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
-import Langchain.Memory.TokenBufferMemory (TokenBufferMemory (..))
 import Langchain.Memory.Core (BaseMemory (..))
+import Langchain.Memory.TokenBufferMemory (TokenBufferMemory (..))
 import Lucid
 import Models.Apis.Fields.Facets qualified as Facets
 import Models.Projects.Projects qualified as Projects
@@ -257,13 +257,14 @@ formatThreadsWithMemory maxTokens platform msgs = case NE.nonEmpty msgs of
 
 
 formatHistoryAsContext :: Text -> [LLM.Message] -> Text
-formatHistoryAsContext platform msgs = unlines
-  [ "\n\nTHREADS:"
-  , "- this query is part of a " <> platform <> " conversation thread. Use previous messages for additional context if needed."
-  , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
-  , "\nPrevious thread messages:\n"
-  , T.intercalate "\n" $ map formatMessage msgs
-  ]
+formatHistoryAsContext platform msgs =
+  unlines
+    [ "\n\nTHREADS:"
+    , "- this query is part of a " <> platform <> " conversation thread. Use previous messages for additional context if needed."
+    , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
+    , "\nPrevious thread messages:\n"
+    , T.intercalate "\n" $ map formatMessage msgs
+    ]
   where
     formatMessage m = "[" <> roleToText (LLM.role m) <> "] " <> LLM.content m
     roleToText = \case

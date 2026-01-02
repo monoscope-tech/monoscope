@@ -31,12 +31,12 @@ import Data.Time qualified as Time
 import Effectful (Eff, type (:>))
 import Effectful.Log qualified as Log
 import Effectful.Time qualified as Time
+import Langchain.LLM.Core qualified as LLM
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Dashboards qualified as Dashboards
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Langchain.LLM.Core qualified as LLM
 import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, authHeader, chartImageUrl, contentTypeHeader, formatThreadsWithMemory, handleTableResponse, processAIQuery)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
