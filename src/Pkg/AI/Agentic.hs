@@ -310,15 +310,22 @@ getIntArg key def args = fromMaybe def $ AET.parseMaybe (AE.withObject "args" (A
 
 -- | Parse query type argument (defaults to KQL)
 getQueryType :: AE.Value -> QueryType
-getQueryType = fromMaybe KQL . AET.parseMaybe (AE.withObject "args" $ \obj -> do
-  typeStr <- obj AE..: "type" :: AET.Parser Text
-  pure $ if T.toUpper typeStr == "SQL" then SQL else KQL)
+getQueryType =
+  fromMaybe KQL
+    . AET.parseMaybe
+      ( AE.withObject "args" $ \obj -> do
+          typeStr <- obj AE..: "type" :: AET.Parser Text
+          pure $ if T.toUpper typeStr == "SQL" then SQL else KQL
+      )
 
 
 -- | Helper to run a KQL query and format the result
 runKqlQuery
   :: (DB es, Log :> es, Time.Time :> es)
-  => AgenticConfig -> Tool -> Text -> [Text]
+  => AgenticConfig
+  -> Tool
+  -> Text
+  -> [Text]
   -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> Text)
   -> Eff es ToolResult
 runKqlQuery config t kqlQuery cols formatResult = case parseQueryToAST kqlQuery of
@@ -401,11 +408,15 @@ runSqlQuery config query lim = do
       hasKeyword kw = kw `T.isPrefixOf` lowerQuery || any (`T.isInfixOf` lowerQuery) [" " <> kw, "\n" <> kw, "\t" <> kw]
       hasDangerousOp = any hasKeyword ["drop", "delete", "truncate", "update", "insert", "alter", "create"]
       hasBypassPattern = any hasKeyword ["union", "except", "intersect"]
-  if hasDangerousOp then pure $ errorResult RunQuery "Only SELECT queries allowed"
-  else if hasBypassPattern then pure $ errorResult RunQuery "UNION/EXCEPT/INTERSECT not allowed"
-  else executeSecuredQuery config.projectId query lim <&> \case
-    Left _ -> errorResult RunQuery "Query execution failed"
-    Right results -> successResult RunQuery $ formatQueryResults results (V.length results)
+  if hasDangerousOp
+    then pure $ errorResult RunQuery "Only SELECT queries allowed"
+    else
+      if hasBypassPattern
+        then pure $ errorResult RunQuery "UNION/EXCEPT/INTERSECT not allowed"
+        else
+          executeSecuredQuery config.projectId query lim <&> \case
+            Left _ -> errorResult RunQuery "Query execution failed"
+            Right results -> successResult RunQuery $ formatQueryResults results (V.length results)
 
 
 -- | Format query results for display
@@ -414,7 +425,8 @@ formatQueryResults results count =
   let formatted = T.intercalate "\n" $ take 20 $ V.toList $ V.map formatRow results
       truncated = if count > 20 then "\n... +" <> show (count - 20) <> " more" else ""
    in "Results (" <> show count <> " rows):\n" <> formatted <> truncated
-  where formatRow row = "  " <> T.intercalate " | " (V.toList $ V.map jsonToText row)
+  where
+    formatRow row = "  " <> T.intercalate " | " (V.toList $ V.map jsonToText row)
 
 
 -- | Format summarize query results (from KQL | summarize count() by <field>)
