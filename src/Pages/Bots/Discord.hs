@@ -36,7 +36,8 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, authHeader, chartImageUrl, contentTypeHeader, formatThreadsPrompt, handleTableResponse, processAIQuery)
+import Langchain.LLM.Core qualified as LLM
+import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, authHeader, chartImageUrl, contentTypeHeader, formatThreadsWithMemory, handleTableResponse, processAIQuery)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
 import Pkg.Parser (parseQueryToAST)
@@ -328,11 +329,13 @@ discordInteractionsH rawBody signatureM timestampM = do
 buildPrompt :: Maybe [InteractionOption] -> DiscordInteraction -> EnvConfig -> ATBaseCtx (Text, Maybe Text)
 buildPrompt cmdOptions interaction envCfg = do
   threadMsgs <- getThreadStarterMessage interaction envCfg.discordBotToken
-  pure $ case cmdOptions of
+  case cmdOptions of
     Just (InteractionOption{value = AE.String q} : _) -> case threadMsgs of
-      Just msgs -> (q, Just $ threadsPrompt (reverse msgs))
-      _ -> (q, Nothing)
-    _ -> ("", Nothing)
+      Just msgs -> do
+        ctx <- liftIO $ threadsPrompt (reverse msgs)
+        pure (q, Just ctx)
+      _ -> pure (q, Nothing)
+    _ -> pure ("", Nothing)
 
 
 contentResponse :: Text -> AE.Value
@@ -354,10 +357,10 @@ sendJsonFollowupResponse appId interactionToken botToken content = do
   pass
 
 
-threadsPrompt :: [DiscordMessage] -> Text
-threadsPrompt = formatThreadsPrompt discordMsgToJson "DISCORD" . filter (\x -> x.author.username == "APItoolkit")
+threadsPrompt :: [DiscordMessage] -> IO Text
+threadsPrompt = formatThreadsWithMemory 3000 "Discord" . map discordToMessage . filter (\x -> x.author.username == "APItoolkit")
   where
-    discordMsgToJson x = AE.object ["message" AE..= AE.object ["content" AE..= x.content, "embeds" AE..= x.embeds]]
+    discordToMessage m = LLM.Message LLM.Assistant m.content LLM.defaultMessageData
 
 
 verifyDiscordSignature

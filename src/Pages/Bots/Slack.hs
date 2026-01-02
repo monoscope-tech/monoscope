@@ -38,7 +38,8 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
-import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, contentTypeHeader, formatThreadsPrompt, handleTableResponse, processAIQuery)
+import Langchain.LLM.Core qualified as LLM
+import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, contentTypeHeader, formatThreadsWithMemory, handleTableResponse, processAIQuery)
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
@@ -551,7 +552,7 @@ slackEventsPostH payload = do
             Nothing -> pass
 
     processMessages envCfg event slackData messages threadTs now = do
-      let threadContext = threadsPrompt messages.messages
+      threadContext <- liftIO $ threadsPrompt messages.messages
       result <- processAIQuery slackData.projectId event.text (Just threadContext) envCfg.openaiApiKey
       case result of
         Left _ -> sendSlackChatMessage envCfg.slackBotToken (AE.object ["text" AE..= "Sorry I wasn't able to process your request", "channel" AE..= event.channel, "thread_ts" AE..= threadTs])
@@ -633,5 +634,6 @@ getChannelMessages token channelId ts = do
       return Nothing
 
 
-threadsPrompt :: [SlackThreadedMessage] -> Text
-threadsPrompt = formatThreadsPrompt (\x -> AE.object ["message" AE..= x.text]) "Slack"
+threadsPrompt :: [SlackThreadedMessage] -> IO Text
+threadsPrompt = formatThreadsWithMemory 3000 "Slack" . map slackToMessage
+  where slackToMessage m = LLM.Message LLM.User m.text LLM.defaultMessageData
