@@ -275,6 +275,7 @@ tabs:
         query: |
           (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http") and duration != null
           | summarize percentiles(duration, 50, 75, 90, 95, 99) by bin_auto(timestamp)
+          | order by timestamp desc
         unit: ns
         layout: { w: 6, h: 4 }
 
@@ -404,8 +405,9 @@ tabs:
         hide_subtitle: true
         summarize_by: max
         query: |
-          resource___service___name == "{{var-service}}" and kind == "server" and duration != null
+          resource.service.name == "{{var-service}}" and kind == "server" and duration != null
           | summarize percentiles(duration, 50, 75, 90, 95, 99) by bin_auto(timestamp)
+          | order by timestamp desc
         unit: ns
         layout: { w: 6, h: 4 }
 

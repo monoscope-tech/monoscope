@@ -126,19 +126,30 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', (
     it "generates LATERAL unnest SQL for percentiles with bin" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize percentiles(duration, 50, 90) by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
-      -- Check that LATERAL unnest is used
-      "LATERAL unnest" `T.isInfixOf` sql `shouldBe` True
-      -- Check that percentile aggregates are present
-      "approx_percentile" `T.isInfixOf` sql `shouldBe` True
-      "percentile_agg" `T.isInfixOf` sql `shouldBe` True
+      let expected =
+            [text|
+SELECT timeB, quantile, value FROM (
+  SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer AS timeB,
+    ARRAY[COALESCE((approx_percentile(0.5, percentile_agg((duration)::float)))::float, 0),
+          COALESCE((approx_percentile(0.9, percentile_agg((duration)::float)))::float, 0)] AS values,
+    ARRAY['p50','p90'] AS quantiles
+  FROM otel_logs_and_spans
+  WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE)
+  GROUP BY timeB
+  HAVING COUNT(*) > 0
+) s, LATERAL unnest(s.values, s.quantiles) AS u(value, quantile)
+WHERE value IS NOT NULL
+ORDER BY timeB DESC
+            |]
+      normT sql `shouldBe` normT expected
 
     it "combines multiple where clauses with AND" do
-      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "resource.service.name == \"cart\" | duration != null | summarize percentiles(duration, 50, 90) by bin(timestamp, 1h)"
-      -- Check that both filters are present in the final SQL query
-      -- The resource.service.name filter should be in the WHERE clause
-      ("resource" `T.isInfixOf` query && "cart" `T.isInfixOf` query) `shouldBe` True
-      -- Duration filter should also be present
-      ("duration" `T.isInfixOf` query && "NOT NULL" `T.isInfixOf` query) `shouldBe` True
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "resource.service.name == \"cart\" | where duration != null | summarize percentiles(duration, 50, 90) by bin(timestamp, 1h)"
+      let expected =
+            [text|
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (approx_percentile(0.5, percentile_agg((duration)::float))::float)::float, count(*) OVER() as _total_count FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((resource->>'service'->>'name' = 'cart') AND (duration IS NOT NULL)) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+            |]
+      normT query `shouldBe` normT expected
 
   describe "countif parsing" do
     it "parses countif with simple condition" do
@@ -152,8 +163,11 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', (
     it "generates COUNT FILTER SQL for countif" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize countif(status_code == \"ERROR\") by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
-      -- Should generate COUNT(*) FILTER (WHERE ...) SQL
-      "FILTER (WHERE" `T.isInfixOf` sql `shouldBe` True
+      let expected =
+            [text|
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (COUNT(*) FILTER (WHERE status_code = 'ERROR'))::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+            |]
+      normT sql `shouldBe` normT expected
 
   describe "dcount parsing" do
     it "parses dcount with simple field" do
@@ -172,8 +186,20 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', (
     it "generates COUNT DISTINCT SQL for dcount" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize dcount(user_id) by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
-      -- Should generate COUNT(DISTINCT ...) SQL
-      "COUNT(DISTINCT" `T.isInfixOf` sql `shouldBe` True
+      let expected =
+            [text|
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (COUNT(DISTINCT user_id))::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+            |]
+      normT sql `shouldBe` normT expected
+
+    it "generates COUNT DISTINCT SQL for dcount with dotted path" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize dcount(resource.service.name) by bin(timestamp, 1h)"
+      let sql = fromMaybe "" c.finalSummarizeQuery
+      let expected =
+            [text|
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (COUNT(DISTINCT resource->>'service'->>'name'))::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+            |]
+      normT sql `shouldBe` normT expected
 
   describe "coalesce parsing" do
     it "parses coalesce with two arguments" do
@@ -188,7 +214,11 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', (
     it "generates COALESCE SQL" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize coalesce(method, \"unknown\") by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
-      "COALESCE(" `T.isInfixOf` sql `shouldBe` True
+      let expected =
+            [text|
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (COALESCE('method', 'unknown'))::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+            |]
+      normT sql `shouldBe` normT expected
 
   describe "strcat parsing" do
     it "parses strcat with multiple arguments" do
@@ -203,7 +233,11 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', (
     it "generates CONCAT SQL for strcat" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize strcat(method, \" \", url_path) by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
-      "CONCAT(" `T.isInfixOf` sql `shouldBe` True
+      let expected =
+            [text|
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (CONCAT('method', ' ', 'url_path'))::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+            |]
+      normT sql `shouldBe` normT expected
 
   describe "iff parsing" do
     it "parses iff with literal values" do
@@ -218,10 +252,11 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', (
     it "generates CASE WHEN SQL for iff" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize iff(status_code == \"ERROR\", \"error\", \"ok\") by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
-      "CASE WHEN" `T.isInfixOf` sql `shouldBe` True
-      "THEN" `T.isInfixOf` sql `shouldBe` True
-      "ELSE" `T.isInfixOf` sql `shouldBe` True
-      "END" `T.isInfixOf` sql `shouldBe` True
+      let expected =
+            [text|
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (CASE WHEN status_code = 'ERROR' THEN 'error' ELSE 'ok' END)::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+            |]
+      normT sql `shouldBe` normT expected
 
   describe "case parsing" do
     it "parses case with literal values" do
@@ -236,10 +271,11 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', (
     it "generates multi-branch CASE SQL" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize case(status >= 500, \"5xx\", status >= 400, \"4xx\", \"ok\") by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
-      -- Should have CASE with multiple WHEN clauses
-      "CASE " `T.isInfixOf` sql `shouldBe` True
-      -- Should have the default ELSE clause
-      "ELSE" `T.isInfixOf` sql `shouldBe` True
+      let expected =
+            [text|
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (CASE WHEN status >= 500 THEN '5xx' WHEN status >= 400 THEN '4xx' ELSE 'ok' END)::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+            |]
+      normT sql `shouldBe` normT expected
 
   describe "combined aggregations" do
     it "parses multiple aggregations including countif and dcount" do
