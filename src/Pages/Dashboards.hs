@@ -430,13 +430,10 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
       constant = Dashboards.replaceConstantVariables pid fromD toD allParams now constantBase
       runQuery label action transform = do
         (result, duration) <- Log.timeAction $ try action
-        case result of
-          Right val -> do
-            Log.logDebug ("Dashboard constant " <> label <> " query completed") (constant.key, duration)
-            pure constant{Dashboards.result = Just $ transform val}
-          Left (err :: SomeException) -> do
-            Log.logWarn ("Dashboard constant " <> label <> " query failed") (constant.key, show err, duration)
-            pure constant
+        either
+          (\(err :: SomeException) -> Log.logWarn ("Dashboard constant " <> label <> " query failed") (constant.key, show err, duration) $> constant)
+          (\val -> Log.logDebug ("Dashboard constant " <> label <> " query completed") (constant.key, duration) $> constant{Dashboards.result = Just $ transform val})
+          result
   case (constant.sql, constant.query) of
     (Just sqlQuery, _) -> runQuery "SQL" (PG.query_ (Query $ encodeUtf8 sqlQuery)) id
     (Nothing, Just kqlQuery) -> runQuery "KQL" (Charts.queryMetrics (Just Charts.DTText) (Just pid) (Just kqlQuery) Nothing sinceStr fromDStr toDStr Nothing allParams) (map V.toList . V.toList . (.dataText))
