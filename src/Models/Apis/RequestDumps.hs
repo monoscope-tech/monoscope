@@ -476,9 +476,23 @@ executeSecuredQuery pid userQuery limit
 -- | Dangerous SQL patterns that must not appear in user queries
 dangerousSqlPatterns :: [Text]
 dangerousSqlPatterns =
-  [ "insert ", "update ", "delete ", "drop ", "truncate ", "alter ", "create "
-  , "grant ", "revoke ", "copy ", "execute ", "explain ", "set "
-  , "; ", "information_schema", "pg_catalog", "pg_"
+  [ "insert "
+  , "update "
+  , "delete "
+  , "drop "
+  , "truncate "
+  , "alter "
+  , "create "
+  , "grant "
+  , "revoke "
+  , "copy "
+  , "execute "
+  , "explain "
+  , "set "
+  , "; "
+  , "information_schema"
+  , "pg_catalog"
+  , "pg_"
   ]
 
 
