@@ -62,7 +62,7 @@ import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.Default (Default, def)
 import Data.Text qualified as T
-import Data.Time (UTCTime, UTCTime (..), fromGregorian, getCurrentTime)
+import Data.Time (UTCTime (..), fromGregorian, getCurrentTime)
 import Data.Time.LocalTime (ZonedTime, utcToLocalZonedTime)
 import Data.UUID.V4 qualified as UUID4
 import Data.UUID.V5 qualified as UUID5
@@ -682,8 +682,10 @@ selectChatHistory convId = PG.query q (Only convId)
 textToConversationId :: Text -> UUIDId "conversation"
 textToConversationId = UUIDId . UUID5.generateNamed UUID5.namespaceOID . BS.unpack . encodeUtf8
 
+
 slackThreadToConversationId :: Text -> Text -> UUIDId "conversation"
 slackThreadToConversationId cid ts = textToConversationId (cid <> ":" <> ts)
+
 
 discordThreadToConversationId :: Text -> UUIDId "conversation"
 discordThreadToConversationId = textToConversationId
