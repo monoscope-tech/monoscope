@@ -233,6 +233,7 @@ abbreviateUnit "seconds" = "secs"
 abbreviateUnit "second" = "sec"
 abbreviateUnit w = w
 
+
 -- | Compact time ago display (e.g., "23 hrs ago" instead of "23 hours ago")
 compactTimeAgo :: Text -> Text
 compactTimeAgo = unwords . map abbreviateUnit . words

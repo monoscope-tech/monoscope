@@ -639,7 +639,8 @@ getOrCreateConversation :: DB es => Projects.ProjectId -> UUIDId "conversation" 
 getOrCreateConversation pid convId convType ctx =
   fromMaybe (error "getOrCreateConversation: RETURNING clause must return a row") . listToMaybe <$> PG.query q (pid, convId, convType, Aeson ctx)
   where
-    q = [sql| INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
+    q =
+      [sql| INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
               VALUES (?, ?, ?, ?) ON CONFLICT (project_id, conversation_id) DO UPDATE SET updated_at = NOW()
               RETURNING id, project_id, conversation_id, conversation_type, context, created_at, updated_at |]
 
