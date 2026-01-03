@@ -220,16 +220,14 @@ anomalyDetailCore pid firstM fetchIssue = do
       addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM)
 
 
--- | Abbreviate time unit words
+-- | Abbreviation map for time units (O(1) lookup)
+timeUnitAbbrevMap :: Map.Map Text Text
+timeUnitAbbrevMap = Map.fromList [("hours", "hrs"), ("hour", "hr"), ("minutes", "mins"), ("minute", "min"), ("seconds", "secs"), ("second", "sec")]
+
+
+-- | Abbreviate a single time unit word
 abbreviateUnit :: Text -> Text
-abbreviateUnit = \case
-  "hours" -> "hrs"
-  "hour" -> "hr"
-  "minutes" -> "mins"
-  "minute" -> "min"
-  "seconds" -> "secs"
-  "second" -> "sec"
-  w -> w
+abbreviateUnit w = Map.findWithDefault w w timeUnitAbbrevMap
 
 
 -- | Compact time ago display (e.g., "23 hrs ago" instead of "23 hours ago")

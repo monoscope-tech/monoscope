@@ -293,28 +293,37 @@ getLimitArg :: Text -> Int -> Int -> Map.Map Text AE.Value -> Int
 getLimitArg key maxVal defVal args = min maxVal $ fromMaybe defVal (getIntArg key args)
 
 
+-- | Join Vector of Text with separator using fold (avoids intermediate list)
+vIntercalate :: Text -> V.Vector Text -> Text
+vIntercalate sep = V.ifoldl' (\acc i x -> if i == 0 then x else acc <> sep <> x) ""
+
+
 formatSummarizeResults :: V.Vector (V.Vector AE.Value) -> Text
-formatSummarizeResults = T.intercalate ", " . V.toList . V.mapMaybe formatRow
+formatSummarizeResults = vIntercalate ", " . V.mapMaybe formatRow
   where
-    formatRow (V.toList -> [v, c]) = Just $ "\"" <> jsonToText v <> "\" (" <> jsonToText c <> ")"
-    formatRow _ = Nothing
+    formatRow row
+      | V.length row == 2 = Just $ "\"" <> jsonToText (row V.! 0) <> "\" (" <> jsonToText (row V.! 1) <> ")"
+      | otherwise = Nothing
 
 
 formatSampleLogs :: Int -> V.Vector (V.Vector AE.Value) -> Text
-formatSampleLogs maxBody = T.intercalate "\n" . V.toList . V.mapMaybe formatRow
+formatSampleLogs maxBody = vIntercalate "\n" . V.mapMaybe formatRow
   where
-    formatRow (V.toList -> (lvl : nm : svc : body)) =
-      Just $ "  - [" <> jsonToText lvl <> "] " <> jsonToText nm <> " (" <> jsonToText svc <> "): " <> T.take maxBody (T.intercalate " " $ map jsonToText body)
-    formatRow _ = Nothing
+    formatRow row
+      | V.length row >= 4 =
+          let (lvl, nm, svc) = (row V.! 0, row V.! 1, row V.! 2)
+              body = vIntercalate " " $ V.map jsonToText $ V.drop 3 row
+           in Just $ "  - [" <> jsonToText lvl <> "] " <> jsonToText nm <> " (" <> jsonToText svc <> "): " <> T.take maxBody body
+      | otherwise = Nothing
 
 
 formatQueryResults :: Int -> V.Vector (V.Vector AE.Value) -> Int -> Text
 formatQueryResults maxRows results count =
-  let formatted = T.intercalate "\n" $ take maxRows $ V.toList $ V.map formatRow results
+  let formatted = vIntercalate "\n" $ V.map formatRow $ V.take maxRows results
       truncated = if count > maxRows then "\n... +" <> show (count - maxRows) <> " more" else ""
    in "Results (" <> show count <> " rows):\n" <> formatted <> truncated
   where
-    formatRow row = "  " <> T.intercalate " | " (V.toList $ V.map jsonToText row)
+    formatRow row = "  " <> vIntercalate " | " (V.map jsonToText row)
 
 
 jsonToText :: AE.Value -> Text
