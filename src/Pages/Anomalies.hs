@@ -223,14 +223,19 @@ anomalyDetailCore pid firstM fetchIssue = do
 -- | Abbreviate time unit words
 abbreviateUnit :: Text -> Text
 abbreviateUnit = \case
-  "hours" -> "hrs"; "hour" -> "hr"
-  "minutes" -> "mins"; "minute" -> "min"
-  "seconds" -> "secs"; "second" -> "sec"
+  "hours" -> "hrs"
+  "hour" -> "hr"
+  "minutes" -> "mins"
+  "minute" -> "min"
+  "seconds" -> "secs"
+  "second" -> "sec"
   w -> w
+
 
 -- | Compact time ago display (e.g., "23 hrs ago" instead of "23 hours ago")
 compactTimeAgo :: Text -> Text
 compactTimeAgo = T.unwords . map abbreviateUnit . T.words
+
 
 -- | Stat box for time display with number large and unit small
 timeStatBox_ :: Text -> String -> Html ()
