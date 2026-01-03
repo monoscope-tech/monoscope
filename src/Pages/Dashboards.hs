@@ -1561,8 +1561,9 @@ mkWidgetProcessor
   -> UTCTime
   -> (Maybe Text, Maybe Text, Maybe Text)
   -> [(Text, Maybe Text)]
-  -> (Widget.Widget -> Eff es Widget.Widget)
-mkWidgetProcessor pid dashId now timeParams paramsWithConstants = \w -> do
+  -> Widget.Widget
+  -> Eff es Widget.Widget
+mkWidgetProcessor pid dashId now timeParams paramsWithConstants w = do
   processed <- processWidget pid now timeParams paramsWithConstants w
   pure $ processed{Widget._dashboardId = Just dashId.toText}
 
