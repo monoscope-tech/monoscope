@@ -25,7 +25,6 @@ module Pages.Anomalies (
 )
 where
 
-import Control.Lens ((?~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (parseMaybe)
 import Data.Default (def)
@@ -615,7 +614,7 @@ aiChatResponse_ pid userQuery explanation widgetsM =
         div_ [class_ "prose prose-sm text-textStrong max-w-none"] $ renderMarkdown explanation
     whenJust widgetsM \widgets ->
       div_ [class_ "grid grid-cols-1 gap-4 mt-4"] do
-        forM_ widgets \widget -> Widget.widget_ $ widget & (#_projectId ?~ pid)
+        forM_ widgets \widget -> Widget.widget_ widget{Widget._projectId = Just pid}
 
 
 renderMarkdown :: Text -> Html ()

@@ -62,7 +62,7 @@ import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.Default (Default, def)
 import Data.Text qualified as T
-import Data.Time (UTCTime, getCurrentTime)
+import Data.Time (UTCTime, UTCTime (..), fromGregorian, getCurrentTime)
 import Data.Time.LocalTime (ZonedTime, utcToLocalZonedTime)
 import Data.UUID.V4 qualified as UUID4
 import Data.UUID.V5 qualified as UUID5
@@ -635,13 +635,14 @@ data AIChatMessage = AIChatMessage
 
 
 -- | Get or create a conversation for a given context (race-condition safe via ON CONFLICT)
+-- Returns the conversation, creating one if it doesn't exist
 getOrCreateConversation :: DB es => Projects.ProjectId -> UUIDId "conversation" -> ConversationType -> AE.Value -> Eff es AIConversation
 getOrCreateConversation pid convId convType ctx = do
   results <- PG.query upsertQ (pid, convId, convType, Aeson ctx)
-  case results of
-    (conv : _) -> pure conv
-    [] -> error "getOrCreateConversation: INSERT RETURNING returned no rows"
+  pure $ fromMaybe (defaultConversation pid convId convType ctx) $ listToMaybe results
   where
+    defaultConversation p c t x = AIConversation (UUIDId c.unUUIDId) p c t (Just $ Aeson x) epoch epoch
+    epoch = UTCTime (fromGregorian 1970 1 1) 0
     upsertQ =
       [sql|
       INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
@@ -677,15 +678,12 @@ selectChatHistory convId = PG.query q (Only convId)
     |]
 
 
--- | Generate deterministic UUID from Slack thread identifiers (channel_id + thread_ts)
+-- | Generate deterministic UUID v5 from text (uses OID namespace)
+textToConversationId :: Text -> UUIDId "conversation"
+textToConversationId = UUIDId . UUID5.generateNamed UUID5.namespaceOID . BS.unpack . encodeUtf8
+
 slackThreadToConversationId :: Text -> Text -> UUIDId "conversation"
-slackThreadToConversationId channelId threadTs =
-  let bytes = BS.unpack $ encodeUtf8 $ channelId <> ":" <> threadTs
-   in UUIDId $ UUID5.generateNamed UUID5.namespaceOID bytes
+slackThreadToConversationId cid ts = textToConversationId (cid <> ":" <> ts)
 
-
--- | Generate deterministic UUID from Discord thread channel ID
 discordThreadToConversationId :: Text -> UUIDId "conversation"
-discordThreadToConversationId channelId =
-  let bytes = BS.unpack $ encodeUtf8 channelId
-   in UUIDId $ UUID5.generateNamed UUID5.namespaceOID bytes
+discordThreadToConversationId = textToConversationId
