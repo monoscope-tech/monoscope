@@ -45,17 +45,16 @@ import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
 import Effectful.Error.Static (Error, throwError)
-import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxPatch_, hxPost_, hxPushUrl_, hxPut_, hxSelect_, hxSwapOob_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ManageMembers
@@ -431,11 +430,19 @@ processVariable pid now timeRange@(sinceStr, fromDStr, toDStr) allParams variabl
 
   case variable._vType of
     Dashboards.VTQuery | Just sqlQuery <- variable.sql -> do
-      result <- try $ PG.query_ (Query $ encodeUtf8 sqlQuery)
+      -- SECURITY: Use secured query execution with project_id filtering
+      result <- RequestDumps.executeSecuredQuery pid sqlQuery 1000
       case result of
-        Right queryResults -> pure variable{Dashboards.options = Just queryResults}
-        Left (_ :: SomeException) -> pure variable -- Return unchanged on error
+        Right queryResults -> pure variable{Dashboards.options = Just $ map (map valueToText . V.toList) $ V.toList queryResults}
+        Left _ -> pure variable -- Return unchanged on error
     _ -> pure variable
+  where
+    valueToText :: AE.Value -> Text
+    valueToText (AE.String t) = t
+    valueToText (AE.Number n) = show n
+    valueToText (AE.Bool b) = if b then "true" else "false"
+    valueToText AE.Null = ""
+    valueToText v = decodeUtf8 $ AE.encode v
 
 
 -- | Process a single dashboard constant by executing its SQL or KQL query and populating the result.
@@ -452,9 +459,23 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
           (\val -> Log.logDebug ("Dashboard constant " <> label <> " query completed") (constant.key, duration) $> constant{Dashboards.result = Just $ toResult val})
           res
   case (constant.sql, constant.query) of
-    (Just sqlQuery, _) -> runQuery "SQL" (PG.query_ (Query $ encodeUtf8 sqlQuery)) identity
+    (Just sqlQuery, _) -> do
+      -- SECURITY: Use secured query execution with project_id filtering
+      (res, duration) <- Log.timeAction $ RequestDumps.executeSecuredQuery pid sqlQuery 1000
+      case res of
+        Left err -> Log.logWarn "Dashboard constant SQL query failed" (constant.key, err, duration) $> constant
+        Right queryResults -> do
+          let toTextList = map (map valueToText . V.toList) $ V.toList queryResults
+          Log.logDebug "Dashboard constant SQL query completed" (constant.key, duration) $> constant{Dashboards.result = Just toTextList}
     (Nothing, Just kqlQuery) -> runQuery "KQL" (Charts.queryMetrics (Just Charts.DTText) (Just pid) (Just kqlQuery) Nothing sinceStr fromDStr toDStr Nothing allParams) (map V.toList . V.toList . (.dataText))
     _ -> pure constant
+  where
+    valueToText :: AE.Value -> Text
+    valueToText (AE.String t) = t
+    valueToText (AE.Number n) = show n
+    valueToText (AE.Bool b) = if b then "true" else "false"
+    valueToText AE.Null = ""
+    valueToText v = decodeUtf8 $ AE.encode v
 
 
 -- Process a single widget recursively.

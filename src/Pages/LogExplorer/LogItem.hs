@@ -203,6 +203,7 @@ spanBadge pid path val key = do
 expandedItemView :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> Maybe Text -> Maybe Text -> Html ()
 expandedItemView pid item aptSp leftM rightM = do
   let isLog = item.kind == Just "log"
+      isAlert = item.kind == Just "alert"
       reqDetails = if isLog then Nothing else getRequestDetails (unAesonTextMaybe item.attributes)
   div_ [class_ $ "w-full pl-2 pb-2 relative" <> if isLog then " flex flex-col gap-2" else " pb-[50px]"] $ do
     div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
@@ -211,7 +212,7 @@ expandedItemView pid item aptSp leftM rightM = do
     div_ [class_ "flex flex-col gap-4 bg-fillWeaker py-2  px-2"] $ do
       div_ [class_ "flex justify-between items-center"] do
         div_ [class_ "flex items-center gap-4"] $ do
-          h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] $ if isLog then "Trace Log" else "Trace Span"
+          h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] $ if isLog then "Trace Log" else if isAlert then "Alert" else "Trace Span"
         div_ [class_ "flex gap-4 items-center"] $ do
           dateTime (if isLog then item.timestamp else item.start_time) Nothing
           div_ [class_ "flex gap-2 items-center"] do
@@ -243,29 +244,36 @@ expandedItemView pid item aptSp leftM rightM = do
               Just v' -> v'
               _ -> toStrict $ encodeToLazyText (unAesonTextMaybe item.body)
             _ -> toStrict $ encodeToLazyText (unAesonTextMaybe item.body)
-        else div_ [class_ "flex items-center gap-4 text-sm font-medium text-textStrong"] $ do
-          case reqDetails of
-            Just req -> do
-              div_ [class_ "flex flex-wrap items-center gap-2"] do
-                whenJust reqDetails $ \case
-                  ("HTTP", method, path, status) -> do
-                    span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap", term "data-tip" ""] $ toHtml method
-                    span_ [class_ $ "relative cbadge-sm badge-" <> T.take 1 (show status) <> "xx whitespace-nowrap", term "data-tip" ""] $ toHtml $ T.take 3 $ show status
-                    div_ [class_ "flex items-center"] do
-                      span_ [class_ "shrink-1 px-2 py-1.5 max-w-96 truncate mr-2 urlPath"] $ toHtml path
-                      div_ [[__| install Copy(content:.urlPath )|]] do
-                        faSprite_ "copy" "regular" "h-8 w-8 border border-strokeWeak bg-fillWeakerer rounded-full p-2 text-textWeak"
-                  (scheme, method, path, status) -> do
-                    div_ [class_ "flex flex-wrap items-center"] do
-                      span_ [class_ "flex gap-2 items-center text-textStrong bg-fillWeaker border border-strokeWeak rounded-lg whitespace-nowrap px-2 py-1"] $ toHtml method
-                      span_ [class_ "px-2 py-1.5 max-w-96"] $ toHtml path
-                      let extraClass = getGrpcStatusColor status
-                      when (scheme /= "DB") $ span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
-            Nothing -> do
+        else
+          if isAlert
+            then div_ [class_ "flex items-center gap-4"] do
               h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" item.name
+              div_ [class_ "flex flex-wrap items-center gap-2"] do
+                let strCls = getAlertStatusColor $ fromMaybe "" item.status_message
+                span_ [class_ $ "badge badge-sm whitespace-nowrap " <> strCls] $ toHtml $ fromMaybe "" item.status_message
+            else div_ [class_ "flex items-center gap-4 text-sm font-medium text-textStrong"] $ do
+              case reqDetails of
+                Just req -> do
+                  div_ [class_ "flex flex-wrap items-center gap-2"] do
+                    whenJust reqDetails $ \case
+                      ("HTTP", method, path, status) -> do
+                        span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap", term "data-tip" ""] $ toHtml method
+                        span_ [class_ $ "relative cbadge-sm badge-" <> T.take 1 (show status) <> "xx whitespace-nowrap", term "data-tip" ""] $ toHtml $ T.take 3 $ show status
+                        div_ [class_ "flex items-center"] do
+                          span_ [class_ "shrink-1 px-2 py-1.5 max-w-96 truncate mr-2 urlPath"] $ toHtml path
+                          div_ [[__| install Copy(content:.urlPath )|]] do
+                            faSprite_ "copy" "regular" "h-8 w-8 border border-strokeWeak bg-fillWeakerer rounded-full p-2 text-textWeak"
+                      (scheme, method, path, status) -> do
+                        div_ [class_ "flex flex-wrap items-center"] do
+                          span_ [class_ "flex gap-2 items-center text-textStrong bg-fillWeaker border border-strokeWeak rounded-lg whitespace-nowrap px-2 py-1"] $ toHtml method
+                          span_ [class_ "px-2 py-1.5 max-w-96"] $ toHtml path
+                          let extraClass = getGrpcStatusColor status
+                          when (scheme /= "DB") $ span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
+                Nothing -> do
+                  h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" item.name
 
       div_ [class_ "flex gap-2 flex-wrap"] $ do
-        unless isLog $ do
+        unless (isLog || isAlert) $ do
           spanBadge pid "duration" (toText $ getDurationNSMS $ maybe 0 fromIntegral item.duration) "Span duration"
           spanBadge pid "kind" (fromMaybe "" item.kind) "Span Kind"
         spanBadge pid "resource___service___name" (getServiceName (unAesonTextMaybe item.resource)) "Service"
@@ -310,6 +318,10 @@ expandedItemView pid item aptSp leftM rightM = do
                 faSprite_ "cross-hair" "regular" "w-4 h-4"
         let item_id = item.id
         let eventType = if isLog then "log" else "span"
+        let monitorId = fromMaybe "" item.parent_id
+        when isAlert $ a_ [class_ "cursor-pointer flex items-center gap-2", href_ $ "/p/" <> pid.toText <> "/monitors/" <> monitorId <> "/overview"] do
+          "View alert"
+          faSprite_ "bell" "regular" "w-3 h-3"
         button_
           [ class_ "cursor-pointer flex items-center gap-2"
           , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> item_id <> "/" <> createdAt <> "?event_type=" <> eventType
@@ -328,10 +340,10 @@ expandedItemView pid item aptSp leftM rightM = do
             _ -> False
           borderClass = "border-b-strokeWeak"
       div_ [class_ "flex", [__|on click halt|]] $ do
-        when (isLog && isJust item.body)
+        when ((isLog || isAlert) && isJust item.body)
           $ button_ [class_ $ "http-tab cursor-pointer  border-b-2 " <> borderClass <> " px-4 py-1.5 t-tab-active", onpointerdown_ $ "navigatable(this, '#body-content', '#" <> tabContainerId <> "', 't-tab-active', 'http')"] "Body"
-        when (not isLog && isHttp) $ button_ [class_ $ "http-tab cursor-pointer  border-b-2 " <> borderClass <> " px-4 py-1.5 t-tab-active", onpointerdown_ $ "navigatable(this, '#request-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] "Request"
-        button_ [class_ $ "cursor-pointer http-tab border-b-2 " <> borderClass <> " px-4 py-1.5 " <> if (isLog && isNothing item.body) || (not isLog && not isHttp) then "t-tab-active" else "", onpointerdown_ $ "navigatable(this, '#att-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] "Attributes"
+        when isHttp $ button_ [class_ $ "http-tab cursor-pointer  border-b-2 " <> borderClass <> " px-4 py-1.5 t-tab-active", onpointerdown_ $ "navigatable(this, '#request-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] "Request"
+        unless isAlert $ button_ [class_ $ "cursor-pointer http-tab border-b-2 " <> borderClass <> " px-4 py-1.5 " <> if (isLog && isNothing item.body) || (not isLog && not isHttp) then "t-tab-active" else "", onpointerdown_ $ "navigatable(this, '#att-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] "Attributes"
         button_ [class_ $ "cursor-pointer http-tab border-b-2 " <> borderClass <> " px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#meta-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] "Process"
         unless (isLog || null spanErrors) $ do
           button_ [class_ $ "http-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 nowrap px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#errors-content', '#" <> tabContainerId <> "', 't-tab-active', 'http')"] do
@@ -344,12 +356,12 @@ expandedItemView pid item aptSp leftM rightM = do
         div_ [class_ $ "w-full border-b-2 " <> borderClass] pass
 
       div_ [class_ "my-4 py-2 text-textWeak"] $ do
-        when isLog $ whenJust item.body $ \b -> do
+        when (isLog || isAlert) $ whenJust item.body $ \b -> do
           div_ [class_ "http-tab-content", id_ "body-content"] do
             jsonValueToHtmlTree (AE.toJSON b) Nothing
         div_ [class_ "hidden http-tab-content", id_ "m-raw-content"] $ do
           jsonValueToHtmlTree (AE.toJSON item) Nothing
-        div_ [class_ $ "http-tab-content " <> if (isLog && isNothing item.body) || (not isLog && not isHttp) then "" else "hidden", id_ "att-content"] $ do
+        unless isAlert $ div_ [class_ $ "http-tab-content " <> if (isLog && isNothing item.body) || (not isLog && not isHttp) then "" else "hidden", id_ "att-content"] $ do
           jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) (unAesonTextMaybe item.attributes)) $ Just "attributes"
         div_ [class_ "hidden http-tab-content", id_ "meta-content"] $ do
           jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) (unAesonTextMaybe item.resource)) $ Just "resource"

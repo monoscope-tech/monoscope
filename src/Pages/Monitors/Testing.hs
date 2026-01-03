@@ -397,23 +397,10 @@ unifiedMonitorOverviewH pid monitorId = do
       discordChannels <- case discordDataM of
         Just discordData -> Discord.getDiscordChannels appCtx.env.discordBotToken discordData.guildId
         Nothing -> return []
-      let bwconf' = bwconf{navTabs = Just $ monitorOverviewTabs pid monitorId "alert"}
       let findChannel xx x = fromMaybe x (find (\c -> c.channelId == x) xx >>= (\a -> Just a.channelName))
       let teams' = (\x -> x{slack_channels = findChannel channels <$> x.slack_channels, discord_channels = (\xx -> fromMaybe xx (find (\c -> c.channelId == xx) discordChannels >>= (\a -> Just a.channelName))) <$> x.discord_channels}) <$> teams
-      addRespHeaders $ PageCtx bwconf' $ unifiedOverviewPage pid alert currTime (V.fromList teams') slackDataM discordDataM
+      addRespHeaders $ PageCtx bwconf $ unifiedOverviewPage pid alert currTime (V.fromList teams') slackDataM discordDataM
     _ -> addRespHeaders $ PageCtx bwconf $ div_ [class_ "p-6 text-center"] "Alert not found"
-
-
--- | Unified overview tabs
-monitorOverviewTabs :: Projects.ProjectId -> Text -> Text -> Html ()
-monitorOverviewTabs pid monitorId monitorType = do
-  let overviewUrl = "/p/" <> pid.toText <> "/monitors/" <> monitorId <> "/overview"
-      editUrl = case monitorType of
-        "alert" -> "/p/" <> pid.toText <> "/monitors/alerts/" <> monitorId
-        _ -> "/p/" <> pid.toText <> "/monitors/collection?col_id=" <> monitorId
-  div_ [class_ "tabs tabs-box tabs-outline items-center"] do
-    a_ [href_ overviewUrl, role_ "tab", class_ "tab h-auto! tab-active text-textStrong"] "Overview"
-    a_ [href_ editUrl, role_ "tab", class_ "tab h-auto! "] "Configuration"
 
 
 -- | Unified overview page that handles both monitor types

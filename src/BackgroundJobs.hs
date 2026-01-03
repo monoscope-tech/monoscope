@@ -77,7 +77,7 @@ import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, try)
-import Utils (DBField, getDurationNSMS)
+import Utils (DBField, getAlertStatusColor, getDurationNSMS)
 
 
 data BgJobs
@@ -1536,7 +1536,7 @@ checkTriggeredQueryMonitors = do
           body = AE.object ["title" AE..= title, "value" AE..= total, "alert_threshold" AE..= monitor.alertThreshold, "warning_threshold" AE..= monitor.warningThreshold, "status" AE..= status, "query" AE..= monitor.logQueryAsSql]
           attrText = decodeUtf8 (AE.encode body)
           truncated = if T.length attrText > 500 then T.take 497 attrText <> "..." else attrText
-          summary = V.fromList ["status;" <> getStatusColor status <> "⇒" <> status, truncated, "condition;right-badge-neutral⇒" <> if monitor.triggerLessThan then "Less Than" else "Greater Than", "duration;right-badge-neutral⇒" <> toText (getDurationNSMS durationNs)]
+          summary = V.fromList ["status;" <> getAlertStatusColor status <> "⇒" <> status, truncated, "condition;right-badge-neutral⇒" <> if monitor.triggerLessThan then "Less Than" else "Greater Than", "duration;right-badge-neutral⇒" <> toText (getDurationNSMS durationNs)]
       _ <- PG.execute q ("query-monitor", monitor.projectId, title, durationNs, summary, status, UUID.toText monitor.id.unQueryMonitorId, body, startWall, startWall)
       if status /= "Normal"
         then do
@@ -1550,38 +1550,6 @@ checkTriggeredQueryMonitors = do
         else pass
       _ <- Monitors.updateLastEvaluatedAt monitor.id startWall
       pass
-
-
--- { id :: Text -- UUID
--- , project_id :: Text
--- , timestamp :: UTCTime
--- , parent_id :: Maybe Text
--- , observed_timestamp :: Maybe UTCTime
--- , hashes :: V.Vector Text
--- , name :: Maybe Text
--- , kind :: Maybe Text
--- , status_code :: Maybe Text
--- , status_message :: Maybe Text
--- , level :: Maybe Text
--- , severity :: Maybe Severity
--- , body :: Maybe (AesonText AE.Value)
--- , duration :: Maybe Int64
--- , start_time :: UTCTime
--- , end_time :: Maybe UTCTime
--- , context :: Maybe Context
--- , events :: Maybe (AesonText AE.Value)
--- , links :: Maybe Text
--- , attributes :: Maybe (AesonText (Map Text AE.Value))
--- , resource :: Maybe (AesonText (Map Text AE.Value))
--- , summary :: V.Vector Text
--- , date :: UTCTime
--- , errors :: Maybe AE.Value
-
-getStatusColor :: Text -> Text
-getStatusColor status = case status of
-  "Alerting" -> "badge-error"
-  "Warning" -> "badge-warning"
-  _ -> "badge-success"
 
 
 monitorStatus :: Bool -> Maybe Int -> Int -> Int -> Text

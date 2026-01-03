@@ -18,6 +18,7 @@ module Utils (
   lookupValueText,
   formatUTC,
   insertIfNotExist,
+  getAlertStatusColor,
   lookupVecTextByKey,
   deleteParam,
   getSeverityColor,
@@ -748,3 +749,10 @@ changeTypeFillColor changeType = case T.toLower changeType of
   "modified" -> "text-fillInformation-strong border-strokeInformation-strong bg-fillInformation-weak"
   "removed" -> "text-fillError-strong border-strokeError-strong bg-fillError-weak"
   _ -> "text-textWeak border-strokeWeak bg-fillWeak"
+
+
+getAlertStatusColor :: Text -> Text
+getAlertStatusColor status = case status of
+  "Alerting" -> "badge-error"
+  "Warning" -> "badge-warning"
+  _ -> "badge-success"

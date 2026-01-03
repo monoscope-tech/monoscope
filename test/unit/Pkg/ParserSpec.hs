@@ -62,17 +62,11 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', (
       SELECT extract(epoch from time_bucket('5 minutes', timestamp))::integer, sum((attributes->>'client')::float), count(*) OVER() as _total_count FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((method = 'GET')) GROUP BY time_bucket('5 minutes', timestamp) ORDER BY time_bucket('5 minutes', timestamp) DESC |]
       normT query `shouldBe` normT expected
     it "summarize with named aggregation" do
-      let result = parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "timestamp >= ago(7d) | summarize TotalCount = count() by Computer"
-      -- This test is now failing with a parse error, let's check if the syntax is still supported
-      case result of
-        Left _ -> True `shouldBe` True  -- Expected to fail for now
-        Right (query, _) -> 
-          let expected =
-                [text|
-          SELECT json_build_array(id,span_id,trace_id,attributes,span_name,severity,log_body,status_code,method,url_path,timestamp,duration_ns,project_id,span_kind,parent_span_id,host,user_agent,request_body,response_body,raw_headers,duration_str,environment_id,service_name,service_version,created_at,count(*)) FROM otel_logs_and_spans
-          WHERE project_id='00000000-0000-0000-0000-000000000000' and ((timestamp >= NOW() - INTERVAL '7 days'))
-          GROUP BY Computer ORDER BY timestamp DESC limit 200|]
-          in normT query `shouldBe` normT expected
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "timestamp >= ago(7d) | summarize TotalCount = count() by Computer"
+      let expected =
+            [text|
+      SELECT count(*), count(*) OVER() as _total_count FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((timestamp >= NOW() - INTERVAL '7 days')) GROUP BY Computer ORDER BY timestamp desc limit 500 |]
+      normT query `shouldBe` normT expected
     it "summarize with sort by and take" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60) | sort by parent_id asc | take 1000"
       let expected =
@@ -136,9 +130,7 @@ SELECT timeB, quantile, value FROM (
   FROM otel_logs_and_spans
   WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE)
   GROUP BY timeB
-  HAVING COUNT(*) > 0
-) s, LATERAL unnest(s.values, s.quantiles) AS u(value, quantile)
-WHERE value IS NOT NULL ORDER BY timeB DESC
+  HAVING COUNT(*) > 0 ) s, LATERAL unnest(s.values, s.quantiles) AS u(value, quantile) WHERE value IS NOT NULL ORDER BY timeB DESC
             |]
       normT sql `shouldBe` normT expected
 
