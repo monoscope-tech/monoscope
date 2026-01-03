@@ -594,9 +594,14 @@ renderChart widget = do
 
                 // Function to initialize this specific widget
                 function initializeThisWidget() {
-                  if (typeof window.bindFunctionsToObjects !== 'function' || typeof window.chartWidget !== 'function') {
-                    // If dependencies aren't loaded yet, retry after a short delay
-                    setTimeout(initializeThisWidget, 100);
+                  if (!window.widgetDepsReady) {
+                    // Dependencies not ready - wait for DOMContentLoaded (modules load before it fires)
+                    if (document.readyState === 'loading') {
+                      document.addEventListener('DOMContentLoaded', initializeThisWidget, { once: true });
+                    } else {
+                      // DOM loaded but deps still not ready - rare case, short retry
+                      setTimeout(initializeThisWidget, 50);
+                    }
                     return;
                   }
 

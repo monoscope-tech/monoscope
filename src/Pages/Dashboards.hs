@@ -212,7 +212,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             , id_ $ "tab-link-" <> dashId.toText <> "-" <> show idx
             , hxGet_ tabContentUrl
             , hxTarget_ "#dashboard-tabs-content"
-            , hxSwap_ "innerHTML"
+            , hxSwap_ "innerHTML transition:true"
             , hxPushUrl_ $ tabUrl <> queryStr
             , hxIndicator_ $ "#tab-indicator-" <> dashId.toText <> "-" <> show idx
             , -- Update active tab styling via htmx hyperscript
@@ -396,12 +396,10 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         // Initialize grids on page load
         initializeGrids();
 
-        // Re-initialize grids after htmx swaps new tab content
-        document.body.addEventListener('htmx:afterSwap', function(e) {
-          // Check if the swap was for tab content
+        // Re-initialize grids after htmx settles new tab content
+        document.body.addEventListener('htmx:afterSettle', function(e) {
           if (e.detail.target && e.detail.target.id === 'dashboard-tabs-content') {
-            // Use requestAnimationFrame to ensure DOM is ready for grid initialization
-            requestAnimationFrame(initializeGrids);
+            initializeGrids();
           }
         });
       });

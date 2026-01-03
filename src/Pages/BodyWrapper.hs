@@ -123,6 +123,9 @@ bodyWrapper bcfg child = do
 
         script_ [src_ "https://unpkg.com/@monoscopetech/browser@latest/dist/monoscope.min.js"] ("" :: Text)
 
+        -- Flag for widget initialization - set true after web-components loads
+        script_ "window.widgetDepsReady = false;"
+
         script_ [type_ "module", src_ $(hashAssetFile "/public/assets/web-components/dist/js/index.js")] ("" :: Text)
 
         script_
@@ -239,8 +242,7 @@ bodyWrapper bcfg child = do
           // Initialize tooltips for current elements
           initTooltips();
           
-          // Re-initialize for dynamically added content
-          document.body.addEventListener('htmx:afterSwap', initTooltips);
+          // Re-initialize for dynamically added content (afterSettle fires after DOM is fully settled)
           document.body.addEventListener('htmx:afterSettle', initTooltips);
           
           var notyf = new Notyf({
