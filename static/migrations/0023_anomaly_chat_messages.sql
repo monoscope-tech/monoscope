@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS apis.ai_chat_messages (
   metadata JSONB DEFAULT NULL,  -- Additional metadata (tokens used, model, etc.)
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+SELECT manage_updated_at('apis.ai_conversations');
 
 -- Composite unique constraint for upsert operations
 ALTER TABLE apis.ai_conversations ADD CONSTRAINT uniq_ai_conversations_project_conv UNIQUE (project_id, conversation_id);

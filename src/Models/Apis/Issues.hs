@@ -62,7 +62,7 @@ import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.Default (Default, def)
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), fromGregorian, getCurrentTime)
+import Data.Time (UTCTime, getCurrentTime)
 import Data.Time.LocalTime (ZonedTime, utcToLocalZonedTime)
 import Data.UUID.V4 qualified as UUID4
 import Data.UUID.V5 qualified as UUID5
@@ -634,22 +634,14 @@ data AIChatMessage = AIChatMessage
   deriving anyclass (Default, FromRow, ToRow)
 
 
--- | Get or create a conversation for a given context (race-condition safe via ON CONFLICT)
--- Returns the conversation, creating one if it doesn't exist
+-- | Get or create a conversation (race-condition safe via ON CONFLICT + RETURNING)
 getOrCreateConversation :: DB es => Projects.ProjectId -> UUIDId "conversation" -> ConversationType -> AE.Value -> Eff es AIConversation
-getOrCreateConversation pid convId convType ctx = do
-  results <- PG.query upsertQ (pid, convId, convType, Aeson ctx)
-  pure $ fromMaybe (defaultConversation pid convId convType ctx) $ listToMaybe results
+getOrCreateConversation pid convId convType ctx =
+  fromMaybe (error "getOrCreateConversation: RETURNING clause must return a row") . listToMaybe <$> PG.query q (pid, convId, convType, Aeson ctx)
   where
-    defaultConversation p c t x = AIConversation (UUIDId c.unUUIDId) p c t (Just $ Aeson x) epoch epoch
-    epoch = UTCTime (fromGregorian 1970 1 1) 0
-    upsertQ =
-      [sql|
-      INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT (project_id, conversation_id) DO UPDATE SET updated_at = NOW()
-      RETURNING id, project_id, conversation_id, conversation_type, context, created_at, updated_at
-    |]
+    q = [sql| INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
+              VALUES (?, ?, ?, ?) ON CONFLICT (project_id, conversation_id) DO UPDATE SET updated_at = NOW()
+              RETURNING id, project_id, conversation_id, conversation_type, context, created_at, updated_at |]
 
 
 -- | Insert a new chat message

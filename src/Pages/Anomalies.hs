@@ -28,7 +28,6 @@ where
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (parseMaybe)
 import Data.Default (def)
-import Data.List.Extra (chunksOf)
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
@@ -87,11 +86,8 @@ acknowledgeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> Maybe Tex
 acknowledgeAnomalyGetH pid aid hostM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  -- Convert to Issues.IssueId for new system
   let issueId = UUIDId aid.unUUIDId
-  -- Use new Issues acknowledge function
   _ <- Issues.acknowledgeIssue issueId sess.user.id
-  -- Still use old cascade for compatibility
   let text_id = V.fromList [UUID.toText aid.unUUIDId]
   v <- Anomalies.acknowledgeAnomalies sess.user.id text_id
   _ <- Anomalies.acknowlegeCascade sess.user.id (V.fromList v)
@@ -141,8 +137,7 @@ instance ToHtml AnomalyAction where
   toHtmlRaw = toHtml
 
 
--- When given a list of anomalyIDs and an action, said action would be applied to the anomalyIDs.
--- Then a notification should be triggered, as well as an action to reload the anomaly List.
+-- | Bulk acknowledge/archive anomalies, triggering a notification and list reload
 anomalyBulkActionsPostH :: Projects.ProjectId -> Text -> AnomalyBulkForm -> ATAuthCtx (RespHeaders AnomalyAction)
 anomalyBulkActionsPostH pid action items = do
   (sess, project) <- Sessions.sessionAndProject pid
@@ -221,31 +216,40 @@ anomalyDetailCore pid firstM fetchIssue = do
       addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM)
 
 
--- | Abbreviation map for time units (O(1) lookup)
-timeUnitAbbrevMap :: Map.Map Text Text
-timeUnitAbbrevMap = Map.fromList [("hours", "hrs"), ("hour", "hr"), ("minutes", "mins"), ("minute", "min"), ("seconds", "secs"), ("second", "sec")]
-
-
--- | Abbreviate a single time unit word
+-- | Abbreviate time unit (e.g., "hours" → "hrs")
+--
+-- >>> abbreviateUnit "hours"
+-- "hrs"
+-- >>> abbreviateUnit "minute"
+-- "min"
+-- >>> abbreviateUnit "days"
+-- "days"
 abbreviateUnit :: Text -> Text
-abbreviateUnit w = Map.findWithDefault w w timeUnitAbbrevMap
-
+abbreviateUnit "hours" = "hrs"
+abbreviateUnit "hour" = "hr"
+abbreviateUnit "minutes" = "mins"
+abbreviateUnit "minute" = "min"
+abbreviateUnit "seconds" = "secs"
+abbreviateUnit "second" = "sec"
+abbreviateUnit w = w
 
 -- | Compact time ago display (e.g., "23 hrs ago" instead of "23 hours ago")
 compactTimeAgo :: Text -> Text
 compactTimeAgo = unwords . map abbreviateUnit . words
 
 
--- | Stat box for time display with number large and unit small
+-- | Stat box for time display with number large and unit small. Empty input renders nothing.
 timeStatBox_ :: Text -> String -> Html ()
-timeStatBox_ title timeStr = case words $ toText timeStr of
-  (num : rest) -> div_ [class_ "bg-fillWeaker rounded-3xl flex flex-col gap-3 p-5 border border-strokeWeak"] do
-    div_ [class_ "flex flex-col gap-1"] do
-      span_ [class_ "font-bold text-textStrong"] do
-        span_ [class_ "text-4xl"] $ toHtml num
-        span_ [class_ "text-sm text-textWeak"] $ toHtml $ " " <> unwords (map abbreviateUnit rest)
-      div_ [class_ "flex gap-2 items-center text-sm text-textWeak"] $ p_ [] $ toHtml title
-  _ -> mempty
+timeStatBox_ title timeStr
+  | null timeStr = pass
+  | (num : rest) <- words $ toText timeStr =
+      div_ [class_ "bg-fillWeaker rounded-3xl flex flex-col gap-3 p-5 border border-strokeWeak"] do
+        div_ [class_ "flex flex-col gap-1"] do
+          span_ [class_ "font-bold text-textStrong"] do
+            span_ [class_ "text-4xl"] $ toHtml num
+            span_ [class_ "text-sm text-textWeak"] $ toHtml $ " " <> unwords (map abbreviateUnit rest)
+          div_ [class_ "flex gap-2 items-center text-sm text-textWeak"] $ p_ [] $ toHtml title
+  | otherwise = pass
 
 
 anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Maybe Anomalies.ATError -> UTCTime -> Bool -> Html ()
@@ -459,7 +463,7 @@ buildAIContext issue errM trDataM spans =
               $ unlines
                 [ ""
                 , "## Span Breakdown"
-                , unlines $ V.toList $ V.take 10 $ flip V.map spans $ \s ->
+                , unlines $ V.toList $ flip V.map (V.take 10 spans) $ \s ->
                     "- " <> fromMaybe "unknown" s.name <> " (" <> maybe "n/a" show s.duration <> "ns)"
                 ]
       ]
@@ -513,11 +517,8 @@ aiChatPostH pid issueId form
       now <- Time.currentTime
 
       let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
-
-      -- Ensure conversation exists
       _ <- Issues.getOrCreateConversation pid convId Issues.CTAnomaly (AE.object ["issue_id" AE..= issueId])
 
-      -- Fetch issue and error context
       issueM <- Issues.selectIssueById issueId
       case issueM of
         Nothing -> do
@@ -526,12 +527,10 @@ aiChatPostH pid issueId form
           Issues.insertChatMessage pid convId "assistant" response Nothing Nothing
           addRespHeaders $ aiChatResponse_ pid form.query response Nothing
         Just issue -> do
-          -- Fetch error data for RuntimeException issues
           errorM <- case issue.issueType of
             Issues.RuntimeException -> Anomalies.errorByHash pid issue.endpointHash
             _ -> pure Nothing
 
-          -- Fetch trace data if available
           (traceDataM, spans) <- case errorM of
             Just err -> do
               let targetTIdM = err.recentTraceId
@@ -547,15 +546,10 @@ aiChatPostH pid issueId form
                 Nothing -> pure (Nothing, V.empty)
             Nothing -> pure (Nothing, V.empty)
 
-          -- Build comprehensive context with anomaly system prompt
           let context = buildAIContext issue errorM traceDataM spans
               anomalyContext = unlines [anomalySystemPrompt, "", "--- ISSUE CONTEXT ---", context]
-
-          -- Get facets for tool context
-          let dayAgo = addUTCTime (-86400) now
+              dayAgo = addUTCTime (-86400) now
           facetSummaryM <- Facets.getFacetSummary pid "otel_logs_and_spans" dayAgo now
-
-          -- Build agentic config with conversation ID for history persistence
           let config =
                 (AI.defaultAgenticConfig pid)
                   { AI.facetContext = facetSummaryM
@@ -564,10 +558,7 @@ aiChatPostH pid issueId form
                   , AI.conversationType = Just Issues.CTAnomaly
                   }
 
-          -- Save user message before AI call
           Issues.insertChatMessage pid convId "user" form.query Nothing Nothing
-
-          -- Run agentic query with full tool access and history
           result <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiApiKey
 
           case result of
@@ -576,16 +567,13 @@ aiChatPostH pid issueId form
               Issues.insertChatMessage pid convId "assistant" errorResponse Nothing Nothing
               addRespHeaders $ aiChatResponse_ pid form.query errorResponse Nothing
             Right responseText -> do
-              -- Try to parse the AI response as JSON
               let parsed = AE.eitherDecode (fromStrict $ encodeUtf8 responseText) :: Either String AIInvestigationResponse
               case parsed of
                 Left _ -> do
-                  -- Save raw response when JSON parsing fails
                   Issues.insertChatMessage pid convId "assistant" responseText Nothing Nothing
                   addRespHeaders $ aiChatResponse_ pid form.query responseText Nothing
                 Right aiResp -> do
-                  -- Limit widgets to max 10 to prevent abuse
-                  let limitedWidgets = take 10 <$> aiResp.widgets
+                  let limitedWidgets = take 10 <$> aiResp.widgets -- max 10 to prevent abuse
                   Issues.insertChatMessage pid convId "assistant" aiResp.explanation (Just $ AE.toJSON limitedWidgets) Nothing
                   addRespHeaders $ aiChatResponse_ pid form.query aiResp.explanation limitedWidgets
 
@@ -628,14 +616,15 @@ parseStoredWidgets :: Maybe (Aeson AE.Value) -> Maybe [Widget.Widget]
 parseStoredWidgets = (>>= parseMaybe AE.parseJSON . getAeson)
 
 
--- | Render chat history
+-- | Render chat history, pairing user messages with their following assistant response
 aiChatHistoryView_ :: Projects.ProjectId -> [Issues.AIChatMessage] -> Html ()
-aiChatHistoryView_ pid messages =
-  forM_ (mapMaybe toPair $ chunksOf 2 messages) \(userMsg, assistantMsg) ->
-    aiChatResponse_ pid userMsg.content assistantMsg.content (parseStoredWidgets assistantMsg.widgets)
+aiChatHistoryView_ pid = go
   where
-    toPair [u, a] | u.role == "user" && a.role == "assistant" = Just (u, a)
-    toPair _ = Nothing
+    go (u : a : rest) | u.role == "user" && a.role == "assistant" = do
+      aiChatResponse_ pid u.content a.content (parseStoredWidgets a.widgets)
+      go rest
+    go (_ : rest) = go rest -- skip unpaired/malformed messages
+    go [] = pass
 
 
 -- | AI Chat Component with inline responses and floating input
@@ -869,7 +858,6 @@ anomalyListSlider currTime _ _ (Just issues) = do
         vm
 
 
--- anomalyAccentColor isAcknowleged isArchived
 anomalyAccentColor :: Bool -> Bool -> Text
 anomalyAccentColor _ True = "bg-fillStrong"
 anomalyAccentColor True False = "bg-fillSuccess-weak"
