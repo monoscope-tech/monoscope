@@ -22,9 +22,11 @@ CREATE TABLE IF NOT EXISTS apis.ai_chat_messages (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_ai_conversations_conv ON apis.ai_conversations(conversation_id);
-CREATE INDEX IF NOT EXISTS idx_ai_conversations_project ON apis.ai_conversations(project_id);
-CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_conv ON apis.ai_chat_messages(conversation_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_project ON apis.ai_chat_messages(project_id);
+-- Composite unique constraint for upsert operations
+ALTER TABLE apis.ai_conversations ADD CONSTRAINT uniq_ai_conversations_project_conv UNIQUE (project_id, conversation_id);
+
+-- Composite index for efficient lookups by project + conversation
+CREATE INDEX IF NOT EXISTS idx_ai_conversations_project_conv ON apis.ai_conversations(project_id, conversation_id);
+CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_project_conv ON apis.ai_chat_messages(project_id, conversation_id, created_at);
 
 COMMIT;

@@ -580,7 +580,7 @@ runAgenticLoopRaw config openAI chatHistory params iteration
   | otherwise = do
       result <- liftIO $ LLM.chat openAI chatHistory (Just params)
       case result of
-        Left err -> pure $ Left $ "LLM Error: " <> show err
+        Left _err -> pure $ Left "LLM service temporarily unavailable"
         Right responseMsg -> case LLM.toolCalls (LLM.messageData responseMsg) of
           Nothing -> pure $ Right $ LLM.content responseMsg
           Just toolCallList -> do
@@ -604,7 +604,7 @@ runAgenticLoop config openAI chatHistory params iteration
   | otherwise = do
       result <- liftIO $ LLM.chat openAI chatHistory (Just params)
       case result of
-        Left err -> pure $ Left $ "LLM Error: " <> show err
+        Left _err -> pure $ Left "LLM service temporarily unavailable"
         Right responseMsg -> case LLM.toolCalls (LLM.messageData responseMsg) of
           Nothing -> pure $ parseResponse $ LLM.content responseMsg
           Just toolCallList -> do

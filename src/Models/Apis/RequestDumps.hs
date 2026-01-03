@@ -461,14 +461,27 @@ executeArbitraryQuery queryText = do
 
 
 -- | Execute a user-provided SQL query with mandatory project_id filtering
--- SECURITY: Wraps query in subquery and filters by parameterized project_id
+-- SECURITY: Validates query, uses READ ONLY transaction, filters by parameterized project_id
 executeSecuredQuery :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
-executeSecuredQuery pid userQuery limit = do
-  let securedQuery = "SELECT * FROM (" <> userQuery <> ") WHERE project_id = ? LIMIT ?"
-  resultE <- try @SomeException $ do
-    results :: [[FieldValue]] <- PG.query (Query $ encodeUtf8 securedQuery) (pid, limit)
-    pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
-  pure $ first (\e -> "Query execution failed: " <> show e) resultE
+executeSecuredQuery pid userQuery limit
+  | not (validateSqlQuery userQuery) = pure $ Left "Query contains disallowed operations"
+  | otherwise = do
+      let securedQuery = "SET TRANSACTION READ ONLY; SELECT * FROM (" <> userQuery <> ") AS subq WHERE project_id = ? LIMIT ?"
+      resultE <- try @SomeException $ do
+        results :: [[FieldValue]] <- PG.query (Query $ encodeUtf8 securedQuery) (pid, limit)
+        pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
+      pure $ first (const "Query execution failed") resultE
+
+-- | Validate SQL query for dangerous constructs
+validateSqlQuery :: Text -> Bool
+validateSqlQuery query =
+  let lowerQuery = T.toLower query
+      dangerousPatterns =
+        [ "insert ", "update ", "delete ", "drop ", "truncate ", "alter ", "create "
+        , "grant ", "revoke ", "; ", "information_schema", "pg_catalog", "pg_"
+        ]
+   in all (\p -> not $ p `T.isInfixOf` lowerQuery) dangerousPatterns
+        && "select" `T.isInfixOf` lowerQuery
 
 
 selectLogTable :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))

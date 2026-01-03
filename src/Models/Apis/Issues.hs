@@ -634,29 +634,18 @@ data AIChatMessage = AIChatMessage
   deriving anyclass (Default, FromRow, ToRow)
 
 
--- | Get or create a conversation for a given context
+-- | Get or create a conversation for a given context (race-condition safe via ON CONFLICT)
 getOrCreateConversation :: DB es => Projects.ProjectId -> UUIDId "conversation" -> ConversationType -> AE.Value -> Eff es AIConversation
 getOrCreateConversation pid convId convType ctx = do
-  existing <- listToMaybe <$> PG.query selectQ (pid, convId)
-  case existing of
-    Just conv -> pure conv
-    Nothing -> do
-      void $ PG.execute insertQ (pid, convId, convType, Aeson ctx)
-      conv <- listToMaybe <$> PG.query selectQ (pid, convId)
-      pure $ fromMaybe (error "Failed to create conversation") conv
+  results <- PG.query upsertQ (pid, convId, convType, Aeson ctx)
+  pure $ fromMaybe (error "getOrCreateConversation: INSERT RETURNING returned no rows") $ listToMaybe results
   where
-    selectQ =
-      [sql|
-      SELECT id, project_id, conversation_id, conversation_type, context, created_at, updated_at
-      FROM apis.ai_conversations
-      WHERE project_id = ? AND conversation_id = ?
-      ORDER BY created_at DESC
-      LIMIT 1
-    |]
-    insertQ =
+    upsertQ =
       [sql|
       INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
       VALUES (?, ?, ?, ?)
+      ON CONFLICT (project_id, conversation_id) DO UPDATE SET updated_at = NOW()
+      RETURNING id, project_id, conversation_id, conversation_type, context, created_at, updated_at
     |]
 
 
@@ -690,11 +679,11 @@ selectChatHistory convId = PG.query q (Only convId)
 slackThreadToConversationId :: Text -> Text -> UUIDId "conversation"
 slackThreadToConversationId channelId threadTs =
   let bytes = BS.unpack $ encodeUtf8 $ channelId <> ":" <> threadTs
-   in UUIDId $ UUID5.generateNamed UUID5.namespaceDNS bytes
+   in UUIDId $ UUID5.generateNamed UUID5.namespaceOID bytes
 
 
 -- | Generate deterministic UUID from Discord thread channel ID
 discordThreadToConversationId :: Text -> UUIDId "conversation"
 discordThreadToConversationId channelId =
   let bytes = BS.unpack $ encodeUtf8 channelId
-   in UUIDId $ UUID5.generateNamed UUID5.namespaceDNS bytes
+   in UUIDId $ UUID5.generateNamed UUID5.namespaceOID bytes

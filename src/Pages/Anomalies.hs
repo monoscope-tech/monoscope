@@ -496,7 +496,9 @@ anomalySystemPrompt =
 
 -- | Handle AI chat POST request
 aiChatPostH :: Projects.ProjectId -> Issues.IssueId -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))
-aiChatPostH pid issueId form = do
+aiChatPostH pid issueId form
+  | T.length form.query > 4000 = addRespHeaders $ aiChatResponse_ pid form.query "Query too long. Maximum 4000 characters allowed." Nothing
+  | otherwise = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   now <- Time.currentTime
@@ -553,20 +555,30 @@ aiChatPostH pid issueId form = do
               , AI.conversationType = Just Issues.CTAnomaly
               }
 
+      -- Save user message before AI call
+      Issues.insertChatMessage pid convId "user" form.query Nothing Nothing
+
       -- Run agentic query with full tool access and history
       result <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiApiKey
 
       case result of
-        Left err -> addRespHeaders $ aiChatResponse_ pid form.query ("I encountered an error while analyzing this issue: " <> err) Nothing
+        Left err -> do
+          let errorResponse = "I encountered an error while analyzing this issue: " <> err
+          Issues.insertChatMessage pid convId "assistant" errorResponse Nothing Nothing
+          addRespHeaders $ aiChatResponse_ pid form.query errorResponse Nothing
         Right responseText -> do
           -- Try to parse the AI response as JSON
           let parsed = AE.eitherDecode (fromStrict $ encodeUtf8 responseText) :: Either String AIInvestigationResponse
           case parsed of
-            Left _ -> addRespHeaders $ aiChatResponse_ pid form.query responseText Nothing
+            Left _ -> do
+              -- Save raw response when JSON parsing fails
+              Issues.insertChatMessage pid convId "assistant" responseText Nothing Nothing
+              addRespHeaders $ aiChatResponse_ pid form.query responseText Nothing
             Right aiResp -> do
-              -- Update the stored response with widget configs
-              Issues.insertChatMessage pid convId "assistant" aiResp.explanation (Just $ AE.toJSON aiResp.widgets) Nothing
-              addRespHeaders $ aiChatResponse_ pid form.query aiResp.explanation aiResp.widgets
+              -- Limit widgets to max 10 to prevent abuse
+              let limitedWidgets = take 10 <$> aiResp.widgets
+              Issues.insertChatMessage pid convId "assistant" aiResp.explanation (Just $ AE.toJSON limitedWidgets) Nothing
+              addRespHeaders $ aiChatResponse_ pid form.query aiResp.explanation limitedWidgets
 
 
 -- | Handle AI chat history GET request
@@ -591,9 +603,9 @@ aiChatResponse_ pid userQuery explanation widgetsM =
       div_ [class_ "p-2 rounded-lg bg-fillBrand-weak shrink-0"] $ faSprite_ "sparkles" "regular" "w-4 h-4 text-iconBrand"
       div_ [class_ "flex-1 flex flex-col gap-4"] do
         div_ [class_ "prose prose-sm text-textStrong max-w-none"] $ renderMarkdown explanation
-    whenJust widgetsM $ \widgets ->
+    whenJust widgetsM \widgets ->
       div_ [class_ "grid grid-cols-1 gap-4 mt-4"] do
-        forM_ widgets $ \widget -> Widget.widget_ $ widget & (#_projectId ?~ pid)
+        forM_ widgets \widget -> Widget.widget_ $ widget & (#_projectId ?~ pid)
 
 
 renderMarkdown :: Text -> Html ()
@@ -612,8 +624,8 @@ parseStoredWidgets (Just (Aeson val)) = case AE.fromJSON val of
 
 -- | Render chat history
 aiChatHistoryView_ :: Projects.ProjectId -> [Issues.AIChatMessage] -> Html ()
-aiChatHistoryView_ pid messages = do
-  forM_ (groupMessages messages) $ \(userMsg, assistantMsg) ->
+aiChatHistoryView_ pid messages =
+  forM_ (groupMessages messages) \(userMsg, assistantMsg) ->
     aiChatResponse_ pid userMsg.content assistantMsg.content (parseStoredWidgets assistantMsg.widgets)
   where
     groupMessages :: [Issues.AIChatMessage] -> [(Issues.AIChatMessage, Issues.AIChatMessage)]
