@@ -1523,7 +1523,7 @@ getDefaultTabSlug = fmap (slugify . (.name)) . (>>= viaNonEmpty head)
 
 
 -- | Render breadcrumb suffix with out-of-band swap for htmx
-breadcrumbSuffixOob_ :: Text -> Html ()
+breadcrumbSuffixOob_ :: Monad m => Text -> HtmlT m ()
 breadcrumbSuffixOob_ tabName =
   span_ [id_ "pageTitleSuffix", class_ "flex items-center gap-1", hxSwapOob_ "true"] do
     faSprite_ "chevron-right" "regular" "w-3 h-3"
@@ -1542,13 +1542,12 @@ queryStringFrom params = let qs = toQueryParams params in if T.null qs then "" e
 
 -- | Process dashboard constants and build extended params with constant results
 processConstantsAndExtendParams
-  :: (DB es, Error ServerError :> es, Log.Log :> es, PG.PostgreSQL :> es)
-  => Projects.ProjectId
+  :: Projects.ProjectId
   -> UTCTime
   -> (Maybe Text, Maybe Text, Maybe Text)
   -> [(Text, Maybe Text)]
   -> [Dashboards.Constant]
-  -> Eff es ([Dashboards.Constant], [(Text, Maybe Text)])
+  -> ATAuthCtx ([Dashboards.Constant], [(Text, Maybe Text)])
 processConstantsAndExtendParams pid now timeParams allParams constants =
   traverse (processConstant pid now timeParams allParams) constants <&> \pc ->
     (pc, allParams <> [("const-" <> c.key, Just $ DashboardUtils.constantToSQLList $ fromMaybe [] c.result) | c <- pc])
@@ -1556,14 +1555,13 @@ processConstantsAndExtendParams pid now timeParams allParams constants =
 
 -- | Create a widget processor that adds dashboard ID to processed widgets
 mkWidgetProcessor
-  :: (DB es, Error ServerError :> es, Log.Log :> es, PG.PostgreSQL :> es)
-  => Projects.ProjectId
+  :: Projects.ProjectId
   -> Dashboards.DashboardId
   -> UTCTime
   -> (Maybe Text, Maybe Text, Maybe Text)
   -> [(Text, Maybe Text)]
   -> Widget.Widget
-  -> Eff es Widget.Widget
+  -> ATAuthCtx Widget.Widget
 mkWidgetProcessor pid dashId now timeParams paramsWithConstants =
   fmap (#_dashboardId ?~ dashId.toText) . processWidget pid now timeParams paramsWithConstants
 
@@ -1600,7 +1598,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
         if idx == activeTabIdx
           then do
             processedWidgets <- traverse processWidgetWithDashboardId tab.widgets
-            pure tab{Dashboards.widgets = processedWidgets}
+            pure $ tab & #widgets .~ processedWidgets
           else pure tab -- Don't process widgets for inactive tabs
       pure $ dash' & #tabs ?~ processedTabs
     Nothing -> pure dash'

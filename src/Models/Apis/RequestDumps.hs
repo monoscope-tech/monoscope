@@ -461,14 +461,13 @@ executeArbitraryQuery queryText = do
 
 
 -- | Execute a user-provided SQL query with mandatory project_id filtering
--- SECURITY: Validates query, uses READ ONLY transaction, filters by parameterized project_id
+-- SECURITY: Validates query for dangerous patterns, wraps in SELECT subquery, filters by parameterized project_id
 executeSecuredQuery :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
 executeSecuredQuery pid userQuery limit
   | not (validateSqlQuery userQuery) = pure $ Left "Query contains disallowed operations"
   | otherwise = do
       let selectQuery = "SELECT * FROM (" <> userQuery <> ") AS subq WHERE project_id = ? LIMIT ?"
-      resultE <- try @SomeException $ PG.withTransaction do
-        _ <- PG.execute_ "SET TRANSACTION READ ONLY"
+      resultE <- try @SomeException do
         results :: [[FieldValue]] <- PG.query (Query $ encodeUtf8 selectQuery) (pid, limit)
         pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
       pure $ first (const "Query execution failed") resultE
