@@ -187,6 +187,12 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           label_ [Lucid.for_ "tabRenameModalId", class_ "btn btn-outline cursor-pointer"] "Cancel"
           button_ [type_ "submit", class_ "btn btn-primary"] "Save"
 
+  -- Variable picker modal - auto-opens when required vars are unset (from tab.requires or variable.required)
+  whenJust dash.variables \variables -> do
+    let activeTabSlug' = join (L.lookup activeTabSlugKey allParams)
+        activeTab = activeTabSlug' >>= \slug -> dash.tabs >>= (`findTabBySlug` slug) <&> snd
+    whenJust (findVarToPrompt activeTab variables) \v -> variablePickerModal_ pid dashId activeTabSlug' allParams v False
+
   -- Render variables and tabs in the same container
   when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-fillWeaker px-4 py-2 gap-4 items-center flex-wrap"] do
     -- Tabs section (on the left) - now using htmx for lazy loading
@@ -443,6 +449,52 @@ processVariable pid now timeRange@(sinceStr, fromDStr, toDStr) allParams variabl
     valueToText (AE.Bool b) = if b then "true" else "false"
     valueToText AE.Null = ""
     valueToText v = decodeUtf8 $ AE.encode v
+
+
+-- | Get required variables without values (respecting dependsOn order)
+unsetRequiredVars :: [Dashboards.Variable] -> [Dashboards.Variable]
+unsetRequiredVars vars = filter shouldShow vars
+  where
+    setKeys = [v.key | v <- vars, isJust v.value]
+    shouldShow v = v.required == Just True && isNothing v.value && maybe True (`elem` setKeys) v.dependsOn
+
+
+-- | Find variable that needs to be prompted (from tab.requires or variable.required)
+findVarToPrompt :: Maybe Dashboards.Tab -> [Dashboards.Variable] -> Maybe Dashboards.Variable
+findVarToPrompt activeTab variables =
+  let tabRequiredVar = activeTab >>= (.requires) >>= \reqKey -> find (\v -> v.key == reqKey && isNothing v.value) variables
+   in tabRequiredVar <|> listToMaybe (unsetRequiredVars variables)
+
+
+-- | Render variable picker modal (auto-opens via hyperscript init)
+variablePickerModal_ :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> [(Text, Maybe Text)] -> Dashboards.Variable -> Bool -> Html ()
+variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
+  let modalId = "varPicker-" <> var.key
+      varTitle = fromMaybe var.key var.title
+      queryBase = queryStringFrom $ filter (\(k, _) -> k /= "var-" <> var.key && k /= activeTabSlugKey) allParams
+      tabPath = maybe "" ("/tab/" <>) activeTabSlug
+      oobAttr = if useOob then [id_ $ modalId <> "-container", hxSwapOob_ "beforeend:body"] else []
+  div_ oobAttr do
+    input_ [class_ "modal-toggle", id_ modalId, type_ "checkbox", [__|init set my.checked to true on keyup if event's key is 'Escape' set my.checked to false|]]
+    div_ [class_ "modal w-screen", role_ "dialog"] do
+      label_ [class_ "modal-backdrop", Lucid.for_ modalId] ""
+      div_ [class_ "modal-box min-w-80 max-w-md flex flex-col gap-4"] do
+        label_ [Lucid.for_ modalId, class_ "btn btn-sm btn-circle btn-ghost absolute right-2 top-2"] "X"
+        h3_ [class_ "font-bold text-lg"] $ toHtml $ "Select " <> varTitle
+        p_ [class_ "text-sm text-textWeak"] $ toHtml $ "This view requires a " <> varTitle <> " to be selected."
+        whenJust var.helpText \h -> p_ [class_ "text-sm text-textWeak italic"] $ toHtml h
+        input_
+          [ type_ "text"
+          , class_ "input input-bordered w-full"
+          , placeholder_ "Search..."
+          , [__|on keyup if event's key is 'Escape' set my value to '' then trigger keyup else show <.var-opt/> in closest .modal-box when its textContent.toLowerCase() contains my value.toLowerCase()|]
+          ]
+        div_ [class_ "max-h-64 overflow-y-auto flex flex-col gap-1"]
+          $ forM_ (fromMaybe [] var.options) \opt -> do
+            let optVal = opt Unsafe.!! 0
+                optLbl = fromMaybe optVal (opt !!? 1)
+                url = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> tabPath <> queryBase <> (if T.null queryBase then "?" else "&") <> "var-" <> var.key <> "=" <> optVal
+            a_ [class_ "var-opt p-2 rounded hover:bg-fillWeak cursor-pointer", href_ url] $ toHtml optLbl
 
 
 -- | Process a single dashboard constant by executing its SQL or KQL query and populating the result.
@@ -1679,11 +1731,17 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
             else snd <$> processConstantsAndExtendParams pid now timeParams allParams (fromMaybe [] dash.constants)
         let processWidgetWithDashboardId = mkWidgetProcessor pid dashId now timeParams allParamsWithConstants
 
+        -- Process variables to check if tab requires one that's not set
+        processedVars <- traverse (traverse (processVariable pid now timeParams allParamsWithConstants)) dash.variables
+        let varToPrompt = findVarToPrompt (Just tab) (fromMaybe [] processedVars)
+
         -- Process widgets concurrently to speed up tabs with multiple eager widgets
         processedWidgets <- pooledForConcurrently tab.widgets processWidgetWithDashboardId
 
-        -- Render just the tab content panel (isPartial=True for HTMX, includes OOB breadcrumb swap)
-        addRespHeaders $ tabContentPanel_ pid dashId.toText idx tab.name processedWidgets True True
+        -- Render tab content panel + OOB modal if variable needs prompting
+        addRespHeaders $ do
+          tabContentPanel_ pid dashId.toText idx tab.name processedWidgets True True
+          whenJust varToPrompt \v -> variablePickerModal_ pid dashId (Just tabSlug) allParamsWithConstants v True
 
 
 -- | Render a single tab content panel

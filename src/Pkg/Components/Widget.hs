@@ -485,14 +485,16 @@ renderTable widget = do
                         $ span_ [class_ "loading loading-spinner loading-sm"] ""
 
     -- Add row click handler script if needed
-    whenJust widget.onRowClick \onRowClick ->
+    whenJust widget.onRowClick \onRowClick -> do
+      let onRowClickJson = decodeUtf8 $ AE.encode onRowClick
+          columnsJson = decodeUtf8 $ AE.encode widget.columns
       script_
         [type_ "text/javascript"]
         [text|
         (function() {
           const tableId = '${tableId}';
-          const onRowClick = ${decodeUtf8 $ AE.encode onRowClick};
-          const columns = ${decodeUtf8 $ AE.encode widget.columns};
+          const onRowClick = ${onRowClickJson};
+          const columns = ${columnsJson};
           
           // Delegate click events to table rows
           document.getElementById(tableId).addEventListener('click', function(e) {
