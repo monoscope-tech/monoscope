@@ -202,6 +202,52 @@ data RowClickAction = RowClickAction
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] RowClickAction
 
 
+renderRowClickScript :: Text -> RowClickAction -> Maybe [TableColumn] -> Html ()
+renderRowClickScript tableId onRowClick columns = do
+  let onRowClickJson = decodeUtf8 $ AE.encode onRowClick
+      columnsJson = decodeUtf8 $ AE.encode columns
+  script_
+    [type_ "text/javascript"]
+    [text|
+    (function() {
+      const tableId = '${tableId}';
+      const onRowClick = ${onRowClickJson};
+      const columns = ${columnsJson};
+
+      // Delegate click events to table rows
+      document.getElementById(tableId).addEventListener('click', function(e) {
+        const tr = e.target.closest('tr[data-row]');
+        if (!tr) return;
+
+        const rowData = JSON.parse(tr.dataset.row);
+
+        // Set variable
+        if (onRowClick.setVariable) {
+          const varName = onRowClick.setVariable;
+          const value = onRowClick.value ?
+            onRowClick.value.replace(/\{\{row\.(\w+)\}\}/g, (_, field) => rowData[field]) :
+            rowData[columns[0].field];
+
+          const url = new URL(window.location.href);
+          url.searchParams.set('var-' + varName, value);
+          history.pushState({}, '', url.toString());
+          window.dispatchEvent(new Event('update-query'));
+
+          // Navigate to tab if specified
+          if (onRowClick.navigateToTab && window.switchDashboardTab) {
+            const tabs = document.querySelectorAll('[data-tab-index]');
+            tabs.forEach((tab, idx) => {
+              if (tab.textContent.includes(onRowClick.navigateToTab)) {
+                window.switchDashboardTab(idx);
+              }
+            });
+          }
+        }
+      });
+    })();
+    |]
+
+
 -- Used when converting a widget json to its html representation. Eg in a query chart builder
 widgetPostH :: Projects.ProjectId -> Widget -> ATAuthCtx (RespHeaders Widget)
 widgetPostH pid widget = addRespHeaders (widget & (#_projectId ?~ pid))
@@ -485,49 +531,7 @@ renderTable widget = do
                         $ span_ [class_ "loading loading-spinner loading-sm"] ""
 
     -- Add row click handler script if needed
-    whenJust widget.onRowClick \onRowClick -> do
-      let onRowClickJson = decodeUtf8 $ AE.encode onRowClick
-          columnsJson = decodeUtf8 $ AE.encode widget.columns
-      script_
-        [type_ "text/javascript"]
-        [text|
-        (function() {
-          const tableId = '${tableId}';
-          const onRowClick = ${onRowClickJson};
-          const columns = ${columnsJson};
-          
-          // Delegate click events to table rows
-          document.getElementById(tableId).addEventListener('click', function(e) {
-            const tr = e.target.closest('tr[data-row]');
-            if (!tr) return;
-            
-            const rowData = JSON.parse(tr.dataset.row);
-            
-            // Set variable
-            if (onRowClick.setVariable) {
-              const varName = onRowClick.setVariable;
-              const value = onRowClick.value ? 
-                onRowClick.value.replace(/\{\{row\.(\w+)\}\}/g, (_, field) => rowData[field]) :
-                rowData[columns[0].field];
-              
-              const url = new URL(window.location.href);
-              url.searchParams.set('var-' + varName, value);
-              history.pushState({}, '', url.toString());
-              window.dispatchEvent(new Event('update-query'));
-              
-              // Navigate to tab if specified
-              if (onRowClick.navigateToTab && window.switchDashboardTab) {
-                const tabs = document.querySelectorAll('[data-tab-index]');
-                tabs.forEach((tab, idx) => {
-                  if (tab.textContent.includes(onRowClick.navigateToTab)) {
-                    window.switchDashboardTab(idx);
-                  }
-                });
-              }
-            }
-          });
-        })();
-        |]
+    whenJust widget.onRowClick \action -> renderRowClickScript tableId action widget.columns
 
 
 renderChart :: Widget -> Html ()
@@ -902,6 +906,9 @@ renderTableWithDataAndParams widget dataRows params = do
                 if isJust col.progress
                   then renderProgressCell col value maxValues valueWidths
                   else toHtml $ formatColumnValue col value
+
+  -- Add row click handler script if needed
+  whenJust widget.onRowClick \action -> renderRowClickScript tableId action widget.columns
 
 
 renderTraceDataTable :: Widget -> V.Vector (V.Vector Text) -> HashMap Text [(Text, Int, Int)] -> HashMap Text [Telemetry.SpanRecord] -> Text -> Html ()
