@@ -197,8 +197,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             Nothing -> 0
           baseTabUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/"
           -- Build query string from current params (excluding activeTabSlugKey which is internal)
-          queryParams = toQueryParams $ filter (\(k, _) -> k /= activeTabSlugKey) allParams
-          queryStr = if T.null queryParams then "" else "?" <> queryParams
+          queryStr = queryStringFrom $ filter (\(k, _) -> k /= activeTabSlugKey) allParams
       div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline", id_ "dashboard-tabs-container"] do
         forM_ (zip [0 ..] tabs) \(idx, tab) -> do
           let tabSlug = slugify tab.name
@@ -673,8 +672,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
   -- This ensures users always land on a tab-based URL for dashboards with tabs
   case getDefaultTabSlug dash.tabs of
     Just firstTabSlug -> do
-      let queryParams = toQueryParams allParams
-          redirectUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/" <> firstTabSlug <> (if T.null queryParams then "" else "?" <> queryParams)
+      let redirectUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/" <> firstTabSlug <> queryStringFrom allParams
       redirectCS redirectUrl
       -- Still need to return something, but the redirect will take effect
       addRespHeaders $ PageCtx (def :: BWConfig) $ DashboardGet pid dashId dash dashVM allParams
@@ -1516,8 +1514,7 @@ dashboardWidgetExpandGetH pid dashId widgetId = do
 
 -- | Find a tab by its slug, returns (index, tab) if found
 findTabBySlug :: [Dashboards.Tab] -> Text -> Maybe (Int, Dashboards.Tab)
-findTabBySlug tabs tabSlug =
-  find (\(_, tab) -> slugify tab.name == tabSlug) (zip [0 ..] tabs)
+findTabBySlug tabs tabSlug = find ((== tabSlug) . slugify . (.name) . snd) (zip [0 ..] tabs)
 
 
 -- | Get the first tab as default if available
@@ -1538,6 +1535,11 @@ activeTabSlugKey :: Text
 activeTabSlugKey = "activeTabSlug"
 
 
+-- | Build query string from params, prefixed with ? if non-empty
+queryStringFrom :: [(Text, Maybe Text)] -> Text
+queryStringFrom params = let qs = toQueryParams params in if T.null qs then "" else "?" <> qs
+
+
 -- | Process dashboard constants and build extended params with constant results
 processConstantsAndExtendParams
   :: (DB es, Error ServerError :> es, Log.Log :> es, PG.PostgreSQL :> es)
@@ -1547,10 +1549,9 @@ processConstantsAndExtendParams
   -> [(Text, Maybe Text)]
   -> [Dashboards.Constant]
   -> Eff es ([Dashboards.Constant], [(Text, Maybe Text)])
-processConstantsAndExtendParams pid now timeParams allParams constants = do
-  processedConstants <- traverse (processConstant pid now timeParams allParams) constants
-  let extendedParams = allParams <> [("const-" <> c.key, Just $ DashboardUtils.constantToSQLList $ fromMaybe [] c.result) | c <- processedConstants]
-  pure (processedConstants, extendedParams)
+processConstantsAndExtendParams pid now timeParams allParams constants =
+  traverse (processConstant pid now timeParams allParams) constants <&> \pc ->
+    (pc, allParams <> [("const-" <> c.key, Just $ DashboardUtils.constantToSQLList $ fromMaybe [] c.result) | c <- pc])
 
 
 -- | Create a widget processor that adds dashboard ID to processed widgets
@@ -1563,9 +1564,8 @@ mkWidgetProcessor
   -> [(Text, Maybe Text)]
   -> Widget.Widget
   -> Eff es Widget.Widget
-mkWidgetProcessor pid dashId now timeParams paramsWithConstants w = do
-  processed <- processWidget pid now timeParams paramsWithConstants w
-  pure $ processed{Widget._dashboardId = Just dashId.toText}
+mkWidgetProcessor pid dashId now timeParams paramsWithConstants =
+  fmap (#_dashboardId ?~ dashId.toText) . processWidget pid now timeParams paramsWithConstants
 
 
 -- | Handler for dashboard with tab in path: /p/{pid}/dashboards/{dash_id}/tab/{tab_slug}
@@ -1725,8 +1725,7 @@ dashboardTabRenamePatchH pid dashId tabSlug form = do
     Just tabs -> case findTabBySlug tabs tabSlug of
       Nothing -> throwError $ err404{errBody = "Tab not found: " <> encodeUtf8 tabSlug}
       Just (idx, _) -> do
-        -- Update the tab name at the found index
-        let updatedTabs = zipWith (\i tab -> if i == idx then tab{Dashboards.name = form.newName} else tab) [0 ..] tabs
+        let updatedTabs = tabs & ix idx . #name .~ form.newName
             updatedDash = dash & #tabs ?~ updatedTabs
             newSlug = slugify form.newName
 
