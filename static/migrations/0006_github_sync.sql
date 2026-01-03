@@ -22,12 +22,3 @@ CREATE TABLE IF NOT EXISTS projects.github_sync (
 CREATE INDEX IF NOT EXISTS idx_github_sync_project_id ON projects.github_sync(project_id);
 CREATE INDEX IF NOT EXISTS idx_github_sync_owner_repo ON projects.github_sync(owner, repo);
 CREATE INDEX IF NOT EXISTS idx_github_sync_installation ON projects.github_sync(installation_id) WHERE installation_id IS NOT NULL;
-
--- Add file path and content hash columns to dashboards
--- file_path: canonical path like "folder/dashboard-title.yaml"
--- file_sha: SHA256 hash of the YAML content for change detection
-ALTER TABLE projects.dashboards
-  ADD COLUMN IF NOT EXISTS file_path TEXT,
-  ADD COLUMN IF NOT EXISTS file_sha TEXT;
-
-CREATE INDEX IF NOT EXISTS idx_dashboards_file_path ON projects.dashboards(project_id, file_path) WHERE file_path IS NOT NULL;
