@@ -201,7 +201,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           queryStr = if T.null queryParams then "" else "?" <> queryParams
       div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline", id_ "dashboard-tabs-container"] do
         forM_ (zip [0 ..] tabs) \(idx, tab) -> do
-          let tabSlug = tabNameToSlug tab.name
+          let tabSlug = slugify tab.name
               isActive = idx == activeTabIdx
               tabUrl = baseTabUrl <> tabSlug
               tabContentUrl = tabUrl <> "/content" <> queryStr
@@ -1514,22 +1514,23 @@ dashboardWidgetExpandGetH pid dashId widgetId = do
       addRespHeaders $ widgetViewerEditor_ pid (Just dashId) Nothing (Just processedWidget) "edit"
 
 
--- | Convert a tab name to a URL-safe slug
-tabNameToSlug :: Text -> Text
-tabNameToSlug = slugify
-
-
 -- | Find a tab by its slug, returns (index, tab) if found
 findTabBySlug :: [Dashboards.Tab] -> Text -> Maybe (Int, Dashboards.Tab)
 findTabBySlug tabs tabSlug =
-  find (\(_, tab) -> tabNameToSlug tab.name == tabSlug) (zip [0 ..] tabs)
+  find (\(_, tab) -> slugify tab.name == tabSlug) (zip [0 ..] tabs)
 
 
 -- | Get the first tab as default if available
 getDefaultTabSlug :: Maybe [Dashboards.Tab] -> Maybe Text
-getDefaultTabSlug = \case
-  Just (firstTab : _) -> Just $ tabNameToSlug firstTab.name
-  _ -> Nothing
+getDefaultTabSlug = fmap (slugify . (.name)) . (>>= viaNonEmpty head)
+
+
+-- | Render breadcrumb suffix with out-of-band swap for htmx
+breadcrumbSuffixOob_ :: Text -> Html ()
+breadcrumbSuffixOob_ tabName =
+  span_ [id_ "pageTitleSuffix", class_ "flex items-center gap-1", hxSwapOob_ "true"] do
+    faSprite_ "chevron-right" "regular" "w-3 h-3"
+    span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml tabName
 
 
 -- | Internal param key for passing active tab slug between handlers and rendering
@@ -1589,10 +1590,10 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
       processWidgetWithDashboardId = mkWidgetProcessor pid dashId now timeParams allParamsWithConstants
 
   dash' <- forOf (#variables . traverse . traverse) dashWithConstants (processVariable pid now timeParams allParamsWithConstants)
-  dash'' <- forOf (#widgets . traverse) dash' processWidgetWithDashboardId
 
   -- Only process widgets for the ACTIVE tab (lazy loading - other tabs load via htmx)
-  dash''' <- case dash''.tabs of
+  -- Note: We don't process dash.widgets here since this is a tab-based dashboard
+  dash'' <- case dash'.tabs of
     Just tabs -> do
       processedTabs <- forM (zip [0 ..] tabs) \(idx, tab) ->
         if idx == activeTabIdx
@@ -1600,8 +1601,8 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
             processedWidgets <- traverse processWidgetWithDashboardId tab.widgets
             pure tab{Dashboards.widgets = processedWidgets}
           else pure tab -- Don't process widgets for inactive tabs
-      pure $ dash'' & #tabs ?~ processedTabs
-    Nothing -> pure dash''
+      pure $ dash' & #tabs ?~ processedTabs
+    Nothing -> pure dash'
 
   freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
 
@@ -1648,7 +1649,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
           }
   -- Pass the active tab slug in allParams for rendering
   let paramsWithTab = (activeTabSlugKey, Just tabSlug) : allParams
-  addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash''' dashVM paramsWithTab
+  addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM paramsWithTab
 
 
 -- | Handler for tab content partial (htmx): /p/{pid}/dashboards/{dash_id}/tab/{tab_slug}/content
@@ -1677,10 +1678,7 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
 -- | Render a single tab content panel
 tabContentPanel_ :: Projects.ProjectId -> Text -> Int -> Text -> [Widget.Widget] -> Bool -> Html ()
 tabContentPanel_ pid dashboardId idx tabName widgets isActive = do
-  -- Out-of-band swap for updating breadcrumb with current tab name
-  span_ [id_ "pageTitleSuffix", class_ "flex items-center gap-1", hxSwapOob_ "true"] do
-    faSprite_ "chevron-right" "regular" "w-3 h-3"
-    span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak"] $ toHtml tabName
+  breadcrumbSuffixOob_ tabName
   -- Tab content panel
   div_
     [ class_ $ "tab-panel grid-stack -m-2" <> if isActive then "" else " hidden"
@@ -1711,11 +1709,7 @@ data TabRenameRes = TabRenameRes
 
 
 instance ToHtml TabRenameRes where
-  toHtml res = do
-    -- Out-of-band swap for updating breadcrumb with new tab name
-    span_ [id_ "pageTitleSuffix", class_ "flex items-center gap-1", hxSwapOob_ "true"] do
-      faSprite_ "chevron-right" "regular" "w-3 h-3"
-      span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml res.newName
+  toHtml res = breadcrumbSuffixOob_ res.newName
   toHtmlRaw = toHtml
 
 
@@ -1733,7 +1727,7 @@ dashboardTabRenamePatchH pid dashId tabSlug form = do
         -- Update the tab name at the found index
         let updatedTabs = zipWith (\i tab -> if i == idx then tab{Dashboards.name = form.newName} else tab) [0 ..] tabs
             updatedDash = dash & #tabs ?~ updatedTabs
-            newSlug = tabNameToSlug form.newName
+            newSlug = slugify form.newName
 
         -- Update the dashboard schema
         _ <- Dashboards.updateSchemaAndUpdatedAt dashId updatedDash now
