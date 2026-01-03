@@ -1,14 +1,24 @@
 CREATE SCHEMA IF NOT EXISTS telemetry;
 
--- Define the ENUM type for severity_text
-CREATE TYPE telemetry.severity_level AS ENUM ('DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL');
+-- Define the ENUM type for severity_text (safe for re-runs)
+DO $$ BEGIN
+  CREATE TYPE telemetry.severity_level AS ENUM ('DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL');
+  EXCEPTION WHEN duplicate_object THEN null;
+END $$;
+
 -- =================================================================
 -- TRACES
 -- =================================================================
-CREATE TYPE telemetry.span_status AS ENUM ('OK', 'ERROR', 'UNSET');
+DO $$ BEGIN
+  CREATE TYPE telemetry.span_status AS ENUM ('OK', 'ERROR', 'UNSET');
+  EXCEPTION WHEN duplicate_object THEN null;
+END $$;
 
--- Define the ENUM type for span kind
-CREATE TYPE telemetry.span_kind AS ENUM ('INTERNAL', 'SERVER', 'CLIENT', 'PRODUCER', 'CONSUMER');
+-- Define the ENUM type for span kind (safe for re-runs)
+DO $$ BEGIN
+  CREATE TYPE telemetry.span_kind AS ENUM ('INTERNAL', 'SERVER', 'CLIENT', 'PRODUCER', 'CONSUMER');
+  EXCEPTION WHEN duplicate_object THEN null;
+END $$;
 
 
 CREATE TABLE IF NOT EXISTS telemetry.metrics (
@@ -56,7 +66,10 @@ SELECT manage_updated_at('telemetry.metrics_meta');
 -- =================================================================
 -- Query history and saved queries
 -- =================================================================
-CREATE TYPE projects.query_library_kind AS ENUM ('history', 'saved');
+DO $$ BEGIN
+  CREATE TYPE projects.query_library_kind AS ENUM ('history', 'saved');
+  EXCEPTION WHEN duplicate_object THEN null;
+END $$;
 CREATE TABLE IF NOT EXISTS projects.query_library (
   id         UUID NOT NULL DEFAULT gen_random_uuid(),
   project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
@@ -90,9 +103,14 @@ CREATE TABLE IF NOT EXISTS projects.dashboards (
   homepage_since TIMESTAMP WITH TIME ZONE,
   tags TEXT[] NOT NULL DEFAULT '{}',
   title TEXT NOT NULL DEFAULT 'Untitled',
+  -- Consolidated from migration 0017, 0020
+  teams UUID[] DEFAULT '{}',
+  file_path TEXT,
+  file_sha TEXT,
   PRIMARY KEY (id)
 );
 SELECT manage_updated_at('projects.dashboards');
+CREATE INDEX IF NOT EXISTS idx_dashboards_file_path ON projects.dashboards(project_id, file_path) WHERE file_path IS NOT NULL;
 
 
 
@@ -186,7 +204,7 @@ CREATE TABLE IF NOT EXISTS otel_logs_and_spans (
     date  TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
 );
 SELECT create_hypertable('otel_logs_and_spans', by_range('timestamp', INTERVAL '1 hours'), migrate_data => true, if_not_exists => true);
-SELECT add_retention_policy('otel_logs_and_spans',INTERVAL '14 days',true);
+SELECT add_retention_policy('otel_logs_and_spans',INTERVAL '30 days',true);
 
 CREATE INDEX IF NOT EXISTS idx_logs_and_spans_trace_id ON otel_logs_and_spans (project_id, context___trace_id);
 CREATE INDEX IF NOT EXISTS idx_logs_and_spans_span_id ON otel_logs_and_spans (project_id, context___span_id);
@@ -196,3 +214,10 @@ CREATE INDEX IF NOT EXISTS idx_logs_and_spans_name ON otel_logs_and_spans (proje
 
 ALTER TABLE otel_logs_and_spans
 ADD COLUMN IF NOT EXISTS errors JSONB DEFAULT  NULL;
+
+-- Columns consolidated from later migrations (0013, 0015)
+ALTER TABLE otel_logs_and_spans
+ADD COLUMN IF NOT EXISTS log_pattern TEXT DEFAULT NULL;
+
+ALTER TABLE otel_logs_and_spans
+ADD COLUMN IF NOT EXISTS summary_pattern TEXT DEFAULT NULL;

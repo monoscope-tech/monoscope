@@ -1,3 +1,4 @@
+-- Teams table for organizing project members and notification routing
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS projects.teams (
@@ -8,7 +9,7 @@ CREATE TABLE IF NOT EXISTS projects.teams (
   description TEXT,
   members UUID[] DEFAULT '{}',
   notify_emails TEXT[] DEFAULT '{}',
-  slack_channels TEXT[] DEFAULT '{}', 
+  slack_channels TEXT[] DEFAULT '{}',
   discord_channels TEXT[] DEFAULT '{}',
   phone_numbers TEXT[] DEFAULT '{}',
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -18,10 +19,6 @@ CREATE TABLE IF NOT EXISTS projects.teams (
   UNIQUE(project_id, handle)
 );
 SELECT manage_updated_at('projects.teams');
-
-ALTER TABLE monitors.query_monitors ADD COLUMN IF NOT EXISTS teams UUID[] DEFAULT '{}';
-
-ALTER TABLE projects.dashboards ADD COLUMN IF NOT EXISTS teams UUID[] DEFAULT '{}';
 
 CREATE INDEX IF NOT EXISTS idx_teams_project_id ON projects.teams(project_id) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_teams_handle ON projects.teams(project_id, handle) WHERE deleted_at IS NULL;

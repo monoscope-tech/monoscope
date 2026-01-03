@@ -43,11 +43,11 @@ CREATE TABLE apis.issues
   
   -- LLM enhancement tracking
   llm_enhanced_at           TIMESTAMP WITH TIME ZONE,
-  llm_enhancement_version   INTEGER DEFAULT 1,
-  
-  -- Constraint: Only one unacknowledged/unarchived API change issue per endpoint
-  CONSTRAINT unique_open_api_change_per_endpoint UNIQUE (project_id, issue_type, endpoint_hash) 
-    DEFERRABLE INITIALLY DEFERRED
+  llm_enhancement_version   INTEGER DEFAULT 1
+
+  -- NOTE: We use a partial unique index (unique_open_api_change_issue_per_endpoint below)
+  -- instead of a table-level constraint. The partial index correctly enforces:
+  -- "only one OPEN api_change issue per endpoint" while allowing multiple closed issues.
 );
 
 -- Add trigger for updated_at
