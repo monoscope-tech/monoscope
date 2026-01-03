@@ -461,7 +461,7 @@ executeArbitraryQuery queryText = do
 
 
 -- | Execute a user-provided SQL query with mandatory project_id filtering
--- SECURITY: Validates query for dangerous patterns, verifies project_id filter, and runs in READ ONLY transaction
+-- SECURITY: Validates query for dangerous patterns and verifies project_id filter is present in query
 -- Note: The query must already contain project_id='<pid>' filtering (via {{project_id}} placeholder substitution done before calling this function)
 executeSecuredQuery :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
 executeSecuredQuery pid userQuery limit
@@ -469,8 +469,7 @@ executeSecuredQuery pid userQuery limit
   | not (hasProjectIdFilter userQuery pid) = pure $ Left "Query must filter by project_id"
   | otherwise = do
       let selectQuery = "SELECT * FROM (" <> userQuery <> ") AS subq LIMIT ?"
-      resultE <- try @SomeException $ PG.withTransaction do
-        _ <- PG.execute_ "SET TRANSACTION READ ONLY"
+      resultE <- try @SomeException do
         results :: [[FieldValue]] <- PG.query (Query $ encodeUtf8 selectQuery) (Only limit)
         pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
       pure $ first (const "Query execution failed") resultE

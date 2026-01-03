@@ -1716,17 +1716,12 @@ newtype TabRenameForm = TabRenameForm
 data TabRenameRes = TabRenameRes
   { newName :: Text
   , newSlug :: Text
-  , pid :: Projects.ProjectId
-  , dashId :: Dashboards.DashboardId
   }
   deriving stock (Generic, Show)
 
 
 instance ToHtml TabRenameRes where
-  toHtml res = do
-    breadcrumbSuffixOob_ res.newName
-    let newUrl = "/p/" <> res.pid.toText <> "/dashboards/" <> res.dashId.toText <> "/tab/" <> res.newSlug
-    script_ $ "history.replaceState({}, '', '" <> newUrl <> "');"
+  toHtml res = breadcrumbSuffixOob_ res.newName
   toHtmlRaw = toHtml
 
 
@@ -1750,5 +1745,6 @@ dashboardTabRenamePatchH pid dashId tabSlug form = do
         syncDashboardAndQueuePush pid dashId
 
         addSuccessToast "Tab renamed successfully" Nothing
-        -- Update URL without redirect (allows OOB swap to work)
-        addRespHeaders $ TabRenameRes{newName = form.newName, newSlug = newSlug, pid = pid, dashId = dashId}
+        -- Redirect to new tab URL after rename
+        redirectCS $ "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/" <> newSlug
+        addRespHeaders $ TabRenameRes{newName = form.newName, newSlug = newSlug}
