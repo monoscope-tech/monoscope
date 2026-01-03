@@ -499,86 +499,86 @@ aiChatPostH :: Projects.ProjectId -> Issues.IssueId -> AIChatForm -> ATAuthCtx (
 aiChatPostH pid issueId form
   | T.length form.query > 4000 = addRespHeaders $ aiChatResponse_ pid form.query "Query too long. Maximum 4000 characters allowed." Nothing
   | otherwise = do
-  (sess, project) <- Sessions.sessionAndProject pid
-  appCtx <- ask @AuthContext
-  now <- Time.currentTime
+      (sess, project) <- Sessions.sessionAndProject pid
+      appCtx <- ask @AuthContext
+      now <- Time.currentTime
 
-  let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
+      let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
 
-  -- Ensure conversation exists
-  _ <- Issues.getOrCreateConversation pid convId Issues.CTAnomaly (AE.object ["issue_id" AE..= issueId])
+      -- Ensure conversation exists
+      _ <- Issues.getOrCreateConversation pid convId Issues.CTAnomaly (AE.object ["issue_id" AE..= issueId])
 
-  -- Fetch issue and error context
-  issueM <- Issues.selectIssueById issueId
-  case issueM of
-    Nothing -> do
-      let response = "Issue not found. Unable to analyze."
-      Issues.insertChatMessage pid convId "user" form.query Nothing Nothing
-      Issues.insertChatMessage pid convId "assistant" response Nothing Nothing
-      addRespHeaders $ aiChatResponse_ pid form.query response Nothing
-    Just issue -> do
-      -- Fetch error data for RuntimeException issues
-      errorM <- case issue.issueType of
-        Issues.RuntimeException -> Anomalies.errorByHash pid issue.endpointHash
-        _ -> pure Nothing
+      -- Fetch issue and error context
+      issueM <- Issues.selectIssueById issueId
+      case issueM of
+        Nothing -> do
+          let response = "Issue not found. Unable to analyze."
+          Issues.insertChatMessage pid convId "user" form.query Nothing Nothing
+          Issues.insertChatMessage pid convId "assistant" response Nothing Nothing
+          addRespHeaders $ aiChatResponse_ pid form.query response Nothing
+        Just issue -> do
+          -- Fetch error data for RuntimeException issues
+          errorM <- case issue.issueType of
+            Issues.RuntimeException -> Anomalies.errorByHash pid issue.endpointHash
+            _ -> pure Nothing
 
-      -- Fetch trace data if available
-      (traceDataM, spans) <- case errorM of
-        Just err -> do
-          let targetTIdM = err.recentTraceId
-              targetTime = zonedTimeToUTC err.updatedAt
-          case targetTIdM of
-            Just tId -> do
-              trM <- Telemetry.getTraceDetails pid tId (Just targetTime) now
-              case trM of
-                Just trData -> do
-                  spanRecs <- Telemetry.getSpanRecordsByTraceId pid trData.traceId (Just trData.traceStartTime) now
-                  pure (Just trData, V.fromList spanRecs)
+          -- Fetch trace data if available
+          (traceDataM, spans) <- case errorM of
+            Just err -> do
+              let targetTIdM = err.recentTraceId
+                  targetTime = zonedTimeToUTC err.updatedAt
+              case targetTIdM of
+                Just tId -> do
+                  trM <- Telemetry.getTraceDetails pid tId (Just targetTime) now
+                  case trM of
+                    Just trData -> do
+                      spanRecs <- Telemetry.getSpanRecordsByTraceId pid trData.traceId (Just trData.traceStartTime) now
+                      pure (Just trData, V.fromList spanRecs)
+                    Nothing -> pure (Nothing, V.empty)
                 Nothing -> pure (Nothing, V.empty)
             Nothing -> pure (Nothing, V.empty)
-        Nothing -> pure (Nothing, V.empty)
 
-      -- Build comprehensive context with anomaly system prompt
-      let context = buildAIContext issue errorM traceDataM spans
-          anomalyContext = T.unlines [anomalySystemPrompt, "", "--- ISSUE CONTEXT ---", context]
+          -- Build comprehensive context with anomaly system prompt
+          let context = buildAIContext issue errorM traceDataM spans
+              anomalyContext = T.unlines [anomalySystemPrompt, "", "--- ISSUE CONTEXT ---", context]
 
-      -- Get facets for tool context
-      let dayAgo = addUTCTime (-86400) now
-      facetSummaryM <- Facets.getFacetSummary pid "otel_logs_and_spans" dayAgo now
+          -- Get facets for tool context
+          let dayAgo = addUTCTime (-86400) now
+          facetSummaryM <- Facets.getFacetSummary pid "otel_logs_and_spans" dayAgo now
 
-      -- Build agentic config with conversation ID for history persistence
-      let config =
-            (AI.defaultAgenticConfig pid)
-              { AI.facetContext = facetSummaryM
-              , AI.customContext = Just anomalyContext
-              , AI.conversationId = Just convId
-              , AI.conversationType = Just Issues.CTAnomaly
-              }
+          -- Build agentic config with conversation ID for history persistence
+          let config =
+                (AI.defaultAgenticConfig pid)
+                  { AI.facetContext = facetSummaryM
+                  , AI.customContext = Just anomalyContext
+                  , AI.conversationId = Just convId
+                  , AI.conversationType = Just Issues.CTAnomaly
+                  }
 
-      -- Save user message before AI call
-      Issues.insertChatMessage pid convId "user" form.query Nothing Nothing
+          -- Save user message before AI call
+          Issues.insertChatMessage pid convId "user" form.query Nothing Nothing
 
-      -- Run agentic query with full tool access and history
-      result <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiApiKey
+          -- Run agentic query with full tool access and history
+          result <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiApiKey
 
-      case result of
-        Left err -> do
-          let errorResponse = "I encountered an error while analyzing this issue: " <> err
-          Issues.insertChatMessage pid convId "assistant" errorResponse Nothing Nothing
-          addRespHeaders $ aiChatResponse_ pid form.query errorResponse Nothing
-        Right responseText -> do
-          -- Try to parse the AI response as JSON
-          let parsed = AE.eitherDecode (fromStrict $ encodeUtf8 responseText) :: Either String AIInvestigationResponse
-          case parsed of
-            Left _ -> do
-              -- Save raw response when JSON parsing fails
-              Issues.insertChatMessage pid convId "assistant" responseText Nothing Nothing
-              addRespHeaders $ aiChatResponse_ pid form.query responseText Nothing
-            Right aiResp -> do
-              -- Limit widgets to max 10 to prevent abuse
-              let limitedWidgets = take 10 <$> aiResp.widgets
-              Issues.insertChatMessage pid convId "assistant" aiResp.explanation (Just $ AE.toJSON limitedWidgets) Nothing
-              addRespHeaders $ aiChatResponse_ pid form.query aiResp.explanation limitedWidgets
+          case result of
+            Left err -> do
+              let errorResponse = "I encountered an error while analyzing this issue: " <> err
+              Issues.insertChatMessage pid convId "assistant" errorResponse Nothing Nothing
+              addRespHeaders $ aiChatResponse_ pid form.query errorResponse Nothing
+            Right responseText -> do
+              -- Try to parse the AI response as JSON
+              let parsed = AE.eitherDecode (fromStrict $ encodeUtf8 responseText) :: Either String AIInvestigationResponse
+              case parsed of
+                Left _ -> do
+                  -- Save raw response when JSON parsing fails
+                  Issues.insertChatMessage pid convId "assistant" responseText Nothing Nothing
+                  addRespHeaders $ aiChatResponse_ pid form.query responseText Nothing
+                Right aiResp -> do
+                  -- Limit widgets to max 10 to prevent abuse
+                  let limitedWidgets = take 10 <$> aiResp.widgets
+                  Issues.insertChatMessage pid convId "assistant" aiResp.explanation (Just $ AE.toJSON limitedWidgets) Nothing
+                  addRespHeaders $ aiChatResponse_ pid form.query aiResp.explanation limitedWidgets
 
 
 -- | Handle AI chat history GET request

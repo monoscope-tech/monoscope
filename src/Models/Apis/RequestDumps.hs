@@ -472,16 +472,29 @@ executeSecuredQuery pid userQuery limit
         pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
       pure $ first (const "Query execution failed") resultE
 
+
 -- | Validate SQL query for dangerous constructs
 validateSqlQuery :: Text -> Bool
 validateSqlQuery query =
   let lowerQuery = T.toLower query
       dangerousPatterns =
-        [ "insert ", "update ", "delete ", "drop ", "truncate ", "alter ", "create "
-        , "grant ", "revoke ", "; ", "information_schema", "pg_catalog", "pg_"
+        [ "insert "
+        , "update "
+        , "delete "
+        , "drop "
+        , "truncate "
+        , "alter "
+        , "create "
+        , "grant "
+        , "revoke "
+        , "; "
+        , "information_schema"
+        , "pg_catalog"
+        , "pg_"
         ]
    in all (\p -> not $ p `T.isInfixOf` lowerQuery) dangerousPatterns
-        && "select" `T.isInfixOf` lowerQuery
+        && "select"
+        `T.isInfixOf` lowerQuery
 
 
 selectLogTable :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
