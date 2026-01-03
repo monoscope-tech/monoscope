@@ -52,7 +52,7 @@ import Effectful.Error.Static (Error, throwError)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
-import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxPatch_, hxPost_, hxPushUrl_, hxPut_, hxSelect_, hxSwapOob_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxIndicator_, hxPatch_, hxPost_, hxPushUrl_, hxPut_, hxSelect_, hxSwapOob_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -214,12 +214,14 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             , hxTarget_ "#dashboard-tabs-content"
             , hxSwap_ "innerHTML"
             , hxPushUrl_ $ tabUrl <> queryStr
+            , hxIndicator_ $ "#tab-indicator-" <> dashId.toText <> "-" <> show idx
             , -- Update active tab styling via htmx hyperscript
               term "_" "on htmx:afterOnLoad remove .tab-active from .tab in #dashboard-tabs-container then add .tab-active to me"
             ]
             do
               whenJust tab.icon \icon -> faSprite_ icon "regular" "w-4 h-4"
               toHtml tab.name
+              span_ [class_ "htmx-indicator", id_ $ "tab-indicator-" <> dashId.toText <> "-" <> show idx] $ faSprite_ "spinner" "regular" "w-3 h-3 animate-spin"
 
     -- Variables section (pushed to the right)
     whenJust dash.variables \variables -> do
@@ -314,7 +316,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         div_ [class_ "dashboard-tabs-container", id_ "dashboard-tabs-content"] do
           -- Only render the active tab's content (other tabs load via htmx)
           case tabs !!? activeTabIdx of
-            Just activeTab -> tabContentPanel_ pid dashId.toText activeTabIdx activeTab.name activeTab.widgets True
+            Just activeTab -> tabContentPanel_ pid dashId.toText activeTabIdx activeTab.name activeTab.widgets True False
             Nothing -> pass
       Nothing -> do
         -- Fall back to old behavior for dashboards without tabs
@@ -1682,14 +1684,15 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
         -- Process widgets concurrently to speed up tabs with multiple eager widgets
         processedWidgets <- pooledForConcurrently tab.widgets processWidgetWithDashboardId
 
-        -- Render just the tab content panel
-        addRespHeaders $ tabContentPanel_ pid dashId.toText idx tab.name processedWidgets True
+        -- Render just the tab content panel (isPartial=True for HTMX, includes OOB breadcrumb swap)
+        addRespHeaders $ tabContentPanel_ pid dashId.toText idx tab.name processedWidgets True True
 
 
 -- | Render a single tab content panel
-tabContentPanel_ :: Projects.ProjectId -> Text -> Int -> Text -> [Widget.Widget] -> Bool -> Html ()
-tabContentPanel_ pid dashboardId idx tabName widgets isActive = do
-  breadcrumbSuffixOob_ tabName
+-- isPartial: True for HTMX partial loads (include OOB swap), False for full page loads
+tabContentPanel_ :: Projects.ProjectId -> Text -> Int -> Text -> [Widget.Widget] -> Bool -> Bool -> Html ()
+tabContentPanel_ pid dashboardId idx tabName widgets isActive isPartial = do
+  when isPartial $ breadcrumbSuffixOob_ tabName
   -- Tab content panel
   div_
     [ class_ $ "tab-panel grid-stack -m-2" <> if isActive then "" else " hidden"
