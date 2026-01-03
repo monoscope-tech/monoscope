@@ -1,10 +1,4 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedLists #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE ViewPatterns #-}
 
 -- |
 -- Module      : Pkg.AI
@@ -46,13 +40,13 @@ import Data.Aeson qualified as AE
 import Data.Effectful.LLM (callOpenAIAPI)
 import Data.Effectful.LLM qualified as ELLM
 import Data.HashMap.Strict qualified as HM
-import Data.List qualified as L
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Effectful (Eff, (:>))
 import Effectful.Log (Log)
+import Effectful.Log qualified as Log
 import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
 import Langchain.LLM.OpenAI qualified as OpenAI
@@ -68,7 +62,7 @@ import OpenAI.V1.Models qualified as Models
 import OpenAI.V1.Tool qualified as OAITool
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser (parseQueryToAST)
-import Relude hiding (pass)
+import Relude
 import System.Types (DB)
 
 
@@ -89,7 +83,7 @@ getNormalTupleReponse :: Text -> Either Text (Text, Maybe Text)
 getNormalTupleReponse response =
   let lines' = lines $ T.strip response
       queryLine = fromMaybe "" (viaNonEmpty head lines')
-      vizTypeM = if length lines' > 1 then parseVisualizationType (lines' L.!! 1) else Nothing
+      vizTypeM = viaNonEmpty head (drop 1 lines') >>= parseVisualizationType
       cleanedQuery =
         T.strip
           $ if "```" `T.isPrefixOf` queryLine
@@ -239,6 +233,7 @@ data ToolLimits = ToolLimits
   , maxQueryResults :: Int
   , maxDisplayRows :: Int
   , maxBodyPreview :: Int
+  , maxTokenBuffer :: Int
   }
 
 
@@ -253,6 +248,7 @@ defaultLimits =
     , maxQueryResults = 100
     , maxDisplayRows = 20
     , maxBodyPreview = 100
+    , maxTokenBuffer = 8000
     }
 
 
@@ -529,7 +525,7 @@ runAgenticQueryWithHistory config userQuery apiKey = do
       -- Save assistant response to DB
       case result of
         Right resp -> Issues.insertChatMessage config.projectId convId "assistant" resp.query Nothing Nothing
-        Left _ -> pure ()
+        Left _ -> pass
       pure result
 
 
@@ -562,7 +558,7 @@ runAgenticChatWithHistory config userQuery apiKey = do
       result <- runAgenticLoopRaw config openAI chatHistory params 0
       case result of
         Right resp -> Issues.insertChatMessage config.projectId convId "assistant" resp Nothing Nothing
-        Left _ -> pure ()
+        Left _ -> pass
       pure result
 
 
@@ -580,14 +576,16 @@ runAgenticLoopRaw config openAI chatHistory params iteration
   | otherwise = do
       result <- liftIO $ LLM.chat openAI chatHistory (Just params)
       case result of
-        Left _err -> pure $ Left "LLM service temporarily unavailable"
+        Left err -> do
+          Log.logAttention "LLM API error in runAgenticLoopRaw" (AE.object ["error" AE..= show @Text err])
+          pure $ Left "LLM service temporarily unavailable"
         Right responseMsg -> case LLM.toolCalls (LLM.messageData responseMsg) of
           Nothing -> pure $ Right $ LLM.content responseMsg
           Just toolCallList -> do
             toolResults <- traverse (executeToolCall config) toolCallList
             let assistantMsg = responseMsg
                 toolMsgs = zipWith mkToolResultMsg toolCallList toolResults
-            newMessages <- liftIO $ addMessagesToMemory chatHistory (assistantMsg : toolMsgs)
+            newMessages <- liftIO $ addMessagesToMemory config.limits.maxTokenBuffer chatHistory (assistantMsg : toolMsgs)
             runAgenticLoopRaw config openAI newMessages params (iteration + 1)
 
 
@@ -604,14 +602,16 @@ runAgenticLoop config openAI chatHistory params iteration
   | otherwise = do
       result <- liftIO $ LLM.chat openAI chatHistory (Just params)
       case result of
-        Left _err -> pure $ Left "LLM service temporarily unavailable"
+        Left err -> do
+          Log.logAttention "LLM API error in runAgenticLoop" (AE.object ["error" AE..= show @Text err])
+          pure $ Left "LLM service temporarily unavailable"
         Right responseMsg -> case LLM.toolCalls (LLM.messageData responseMsg) of
           Nothing -> pure $ parseResponse $ LLM.content responseMsg
           Just toolCallList -> do
             toolResults <- traverse (executeToolCall config) toolCallList
             let assistantMsg = responseMsg
                 toolMsgs = zipWith mkToolResultMsg toolCallList toolResults
-            newMessages <- liftIO $ addMessagesToMemory chatHistory (assistantMsg : toolMsgs)
+            newMessages <- liftIO $ addMessagesToMemory config.limits.maxTokenBuffer chatHistory (assistantMsg : toolMsgs)
             runAgenticLoop config openAI newMessages params (iteration + 1)
 
 
@@ -624,10 +624,10 @@ mkToolResultMsg tc result =
     }
 
 
-addMessagesToMemory :: LLM.ChatHistory -> [LLM.Message] -> IO LLM.ChatHistory
-addMessagesToMemory history newMsgs = do
+addMessagesToMemory :: Int -> LLM.ChatHistory -> [LLM.Message] -> IO LLM.ChatHistory
+addMessagesToMemory maxTokens history newMsgs = do
   let allMsgs = maybe history (history <>) (nonEmpty newMsgs)
-      memory = TokenBufferMemory{maxTokens = 8000, tokenBufferMessages = allMsgs}
+      memory = TokenBufferMemory{maxTokens, tokenBufferMessages = allMsgs}
   result <- messages memory
   pure $ fromMaybe allMsgs (rightToMaybe result)
 

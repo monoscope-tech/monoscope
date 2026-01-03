@@ -234,17 +234,17 @@ abbreviateUnit = \case
 
 -- | Compact time ago display (e.g., "23 hrs ago" instead of "23 hours ago")
 compactTimeAgo :: Text -> Text
-compactTimeAgo = T.unwords . map abbreviateUnit . T.words
+compactTimeAgo = unwords . map abbreviateUnit . words
 
 
 -- | Stat box for time display with number large and unit small
 timeStatBox_ :: Text -> String -> Html ()
-timeStatBox_ title timeStr = case T.words $ toText timeStr of
+timeStatBox_ title timeStr = case words $ toText timeStr of
   (num : rest) -> div_ [class_ "bg-fillWeaker rounded-3xl flex flex-col gap-3 p-5 border border-strokeWeak"] do
     div_ [class_ "flex flex-col gap-1"] do
       span_ [class_ "font-bold text-textStrong"] do
         span_ [class_ "text-4xl"] $ toHtml num
-        span_ [class_ "text-sm text-textWeak"] $ toHtml $ " " <> T.unwords (map abbreviateUnit rest)
+        span_ [class_ "text-sm text-textWeak"] $ toHtml $ " " <> unwords (map abbreviateUnit rest)
       div_ [class_ "flex gap-2 items-center text-sm text-textWeak"] $ p_ [] $ toHtml title
   _ -> mempty
 
@@ -419,7 +419,7 @@ data AIInvestigationResponse = AIInvestigationResponse
 -- | Build comprehensive context for AI from issue, error, and trace data
 buildAIContext :: Issues.Issue -> Maybe Anomalies.ATError -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Text
 buildAIContext issue errM trDataM spans =
-  T.unlines
+  unlines
     $ catMaybes
       [ Just "## Issue Details"
       , Just $ "- **Title**: " <> issue.title
@@ -431,7 +431,7 @@ buildAIContext issue errM trDataM spans =
       , Just $ "- **Recommended Action**: " <> issue.recommendedAction
       , errM >>= \err ->
           Just
-            $ T.unlines
+            $ unlines
               [ ""
               , "## Error Details"
               , "- **Error Type**: " <> err.errorType
@@ -440,13 +440,13 @@ buildAIContext issue errM trDataM spans =
               , "```"
               , err.errorData.stackTrace
               , "```"
-              , maybe "" (\svc -> "- **Service Name**: " <> svc) err.errorData.serviceName
-              , maybe "" (\m -> "- **Request Method**: " <> m) err.errorData.requestMethod
-              , maybe "" (\p -> "- **Request Path**: " <> p) err.errorData.requestPath
+              , maybe "" ("- **Service Name**: " <>) err.errorData.serviceName
+              , maybe "" ("- **Request Method**: " <>) err.errorData.requestMethod
+              , maybe "" ("- **Request Path**: " <>) err.errorData.requestPath
               ]
       , trDataM >>= \tr ->
           Just
-            $ T.unlines
+            $ unlines
               [ ""
               , "## Trace Context"
               , "- **Trace ID**: " <> tr.traceId
@@ -457,10 +457,10 @@ buildAIContext issue errM trDataM spans =
           then Nothing
           else
             Just
-              $ T.unlines
+              $ unlines
                 [ ""
                 , "## Span Breakdown"
-                , T.unlines $ V.toList $ V.take 10 $ flip V.map spans $ \s ->
+                , unlines $ V.toList $ V.take 10 $ flip V.map spans $ \s ->
                     "- " <> fromMaybe "unknown" s.name <> " (" <> maybe "n/a" show s.duration <> "ns)"
                 ]
       ]
@@ -469,7 +469,7 @@ buildAIContext issue errM trDataM spans =
 -- | System prompt for anomaly investigation AI
 anomalySystemPrompt :: Text
 anomalySystemPrompt =
-  T.unlines
+  unlines
     [ "You are an expert debugging assistant helping to investigate application issues and anomalies."
     , "You have access to issue details, error information, stack traces, and trace data."
     , ""
@@ -550,7 +550,7 @@ aiChatPostH pid issueId form
 
           -- Build comprehensive context with anomaly system prompt
           let context = buildAIContext issue errorM traceDataM spans
-              anomalyContext = T.unlines [anomalySystemPrompt, "", "--- ISSUE CONTEXT ---", context]
+              anomalyContext = unlines [anomalySystemPrompt, "", "--- ISSUE CONTEXT ---", context]
 
           -- Get facets for tool context
           let dayAgo = addUTCTime (-86400) now
