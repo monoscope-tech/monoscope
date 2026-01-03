@@ -47,6 +47,7 @@ import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
+import Effectful.Concurrent.Async (pooledForConcurrently)
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
@@ -79,7 +80,7 @@ import Pkg.DashboardUtils qualified as DashboardUtils
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import Servant (NoContent (..), ServerError, err404, errBody)
+import Servant (NoContent (..), ServerError, err302, err404, errBody, errHeaders)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import System.Config (AuthContext (..))
@@ -489,11 +490,13 @@ processWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widgetBas
       then processEagerWidget pid now timeRange allParams widget
       else pure widget
 
-  -- Recursively process child widgets
-  forOf (#children . _Just . traverse) widget' $ \child ->
-    processWidget pid now timeRange allParams
-      $ child
-      & #_dashboardId %~ (<|> widget'._dashboardId)
+  -- Recursively process child widgets concurrently
+  case widget'.children of
+    Nothing -> pure widget'
+    Just children -> do
+      let addDashboardId child = child & #_dashboardId %~ (<|> widget'._dashboardId)
+      processedChildren <- pooledForConcurrently children (processWidget pid now timeRange allParams . addDashboardId)
+      pure $ widget' & #children ?~ processedChildren
 
 
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
@@ -673,9 +676,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
   case getDefaultTabSlug dash.tabs of
     Just firstTabSlug -> do
       let redirectUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/" <> firstTabSlug <> queryStringFrom allParams
-      redirectCS redirectUrl
-      -- Still need to return something, but the redirect will take effect
-      addRespHeaders $ PageCtx (def :: BWConfig) $ DashboardGet pid dashId dash dashVM allParams
+      throwError $ err302{errHeaders = [("Location", encodeUtf8 redirectUrl)]}
     Nothing -> do
       -- No tabs - render the dashboard normally (existing behavior for non-tabbed dashboards)
       let timeParams = (sinceStr, fromDStr, toDStr)
@@ -685,7 +686,9 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
           processWidgetWithDashboardId = mkWidgetProcessor pid dashId now timeParams allParamsWithConstants
 
       dash' <- forOf (#variables . traverse . traverse) dashWithConstants (processVariable pid now timeParams allParamsWithConstants)
-      dash'' <- forOf (#widgets . traverse) dash' processWidgetWithDashboardId
+      -- Process widgets concurrently
+      processedWidgets <- pooledForConcurrently dash'.widgets processWidgetWithDashboardId
+      let dash'' = dash' & #widgets .~ processedWidgets
 
       freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
 
@@ -1597,7 +1600,8 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
       processedTabs <- forM (zip [0 ..] tabs) \(idx, tab) ->
         if idx == activeTabIdx
           then do
-            processedWidgets <- traverse processWidgetWithDashboardId tab.widgets
+            -- Process widgets concurrently for faster initial page load
+            processedWidgets <- pooledForConcurrently tab.widgets processWidgetWithDashboardId
             pure $ tab & #widgets .~ processedWidgets
           else pure tab -- Don't process widgets for inactive tabs
       pure $ dash' & #tabs ?~ processedTabs
@@ -1646,8 +1650,9 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
                         "Delete dashboard"
           , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/dashboard/"
           }
-  -- Pass the active tab slug in allParams for rendering
-  let paramsWithTab = (activeTabSlugKey, Just tabSlug) : allParams
+  -- Pass the active tab slug and computed constants in params for rendering
+  -- Including constants allows HTMX tab switches to skip re-executing constant queries
+  let paramsWithTab = (activeTabSlugKey, Just tabSlug) : allParamsWithConstants
   addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM paramsWithTab
 
 
@@ -1658,6 +1663,8 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
   now <- Time.currentTime
   (_dashVM, dash) <- getDashAndVM dashId fileM
   let timeParams = (sinceStr, fromDStr, toDStr)
+      -- Check if constants are already in params (passed from initial page load)
+      hasConstants = any (\(k, _) -> "const-" `T.isPrefixOf` k) allParams
 
   -- Find the tab by slug
   case dash.tabs of
@@ -1665,10 +1672,15 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
     Just tabs -> case findTabBySlug tabs tabSlug of
       Nothing -> throwError $ err404{errBody = "Tab not found: " <> encodeUtf8 tabSlug}
       Just (idx, tab) -> do
-        (_processedConstants, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams allParams (fromMaybe [] dash.constants)
+        -- Skip constant processing if already provided via params (avoids redundant SQL queries)
+        allParamsWithConstants <-
+          if hasConstants
+            then pure allParams
+            else snd <$> processConstantsAndExtendParams pid now timeParams allParams (fromMaybe [] dash.constants)
         let processWidgetWithDashboardId = mkWidgetProcessor pid dashId now timeParams allParamsWithConstants
 
-        processedWidgets <- traverse processWidgetWithDashboardId tab.widgets
+        -- Process widgets concurrently to speed up tabs with multiple eager widgets
+        processedWidgets <- pooledForConcurrently tab.widgets processWidgetWithDashboardId
 
         -- Render just the tab content panel
         addRespHeaders $ tabContentPanel_ pid dashId.toText idx tab.name processedWidgets True
