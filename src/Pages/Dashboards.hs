@@ -493,9 +493,9 @@ processWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widgetBas
   -- Recursively process child widgets concurrently
   case widget'.children of
     Nothing -> pure widget'
-    Just children -> do
+    Just childWidgets -> do
       let addDashboardId child = child & #_dashboardId %~ (<|> widget'._dashboardId)
-      processedChildren <- pooledForConcurrently children (processWidget pid now timeRange allParams . addDashboardId)
+      processedChildren <- pooledForConcurrently childWidgets (processWidget pid now timeRange allParams . addDashboardId)
       pure $ widget' & #children ?~ processedChildren
 
 
