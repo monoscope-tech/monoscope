@@ -168,7 +168,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
 
   -- Modal for renaming tab (only shown for dashboards with tabs)
   whenJust dash.tabs \tabs -> do
-    let activeTabSlug = join (L.lookup "activeTabSlug" allParams)
+    let activeTabSlug = join (L.lookup activeTabSlugKey allParams)
         activeTabInfo = activeTabSlug >>= findTabBySlug tabs
         activeTabName = maybe "" ((.name) . snd) activeTabInfo
         currentTabSlug = fromMaybe "" activeTabSlug
@@ -191,13 +191,13 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     -- Tabs section (on the left) - now using htmx for lazy loading
     whenJust dash.tabs \tabs -> do
       -- Get active tab from path-based slug or fall back to first tab
-      let activeTabSlug = join (L.lookup "activeTabSlug" allParams)
+      let activeTabSlug = join (L.lookup activeTabSlugKey allParams)
           activeTabIdx = case activeTabSlug of
             Just slug -> maybe 0 fst (findTabBySlug tabs slug)
             Nothing -> 0
           baseTabUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/"
-          -- Build query string from current params (excluding activeTabSlug which is internal)
-          queryParams = toQueryParams $ filter (\(k, _) -> k /= "activeTabSlug") allParams
+          -- Build query string from current params (excluding activeTabSlugKey which is internal)
+          queryParams = toQueryParams $ filter (\(k, _) -> k /= activeTabSlugKey) allParams
           queryStr = if T.null queryParams then "" else "?" <> queryParams
       div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline", id_ "dashboard-tabs-container"] do
         forM_ (zip [0 ..] tabs) \(idx, tab) -> do
@@ -306,7 +306,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     case dash.tabs of
       Just tabs -> do
         -- Get active tab from path-based slug or fall back to first tab
-        let activeTabSlug = join (L.lookup "activeTabSlug" allParams)
+        let activeTabSlug = join (L.lookup activeTabSlugKey allParams)
             activeTabIdx = case activeTabSlug of
               Just slug -> maybe 0 fst (findTabBySlug tabs slug)
               Nothing -> 0
@@ -398,8 +398,8 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         document.body.addEventListener('htmx:afterSwap', function(e) {
           // Check if the swap was for tab content
           if (e.detail.target && e.detail.target.id === 'dashboard-tabs-content') {
-            // Small delay to ensure DOM is ready
-            setTimeout(initializeGrids, 50);
+            // Use requestAnimationFrame to ensure DOM is ready for grid initialization
+            requestAnimationFrame(initializeGrids);
           }
         });
       });
@@ -680,20 +680,13 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
       addRespHeaders $ PageCtx (def :: BWConfig) $ DashboardGet pid dashId dash dashVM allParams
     Nothing -> do
       -- No tabs - render the dashboard normally (existing behavior for non-tabbed dashboards)
-      -- Process constants first - these are executed once and made available to all queries
-      processedConstants <- traverse (processConstant pid now (sinceStr, fromDStr, toDStr) allParams) (fromMaybe [] dash.constants)
-      let allParamsWithConstants = allParams <> [("const-" <> c.key, Just $ DashboardUtils.constantToSQLList $ fromMaybe [] c.result) | c <- processedConstants]
+      let timeParams = (sinceStr, fromDStr, toDStr)
+      (processedConstants, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams allParams (fromMaybe [] dash.constants)
 
-      -- Update dashboard with processed constants
       let dashWithConstants = dash & #constants ?~ processedConstants
+          processWidgetWithDashboardId = mkWidgetProcessor pid dashId now timeParams allParamsWithConstants
 
-      dash' <- forOf (#variables . traverse . traverse) dashWithConstants (processVariable pid now (sinceStr, fromDStr, toDStr) allParamsWithConstants)
-
-      let processWidgetWithDashboardId w = do
-            processed <- processWidget pid now (sinceStr, fromDStr, toDStr) allParamsWithConstants w
-            pure $ processed{Widget._dashboardId = Just dashId.toText}
-
-      -- Process widgets in the main widgets array
+      dash' <- forOf (#variables . traverse . traverse) dashWithConstants (processVariable pid now timeParams allParamsWithConstants)
       dash'' <- forOf (#widgets . traverse) dash' processWidgetWithDashboardId
 
       freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
@@ -1539,6 +1532,40 @@ getDefaultTabSlug = \case
   _ -> Nothing
 
 
+-- | Internal param key for passing active tab slug between handlers and rendering
+activeTabSlugKey :: Text
+activeTabSlugKey = "activeTabSlug"
+
+
+-- | Process dashboard constants and build extended params with constant results
+processConstantsAndExtendParams ::
+  (DB es, Log.Log :> es, Error ServerError :> es, PG.PostgreSQL :> es) =>
+  Projects.ProjectId ->
+  UTCTime ->
+  (Maybe Text, Maybe Text, Maybe Text) ->
+  [(Text, Maybe Text)] ->
+  [Dashboards.Constant] ->
+  Eff es ([Dashboards.Constant], [(Text, Maybe Text)])
+processConstantsAndExtendParams pid now timeParams allParams constants = do
+  processedConstants <- traverse (processConstant pid now timeParams allParams) constants
+  let extendedParams = allParams <> [("const-" <> c.key, Just $ DashboardUtils.constantToSQLList $ fromMaybe [] c.result) | c <- processedConstants]
+  pure (processedConstants, extendedParams)
+
+
+-- | Create a widget processor that adds dashboard ID to processed widgets
+mkWidgetProcessor ::
+  (DB es, Log.Log :> es, Error ServerError :> es, PG.PostgreSQL :> es) =>
+  Projects.ProjectId ->
+  Dashboards.DashboardId ->
+  UTCTime ->
+  (Maybe Text, Maybe Text, Maybe Text) ->
+  [(Text, Maybe Text)] ->
+  (Widget.Widget -> Eff es Widget.Widget)
+mkWidgetProcessor pid dashId now timeParams paramsWithConstants = \w -> do
+  processed <- processWidget pid now timeParams paramsWithConstants w
+  pure $ processed{Widget._dashboardId = Just dashId.toText}
+
+
 -- | Handler for dashboard with tab in path: /p/{pid}/dashboards/{dash_id}/tab/{tab_slug}
 -- This renders the full page with the specified tab active
 dashboardTabGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
@@ -1554,21 +1581,14 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
   let activeTabInfo = dash.tabs >>= (`findTabBySlug` tabSlug)
       activeTabIdx = maybe 0 fst activeTabInfo
       activeTabName = fmap ((.name) . snd) activeTabInfo
+      timeParams = (sinceStr, fromDStr, toDStr)
 
-  -- Process constants first
-  processedConstants <- traverse (processConstant pid now (sinceStr, fromDStr, toDStr) allParams) (fromMaybe [] dash.constants)
-  let allParamsWithConstants = allParams <> [("const-" <> c.key, Just $ DashboardUtils.constantToSQLList $ fromMaybe [] c.result) | c <- processedConstants]
-
+  -- Process constants and variables
+  (processedConstants, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams allParams (fromMaybe [] dash.constants)
   let dashWithConstants = dash & #constants ?~ processedConstants
+      processWidgetWithDashboardId = mkWidgetProcessor pid dashId now timeParams allParamsWithConstants
 
-  -- Process variables
-  dash' <- forOf (#variables . traverse . traverse) dashWithConstants (processVariable pid now (sinceStr, fromDStr, toDStr) allParamsWithConstants)
-
-  let processWidgetWithDashboardId w = do
-        processed <- processWidget pid now (sinceStr, fromDStr, toDStr) allParamsWithConstants w
-        pure $ processed{Widget._dashboardId = Just dashId.toText}
-
-  -- Only process widgets in the main widgets array (for non-tabbed dashboards)
+  dash' <- forOf (#variables . traverse . traverse) dashWithConstants (processVariable pid now timeParams allParamsWithConstants)
   dash'' <- forOf (#widgets . traverse) dash' processWidgetWithDashboardId
 
   -- Only process widgets for the ACTIVE tab (lazy loading - other tabs load via htmx)
@@ -1627,7 +1647,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
           , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/dashboard/"
           }
   -- Pass the active tab slug in allParams for rendering
-  let paramsWithTab = ("activeTabSlug", Just tabSlug) : allParams
+  let paramsWithTab = (activeTabSlugKey, Just tabSlug) : allParams
   addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash''' dashVM paramsWithTab
 
 
@@ -1636,7 +1656,8 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
 dashboardTabContentGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (Html ()))
 dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = do
   now <- Time.currentTime
-  (dashVM, dash) <- getDashAndVM dashId fileM
+  (_dashVM, dash) <- getDashAndVM dashId fileM
+  let timeParams = (sinceStr, fromDStr, toDStr)
 
   -- Find the tab by slug
   case dash.tabs of
@@ -1644,14 +1665,8 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
     Just tabs -> case findTabBySlug tabs tabSlug of
       Nothing -> throwError $ err404{errBody = "Tab not found: " <> encodeUtf8 tabSlug}
       Just (idx, tab) -> do
-        -- Process constants
-        processedConstants <- traverse (processConstant pid now (sinceStr, fromDStr, toDStr) allParams) (fromMaybe [] dash.constants)
-        let allParamsWithConstants = allParams <> [("const-" <> c.key, Just $ DashboardUtils.constantToSQLList $ fromMaybe [] c.result) | c <- processedConstants]
-
-        -- Process the tab's widgets
-        let processWidgetWithDashboardId w = do
-              processed <- processWidget pid now (sinceStr, fromDStr, toDStr) allParamsWithConstants w
-              pure $ processed{Widget._dashboardId = Just dashId.toText}
+        (_processedConstants, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams allParams (fromMaybe [] dash.constants)
+        let processWidgetWithDashboardId = mkWidgetProcessor pid dashId now timeParams allParamsWithConstants
 
         processedWidgets <- traverse processWidgetWithDashboardId tab.widgets
 
