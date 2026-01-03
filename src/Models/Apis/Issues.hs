@@ -638,7 +638,9 @@ data AIChatMessage = AIChatMessage
 getOrCreateConversation :: DB es => Projects.ProjectId -> UUIDId "conversation" -> ConversationType -> AE.Value -> Eff es AIConversation
 getOrCreateConversation pid convId convType ctx = do
   results <- PG.query upsertQ (pid, convId, convType, Aeson ctx)
-  pure $ fromMaybe (error "getOrCreateConversation: INSERT RETURNING returned no rows") $ listToMaybe results
+  case results of
+    (conv : _) -> pure conv
+    [] -> error "getOrCreateConversation: INSERT RETURNING returned no rows"
   where
     upsertQ =
       [sql|

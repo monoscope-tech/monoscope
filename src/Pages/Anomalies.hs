@@ -220,23 +220,28 @@ anomalyDetailCore pid firstM fetchIssue = do
       addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM)
 
 
+-- | Abbreviate time unit words
+abbreviateUnit :: Text -> Text
+abbreviateUnit = \case
+  "hours" -> "hrs"; "hour" -> "hr"
+  "minutes" -> "mins"; "minute" -> "min"
+  "seconds" -> "secs"; "second" -> "sec"
+  w -> w
+
 -- | Compact time ago display (e.g., "23 hrs ago" instead of "23 hours ago")
 compactTimeAgo :: Text -> Text
-compactTimeAgo = T.replace " hours " " hrs " . T.replace " minutes " " mins " . T.replace " seconds " " secs "
-
+compactTimeAgo = T.unwords . map abbreviateUnit . T.words
 
 -- | Stat box for time display with number large and unit small
 timeStatBox_ :: Text -> String -> Html ()
-timeStatBox_ title timeStr = do
-  let (num, unit) = T.breakOn " " $ toText timeStr
-      compactUnit = T.replace "hours" "hrs" $ T.replace "minutes" "mins" $ T.replace "seconds" "secs" unit
-  div_ [class_ "bg-fillWeaker rounded-3xl flex flex-col gap-3 p-5 border border-strokeWeak"] do
+timeStatBox_ title timeStr = case T.words $ toText timeStr of
+  (num : rest) -> div_ [class_ "bg-fillWeaker rounded-3xl flex flex-col gap-3 p-5 border border-strokeWeak"] do
     div_ [class_ "flex flex-col gap-1"] do
       span_ [class_ "font-bold text-textStrong"] do
         span_ [class_ "text-4xl"] $ toHtml num
-        span_ [class_ "text-sm text-textWeak"] $ toHtml compactUnit
-      div_ [class_ "flex gap-2 items-center text-sm text-textWeak"] do
-        p_ [] $ toHtml title
+        span_ [class_ "text-sm text-textWeak"] $ toHtml $ " " <> T.unwords (map abbreviateUnit rest)
+      div_ [class_ "flex gap-2 items-center text-sm text-textWeak"] $ p_ [] $ toHtml title
+  _ -> mempty
 
 
 anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Maybe Anomalies.ATError -> UTCTime -> Bool -> Html ()
