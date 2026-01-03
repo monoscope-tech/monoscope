@@ -121,7 +121,7 @@ onpointerdown_ :: Text -> Attribute
 onpointerdown_ = term "onpointerdown"
 
 
-faSprite_ :: Text -> Text -> Text -> Html ()
+faSprite_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
 faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes] $ Svg.use_ [href_ $ "/public/assets/svgs/fa-sprites/" <> faType <> ".svg?v=" <> fileHash <> "#" <> mIcon]
   where
     fileHash = case faType of

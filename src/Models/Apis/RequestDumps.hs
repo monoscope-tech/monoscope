@@ -461,17 +461,29 @@ executeArbitraryQuery queryText = do
 
 
 -- | Execute a user-provided SQL query with mandatory project_id filtering
--- SECURITY: Validates query, uses READ ONLY transaction, filters by parameterized project_id
+-- SECURITY: Validates query for dangerous patterns and verifies project_id filter is present in query
+-- Note: The query must already contain project_id='<pid>' filtering (via {{project_id}} placeholder substitution done before calling this function)
 executeSecuredQuery :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
 executeSecuredQuery pid userQuery limit
   | not (validateSqlQuery userQuery) = pure $ Left "Query contains disallowed operations"
+  | not (hasProjectIdFilter userQuery pid) = pure $ Left "Query must filter by project_id"
   | otherwise = do
-      let selectQuery = "SELECT * FROM (" <> userQuery <> ") AS subq WHERE project_id = ? LIMIT ?"
-      resultE <- try @SomeException $ PG.withTransaction do
-        _ <- PG.execute_ "SET TRANSACTION READ ONLY"
-        results :: [[FieldValue]] <- PG.query (Query $ encodeUtf8 selectQuery) (pid, limit)
+      let selectQuery = "SELECT * FROM (" <> userQuery <> ") AS subq LIMIT ?"
+      resultE <- try @SomeException do
+        results :: [[FieldValue]] <- PG.query (Query $ encodeUtf8 selectQuery) (Only limit)
         pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
       pure $ first (const "Query execution failed") resultE
+
+
+-- | Check that query contains a project_id filter with the correct project ID
+-- This validates that the query has been properly prepared with the project_id substituted
+hasProjectIdFilter :: Text -> Projects.ProjectId -> Bool
+hasProjectIdFilter query pid =
+  let pidText = pid.toText
+   in ("project_id='" <> pidText <> "'")
+        `T.isInfixOf` query
+        || ("project_id = '" <> pidText <> "'")
+        `T.isInfixOf` query
 
 
 -- | Dangerous SQL patterns that must not appear in user queries

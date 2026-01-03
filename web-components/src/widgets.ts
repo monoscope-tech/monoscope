@@ -733,3 +733,6 @@ export const applyThresholds = (chart: any, thresholds: Record<string, number>) 
     })),
   });
 };
+
+// Signal that widget dependencies are ready
+(window as any).widgetDepsReady = true;
