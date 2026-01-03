@@ -1538,14 +1538,14 @@ activeTabSlugKey = "activeTabSlug"
 
 
 -- | Process dashboard constants and build extended params with constant results
-processConstantsAndExtendParams ::
-  (DB es, Log.Log :> es, Error ServerError :> es, PG.PostgreSQL :> es) =>
-  Projects.ProjectId ->
-  UTCTime ->
-  (Maybe Text, Maybe Text, Maybe Text) ->
-  [(Text, Maybe Text)] ->
-  [Dashboards.Constant] ->
-  Eff es ([Dashboards.Constant], [(Text, Maybe Text)])
+processConstantsAndExtendParams
+  :: (DB es, Error ServerError :> es, Log.Log :> es, PG.PostgreSQL :> es)
+  => Projects.ProjectId
+  -> UTCTime
+  -> (Maybe Text, Maybe Text, Maybe Text)
+  -> [(Text, Maybe Text)]
+  -> [Dashboards.Constant]
+  -> Eff es ([Dashboards.Constant], [(Text, Maybe Text)])
 processConstantsAndExtendParams pid now timeParams allParams constants = do
   processedConstants <- traverse (processConstant pid now timeParams allParams) constants
   let extendedParams = allParams <> [("const-" <> c.key, Just $ DashboardUtils.constantToSQLList $ fromMaybe [] c.result) | c <- processedConstants]
@@ -1553,14 +1553,14 @@ processConstantsAndExtendParams pid now timeParams allParams constants = do
 
 
 -- | Create a widget processor that adds dashboard ID to processed widgets
-mkWidgetProcessor ::
-  (DB es, Log.Log :> es, Error ServerError :> es, PG.PostgreSQL :> es) =>
-  Projects.ProjectId ->
-  Dashboards.DashboardId ->
-  UTCTime ->
-  (Maybe Text, Maybe Text, Maybe Text) ->
-  [(Text, Maybe Text)] ->
-  (Widget.Widget -> Eff es Widget.Widget)
+mkWidgetProcessor
+  :: (DB es, Error ServerError :> es, Log.Log :> es, PG.PostgreSQL :> es)
+  => Projects.ProjectId
+  -> Dashboards.DashboardId
+  -> UTCTime
+  -> (Maybe Text, Maybe Text, Maybe Text)
+  -> [(Text, Maybe Text)]
+  -> (Widget.Widget -> Eff es Widget.Widget)
 mkWidgetProcessor pid dashId now timeParams paramsWithConstants = \w -> do
   processed <- processWidget pid now timeParams paramsWithConstants w
   pure $ processed{Widget._dashboardId = Just dashId.toText}
