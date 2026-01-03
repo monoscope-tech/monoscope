@@ -1,9 +1,9 @@
 roots = ["^Main.main$"]
 type-class-roots = true
-hie_directory = ".hiefiles"
+hie-files = ".hiefiles"
 root-modules = [
-  "src/Data/Effectful/Wreq.hs",
-  "src/Data/Effectful/LLM.hs",
-  "src/System/Tracing.hs",
+  "^Data\\.Effectful\\.Wreq$",
+  "^Data\\.Effectful\\.LLM$",
+  "^System\\.Tracing$",
 ]
 unused-types = true
