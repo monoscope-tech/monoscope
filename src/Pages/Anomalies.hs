@@ -27,7 +27,9 @@ where
 
 import Control.Lens ((?~))
 import Data.Aeson qualified as AE
+import Data.Aeson.Types (parseMaybe)
 import Data.Default (def)
+import Data.List.Extra (chunksOf)
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
@@ -624,24 +626,17 @@ renderMarkdown md = case MMark.parse "" md of
 
 -- | Parse widgets from stored JSON
 parseStoredWidgets :: Maybe (Aeson AE.Value) -> Maybe [Widget.Widget]
-parseStoredWidgets Nothing = Nothing
-parseStoredWidgets (Just (Aeson val)) = case AE.fromJSON val of
-  AE.Success widgets -> Just widgets
-  AE.Error _ -> Nothing
+parseStoredWidgets = (>>= parseMaybe AE.parseJSON . getAeson)
 
 
 -- | Render chat history
 aiChatHistoryView_ :: Projects.ProjectId -> [Issues.AIChatMessage] -> Html ()
 aiChatHistoryView_ pid messages =
-  forM_ (groupMessages messages) \(userMsg, assistantMsg) ->
+  forM_ (mapMaybe toPair $ chunksOf 2 messages) \(userMsg, assistantMsg) ->
     aiChatResponse_ pid userMsg.content assistantMsg.content (parseStoredWidgets assistantMsg.widgets)
   where
-    groupMessages :: [Issues.AIChatMessage] -> [(Issues.AIChatMessage, Issues.AIChatMessage)]
-    groupMessages [] = []
-    groupMessages [_] = []
-    groupMessages (u : a : rest)
-      | u.role == "user" && a.role == "assistant" = (u, a) : groupMessages rest
-      | otherwise = groupMessages (a : rest)
+    toPair [u, a] | u.role == "user" && a.role == "assistant" = Just (u, a)
+    toPair _ = Nothing
 
 
 -- | AI Chat Component with inline responses and floating input
