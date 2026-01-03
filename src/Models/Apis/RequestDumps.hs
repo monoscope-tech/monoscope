@@ -480,8 +480,10 @@ executeSecuredQuery pid userQuery limit
 hasProjectIdFilter :: Text -> Projects.ProjectId -> Bool
 hasProjectIdFilter query pid =
   let pidText = pid.toText
-   in ("project_id='" <> pidText <> "'") `T.isInfixOf` query
-        || ("project_id = '" <> pidText <> "'") `T.isInfixOf` query
+   in ("project_id='" <> pidText <> "'")
+        `T.isInfixOf` query
+        || ("project_id = '" <> pidText <> "'")
+        `T.isInfixOf` query
 
 
 -- | Dangerous SQL patterns that must not appear in user queries
