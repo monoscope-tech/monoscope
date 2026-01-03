@@ -44,14 +44,28 @@ module Models.Apis.Issues (
   issueIdText,
   parseIssueType,
   issueTypeToText,
+
+  -- * AI Conversations
+  AIConversation (..),
+  AIChatMessage (..),
+  ConversationType (..),
+  getOrCreateConversation,
+  insertChatMessage,
+  selectChatHistory,
+
+  -- * Thread ID Helpers
+  slackThreadToConversationId,
+  discordThreadToConversationId,
 ) where
 
 import Data.Aeson qualified as AE
+import Data.ByteString qualified as BS
 import Data.Default (Default, def)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Data.Time.LocalTime (ZonedTime, utcToLocalZonedTime)
-import Data.UUID.V4 qualified as UUID
+import Data.UUID.V4 qualified as UUID4
+import Data.UUID.V5 qualified as UUID5
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_selectWhere)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
@@ -420,7 +434,7 @@ acknowledgeIssue issueId userId = void $ PG.execute q (userId, issueId)
 -- | Create API Change issue from anomalies
 createAPIChangeIssue :: Projects.ProjectId -> Text -> V.Vector Anomalies.AnomalyVM -> IO Issue
 createAPIChangeIssue projectId endpointHash anomalies = do
-  issueId <- UUIDId <$> UUID.nextRandom
+  issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime
 
   let firstAnomaly = V.head anomalies
@@ -471,7 +485,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
 -- | Create Runtime Exception issue
 createRuntimeExceptionIssue :: Projects.ProjectId -> RequestDumps.ATError -> IO Issue
 createRuntimeExceptionIssue projectId atError = do
-  issueId <- UUIDId <$> UUID.nextRandom
+  issueId <- UUIDId <$> UUID4.nextRandom
   errorZonedTime <- utcToLocalZonedTime atError.when
 
   let exceptionData =
@@ -517,7 +531,7 @@ createRuntimeExceptionIssue projectId atError = do
 -- | Create Query Alert issue
 createQueryAlertIssue :: Projects.ProjectId -> Text -> Text -> Text -> Double -> Double -> Text -> IO Issue
 createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thresholdType = do
-  issueId <- UUIDId <$> UUID.nextRandom
+  issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime
   zonedNow <- utcToLocalZonedTime now
 
@@ -558,3 +572,113 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
       , llmEnhancedAt = Nothing
       , llmEnhancementVersion = Nothing
       }
+
+
+-- | Conversation type for AI chats
+data ConversationType = CTAnomaly | CTTrace | CTLogExplorer | CTDashboard | CTSlackThread | CTDiscordThread
+  deriving stock (Eq, Generic, Show)
+
+
+instance Default ConversationType where
+  def = CTAnomaly
+
+
+instance ToField ConversationType where
+  toField CTAnomaly = Escape "anomaly"
+  toField CTTrace = Escape "trace"
+  toField CTLogExplorer = Escape "log_explorer"
+  toField CTDashboard = Escape "dashboard"
+  toField CTSlackThread = Escape "slack_thread"
+  toField CTDiscordThread = Escape "discord_thread"
+
+
+instance FromField ConversationType where
+  fromField f mdata = do
+    txt <- fromField @Text f mdata
+    case txt of
+      "anomaly" -> pure CTAnomaly
+      "trace" -> pure CTTrace
+      "log_explorer" -> pure CTLogExplorer
+      "dashboard" -> pure CTDashboard
+      "slack_thread" -> pure CTSlackThread
+      "discord_thread" -> pure CTDiscordThread
+      _ -> returnError ConversionFailed f "Invalid conversation type"
+
+
+-- | AI Conversation metadata
+data AIConversation = AIConversation
+  { id :: UUIDId "ai_conversation"
+  , projectId :: Projects.ProjectId
+  , conversationId :: UUIDId "conversation" -- The contextual ID (issue_id, trace_id, etc.)
+  , conversationType :: ConversationType
+  , context :: Maybe (Aeson AE.Value) -- Initial context for the AI
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, ToRow)
+
+
+-- | AI Chat message
+data AIChatMessage = AIChatMessage
+  { id :: UUIDId "ai_chat"
+  , projectId :: Projects.ProjectId
+  , conversationId :: UUIDId "conversation"
+  , role :: Text -- "user", "assistant", or "system"
+  , content :: Text
+  , widgets :: Maybe (Aeson AE.Value) -- Array of widget configs
+  , metadata :: Maybe (Aeson AE.Value) -- Additional metadata
+  , createdAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, ToRow)
+
+
+-- | Get or create a conversation (race-condition safe via ON CONFLICT + RETURNING)
+getOrCreateConversation :: DB es => Projects.ProjectId -> UUIDId "conversation" -> ConversationType -> AE.Value -> Eff es AIConversation
+getOrCreateConversation pid convId convType ctx =
+  fromMaybe (error "getOrCreateConversation: RETURNING clause must return a row") . listToMaybe <$> PG.query q (pid, convId, convType, Aeson ctx)
+  where
+    q =
+      [sql| INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
+              VALUES (?, ?, ?, ?) ON CONFLICT (project_id, conversation_id) DO UPDATE SET updated_at = NOW()
+              RETURNING id, project_id, conversation_id, conversation_type, context, created_at, updated_at |]
+
+
+-- | Insert a new chat message
+insertChatMessage :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Text -> Text -> Maybe AE.Value -> Maybe AE.Value -> Eff es ()
+insertChatMessage pid convId role content widgetsM metadataM = void $ PG.execute q params
+  where
+    q =
+      [sql|
+      INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, widgets, metadata)
+      VALUES (?, ?, ?, ?, ?, ?)
+    |]
+    params = (pid, convId, role, content, Aeson <$> widgetsM, Aeson <$> metadataM)
+
+
+-- | Select chat history for a conversation (oldest first, limited to 20)
+selectChatHistory :: DB es => UUIDId "conversation" -> Eff es [AIChatMessage]
+selectChatHistory convId = PG.query q (Only convId)
+  where
+    q =
+      [sql|
+      SELECT id, project_id, conversation_id, role, content, widgets, metadata, created_at
+      FROM apis.ai_chat_messages
+      WHERE conversation_id = ?
+      ORDER BY created_at ASC
+      LIMIT 20
+    |]
+
+
+-- | Generate deterministic UUID v5 from text (uses OID namespace)
+textToConversationId :: Text -> UUIDId "conversation"
+textToConversationId = UUIDId . UUID5.generateNamed UUID5.namespaceOID . BS.unpack . encodeUtf8
+
+
+slackThreadToConversationId :: Text -> Text -> UUIDId "conversation"
+slackThreadToConversationId cid ts = textToConversationId (cid <> ":" <> ts)
+
+
+discordThreadToConversationId :: Text -> UUIDId "conversation"
+discordThreadToConversationId = textToConversationId

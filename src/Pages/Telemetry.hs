@@ -533,8 +533,8 @@ tracePage pid traceItem spanRecords = do
           h3_ [class_ "whitespace-nowrap  font-semibold text-textStrong"] "Trace Breakdown"
         div_ [class_ "flex items-center gap-2"] $ do
           Components.dateTime traceItem.traceStartTime (Just traceItem.traceEndTime)
-          button_ [class_ "p-0 m-0", [__| on click add .hidden to #trace_expanded_view then call updateUrlState('showTrace', '', 'delete')|]] do
-            faSprite_ "side-chevron-left-in-box" "regular" "w-5 h-5 text-textBrand rotate-180"
+          button_ [class_ "p-0 m-0 cursor-pointer", [__| on click add .hidden to #trace_expanded_view then call updateUrlState('showTrace', '', 'delete')|]] do
+            faSprite_ "side-chevron-left" "regular" "w-5 h-5 text-textBrand rotate-180"
 
       div_ [class_ "flex gap-1 w-full mt-5"] $ do
         div_ [role_ "tablist", class_ "w-full flex flex-col gap-2", id_ "trace-tabs"] $ do

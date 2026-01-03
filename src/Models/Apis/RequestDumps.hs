@@ -461,14 +461,55 @@ executeArbitraryQuery queryText = do
 
 
 -- | Execute a user-provided SQL query with mandatory project_id filtering
--- SECURITY: Wraps query in subquery and filters by parameterized project_id
+-- SECURITY: Validates query, uses READ ONLY transaction, filters by parameterized project_id
 executeSecuredQuery :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
-executeSecuredQuery pid userQuery limit = do
-  let securedQuery = "SELECT * FROM (" <> userQuery <> ") WHERE project_id = ? LIMIT ?"
-  resultE <- try @SomeException $ do
-    results :: [[FieldValue]] <- PG.query (Query $ encodeUtf8 securedQuery) (pid, limit)
-    pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
-  pure $ first (\e -> "Query execution failed: " <> show e) resultE
+executeSecuredQuery pid userQuery limit
+  | not (validateSqlQuery userQuery) = pure $ Left "Query contains disallowed operations"
+  | otherwise = do
+      let selectQuery = "SELECT * FROM (" <> userQuery <> ") AS subq WHERE project_id = ? LIMIT ?"
+      resultE <- try @SomeException $ PG.withTransaction do
+        _ <- PG.execute_ "SET TRANSACTION READ ONLY"
+        results :: [[FieldValue]] <- PG.query (Query $ encodeUtf8 selectQuery) (pid, limit)
+        pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
+      pure $ first (const "Query execution failed") resultE
+
+
+-- | Dangerous SQL patterns that must not appear in user queries
+dangerousSqlPatterns :: [Text]
+dangerousSqlPatterns =
+  [ "insert "
+  , "update "
+  , "delete "
+  , "drop "
+  , "truncate "
+  , "alter "
+  , "create "
+  , "grant "
+  , "revoke "
+  , "copy "
+  , "execute "
+  , "explain "
+  , "set "
+  , "; "
+  , "--"
+  , "/*"
+  , "*/"
+  , "information_schema"
+  , "pg_catalog"
+  , "pg_"
+  ]
+
+
+-- | Validate SQL query for dangerous constructs
+validateSqlQuery :: Text -> Bool
+validateSqlQuery query =
+  let lowerQuery = T.toLower query
+      -- Check for comment-based bypass attempts in original query
+      hasComments = "--" `T.isInfixOf` query || "/*" `T.isInfixOf` query
+   in not hasComments
+        && all (\p -> not $ p `T.isInfixOf` lowerQuery) dangerousSqlPatterns
+        && "select"
+        `T.isInfixOf` lowerQuery
 
 
 selectLogTable :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
