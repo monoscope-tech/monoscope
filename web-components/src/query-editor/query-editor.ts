@@ -158,6 +158,10 @@ class SchemaManager {
   private defaultSchema = DATA_SOURCES[0];
   private schemaData: Record<string, SchemaData> = {};
 
+  // Caches for schema resolution to avoid redundant computation
+  private nestedCache = new Map<string, SchemaField[]>();
+  private valueCache = new Map<string, string[]>();
+
   private nestedResolver: (schema: string, prefix: string) => Promise<SchemaField[]> = async (schema, prefix) => {
     const currentSchema = this.schemaData[schema] || this.schemaData[this.defaultSchema];
     if (!currentSchema?.fields) return [];
@@ -209,18 +213,37 @@ class SchemaManager {
   };
   setSchemaData = (schema: string, data: SchemaData) => {
     this.schemaData[schema] = data;
+    // Clear caches when schema changes
+    this.nestedCache.clear();
+    this.valueCache.clear();
   };
   getSchemaData = (schema: string) => this.schemaData[schema];
   setNestedResolver = (fn: typeof this.nestedResolver) => {
     this.nestedResolver = fn;
+    this.nestedCache.clear();
   };
   setValueResolver = (fn: typeof this.valueResolver) => {
     this.valueResolver = fn;
+    this.valueCache.clear();
   };
   getSchemas = () => this.schemas;
   getDefaultSchema = () => this.defaultSchema;
-  resolveNested = (schema: string, prefix: string) => this.nestedResolver(schema, prefix);
-  resolveValues = (schema: string, field: string) => this.valueResolver(schema, field);
+  resolveNested = async (schema: string, prefix: string): Promise<SchemaField[]> => {
+    const cacheKey = `${schema}:${prefix}`;
+    const cached = this.nestedCache.get(cacheKey);
+    if (cached) return cached;
+    const result = await this.nestedResolver(schema, prefix);
+    this.nestedCache.set(cacheKey, result);
+    return result;
+  };
+  resolveValues = async (schema: string, field: string): Promise<string[]> => {
+    const cacheKey = `${schema}:${field}`;
+    const cached = this.valueCache.get(cacheKey);
+    if (cached) return cached;
+    const result = await this.valueResolver(schema, field);
+    this.valueCache.set(cacheKey, result);
+    return result;
+  };
 
   // Legacy compatibility methods
   getRootFields = async (): Promise<{ name: string; info: FieldInfo }[]> => {
@@ -346,10 +369,14 @@ monaco.languages.register({ id: 'aql' });
 monaco.languages.setMonarchTokensProvider('aql', language);
 monaco.languages.setLanguageConfiguration('aql', conf);
 
+// Version counter for cancelling stale completion requests
+let completionVersion = 0;
+
 // Completion provider
 monaco.languages.registerCompletionItemProvider('aql', {
   triggerCharacters: [' ', '|', '.', '[', ',', '"'],
   provideCompletionItems: async (model, position) => {
+    const myVersion = ++completionVersion;
     const text = model.getValueInRange({
       startLineNumber: 1,
       startColumn: 1,
@@ -374,13 +401,18 @@ monaco.languages.registerCompletionItemProvider('aql', {
     });
 
     const lineText = currentLine.substring(0, position.column - 1);
+    const lastChar = lineText.charAt(lineText.length - 1);
+    const trimmedLine = lineText.trimEnd();
+    const lastCharTrimmed = trimmedLine.charAt(trimmedLine.length - 1);
 
     // First priority: Check for nested fields after dot
-    const dotMatch = lineText.match(REGEX_PATTERNS.dotMatchEnd) || lineText.match(REGEX_PATTERNS.dotMatchPartial);
+    // OPTIMIZATION: Only run regex if line contains a dot
+    const dotMatch = lineText.includes('.') ? (lineText.match(REGEX_PATTERNS.dotMatchEnd) || lineText.match(REGEX_PATTERNS.dotMatchPartial)) : null;
 
     if (dotMatch) {
       const fieldPrefix = dotMatch[1];
       const nested = await schemaManager.resolveNested(currentSchema, fieldPrefix);
+      if (myVersion !== completionVersion) return { suggestions: [] };
 
       nested.forEach((n) =>
         suggestions.push({
@@ -397,11 +429,13 @@ monaco.languages.registerCompletionItemProvider('aql', {
     }
 
     // Check for operator pattern - show value suggestions
-    const operatorMatch = lineText.match(REGEX_PATTERNS.operatorMatch);
+    // OPTIMIZATION: Only run regex if line ends with space (after operator)
+    const operatorMatch = lastChar === ' ' ? lineText.match(REGEX_PATTERNS.operatorMatch) : null;
     if (operatorMatch) {
       const fieldName = operatorMatch[1];
       const operator = operatorMatch[2];
       const values = await schemaManager.resolveValues(currentSchema, fieldName);
+      if (myVersion !== completionVersion) return { suggestions: [] };
 
       // Special handling for 'in' and '!in' operators
       if (operator === 'in' || operator === '!in') {
@@ -433,7 +467,10 @@ monaco.languages.registerCompletionItemProvider('aql', {
     }
 
     // Fourth priority: Check for complete field-operator-value pattern - suggest logical operators
-    const afterValue = REGEX_PATTERNS.afterQuotedValue.test(lineText) || REGEX_PATTERNS.afterNumericValue.test(lineText);
+    // OPTIMIZATION: Only run regex if line ends with space after quote or digit
+    const afterValue = lastChar === ' ' && (lastCharTrimmed === '"' || /\d/.test(lastCharTrimmed))
+      ? (REGEX_PATTERNS.afterQuotedValue.test(lineText) || REGEX_PATTERNS.afterNumericValue.test(lineText))
+      : false;
     if (afterValue) {
       [...LOGICAL_OPERATORS.filter((op) => op === 'and' || op === 'or'), PIPE_OPERATOR[0]].forEach((op) =>
         suggestions.push({
@@ -447,9 +484,11 @@ monaco.languages.registerCompletionItemProvider('aql', {
     }
 
     // Fifth priority: Check for logical operators followed by space - suggest fields
-    const logicalOperatorMatch = lineText.match(REGEX_PATTERNS.logicalOperator);
+    // OPTIMIZATION: Only run regex if line ends with space
+    const logicalOperatorMatch = lastChar === ' ' ? lineText.match(REGEX_PATTERNS.logicalOperator) : null;
     if (logicalOperatorMatch) {
       const fields = await schemaManager.resolveNested(currentSchema, '');
+      if (myVersion !== completionVersion) return { suggestions: [] };
       fields.forEach((f) =>
         suggestions.push({
           label: f.name,
@@ -464,7 +503,8 @@ monaco.languages.registerCompletionItemProvider('aql', {
     }
 
     // Check for field name followed by space
-    const fieldSpaceMatch = lineText.match(REGEX_PATTERNS.fieldSpace);
+    // OPTIMIZATION: Only run regex if line ends with space
+    const fieldSpaceMatch = lastChar === ' ' ? lineText.match(REGEX_PATTERNS.fieldSpace) : null;
     if (fieldSpaceMatch && !logicalOperatorMatch) {
       [
         '==',
@@ -519,6 +559,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
       if (last === '' || !tables.some((t) => last.toLowerCase().trim().startsWith(t))) {
         const defaultSchema = schemaManager.getDefaultSchema();
         const fields = await schemaManager.resolveNested(defaultSchema, '');
+        if (myVersion !== completionVersion) return { suggestions: [] };
         fields.forEach((f) =>
           suggestions.push({
             label: f.name,
@@ -560,6 +601,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
         })
       );
       const fields = await schemaManager.resolveNested(currentSchema, '');
+      if (myVersion !== completionVersion) return { suggestions: [] };
       fields.forEach((f) =>
         suggestions.push({
           label: f.name,
@@ -608,6 +650,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
       );
 
       const fields = await schemaManager.resolveNested(currentSchema, '');
+      if (myVersion !== completionVersion) return { suggestions: [] };
       fields.forEach((f) =>
         suggestions.push({
           label: f.name,
@@ -635,6 +678,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
 
       if (REGEX_PATTERNS.byKeyword.test(last)) {
         const fields = await schemaManager.resolveNested(currentSchema, '');
+        if (myVersion !== completionVersion) return { suggestions: [] };
         fields.forEach((f) =>
           suggestions.push({
             label: f.name,
@@ -1138,29 +1182,29 @@ export class QueryEditorComponent extends LitElement {
 
     this.editor = monaco.editor.create(this._editorContainer, {
       value: this.defaultValue,
-      language: 'aql',
+      language: 'aql', // Keep AQL for syntax highlighting and context-aware completion
       theme: theme,
-      automaticLayout: false, // Disable automatic layout - we handle it manually (keeps performance)
+      automaticLayout: false,
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
       lineNumbers: 'off',
       roundedSelection: false,
       readOnly: false,
       cursorStyle: 'line',
-      fontLigatures: false, // DISABLE for instant typing - ligatures add latency
+      fontLigatures: false,
       fontSize: 14,
-      'semanticHighlighting.enabled': false, // DISABLE - causes typing lag
-      quickSuggestions: false, // DISABLE - triggers on every keystroke, causing lag
-      suggestOnTriggerCharacters: true, // Keep manual triggering
+      'semanticHighlighting.enabled': false,
+      quickSuggestions: false,
+      suggestOnTriggerCharacters: true,
       suggest: {
         showIcons: false,
         snippetsPreventQuickSuggestions: true,
-        filterGraceful: false, // DISABLE - adds latency
+        filterGraceful: false,
         showWords: false,
       } as any,
       wordWrap: 'on',
-      wrappingStrategy: 'simple', // SIMPLE is much faster than advanced
-      wrappingIndent: 'none', // DISABLE - adds latency on wrapped lines
+      wrappingStrategy: 'simple',
+      wrappingIndent: 'none',
       wordWrapOverride1: 'on',
       wordWrapOverride2: 'on',
       glyphMargin: false,
@@ -1177,14 +1221,28 @@ export class QueryEditorComponent extends LitElement {
       },
       lineDecorationsWidth: 0,
       lineNumbersMinChars: 0,
-      // CRITICAL for instant typing - disable validation during typing
       validate: false as any,
-      // Render whitespace minimally
       renderWhitespace: 'none',
-      // Disable cursor blinking animations for better performance
       cursorBlinking: 'solid',
-      // Disable smooth scrolling
       smoothScrolling: false,
+      // PERF: Aggressive optimizations for instant typing
+      accessibilitySupport: 'off',
+      matchBrackets: 'never',
+      links: false,
+      contextmenu: false,
+      occurrencesHighlight: 'off',
+      selectionHighlight: false,
+      renderControlCharacters: false,
+      codeLens: false,
+      lightbulb: { enabled: 'off' as any },
+      hover: { enabled: false },
+      parameterHints: { enabled: false },
+      inlayHints: { enabled: 'off' as any },
+      stickyScroll: { enabled: false },
+      find: { addExtraSpaceOnTop: false, autoFindInSelection: 'never', seedSearchStringFromSelection: 'never' },
+      colorDecorators: false,
+      dropIntoEditor: { enabled: false },
+      unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false },
     });
 
     this.setupEditorEvents();
@@ -1255,33 +1313,30 @@ export class QueryEditorComponent extends LitElement {
       this.editor.onKeyDown(this.handleKeyboardNavigation),
 
       this.editor.onDidChangeModelContent(() => {
-        if (!this.isProgrammaticUpdate) {
+        if (this.isProgrammaticUpdate) return;
+
+        // PERF: Use requestIdleCallback to defer non-critical work off the keystroke path
+        // This allows the browser to render the typed character immediately
+        (window.requestIdleCallback || ((cb) => setTimeout(cb, 1)))(() => {
           const model = this.editor?.getModel();
           if (!model) return;
 
           const newValue = model.getValue();
 
-          // OPTIMIZATION: Only update placeholder on empty/non-empty transitions
+          // Only update placeholder on empty/non-empty transitions
           const isEmpty = newValue.trim() === '';
           const wasEmpty = !this.currentQuery || this.currentQuery.trim() === '';
           if (isEmpty !== wasEmpty) {
             this.updatePlaceholder();
           }
 
+          // Update internal state without triggering Lit re-render
           this.currentQuery = newValue;
-          this.showSuggestions = true;
 
-          // Debounced update - only fires after user stops typing
+          // Debounced updates
           this.updateQueryDebounced(newValue);
-
-          // Trigger suggestions to refresh based on new content (debounced)
-          // This ensures that when content is deleted (backspaced), suggestions update correctly
-          // Uses 100ms debounce to prevent lag while still feeling instant
           this.triggerSuggestionsDebounced();
-
-          // OPTIMIZATION: Skip re-render entirely - dropdown updates are handled by shouldUpdate
-          // The dropdown doesn't need to update on every keystroke
-        }
+        }, { timeout: 50 });
       }),
 
       // OPTIMIZATION: Removed cursor position handler - dropdown position is already correct
