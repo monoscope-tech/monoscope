@@ -310,12 +310,13 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     });
   });
     |]
+  let activeTabSlug = dash.tabs >>= \tabs -> join (L.lookup activeTabSlugKey allParams) <|> (slugify . (.name) <$> listToMaybe tabs)
+      widgetOrderUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets_order" <> maybe "" ("?tab=" <>) activeTabSlug
+
   section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-5 pb-6 px-4 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-20 group/pg", id_ "dashboardPage"] do
     case dash.tabs of
       Just tabs -> do
-        -- Get active tab from path-based slug or fall back to first tab
-        let activeTabSlug = join (L.lookup activeTabSlugKey allParams)
-            activeTabIdx = case activeTabSlug of
+        let activeTabIdx = case activeTabSlug of
               Just slug -> maybe 0 fst (findTabBySlug tabs slug)
               Nothing -> 0
         -- Tab system with htmx lazy loading - only render active tab content
@@ -333,10 +334,21 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             when (null (dash :: Dashboards.Dashboard).widgets) $ label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center *:right-0!  *:bottom-0! ", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
               faSprite_ "plus" "regular" "h-8 w-8"
               span_ "Add a widget"
-    let projectId = pid.toText
-    let dashboardId = dashId.toText
+
     -- Add hidden element for the auto-refresh handler
     div_ [id_ "dashboard-refresh-handler", class_ "hidden"] ""
+
+    -- Hidden form for widget order PATCH via HTMX (tab slug hardcoded in URL)
+    form_
+      [ id_ "widget-order-trigger"
+      , class_ "hidden"
+      , hxPatch_ widgetOrderUrl
+      , hxVals_ "js:{...buildWidgetOrder(document.querySelector('.grid-stack'))}"
+      , hxExt_ "json-enc"
+      , hxSwap_ "none"
+      , hxTrigger_ "widget-order-changed from:body"
+      ]
+      ""
 
     script_
       [text|
@@ -370,7 +382,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 staticGrid: false,
               }, gridEl);
 
-              grid.on('removed change', debounce(updateWidgetOrder('${projectId}', '${dashboardId}'), 200));
+              grid.on('removed change', debounce(() => htmx.trigger(document.body, 'widget-order-changed'), 200));
               gridEl.classList.add('grid-stack-initialized');
               gridInstances.push(grid);
               // Set global gridStackInstance to the current grid
@@ -393,7 +405,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 styleInHead: true,
                 staticGrid: false,
               }, nestedEl);
-              nestedInstance.on('removed change', debounce(updateWidgetOrder('${projectId}', '${dashboardId}'), 200));
+              nestedInstance.on('removed change', debounce(() => htmx.trigger(document.body, 'widget-order-changed'), 200));
               nestedEl.classList.add('grid-stack-initialized');
             }
           });
@@ -611,25 +623,27 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
           }
 
 
-dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
-dashboardWidgetPutH pid dashId widgetIdM widget = do
+dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
+dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = do
   (_, dash) <- getDashAndVM dashId Nothing
   uid <- UUID.genUUID <&> UUID.toText
-  let (dash', widget') = case widgetIdM of
-        Just wID -> do
-          let normalizedWidgetId = T.replace "Expanded" "" wID
 
-          let updateWidget w =
-                if (w.id == Just normalizedWidgetId) || (maybeToMonoid (slugify <$> w.title) == normalizedWidgetId)
-                  then widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just normalizedWidgetId}
-                  else w
-              updatedWidgets = map updateWidget (dash :: Dashboards.Dashboard).widgets
-              updatedWidget = widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just normalizedWidgetId}
-          ((dash :: Dashboards.Dashboard) & #widgets .~ updatedWidgets, updatedWidget)
-        Nothing -> do
-          -- When adding a new widget
-          let widgetUpdated = widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just uid, Widget._centerTitle = Nothing}
-          ((dash :: Dashboards.Dashboard) & #widgets %~ (<> [widgetUpdated]), widgetUpdated)
+  let widgetUpdated = case widgetIdM of
+        Just wID -> widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just (T.replace "Expanded" "" wID)}
+        Nothing -> widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just uid, Widget._centerTitle = Nothing}
+
+  let updateWidgets ws = case widgetIdM of
+        Just wID ->
+          let normalizedWidgetId = T.replace "Expanded" "" wID
+              updateWidget w = if (w.id == Just normalizedWidgetId) || (maybeToMonoid (slugify <$> w.title) == normalizedWidgetId) then widgetUpdated else w
+           in map updateWidget ws
+        Nothing -> ws <> [widgetUpdated]
+
+  let dash' = case (tabSlugM, (dash :: Dashboards.Dashboard).tabs) of
+        (Just slug, Just _) ->
+          let updateTab tab = if slugify tab.name == slug then (tab :: Dashboards.Tab) & #widgets %~ updateWidgets else tab
+           in (dash :: Dashboards.Dashboard) & #tabs %~ fmap (map updateTab)
+        _ -> (dash :: Dashboards.Dashboard) & #widgets %~ updateWidgets
 
   _ <- Dashboards.updateSchema dashId dash'
   syncDashboardAndQueuePush pid dashId
@@ -640,7 +654,7 @@ dashboardWidgetPutH pid dashId widgetIdM widget = do
 
   addSuccessToast successMsg Nothing
   addTriggerEvent "closeModal" ""
-  addRespHeaders widget'
+  addRespHeaders widgetUpdated
 
 
 data WidgetReorderItem = WidgetReorderItem
@@ -658,14 +672,22 @@ data WidgetReorderItem = WidgetReorderItem
 dashboardWidgetReorderPatchH
   :: Projects.ProjectId
   -> Dashboards.DashboardId
+  -> Maybe Text
+  -- ^ Optional tab slug for tabbed dashboards
   -> Map Text WidgetReorderItem
   -- ^ The ordered list of widget IDs
   -> ATAuthCtx (RespHeaders NoContent)
-dashboardWidgetReorderPatchH pid dashId widgetOrder = do
+dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
   (_, dash) <- getDashAndVM dashId Nothing
 
-  let sortedWidgets = reorderWidgets widgetOrder (dash :: Dashboards.Dashboard).widgets
-      newDash = (dash :: Dashboards.Dashboard) & #widgets .~ sortedWidgets
+  let newDash = case (tabSlugM, (dash :: Dashboards.Dashboard).tabs) of
+        (Just slug, Just tabs) ->
+          -- Update widgets in the specific tab
+          let updateTab tab = if slugify tab.name == slug then (tab :: Dashboards.Tab) & #widgets .~ reorderWidgets widgetOrder tab.widgets else tab
+           in (dash :: Dashboards.Dashboard) & #tabs %~ fmap (map updateTab)
+        _ ->
+          -- No tabs or no tab specified - update top-level widgets
+          (dash :: Dashboards.Dashboard) & #widgets .~ reorderWidgets widgetOrder (dash :: Dashboards.Dashboard).widgets
 
   _ <- Dashboards.updateSchema dashId newDash
   syncDashboardAndQueuePush pid dashId
@@ -685,10 +707,10 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
       let newLayout =
             Just
               $ maybe def Relude.id orig.layout
-              & #x %~ (<|> item.x)
-              & #y %~ (<|> item.y)
-              & #w %~ (<|> item.w)
-              & #h %~ (<|> item.h)
+              & #x .~ (item.x <|> (orig.layout >>= (.x)))
+              & #y .~ (item.y <|> (orig.layout >>= (.y)))
+              & #w .~ (item.w <|> (orig.layout >>= (.w)))
+              & #h .~ (item.h <|> (orig.layout >>= (.h)))
       pure
         orig
           { Widget.layout = newLayout
@@ -758,7 +780,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
                   TimePicker.refreshButton_
                   div_ [class_ "flex items-center"] do
                     span_ [class_ "text-fillDisabled mr-2"] "|"
-                    Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
+                    Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid dashId Nothing currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
                     div_ [class_ "dropdown dropdown-end"] do
                       div_ [tabindex_ "0", role_ "button", class_ "text-iconNeutral cursor-pointer  p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Context Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
                       ul_ [tabindex_ "0", class_ "dropdown-content menu menu-md bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none"] do
@@ -788,11 +810,12 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
 -- | A unified widget viewer/editor component that uses DaisyUI tabs without JavaScript
 -- @param pid Project ID
 -- @param dashboardIdM Optional dashboard ID
+-- @param tabSlugM Optional tab slug for tabbed dashboards
 -- @param currentRange Time range for the widget
 -- @param existingWidgetM Optional existing widget (for edit mode)
 -- @param activeTab Which tab should be active initially ("edit" or "overview")
-widgetViewerEditor_ :: Projects.ProjectId -> Maybe Dashboards.DashboardId -> Maybe (Text, Text) -> Maybe Widget.Widget -> Text -> Html ()
-widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = div_ [class_ "group/wgtexp"] do
+widgetViewerEditor_ :: Projects.ProjectId -> Maybe Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Maybe Widget.Widget -> Text -> Html ()
+widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activeTab = div_ [class_ "group/wgtexp"] do
   let isNewWidget = isNothing existingWidgetM
   let effectiveActiveTab = if isNewWidget then "edit" else activeTab
 
@@ -826,9 +849,12 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
       drawerStateCheckbox = if isJust existingWidgetM then "global-data-drawer" else "page-data-drawer"
 
   let widgetJSON = decodeUtf8 $ fromLazy $ AE.encode widgetToUse
-  let formAction = case (dashboardIdM, existingWidgetM) of
-        (Just dashId, Just w) -> "?widget_id=" <> fromMaybe "" w.id
-        _ -> ""
+  let formAction = case dashboardIdM of
+        Just dashId ->
+          let baseUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText
+              params = catMaybes [("widget_id=" <>) . fromMaybe "" . (.id) <$> existingWidgetM, ("tab=" <>) <$> tabSlugM]
+           in baseUrl <> if null params then "" else "?" <> T.intercalate "&" params
+        Nothing -> ""
 
   form_
     [ class_ "hidden"
@@ -954,9 +980,9 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
 
 -- visTypes is now imported from LogQueryBox to avoid circular dependencies
 
--- | Backward compatibility wrapper for the new widget editor
-newWidget_ :: Projects.ProjectId -> Maybe (Text, Text) -> Html ()
-newWidget_ pid currentRange = widgetViewerEditor_ pid Nothing currentRange Nothing "edit"
+-- | Wrapper for the new widget editor
+newWidget_ :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Html ()
+newWidget_ pid dashId tabSlugM currentRange = widgetViewerEditor_ pid (Just dashId) tabSlugM currentRange Nothing "edit"
 
 
 --------------------------------------------------------------------
@@ -1564,7 +1590,7 @@ dashboardWidgetExpandGetH pid dashId widgetId = do
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
     Just widgetToExpand -> do
       processedWidget <- processWidget pid now (Nothing, Nothing, Nothing) [] widgetToExpand
-      addRespHeaders $ widgetViewerEditor_ pid (Just dashId) Nothing (Just processedWidget) "edit"
+      addRespHeaders $ widgetViewerEditor_ pid (Just dashId) Nothing Nothing (Just processedWidget) "edit"
 
 
 -- | Find a tab by its slug, returns (index, tab) if found
@@ -1677,7 +1703,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
               TimePicker.refreshButton_
               div_ [class_ "flex items-center"] do
                 span_ [class_ "text-fillDisabled mr-2"] "|"
-                Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
+                Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid dashId (Just tabSlug) currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
                 div_ [class_ "dropdown dropdown-end"] do
                   div_ [tabindex_ "0", role_ "button", class_ "text-iconNeutral cursor-pointer  p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Context Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
                   ul_ [tabindex_ "0", class_ "dropdown-content menu menu-md bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none"] do
