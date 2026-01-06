@@ -677,21 +677,18 @@ dashboardWidgetReorderPatchH
   -> Map Text WidgetReorderItem
   -- ^ The ordered list of widget IDs
   -> ATAuthCtx (RespHeaders NoContent)
+dashboardWidgetReorderPatchH _ _ _ widgetOrder | Map.null widgetOrder = addRespHeaders NoContent
 dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
   (_, dash) <- getDashAndVM dashId Nothing
 
   let newDash = case (tabSlugM, (dash :: Dashboards.Dashboard).tabs) of
         (Just slug, Just tabs) ->
-          -- Update widgets in the specific tab
           let updateTab tab = if slugify tab.name == slug then (tab :: Dashboards.Tab) & #widgets .~ reorderWidgets widgetOrder tab.widgets else tab
            in (dash :: Dashboards.Dashboard) & #tabs %~ fmap (map updateTab)
-        _ ->
-          -- No tabs or no tab specified - update top-level widgets
-          (dash :: Dashboards.Dashboard) & #widgets .~ reorderWidgets widgetOrder (dash :: Dashboards.Dashboard).widgets
+        _ -> (dash :: Dashboards.Dashboard) & #widgets .~ reorderWidgets widgetOrder (dash :: Dashboards.Dashboard).widgets
 
   _ <- Dashboards.updateSchema dashId newDash
   syncDashboardAndQueuePush pid dashId
-
   addRespHeaders NoContent
 
 

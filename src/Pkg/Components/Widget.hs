@@ -124,6 +124,7 @@ data Widget = Widget
   , wData :: Maybe AE.Value
   , hideLegend :: Maybe Bool
   , legendPosition :: Maybe Text -- Legend position: "top", "bottom", "top-right", "top-left", "bottom-right", "bottom-left"
+  , legendSize :: Maybe Text -- Legend size: "xs" (default), "sm", "md"
   , theme :: Maybe Text
   , dataset :: Maybe WidgetDataset
   , -- eager
@@ -712,14 +713,19 @@ widgetToECharts widget =
                       [v, h] | h == "right" || h == "left" -> (v, Just h)
                       [v] -> (v, Nothing)
                       _ -> ("bottom", Nothing)
+                    (fontSize, itemSize, itemGap, pad) = case fromMaybe "sm" widget.legendSize of
+                      "xs" -> (10 :: Int, 6 :: Int, 6 :: Int, [2, 4, 2, 4] :: [Int])
+                      "md" -> (14, 12, 12, [4, 8, 4, 8])
+                      "lg" -> (16, 14, 14, [5, 10, 5, 10])
+                      _ -> (12, 9, 9, [3, 6, 3, 6]) -- sm (default)
                  in [ "show" AE..= legendVisibility
                     , "type" AE..= "scroll"
                     , "top" AE..= vPos
-                    , "textStyle" AE..= AE.object ["fontSize" AE..= AE.Number 10, "padding" AE..= AE.Array [AE.Number 0, AE.Number 0, AE.Number 0, AE.Number (-2)]]
-                    , "itemWidth" AE..= AE.Number 6
-                    , "itemHeight" AE..= AE.Number 6
-                    , "itemGap" AE..= AE.Number 6
-                    , "padding" AE..= AE.Array [AE.Number 2, AE.Number 4, AE.Number 2, AE.Number 4]
+                    , "textStyle" AE..= AE.object ["fontSize" AE..= AE.Number (fromIntegral fontSize), "padding" AE..= AE.Array [AE.Number 0, AE.Number 0, AE.Number 0, AE.Number (-2)]]
+                    , "itemWidth" AE..= AE.Number (fromIntegral itemSize)
+                    , "itemHeight" AE..= AE.Number (fromIntegral itemSize)
+                    , "itemGap" AE..= AE.Number (fromIntegral itemGap)
+                    , "padding" AE..= AE.Array (V.fromList $ map (AE.Number . fromIntegral) pad)
                     , "data" AE..= fromMaybe [] (extractLegend widget)
                     ]
                       <> [K.fromText h AE..= (0 :: Int) | Just h <- [hPos]]

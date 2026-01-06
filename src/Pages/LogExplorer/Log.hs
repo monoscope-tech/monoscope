@@ -667,7 +667,7 @@ apiLogsPage page = do
         let (tp, query, title) = case page.vizType of
               Just "patterns" -> (WTTimeseriesLine, patternTarget <> " != null | summarize count(*) by bin_auto(timestamp), " <> patternTarget, nm <> " patterns")
               _ -> (WTTimeseries, "summarize count(*) by bin_auto(timestamp), status_code", "All traces")
-        Widget.widget_ $ (def :: Widget.Widget){Widget.wType = tp, Widget.query = Just query, Widget.unit = Just "rows", Widget.title = Just title, Widget.legendPosition = Just "top-right", Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True, Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
+        Widget.widget_ $ (def :: Widget.Widget){Widget.wType = tp, Widget.query = Just query, Widget.unit = Just "rows", Widget.title = Just title, Widget.legendPosition = Just "top-right", Widget.legendSize = Just "xs", Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True, Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
         unless (page.vizType == Just "patterns")
           $ Widget.widget_
           $ (def :: Widget.Widget)
@@ -681,6 +681,7 @@ apiLogsPage page = do
             , Widget.query = Just "duration != null | summarize percentiles(duration, 50, 75, 90, 95) by bin_auto(timestamp)"
             , Widget.unit = Just "ns"
             , Widget.legendPosition = Just "top-right"
+            , Widget.legendSize = Just "xs"
             , Widget._projectId = Just page.pid
             }
     whenJust page.patterns \patternsData ->
