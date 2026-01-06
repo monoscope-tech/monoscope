@@ -83,10 +83,10 @@ data AnomalyTypes
   | ATRuntimeException
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (FromField, ToField, Display) via WrappedEnumSC "AT" AnomalyTypes
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyTypes
+  deriving (Display, FromField, ToField) via WrappedEnumSC "AT" AnomalyTypes
 
 
 instance Default AnomalyTypes where
@@ -108,10 +108,10 @@ data AnomalyActions
   | AACreated
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (FromField, ToField, Display) via WrappedEnumSC "AA" AnomalyActions
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyActions
+  deriving (Display, FromField, ToField) via WrappedEnumSC "AA" AnomalyActions
 
 
 instance Default AnomalyActions where

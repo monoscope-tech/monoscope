@@ -35,6 +35,7 @@ import Data.HashTable.Class qualified as HTC
 import Data.HashTable.ST.Cuckoo qualified as HT
 import Data.Scientific qualified as Scientific
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time.LocalTime (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -42,7 +43,6 @@ import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Simple (Query)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Anomalies qualified as Anomalies
-import Data.Text.Display (display)
 import Models.Apis.Fields.Types qualified as Fields (
   Field (..),
   FieldCategoryEnum (..),

@@ -60,7 +60,7 @@ data Permissions
   | PEdit
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (FromField, ToField, FromHttpApiData, Display) via WrappedEnumSC "P" Permissions
+  deriving (Display, FromField, FromHttpApiData, ToField) via WrappedEnumSC "P" Permissions
 
 
 data ProjectMembers = ProjectMembers

@@ -24,11 +24,11 @@ where
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.HashMap.Strict qualified as HM
+import Data.Text.Display (Display, display)
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Data.Text.Display (Display, display)
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -120,7 +120,7 @@ data FieldCategoryEnum
   | FCResponseBody
   deriving stock (Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
-  deriving (FromField, ToField, Display) via WrappedEnumSC "FC" FieldCategoryEnum
+  deriving (Display, FromField, ToField) via WrappedEnumSC "FC" FieldCategoryEnum
 
 
 instance AE.FromJSON FieldCategoryEnum where

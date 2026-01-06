@@ -579,7 +579,7 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
 -- | Conversation type for AI chats
 data ConversationType = CTAnomaly | CTTrace | CTLogExplorer | CTDashboard | CTSlackThread | CTDiscordThread
   deriving stock (Eq, Generic, Read, Show)
-  deriving (FromField, ToField, Display) via WrappedEnumSC "CT" ConversationType
+  deriving (Display, FromField, ToField) via WrappedEnumSC "CT" ConversationType
 
 
 instance Default ConversationType where
