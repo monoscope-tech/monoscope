@@ -123,7 +123,7 @@ data Widget = Widget
   , value :: Maybe Int -- value could represent a number or a count
   , wData :: Maybe AE.Value
   , hideLegend :: Maybe Bool
-  , legendPosition :: Maybe Text -- Position of the legend: "top" or "bottom" (default)
+  , legendPosition :: Maybe Text -- Legend position: "top", "bottom", "top-right", "top-left", "bottom-right", "bottom-left"
   , theme :: Maybe Text
   , dataset :: Maybe WidgetDataset
   , -- eager
@@ -706,23 +706,29 @@ widgetToECharts widget =
               ]
         , "legend"
             AE..= AE.object
-              [ "show" AE..= legendVisibility
-              , "type" AE..= "scroll"
-              , "top" AE..= fromMaybe "bottom" widget.legendPosition
-              , "textStyle" AE..= AE.object ["fontSize" AE..= AE.Number 12] -- // default is usually 12 or 14
-              --  Shrink the symbol/icon size
-              , "itemWidth" AE..= AE.Number 14 -- default is 25
-              , "itemHeight" AE..= AE.Number 12 -- default is 14
-              , "itemGap" AE..= AE.Number 8 -- defalt is 10
-              , "padding" AE..= AE.Array [AE.Number 2, AE.Number 4, AE.Number 2, AE.Number 4] -- [top, right, bottom, left]
-              , "data" AE..= fromMaybe [] (extractLegend widget)
-              ]
+              ( let pos = fromMaybe "bottom" widget.legendPosition
+                    (vPos, hPos) = case T.splitOn "-" pos of
+                      [v, h] | h == "right" || h == "left" -> (v, Just h)
+                      [v] -> (v, Nothing)
+                      _ -> ("bottom", Nothing)
+                 in [ "show" AE..= legendVisibility
+                    , "type" AE..= "scroll"
+                    , "top" AE..= vPos
+                    , "textStyle" AE..= AE.object ["fontSize" AE..= AE.Number 10, "padding" AE..= AE.Array [AE.Number 0, AE.Number 0, AE.Number 0, AE.Number (-2)]]
+                    , "itemWidth" AE..= AE.Number 6
+                    , "itemHeight" AE..= AE.Number 6
+                    , "itemGap" AE..= AE.Number 6
+                    , "padding" AE..= AE.Array [AE.Number 2, AE.Number 4, AE.Number 2, AE.Number 4]
+                    , "data" AE..= fromMaybe [] (extractLegend widget)
+                    ]
+                      <> [K.fromText h AE..= (0 :: Int) | Just h <- [hPos]]
+              )
         , "grid"
             AE..= AE.object
               [ "width" AE..= ("100%" :: Text)
               , "left" AE..= ("0%" :: Text)
-              , "top" AE..= if widget.legendPosition == Just "top" && legendVisibility then "18%" else if widget.naked == Just True then "10%" else "5%"
-              , "bottom" AE..= if widget.legendPosition /= Just "top" && legendVisibility then "18%" else "1.8%"
+              , "top" AE..= if maybe False (T.isPrefixOf "top") widget.legendPosition && legendVisibility then "14%" else if widget.naked == Just True then "10%" else "5%"
+              , "bottom" AE..= if not (maybe False (T.isPrefixOf "top") widget.legendPosition) && legendVisibility then "14%" else "1.8%"
               , "containLabel" AE..= True
               , "show" AE..= False
               ]
