@@ -1,4 +1,4 @@
-module Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..), connectPostgreSQL) where
+module Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..), WrappedEnumShow (..), connectPostgreSQL) where
 
 import Control.Exception
 import Data.IntMap qualified as IntMap
@@ -55,6 +55,21 @@ instance (KnownSymbol prefix, Read a, Show a) => FromHttpApiData (WrappedEnumSC 
     case readMaybe (symbolVal (Proxy @prefix) <> toPascal (fromSnake $ toString @Text t)) of
       Just a -> Right $ WrappedEnumSC a
       Nothing -> Left $ "Invalid " <> fromString (symbolVal (Proxy @prefix)) <> " value: " <> t
+
+
+-- | Wrapper for enums that use Show/Read directly (stored as-is in DB)
+newtype WrappedEnumShow a = WrappedEnumShow a
+  deriving (Generic)
+
+
+instance Show a => ToField (WrappedEnumShow a) where
+  toField (WrappedEnumShow a) = toField (show a)
+
+
+instance (Read a, Typeable a) => FromField (WrappedEnumShow a) where
+  fromField f = \case
+    Nothing -> returnError UnexpectedNull f ""
+    Just bss -> pure $ WrappedEnumShow (Unsafe.read $ toString @Text (decodeUtf8 bss))
 
 
 connectPostgreSQL :: ByteString -> IO Connection
