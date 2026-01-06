@@ -377,10 +377,8 @@ integrationsBody IntegrationsConfig{..} = do
   script_
     [text|
      document.addEventListener('DOMContentLoaded', function() {
-      var inputElem = document.querySelector('#phones_input')
-      var tagify = new Tagify(inputElem)
-      tagify.addTags($tgs);
-      window.tagify = tagify
+      window.tagify = createTagify('#phones_input');
+      window.tagify.addTags($tgs);
     })
 
    function getChecked() {
