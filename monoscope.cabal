@@ -87,6 +87,7 @@ library
       Models.Projects.Projects
       Models.Telemetry.Schema
       Models.Telemetry.SummaryGenerator
+      Models.Telemetry.SystemLogs
       Models.Telemetry.Telemetry
       Models.Users.Sessions
       Models.Users.Users
