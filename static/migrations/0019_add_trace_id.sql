@@ -8,7 +8,6 @@ ALTER TABLE apis.errors
 ADD COLUMN first_trace_id TEXT,
 ADD COLUMN recent_trace_id TEXT;
 
--- remove first_trace_id and recent_trace_id from apis.issues 
 
 ALTER TABLE apis.issues
 DROP COLUMN IF EXISTS first_trace_id,

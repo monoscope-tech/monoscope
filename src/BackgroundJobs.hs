@@ -352,7 +352,7 @@ processBackgroundJob authCtx bgJob =
     GitSyncFromRepo pid -> gitSyncFromRepo pid
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
-    QueryMonitorsCheck -> checkTriggeredQueryMonitors
+    QueryMonitorsCheck -> pass -- checkTriggeredQueryMonitors
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -1072,20 +1072,6 @@ sendReportForProject pid rType = do
 emailQueryMonitorAlert :: Monitors.QueryMonitorEvaled -> CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()
 emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email userM = whenJust userM (const pass)
 
-
--- FIXME: implement query alert email using postmark
--- sendEmail
---   (CI.original email)
---   [fmt| 🤖 APITOOLKIT: log monitor triggered `{alertConfig.title}` |]
---   [fmtTrim|
---     Hi {user.firstName},<br/>
---
---     The monitor: `{alertConfig.title}` was triggered and got above it's defined threshold.
---
---     <br/><br/>
---     Regards,
---     Apitoolkit team
---               |]
 
 -- | Process new anomalies detected by database triggers
 -- This job is created by the apis.new_anomaly_proc() stored procedure
