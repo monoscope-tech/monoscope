@@ -725,28 +725,28 @@ instance Display Values where
 -- "method NOT IN ('GET','POST')"
 --
 -- >>> display (Has (Subject "" "message" []) (Str "error"))
--- "message ~* 'error'"
+-- "message::text ~* 'error'"
 --
 -- >>> display (NotHas (Subject "" "message" []) (Str "success"))
--- "message !~* 'success'"
+-- "message::text !~* 'success'"
 --
 -- >>> display (Contains (Subject "" "url" []) (Str "api"))
--- "url ILIKE '%' || 'api' || '%'"
+-- "url::text ILIKE '%' || 'api' || '%'"
 --
 -- >>> display (NotContains (Subject "" "path" []) (Str "admin"))
--- "path NOT ILIKE '%' || 'admin' || '%'"
+-- "path::text NOT ILIKE '%' || 'admin' || '%'"
 --
 -- >>> display (StartsWith (Subject "" "endpoint" []) (Str "/api/"))
--- "endpoint ILIKE '/api/' || '%'"
+-- "endpoint::text ILIKE '/api/' || '%'"
 --
 -- >>> display (NotStartsWith (Subject "" "path" []) (Str "/internal"))
--- "path NOT ILIKE '/internal' || '%'"
+-- "path::text NOT ILIKE '/internal' || '%'"
 --
 -- >>> display (EndsWith (Subject "" "filename" []) (Str ".log"))
--- "filename ILIKE '%' || '.log'"
+-- "filename::text ILIKE '%' || '.log'"
 --
 -- >>> display (NotEndsWith (Subject "" "url" []) (Str ".css"))
--- "url NOT ILIKE '%' || '.css'"
+-- "url::text NOT ILIKE '%' || '.css'"
 --
 -- >>> display (Matches (Subject "" "email" []) ".*@company\\.com")
 -- "jsonb_path_exists(to_jsonb(email), $$$ ? (@ like_regex \".*@company\\.com\" flag \"i\" )$$::jsonpath)"
