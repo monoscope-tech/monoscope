@@ -341,8 +341,9 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   (sess, project) <- Sessions.sessionAndProject pid
   let source = fromMaybe "spans" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
-  let parseQuery q = either (\err -> addErrorToast "Error Parsing Query" (Just err) >> pure []) pure (parseQueryToAST q)
-  queryAST <- parseQuery $ maybeToMonoid queryM'
+  (queryAST, hadParseError) <- case parseQueryToAST (maybeToMonoid queryM') of
+    Left err -> addErrorToast "Error Parsing Query" (Just err) >> pure ([], True)
+    Right ast -> pure (ast, False)
   let queryText = toQText queryAST
 
   unless (isJust queryLibItemTitle) $ Projects.queryLibInsert Projects.QLTHistory pid sess.persistentSession.userId queryText queryAST Nothing
@@ -376,7 +377,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   let effectiveVizType = vizTypeM <|> ((.visualizationType) <$> alertDM)
 
   -- Skip table load on initial page load unless it's a JSON request
-  let shouldSkipLoad = isNothing layoutM && isNothing hxRequestM && jsonM /= Just "true" || effectiveVizType == Just "patterns"
+  let shouldSkipLoad = hadParseError || isNothing layoutM && isNothing hxRequestM && jsonM /= Just "true" || effectiveVizType == Just "patterns"
       fetchLogs =
         if authCtx.env.enableTimefusionReads
           then labeled @"timefusion" @PG.WithConnection $ RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
