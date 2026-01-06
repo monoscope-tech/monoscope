@@ -70,7 +70,7 @@ unAesonTextMaybe = fmap unAesonText
 -- | Newtype wrapper for PostgreSQL text arrays (TEXT[])
 newtype PGTextArray = PGTextArray (V.Vector Text)
   deriving (Eq, Generic, Show)
-  deriving newtype (NFData, FromField, ToField)
+  deriving newtype (FromField, NFData, ToField)
 
 
 -- | Generic UUID-based ID type with phantom type parameter for type safety
