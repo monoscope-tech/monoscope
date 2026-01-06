@@ -23,10 +23,10 @@ module Models.Projects.ProjectMembers (
   TeamMemberVM (..),
 ) where
 
-import Control.Error (note)
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive (CI)
 import Data.Default.Instances ()
+import Data.Text.Display (Display)
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -39,54 +39,28 @@ import Database.PostgreSQL.Entity.Types (
   Schema,
   TableName,
  )
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (..), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
+import Database.PostgreSQL.Simple.ToField (ToField)
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
+import Pkg.DBUtils (WrappedEnumSC (..))
 import Relude
 import Servant (FromHttpApiData)
 import System.Types (DB)
-import Web.HttpApiData (parseUrlPiece)
 
 
 data Permissions
   = PAdmin
   | PView
   | PEdit
-  deriving stock (Eq, Generic, Show)
+  deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-
-
-instance FromHttpApiData Permissions where
-  parseUrlPiece = note "Unable to parse" . parsePermissions
-
-
-instance ToField Permissions where
-  toField PAdmin = Escape "admin"
-  toField PView = Escape "view"
-  toField PEdit = Escape "edit"
-
-
-parsePermissions :: (Eq s, IsString s) => s -> Maybe Permissions
-parsePermissions "admin" = Just PAdmin
-parsePermissions "view" = Just PView
-parsePermissions "edit" = Just PEdit
-parsePermissions _ = Nothing
-
-
-instance FromField Permissions where
-  fromField f mdata =
-    case mdata of
-      Nothing -> returnError UnexpectedNull f ""
-      Just bs ->
-        case parsePermissions bs of
-          Just a -> pure a
-          Nothing -> returnError ConversionFailed f $ "Conversion error: Expected permission enum, got " <> decodeUtf8 bs <> " instead."
+  deriving (FromField, ToField, FromHttpApiData, Display) via WrappedEnumSC "P" Permissions
 
 
 data ProjectMembers = ProjectMembers

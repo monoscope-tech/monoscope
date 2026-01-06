@@ -42,13 +42,13 @@ import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Simple (Query)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Anomalies qualified as Anomalies
+import Data.Text.Display (display)
 import Models.Apis.Fields.Types qualified as Fields (
   Field (..),
   FieldCategoryEnum (..),
   FieldId (FieldId),
   FieldTypes (..),
   Format (..),
-  fieldCategoryEnumToText,
  )
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -683,7 +683,7 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
     fieldType = fromMaybe Fields.FTUnknown $ V.map aeValueToFieldType val V.!? 0
 
     -- field hash is <hash of the endpoint> + <the hash of <field_category><key_path_str><field_type>> (No space or comma between data)
-    !fieldHash = endpointHash <> toXXHash (Fields.fieldCategoryEnumToText fieldCategory <> keyPath)
+    !fieldHash = endpointHash <> toXXHash (display fieldCategory <> keyPath)
     -- FIXME: We should rethink this value to format logic.
     -- FIXME: Maybe it actually needs machine learning,
     -- FIXME: or maybe it should operate on the entire list, and not just one value.

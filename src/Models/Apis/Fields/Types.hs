@@ -12,7 +12,6 @@ module Models.Apis.Fields.Types (
   parseFieldCategoryEnum,
   parseFieldTypes,
   fieldTypeToText,
-  fieldCategoryEnumToText,
   bulkInsertFields,
   -- Formats
   Format (..),
@@ -29,11 +28,12 @@ import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow, ResultError (..), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
+import Data.Text.Display (Display, display)
+import Database.PostgreSQL.Simple (FromRow, ToRow)
+import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
+import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.PostgreSQL qualified as PG
@@ -118,8 +118,9 @@ data FieldCategoryEnum
   | FCResponseHeader
   | FCRequestBody
   | FCResponseBody
-  deriving stock (Eq, Generic, Ord, Show)
+  deriving stock (Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
+  deriving (FromField, ToField, Display) via WrappedEnumSC "FC" FieldCategoryEnum
 
 
 instance AE.FromJSON FieldCategoryEnum where
@@ -128,24 +129,11 @@ instance AE.FromJSON FieldCategoryEnum where
 
 
 instance AE.ToJSON FieldCategoryEnum where
-  toJSON = AE.String . fieldCategoryEnumToText
+  toJSON = AE.String . display
 
 
 instance Default FieldCategoryEnum where
   def = FCQueryParam
-
-
-instance ToField FieldCategoryEnum where
-  toField = Escape . encodeUtf8 <$> fieldCategoryEnumToText
-
-
-fieldCategoryEnumToText :: FieldCategoryEnum -> Text
-fieldCategoryEnumToText FCQueryParam = "query_param"
-fieldCategoryEnumToText FCPathParam = "path_param"
-fieldCategoryEnumToText FCRequestHeader = "request_header"
-fieldCategoryEnumToText FCResponseHeader = "response_header"
-fieldCategoryEnumToText FCRequestBody = "request_body"
-fieldCategoryEnumToText FCResponseBody = "response_body"
 
 
 parseFieldCategoryEnum :: (Eq s, IsString s) => s -> Maybe FieldCategoryEnum
@@ -156,16 +144,6 @@ parseFieldCategoryEnum "response_header" = Just FCResponseHeader
 parseFieldCategoryEnum "request_body" = Just FCRequestBody
 parseFieldCategoryEnum "response_body" = Just FCResponseBody
 parseFieldCategoryEnum _ = Nothing
-
-
-instance FromField FieldCategoryEnum where
-  fromField f mdata =
-    case mdata of
-      Nothing -> returnError UnexpectedNull f ""
-      Just bs ->
-        case parseFieldCategoryEnum bs of
-          Just a -> pure a
-          Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'field_type' enum, got " <> decodeUtf8 bs <> " instead."
 
 
 data Field = Field

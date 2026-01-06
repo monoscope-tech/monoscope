@@ -19,7 +19,6 @@ module Models.Apis.Anomalies (
   insertErrorQueryAndParams,
   parseAnomalyTypes,
   detectService,
-  parseAnomalyActions,
   getAnomaliesVM,
   errorsByHashes,
   countAnomalies,
@@ -33,6 +32,7 @@ import Data.Aeson qualified as AE
 import Data.ByteString.Char8 qualified as BSC
 import Data.Default (Default, def)
 import Data.Text qualified as T
+import Data.Text.Display (Display)
 import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -42,7 +42,7 @@ import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionF
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Time (parseUTCTime)
-import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
+import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
@@ -59,6 +59,7 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
+import Pkg.DBUtils (WrappedEnumSC (..))
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (id, many, some)
 import Relude.Unsafe qualified as Unsafe
@@ -80,8 +81,9 @@ data AnomalyTypes
   | ATShape
   | ATFormat
   | ATRuntimeException
-  deriving stock (Eq, Generic, Show)
+  deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
+  deriving (FromField, ToField, Display) via WrappedEnumSC "AT" AnomalyTypes
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyTypes
@@ -89,19 +91,6 @@ data AnomalyTypes
 
 instance Default AnomalyTypes where
   def = ATUnknown
-
-
-anomalyTypesToText :: AnomalyTypes -> Text
-anomalyTypesToText ATUnknown = "unknown"
-anomalyTypesToText ATField = "field"
-anomalyTypesToText ATEndpoint = "endpoint"
-anomalyTypesToText ATShape = "shape"
-anomalyTypesToText ATFormat = "format"
-anomalyTypesToText ATRuntimeException = "runtime_exception"
-
-
-instance ToField AnomalyTypes where
-  toField = Escape . encodeUtf8 <$> anomalyTypesToText
 
 
 parseAnomalyTypes :: (Eq s, IsString s) => s -> Maybe AnomalyTypes
@@ -114,21 +103,12 @@ parseAnomalyTypes "runtime_exception" = Just ATRuntimeException
 parseAnomalyTypes _ = Nothing
 
 
-instance FromField AnomalyTypes where
-  fromField f mdata =
-    case mdata of
-      Nothing -> returnError UnexpectedNull f ""
-      Just bs ->
-        case parseAnomalyTypes bs of
-          Just a -> pure a
-          Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'anomaly_type' enum, got " <> decodeUtf8 bs <> " instead."
-
-
 data AnomalyActions
   = AAUnknown
   | AACreated
-  deriving stock (Eq, Generic, Show)
+  deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
+  deriving (FromField, ToField, Display) via WrappedEnumSC "AA" AnomalyActions
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyActions
@@ -136,31 +116,6 @@ data AnomalyActions
 
 instance Default AnomalyActions where
   def = AAUnknown
-
-
-anomalyActionsToText :: AnomalyActions -> Text
-anomalyActionsToText AAUnknown = "unknown"
-anomalyActionsToText AACreated = "created"
-
-
-instance ToField AnomalyActions where
-  toField = Escape . encodeUtf8 <$> anomalyActionsToText
-
-
-parseAnomalyActions :: (Eq s, IsString s) => s -> Maybe AnomalyActions
-parseAnomalyActions "unknown" = Just AAUnknown
-parseAnomalyActions "created" = Just AACreated
-parseAnomalyActions _ = Nothing
-
-
-instance FromField AnomalyActions where
-  fromField f mdata =
-    case mdata of
-      Nothing -> returnError UnexpectedNull f ""
-      Just bs ->
-        case parseAnomalyActions bs of
-          Just a -> pure a
-          Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'anomaly_actions' enum, got " <> decodeUtf8 bs <> " instead."
 
 
 data AnomalyVM = AnomalyVM
