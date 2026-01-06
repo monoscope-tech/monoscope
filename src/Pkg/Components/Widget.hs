@@ -693,6 +693,7 @@ widgetToECharts widget =
             AE..= AE.object
               [ "show" AE..= fromMaybe True widget.showTooltip
               , "trigger" AE..= ("axis" :: Text)
+              , "appendToBody" AE..= True
               , "axisPointer"
                   AE..= AE.object
                     ["type" AE..= ("shadow" :: Text)]
