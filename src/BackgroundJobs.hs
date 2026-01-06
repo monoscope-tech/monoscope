@@ -1534,16 +1534,17 @@ checkTriggeredQueryMonitors = do
           title = monitor.alertConfig.title
           status = monitorStatus monitor.triggerLessThan monitor.warningThreshold monitor.alertThreshold total
           severity = case status of "Alerting" -> SysError; "Warning" -> SysWarn; _ -> SysInfo
-          attrs = Map.fromList
-            [ ("monitor.id", AE.toJSON monitor.id)
-            , ("monitor.title", AE.toJSON title)
-            , ("monitor.value", AE.toJSON total)
-            , ("monitor.threshold", AE.toJSON monitor.alertThreshold)
-            , ("monitor.warning_threshold", AE.toJSON monitor.warningThreshold)
-            , ("monitor.status", AE.toJSON status)
-            , ("monitor.query", AE.toJSON monitor.logQueryAsSql)
-            , ("monitor.condition", AE.toJSON $ if monitor.triggerLessThan then "less_than" :: Text else "greater_than")
-            ]
+          attrs =
+            Map.fromList
+              [ ("monitor.id", AE.toJSON monitor.id)
+              , ("monitor.title", AE.toJSON title)
+              , ("monitor.value", AE.toJSON total)
+              , ("monitor.threshold", AE.toJSON monitor.alertThreshold)
+              , ("monitor.warning_threshold", AE.toJSON monitor.warningThreshold)
+              , ("monitor.status", AE.toJSON status)
+              , ("monitor.query", AE.toJSON monitor.logQueryAsSql)
+              , ("monitor.condition", AE.toJSON $ if monitor.triggerLessThan then "less_than" :: Text else "greater_than")
+              ]
           otelLog = mkSystemLog monitor.projectId "monitor.alert.triggered" severity (title <> ": " <> status) attrs (Just $ fromIntegral durationNs) startWall
       insertSystemLog otelLog
       if status /= "Normal"

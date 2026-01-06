@@ -5,6 +5,7 @@ module Models.Telemetry.SystemLogs (
 ) where
 
 import Data.Aeson qualified as AE
+import Data.Effectful.UUID (UUIDEff)
 import Data.Map qualified as Map
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
@@ -22,11 +23,10 @@ import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
 import Relude
 import System.Config (AuthContext)
 import System.Types (DB)
-import Data.Effectful.UUID (UUIDEff)
 
 
 data SystemLogSeverity = SysInfo | SysWarn | SysError
-  deriving (Show, Eq)
+  deriving (Eq, Show)
 
 
 mkSystemLog
@@ -45,32 +45,33 @@ mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
       SysWarn -> (SLWarn, 13)
       SysError -> (SLError, 17)
     resource = Map.fromList [("service.name", AE.String "SYSTEM")]
-    otelLog = OtelLogsAndSpans
-      { id = "" -- Will be set by bulkInsertOtelLogsAndSpansTF
-      , project_id = UUID.toText pid
-      , timestamp = ts
-      , parent_id = Nothing
-      , observed_timestamp = Just ts
-      , hashes = V.empty
-      , name = Just eventName
-      , kind = Just "log"
-      , status_code = Nothing
-      , status_message = Nothing
-      , level = Just $ case sev of SysInfo -> "INFO"; SysWarn -> "WARN"; SysError -> "ERROR"
-      , severity = Just Severity{severity_text = Just sevLevel, severity_number = sevNum}
-      , body = Just $ AesonText $ AE.String bodyMsg
-      , duration = duration
-      , start_time = ts
-      , end_time = Nothing
-      , context = Just Context{trace_id = Nothing, span_id = Nothing, trace_state = Nothing, trace_flags = Nothing, is_remote = Nothing}
-      , events = Nothing
-      , links = Nothing
-      , attributes = if Map.null attrs then Nothing else Just (AesonText attrs)
-      , resource = Just (AesonText resource)
-      , summary = V.empty -- Will be generated
-      , date = ts
-      , errors = Nothing
-      }
+    otelLog =
+      OtelLogsAndSpans
+        { id = "" -- Will be set by bulkInsertOtelLogsAndSpansTF
+        , project_id = UUID.toText pid
+        , timestamp = ts
+        , parent_id = Nothing
+        , observed_timestamp = Just ts
+        , hashes = V.empty
+        , name = Just eventName
+        , kind = Just "log"
+        , status_code = Nothing
+        , status_message = Nothing
+        , level = Just $ case sev of SysInfo -> "INFO"; SysWarn -> "WARN"; SysError -> "ERROR"
+        , severity = Just Severity{severity_text = Just sevLevel, severity_number = sevNum}
+        , body = Just $ AesonText $ AE.String bodyMsg
+        , duration = duration
+        , start_time = ts
+        , end_time = Nothing
+        , context = Just Context{trace_id = Nothing, span_id = Nothing, trace_state = Nothing, trace_flags = Nothing, is_remote = Nothing}
+        , events = Nothing
+        , links = Nothing
+        , attributes = if Map.null attrs then Nothing else Just (AesonText attrs)
+        , resource = Just (AesonText resource)
+        , summary = V.empty -- Will be generated
+        , date = ts
+        , errors = Nothing
+        }
    in
     otelLog{summary = generateSummary otelLog}
 
