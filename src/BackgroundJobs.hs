@@ -50,7 +50,8 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.SystemLogs (SystemLogSeverity (..), insertSystemLog, mkSystemLog)
+import Models.Telemetry.SystemLogs (insertSystemLog, mkSystemLog)
+import Models.Telemetry.Telemetry (SeverityLevel (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
@@ -1533,7 +1534,7 @@ checkTriggeredQueryMonitors = do
           durationNs = toNanoSecs (diffTimeSpec end start)
           title = monitor.alertConfig.title
           status = monitorStatus monitor.triggerLessThan monitor.warningThreshold monitor.alertThreshold total
-          severity = case status of "Alerting" -> SysError; "Warning" -> SysWarn; _ -> SysInfo
+          severity = case status of "Alerting" -> SLError; "Warning" -> SLWarn; _ -> SLInfo
           attrs =
             Map.fromList
               [ ("monitor.id", AE.toJSON monitor.id)

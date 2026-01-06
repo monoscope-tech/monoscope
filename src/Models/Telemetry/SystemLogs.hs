@@ -1,5 +1,4 @@
 module Models.Telemetry.SystemLogs (
-  SystemLogSeverity (..),
   mkSystemLog,
   insertSystemLog,
 ) where
@@ -25,14 +24,10 @@ import System.Config (AuthContext)
 import System.Types (DB)
 
 
-data SystemLogSeverity = SysInfo | SysWarn | SysError
-  deriving (Eq, Show)
-
-
 mkSystemLog
   :: Projects.ProjectId
   -> Text -- event name (e.g., "monitor.alert.triggered")
-  -> SystemLogSeverity
+  -> SeverityLevel
   -> Text -- body message (human-readable)
   -> Map Text AE.Value -- attributes
   -> Maybe Int64 -- optional duration in nanoseconds
@@ -40,10 +35,12 @@ mkSystemLog
   -> OtelLogsAndSpans
 mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
   let
-    (sevLevel, sevNum) = case sev of
-      SysInfo -> (SLInfo, 9)
-      SysWarn -> (SLWarn, 13)
-      SysError -> (SLError, 17)
+    (levelText, sevNum) = case sev of
+      SLDebug -> ("DEBUG", 5)
+      SLInfo -> ("INFO", 9)
+      SLWarn -> ("WARN", 13)
+      SLError -> ("ERROR", 17)
+      SLFatal -> ("FATAL", 21)
     resource = Map.fromList [("service.name", AE.String "SYSTEM")]
     otelLog =
       OtelLogsAndSpans
@@ -57,8 +54,8 @@ mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
         , kind = Just "log"
         , status_code = Nothing
         , status_message = Nothing
-        , level = Just $ case sev of SysInfo -> "INFO"; SysWarn -> "WARN"; SysError -> "ERROR"
-        , severity = Just Severity{severity_text = Just sevLevel, severity_number = sevNum}
+        , level = Just levelText
+        , severity = Just Severity{severity_text = Just sev, severity_number = sevNum}
         , body = Just $ AesonText $ AE.String bodyMsg
         , duration = duration
         , start_time = ts
