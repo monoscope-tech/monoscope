@@ -1,4 +1,4 @@
-module Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..), connectPostgreSQL) where
+module Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..), WrappedEnumShow (..), connectPostgreSQL) where
 
 import Control.Exception
 import Data.IntMap qualified as IntMap
@@ -11,7 +11,7 @@ import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.ToField (ToField, toField)
 import GHC.TypeLits
 import Relude
-import Relude.Unsafe qualified as Unsafe
+import Servant (FromHttpApiData (..))
 import Text.Casing
 
 
@@ -26,7 +26,11 @@ instance (KnownSymbol prefix, Show a) => ToField (WrappedEnum prefix a) where
 instance (KnownSymbol prefix, Read a, Typeable a) => FromField (WrappedEnum prefix a) where
   fromField f = \case
     Nothing -> returnError UnexpectedNull f ""
-    Just bss -> pure $ WrappedEnum (Unsafe.read $ symbolVal (Proxy @prefix) <> toString (T.toTitle (decodeUtf8 bss)))
+    Just bss ->
+      let str = symbolVal (Proxy @prefix) <> toString (T.toTitle (decodeUtf8 bss))
+       in case readMaybe str of
+            Just a -> pure $ WrappedEnum a
+            Nothing -> returnError ConversionFailed f $ "Cannot parse: " <> str
 
 
 -- Snakecase
@@ -41,12 +45,42 @@ instance (KnownSymbol prefix, Show a) => ToField (WrappedEnumSC prefix a) where
 instance (KnownSymbol prefix, Read a, Typeable a) => FromField (WrappedEnumSC prefix a) where
   fromField f = \case
     Nothing -> returnError UnexpectedNull f ""
-    Just bss -> pure $ WrappedEnumSC (Unsafe.read $ symbolVal (Proxy @prefix) <> toString (T.toTitle (decodeUtf8 bss)))
+    Just bss ->
+      let str = symbolVal (Proxy @prefix) <> toPascal (fromSnake $ toString @Text (decodeUtf8 bss))
+       in case readMaybe str of
+            Just a -> pure $ WrappedEnumSC a
+            Nothing -> returnError ConversionFailed f $ "Cannot parse: " <> str
 
 
 -- Display instance that shows the value in snake_case without prefix
 instance (KnownSymbol prefix, Show a) => Display (WrappedEnumSC prefix a) where
   displayBuilder (WrappedEnumSC a) = fromString . quietSnake . drop (length $ symbolVal (Proxy @prefix)) . show $ a
+
+
+instance (KnownSymbol prefix, Read a, Show a) => FromHttpApiData (WrappedEnumSC prefix a) where
+  parseUrlPiece t =
+    case readMaybe (symbolVal (Proxy @prefix) <> toPascal (fromSnake $ toString @Text t)) of
+      Just a -> Right $ WrappedEnumSC a
+      Nothing -> Left $ "Invalid " <> fromString (symbolVal (Proxy @prefix)) <> " value: " <> t
+
+
+-- | Wrapper for enums that use Show/Read directly (stored as-is in DB)
+newtype WrappedEnumShow a = WrappedEnumShow a
+  deriving (Generic)
+
+
+instance Show a => ToField (WrappedEnumShow a) where
+  toField (WrappedEnumShow a) = toField (show a)
+
+
+instance (Read a, Typeable a) => FromField (WrappedEnumShow a) where
+  fromField f = \case
+    Nothing -> returnError UnexpectedNull f ""
+    Just bss ->
+      let str = toString @Text (decodeUtf8 bss)
+       in case readMaybe str of
+            Just a -> pure $ WrappedEnumShow a
+            Nothing -> returnError ConversionFailed f $ "Cannot parse: " <> str
 
 
 connectPostgreSQL :: ByteString -> IO Connection

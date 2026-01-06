@@ -35,6 +35,7 @@ import Data.HashTable.Class qualified as HTC
 import Data.HashTable.ST.Cuckoo qualified as HT
 import Data.Scientific qualified as Scientific
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time.LocalTime (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -48,7 +49,6 @@ import Models.Apis.Fields.Types qualified as Fields (
   FieldId (FieldId),
   FieldTypes (..),
   Format (..),
-  fieldCategoryEnumToText,
  )
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -683,7 +683,7 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
     fieldType = fromMaybe Fields.FTUnknown $ V.map aeValueToFieldType val V.!? 0
 
     -- field hash is <hash of the endpoint> + <the hash of <field_category><key_path_str><field_type>> (No space or comma between data)
-    !fieldHash = endpointHash <> toXXHash (Fields.fieldCategoryEnumToText fieldCategory <> keyPath)
+    !fieldHash = endpointHash <> toXXHash (display fieldCategory <> keyPath)
     -- FIXME: We should rethink this value to format logic.
     -- FIXME: Maybe it actually needs machine learning,
     -- FIXME: or maybe it should operate on the entire list, and not just one value.

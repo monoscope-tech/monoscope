@@ -62,6 +62,7 @@ import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.Default (Default, def)
 import Data.Text qualified as T
+import Data.Text.Display (Display)
 import Data.Time (UTCTime, getCurrentTime)
 import Data.Time.LocalTime (ZonedTime, utcToLocalZonedTime)
 import Data.UUID.V4 qualified as UUID4
@@ -84,6 +85,7 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
+import Pkg.DBUtils (WrappedEnumSC (..))
 import Pkg.DeriveUtils (UUIDId (..), idToText)
 import Relude hiding (id)
 import System.Types (DB)
@@ -576,33 +578,12 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
 
 -- | Conversation type for AI chats
 data ConversationType = CTAnomaly | CTTrace | CTLogExplorer | CTDashboard | CTSlackThread | CTDiscordThread
-  deriving stock (Eq, Generic, Show)
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (Display, FromField, ToField) via WrappedEnumSC "CT" ConversationType
 
 
 instance Default ConversationType where
   def = CTAnomaly
-
-
-instance ToField ConversationType where
-  toField CTAnomaly = Escape "anomaly"
-  toField CTTrace = Escape "trace"
-  toField CTLogExplorer = Escape "log_explorer"
-  toField CTDashboard = Escape "dashboard"
-  toField CTSlackThread = Escape "slack_thread"
-  toField CTDiscordThread = Escape "discord_thread"
-
-
-instance FromField ConversationType where
-  fromField f mdata = do
-    txt <- fromField @Text f mdata
-    case txt of
-      "anomaly" -> pure CTAnomaly
-      "trace" -> pure CTTrace
-      "log_explorer" -> pure CTLogExplorer
-      "dashboard" -> pure CTDashboard
-      "slack_thread" -> pure CTSlackThread
-      "discord_thread" -> pure CTDiscordThread
-      _ -> returnError ConversionFailed f "Invalid conversation type"
 
 
 -- | AI Conversation metadata
