@@ -216,8 +216,8 @@ SELECT
     an.created_at,
     an.updated_at,
     an.project_id,
-    an.acknowleged_at,
-    an.acknowleged_by,
+    an.acknowledged_at,
+    an.acknowledged_by,
     an.anomaly_type,
     an.action,
     an.target_hash,
@@ -289,9 +289,9 @@ acknowledgeAnomalies uid aids
       coerce @[Only Text] @[Text] <$> PG.query q (uid, aids)
   where
     qGetHashes = [sql| SELECT anomaly_hashes FROM apis.issues WHERE id=ANY(?::uuid[]) |]
-    qIssues = [sql| update apis.issues set acknowledged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
-    q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
-    qAnomaliesByHash = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where target_hash=ANY(?) |]
+    qIssues = [sql| update apis.issues set acknowledged_by=?, acknowledged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
+    q = [sql| update apis.anomalies set acknowledged_by=?, acknowledged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
+    qAnomaliesByHash = [sql| update apis.anomalies set acknowledged_by=?, acknowledged_at=NOW() where target_hash=ANY(?) |]
 
 
 acknowlegeCascade :: DB es => Users.UserId -> V.Vector Text -> Eff es Int64
@@ -302,8 +302,8 @@ acknowlegeCascade uid targets
       PG.execute q (uid, hashes)
   where
     hashes = (<> "%") <$> targets
-    qIssues = [sql| UPDATE apis.issues SET acknowledged_by = ?, acknowleged_at = NOW() WHERE target_hash=ANY (?); |]
-    q = [sql| UPDATE apis.anomalies SET acknowleged_by = ?, acknowleged_at = NOW() WHERE target_hash LIKE ANY (?); |]
+    qIssues = [sql| UPDATE apis.issues SET acknowledged_by = ?, acknowledged_at = NOW() WHERE target_hash=ANY (?); |]
+    q = [sql| UPDATE apis.anomalies SET acknowledged_by = ?, acknowledged_at = NOW() WHERE target_hash LIKE ANY (?); |]
 
 
 -------------------------------------------------------------------------------------------
