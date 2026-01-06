@@ -1158,28 +1158,21 @@ code, pre, .code, .monospace {
 }
 
 .tagify__dropdown__item {
-  color: var(--color-text);
+  color: var(--color-text) !important;
   border-radius: 0.5rem;
   margin: 2px 4px;
 }
 
-.tagify__dropdown__item:hover {
-  background: var(--color-fillWeak);
-  color: var(--color-textStrong);
-}
-
+.tagify__dropdown .tagify__dropdown__item:hover,
+.tagify__dropdown .tagify__dropdown__item--active,
 .tagify__dropdown__item--active {
-  background: var(--color-fillWeak);
-  color: var(--color-textStrong);
+  background: var(--color-fillWeak) !important;
+  color: var(--color-textStrong) !important;
 }
 
 /* Dark mode overrides */
 [data-theme="dark"] .tagify__dropdown {
   box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-}
-
-[data-theme="dark"] .tagify__dropdown__item--active {
-  background: var(--color-fillStrong);
 }
 
 /* Dark mode tag colors */

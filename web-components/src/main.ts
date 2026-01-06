@@ -237,7 +237,7 @@ window.createTagify = (selectorOrElement: string | Element, options: any = {}) =
       enabled: 0,
       maxItems: 50,
       fuzzySearch: true,
-      position: 'text',
+      position: 'input',
       caseSensitive: false,
       mapValueTo: 'name',
       searchKeys: ['value', 'name'],
