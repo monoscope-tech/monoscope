@@ -814,17 +814,22 @@ displayExprHelper op prec sub val =
         ("!=", Null) -> displayPrec prec sub <> " IS NOT NULL"
         ("IN", List vs) -> displayPrec prec sub <> " IN (" <> (mconcat . intersperse "," . map (displayPrec prec)) vs <> ")"
         ("NOT IN", List vs) -> displayPrec prec sub <> " NOT IN (" <> (mconcat . intersperse "," . map (displayPrec prec)) vs <> ")"
-        ("HAS", _) -> displayPrec prec sub <> " ~* " <> displayPrec prec val
-        ("NOT HAS", _) -> displayPrec prec sub <> " !~* " <> displayPrec prec val
-        ("HAS_ANY", List vs) -> "(" <> (mconcat . intersperse " OR " . map (\v -> displayPrec prec sub <> " ~* " <> displayPrec prec v)) vs <> ")"
-        ("HAS_ALL", List vs) -> "(" <> (mconcat . intersperse " AND " . map (\v -> displayPrec prec sub <> " ~* " <> displayPrec prec v)) vs <> ")"
-        ("CONTAINS", _) -> displayPrec prec sub <> " ILIKE '%' || " <> displayPrec prec val <> " || '%'"
-        ("NOT CONTAINS", _) -> displayPrec prec sub <> " NOT ILIKE '%' || " <> displayPrec prec val <> " || '%'"
-        ("STARTSWITH", _) -> displayPrec prec sub <> " ILIKE " <> displayPrec prec val <> " || '%'"
-        ("NOT STARTSWITH", _) -> displayPrec prec sub <> " NOT ILIKE " <> displayPrec prec val <> " || '%'"
-        ("ENDSWITH", _) -> displayPrec prec sub <> " ILIKE '%' || " <> displayPrec prec val
-        ("NOT ENDSWITH", _) -> displayPrec prec sub <> " NOT ILIKE '%' || " <> displayPrec prec val
+        ("HAS", _) -> subAsText <> " ~* " <> displayPrec prec val
+        ("NOT HAS", _) -> subAsText <> " !~* " <> displayPrec prec val
+        ("HAS_ANY", List vs) -> "(" <> (mconcat . intersperse " OR " . map (\v -> subAsText <> " ~* " <> displayPrec prec v)) vs <> ")"
+        ("HAS_ALL", List vs) -> "(" <> (mconcat . intersperse " AND " . map (\v -> subAsText <> " ~* " <> displayPrec prec v)) vs <> ")"
+        ("CONTAINS", _) -> subAsText <> " ILIKE '%' || " <> displayPrec prec val <> " || '%'"
+        ("NOT CONTAINS", _) -> subAsText <> " NOT ILIKE '%' || " <> displayPrec prec val <> " || '%'"
+        ("STARTSWITH", _) -> subAsText <> " ILIKE " <> displayPrec prec val <> " || '%'"
+        ("NOT STARTSWITH", _) -> subAsText <> " NOT ILIKE " <> displayPrec prec val <> " || '%'"
+        ("ENDSWITH", _) -> subAsText <> " ILIKE '%' || " <> displayPrec prec val
+        ("NOT ENDSWITH", _) -> subAsText <> " NOT ILIKE '%' || " <> displayPrec prec val
         _ -> displayPrec prec sub <> " " <> displayPrec @T.Text prec op <> " " <> displayPrec prec val
+  where
+    -- Cast to text for subjects without field keys (may be JSONB columns)
+    subAsText = case sub of
+      Subject _ _ [] -> displayPrec prec sub <> "::text"
+      _ -> displayPrec prec sub
 
 
 -- | Generate PostgreSQL JSONPath queries from AST with specified operator
