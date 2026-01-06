@@ -11,7 +11,6 @@ import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.ToField (ToField, toField)
 import GHC.TypeLits
 import Relude
-import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
 import Text.Casing
 
@@ -27,7 +26,11 @@ instance (KnownSymbol prefix, Show a) => ToField (WrappedEnum prefix a) where
 instance (KnownSymbol prefix, Read a, Typeable a) => FromField (WrappedEnum prefix a) where
   fromField f = \case
     Nothing -> returnError UnexpectedNull f ""
-    Just bss -> pure $ WrappedEnum (Unsafe.read $ symbolVal (Proxy @prefix) <> toString (T.toTitle (decodeUtf8 bss)))
+    Just bss ->
+      let str = symbolVal (Proxy @prefix) <> toString (T.toTitle (decodeUtf8 bss))
+       in case readMaybe str of
+            Just a -> pure $ WrappedEnum a
+            Nothing -> returnError ConversionFailed f $ "Cannot parse: " <> str
 
 
 -- Snakecase
@@ -42,7 +45,11 @@ instance (KnownSymbol prefix, Show a) => ToField (WrappedEnumSC prefix a) where
 instance (KnownSymbol prefix, Read a, Typeable a) => FromField (WrappedEnumSC prefix a) where
   fromField f = \case
     Nothing -> returnError UnexpectedNull f ""
-    Just bss -> pure $ WrappedEnumSC (Unsafe.read $ symbolVal (Proxy @prefix) <> toPascal (fromSnake $ toString @Text (decodeUtf8 bss)))
+    Just bss ->
+      let str = symbolVal (Proxy @prefix) <> toPascal (fromSnake $ toString @Text (decodeUtf8 bss))
+       in case readMaybe str of
+            Just a -> pure $ WrappedEnumSC a
+            Nothing -> returnError ConversionFailed f $ "Cannot parse: " <> str
 
 
 -- Display instance that shows the value in snake_case without prefix
@@ -69,7 +76,11 @@ instance Show a => ToField (WrappedEnumShow a) where
 instance (Read a, Typeable a) => FromField (WrappedEnumShow a) where
   fromField f = \case
     Nothing -> returnError UnexpectedNull f ""
-    Just bss -> pure $ WrappedEnumShow (Unsafe.read $ toString @Text (decodeUtf8 bss))
+    Just bss ->
+      let str = toString @Text (decodeUtf8 bss)
+       in case readMaybe str of
+            Just a -> pure $ WrappedEnumShow a
+            Nothing -> returnError ConversionFailed f $ "Cannot parse: " <> str
 
 
 connectPostgreSQL :: ByteString -> IO Connection
