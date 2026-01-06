@@ -163,23 +163,15 @@ spec = aroundAll withTestResources do
   describe "Query Error Handling" do
     it "should handle invalid query syntax gracefully" \tr -> do
       let invalidQuery = "status_code = 200"  -- Missing quotes around string value
-      
-      -- First, create some test data so we can verify behavior
-      let frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime
-      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
-      let reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
-      let msgs = [("m1", toStrict $ AE.encode reqMsg)]
-      _ <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
-      
-      (_, pg) <- testServant tr $ 
+
+      (_, pg) <- testServant tr $
         Log.apiLogH testPid (Just invalidQuery) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
-      
-      -- Invalid query should be ignored, returning all results (no filter applied)
+
+      -- Invalid query should return 0 results (not silently ignored)
       case pg of
         Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount -> do
-          -- Should return results because invalid query is ignored
-          resultCount `shouldSatisfy` (>= 1)
-          V.length requestVecs `shouldSatisfy` (>= 1)
+          V.length requestVecs `shouldBe` 0
+          resultCount `shouldBe` 0
         Log.LogsGetErrorSimple _ -> pass  -- Also acceptable
         _ -> error "Expected JSON response or error"
 

@@ -341,9 +341,12 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   (sess, project) <- Sessions.sessionAndProject pid
   let source = fromMaybe "spans" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
-  (queryAST, hadParseError) <- case parseQueryToAST (maybeToMonoid queryM') of
+  let queryInput = maybeToMonoid queryM'
+  (queryAST, hadParseError) <- case parseQueryToAST queryInput of
     Left err -> addErrorToast "Error Parsing Query" (Just err) >> pure ([], True)
-    Right ast -> pure (ast, False)
+    Right ast
+      | not (T.null (T.strip queryInput)) && null ast -> addErrorToast "Error Parsing Query" (Just "Invalid query syntax") >> pure ([], True)
+      | otherwise -> pure (ast, False)
   let queryText = toQText queryAST
 
   unless (isJust queryLibItemTitle) $ Projects.queryLibInsert Projects.QLTHistory pid sess.persistentSession.userId queryText queryAST Nothing
