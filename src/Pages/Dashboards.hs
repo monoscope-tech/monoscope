@@ -1761,10 +1761,23 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
         -- Process widgets concurrently to speed up tabs with multiple eager widgets
         processedWidgets <- pooledForConcurrently tab.widgets processWidgetWithDashboardId
 
-        -- Render tab content panel + OOB modal if variable needs prompting
+        -- Render tab content panel + OOB modal if variable needs prompting + OOB form URL update
+        let widgetOrderUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets_order?tab=" <> tabSlug
         addRespHeaders $ do
           tabContentPanel_ pid dashId.toText idx tab.name processedWidgets True True
           whenJust varToPrompt \v -> variablePickerModal_ pid dashId (Just tabSlug) allParamsWithConstants v True
+          -- OOB swap to update widget-order-trigger form's hx-patch URL for the current tab
+          form_
+            [ id_ "widget-order-trigger"
+            , class_ "hidden"
+            , hxPatch_ widgetOrderUrl
+            , hxVals_ "js:{...buildWidgetOrder(document.querySelector('.grid-stack'))}"
+            , hxExt_ "json-enc"
+            , hxSwap_ "none"
+            , hxTrigger_ "widget-order-changed from:body"
+            , hxSwapOob_ "true"
+            ]
+            ""
 
 
 -- | Render a single tab content panel
