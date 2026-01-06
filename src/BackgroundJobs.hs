@@ -50,6 +50,8 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.SystemLogs (insertSystemLog, mkSystemLog)
+import Models.Telemetry.Telemetry (SeverityLevel (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
@@ -77,7 +79,7 @@ import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, try)
-import Utils (DBField, getAlertStatusColor, getDurationNSMS)
+import Utils (DBField)
 
 
 data BgJobs
@@ -1532,12 +1534,20 @@ checkTriggeredQueryMonitors = do
           durationNs = toNanoSecs (diffTimeSpec end start)
           title = monitor.alertConfig.title
           status = monitorStatus monitor.triggerLessThan monitor.warningThreshold monitor.alertThreshold total
-          q = [sql| INSERT INTO otel_logs_and_spans (resource___service___name, project_id, kind,  timestamp , name , duration , summary , status_message , parent_id , body, hashes, start_time, date) VALUES (?, ?, 'alert', NOW(), ?, ?, ?, ?, ?, ?, '{}'::text[], ?, ?)|]
-          body = AE.object ["title" AE..= title, "value" AE..= total, "alert_threshold" AE..= monitor.alertThreshold, "warning_threshold" AE..= monitor.warningThreshold, "status" AE..= status, "query" AE..= monitor.logQueryAsSql]
-          attrText = decodeUtf8 (AE.encode body)
-          truncated = if T.length attrText > 500 then T.take 497 attrText <> "..." else attrText
-          summary = V.fromList ["status;" <> getAlertStatusColor status <> "⇒" <> status, truncated, "condition;right-badge-neutral⇒" <> if monitor.triggerLessThan then "Less Than" else "Greater Than", "duration;right-badge-neutral⇒" <> toText (getDurationNSMS durationNs)]
-      _ <- PG.execute q ("query-monitor", monitor.projectId, title, durationNs, summary, status, UUID.toText monitor.id.unQueryMonitorId, body, startWall, startWall)
+          severity = case status of "Alerting" -> SLError; "Warning" -> SLWarn; _ -> SLInfo
+          attrs =
+            Map.fromList
+              [ ("monitor.id", AE.toJSON monitor.id)
+              , ("monitor.title", AE.toJSON title)
+              , ("monitor.value", AE.toJSON total)
+              , ("monitor.threshold", AE.toJSON monitor.alertThreshold)
+              , ("monitor.warning_threshold", AE.toJSON monitor.warningThreshold)
+              , ("monitor.status", AE.toJSON status)
+              , ("monitor.query", AE.toJSON monitor.logQueryAsSql)
+              , ("monitor.condition", AE.toJSON $ if monitor.triggerLessThan then "less_than" :: Text else "greater_than")
+              ]
+          otelLog = mkSystemLog monitor.projectId "monitor.alert.triggered" severity (title <> ": " <> status) attrs (Just $ fromIntegral durationNs) startWall
+      insertSystemLog otelLog
       if status /= "Normal"
         then do
           Log.logInfo "Query monitor triggered alert" (monitor.id, title, status, total)
