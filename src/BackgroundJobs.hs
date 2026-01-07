@@ -1536,8 +1536,16 @@ checkTriggeredQueryMonitors = do
           -- Determine if previously alerting/warning (within last 5 minutes)
           wasAlerting = maybe False (\t -> startWall `diffUTCTime` t < 300) monitor.alertLastTriggered
           wasWarning = maybe False (\t -> startWall `diffUTCTime` t < 300) monitor.warningLastTriggered
-          status = monitorStatus monitor.triggerLessThan monitor.warningThreshold monitor.alertThreshold
-                     monitor.alertRecoveryThreshold monitor.warningRecoveryThreshold wasAlerting wasWarning total
+          status =
+            monitorStatus
+              monitor.triggerLessThan
+              monitor.warningThreshold
+              monitor.alertThreshold
+              monitor.alertRecoveryThreshold
+              monitor.warningRecoveryThreshold
+              wasAlerting
+              wasWarning
+              total
           severity = case status of "Alerting" -> SLError; "Warning" -> SLWarn; _ -> SLInfo
           attrs =
             Map.fromList
@@ -1572,14 +1580,16 @@ monitorStatus :: Bool -> Maybe Int -> Int -> Maybe Int -> Maybe Int -> Bool -> B
 monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRecovery wasAlerting wasWarning value
   | not triggerLessThan = case () of
       -- Trigger thresholds (going from normal to alerting/warning)
-      _ | alertThreshold <= value -> "Alerting"
+      _
+        | alertThreshold <= value -> "Alerting"
         | maybe False (<= value) warnThreshold -> "Warning"
         -- Recovery with hysteresis: stay in state until recovery threshold crossed
         | wasAlerting, not (hasRecovered alertRecovery alertThreshold) -> "Alerting"
         | wasWarning, not (hasRecovered warnRecovery (fromMaybe alertThreshold warnThreshold)) -> "Warning"
         | otherwise -> "Normal"
   | otherwise = case () of -- triggerLessThan
-      _ | alertThreshold >= value -> "Alerting"
+      _
+        | alertThreshold >= value -> "Alerting"
         | maybe False (>= value) warnThreshold -> "Warning"
         -- Recovery with hysteresis (inverted for less-than)
         | wasAlerting, not (hasRecoveredLT alertRecovery alertThreshold) -> "Alerting"

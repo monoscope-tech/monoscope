@@ -97,8 +97,8 @@ data QueryMonitor = QueryMonitor
   , deletedAt :: Maybe UTCTime
   , visualizationType :: Text
   , teams :: V.Vector UUID.UUID
-  -- Widget alert fields
-  , widgetId :: Maybe Text
+  , -- Widget alert fields
+    widgetId :: Maybe Text
   , dashboardId :: Maybe UUID.UUID
   , showThresholdLines :: Maybe Text
   , alertRecoveryThreshold :: Maybe Int
@@ -130,8 +130,8 @@ data QueryMonitorEvaled = QueryMonitorEvaled
   , deletedAt :: Maybe UTCTime
   , visualizationType :: Text
   , teams :: V.Vector UUID.UUID
-  -- Widget alert fields
-  , widgetId :: Maybe Text
+  , -- Widget alert fields
+    widgetId :: Maybe Text
   , dashboardId :: Maybe UUID.UUID
   , showThresholdLines :: Maybe Text
   , alertRecoveryThreshold :: Maybe Int

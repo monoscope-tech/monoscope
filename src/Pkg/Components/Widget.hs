@@ -826,7 +826,8 @@ widgetToECharts widget =
 -- Helper: Add markLines to first series for alert thresholds
 addMarkLinesToFirstSeries :: Widget -> [AE.Value] -> [AE.Value]
 addMarkLinesToFirstSeries widget series
-  | shouldShowLines, not (null markLineData) = case series of
+  | shouldShowLines
+  , not (null markLineData) = case series of
       [] -> series
       (first : rest) -> addMarkLine first : rest
   | otherwise = series
@@ -837,28 +838,32 @@ addMarkLinesToFirstSeries widget series
       _ -> isJust widget.alertThreshold || isJust widget.warningThreshold
 
     markLineData :: [AE.Value]
-    markLineData = catMaybes
-      [ widget.alertThreshold <&> \t -> AE.object
-          [ "yAxis" AE..= t
-          , "lineStyle" AE..= AE.object ["color" AE..= ("#dc2626" :: Text), "type" AE..= ("dashed" :: Text), "width" AE..= (2 :: Int)]
-          , "label" AE..= AE.object ["formatter" AE..= ("Alert: {c}" :: Text), "position" AE..= ("insideEndTop" :: Text)]
-          ]
-      , widget.warningThreshold <&> \t -> AE.object
-          [ "yAxis" AE..= t
-          , "lineStyle" AE..= AE.object ["color" AE..= ("#f59e0b" :: Text), "type" AE..= ("dashed" :: Text), "width" AE..= (2 :: Int)]
-          , "label" AE..= AE.object ["formatter" AE..= ("Warning: {c}" :: Text), "position" AE..= ("insideEndTop" :: Text)]
-          ]
-      ]
+    markLineData =
+      catMaybes
+        [ widget.alertThreshold <&> \t ->
+            AE.object
+              [ "yAxis" AE..= t
+              , "lineStyle" AE..= AE.object ["color" AE..= ("#dc2626" :: Text), "type" AE..= ("dashed" :: Text), "width" AE..= (2 :: Int)]
+              , "label" AE..= AE.object ["formatter" AE..= ("Alert: {c}" :: Text), "position" AE..= ("insideEndTop" :: Text)]
+              ]
+        , widget.warningThreshold <&> \t ->
+            AE.object
+              [ "yAxis" AE..= t
+              , "lineStyle" AE..= AE.object ["color" AE..= ("#f59e0b" :: Text), "type" AE..= ("dashed" :: Text), "width" AE..= (2 :: Int)]
+              , "label" AE..= AE.object ["formatter" AE..= ("Warning: {c}" :: Text), "position" AE..= ("insideEndTop" :: Text)]
+              ]
+        ]
 
     addMarkLine :: AE.Value -> AE.Value
     addMarkLine (AE.Object obj) = AE.Object $ AE.KeyMap.insert (K.fromText "markLine") markLineObj obj
     addMarkLine v = v
 
-    markLineObj = AE.object
-      [ "silent" AE..= True
-      , "symbol" AE..= ("none" :: Text)
-      , "data" AE..= markLineData
-      ]
+    markLineObj =
+      AE.object
+        [ "silent" AE..= True
+        , "symbol" AE..= ("none" :: Text)
+        , "data" AE..= markLineData
+        ]
 
 
 -- Helper: Extract legend data

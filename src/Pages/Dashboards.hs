@@ -48,6 +48,8 @@ import Data.List qualified as L
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
@@ -59,6 +61,7 @@ import Lucid
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxIndicator_, hxPatch_, hxPost_, hxPushUrl_, hxPut_, hxSelect_, hxSwapOob_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
+import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
@@ -75,6 +78,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.LogExplorer.LogItem (getServiceName)
+import Pages.Monitors qualified as Alerts
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
 import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
@@ -95,10 +99,6 @@ import Text.Slugify (slugify)
 import UnliftIO.Exception (try)
 import Utils
 import Web.FormUrlEncoded (FromForm)
-import Data.UUID qualified as UUID
-import Data.UUID.V4 qualified as UUID
-import Models.Apis.Monitors qualified as Monitors
-import Pages.Monitors qualified as Alerts
 
 
 folderFromPath :: Maybe Text -> Text
@@ -644,12 +644,13 @@ populateWidgetAlertStatuses widgets = do
   where
     applyAlertStatus statusMap w = case (.id) w >>= (`Map.lookup` statusMap) of
       Nothing -> w
-      Just status -> w
-        { Widget.alertId = Just $ Monitors.unQueryMonitorId status.monitorId & UUID.toText
-        , Widget.alertThreshold = Just status.alertThreshold
-        , Widget.warningThreshold = status.warningThreshold
-        , Widget.alertStatus = Just status.alertStatus
-        }
+      Just status ->
+        w
+          { Widget.alertId = Just $ Monitors.unQueryMonitorId status.monitorId & UUID.toText
+          , Widget.alertThreshold = Just status.alertThreshold
+          , Widget.warningThreshold = status.warningThreshold
+          , Widget.alertStatus = Just status.alertStatus
+          }
 
 
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
@@ -1058,10 +1059,14 @@ widgetAlertConfig_ pid alertFormId alertEndpoint widgetId widget = do
     do
       input_ [type_ "hidden", name_ "widgetId", value_ widgetId]
       input_ [type_ "hidden", name_ "query", value_ $ fromMaybe "" widget.query]
-      input_ [type_ "hidden", name_ "vizType", value_ $ case widget.wType of
-        Widget.WTTimeseries -> "timeseries"
-        Widget.WTTimeseriesLine -> "timeseries_line"
-        _ -> "timeseries"]
+      input_
+        [ type_ "hidden"
+        , name_ "vizType"
+        , value_ $ case widget.wType of
+            Widget.WTTimeseries -> "timeseries"
+            Widget.WTTimeseriesLine -> "timeseries_line"
+            _ -> "timeseries"
+        ]
 
       div_ [class_ "flex items-center justify-between p-4 bg-fillWeaker rounded-lg"] do
         div_ [] do
@@ -1214,34 +1219,35 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
       addRespHeaders $ toHtml ("" :: Text)
     Just _ -> do
       -- Convert to AlertUpsertForm and reuse convertToQueryMonitor
-      let alertForm = Alerts.AlertUpsertForm
-            { alertId = Just $ Monitors.unQueryMonitorId queryMonitorId & UUID.toText
-            , alertThreshold = form.alertThreshold
-            , warningThreshold = form.warningThreshold
-            , recipientEmails = []
-            , recipientSlacks = []
-            , recipientEmailAll = Nothing
-            , direction = form.direction
-            , title = form.title
-            , severity = "warning"
-            , subject = form.title
-            , message = ""
-            , query = form.query
-            , since = "1h"
-            , from = ""
-            , to = ""
-            , frequency = form.frequency
-            , timeWindow = Nothing
-            , conditionType = Just "threshold_exceeded"
-            , source = Just "widget"
-            , vizType = form.vizType
-            , teams = []
-            , alertRecoveryThreshold = form.alertRecoveryThreshold
-            , warningRecoveryThreshold = form.warningRecoveryThreshold
-            , widgetId = Just form.widgetId
-            , dashboardId = UUID.toText <$> dashboardIdM
-            , showThresholdLines = form.showThresholdLines
-            }
+      let alertForm =
+            Alerts.AlertUpsertForm
+              { alertId = Just $ Monitors.unQueryMonitorId queryMonitorId & UUID.toText
+              , alertThreshold = form.alertThreshold
+              , warningThreshold = form.warningThreshold
+              , recipientEmails = []
+              , recipientSlacks = []
+              , recipientEmailAll = Nothing
+              , direction = form.direction
+              , title = form.title
+              , severity = "warning"
+              , subject = form.title
+              , message = ""
+              , query = form.query
+              , since = "1h"
+              , from = ""
+              , to = ""
+              , frequency = form.frequency
+              , timeWindow = Nothing
+              , conditionType = Just "threshold_exceeded"
+              , source = Just "widget"
+              , vizType = form.vizType
+              , teams = []
+              , alertRecoveryThreshold = form.alertRecoveryThreshold
+              , warningRecoveryThreshold = form.warningRecoveryThreshold
+              , widgetId = Just form.widgetId
+              , dashboardId = UUID.toText <$> dashboardIdM
+              , showThresholdLines = form.showThresholdLines
+              }
 
       let queryMonitor = Alerts.convertToQueryMonitor pid now queryMonitorId alertForm
       _ <- Monitors.queryMonitorUpsert queryMonitor

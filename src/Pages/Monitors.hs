@@ -59,11 +59,11 @@ data AlertUpsertForm = AlertUpsertForm
   , source :: Maybe Text
   , vizType :: Maybe Text
   , teams :: [UUID.UUID]
-  -- Recovery thresholds (hysteresis)
-  , alertRecoveryThreshold :: Maybe Text
+  , -- Recovery thresholds (hysteresis)
+    alertRecoveryThreshold :: Maybe Text
   , warningRecoveryThreshold :: Maybe Text
-  -- Widget alert fields
-  , widgetId :: Maybe Text
+  , -- Widget alert fields
+    widgetId :: Maybe Text
   , dashboardId :: Maybe Text
   , showThresholdLines :: Maybe Text
   }
@@ -116,8 +116,8 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , deactivatedAt = Nothing
         , visualizationType = fromMaybe "timeseries" alertForm.vizType
         , teams = V.fromList alertForm.teams
-        -- Widget alert fields
-        , widgetId = alertForm.widgetId
+        , -- Widget alert fields
+          widgetId = alertForm.widgetId
         , dashboardId = dashboardUuid
         , showThresholdLines = alertForm.showThresholdLines
         , alertRecoveryThreshold = if isThresholdAlert then alertRecoveryInt else Nothing
