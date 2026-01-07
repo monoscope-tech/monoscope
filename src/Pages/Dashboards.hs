@@ -1087,42 +1087,9 @@ widgetAlertConfig_ pid alertFormId alertEndpoint widgetId widget = do
       div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4 space-y-4"] do
         h4_ [class_ "font-medium text-textStrong mb-3"] "Thresholds"
         div_ [class_ "grid grid-cols-2 gap-4"] do
-          fieldset_ [class_ "fieldset"] do
-            label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] do
-              div_ [class_ "w-1.5 h-1.5 rounded-full bg-fillError-weak"] ""
-              span_ "Alert threshold"
-            div_ [class_ "relative"] do
-              input_
-                [ type_ "number"
-                , name_ "alertThreshold"
-                , class_ "input input-bordered w-full pr-14"
-                , placeholder_ "100"
-                , required_ "required"
-                , value_ $ maybe "" show widget.alertThreshold
-                ]
-              span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
-          fieldset_ [class_ "fieldset"] do
-            label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] do
-              div_ [class_ "w-1.5 h-1.5 rounded-full bg-fillWarning-weak"] ""
-              span_ "Warning threshold"
-            div_ [class_ "relative"] do
-              input_
-                [ type_ "number"
-                , name_ "warningThreshold"
-                , class_ "input input-bordered w-full pr-14"
-                , placeholder_ "50"
-                , value_ $ maybe "" show widget.warningThreshold
-                ]
-              span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
-
-        -- Direction
-        div_ [class_ "mt-3"] do
-          label_ [class_ "text-xs font-medium text-textStrong block mb-1"] "Trigger when value goes"
-          select_ [name_ "direction", class_ "select select-bordered w-full"] do
-            option_ [value_ "above", selected_ ""] "Above threshold"
-            option_ [value_ "below"] "Below threshold"
-
-        -- Threshold line visibility
+          Alerts.thresholdInput_ "alertThreshold" "bg-fillError-weak" "Alert threshold" True "input-bordered w-full" [] widget.alertThreshold
+          Alerts.thresholdInput_ "warningThreshold" "bg-fillWarning-weak" "Warning threshold" False "input-bordered w-full" [] widget.warningThreshold
+        Alerts.directionSelect_ False "select-bordered w-full"
         div_ [class_ "mt-3"] do
           label_ [class_ "text-xs font-medium text-textStrong block mb-1"] "Show threshold lines"
           select_ [name_ "showThresholdLines", class_ "select select-bordered w-full"] do
@@ -1134,34 +1101,14 @@ widgetAlertConfig_ pid alertFormId alertEndpoint widgetId widget = do
             option_ ([value_ "never"] <> [selected_ "" | isNever]) "Never"
 
       -- Recovery thresholds (collapsible)
-      details_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
-        summary_ [class_ "p-3 cursor-pointer hover:bg-fillWeak transition-colors"] do
-          div_ [class_ "flex items-center gap-2"] do
-            faSprite_ "rotate-left" "regular" "w-4 h-4 text-iconNeutral"
-            span_ [class_ "font-medium text-sm"] "Recovery thresholds"
-            span_ [class_ "text-xs text-textWeak"] "(prevents flapping)"
-        div_ [class_ "p-4 pt-0 border-t border-strokeWeak mt-2"] do
-          p_ [class_ "text-xs text-textWeak mb-3"] "Alert recovers only when value crosses these thresholds"
-          div_ [class_ "grid grid-cols-2 gap-4"] do
-            fieldset_ [class_ "fieldset"] do
-              label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] do
-                div_ [class_ "w-1.5 h-1.5 rounded-full bg-fillError-weak"] ""
-                span_ "Alert recovery"
-              input_ [type_ "number", name_ "alertRecoveryThreshold", class_ "input input-bordered w-full", placeholder_ "e.g., 80"]
-            fieldset_ [class_ "fieldset"] do
-              label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] do
-                div_ [class_ "w-1.5 h-1.5 rounded-full bg-fillWarning-weak"] ""
-                span_ "Warning recovery"
-              input_ [type_ "number", name_ "warningRecoveryThreshold", class_ "input input-bordered w-full", placeholder_ "e.g., 40"]
+      Alerts.collapsibleSection_ "rotate-left" "regular" "Recovery thresholds" (Just "(prevents flapping)") do
+        p_ [class_ "text-xs text-textWeak mb-3"] "Alert recovers only when value crosses these thresholds"
+        div_ [class_ "grid grid-cols-2 gap-4"] do
+          Alerts.recoveryInput_ "alertRecoveryThreshold" "bg-fillError-weak" "Alert recovery" "input-bordered w-full" Nothing
+          Alerts.recoveryInput_ "warningRecoveryThreshold" "bg-fillWarning-weak" "Warning recovery" "input-bordered w-full" Nothing
 
       -- Check interval
-      div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4"] do
-        label_ [class_ "text-xs font-medium text-textStrong block mb-2"] "Check interval"
-        select_ [name_ "frequency", class_ "select select-bordered w-full"] do
-          option_ [value_ "1m"] "Every 1 minute"
-          option_ [value_ "5m", selected_ ""] "Every 5 minutes"
-          option_ [value_ "15m"] "Every 15 minutes"
-          option_ [value_ "1h"] "Every hour"
+      div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4"] $ Alerts.frequencySelect_ 5 True "select-bordered w-full"
 
       -- Alert title
       div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4"] do

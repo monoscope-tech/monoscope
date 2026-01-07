@@ -9,6 +9,12 @@ module Pages.Monitors (
   alertTeamDeleteH,
   AlertUpsertForm (..),
   Alert (..),
+  -- Shared alert UI helpers
+  thresholdInput_,
+  recoveryInput_,
+  directionSelect_,
+  frequencySelect_,
+  collapsibleSection_,
 )
 where
 
@@ -305,3 +311,53 @@ alertTeamDeleteH pid monitorId teamId = do
   _ <- Monitors.monitorRemoveTeam pid monitorId teamId
   addSuccessToast "Team removed from alert successfully" Nothing
   addRespHeaders $ AlertNoContent ""
+
+
+-- Shared Alert UI Helpers
+
+thresholdInput_ :: Text -> Text -> Text -> Bool -> Text -> [Attribute] -> Maybe Double -> Html ()
+thresholdInput_ nm color lbl req inputCls extraAttrs vM = fieldset_ [class_ "fieldset flex-1"] do
+  label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] do
+    div_ [class_ $ "w-1.5 h-1.5 rounded-full " <> color] ""
+    span_ [class_ "font-medium"] $ toHtml lbl
+    when req $ span_ [class_ "text-textWeak"] "*"
+  div_ [class_ "relative"] do
+    input_ $ [type_ "number", name_ nm, id_ nm, class_ $ "input " <> inputCls <> " pr-14"] <> [required_ "" | req] <> [value_ (show v) | Just v <- [vM]] <> extraAttrs
+    span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
+
+
+recoveryInput_ :: Text -> Text -> Text -> Text -> Maybe Double -> Html ()
+recoveryInput_ nm color lbl inputCls vM = fieldset_ [class_ "fieldset flex-1"] do
+  label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] $ div_ [class_ $ "w-1.5 h-1.5 rounded-full " <> color] "" >> span_ [class_ "font-medium"] (toHtml lbl)
+  div_ [class_ "relative"] do
+    input_ $ [type_ "number", name_ nm, class_ $ "input " <> inputCls <> " pr-14", placeholder_ "Same as trigger"] <> [value_ (show v) | Just v <- [vM]]
+    span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
+
+
+directionSelect_ :: Bool -> Text -> Html ()
+directionSelect_ belowSelected selectCls = fieldset_ [class_ "fieldset flex-1"] do
+  label_ [class_ "label text-xs font-medium mb-1"] "Trigger condition"
+  select_ [name_ "direction", class_ $ "select " <> selectCls] do
+    option_ (value_ "above" : [selected_ "" | not belowSelected]) "Above threshold"
+    option_ (value_ "below" : [selected_ "" | belowSelected]) "Below threshold"
+
+
+frequencySelect_ :: Int -> Bool -> Text -> Html ()
+frequencySelect_ defaultMins isByos selectCls = fieldset_ [class_ "fieldset flex-1"] do
+  label_ [class_ "label text-xs"] "Check interval"
+  select_ [name_ "frequency", class_ $ "select " <> selectCls] $ forM_ timeOpts mkOpt
+  where
+    timeOpts :: [(Int, Text)]
+    timeOpts = [(1, "1 minute"), (2, "2 minutes"), (5, "5 minutes"), (10, "10 minutes"), (15, "15 minutes"), (30, "30 minutes"), (60, "1 hour"), (360, "6 hours"), (720, "12 hours"), (1440, "1 day")]
+    mkOpt (m, l) = option_ ([value_ (show m <> "m")] <> [disabled_ "" | not isByos && m < 5] <> [selected_ "" | m == defaultMins]) ("Every " <> toHtml l)
+
+
+collapsibleSection_ :: Text -> Text -> Text -> Maybe Text -> Html () -> Html ()
+collapsibleSection_ icon iconKind title subtitleM content =
+  details_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
+    summary_ [class_ "p-3 cursor-pointer hover:bg-fillWeak transition-colors"] do
+      div_ [class_ "flex items-center gap-2"] do
+        faSprite_ icon iconKind "w-4 h-4 text-iconNeutral"
+        span_ [class_ "font-medium text-sm"] $ toHtml title
+        whenJust subtitleM \sub -> span_ [class_ "text-xs text-textWeak"] $ toHtml sub
+    div_ [class_ "p-4 pt-0 border-t border-strokeWeak mt-2"] content
