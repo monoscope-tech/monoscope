@@ -1297,8 +1297,11 @@ export class QueryEditorComponent extends LitElement {
         if (this.isProgrammaticUpdate) return;
 
         // PERF: Use requestIdleCallback to defer non-critical work off the keystroke path
-        // This allows the browser to render the typed character immediately
-        (window.requestIdleCallback || ((cb) => setTimeout(cb, 1)))(() => {
+        const scheduleIdle = window.requestIdleCallback
+          ? (cb: () => void) => window.requestIdleCallback(cb, { timeout: IDLE_CALLBACK_TIMEOUT })
+          : (cb: () => void) => setTimeout(cb, 1);
+
+        scheduleIdle(() => {
           const model = this.editor?.getModel();
           if (!model) return;
 
@@ -1317,7 +1320,7 @@ export class QueryEditorComponent extends LitElement {
           // Debounced updates
           this.updateQueryDebounced(newValue);
           this.triggerSuggestionsDebounced();
-        }, { timeout: IDLE_CALLBACK_TIMEOUT });
+        });
       }),
 
       // OPTIMIZATION: Removed cursor position handler - dropdown position is already correct
@@ -1490,22 +1493,14 @@ export class QueryEditorComponent extends LitElement {
 
     const searchTerm = query.split('|').pop()?.trim() || '';
 
-    const filterAndSlice = (items: any[], prop: string = 'query') => {
-      const result: any[] = [];
-      const limit = 5;
-      for (const item of items) {
-        if (result.length >= limit) break;
-        if (!searchTerm) {
-          result.push(item);
-        } else {
-          const propVal = (prop === 'query' ? item.query : item.name).toLowerCase();
-          if (propVal.includes(searchTerm) || item.query.toLowerCase().includes(searchTerm)) {
-            result.push(item);
-          }
-        }
-      }
-      return result;
-    };
+    const filterAndSlice = (items: any[], prop: string = 'query') =>
+      (searchTerm
+        ? items.filter((item) =>
+            (prop === 'query' ? item.query : item.name).toLowerCase().includes(searchTerm) ||
+            item.query.toLowerCase().includes(searchTerm)
+          )
+        : items
+      ).slice(0, 5);
 
     const result = {
       saved: filterAndSlice(this.savedViews, 'name'),
