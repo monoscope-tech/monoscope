@@ -841,8 +841,10 @@ removeProjectId v = v
 severityAliases :: [(Text, (Text, Telemetry.SeverityLevel))]
 severityAliases = [("TRACE", ("TRACE", Telemetry.SLTrace)), ("DEBUG", ("DEBUG", Telemetry.SLDebug)), ("INFO", ("INFO", Telemetry.SLInfo)), ("WARN", ("WARN", Telemetry.SLWarn)), ("ERROR", ("ERROR", Telemetry.SLError)), ("FATAL", ("FATAL", Telemetry.SLFatal)), ("WARNING", ("WARN", Telemetry.SLWarn)), ("INFORMATION", ("INFO", Telemetry.SLInfo)), ("CRITICAL", ("FATAL", Telemetry.SLFatal))]
 
+
 parseSeverityLevel :: Text -> Maybe Telemetry.SeverityLevel
 parseSeverityLevel = fmap snd . (`L.lookup` severityAliases) . T.toUpper
+
 
 normalizeSeverityLevel :: Text -> Maybe Text
 normalizeSeverityLevel = fmap fst . (`L.lookup` severityAliases) . T.toUpper
