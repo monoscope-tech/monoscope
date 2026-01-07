@@ -38,6 +38,7 @@ This document provides a complete reference for the Kusto Query Language (KQL) i
 - [Value Types](#value-types)
 - [Named Aggregations](#named-aggregations)
 - [Query Examples](#query-examples)
+- [Limitations & Notes](#limitations--notes)
 
 ---
 
@@ -113,9 +114,9 @@ response_time >= 100 and response_time <= 500
 
 | Operator | Description | Case Sensitive | Example |
 |----------|-------------|----------------|---------|
-| `has` | Contains substring (word match) | No | `message has "error"` |
-| `!has` | Does not contain substring | No | `message !has "debug"` |
-| `contains` | Contains substring | No | `url contains "/api"` |
+| `has` | Contains word (token match) | No | `message has "error"` |
+| `!has` | Does not contain word | No | `message !has "debug"` |
+| `contains` | Contains substring (any position) | No | `url contains "/api"` |
 | `!contains` | Does not contain substring | No | `path !contains "/health"` |
 | `startswith` | Starts with string | No | `endpoint startswith "/v1/"` |
 | `!startswith` | Does not start with string | No | `path !startswith "/internal"` |
@@ -123,6 +124,20 @@ response_time >= 100 and response_time <= 500
 | `!endswith` | Does not end with string | No | `url !endswith ".css"` |
 | `matches` | Matches regex pattern | Yes | `email matches /.*@company\.com/` |
 | `=~` | Matches regex pattern (alternate syntax) | Yes | `body =~ /^ERROR:.*/` |
+
+**`has` vs `contains`:**
+- `has` matches whole words/tokens (bounded by non-alphanumeric characters)
+- `contains` matches any substring regardless of word boundaries
+
+```kusto
+// has matches whole words only
+"error code 500" has "error"      // ✓ matches (word boundary)
+"errorcode 500" has "error"       // ✗ no match (no word boundary)
+
+// contains matches any substring
+"error code 500" contains "error" // ✓ matches
+"errorcode 500" contains "error"  // ✓ matches
+```
 
 **Examples:**
 ```kusto
@@ -412,16 +427,16 @@ bin_auto(timestamp_field)
 
 | Time Range | Bin Width |
 |------------|-----------|
-| <= 2 minutes | 1 second |
-| <= 5 minutes | 5 seconds |
-| <= 15 minutes | 10 seconds |
-| <= 1 hour | 30 seconds |
-| <= 6 hours | 1 minute |
-| <= 14 hours | 5 minutes |
-| <= 48 hours | 10 minutes |
-| < 7 days | 1 hour |
-| < 30 days | 6 hours |
-| >= 30 days | 1 day |
+| 0 - 2 minutes | 1 second |
+| 2 - 5 minutes | 5 seconds |
+| 5 - 15 minutes | 10 seconds |
+| 15 minutes - 1 hour | 30 seconds |
+| 1 - 6 hours | 1 minute |
+| 6 - 14 hours | 5 minutes |
+| 14 - 48 hours | 10 minutes |
+| 2 - 7 days | 1 hour |
+| 7 - 30 days | 6 hours |
+| 30+ days | 1 day |
 
 **Examples:**
 ```kusto
@@ -736,3 +751,29 @@ countif(condition), dcount(field)
 strcat(s1, s2, ...), coalesce(v1, v2, ...)
 iff(cond, then, else), case(p1, v1, ..., else)
 ```
+
+---
+
+## Limitations & Notes
+
+### Unsupported KQL Features
+This implementation supports a subset of KQL. Notable differences from Azure Data Explorer KQL:
+- No `join`, `union`, or subquery support
+- No `let` statements for variable binding
+- No `project`, `extend`, or `mv-expand` operators
+- No `render` operator (visualization is handled separately)
+
+### Null Handling
+- Comparisons with `null` fields return `false` (field must exist)
+- Use `coalesce(field, default)` to handle missing values
+- Aggregations skip null values
+
+### Type Coercion
+- String-to-number comparisons: strings are not auto-converted
+- Use explicit values: `status_code == 200` (number) not `status_code == "200"` (string)
+
+### Performance Tips
+- Filter by time range first (`timestamp >= ago(1h)`) to limit data scanned
+- Use `has` over `contains` when possible (more efficient for indexed fields)
+- Limit results with `take` when exploring data
+- Percentile calculations are approximate for performance
