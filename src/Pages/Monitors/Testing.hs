@@ -15,7 +15,6 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
-import Fmt (commaizeF, fmt)
 import Lucid
 import Lucid.Htmx
 import Models.Apis.Monitors qualified as Monitors
@@ -39,7 +38,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (checkFreeTierExceeded, faSprite_, toUriStr)
+import Utils (checkFreeTierExceeded, faSprite_, formatWithCommas, toUriStr)
 
 
 -- | Types for unified monitor view
@@ -490,17 +489,13 @@ alertStats_ pid alert currTime = do
   section_ [class_ "space-y-3 shrink-0 w-full"] do
     div_ [class_ "flex gap-2"] do
       statBox_ (Just pid) Nothing "Check Interval" "How often the alert query is evaluated" (show alert.checkIntervalMins <> " min") Nothing Nothing
-      statBox_ (Just pid) Nothing "Alert Threshold" ("Trigger alert when value is " <> direction) (fmtThreshold alert.alertThreshold) Nothing Nothing
+      statBox_ (Just pid) Nothing "Alert Threshold" ("Trigger alert when value is " <> direction) (formatWithCommas alert.alertThreshold) Nothing Nothing
       whenJust alert.warningThreshold \warning ->
-        statBox_ (Just pid) Nothing "Warning Threshold" ("Trigger warning when value is " <> direction) (fmtThreshold warning) Nothing Nothing
+        statBox_ (Just pid) Nothing "Warning Threshold" ("Trigger warning when value is " <> direction) (formatWithCommas warning) Nothing Nothing
       statBox_ (Just pid) Nothing "Last Evaluated" "When the alert was last checked" (toText $ prettyTimeAuto currTime alert.lastEvaluated) Nothing Nothing
       statBox_ (Just pid) Nothing "Last Triggered" "When the alert was last triggered" (maybe "Never" (toText . prettyTimeAuto currTime) alert.alertLastTriggered) Nothing Nothing
   where
     direction = if alert.triggerLessThan then "below" else "above"
-    fmtThreshold d =
-      let (intPart, fracPart) = properFraction d :: (Int, Double)
-          intFormatted = fmt (commaizeF intPart)
-       in if fracPart == 0 then intFormatted else intFormatted <> T.pack (dropWhile (/= '.') (show d))
 
 
 -- | Alert query tab content (copied from Alerts module)
