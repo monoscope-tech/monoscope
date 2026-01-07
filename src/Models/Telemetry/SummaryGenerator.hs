@@ -106,6 +106,7 @@ generateLogSummary otel =
     V.fromList $ if null elements then rawDataLogElements else elements
   where
     severityStyle sev = case sev of
+      SLTrace -> "badge-neutral"
       SLDebug -> "badge-neutral"
       SLInfo -> "badge-info" -- Blue background for INFO
       SLWarn -> "badge-warning"
@@ -113,6 +114,7 @@ generateLogSummary otel =
       SLFatal -> "badge-fatal"
 
     severityText sev = case sev of
+      SLTrace -> "TRACE"
       SLDebug -> "DEBUG"
       SLInfo -> "INFO"
       SLWarn -> "WARN"
