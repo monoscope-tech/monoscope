@@ -1,14 +1,14 @@
 -- Widget-integrated alerts: link alerts to dashboard widgets
 
--- Add widget linkage and recovery thresholds to query_monitors
 ALTER TABLE monitors.query_monitors
   ADD COLUMN IF NOT EXISTS widget_id TEXT,
   ADD COLUMN IF NOT EXISTS dashboard_id UUID REFERENCES projects.dashboards(id) ON DELETE CASCADE,
   ADD COLUMN IF NOT EXISTS show_threshold_lines TEXT DEFAULT 'always',
   ADD COLUMN IF NOT EXISTS alert_recovery_threshold INT,
-  ADD COLUMN IF NOT EXISTS warning_recovery_threshold INT;
+  ADD COLUMN IF NOT EXISTS warning_recovery_threshold INT,
+  ADD COLUMN IF NOT EXISTS current_status TEXT DEFAULT 'normal',
+  ADD COLUMN IF NOT EXISTS current_value INT DEFAULT 0;
 
--- Add constraint for show_threshold_lines values
 DO $$ BEGIN
   ALTER TABLE monitors.query_monitors
     ADD CONSTRAINT check_show_threshold_lines
@@ -17,7 +17,14 @@ EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
 
--- Index for efficient widget-to-alert lookups
+DO $$ BEGIN
+  ALTER TABLE monitors.query_monitors
+    ADD CONSTRAINT check_current_status
+    CHECK (current_status IN ('normal', 'warning', 'alerting'));
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_query_monitors_widget_id
   ON monitors.query_monitors(widget_id)
   WHERE widget_id IS NOT NULL;
