@@ -673,11 +673,9 @@ dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = do
            in map updateWidget ws
         Nothing -> ws <> [widgetUpdated]
 
-  let dash' = case (tabSlugM, (dash :: Dashboards.Dashboard).tabs) of
-        (Just slug, Just _) ->
-          let updateTab tab = if slugify tab.name == slug then (tab :: Dashboards.Tab) & #widgets %~ updateWidgets else tab
-           in (dash :: Dashboards.Dashboard) & #tabs %~ fmap (map updateTab)
-        _ -> (dash :: Dashboards.Dashboard) & #widgets %~ updateWidgets
+  let dash' = case (tabSlugM, dash.tabs) of
+        (Just slug, Just _) -> updateTabBySlug slug (#widgets %~ updateWidgets) dash
+        _ -> dash & #widgets %~ updateWidgets
 
   _ <- Dashboards.updateSchema dashId dash'
   syncDashboardAndQueuePush pid dashId
@@ -732,21 +730,16 @@ dashboardWidgetReorderPatchH _ _ _ widgetOrder | Map.null widgetOrder = addRespH
 dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
   (_, dash) <- getDashAndVM dashId Nothing
 
-  -- Get the old widgets to detect deletions
-  let oldWidgets = case (tabSlugM, (dash :: Dashboards.Dashboard).tabs) of
-        (Just slug, Just tabs) ->
-          let tab = find (\t -> slugify t.name == slug) tabs
-           in maybe [] (.widgets) tab
-        _ -> (dash :: Dashboards.Dashboard).widgets
+  let oldWidgets = case (tabSlugM, dash.tabs) of
+        (Just slug, Just tabs) -> maybe [] (.widgets) $ find (\t -> slugify t.name == slug) tabs
+        _ -> dash.widgets
       oldWidgetIds = mapMaybe (.id) oldWidgets
       newWidgetIds = Map.keys widgetOrder
       deletedWidgetIds = filter (`notElem` newWidgetIds) oldWidgetIds
 
-  let newDash = case (tabSlugM, (dash :: Dashboards.Dashboard).tabs) of
-        (Just slug, Just tabs) ->
-          let updateTab tab = if slugify tab.name == slug then (tab :: Dashboards.Tab) & #widgets .~ reorderWidgets widgetOrder tab.widgets else tab
-           in (dash :: Dashboards.Dashboard) & #tabs %~ fmap (map updateTab)
-        _ -> (dash :: Dashboards.Dashboard) & #widgets .~ reorderWidgets widgetOrder (dash :: Dashboards.Dashboard).widgets
+  let newDash = case (tabSlugM, dash.tabs) of
+        (Just slug, Just _) -> updateTabBySlug slug (\tab -> tab & #widgets .~ reorderWidgets widgetOrder tab.widgets) dash
+        _ -> dash & #widgets .~ reorderWidgets widgetOrder dash.widgets
 
   _ <- Dashboards.updateSchema dashId newDash
   syncDashboardAndQueuePush pid dashId
@@ -782,6 +775,11 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
     mkWidgetMap = Map.fromList . concatMap flatten
     flatten w = (widgetId w, w) : maybe [] (concatMap flatten) w.children
     widgetId w = fromMaybe (maybeToMonoid $ slugify <$> w.title) w.id
+
+
+updateTabBySlug :: Text -> (Dashboards.Tab -> Dashboards.Tab) -> Dashboards.Dashboard -> Dashboards.Dashboard
+updateTabBySlug slug f dash = dash & #tabs %~ fmap (map updateTab)
+  where updateTab tab = if slugify tab.name == slug then f tab else tab
 
 
 getDashAndVM :: (DB es, Error ServerError :> es, Wreq.HTTP :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)

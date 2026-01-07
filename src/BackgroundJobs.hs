@@ -15,7 +15,7 @@ import Data.Map.Lazy qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
-import Data.Time.Clock (NominalDiffTime, diffUTCTime)
+import Data.Time.Clock (diffUTCTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime)
 import Data.UUID qualified as UUID
@@ -1533,9 +1533,8 @@ checkTriggeredQueryMonitors = do
       let total = sum (map (\(Only v) -> v) results)
           durationNs = toNanoSecs (diffTimeSpec end start)
           title = monitor.alertConfig.title
-          isRecentAlert = (< alertActiveWindow) . diffUTCTime startWall
-          wasAlerting = maybe False isRecentAlert monitor.alertLastTriggered
-          wasWarning = maybe False isRecentAlert monitor.warningLastTriggered
+          wasAlerting = monitor.currentStatus == "alerting"
+          wasWarning = monitor.currentStatus == "warning"
           status =
             monitorStatus
               monitor.triggerLessThan
@@ -1571,28 +1570,14 @@ checkTriggeredQueryMonitors = do
       void $ Monitors.updateLastEvaluatedAt monitor.id startWall
 
 
-alertActiveWindow :: NominalDiffTime
-alertActiveWindow = 300
-
-
 monitorStatus :: Bool -> Maybe Int -> Int -> Maybe Int -> Maybe Int -> Bool -> Bool -> Int -> Text
 monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRecovery wasAlerting wasWarning value
-  | not triggerLessThan = case () of
-      _
-        | alertThreshold <= value -> "alerting"
-        | maybe False (<= value) warnThreshold -> "warning"
-        | wasAlerting, not (hasRecovered alertRecovery alertThreshold) -> "alerting"
-        | wasWarning, not (hasRecovered warnRecovery (fromMaybe alertThreshold warnThreshold)) -> "warning"
-        | otherwise -> "normal"
-  | otherwise = case () of -- triggerLessThan
-      _
-        | alertThreshold >= value -> "alerting"
-        | maybe False (>= value) warnThreshold -> "warning"
-        | wasAlerting, not (hasRecoveredLT alertRecovery alertThreshold) -> "alerting"
-        | wasWarning, not (hasRecoveredLT warnRecovery (fromMaybe alertThreshold warnThreshold)) -> "warning"
-        | otherwise -> "normal"
+  | breached alertThreshold = "alerting"
+  | maybe False breached warnThreshold = "warning"
+  | wasAlerting, not (recovered alertRecovery alertThreshold) = "alerting"
+  | wasWarning, not (recovered warnRecovery (fromMaybe alertThreshold warnThreshold)) = "warning"
+  | otherwise = "normal"
   where
-    -- For "above" threshold: recovered when value drops below recovery threshold
-    hasRecovered recoveryM trigger = value < fromMaybe trigger recoveryM
-    -- For "below" threshold: recovered when value rises above recovery threshold
-    hasRecoveredLT recoveryM trigger = value > fromMaybe trigger recoveryM
+    (breached, recovered) = if triggerLessThan
+      then ((>= value), \r t -> value > fromMaybe t r)
+      else ((<= value), \r t -> value < fromMaybe t r)

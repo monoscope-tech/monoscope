@@ -291,8 +291,6 @@ updateLastEvaluatedAt qmId time = PG.execute q (time, qmId)
     q = [sql|UPDATE monitors.query_monitors SET last_evaluated=? where id=?|]
 
 
--- Widget alert queries
-
 queryMonitorByWidgetId :: DB es => Text -> Eff es (Maybe QueryMonitor)
 queryMonitorByWidgetId wId = listToMaybe <$> PG.query q (Only wId)
   where
