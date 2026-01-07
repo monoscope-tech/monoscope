@@ -27,7 +27,7 @@ import Data.Default (Default)
 import Data.Time.Clock (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity (_selectWhere)
+import Database.PostgreSQL.Entity (_select, _selectWhere)
 import Database.PostgreSQL.Entity.Types (
   CamelToSnake,
   Entity,
@@ -243,17 +243,7 @@ queryMonitorsAll pid = PG.query (_selectWhere @QueryMonitor [[DAT.field| project
 
 
 getAlertsByTeamHandle :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [QueryMonitor]
-getAlertsByTeamHandle pid teamId = PG.query q (pid, teamId)
-  where
-    q =
-      [sql|
-      SELECT qm.id, qm.created_at, qm.updated_at, qm.project_id, qm.check_interval_mins, qm.alert_threshold, qm.warning_threshold,
-        qm.log_query, qm.log_query_as_sql, qm.last_evaluated, qm.warning_last_triggered, qm.alert_last_triggered, qm.trigger_less_than,
-        qm.threshold_sustained_for_mins, qm.alert_config, qm.deactivated_at, qm.deleted_at, qm.visualization_type, qm.teams,
-        qm.widget_id, qm.dashboard_id, qm.alert_recovery_threshold, qm.warning_recovery_threshold, qm.current_status, qm.current_value
-      FROM monitors.query_monitors qm
-      WHERE qm.project_id = ? AND ? = ANY(qm.teams)
-    |]
+getAlertsByTeamHandle pid teamId = PG.query (_select @QueryMonitor <> " WHERE project_id = ? AND ? = ANY(teams)") (pid, teamId)
 
 
 monitorRemoveTeam :: DB es => Projects.ProjectId -> QueryMonitorId -> UUID.UUID -> Eff es Int64
@@ -268,17 +258,7 @@ monitorRemoveTeam pid monitorId teamId = PG.execute q (teamId, pid, monitorId)
 
 
 getActiveQueryMonitors :: DB es => Eff es [QueryMonitor]
-getActiveQueryMonitors = PG.query q ()
-  where
-    q =
-      [sql|
-    SELECT  qm.id, qm.created_at, qm.updated_at, qm.project_id, qm.check_interval_mins, qm.alert_threshold, qm.warning_threshold,
-        qm.log_query, qm.log_query_as_sql, qm.last_evaluated, qm.warning_last_triggered, qm.alert_last_triggered, qm.trigger_less_than,
-        qm.threshold_sustained_for_mins, qm.alert_config, qm.deactivated_at, qm.deleted_at, qm.visualization_type, qm.teams,
-        qm.widget_id, qm.dashboard_id, qm.alert_recovery_threshold, qm.warning_recovery_threshold, qm.current_status, qm.current_value
-      FROM monitors.query_monitors qm
-      WHERE qm.deactivated_at IS NULL AND qm.log_query_as_sql IS NOT NULL AND qm.log_query_as_sql != ''
-    |]
+getActiveQueryMonitors = PG.query (_select @QueryMonitor <> " WHERE deactivated_at IS NULL AND log_query_as_sql IS NOT NULL AND log_query_as_sql != ''") ()
 
 
 updateLastEvaluatedAt :: DB es => QueryMonitorId -> UTCTime -> Eff es Int64
@@ -288,31 +268,11 @@ updateLastEvaluatedAt qmId time = PG.execute q (time, qmId)
 
 
 queryMonitorByWidgetId :: DB es => Text -> Eff es (Maybe QueryMonitor)
-queryMonitorByWidgetId wId = listToMaybe <$> PG.query q (Only wId)
-  where
-    q =
-      [sql|
-      SELECT id, created_at, updated_at, project_id, check_interval_mins, alert_threshold, warning_threshold,
-        log_query, log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
-        threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, visualization_type, teams,
-        widget_id, dashboard_id, alert_recovery_threshold, warning_recovery_threshold, current_status, current_value
-      FROM monitors.query_monitors
-      WHERE widget_id = ? AND deleted_at IS NULL
-    |]
+queryMonitorByWidgetId wId = listToMaybe <$> PG.query (_select @QueryMonitor <> " WHERE widget_id = ? AND deleted_at IS NULL") (Only wId)
 
 
 queryMonitorsByDashboardId :: DB es => UUID.UUID -> Eff es [QueryMonitor]
-queryMonitorsByDashboardId dId = PG.query q (Only dId)
-  where
-    q =
-      [sql|
-      SELECT id, created_at, updated_at, project_id, check_interval_mins, alert_threshold, warning_threshold,
-        log_query, log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
-        threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, visualization_type, teams,
-        widget_id, dashboard_id, alert_recovery_threshold, warning_recovery_threshold, current_status, current_value
-      FROM monitors.query_monitors
-      WHERE dashboard_id = ? AND deleted_at IS NULL
-    |]
+queryMonitorsByDashboardId dId = PG.query (_select @QueryMonitor <> " WHERE dashboard_id = ? AND deleted_at IS NULL") (Only dId)
 
 
 deleteMonitorsByWidgetIds :: DB es => [Text] -> Eff es Int64
