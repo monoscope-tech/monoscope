@@ -1217,6 +1217,14 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
     Just m -> pure m.id
     Nothing -> liftIO $ Monitors.QueryMonitorId <$> UUID.nextRandom
 
+  -- Update widget's showThresholdLines in the dashboard
+  whenJust dashboardIdM \dashId -> do
+    let dashboardId = UUIDId dashId
+    (_, dash) <- getDashAndVM dashboardId Nothing
+    let updateWidget w = if w.id == Just form.widgetId then w{Widget.showThresholdLines = form.showThresholdLines} else w
+        dash' = dash & #widgets %~ map updateWidget & #tabs %~ fmap (map (\t -> t & #widgets %~ map updateWidget))
+    void $ Dashboards.updateSchema dashboardId dash'
+
   -- If alertEnabled is not checked, delete the monitor
   case form.alertEnabled of
     Nothing -> do
@@ -1252,7 +1260,6 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
               , warningRecoveryThreshold = form.warningRecoveryThreshold
               , widgetId = Just form.widgetId
               , dashboardId = UUID.toText <$> dashboardIdM
-              , showThresholdLines = form.showThresholdLines
               }
 
       let queryMonitor = Alerts.convertToQueryMonitor pid now queryMonitorId alertForm

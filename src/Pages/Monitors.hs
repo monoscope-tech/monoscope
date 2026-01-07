@@ -65,7 +65,6 @@ data AlertUpsertForm = AlertUpsertForm
   , -- Widget alert fields
     widgetId :: Maybe Text
   , dashboardId :: Maybe Text
-  , showThresholdLines :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -119,10 +118,10 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , -- Widget alert fields
           widgetId = alertForm.widgetId
         , dashboardId = dashboardUuid
-        , showThresholdLines = alertForm.showThresholdLines
         , alertRecoveryThreshold = if isThresholdAlert then alertRecoveryInt else Nothing
         , warningRecoveryThreshold = if isThresholdAlert then warningRecoveryInt else Nothing
         , currentStatus = "normal"
+        , currentValue = 0
         }
 
 

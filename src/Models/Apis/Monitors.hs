@@ -100,7 +100,6 @@ data QueryMonitor = QueryMonitor
   , -- Widget alert fields
     widgetId :: Maybe Text
   , dashboardId :: Maybe UUID.UUID
-  , showThresholdLines :: Maybe Text
   , alertRecoveryThreshold :: Maybe Int
   , warningRecoveryThreshold :: Maybe Int
   , currentStatus :: Text
@@ -135,7 +134,6 @@ data QueryMonitorEvaled = QueryMonitorEvaled
   , -- Widget alert fields
     widgetId :: Maybe Text
   , dashboardId :: Maybe UUID.UUID
-  , showThresholdLines :: Maybe Text
   , alertRecoveryThreshold :: Maybe Int
   , warningRecoveryThreshold :: Maybe Int
   , currentStatus :: Text
@@ -167,7 +165,6 @@ queryMonitorUpsert qm =
     , qm.teams
     , qm.widgetId
     , qm.dashboardId
-    , qm.showThresholdLines
     , qm.alertRecoveryThreshold
     , qm.warningRecoveryThreshold
     )
@@ -177,8 +174,8 @@ queryMonitorUpsert qm =
     INSERT INTO monitors.query_monitors (id, project_id, alert_threshold, warning_threshold, log_query,
                   log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
                   threshold_sustained_for_mins, alert_config, check_interval_mins, visualization_type, teams,
-                  widget_id, dashboard_id, show_threshold_lines, alert_recovery_threshold, warning_recovery_threshold)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::uuid[],?,?,?,?,?)
+                  widget_id, dashboard_id, alert_recovery_threshold, warning_recovery_threshold)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::uuid[],?,?,?,?)
     ON CONFLICT (id) DO UPDATE SET
                   alert_threshold=EXCLUDED.alert_threshold,
                   warning_threshold=EXCLUDED.warning_threshold,
@@ -195,7 +192,6 @@ queryMonitorUpsert qm =
                   teams=EXCLUDED.teams,
                   widget_id=EXCLUDED.widget_id,
                   dashboard_id=EXCLUDED.dashboard_id,
-                  show_threshold_lines=EXCLUDED.show_threshold_lines,
                   alert_recovery_threshold=EXCLUDED.alert_recovery_threshold,
                   warning_recovery_threshold=EXCLUDED.warning_recovery_threshold
     |]
@@ -215,7 +211,7 @@ queryMonitorsById ids
     SELECT id, created_at, updated_at, project_id, check_interval_mins, alert_threshold, warning_threshold,
         log_query, log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
         threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, visualization_type, teams,
-        widget_id, dashboard_id, show_threshold_lines, alert_recovery_threshold, warning_recovery_threshold, current_status,
+        widget_id, dashboard_id, alert_recovery_threshold, warning_recovery_threshold, current_status,
         eval(log_query_as_sql)
       FROM monitors.query_monitors where id=ANY(?::UUID[])
     |]
