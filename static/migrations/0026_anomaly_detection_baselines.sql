@@ -87,7 +87,6 @@ CREATE TABLE apis.errors (
 
     baseline_state TEXT NOT NULL DEFAULT 'learning',
     baseline_samples INT NOT NULL DEFAULT 0,
-    baseline_updated_at TIMESTAMPTZ,
     baseline_error_rate_mean FLOAT,
     baseline_error_rate_stddev FLOAT,
     baseline_updated_at TIMESTAMPTZ,

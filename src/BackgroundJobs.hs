@@ -38,6 +38,8 @@ import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogLegacy
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Errors qualified as Errors
+import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Issues qualified as Issues
@@ -80,7 +82,7 @@ import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, try)
-import Utils (DBField)
+import Utils (DBField, toXXHash)
 
 
 data BgJobs
@@ -114,6 +116,14 @@ data BgJobs
   | GitSyncFromRepo Projects.ProjectId
   | GitSyncPushDashboard Projects.ProjectId UUID.UUID -- projectId, dashboardId
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
+  | -- Error processing jobs
+    ErrorBaselineCalculation Projects.ProjectId -- Calculate baselines for all errors in a project
+  | ErrorSpikeDetection Projects.ProjectId -- Detect error spikes and create issues
+  | NewErrorDetected Projects.ProjectId Text -- projectId, error hash - creates issue for new error
+  | -- Log pattern processing jobs
+    LogPatternBaselineCalculation Projects.ProjectId -- Calculate baselines for log patterns
+  | LogPatternSpikeDetection Projects.ProjectId -- Detect log pattern volume spikes
+  | NewLogPatternDetected Projects.ProjectId Text -- projectId, pattern hash - notify about new pattern
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -353,6 +363,14 @@ processBackgroundJob authCtx bgJob =
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
     QueryMonitorsCheck -> pass -- checkTriggeredQueryMonitors
+    -- Error processing jobs
+    ErrorBaselineCalculation pid -> calculateErrorBaselines pid
+    ErrorSpikeDetection pid -> detectErrorSpikes pid authCtx
+    NewErrorDetected pid errorHash -> processNewError pid errorHash authCtx
+    -- Log pattern processing jobs
+    LogPatternBaselineCalculation pid -> calculateLogPatternBaselines pid
+    LogPatternSpikeDetection pid -> detectLogPatternSpikes pid authCtx
+    NewLogPatternDetected pid patternHash -> processNewLogPattern pid patternHash authCtx
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -381,6 +399,16 @@ runHourlyJob scheduledTime hour = do
     forM_ projectBatches \batch -> do
       let batchJob = BackgroundJobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime
       createJob conn "background_jobs" batchJob
+
+  -- Schedule baseline calculation and spike detection for active projects
+  liftIO $ withResource ctx.jobsPool \conn ->
+    forM_ activeProjects \pid -> do
+      -- Error baseline and spike detection
+      createJob conn "background_jobs" $ ErrorBaselineCalculation pid
+      createJob conn "background_jobs" $ ErrorSpikeDetection pid
+      -- Log pattern baseline and spike detection
+      createJob conn "background_jobs" $ LogPatternBaselineCalculation pid
+      createJob conn "background_jobs" $ LogPatternSpikeDetection pid
 
   -- Cleanup expired query cache entries
   deletedCount <- QueryCache.cleanupExpiredCache
@@ -507,9 +535,19 @@ processPatterns kind fieldName events pid scheduledTime since = do
 
     forM_ newPatterns \(patternTxt, ids) -> do
       let q = [text|UPDATE otel_logs_and_spans SET $fieldName = ?  WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|]
-      unless (V.null ids)
-        $ void
-        $ PG.execute (Query $ encodeUtf8 q) (patternTxt, pid, since, V.filter (/= "") ids)
+      unless (V.null ids) $ do
+        -- Update otel_logs_and_spans with pattern
+        void $ PG.execute (Query $ encodeUtf8 q) (patternTxt, pid, since, V.filter (/= "") ids)
+
+        -- Also store in apis.log_patterns table (only for log patterns, not summaries)
+        Relude.when (kind == "log" && not (T.null patternTxt)) $ do
+          let patternHash = toXXHash patternTxt
+              -- Get a sample message from the first non-empty id
+              sampleMsg = case V.find (/= "") (V.map snd events) of
+                Just msg -> Just (T.take 500 msg)
+                Nothing -> Nothing
+          -- Upsert the pattern (increments count if exists, inserts if new)
+          void $ LogPatterns.upsertLogPattern pid patternTxt patternHash Nothing Nothing sampleMsg
 
 
 -- | Process a batch of (id, content) pairs through Drain
@@ -1623,3 +1661,177 @@ monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRec
   where
     breached t = if triggerLessThan then t >= value else t <= value
     recovered r t = if triggerLessThan then value > fromMaybe t r else value < fromMaybe t r
+
+
+calculateErrorBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
+calculateErrorBaselines pid = do
+  Log.logInfo "Calculating error baselines" pid
+  errors <- Errors.getActiveErrors pid
+
+  forM_ errors \err -> do
+    -- Get hourly stats from error_events over last 7 days (168 hours)
+    statsM <- Errors.getErrorEventStats err.id 168
+
+    case statsM of
+      Nothing -> pass
+      Just stats -> do
+        let newSamples = stats.totalHours
+            newMean = stats.hourlyMean
+            newStddev = stats.hourlyStddev
+            -- Establish baseline after 24 hours of data
+            newState = if newSamples >= 24 then "established" else "learning"
+        _ <- Errors.updateBaseline err.id newState newMean newStddev newSamples
+        pass
+
+  Log.logInfo "Finished calculating error baselines" (pid, length errors)
+
+
+-- | Detect error spikes and create issues
+-- Uses error_events table for current rate calculation
+detectErrorSpikes :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
+detectErrorSpikes pid authCtx = do
+  Log.logInfo "Detecting error spikes" pid
+
+  -- Get all errors with their current hour counts in one query
+  errorsWithRates <- Errors.getErrorsWithCurrentRates pid
+
+  forM_ errorsWithRates \errRate -> do
+    -- Only check errors with established baselines
+    case (errRate.baselineState, errRate.baselineMean, errRate.baselineStddev) of
+      ("established", Just mean, Just stddev) | stddev > 0 -> do
+        let currentRate = fromIntegral errRate.currentHourCount :: Double
+            zScore = (currentRate - mean) / stddev
+            isSpike = zScore > 3.0 && currentRate > mean + 5
+
+        Relude.when isSpike $ do
+          Log.logInfo "Error spike detected" (errRate.errorId, errRate.exceptionType, currentRate, mean, zScore)
+
+          -- Get full error record for issue creation
+          errorM <- Errors.getErrorById errRate.errorId
+          whenJust errorM \err -> do
+            _ <- Errors.updateErrorState err.id Errors.ESEscalating
+            issue <- liftIO $ Issues.createErrorSpikeIssue pid err currentRate mean stddev
+            Issues.insertIssue issue
+            liftIO $ withResource authCtx.jobsPool \conn ->
+              void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+
+            Log.logInfo "Created issue for error spike" (pid, err.id, issue.id)
+
+      _ -> pass -- Skip errors without established baseline
+
+  Log.logInfo "Finished error spike detection" pid
+
+
+-- | Process a new error and create an issue
+processNewError :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBackgroundCtx ()
+processNewError pid errorHash authCtx = do
+  Log.logInfo "Processing new error" (pid, errorHash)
+
+  -- Get the error by hash
+  errorM <- Errors.getErrorByHash pid errorHash "production"
+
+  case errorM of
+    Nothing -> Log.logAttention "Error not found for new error processing" (pid, errorHash)
+    Just err -> do
+      -- Only create issue for truly new errors (state = 'new')
+      Relude.when (err.state == Errors.ESNew) $ do
+        -- Create a runtime exception issue
+        issue <- liftIO $ Issues.createNewErrorIssue pid err
+        Issues.insertIssue issue
+
+        -- Queue LLM enhancement
+        liftIO $ withResource authCtx.jobsPool \conn ->
+          void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+
+        Log.logInfo "Created issue for new error" (pid, err.id, issue.id)
+
+
+-- ============================================================================
+-- Log Pattern Processing Jobs
+-- ============================================================================
+
+-- | Calculate baselines for log patterns
+-- Uses hourly counts from otel_logs_and_spans over the last 7 days
+calculateLogPatternBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
+calculateLogPatternBaselines pid = do
+  Log.logInfo "Calculating log pattern baselines" pid
+
+  -- Get all non-ignored patterns
+  patterns <- LogPatterns.getLogPatterns pid Nothing 1000 0
+
+  forM_ patterns \lp -> do
+    -- Get hourly stats from otel_logs_and_spans over last 7 days (168 hours)
+    statsM <- LogPatterns.getPatternStats pid lp.pattern 168
+
+    case statsM of
+      Nothing -> pass
+      Just stats -> do
+        let newSamples = stats.totalHours
+            newMean = stats.hourlyMean
+            newStddev = stats.hourlyStddev
+            -- Establish baseline after 24 hours of data
+            newState = if newSamples >= 24 then "established" else "learning"
+        _ <- LogPatterns.updateBaseline pid lp.patternHash newState newMean newStddev newSamples
+        pass
+
+  Log.logInfo "Finished calculating log pattern baselines" (pid, length patterns)
+
+
+-- | Detect log pattern volume spikes and create issues
+-- Uses otel_logs_and_spans table for current rate calculation
+detectLogPatternSpikes :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
+detectLogPatternSpikes pid authCtx = do
+  Log.logInfo "Detecting log pattern spikes" pid
+
+  -- Get all patterns with their current hour counts in one query
+  patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid
+
+  forM_ patternsWithRates \lpRate -> do
+    -- Only check patterns with established baselines
+    case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineStddev) of
+      ("established", Just mean, Just stddev) | stddev > 0 -> do
+        let currentRate = fromIntegral lpRate.currentHourCount :: Double
+            zScore = (currentRate - mean) / stddev
+            -- Spike detection: >3 std devs AND at least 10 more events than baseline
+            isSpike = zScore > 3.0 && currentRate > mean + 10
+
+        Relude.when isSpike $ do
+          Log.logInfo "Log pattern spike detected" (lpRate.patternId, lpRate.pattern, currentRate, mean, zScore)
+
+          -- Get full pattern record for issue creation
+          patternM <- LogPatterns.getLogPatternById lpRate.patternId
+          whenJust patternM \lp -> do
+            issue <- liftIO $ Issues.createLogPatternSpikeIssue pid lp currentRate mean stddev
+            Issues.insertIssue issue
+            liftIO $ withResource authCtx.jobsPool \conn ->
+              void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+
+            Log.logInfo "Created issue for log pattern spike" (pid, lp.id, issue.id)
+
+      _ -> pass -- Skip patterns without established baseline
+
+  Log.logInfo "Finished log pattern spike detection" pid
+
+
+-- | Process a new log pattern and create an issue
+processNewLogPattern :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBackgroundCtx ()
+processNewLogPattern pid patternHash authCtx = do
+  Log.logInfo "Processing new log pattern" (pid, patternHash)
+
+  -- Get the pattern by hash
+  patternM <- LogPatterns.getLogPatternByHash pid patternHash
+
+  case patternM of
+    Nothing -> Log.logAttention "Log pattern not found for new pattern processing" (pid, patternHash)
+    Just lp -> do
+      -- Only create issue for truly new patterns (state = 'new')
+      Relude.when (lp.state == LogPatterns.LPSNew) $ do
+        -- Create a new log pattern issue
+        issue <- liftIO $ Issues.createNewLogPatternIssue pid lp
+        Issues.insertIssue issue
+
+        -- Queue LLM enhancement
+        liftIO $ withResource authCtx.jobsPool \conn ->
+          void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+
+        Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
