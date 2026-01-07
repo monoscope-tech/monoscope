@@ -884,7 +884,7 @@ alertConfigurationForm_ :: Projects.Project -> Maybe Monitors.QueryMonitor -> V.
 alertConfigurationForm_ project alertM teams = do
   let pid = project.id
       isByos = project.paymentPlan == "Bring your own storage"
-  div_ [class_ "bg-fillWeaker h-full flex flex-col group/alt"] do
+  div_ [class_ "surface-raised h-full flex flex-col group/alt"] do
     -- Header section (more compact)
     div_ [class_ "flex items-center justify-between px-4 py-2.5"] do
       div_ [class_ "flex items-center gap-2.5"] do
