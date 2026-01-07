@@ -829,7 +829,7 @@ addMarkLinesToFirstSeries widget series
   | shouldShowLines
   , not (null markLineData) = case series of
       [] -> series
-      (first : rest) -> addMarkLine first : rest
+      (s : rest) -> addMarkLine s : rest
   | otherwise = series
   where
     shouldShowLines = case widget.showThresholdLines of
