@@ -1533,9 +1533,16 @@ checkTriggeredQueryMonitors = do
       let total = sum [v | Only v <- results]
           durationNs = toNanoSecs (diffTimeSpec end start)
           title = monitor.alertConfig.title
-          status = monitorStatus monitor.triggerLessThan monitor.warningThreshold monitor.alertThreshold
-            monitor.alertRecoveryThreshold monitor.warningRecoveryThreshold
-            (monitor.currentStatus == "alerting") (monitor.currentStatus == "warning") total
+          status =
+            monitorStatus
+              monitor.triggerLessThan
+              monitor.warningThreshold
+              monitor.alertThreshold
+              monitor.alertRecoveryThreshold
+              monitor.warningRecoveryThreshold
+              (monitor.currentStatus == "alerting")
+              (monitor.currentStatus == "warning")
+              total
           severity = case status of "alerting" -> SLError; "warning" -> SLWarn; _ -> SLInfo
           attrs =
             Map.fromList
@@ -1556,8 +1563,10 @@ checkTriggeredQueryMonitors = do
         let warningAt = if status == "warning" then Just startWall else Nothing
             alertAt = if status == "alerting" then Just startWall else Nothing
         void $ PG.execute [sql| UPDATE monitors.query_monitors SET warning_last_triggered = ?, alert_last_triggered = ? WHERE id = ? |] (warningAt, alertAt, monitor.id)
-        void $ PG.execute [sql| INSERT INTO background_jobs (run_at, status, payload) VALUES (NOW(), 'queued', ?) |]
-          (Only $ AE.object ["tag" AE..= "QueryMonitorAlert", "contents" AE..= V.singleton monitor.id])
+        void
+          $ PG.execute
+            [sql| INSERT INTO background_jobs (run_at, status, payload) VALUES (NOW(), 'queued', ?) |]
+            (Only $ AE.object ["tag" AE..= "QueryMonitorAlert", "contents" AE..= V.singleton monitor.id])
       void $ Monitors.updateLastEvaluatedAt monitor.id startWall
 
 
