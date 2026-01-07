@@ -841,12 +841,15 @@ removeProjectId v = v
 canonicalLevels :: [(Text, Telemetry.SeverityLevel)]
 canonicalLevels = [("TRACE", Telemetry.SLTrace), ("DEBUG", Telemetry.SLDebug), ("INFO", Telemetry.SLInfo), ("WARN", Telemetry.SLWarn), ("ERROR", Telemetry.SLError), ("FATAL", Telemetry.SLFatal)]
 
+
 severityMap :: Map.Map Text (Text, Telemetry.SeverityLevel)
 severityMap = Map.fromList $ [(t, (t, sl)) | (t, sl) <- canonicalLevels] <> [(alias, (canonical, sl)) | (alias, canonical) <- [("WARNING", "WARN"), ("INFORMATION", "INFO"), ("CRITICAL", "FATAL")], Just sl <- [L.lookup canonical canonicalLevels]]
+
 
 {-# INLINE parseSeverityLevel #-}
 parseSeverityLevel :: Text -> Maybe Telemetry.SeverityLevel
 parseSeverityLevel txt = snd <$> Map.lookup (T.toUpper txt) severityMap
+
 
 {-# INLINE normalizeSeverityLevel #-}
 normalizeSeverityLevel :: Text -> Maybe Text
