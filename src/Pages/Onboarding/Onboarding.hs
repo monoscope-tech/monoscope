@@ -822,10 +822,8 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
       script_
         [text|
      document.addEventListener('DOMContentLoaded', function() {
-      var inputElem = document.querySelector('#emails_input')
-      var tagify = new Tagify(inputElem)
-      tagify.addTags($tgs);
-      window.tagify = tagify
+      window.tagify = createTagify('#emails_input');
+      window.tagify.addTags($tgs);
     })
 
     function appendMember() {

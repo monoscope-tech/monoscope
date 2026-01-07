@@ -201,28 +201,67 @@ export function getSeriesColor(value: string, context?: 'status' | 'percentile' 
   return THEME_COLORS[hashString(value) % THEME_COLORS.length];
 }
 
-// Tailwind to hex color mapping (for consistency with backend)
+// Tailwind to hex color mapping (ECharts theme colors for consistency across app)
 export const TAILWIND_TO_HEX: Record<string, string> = {
   'bg-red-400': '#ee6666',
   'bg-amber-400': '#fac858',
   'bg-orange-400': '#fc8452',
-  'bg-yellow-400': '#ff8c00',    // Dark orange for better contrast
+  'bg-yellow-400': '#fac858',
   'bg-lime-400': '#91cc75',
   'bg-green-400': '#3ba272',
-  'bg-teal-400': '#20b2aa',       // Light sea green for better contrast
+  'bg-teal-400': '#20b2aa',
   'bg-cyan-400': '#73c0de',
   'bg-blue-400': '#1A74A8',
   'bg-purple-400': '#9a60b4',
-  'bg-violet-400': '#6a5acd',     // Slate blue for better contrast
-  'bg-pink-400': '#c71585',       // Medium violet red for better contrast
-  'bg-rose-400': '#dc143c',       // Crimson for better contrast
-  'bg-emerald-400': '#228b22',    // Forest green for better contrast
-  'bg-fuchsia-400': '#8b008b',    // Dark magenta for better contrast
-  'bg-indigo-400': '#4b0082',     // Indigo for better contrast
+  'bg-violet-400': '#6a5acd',
+  'bg-pink-400': '#c71585',
+  'bg-rose-400': '#dc143c',
+  'bg-emerald-400': '#228b22',
+  'bg-fuchsia-400': '#8b008b',
+  'bg-indigo-400': '#4b0082',
   'bg-sky-400': '#32c5e9',
-  'bg-gray-400': '#9ca3af',       // Neutral gray for null/missing values
-  'bg-gray-500': '#6b7280',       // Darker gray option
+  'bg-gray-400': '#9ca3af',
+  'bg-gray-500': '#6b7280',
 };
+
+// Convert hex to HSL
+function hexToHsl(hex: string): [number, number, number] {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0, l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    h = max === r ? ((g - b) / d + (g < b ? 6 : 0)) / 6
+      : max === g ? ((b - r) / d + 2) / 6
+      : ((r - g) / d + 4) / 6;
+  }
+  return [h * 360, s * 100, l * 100];
+}
+
+// Convert HSL to hex
+function hslToHex(h: number, s: number, l: number): string {
+  s /= 100; l /= 100;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * color).toString(16).padStart(2, '0');
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+// Calculate contrast text color - returns tinted version of background for softer look
+export function getContrastTextColor(hexColor: string): string {
+  const [h, s, l] = hexToHsl(hexColor);
+  // For dark backgrounds: light tint (85-92% lightness), for light: dark shade (15-22%)
+  const newL = l > 50 ? 18 : 88;
+  // Reduce saturation slightly for softer appearance
+  const newS = Math.min(s, 60);
+  return hslToHex(h, newS, newL);
+}
 
 // Convert Tailwind class to hex color
 export function tailwindToHex(tailwindClass: string): string {

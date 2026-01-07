@@ -181,7 +181,7 @@ makeApiKeysTable pid apiKeys elemId =
     { config = def{Table.elemID = elemId, Table.renderAsTable = True}
     , columns = apiKeyColumns pid
     , rows = V.indexed apiKeys
-    , features = def{Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]}
+    , features = Table.Features{rowLink = Nothing, rowId = Nothing, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], selectRow = Nothing, bulkActions = [], search = Nothing, tabs = Nothing, sort = Nothing, sortableColumns = Nothing, tableHeaderActions = Nothing, pagination = Nothing, zeroState = Nothing, header = Nothing}
     }
 
 

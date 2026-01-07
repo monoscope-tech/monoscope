@@ -34,11 +34,11 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (Only (Only), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField (fromField))
+import Database.PostgreSQL.Simple.FromField (FromField, fromField)
 import Database.PostgreSQL.Simple.FromRow (FromRow (..))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (ToField (toField))
+import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
 import Effectful
@@ -48,6 +48,7 @@ import Effectful.Time qualified as Time
 import Models.Apis.Fields.Types ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
+import Pkg.DBUtils (WrappedEnumShow (..))
 import Pkg.Parser
 import Pkg.Parser.Stats (Section, Sources (SSpans))
 import Relude hiding (many, some)
@@ -91,18 +92,7 @@ data SDKTypes
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
-
-
-instance ToField SDKTypes where
-  toField sdkType = toField @String (show sdkType)
-
-
-instance FromField SDKTypes where
-  fromField f mdata = do
-    str <- fromField f mdata
-    case readMaybe str of
-      Just sdkType -> return sdkType
-      Nothing -> return GoGin
+  deriving (FromField, ToField) via WrappedEnumShow SDKTypes
 
 
 data RequestTypes
@@ -113,18 +103,7 @@ data RequestTypes
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestTypes
-
-
-instance ToField RequestTypes where
-  toField requestType = toField @String (show requestType)
-
-
-instance FromField RequestTypes where
-  fromField f mdata = do
-    str <- fromField f mdata
-    case readMaybe str of
-      Just requestType -> return requestType
-      Nothing -> return Incoming
+  deriving (FromField, ToField) via WrappedEnumShow RequestTypes
 
 
 -- Nothing -> returnError ConversionFailed f ("Could not read SDKTypes: " ++ str)

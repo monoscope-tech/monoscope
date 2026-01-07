@@ -3,6 +3,7 @@ module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as K
+import Data.Aeson.KeyMap qualified as AE.KeyMap
 import Data.Default
 import Data.Generics.Labels ()
 import Data.HashMap.Lazy qualified as HM
@@ -120,10 +121,11 @@ data Widget = Widget
   , xAxis :: Maybe WidgetAxis
   , yAxis :: Maybe WidgetAxis -- Optional y-axis label
   , unit :: Maybe Text
-  , value :: Maybe Int -- value could represent a number or a count
+  , value :: Maybe Double -- value could represent a number or a count
   , wData :: Maybe AE.Value
   , hideLegend :: Maybe Bool
-  , legendPosition :: Maybe Text -- Position of the legend: "top" or "bottom" (default)
+  , legendPosition :: Maybe Text -- Legend position: "top", "bottom", "top-right", "top-left", "bottom-right", "bottom-left"
+  , legendSize :: Maybe Text -- Legend size: "xs" (default), "sm", "md"
   , theme :: Maybe Text
   , dataset :: Maybe WidgetDataset
   , -- eager
@@ -140,6 +142,12 @@ data Widget = Widget
   , showMarkArea :: Maybe Bool -- Show mark area in the chart
   , columns :: Maybe [TableColumn] -- Table columns
   , onRowClick :: Maybe RowClickAction -- Action when table row is clicked
+  -- Alert fields (populated from QueryMonitor at render time)
+  , alertId :: Maybe Text -- Linked QueryMonitor ID
+  , alertThreshold :: Maybe Double -- For threshold line rendering
+  , warningThreshold :: Maybe Double
+  , showThresholdLines :: Maybe Text -- 'always' | 'on_breach' | 'never'
+  , alertStatus :: Maybe Text -- 'normal' | 'warning' | 'alerting' (runtime)
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
@@ -305,8 +313,23 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
     span_ [class_ $ "text-textDisabled widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
     span_ [class_ "hidden", id_ $ wId <> "_loader"] $ Utils.faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
-  div_ [class_ "text-iconNeutral flex items-center"] do
-    -- Add expand button that's visible on hover
+  div_ [class_ "text-iconNeutral flex items-center gap-0.5"] do
+    -- Alert status indicator (visible on hover, always visible when alerting/warning)
+    whenJust widget.alertId \_ -> do
+      let (iconColor, iconType, tooltip) = case widget.alertStatus of
+            Just "alerting" -> ("text-fillError-strong", "bell-exclamation", "Alert triggered")
+            Just "warning" -> ("text-fillWarning-strong", "bell", "Warning threshold exceeded")
+            _ -> ("text-iconNeutral", "bell", "Alert configured")
+          visibilityClass = case widget.alertStatus of
+            Just "alerting" -> ""
+            Just "warning" -> ""
+            _ -> "opacity-0 group-hover/wgt:opacity-100"
+      span_
+        [ class_ $ "p-1 transition-opacity " <> visibilityClass
+        , data_ "tippy-content" tooltip
+        , id_ $ wId <> "_alert_indicator"
+        ]
+        $ Utils.faSprite_ iconType "regular" ("w-3.5 h-3.5 " <> iconColor)
 
     whenJust ctaM \(ctaTitle, uri) -> a_ [class_ "underline underline-offset-2 text-textBrand", href_ uri] $ toHtml ctaTitle
     whenJust expandBtnFn \fn ->
@@ -693,6 +716,7 @@ widgetToECharts widget =
             AE..= AE.object
               [ "show" AE..= fromMaybe True widget.showTooltip
               , "trigger" AE..= ("axis" :: Text)
+              , "appendToBody" AE..= True
               , "axisPointer"
                   AE..= AE.object
                     ["type" AE..= ("shadow" :: Text)]
@@ -706,23 +730,34 @@ widgetToECharts widget =
               ]
         , "legend"
             AE..= AE.object
-              [ "show" AE..= legendVisibility
-              , "type" AE..= "scroll"
-              , "top" AE..= fromMaybe "bottom" widget.legendPosition
-              , "textStyle" AE..= AE.object ["fontSize" AE..= AE.Number 12] -- // default is usually 12 or 14
-              --  Shrink the symbol/icon size
-              , "itemWidth" AE..= AE.Number 14 -- default is 25
-              , "itemHeight" AE..= AE.Number 12 -- default is 14
-              , "itemGap" AE..= AE.Number 8 -- defalt is 10
-              , "padding" AE..= AE.Array [AE.Number 2, AE.Number 4, AE.Number 2, AE.Number 4] -- [top, right, bottom, left]
-              , "data" AE..= fromMaybe [] (extractLegend widget)
-              ]
+              ( let pos = fromMaybe "bottom" widget.legendPosition
+                    (vPos, hPos) = case T.splitOn "-" pos of
+                      [v, h] | h == "right" || h == "left" -> (v, Just h)
+                      [v] -> (v, Nothing)
+                      _ -> ("bottom", Nothing)
+                    (fontSize, itemSize, itemGap, pad) = case fromMaybe "sm" widget.legendSize of
+                      "xs" -> (10 :: Int, 6 :: Int, 6 :: Int, [2, 4, 2, 4] :: [Int])
+                      "md" -> (14, 12, 12, [4, 8, 4, 8])
+                      "lg" -> (16, 14, 14, [5, 10, 5, 10])
+                      _ -> (12, 9, 9, [3, 6, 3, 6]) -- sm (default)
+                 in [ "show" AE..= legendVisibility
+                    , "type" AE..= "scroll"
+                    , "top" AE..= vPos
+                    , "textStyle" AE..= AE.object ["fontSize" AE..= AE.Number (fromIntegral fontSize), "padding" AE..= AE.Array [AE.Number 0, AE.Number 0, AE.Number 0, AE.Number (-2)]]
+                    , "itemWidth" AE..= AE.Number (fromIntegral itemSize)
+                    , "itemHeight" AE..= AE.Number (fromIntegral itemSize)
+                    , "itemGap" AE..= AE.Number (fromIntegral itemGap)
+                    , "padding" AE..= AE.Array (V.fromList $ map (AE.Number . fromIntegral) pad)
+                    , "data" AE..= fromMaybe [] (extractLegend widget)
+                    ]
+                      <> [K.fromText h AE..= (0 :: Int) | Just h <- [hPos]]
+              )
         , "grid"
             AE..= AE.object
               [ "width" AE..= ("100%" :: Text)
               , "left" AE..= ("0%" :: Text)
-              , "top" AE..= if widget.legendPosition == Just "top" && legendVisibility then "18%" else if widget.naked == Just True then "10%" else "5%"
-              , "bottom" AE..= if widget.legendPosition /= Just "top" && legendVisibility then "18%" else "1.8%"
+              , "top" AE..= if maybe False (T.isPrefixOf "top") widget.legendPosition && legendVisibility then "14%" else if widget.naked == Just True then "10%" else "5%"
+              , "bottom" AE..= if not (maybe False (T.isPrefixOf "top") widget.legendPosition) && legendVisibility then "14%" else "1.8%"
               , "containLabel" AE..= True
               , "show" AE..= False
               ]
@@ -776,7 +811,7 @@ widgetToECharts widget =
         , "dataset"
             AE..= AE.object
               ["source" AE..= maybe AE.Null (.source) widget.dataset]
-        , "series" AE..= map (createSeries widget.wType) ([] :: [Maybe Query])
+        , "series" AE..= addMarkLinesToFirstSeries widget (map (createSeries widget.wType) ([] :: [Maybe Query]))
         , "animation" AE..= False
         , if widget.allowZoom == Just True
             then
@@ -785,6 +820,46 @@ widgetToECharts widget =
                   [ "feature" AE..= AE.object ["dataZoom" AE..= AE.object ["show" AE..= True, "yAxisIndex" AE..= "none", "icon" AE..= AE.object ["zoom" AE..= "none", "back" AE..= "none"]]]
                   ]
             else "toolbox" AE..= AE.object []
+        ]
+
+
+-- Helper: Add markLines to first series for alert thresholds
+addMarkLinesToFirstSeries :: Widget -> [AE.Value] -> [AE.Value]
+addMarkLinesToFirstSeries widget series
+  | shouldShowLines
+  , not (null markLineData) = case series of
+      [] -> series
+      (s : rest) -> addMarkLine s : rest
+  | otherwise = series
+  where
+    shouldShowLines = case widget.showThresholdLines of
+      Just "never" -> False
+      Just "on_breach" -> widget.alertStatus == Just "warning" || widget.alertStatus == Just "alerting"
+      _ -> isJust widget.alertThreshold || isJust widget.warningThreshold
+
+    mkMarkLine color label threshold =
+      AE.object
+        [ "yAxis" AE..= threshold
+        , "lineStyle" AE..= AE.object ["color" AE..= (color :: Text), "type" AE..= ("dashed" :: Text), "width" AE..= (2 :: Int)]
+        , "label" AE..= AE.object ["formatter" AE..= ((label <> ": {c}") :: Text), "position" AE..= ("insideEndTop" :: Text)]
+        ]
+
+    markLineData :: [AE.Value]
+    markLineData =
+      catMaybes
+        [ widget.alertThreshold <&> mkMarkLine "#dc2626" "Alert"
+        , widget.warningThreshold <&> mkMarkLine "#f59e0b" "Warning"
+        ]
+
+    addMarkLine :: AE.Value -> AE.Value
+    addMarkLine (AE.Object obj) = AE.Object $ AE.KeyMap.insert (K.fromText "markLine") markLineObj obj
+    addMarkLine v = v
+
+    markLineObj =
+      AE.object
+        [ "silent" AE..= True
+        , "symbol" AE..= ("none" :: Text)
+        , "data" AE..= markLineData
         ]
 
 

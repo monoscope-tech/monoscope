@@ -49,10 +49,10 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_insert)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField, fromField, fromJSONField)
+import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (ToField, toField, toJSONField)
+import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.PostgreSQL qualified as PG
@@ -182,14 +182,7 @@ data ProjectS3Bucket = ProjectS3Bucket
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON, FromForm, NFData)
-
-
-instance FromField ProjectS3Bucket where
-  fromField = fromJSONField
-
-
-instance ToField ProjectS3Bucket where
-  toField = toJSONField
+  deriving (FromField, ToField) via Aeson ProjectS3Bucket
 
 
 data ProjectCache = ProjectCache

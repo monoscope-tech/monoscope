@@ -1144,11 +1144,53 @@ code, pre, .code, .monospace {
 
 /****** Tagify *****/
 
-.modal > tags {
-    @apply border-strokeWeak;
-  }
+/* Dropdown styling */
+.tagify__dropdown {
+  --tagify-dd-color-primary: var(--color-fillWeak);
+  --tagify-dd-bg-color: var(--color-bgRaised);
+  --tagify-dd-text-color: var(--color-text);
+  background: var(--color-bgRaised);
+  border: 1px solid var(--color-strokeWeak);
+  border-radius: 0.75rem;
+  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1);
+  margin-top: 4px;
+  max-width: 100% !important;
+}
 
-  .dash-variable .tagify {
+.tagify__dropdown__item {
+  color: var(--color-text) !important;
+  border-radius: 0.5rem;
+  margin: 2px 4px;
+}
+
+.tagify__dropdown .tagify__dropdown__item:hover,
+.tagify__dropdown .tagify__dropdown__item--active,
+.tagify__dropdown__item--active {
+  background: var(--color-fillWeak) !important;
+  color: var(--color-textStrong) !important;
+}
+
+/* Dark mode overrides */
+[data-theme="dark"] .tagify__dropdown {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+
+/* Dark mode tag colors */
+[data-theme="dark"] .tagify {
+  --tag-bg: var(--color-fillWeak);
+  --tag-text-color: var(--color-textStrong);
+  --tag-hover: var(--color-fillStrong);
+  --placeholder-color: var(--color-textWeak);
+  --input-color: var(--color-text);
+}
+
+/* Modal specific */
+.modal > tags {
+  @apply border-strokeWeak;
+}
+
+/* Dashboard variable selectors */
+.dash-variable .tagify {
   margin-top: -0.5rem;
   --tags-border-color: transparent;
   --tag-text-color: var(--color-textStrong);
