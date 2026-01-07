@@ -178,7 +178,6 @@ removeQueryParams statusCode urlPath =
     (before, after) -> before -- Query parameters found, stripping them
 
 
-
 data ATError = ATError
   { projectId :: Maybe Projects.ProjectId
   , when :: UTCTime

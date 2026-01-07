@@ -25,7 +25,7 @@ import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow, Only (Only),ToRow)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
@@ -149,7 +149,6 @@ getLogPatternByHash pid hash = do
       |]
 
 
-
 -- | Acknowledge log patterns
 acknowledgeLogPatterns :: DB es => Users.UserId -> V.Vector Text -> Eff es Int64
 acknowledgeLogPatterns uid patternHashes
@@ -163,16 +162,17 @@ acknowledgeLogPatterns uid patternHashes
         WHERE pattern_hash = ANY(?)
       |]
 
+
 -- | Upsert a log pattern (insert or update occurrence count)
-upsertLogPattern ::
-  DB es =>
-  Projects.ProjectId ->
-  Text -> -- pattern
-  Text -> -- pattern_hash
-  Maybe Text -> -- service_name
-  Maybe Text -> -- log_level
-  Maybe Text -> -- sample_message
-  Eff es Int64
+upsertLogPattern
+  :: DB es
+  => Projects.ProjectId
+  -> Text -- pattern
+  -> Text -- pattern_hash
+  -> Maybe Text -- service_name
+  -> Maybe Text -- log_level
+  -> Maybe Text -- sample_message
+  -> Eff es Int64
 upsertLogPattern pid pat patHash serviceName logLevel sampleMsg =
   PG.execute q (pid, pat, patHash, serviceName, logLevel, sampleMsg)
   where
@@ -202,15 +202,15 @@ updateLogPatternStats pid patHash additionalCount =
 
 
 -- | Update baseline data for a log pattern
-updateBaseline ::
-  DB es =>
-  Projects.ProjectId ->
-  Text -> -- pattern_hash
-  Text -> -- baseline_state ('learning' or 'established')
-  Double -> -- hourly_mean
-  Double -> -- hourly_stddev
-  Int -> -- samples
-  Eff es Int64
+updateBaseline
+  :: DB es
+  => Projects.ProjectId
+  -> Text -- pattern_hash
+  -> Text -- baseline_state ('learning' or 'established')
+  -> Double -- hourly_mean
+  -> Double -- hourly_stddev
+  -> Int -- samples
+  -> Eff es Int64
 updateBaseline pid patHash bState hourlyMean hourlyStddev samples =
   PG.execute q (bState, hourlyMean, hourlyStddev, samples, pid, patHash)
   where
@@ -242,12 +242,12 @@ data PatternStats = PatternStats
 
 
 -- | Get pattern stats from otel_logs_and_spans
-getPatternStats ::
-  DB es =>
-  Projects.ProjectId ->
-  Text -> -- pattern (log_pattern value)
-  Int -> -- hours to look back
-  Eff es (Maybe PatternStats)
+getPatternStats
+  :: DB es
+  => Projects.ProjectId
+  -> Text -- pattern (log_pattern value)
+  -> Int -- hours to look back
+  -> Eff es (Maybe PatternStats)
 getPatternStats pid pattern' hoursBack = do
   results <- PG.query q (pid, pattern', hoursBack)
   return $ listToMaybe results
