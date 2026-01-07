@@ -1671,7 +1671,6 @@ calculateErrorBaselines pid = do
   forM_ errors \err -> do
     -- Get hourly stats from error_events over last 7 days (168 hours)
     statsM <- Errors.getErrorEventStats err.id 168
-
     case statsM of
       Nothing -> pass
       Just stats -> do
