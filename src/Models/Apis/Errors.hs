@@ -97,7 +97,7 @@ instance FromField ErrorState where
       Just bs ->
         case parseErrorState bs of
           Just s -> pure s
-          Nothing -> returnError ConversionFailed f $ "Conversion error: Expected error state, got " <> decodeUtf8 bs <> " instead."
+          Nothing -> ESNew
 
 
 data Error = Error
@@ -271,81 +271,6 @@ getActiveErrors pid = PG.query q (pid,)
       |]
 
 
--- | Upsert an error (insert or update on conflict)
-upsertError ::
-  DB es =>
-  Projects.ProjectId ->
-  Text -> -- exception_type
-  Text -> -- message
-  Text -> -- stacktrace
-  Text -> -- hash
-  Text -> -- environment
-  Maybe Text -> -- service
-  Maybe Text -> -- runtime
-  Eff es ErrorId
-upsertError pid exType msg stack hash env service runtime = do
-  results <- PG.query q (pid, exType, msg, stack, hash, env, service, runtime, msg)
-  case results of
-    [(Only eid)] -> return eid
-    _ -> error "upsertError: unexpected result"
-  where
-    q =
-      [sql|
-        INSERT INTO apis.errors (
-          project_id, exception_type, message, stacktrace, hash,
-          environment, service, runtime, occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1)
-        ON CONFLICT (project_id, hash, environment) DO UPDATE SET
-          updated_at = NOW(),
-          representative_message = EXCLUDED.message,
-          occurrences_1m = apis.errors.occurrences_1m + 1,
-          occurrences_5m = apis.errors.occurrences_5m + 1,
-          occurrences_1h = apis.errors.occurrences_1h + 1,
-          occurrences_24h = apis.errors.occurrences_24h + 1,
-          state = CASE
-            WHEN apis.errors.state = 'resolved' THEN 'regressed'
-            WHEN apis.errors.state = 'new' AND apis.errors.occurrences_1h > 10 THEN 'escalating'
-            ELSE apis.errors.state
-          END,
-          regressed_at = CASE
-            WHEN apis.errors.state = 'resolved' THEN NOW()
-            ELSE apis.errors.regressed_at
-          END
-        RETURNING id
-      |]
-
-
--- | Insert an error event
-insertErrorEvent ::
-  DB es =>
-  Projects.ProjectId ->
-  ErrorId ->
-  Text -> -- target_hash
-  Text -> -- exception_type
-  Text -> -- message
-  Text -> -- stack_trace
-  Text -> -- service_name
-  Maybe Text -> -- trace_id
-  Maybe Text -> -- span_id
-  Maybe Text -> -- user_id
-  Maybe Text -> -- user_email
-  Eff es ErrorEventId
-insertErrorEvent pid errorId hash exType msg stack serviceName traceId spanId userId userEmail = do
-  results <- PG.query q (pid, errorId, hash, exType, msg, stack, serviceName, traceId, spanId, userId, userEmail)
-  case results of
-    [(Only eid)] -> return eid
-    _ -> error "insertErrorEvent: unexpected result"
-  where
-    q =
-      [sql|
-        INSERT INTO apis.error_events (
-          project_id, error_id, target_hash, exception_type, message,
-          stack_trace, service_name, trace_id, span_id, user_id, user_email
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        RETURNING id
-      |]
-
-
 -- | Update occurrence counts (called periodically to decay counts)
 updateOccurrenceCounts :: DB es => Eff es Int64
 updateOccurrenceCounts =
@@ -371,54 +296,25 @@ updateOccurrenceCounts =
       |]
 
 
--- | Update error state
 updateErrorState :: DB es => ErrorId -> ErrorState -> Eff es Int64
-updateErrorState eid newState =
-  PG.execute q (errorStateToText newState, eid)
+updateErrorState eid newState = PG.execute q (errorStateToText newState, eid)
   where
     q =
-      [sql|
-        UPDATE apis.errors
-        SET state = ?, updated_at = NOW()
-        WHERE id = ?
-      |]
+      [sql| UPDATE apis.errors SET state = ?, updated_at = NOW() WHERE id = ? |]
 
-
--- | Resolve an error manually
 resolveError :: DB es => ErrorId -> Eff es Int64
-resolveError eid =
-  PG.execute q (eid,)
+resolveError eid =  PG.execute q (eid,)
   where
-    q =
-      [sql|
-        UPDATE apis.errors
-        SET state = 'resolved', resolved_at = NOW(), updated_at = NOW()
-        WHERE id = ?
-      |]
+    q = [sql| UPDATE apis.errors SET state = 'resolved', resolved_at = NOW(), updated_at = NOW() WHERE id = ? |]
 
-
--- | Assign an error to a user
 assignError :: DB es => ErrorId -> Users.UserId -> Eff es Int64
-assignError eid uid =
-  PG.execute q (uid, eid)
+assignError eid uid = PG.execute q (uid, eid)
   where
-    q =
-      [sql|
-        UPDATE apis.errors
-        SET assignee_id = ?, assigned_at = NOW(), updated_at = NOW()
-        WHERE id = ?
-      |]
+    q =  [sql| UPDATE apis.errors SET assignee_id = ?, assigned_at = NOW(), updated_at = NOW() WHERE id = ? |]
 
 
 -- | Update baseline data for an error
-updateBaseline ::
-  DB es =>
-  ErrorId ->
-  Text -> -- baseline_state ('learning' or 'established')
-  Double -> -- error_rate_mean
-  Double -> -- error_rate_stddev
-  Int -> -- samples
-  Eff es Int64
+updateBaseline :: DB es => ErrorId -> Text ->  Double -> Double ->  Int -> Eff es Int64
 updateBaseline eid bState rateMean rateStddev samples =
   PG.execute q (bState, rateMean, rateStddev, samples, eid)
   where
@@ -432,11 +328,6 @@ updateBaseline eid bState rateMean rateStddev samples =
             baseline_updated_at = NOW()
         WHERE id = ?
       |]
-
-
--- ============================================================================
--- Error Events Queries (for baseline calculation and spike detection)
--- ============================================================================
 
 -- | Hourly bucket for error event aggregation
 data HourlyBucket = HourlyBucket
@@ -499,11 +390,7 @@ data ErrorEventStats = ErrorEventStats
   deriving anyclass (FromRow)
 
 
-getErrorEventStats ::
-  DB es =>
-  ErrorId ->
-  Int -> -- hours to look back
-  Eff es (Maybe ErrorEventStats)
+getErrorEventStats ::  DB es =>  ErrorId ->  Int -> Eff es (Maybe ErrorEventStats)
 getErrorEventStats eid hoursBack = do
   results <- PG.query q (eid, hoursBack)
   return $ listToMaybe results
@@ -589,3 +476,42 @@ getErrorsWithCurrentRates pid =
           AND e.state != 'resolved'
           AND e.is_ignored = false
       |]
+
+-- | Upsert an error (insert or update on conflict)
+upsertErrorQueryAndParam :: DB es => Projects.ProjectId -> (Query, [DBField])
+upsertErrorQueryAndParam pid err exType msg stack hash env service runtime = (q, params)
+  where
+    q =
+      [sql|
+        INSERT INTO apis.errors (
+          project_id, exception_type, message, stacktrace, hash,
+          environment, service, runtime, error_data, occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1)
+        ON CONFLICT (hash) DO UPDATE SET
+          updated_at = NOW(),
+          representative_message = EXCLUDED.message,
+          occurrences_1m = apis.errors.occurrences_1m + 1,
+          occurrences_5m = apis.errors.occurrences_5m + 1,
+          occurrences_1h = apis.errors.occurrences_1h + 1,
+          occurrences_24h = apis.errors.occurrences_24h + 1,
+          state = CASE
+            WHEN apis.errors.state = 'resolved' THEN 'regressed'
+            WHEN apis.errors.state = 'new' AND apis.errors.occurrences_1h > 10 THEN 'escalating'
+            ELSE apis.errors.state
+          END,
+          regressed_at = CASE
+            WHEN apis.errors.state = 'resolved' THEN NOW()
+            ELSE apis.errors.regressed_at
+          END
+      |]
+    params =
+      [ MkDBField err.projectId
+      , MkDBField err.errorType
+      , MkDBField err.message
+      , MkDBField err.stackTrace
+      , MkDBField err.hash
+      , MkDBField err.environment
+      , MkDBField err.serviceName
+      , MkDBField err.runtime
+      , MkDBField err
+      ]

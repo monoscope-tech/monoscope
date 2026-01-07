@@ -53,6 +53,8 @@ DROP TRIGGER IF EXISTS error_created_anomaly ON apis.errors;
 DROP TABLE IF EXISTS apis.errors;
 
 
+
+
 CREATE TABLE apis.errors (
     id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id                UUID NOT NULL REFERENCES projects.projects(id) ON DELETE CASCADE,
@@ -68,7 +70,6 @@ CREATE TABLE apis.errors (
     service                   TEXT,                        
     runtime                   TEXT,                       
     error_data                JSONB NOT NULL DEFAULT '{}', 
-    representative_message    TEXT,                       
     first_event_id            UUID,                        
     last_event_id             UUID,                        
     state                     TEXT NOT NULL DEFAULT 'new', 
@@ -113,7 +114,6 @@ CREATE TRIGGER error_created_anomaly AFTER INSERT ON apis.errors FOR EACH ROW EX
 CREATE TABLE apis.error_events (
     id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id         UUID NOT NULL REFERENCES projects.projects(id) ON DELETE CASCADE,
-    error_id           UUID NOT NULL REFERENCES apis.errors(id) ON DELETE CASCADE,
     occurred_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     target_hash        TEXT NOT NULL REFERENCES apis.errors(hash) ON DELETE CASCADE,  
     exception_type     TEXT NOT NULL,   
@@ -121,32 +121,24 @@ CREATE TABLE apis.error_events (
     stack_trace        TEXT NOT NULL,   
     service_name       TEXT NOT NULL, 
 
-    release            TEXT,           
-    platform_version   TEXT,
-
-    request_method    TEXT,
-    request_path      TEXT,
-    endpoint_hash     TEXT,
-
+    release            TEXT,
+    environment        TEXT,        
+    request_method     TEXT,
+    request_path       TEXT,
+    endpoint_hash      TEXT,
     trace_id           TEXT,
     span_id            TEXT,
     parent_span_id     TEXT,
-
     user_id            TEXT,
     user_email         TEXT,
     user_ip            INET,
     session_id         TEXT,
-
     sample_rate        FLOAT NOT NULL DEFAULT 1.0,
-    ingestion_id       UUID
 );
 
 -- Indexes for efficient queries
-CREATE INDEX idx_error_events_error ON apis.error_events (error_id, occurred_at DESC);
 CREATE INDEX idx_error_events_project ON apis.error_events (project_id, occurred_at DESC);
-CREATE INDEX idx_error_events_trace ON apis.error_events (trace_id);
+CREATE INDEX idx_error_event_error_hash ON apis.error_events (project_id, target_hash);
 CREATE INDEX idx_error_events_service ON apis.error_events (service_name);
-CREATE INDEX idx_error_events_tags USING GIN (tags);
-
 
 COMMIT;

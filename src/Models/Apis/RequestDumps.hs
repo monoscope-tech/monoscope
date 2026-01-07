@@ -178,6 +178,7 @@ removeQueryParams statusCode urlPath =
     (before, after) -> before -- Query parameters found, stripping them
 
 
+
 data ATError = ATError
   { projectId :: Maybe Projects.ProjectId
   , when :: UTCTime
@@ -190,10 +191,17 @@ data ATError = ATError
   , technology :: Maybe SDKTypes
   , requestMethod :: Maybe Text
   , requestPath :: Maybe Text
-  , spanId :: Maybe Text
-  , traceId :: Maybe Text
   , serviceName :: Maybe Text
-  , stack :: Maybe Text
+  , environment :: Maybe Text
+  , runtime :: Maybe Text,
+  , traceId :: Maybe Text, 
+  , spanId :: Maybe Text
+  , parentSpanId :: Maybe Text
+  , endpointHash :: Maybe Text
+  , userId :: Maybe Text
+  , userEmail :: Maybe Text
+  , userIp :: Maybe Text
+  , sessionId :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, NFData)
