@@ -14,6 +14,7 @@ import Data.List.Extra (chunksOf, groupBy)
 import Data.Map.Lazy qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
 import Data.Time.Clock (diffUTCTime)
 import Data.Time.Format (defaultTimeLocale)
@@ -1540,10 +1541,10 @@ checkTriggeredQueryMonitors = do
               monitor.alertThreshold
               monitor.alertRecoveryThreshold
               monitor.warningRecoveryThreshold
-              (monitor.currentStatus == "alerting")
-              (monitor.currentStatus == "warning")
+              (monitor.currentStatus == Monitors.MSAlerting)
+              (monitor.currentStatus == Monitors.MSWarning)
               total
-          severity = case status of "alerting" -> SLError; "warning" -> SLWarn; _ -> SLInfo
+          severity = case status of Monitors.MSAlerting -> SLError; Monitors.MSWarning -> SLWarn; _ -> SLInfo
           attrs =
             Map.fromList
               [ ("monitor.id", AE.toJSON monitor.id)
@@ -1555,13 +1556,13 @@ checkTriggeredQueryMonitors = do
               , ("monitor.query", AE.toJSON monitor.logQueryAsSql)
               , ("monitor.condition", AE.toJSON $ if monitor.triggerLessThan then "less_than" :: Text else "greater_than")
               ]
-          otelLog = mkSystemLog monitor.projectId "monitor.alert.triggered" severity (title <> ": " <> status) attrs (Just $ fromIntegral durationNs) startWall
+          otelLog = mkSystemLog monitor.projectId "monitor.alert.triggered" severity (title <> ": " <> display status) attrs (Just $ fromIntegral durationNs) startWall
       insertSystemLog otelLog
       void $ PG.execute [sql| UPDATE monitors.query_monitors SET current_status = ?, current_value = ? WHERE id = ? |] (status, total, monitor.id)
-      Relude.when (status /= "normal") do
+      Relude.when (status /= Monitors.MSNormal) do
         Log.logInfo "Query monitor triggered alert" (monitor.id, title, status, total)
-        let warningAt = if status == "warning" then Just startWall else Nothing
-            alertAt = if status == "alerting" then Just startWall else Nothing
+        let warningAt = if status == Monitors.MSWarning then Just startWall else Nothing
+            alertAt = if status == Monitors.MSAlerting then Just startWall else Nothing
         void $ PG.execute [sql| UPDATE monitors.query_monitors SET warning_last_triggered = ?, alert_last_triggered = ? WHERE id = ? |] (warningAt, alertAt, monitor.id)
         void
           $ PG.execute
@@ -1570,13 +1571,13 @@ checkTriggeredQueryMonitors = do
       void $ Monitors.updateLastEvaluatedAt monitor.id startWall
 
 
-monitorStatus :: Bool -> Maybe Double -> Double -> Maybe Double -> Maybe Double -> Bool -> Bool -> Double -> Text
+monitorStatus :: Bool -> Maybe Double -> Double -> Maybe Double -> Maybe Double -> Bool -> Bool -> Double -> Monitors.MonitorStatus
 monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRecovery wasAlerting wasWarning value
-  | breached alertThreshold = "alerting"
-  | maybe False breached warnThreshold = "warning"
-  | wasAlerting && not (recovered alertRecovery alertThreshold) = "alerting"
-  | wasWarning && not (recovered warnRecovery (fromMaybe alertThreshold warnThreshold)) = "warning"
-  | otherwise = "normal"
+  | breached alertThreshold = Monitors.MSAlerting
+  | maybe False breached warnThreshold = Monitors.MSWarning
+  | wasAlerting && not (recovered alertRecovery alertThreshold) = Monitors.MSAlerting
+  | wasWarning && not (recovered warnRecovery (fromMaybe alertThreshold warnThreshold)) = Monitors.MSWarning
+  | otherwise = Monitors.MSNormal
   where
     breached t = if triggerLessThan then t >= value else t <= value
     recovered r t = if triggerLessThan then value > fromMaybe t r else value < fromMaybe t r

@@ -47,6 +47,7 @@ import Data.HashMap.Lazy qualified as M
 import Data.List qualified as L
 import Data.Map qualified as Map
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
@@ -646,30 +647,29 @@ populateWidgetAlertStatuses widgets = do
       let statusMap = foldMap (\s -> Map.singleton s.widgetId s) statuses
       pure $ map (applyAlertStatus statusMap) widgets
   where
-    applyAlertStatus statusMap w = case (.id) w >>= (`Map.lookup` statusMap) of
-      Nothing -> w
-      Just status ->
-        w
-          { Widget.alertId = Just $ Monitors.unQueryMonitorId status.monitorId & UUID.toText
-          , Widget.alertThreshold = Just status.alertThreshold
-          , Widget.warningThreshold = status.warningThreshold
-          , Widget.alertStatus = Just status.alertStatus
-          }
+    applyAlertStatus statusMap w = fromMaybe w do
+      status <- (.id) w >>= (`Map.lookup` statusMap)
+      pure w
+        { Widget.alertId = Just $ Monitors.unQueryMonitorId status.monitorId & UUID.toText
+        , Widget.alertThreshold = Just status.alertThreshold
+        , Widget.warningThreshold = status.warningThreshold
+        , Widget.alertStatus = Just $ display status.alertStatus
+        }
 
 
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
 dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = do
   (_, dash) <- getDashAndVM dashId Nothing
   uid <- UUID.genUUID <&> UUID.toText
+  let normalizedWidgetIdM = normalizeWidgetId <$> widgetIdM
 
-  let widgetUpdated = case widgetIdM of
-        Just wID -> widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just (normalizeWidgetId wID)}
+  let widgetUpdated = case normalizedWidgetIdM of
+        Just nwid -> widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just nwid}
         Nothing -> widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just uid, Widget._centerTitle = Nothing}
 
-  let updateWidgets ws = case widgetIdM of
-        Just wID ->
-          let nwid = normalizeWidgetId wID
-              updateWidget w = if (w.id == Just nwid) || (maybeToMonoid (slugify <$> w.title) == nwid) then widgetUpdated else w
+  let updateWidgets ws = case normalizedWidgetIdM of
+        Just nwid ->
+          let updateWidget w = if (w.id == Just nwid) || (maybeToMonoid (slugify <$> w.title) == nwid) then widgetUpdated else w
            in map updateWidget ws
         Nothing -> ws <> [widgetUpdated]
 
@@ -681,23 +681,26 @@ dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = do
   syncDashboardAndQueuePush pid dashId
 
   -- Sync widget alert if exists
-  whenJust widgetIdM \wid -> do
-    existingMonitor <- Monitors.queryMonitorByWidgetId (normalizeWidgetId wid)
+  whenJust normalizedWidgetIdM \nwid -> do
+    existingMonitor <- Monitors.queryMonitorByWidgetId nwid
     whenJust existingMonitor \monitor -> do
       let newQuery = fromMaybe "" widget.query
       when (monitor.logQuery /= newQuery) do
         let sqlQueryCfg = (defSqlQueryCfg pid fixedUTCTime Nothing Nothing){presetRollup = Just "5m"}
-            newSqlQuery = case parseQueryToComponents sqlQueryCfg newQuery of
-              Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
-              Left _ -> monitor.logQueryAsSql
-            updatedMonitor =
+            parseResult = parseQueryToComponents sqlQueryCfg newQuery
+        newSqlQuery <- case parseResult of
+          Right (_, qc) -> pure $ fromMaybe "" qc.finalAlertQuery
+          Left err -> do
+            Log.logWarn "Failed to parse widget alert query, keeping previous SQL" (monitor.id, err)
+            pure monitor.logQueryAsSql
+        let updatedMonitor =
               (monitor :: Monitors.QueryMonitor)
                 { Monitors.logQuery = newQuery
                 , Monitors.logQueryAsSql = newSqlQuery
                 }
         void $ Monitors.queryMonitorUpsert updatedMonitor
 
-  let successMsg = case widgetIdM of
+  let successMsg = case normalizedWidgetIdM of
         Just _ -> "Widget updated successfully"
         Nothing -> "Widget added to dashboard successfully"
 
@@ -737,16 +740,15 @@ dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
       newWidgetIds = Map.keys widgetOrder
       deletedWidgetIds = filter (`notElem` newWidgetIds) oldWidgetIds
 
+  -- Delete alerts for removed widgets first (before updating dashboard to avoid orphaned monitors)
+  unless (null deletedWidgetIds) $ void $ Monitors.deleteMonitorsByWidgetIds deletedWidgetIds
+
   let newDash = case (tabSlugM, dash.tabs) of
         (Just slug, Just _) -> updateTabBySlug slug (\tab -> tab & #widgets .~ reorderWidgets widgetOrder tab.widgets) dash
         _ -> dash & #widgets .~ reorderWidgets widgetOrder dash.widgets
 
   _ <- Dashboards.updateSchema dashId newDash
   syncDashboardAndQueuePush pid dashId
-
-  -- Delete alerts for removed widgets
-  unless (null deletedWidgetIds) $ void $ Monitors.deleteMonitorsByWidgetIds deletedWidgetIds
-
   addRespHeaders NoContent
 
 
@@ -1871,7 +1873,7 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
                 , Monitors.widgetId = Just newWidgetId
                 , Monitors.alertLastTriggered = Nothing
                 , Monitors.warningLastTriggered = Nothing
-                , Monitors.currentStatus = "normal"
+                , Monitors.currentStatus = Monitors.MSNormal
                 }
         void $ Monitors.queryMonitorUpsert newMonitor
         pure newMonitorId.toText

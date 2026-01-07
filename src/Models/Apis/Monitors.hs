@@ -8,6 +8,7 @@ module Models.Apis.Monitors (
   QueryMonitorEvaled (..),
   MonitorAlertConfig (..),
   QueryMonitorId (..),
+  MonitorStatus (..),
   updateQMonitorTriggeredState,
   getAlertsByTeamHandle,
   monitorRemoveTeam,
@@ -23,7 +24,8 @@ module Models.Apis.Monitors (
 
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
-import Data.Default (Default)
+import Data.Default (Default (..))
+import Data.Text.Display (Display)
 import Data.Time.Clock (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -48,6 +50,7 @@ import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
+import Pkg.DBUtils (WrappedEnumSC (..))
 import Relude
 import Servant (FromHttpApiData)
 import System.Types (DB)
@@ -60,6 +63,13 @@ newtype QueryMonitorId = QueryMonitorId {unQueryMonitorId :: UUID.UUID}
 
 instance HasField "toText" QueryMonitorId Text where
   getField = UUID.toText . unQueryMonitorId
+
+
+data MonitorStatus = MSNormal | MSWarning | MSAlerting
+  deriving stock (Eq, Generic, Read, Show)
+  deriving anyclass (Default, NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "MS", DAE.CamelToSnake]] MonitorStatus
+  deriving (Display, FromField, ToField) via WrappedEnumSC "MS" MonitorStatus
 
 
 data MonitorAlertConfig = MonitorAlertConfig
@@ -102,7 +112,7 @@ data QueryMonitor = QueryMonitor
   , dashboardId :: Maybe UUID.UUID
   , alertRecoveryThreshold :: Maybe Double
   , warningRecoveryThreshold :: Maybe Double
-  , currentStatus :: Text
+  , currentStatus :: MonitorStatus
   , currentValue :: Double
   }
   deriving stock (Generic, Show)
@@ -136,7 +146,7 @@ data QueryMonitorEvaled = QueryMonitorEvaled
   , dashboardId :: Maybe UUID.UUID
   , alertRecoveryThreshold :: Maybe Double
   , warningRecoveryThreshold :: Maybe Double
-  , currentStatus :: Text
+  , currentStatus :: MonitorStatus
   , evalResult :: Double
   }
   deriving stock (Generic, Show)
@@ -284,7 +294,7 @@ deleteMonitorsByWidgetIds widgetIds = PG.execute q (Only (V.fromList widgetIds))
 data WidgetAlertStatus = WidgetAlertStatus
   { widgetId :: Text
   , monitorId :: QueryMonitorId
-  , alertStatus :: Text
+  , alertStatus :: MonitorStatus
   , currentValue :: Maybe Double
   , alertThreshold :: Double
   , warningThreshold :: Maybe Double

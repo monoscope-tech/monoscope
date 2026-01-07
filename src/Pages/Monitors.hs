@@ -120,7 +120,7 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , dashboardId = dashboardUuid
         , alertRecoveryThreshold = if isThresholdAlert then alertRecoveryD else Nothing
         , warningRecoveryThreshold = if isThresholdAlert then warningRecoveryD else Nothing
-        , currentStatus = "normal"
+        , currentStatus = Monitors.MSNormal
         , currentValue = 0
         }
 
