@@ -111,6 +111,13 @@ const PIPE_OPERATOR = ['|'];
 // Combine all operators for easy access
 const ALL_OPERATORS = [...COMPARISON_OPERATORS, ...SET_OPERATORS, ...STRING_OPERATORS, ...PIPE_OPERATOR];
 
+// Operators for suggestion dropdowns (includes logical operators)
+const SUGGESTION_OPERATORS = [...COMPARISON_OPERATORS, ...SET_OPERATORS, ...STRING_OPERATORS, ...LOGICAL_OPERATORS.filter((op) => op !== '!exists')];
+
+// Performance constants
+const IDLE_CALLBACK_TIMEOUT = 50;
+const MAX_CACHE_SIZE = 100;
+
 // Sources and keywords
 const DATA_SOURCES = ['spans', 'metrics'];
 const AGGREGATION_COMMANDS = ['stats', 'timechart'];
@@ -150,6 +157,11 @@ const REGEX_PATTERNS = {
   hasBinFunction: /summarize.*by\s+.*bin(_auto)?\s*\(\s*\w+\s*[,)].*$/i,
   summarizeClause: /\|\s*summarize\s+[^|]+/i,
   summarizeByClause: /(\s*summarize\s+[^|]*?by\s+)([^|]*?)(?=\||$)/i,
+
+  // Character tests (precompiled for hot path)
+  digitTest: /\d/,
+  whitespaceTest: /\s/,
+  wordBoundaryTest: /[^\w\d_=<>!&|+\-*/%^.:]/,
 };
 
 // Schema Manager class for better encapsulation
@@ -228,12 +240,20 @@ class SchemaManager {
   };
   getSchemas = () => this.schemas;
   getDefaultSchema = () => this.defaultSchema;
+  private setCacheWithLimit<K, V>(cache: Map<K, V>, key: K, value: V): void {
+    if (cache.size >= MAX_CACHE_SIZE) {
+      const firstKey = cache.keys().next().value;
+      if (firstKey !== undefined) cache.delete(firstKey);
+    }
+    cache.set(key, value);
+  }
+
   resolveNested = async (schema: string, prefix: string): Promise<SchemaField[]> => {
     const cacheKey = `${schema}:${prefix}`;
     const cached = this.nestedCache.get(cacheKey);
     if (cached) return cached;
     const result = await this.nestedResolver(schema, prefix);
-    this.nestedCache.set(cacheKey, result);
+    this.setCacheWithLimit(this.nestedCache, cacheKey, result);
     return result;
   };
   resolveValues = async (schema: string, field: string): Promise<string[]> => {
@@ -241,7 +261,7 @@ class SchemaManager {
     const cached = this.valueCache.get(cacheKey);
     if (cached) return cached;
     const result = await this.valueResolver(schema, field);
-    this.valueCache.set(cacheKey, result);
+    this.setCacheWithLimit(this.valueCache, cacheKey, result);
     return result;
   };
 
@@ -285,6 +305,7 @@ class SchemaManager {
         fields: f.info.fields,
       }));
     };
+    this.nestedCache.clear();
   };
 }
 
@@ -402,8 +423,6 @@ monaco.languages.registerCompletionItemProvider('aql', {
 
     const lineText = currentLine.substring(0, position.column - 1);
     const lastChar = lineText.charAt(lineText.length - 1);
-    const trimmedLine = lineText.trimEnd();
-    const lastCharTrimmed = trimmedLine.charAt(trimmedLine.length - 1);
 
     // First priority: Check for nested fields after dot
     // OPTIMIZATION: Only run regex if line contains a dot
@@ -467,10 +486,15 @@ monaco.languages.registerCompletionItemProvider('aql', {
     }
 
     // Fourth priority: Check for complete field-operator-value pattern - suggest logical operators
-    // OPTIMIZATION: Only run regex if line ends with space after quote or digit
-    const afterValue = lastChar === ' ' && (lastCharTrimmed === '"' || /\d/.test(lastCharTrimmed))
-      ? (REGEX_PATTERNS.afterQuotedValue.test(lineText) || REGEX_PATTERNS.afterNumericValue.test(lineText))
-      : false;
+    // OPTIMIZATION: Only compute lastCharTrimmed and run regex when needed
+    let afterValue = false;
+    if (lastChar === ' ') {
+      const trimmedLine = lineText.trimEnd();
+      const lastCharTrimmed = trimmedLine.charAt(trimmedLine.length - 1);
+      if (lastCharTrimmed === '"' || REGEX_PATTERNS.digitTest.test(lastCharTrimmed)) {
+        afterValue = REGEX_PATTERNS.afterQuotedValue.test(lineText) || REGEX_PATTERNS.afterNumericValue.test(lineText);
+      }
+    }
     if (afterValue) {
       [...LOGICAL_OPERATORS.filter((op) => op === 'and' || op === 'or'), PIPE_OPERATOR[0]].forEach((op) =>
         suggestions.push({
@@ -506,32 +530,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
     // OPTIMIZATION: Only run regex if line ends with space
     const fieldSpaceMatch = lastChar === ' ' ? lineText.match(REGEX_PATTERNS.fieldSpace) : null;
     if (fieldSpaceMatch && !logicalOperatorMatch) {
-      [
-        '==',
-        '!=',
-        '>',
-        '<',
-        '>=',
-        '<=',
-        '=~',
-        'in',
-        '!in',
-        'has',
-        '!has',
-        'has_any',
-        'has_all',
-        'contains',
-        '!contains',
-        'startswith',
-        '!startswith',
-        'endswith',
-        '!endswith',
-        'matches',
-        'and',
-        'or',
-        'not',
-        'exists',
-      ].forEach((op) =>
+      SUGGESTION_OPERATORS.forEach((op) =>
         suggestions.push({
           label: op,
           kind: monaco.languages.CompletionItemKind.Operator,
@@ -615,32 +614,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
 
     // Search segment
     if (!REGEX_PATTERNS.statsOrTimechart.test(last)) {
-      [
-        '==',
-        '!=',
-        '>',
-        '<',
-        '>=',
-        '<=',
-        '=~',
-        'in',
-        '!in',
-        'has',
-        '!has',
-        'has_any',
-        'has_all',
-        'contains',
-        '!contains',
-        'startswith',
-        '!startswith',
-        'endswith',
-        '!endswith',
-        'matches',
-        'and',
-        'or',
-        'not',
-        'exists',
-      ].forEach((op) =>
+      SUGGESTION_OPERATORS.forEach((op) =>
         suggestions.push({
           label: op,
           kind: monaco.languages.CompletionItemKind.Operator,
@@ -736,6 +710,21 @@ export class QueryEditorComponent extends LitElement {
   private updateHandlers: Array<monaco.IDisposable> = [];
   private resizeObserver: ResizeObserver | null = null;
   private themeObserver: MutationObserver | null = null;
+
+  // Bound handlers for cleanup
+  private resizeHandler = () => {
+    this.adjustEditorHeight();
+    this.refreshLayoutThrottled();
+  };
+  private keydownHandler = (e: KeyboardEvent) => {
+    if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const target = e.target as HTMLElement;
+      if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && target.contentEditable !== 'true') {
+        e.preventDefault();
+        this.editor?.focus();
+      }
+    }
+  };
 
   // Memoization cache for getMatches
   private _matchesCache: { query: string; result: any } | null = null;
@@ -883,10 +872,7 @@ export class QueryEditorComponent extends LitElement {
       }
     });
 
-    window.addEventListener('resize', () => {
-      this.adjustEditorHeight();
-      this.refreshLayoutThrottled();
-    });
+    window.addEventListener('resize', this.resizeHandler);
 
     // Set up ResizeObserver to handle container size changes
     if (this._editorContainer && window.ResizeObserver) {
@@ -897,15 +883,7 @@ export class QueryEditorComponent extends LitElement {
     }
 
     // Focus editor when "/" is pressed
-    document.addEventListener('keydown', (e: KeyboardEvent) => {
-      if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        const target = e.target as HTMLElement;
-        if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && target.contentEditable !== 'true') {
-          e.preventDefault();
-          this.editor?.focus();
-        }
-      }
-    });
+    document.addEventListener('keydown', this.keydownHandler);
 
     // Watch for theme changes
     this.themeObserver = new MutationObserver((mutations) => {
@@ -933,6 +911,9 @@ export class QueryEditorComponent extends LitElement {
     this.resizeObserver = null;
     this.themeObserver?.disconnect();
     this.themeObserver = null;
+    // Remove global event listeners
+    window.removeEventListener('resize', this.resizeHandler);
+    document.removeEventListener('keydown', this.keydownHandler);
     // Clear any pending debounced update
     if (this.updateQueryTimeout !== null) {
       clearTimeout(this.updateQueryTimeout);
@@ -1336,7 +1317,7 @@ export class QueryEditorComponent extends LitElement {
           // Debounced updates
           this.updateQueryDebounced(newValue);
           this.triggerSuggestionsDebounced();
-        }, { timeout: 50 });
+        }, { timeout: IDLE_CALLBACK_TIMEOUT });
       }),
 
       // OPTIMIZATION: Removed cursor position handler - dropdown position is already correct
@@ -1465,7 +1446,7 @@ export class QueryEditorComponent extends LitElement {
 
     if (position && model) {
       const lineText = model.getLineContent(position.lineNumber).substring(0, position.column - 1);
-      const dotMatch = lineText.match(REGEX_PATTERNS.dotMatchEnd) || lineText.match(REGEX_PATTERNS.dotMatchPartial);
+      const dotMatch = lineText.includes('.') ? (lineText.match(REGEX_PATTERNS.dotMatchEnd) || lineText.match(REGEX_PATTERNS.dotMatchPartial)) : null;
       if (dotMatch) {
         parentPath = dotMatch[1];
       }
@@ -1509,16 +1490,22 @@ export class QueryEditorComponent extends LitElement {
 
     const searchTerm = query.split('|').pop()?.trim() || '';
 
-    const filterAndSlice = (items: any[], prop: string = 'query') =>
-      searchTerm
-        ? items
-            .filter(
-              (item) =>
-                (prop === 'query' ? item.query : item.name).toLowerCase().includes(searchTerm) ||
-                item.query.toLowerCase().includes(searchTerm)
-            )
-            .slice(0, 5)
-        : items.slice(0, 5);
+    const filterAndSlice = (items: any[], prop: string = 'query') => {
+      const result: any[] = [];
+      const limit = 5;
+      for (const item of items) {
+        if (result.length >= limit) break;
+        if (!searchTerm) {
+          result.push(item);
+        } else {
+          const propVal = (prop === 'query' ? item.query : item.name).toLowerCase();
+          if (propVal.includes(searchTerm) || item.query.toLowerCase().includes(searchTerm)) {
+            result.push(item);
+          }
+        }
+      }
+      return result;
+    };
 
     const result = {
       saved: filterAndSlice(this.savedViews, 'name'),
@@ -1565,7 +1552,7 @@ export class QueryEditorComponent extends LitElement {
       const wordEndPos = position.column - 1;
       let wordStartPos = wordEndPos;
 
-      const dotMatch = lineText.match(REGEX_PATTERNS.dotMatchEnd) || lineText.match(REGEX_PATTERNS.dotMatchPartial);
+      const dotMatch = lineText.includes('.') ? (lineText.match(REGEX_PATTERNS.dotMatchEnd) || lineText.match(REGEX_PATTERNS.dotMatchPartial)) : null;
 
       if (dotMatch) {
         const lastDotIndex = lineText.lastIndexOf('.');
@@ -1573,7 +1560,7 @@ export class QueryEditorComponent extends LitElement {
       } else {
         while (wordStartPos > 0) {
           const c = currentLine.charAt(wordStartPos - 1);
-          if (/\s/.test(c) || /[^\w\d_=<>!&|+\-*/%^.:]/.test(c)) break;
+          if (REGEX_PATTERNS.whitespaceTest.test(c) || REGEX_PATTERNS.wordBoundaryTest.test(c)) break;
           wordStartPos--;
         }
       }
@@ -1725,7 +1712,7 @@ export class QueryEditorComponent extends LitElement {
       <div
         class="flex items-center justify-between px-4 py-2 hover:bg-fillBrand-weak cursor-pointer border-b border-strokeWeak ${selectedClass}"
         @pointerdown=${(e: MouseEvent) => this.handleSuggestionClick(item, e)}
-        @mouseover=${() => (this.selectedIndex = itemIndex)}
+        @mouseover=${() => { if (this.selectedIndex !== itemIndex) this.selectedIndex = itemIndex; }}
         data-index="${itemIndex}"
       >
         <div class="flex items-center gap-2 overflow-hidden">
