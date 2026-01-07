@@ -46,6 +46,10 @@ alertForm =
     , source = Nothing
     , vizType = Nothing
     , teams = []
+    , alertRecoveryThreshold = Nothing
+    , warningRecoveryThreshold = Nothing
+    , widgetId = Nothing
+    , dashboardId = Nothing
     }
 
 

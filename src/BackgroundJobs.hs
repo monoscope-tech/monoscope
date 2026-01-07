@@ -1,4 +1,4 @@
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -1571,6 +1571,56 @@ checkTriggeredQueryMonitors = do
       void $ Monitors.updateLastEvaluatedAt monitor.id startWall
 
 
+-- | Determine monitor status with hysteresis support.
+-- Args: triggerLessThan warnThreshold alertThreshold alertRecovery warnRecovery wasAlerting wasWarning value
+-- For "above" (triggerLessThan=False): alert when value >= threshold, recover when value < recoveryThreshold
+-- For "below" (triggerLessThan=True): alert when value <= threshold, recover when value > recoveryThreshold
+--
+-- Trigger tests (above direction):
+-- >>> monitorStatus False Nothing 100 Nothing Nothing False False 100
+-- MSAlerting
+-- >>> monitorStatus False Nothing 100 Nothing Nothing False False 150
+-- MSAlerting
+-- >>> monitorStatus False Nothing 100 Nothing Nothing False False 99
+-- MSNormal
+--
+-- Trigger tests (below direction):
+-- >>> monitorStatus True Nothing 100 Nothing Nothing False False 100
+-- MSAlerting
+-- >>> monitorStatus True Nothing 100 Nothing Nothing False False 50
+-- MSAlerting
+-- >>> monitorStatus True Nothing 100 Nothing Nothing False False 101
+-- MSNormal
+--
+-- Hysteresis: stays alerting until recovery threshold crossed (above)
+-- >>> monitorStatus False Nothing 100 (Just 80) Nothing True False 95
+-- MSAlerting
+-- >>> monitorStatus False Nothing 100 (Just 80) Nothing True False 79
+-- MSNormal
+--
+-- Hysteresis: stays alerting until recovery threshold crossed (below)
+-- >>> monitorStatus True Nothing 100 (Just 120) Nothing True False 105
+-- MSAlerting
+-- >>> monitorStatus True Nothing 100 (Just 120) Nothing True False 121
+-- MSNormal
+--
+-- Warning threshold with hysteresis
+-- >>> monitorStatus False (Just 80) 100 Nothing (Just 60) False True 75
+-- MSWarning
+-- >>> monitorStatus False (Just 80) 100 Nothing (Just 60) False True 59
+-- MSNormal
+--
+-- Edge case: recovery > threshold (above) - no hysteresis band
+-- >>> monitorStatus False Nothing 100 (Just 120) Nothing True False 110
+-- MSAlerting
+-- >>> monitorStatus False Nothing 100 (Just 120) Nothing True False 99
+-- MSNormal
+--
+-- Edge case: recovery < threshold (below) - no hysteresis band
+-- >>> monitorStatus True Nothing 100 (Just 80) Nothing True False 95
+-- MSAlerting
+-- >>> monitorStatus True Nothing 100 (Just 80) Nothing True False 101
+-- MSNormal
 monitorStatus :: Bool -> Maybe Double -> Double -> Maybe Double -> Maybe Double -> Bool -> Bool -> Double -> Monitors.MonitorStatus
 monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRecovery wasAlerting wasWarning value
   | breached alertThreshold = Monitors.MSAlerting
