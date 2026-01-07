@@ -36,6 +36,7 @@ mkSystemLog
 mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
   let
     (levelText, sevNum) = case sev of
+      SLTrace -> ("TRACE", 1)
       SLDebug -> ("DEBUG", 5)
       SLInfo -> ("INFO", 9)
       SLWarn -> ("WARN", 13)
