@@ -49,30 +49,6 @@ BEGIN
                     status := 'Normal'; 
                 END IF;
 
-                -- Insert into otel_logs_and_spans as an alert
-                INSERT INTO otel_logs_and_spans (
-                    project_id,
-                    kind,
-                    timestamp,
-                    name,
-                    duration,
-                    summary,
-                    status_message,
-                    context___trace_id,
-                    body
-                )
-                VALUES (
-                    monitor_rec.project_id,      
-                    'alert',                     
-                    start,
-                    COALESCE(monitor_rec.alert_config->>'title', 'Untitled Monitor'),
-                    duration_ns,  -- Duration in nanoseconds
-                    ARRAY['Query monitor triggered', COALESCE(monitor_rec.alert_config->>'title', 'Untitled Monitor')]::TEXT[],
-                    status,
-                    monitor_rec.id::text,         
-                    jsonb_build_object('value', value, 'monitor_id', monitor_rec.id)
-                );
-
                 -- Also queue the job
                 INSERT INTO background_jobs (run_at, status, payload)
                 VALUES (

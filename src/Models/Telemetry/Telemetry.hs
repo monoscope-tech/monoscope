@@ -148,7 +148,7 @@ atMapInt key maybeMap = do
     _ -> Nothing
 
 
-data SeverityLevel = SLDebug | SLInfo | SLWarn | SLError | SLFatal
+data SeverityLevel = SLTrace | SLDebug | SLInfo | SLWarn | SLError | SLFatal
   deriving (Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "SL", DAE.CamelToSnake]] SeverityLevel

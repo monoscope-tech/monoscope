@@ -1,4 +1,18 @@
-import { getSeriesColor, tailwindToHex } from './colorMapping';
+import { getSeriesColor, tailwindToHex, getContrastTextColor } from './colorMapping';
+
+// Calculate actual trace time range (maxEndTime - minStartTime)
+const getTimeRange = (spans: FlameGraphItem[]): number => {
+  let minStart = Infinity, maxEnd = -Infinity;
+  const traverse = (items: FlameGraphItem[]) => {
+    for (const item of items) {
+      minStart = Math.min(minStart, item.start);
+      maxEnd = Math.max(maxEnd, item.start + item.value);
+      if (item.children) traverse(item.children);
+    }
+  };
+  traverse(spans);
+  return maxEnd - minStart || 1;
+};
 
 const SCROLL_BAR_WIDTH = 7;
 
@@ -79,9 +93,8 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
   const recursionJson = (jsonObj: FlameGraphItem[], id: string | null = null) => {
     const data: ItemsWithStyle[] = [];
     const filteredJson = filterJson(structuredClone(jsonObj), id);
-    const rootVal = filteredJson.sort((a, b) => b.value - a.value)[0]?.value || 1;
+    const rootVal = getTimeRange(filteredJson);
     const recur = (item: FlameGraphItem, start = 0, level = 0) => {
-      // Use deterministic color based on service name
       const tailwindColor = colorsMap[item.serviceName] || getSeriesColor(item.serviceName, 'service');
       const color = tailwindColor.startsWith('#') ? tailwindColor : tailwindToHex(tailwindColor);
       const temp: ItemsWithStyle = {
@@ -104,7 +117,7 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
     return data;
   };
 
-  const fData = modifySpansForFlameGraph(data);
+  const fData = buildHierarchy(data);
 
   const renderItem = (item: ItemsWithStyle, renderAt: string, rootVal: number, containerWidth?: number) => {
     const [level, xStart, xEnd] = item.value;
@@ -145,9 +158,10 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
     if (item.hasErrors) {
       div.appendChild(getErrorIndicator());
     }
-    const text = elt('span', { class: 'text-black shrink-0 mr-4 text-xs' }, item.name);
+    const textColor = getContrastTextColor(item.itemStyle.color);
+    const text = elt('span', { class: 'ml-1 shrink-0 mr-4 text-xs', style: `color: ${textColor}` }, item.name);
     const [t, u] = formatDuration(item.value[2]);
-    const tim = elt('span', { class: 'text-black text-xs shrink-0 ml-auto' }, `${Math.floor(Number(t))} ${u}`);
+    const tim = elt('span', { class: 'text-xs shrink-0 ml-auto mr-1', style: `color: ${textColor}` }, `${Math.floor(Number(t))} ${u}`);
     div.appendChild(text);
     div.appendChild(tim);
     container.appendChild(div);
@@ -233,30 +247,17 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
 
 window.flameGraphChart = flameGraphChart;
 
-function modifySpansForFlameGraph(data: FlameGraphItem[]) {
-  const spans = buildHierachy(structuredClone(data));
-  return spans;
-}
-
-function buildHierachy(spans: FlameGraphItem[]) {
+function buildHierarchy(spans: FlameGraphItem[]): FlameGraphItem[] {
   const spanMap = new Map<string, FlameGraphItem>();
-  spans.forEach((span) => {
+  const roots: FlameGraphItem[] = [];
+  for (const span of structuredClone(spans)) {
     span.children = [];
     spanMap.set(span.spanId, span);
-  });
-  const roots: FlameGraphItem[] = [];
-  spans.forEach((span) => {
-    if (span.parentId) {
-      const parent = spanMap.get(span.parentId);
-      if (parent) {
-        parent.children.push(span);
-      } else {
-        roots.push(span);
-      }
-    } else {
-      roots.push(span);
-    }
-  });
+  }
+  for (const span of spanMap.values()) {
+    const parent = span.parentId ? spanMap.get(span.parentId) : null;
+    parent ? parent.children.push(span) : roots.push(span);
+  }
   return roots;
 }
 
@@ -330,7 +331,7 @@ type WaterfallItem = {
     spanDurationNs: number;
     uSpandId: boolean;
     hasErrors: boolean;
-    serviceName: number;
+    serviceName: string;
     startTime: number;
     endTime: number;
     timestamp: string;
@@ -363,18 +364,15 @@ function buildTree(span: WaterfallItem, serviceColors: Record<string, string>, s
   const st = startCurr - start;
   const startPix = (containerWidth * st) / rootVal;
   const width = (containerWidth * span.spanRecord.spanDurationNs) / rootVal;
-  const parentDiv = elt('div', {
-    class: 'flex flex-col span-filterble',
-  });
   const spanId = span.spanRecord.spanId;
-  // Use deterministic color based on service name
-  const tailwindColor = serviceColors[span.spanRecord.serviceName] || getSeriesColor(span.spanRecord.serviceName, 'service');
-  const color = tailwindColor.startsWith('bg-') ? tailwindColor : `bg-[${tailwindColor}]`;
+  const tailwindColor = serviceColors[span.spanRecord.serviceName] || getSeriesColor(String(span.spanRecord.serviceName), 'service');
+  const color = tailwindColor.startsWith('#') ? tailwindColor : tailwindToHex(tailwindColor);
+  const textColor = getContrastTextColor(color);
+  const parentDiv = elt('div', { class: 'flex flex-col span-filterble' });
   const div = elt('div', {
-    class:
-      color +
-      ' flex rounded-sm items-center cursor-pointer  h-5 grow-0 justify-between flex-nowrap overflow-x-visible hover:border hover:border-black',
+    class: 'flex rounded-sm items-center cursor-pointer h-5 grow-0 justify-between flex-nowrap overflow-x-visible hover:border hover:border-black',
     id: 'waterfall-chart-' + spanId,
+    style: `background-color: ${color};`,
     onclick: (event: any) => {
       event.stopPropagation();
       event.currentTarget.nextSibling.classList.toggle('hidden');
@@ -384,31 +382,18 @@ function buildTree(span: WaterfallItem, serviceColors: Record<string, string>, s
   });
   parentDiv.style.marginLeft = `${startPix}px`;
   div.style.width = `${width}px`;
-  const childDiv = elt('div', {
-    class: 'flex flex-col gap-2 mt-2 gap-1',
-    id: 'waterfall-child-' + spanId,
-  });
+  const childDiv = elt('div', { class: 'flex flex-col gap-2 mt-2', id: 'waterfall-child-' + spanId });
   span.children.forEach((child) => {
     childDiv.appendChild(buildTree(child, serviceColors, startCurr, rootVal, containerWidth));
   });
-  const text = elt(
-    'span',
-    {
-      class: 'text-black ml-1 shrink-0 mr-4 text-xs hidden',
-    },
-    span.spanRecord.serviceName + span.spanRecord.spanName
-  );
+  const text = elt('span', { class: 'ml-1 shrink-0 mr-4 text-xs hidden', style: `color: ${textColor}` }, span.spanRecord.serviceName + span.spanRecord.spanName);
   const [t, u] = formatDuration(span.spanRecord.spanDurationNs);
-  const tim = elt('span', { class: 'text-black text-xs shrink-0 ml-auto' }, `${Math.floor(Number(t))} ${u}`);
-  if (span.spanRecord.hasErrors) {
-    div.appendChild(getErrorIndicator());
-  }
+  const tim = elt('span', { class: 'text-xs shrink-0 ml-auto mr-1', style: `color: ${textColor}` }, `${Math.floor(Number(t))} ${u}`);
+  if (span.spanRecord.hasErrors) div.appendChild(getErrorIndicator());
   div.appendChild(text);
   div.appendChild(tim);
   parentDiv.appendChild(div);
-  if (span.children.length > 0) {
-    parentDiv.appendChild(childDiv);
-  }
+  if (span.children.length > 0) parentDiv.appendChild(childDiv);
   return parentDiv;
 }
 

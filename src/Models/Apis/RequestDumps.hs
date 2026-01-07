@@ -34,11 +34,11 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (Only (Only), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField (fromField))
+import Database.PostgreSQL.Simple.FromField (FromField, fromField)
 import Database.PostgreSQL.Simple.FromRow (FromRow (..))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (ToField (toField))
+import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
 import Effectful
@@ -48,6 +48,7 @@ import Effectful.Time qualified as Time
 import Models.Apis.Fields.Types ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
+import Pkg.DBUtils (WrappedEnumShow (..))
 import Pkg.Parser
 import Pkg.Parser.Stats (Section, Sources (SSpans))
 import Relude hiding (many, some)
@@ -91,18 +92,7 @@ data SDKTypes
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
-
-
-instance ToField SDKTypes where
-  toField sdkType = toField @String (show sdkType)
-
-
-instance FromField SDKTypes where
-  fromField f mdata = do
-    str <- fromField f mdata
-    case readMaybe str of
-      Just sdkType -> return sdkType
-      Nothing -> return GoGin
+  deriving (FromField, ToField) via WrappedEnumShow SDKTypes
 
 
 data RequestTypes
@@ -113,18 +103,7 @@ data RequestTypes
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestTypes
-
-
-instance ToField RequestTypes where
-  toField requestType = toField @String (show requestType)
-
-
-instance FromField RequestTypes where
-  fromField f mdata = do
-    str <- fromField f mdata
-    case readMaybe str of
-      Just requestType -> return requestType
-      Nothing -> return Incoming
+  deriving (FromField, ToField) via WrappedEnumShow RequestTypes
 
 
 -- Nothing -> returnError ConversionFailed f ("Could not read SDKTypes: " ++ str)
@@ -461,14 +440,67 @@ executeArbitraryQuery queryText = do
 
 
 -- | Execute a user-provided SQL query with mandatory project_id filtering
--- SECURITY: Wraps query in subquery and filters by parameterized project_id
+-- SECURITY: Validates query for dangerous patterns and verifies project_id filter is present in query
+-- Note: The query must already contain project_id='<pid>' filtering (via {{project_id}} placeholder substitution done before calling this function)
 executeSecuredQuery :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
-executeSecuredQuery pid userQuery limit = do
-  let securedQuery = "SELECT * FROM (" <> userQuery <> ") WHERE project_id = ? LIMIT ?"
-  resultE <- try @SomeException $ do
-    results :: [[FieldValue]] <- PG.query (Query $ encodeUtf8 securedQuery) (pid, limit)
-    pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
-  pure $ first (\e -> "Query execution failed: " <> show e) resultE
+executeSecuredQuery pid userQuery limit
+  | not (validateSqlQuery userQuery) = pure $ Left "Query contains disallowed operations"
+  | not (hasProjectIdFilter userQuery pid) = pure $ Left "Query must filter by project_id"
+  | otherwise = do
+      let selectQuery = "SELECT * FROM (" <> userQuery <> ") AS subq LIMIT ?"
+      resultE <- try @SomeException do
+        results :: [[FieldValue]] <- PG.query (Query $ encodeUtf8 selectQuery) (Only limit)
+        pure $ V.fromList $ map (V.fromList . map fieldValueToJson) results
+      pure $ first (const "Query execution failed") resultE
+
+
+-- | Check that query contains a project_id filter with the correct project ID
+-- This validates that the query has been properly prepared with the project_id substituted
+hasProjectIdFilter :: Text -> Projects.ProjectId -> Bool
+hasProjectIdFilter query pid =
+  let pidText = pid.toText
+   in ("project_id='" <> pidText <> "'")
+        `T.isInfixOf` query
+        || ("project_id = '" <> pidText <> "'")
+        `T.isInfixOf` query
+
+
+-- | Dangerous SQL patterns that must not appear in user queries
+dangerousSqlPatterns :: [Text]
+dangerousSqlPatterns =
+  [ "insert "
+  , "update "
+  , "delete "
+  , "drop "
+  , "truncate "
+  , "alter "
+  , "create "
+  , "grant "
+  , "revoke "
+  , "copy "
+  , "execute "
+  , "explain "
+  , "set "
+  , "; "
+  , "--"
+  , "/*"
+  , "*/"
+  , "information_schema"
+  , "pg_catalog"
+  , "pg_"
+  ]
+
+
+-- | Validate SQL query for dangerous constructs
+validateSqlQuery :: Text -> Bool
+validateSqlQuery query =
+  let lowerQuery = T.toLower query
+      -- Check for comment-based bypass attempts in original query
+      hasComments = "--" `T.isInfixOf` query || "/*" `T.isInfixOf` query
+   in not hasComments
+        && all (\p -> not $ p `T.isInfixOf` lowerQuery) dangerousSqlPatterns
+        && "select"
+        `T.isInfixOf` lowerQuery
 
 
 selectLogTable :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))

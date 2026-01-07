@@ -48,6 +48,7 @@ extra-source-files:
     static/migrations/0020_github_sync.sql
     static/migrations/0021_move_monitors_to_haskell.sql
     static/migrations/0022_query_cache.sql
+    static/migrations/0023_anomaly_chat_messages.sql
 
 source-repository head
   type: git
@@ -86,6 +87,7 @@ library
       Models.Projects.Projects
       Models.Telemetry.Schema
       Models.Telemetry.SummaryGenerator
+      Models.Telemetry.SystemLogs
       Models.Telemetry.Telemetry
       Models.Users.Sessions
       Models.Users.Users

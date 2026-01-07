@@ -39,6 +39,7 @@ module Utils (
   getGrpcStatusColor,
   nestedJsonFromDotNotation,
   prettyPrintCount,
+  formatWithCommas,
   extractMessageFromLog,
   -- Fill color helpers
   statusFillColor,
@@ -72,6 +73,7 @@ import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Effectful (Eff, IOE)
 import Effectful qualified
 import Effectful.PostgreSQL (WithConnection)
+import Fmt (commaizeF, fmt)
 import Lucid
 import Lucid.Hyperscript (__)
 import Lucid.Svg qualified as Svg
@@ -121,7 +123,7 @@ onpointerdown_ :: Text -> Attribute
 onpointerdown_ = term "onpointerdown"
 
 
-faSprite_ :: Text -> Text -> Text -> Html ()
+faSprite_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
 faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes] $ Svg.use_ [href_ $ "/public/assets/svgs/fa-sprites/" <> faType <> ".svg?v=" <> fileHash <> "#" <> mIcon]
   where
     fileHash = case faType of
@@ -583,6 +585,15 @@ prettyPrintCount n
   | n >= 1_000_000 = T.show (n `div` 1_000_000) <> "." <> T.show ((n `mod` 1_000_000) `div` 100_000) <> "M"
   | n >= 1_000 = T.show (n `div` 1_000) <> "." <> T.show ((n `mod` 1_000) `div` 100) <> "K"
   | otherwise = T.show n
+
+
+-- | Format a Double with thousand separators
+-- | Example: 1000 -> "1,000", 1000.55 -> "1,000.55", 0.5 -> "0.5"
+formatWithCommas :: Double -> Text
+formatWithCommas d =
+  let (intPart, fracPart) = properFraction d :: (Int, Double)
+      intFormatted = fmt (commaizeF intPart)
+   in if fracPart == 0 then intFormatted else intFormatted <> toText (dropWhile (/= '.') (show d))
 
 
 messageKeys :: [T.Text]

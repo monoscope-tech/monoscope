@@ -1,5 +1,8 @@
 module Pages.Dashboards (
   dashboardGetH,
+  dashboardTabGetH,
+  dashboardTabContentGetH,
+  dashboardTabRenamePatchH,
   entrypointRedirectGetH,
   DashboardGet (..),
   dashboardsGetH,
@@ -24,6 +27,12 @@ module Pages.Dashboards (
   visTypes,
   processEagerWidget,
   dashboardBulkActionPostH,
+  TabRenameForm (..),
+  TabRenameRes (..),
+  -- Widget alerts
+  WidgetAlertForm (..),
+  widgetAlertUpsertH,
+  widgetAlertDeleteH,
 ) where
 
 import Control.Lens
@@ -38,19 +47,22 @@ import Data.HashMap.Lazy qualified as M
 import Data.List qualified as L
 import Data.Map qualified as Map
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
+import Effectful.Concurrent.Async (pooledForConcurrently)
 import Effectful.Error.Static (Error, throwError)
-import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
-import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxPatch_, hxPost_, hxPushUrl_, hxPut_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxIndicator_, hxPatch_, hxPost_, hxPushUrl_, hxPut_, hxSelect_, hxSwapOob_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
+import Models.Apis.Monitors qualified as Monitors
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ManageMembers
@@ -66,6 +78,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.LogExplorer.LogItem (getServiceName)
+import Pages.Monitors qualified as Alerts
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
 import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
@@ -73,9 +86,10 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DashboardUtils qualified as DashboardUtils
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.Parser (defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import Servant (NoContent (..), ServerError, err404, errBody)
+import Servant (NoContent (..), ServerError, err302, err404, errBody, errHeaders)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import System.Config (AuthContext (..))
@@ -91,6 +105,10 @@ import Web.FormUrlEncoded (FromForm)
 folderFromPath :: Maybe Text -> Text
 folderFromPath Nothing = ""
 folderFromPath (Just path) = let dir = takeDirectory (toString path) in if dir == "." then "" else toText dir <> "/"
+
+
+normalizeWidgetId :: Text -> Text
+normalizeWidgetId = T.replace "Expanded" ""
 
 
 dashTitle :: Text -> Text
@@ -144,7 +162,7 @@ instance ToHtml DashboardGet where
 
 dashboardPage_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> [(Text, Maybe Text)] -> Html ()
 dashboardPage_ pid dashId dash dashVM allParams = do
-  -- when  $ freeTierLimitExceededBanner pid.toText
+  -- Modal for renaming dashboard
   Components.modal_ "pageTitleModalId" ""
     $ form_
       [ class_ "flex flex-col p-3 gap-3"
@@ -162,29 +180,67 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         label_ [Lucid.for_ "pageTitleModalId", class_ "btn btn-outline cursor-pointer"] "Cancel"
         button_ [type_ "submit", class_ "btn btn-primary"] "Save"
 
+  -- Modal for renaming tab (only shown for dashboards with tabs)
+  whenJust dash.tabs \tabs -> do
+    let activeTabSlug = join (L.lookup activeTabSlugKey allParams)
+        activeTabInfo = activeTabSlug >>= findTabBySlug tabs
+        activeTabName = maybe "" ((.name) . snd) activeTabInfo
+        currentTabSlug = fromMaybe "" activeTabSlug
+    Components.modal_ "tabRenameModalId" ""
+      $ form_
+        [ class_ "flex flex-col p-3 gap-3"
+        , hxPatch_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/" <> currentTabSlug <> "/rename")
+        , hxSwap_ "none"
+        , hxTrigger_ "submit"
+        ]
+      $ fieldset_ [class_ "fieldset min-w-xs"] do
+        label_ [class_ "label"] "Tab Name"
+        input_ [class_ "input", name_ "newName", placeholder_ "Enter tab name", value_ activeTabName]
+        div_ [class_ "mt-3 flex justify-end gap-2"] do
+          label_ [Lucid.for_ "tabRenameModalId", class_ "btn btn-outline cursor-pointer"] "Cancel"
+          button_ [type_ "submit", class_ "btn btn-primary"] "Save"
+
+  -- Variable picker modal - auto-opens when required vars are unset (from tab.requires or variable.required)
+  whenJust dash.variables \variables -> do
+    let activeTabSlug' = join (L.lookup activeTabSlugKey allParams)
+        activeTab = activeTabSlug' >>= \slug -> dash.tabs >>= (`findTabBySlug` slug) <&> snd
+    whenJust (findVarToPrompt activeTab variables) \v -> variablePickerModal_ pid dashId activeTabSlug' allParams v False
+
   -- Render variables and tabs in the same container
   when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-fillWeaker px-4 py-2 gap-4 items-center flex-wrap"] do
-    -- Tabs section (on the left)
+    -- Tabs section (on the left) - now using htmx for lazy loading
     whenJust dash.tabs \tabs -> do
-      let activeTabIdx = fromMaybe 0 $ readMaybe . toString =<< join (L.lookup "tab" allParams)
-      div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline"] do
+      -- Get active tab from path-based slug or fall back to first tab
+      let activeTabSlug = join (L.lookup activeTabSlugKey allParams)
+          activeTabIdx = case activeTabSlug of
+            Just slug -> maybe 0 fst (findTabBySlug tabs slug)
+            Nothing -> 0
+          baseTabUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/"
+          -- Build query string from current params (excluding activeTabSlugKey which is internal)
+          queryStr = queryStringFrom $ filter (\(k, _) -> k /= activeTabSlugKey) allParams
+      div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline", id_ "dashboard-tabs-container"] do
         forM_ (zip [0 ..] tabs) \(idx, tab) -> do
-          let tabId = "dashboard-tab-" <> dashId.toText <> "-" <> show idx
-          label_
+          let tabSlug = slugify tab.name
+              isActive = idx == activeTabIdx
+              tabUrl = baseTabUrl <> tabSlug
+              tabContentUrl = tabUrl <> "/content" <> queryStr
+          a_
             [ role_ "tab"
-            , class_ "tab group flex items-center gap-2 has-[:checked]:tab-active"
+            , href_ $ tabUrl <> queryStr
+            , class_ $ "tab flex items-center gap-2" <> if isActive then " tab-active" else ""
+            , id_ $ "tab-link-" <> dashId.toText <> "-" <> show idx
+            , hxGet_ tabContentUrl
+            , hxTarget_ "#dashboard-tabs-content"
+            , hxSwap_ "innerHTML transition:true"
+            , hxPushUrl_ $ tabUrl <> queryStr
+            , hxIndicator_ $ "#tab-indicator-" <> dashId.toText <> "-" <> show idx
+            , -- Update active tab styling via htmx hyperscript
+              term "_" "on htmx:afterOnLoad remove .tab-active from .tab in #dashboard-tabs-container then add .tab-active to me"
             ]
             do
-              input_
-                ( [ type_ "radio"
-                  , name_ $ "dashboard-tabs-" <> dashId.toText
-                  , id_ tabId
-                  , class_ "hidden"
-                  , onchange_ $ "const url = new URL(location); url.searchParams.set('tab', '" <> show idx <> "'); history.pushState({}, '', url)"
-                  ]
-                    <> [checked_ | idx == activeTabIdx]
-                )
+              whenJust tab.icon \icon -> faSprite_ icon "regular" "w-4 h-4"
               toHtml tab.name
+              span_ [class_ "htmx-indicator", id_ $ "tab-indicator-" <> dashId.toText <> "-" <> show idx] $ faSprite_ "spinner" "regular" "w-3 h-3 animate-spin"
 
     -- Variables section (pushed to the right)
     whenJust dash.variables \variables -> do
@@ -267,24 +323,21 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     });
   });
     |]
+  let activeTabSlug = dash.tabs >>= \tabs -> join (L.lookup activeTabSlugKey allParams) <|> (slugify . (.name) <$> listToMaybe tabs)
+      widgetOrderUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets_order" <> maybe "" ("?tab=" <>) activeTabSlug
+
   section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-5 pb-6 px-4 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-20 group/pg", id_ "dashboardPage"] do
-    let activeTabIdx = fromMaybe 0 $ readMaybe . toString =<< join (L.lookup "tab" allParams)
     case dash.tabs of
       Just tabs -> do
-        -- Tab system with CSS-based switching
-        div_ [class_ "dashboard-tabs-container"] do
-          forM_ (zip [0 ..] tabs) \(idx, tab) -> do
-            -- Tab content panel
-            div_
-              [ class_ $ "tab-panel grid-stack -m-2" <> if idx == activeTabIdx then "" else " hidden"
-              , data_ "tab-index" (show idx)
-              , id_ $ "tab-panel-" <> dashId.toText <> "-" <> show idx
-              ]
-              do
-                forM_ tab.widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
-                when (null tab.widgets) $ label_ [id_ $ "add_widget_tab_" <> show idx, class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
-                  faSprite_ "plus" "regular" "h-8 w-8"
-                  span_ "Add a widget"
+        let activeTabIdx = case activeTabSlug of
+              Just slug -> maybe 0 fst (findTabBySlug tabs slug)
+              Nothing -> 0
+        -- Tab system with htmx lazy loading - only render active tab content
+        div_ [class_ "dashboard-tabs-container", id_ "dashboard-tabs-content"] do
+          -- Only render the active tab's content (other tabs load via htmx)
+          case tabs !!? activeTabIdx of
+            Just activeTab -> tabContentPanel_ pid dashId.toText activeTabIdx activeTab.name activeTab.widgets True False
+            Nothing -> pass
       Nothing -> do
         -- Fall back to old behavior for dashboards without tabs
         div_
@@ -294,32 +347,25 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             when (null (dash :: Dashboards.Dashboard).widgets) $ label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center *:right-0!  *:bottom-0! ", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
               faSprite_ "plus" "regular" "h-8 w-8"
               span_ "Add a widget"
-    let projectId = pid.toText
-    let dashboardId = dashId.toText
+
     -- Add hidden element for the auto-refresh handler
     div_ [id_ "dashboard-refresh-handler", class_ "hidden"] ""
+
+    -- Hidden form for widget order PATCH via HTMX (tab slug hardcoded in URL)
+    form_
+      [ id_ "widget-order-trigger"
+      , class_ "hidden"
+      , hxPatch_ widgetOrderUrl
+      , hxVals_ "js:{...buildWidgetOrder(document.querySelector('.grid-stack'))}"
+      , hxExt_ "json-enc"
+      , hxSwap_ "none"
+      , hxTrigger_ "widget-order-changed from:body"
+      ]
+      ""
 
     script_
       [text|
       document.addEventListener('DOMContentLoaded', () => {
-        // Handle tab switching
-        document.querySelectorAll('input[name="dashboard-tabs-${dashboardId}"]').forEach(radio => {
-          radio.addEventListener('change', function() {
-            if (this.checked) {
-              const tabIndex = this.id.split('-').pop();
-              // Hide all panels
-              document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
-              // Show active panel
-              const activePanel = document.getElementById('tab-panel-${dashboardId}-' + tabIndex);
-              activePanel.classList.remove('hidden');
-              // Update gridStackInstance to point to the active tab's grid
-              if (activePanel.gridstack) {
-                window.gridStackInstance = activePanel.gridstack;
-              }
-            }
-          });
-        });
-        
         GridStack.renderCB = function(el, w) {
           el.innerHTML = w.content;
           const scripts = Array.from(el.querySelectorAll('script'));
@@ -331,71 +377,71 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           });
         };
 
-        // Initialize all grids (for both tabs and non-tab dashboards)
-        const gridInstances = [];
-        document.querySelectorAll('.grid-stack').forEach(gridEl => {
-          if (!gridEl.classList.contains('grid-stack-initialized')) {
-            const grid = GridStack.init({
-              column: 12,
-              acceptWidgets: true,
-              cellHeight: '5rem',
-              marginTop: '0.05rem',
-              marginLeft: '0.5rem',
-              marginRight: '0.5rem',
-              marginBottom: '2rem',
-              handleClass: 'grid-stack-handle',
-              styleInHead: true,
-              staticGrid: false,
-            }, gridEl);
+        // Function to initialize grids (called on page load and after htmx swaps)
+        function initializeGrids() {
+          const gridInstances = [];
+          document.querySelectorAll('.grid-stack').forEach(gridEl => {
+            if (!gridEl.classList.contains('grid-stack-initialized')) {
+              const grid = GridStack.init({
+                column: 12,
+                acceptWidgets: true,
+                cellHeight: '5rem',
+                marginTop: '0.05rem',
+                marginLeft: '0.5rem',
+                marginRight: '0.5rem',
+                marginBottom: '2rem',
+                handleClass: 'grid-stack-handle',
+                styleInHead: true,
+                staticGrid: false,
+              }, gridEl);
 
-            grid.on('removed change', debounce(updateWidgetOrder('${projectId}', '${dashboardId}'), 200));
-            gridEl.classList.add('grid-stack-initialized');
-            gridInstances.push(grid);
-            // Set global gridStackInstance to the first (or visible) grid for hyperscript access
-            if (!window.gridStackInstance) {
+              grid.on('removed change', debounce(() => htmx.trigger(document.body, 'widget-order-changed'), 200));
+              gridEl.classList.add('grid-stack-initialized');
+              gridInstances.push(grid);
+              // Set global gridStackInstance to the current grid
               window.gridStackInstance = grid;
             }
-          }
-        });
+          });
 
-        // Initialize nested grids and bind change events.
-        const nestedGridInstances = [];
-        document.querySelectorAll('.nested-grid').forEach(nestedEl => {
-          const nestedInstance = GridStack.init({
-            column: 12,
-            acceptWidgets: true,
-            cellHeight: '4.9rem',
-            // margin: '0.5rem',
-            marginTop: '0.01rem',
-            marginLeft: '0.5rem',
-            marginRight: '0.5rem',
-            marginBottom: '1rem',
-            handleClass: 'nested-grid-stack-handle',
-            styleInHead: true,
-            staticGrid: false,
-          }, nestedEl);
-          // nestedInstance.compact()
-          nestedInstance.on('removed change', debounce(updateWidgetOrder('${projectId}', '${dashboardId}'), 200));
-          nestedGridInstances.push(nestedInstance);
-        });
-      })
-        // Listen for widget-remove-requested custom events
-        document.addEventListener('widget-remove-requested', function(e) {
-          const widgetEl = document.getElementById(e.detail.widgetId + '_widgetEl');
-          if (widgetEl) {
-             gridStackInstance.removeWidget(widgetEl, true);
-            // Find which nested grid contains this widget
-            for (const nestedInstance of nestedGridInstances) {
-              try {
-                nestedInstance.removeWidget(widgetEl, true);
-                break;
-              } catch (err) {
-                // Continue to the next instance if this one doesn't contain the widget
-                continue;
-              }
+          // Initialize nested grids
+          document.querySelectorAll('.nested-grid').forEach(nestedEl => {
+            if (!nestedEl.classList.contains('grid-stack-initialized')) {
+              const nestedInstance = GridStack.init({
+                column: 12,
+                acceptWidgets: true,
+                cellHeight: '4.9rem',
+                marginTop: '0.01rem',
+                marginLeft: '0.5rem',
+                marginRight: '0.5rem',
+                marginBottom: '1rem',
+                handleClass: 'nested-grid-stack-handle',
+                styleInHead: true,
+                staticGrid: false,
+              }, nestedEl);
+              nestedInstance.on('removed change', debounce(() => htmx.trigger(document.body, 'widget-order-changed'), 200));
+              nestedEl.classList.add('grid-stack-initialized');
             }
+          });
+        }
+
+        // Initialize grids on page load
+        initializeGrids();
+
+        // Re-initialize grids after htmx settles new tab content
+        document.body.addEventListener('htmx:afterSettle', function(e) {
+          if (e.detail.target && e.detail.target.id === 'dashboard-tabs-content') {
+            initializeGrids();
           }
         });
+      });
+
+      // Listen for widget-remove-requested custom events
+      document.addEventListener('widget-remove-requested', function(e) {
+        const widgetEl = document.getElementById(e.detail.widgetId + '_widgetEl');
+        if (widgetEl && window.gridStackInstance) {
+          window.gridStackInstance.removeWidget(widgetEl, true);
+        }
+      });
       |]
 
 
@@ -415,11 +461,65 @@ processVariable pid now timeRange@(sinceStr, fromDStr, toDStr) allParams variabl
 
   case variable._vType of
     Dashboards.VTQuery | Just sqlQuery <- variable.sql -> do
-      result <- try $ PG.query_ (Query $ encodeUtf8 sqlQuery)
+      -- SECURITY: Use secured query execution with project_id filtering
+      result <- RequestDumps.executeSecuredQuery pid sqlQuery 1000
       case result of
-        Right queryResults -> pure variable{Dashboards.options = Just queryResults}
-        Left (_ :: SomeException) -> pure variable -- Return unchanged on error
+        Right queryResults -> pure variable{Dashboards.options = Just $ map (map valueToText . V.toList) $ V.toList queryResults}
+        Left _ -> pure variable -- Return unchanged on error
     _ -> pure variable
+  where
+    valueToText :: AE.Value -> Text
+    valueToText (AE.String t) = t
+    valueToText (AE.Number n) = show n
+    valueToText (AE.Bool b) = if b then "true" else "false"
+    valueToText AE.Null = ""
+    valueToText v = decodeUtf8 $ AE.encode v
+
+
+-- | Get required variables without values (respecting dependsOn order)
+unsetRequiredVars :: [Dashboards.Variable] -> [Dashboards.Variable]
+unsetRequiredVars vars = filter shouldShow vars
+  where
+    setKeys = [v.key | v <- vars, isJust v.value]
+    shouldShow v = v.required == Just True && isNothing v.value && maybe True (`elem` setKeys) v.dependsOn
+
+
+-- | Find variable that needs to be prompted (from tab.requires or variable.required)
+findVarToPrompt :: Maybe Dashboards.Tab -> [Dashboards.Variable] -> Maybe Dashboards.Variable
+findVarToPrompt activeTab variables =
+  let tabRequiredVar = activeTab >>= (.requires) >>= \reqKey -> find (\v -> v.key == reqKey && isNothing v.value) variables
+   in tabRequiredVar <|> listToMaybe (unsetRequiredVars variables)
+
+
+-- | Render variable picker modal (auto-opens via hyperscript init)
+variablePickerModal_ :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> [(Text, Maybe Text)] -> Dashboards.Variable -> Bool -> Html ()
+variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
+  let modalId = "varPicker-" <> var.key
+      varTitle = fromMaybe var.key var.title
+      queryBase = queryStringFrom $ filter (\(k, _) -> k /= "var-" <> var.key && k /= activeTabSlugKey) allParams
+      tabPath = maybe "" ("/tab/" <>) activeTabSlug
+      oobAttr = if useOob then [id_ $ modalId <> "-container", hxSwapOob_ "beforeend:body"] else []
+  div_ oobAttr do
+    input_ [class_ "modal-toggle", id_ modalId, type_ "checkbox", [__|init set my.checked to true on keyup if event's key is 'Escape' set my.checked to false|]]
+    div_ [class_ "modal w-screen", role_ "dialog"] do
+      label_ [class_ "modal-backdrop", Lucid.for_ modalId] ""
+      div_ [class_ "modal-box min-w-80 max-w-md flex flex-col gap-4"] do
+        label_ [Lucid.for_ modalId, class_ "btn btn-sm btn-circle btn-ghost absolute right-2 top-2"] "X"
+        h3_ [class_ "font-bold text-lg"] $ toHtml $ "Select " <> varTitle
+        p_ [class_ "text-sm text-textWeak"] $ toHtml $ "This view requires a " <> varTitle <> " to be selected."
+        whenJust var.helpText $ p_ [class_ "text-sm text-textWeak italic"] . toHtml
+        input_
+          [ type_ "text"
+          , class_ "input input-bordered w-full"
+          , placeholder_ "Search..."
+          , [__|on keyup if event's key is 'Escape' set my value to '' then trigger keyup else show <.var-opt/> in closest .modal-box when its textContent.toLowerCase() contains my value.toLowerCase()|]
+          ]
+        div_ [class_ "max-h-64 overflow-y-auto flex flex-col gap-1"]
+          $ forM_ (fromMaybe [] var.options) \opt -> do
+            let optVal = opt Unsafe.!! 0
+                optLbl = fromMaybe optVal (opt !!? 1)
+                url = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> tabPath <> queryBase <> (if T.null queryBase then "?" else "&") <> "var-" <> var.key <> "=" <> optVal
+            a_ [class_ "var-opt p-2 rounded hover:bg-fillWeak cursor-pointer", href_ url] $ toHtml optLbl
 
 
 -- | Process a single dashboard constant by executing its SQL or KQL query and populating the result.
@@ -436,9 +536,23 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
           (\val -> Log.logDebug ("Dashboard constant " <> label <> " query completed") (constant.key, duration) $> constant{Dashboards.result = Just $ toResult val})
           res
   case (constant.sql, constant.query) of
-    (Just sqlQuery, _) -> runQuery "SQL" (PG.query_ (Query $ encodeUtf8 sqlQuery)) identity
+    (Just sqlQuery, _) -> do
+      -- SECURITY: Use secured query execution with project_id filtering
+      (res, duration) <- Log.timeAction $ RequestDumps.executeSecuredQuery pid sqlQuery 1000
+      case res of
+        Left err -> Log.logWarn "Dashboard constant SQL query failed" (constant.key, err, duration) $> constant
+        Right queryResults -> do
+          let toTextList = map (map valueToText . V.toList) $ V.toList queryResults
+          Log.logDebug "Dashboard constant SQL query completed" (constant.key, duration) $> constant{Dashboards.result = Just toTextList}
     (Nothing, Just kqlQuery) -> runQuery "KQL" (Charts.queryMetrics (Just Charts.DTText) (Just pid) (Just kqlQuery) Nothing sinceStr fromDStr toDStr Nothing allParams) (map V.toList . V.toList . (.dataText))
     _ -> pure constant
+  where
+    valueToText :: AE.Value -> Text
+    valueToText (AE.String t) = t
+    valueToText (AE.Number n) = show n
+    valueToText (AE.Bool b) = if b then "true" else "false"
+    valueToText AE.Null = ""
+    valueToText v = decodeUtf8 $ AE.encode v
 
 
 -- Process a single widget recursively.
@@ -453,11 +567,13 @@ processWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widgetBas
       then processEagerWidget pid now timeRange allParams widget
       else pure widget
 
-  -- Recursively process child widgets
-  forOf (#children . _Just . traverse) widget' $ \child ->
-    processWidget pid now timeRange allParams
-      $ child
-      & #_dashboardId %~ (<|> widget'._dashboardId)
+  -- Recursively process child widgets concurrently
+  case widget'.children of
+    Nothing -> pure widget'
+    Just childWidgets -> do
+      let addDashboardId child = child & #_dashboardId %~ (<|> widget'._dashboardId)
+      processedChildren <- pooledForConcurrently childWidgets (processWidget pid now timeRange allParams . addDashboardId)
+      pure $ widget' & #children ?~ processedChildren
 
 
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
@@ -520,36 +636,76 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
           }
 
 
-dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
-dashboardWidgetPutH pid dashId widgetIdM widget = do
+-- | Populate widgets with their alert statuses
+populateWidgetAlertStatuses :: DB es => [Widget.Widget] -> Eff es [Widget.Widget]
+populateWidgetAlertStatuses widgets = do
+  let widgetIds = V.fromList $ mapMaybe (.id) widgets
+  if V.null widgetIds
+    then pure widgets
+    else do
+      statuses <- Monitors.getWidgetAlertStatuses widgetIds
+      let statusMap = foldMap (\s -> one (s.widgetId, s)) statuses
+      pure $ map (applyAlertStatus statusMap) widgets
+  where
+    applyAlertStatus statusMap w = fromMaybe w do
+      status <- (.id) w >>= (`Map.lookup` statusMap)
+      pure
+        w
+          { Widget.alertId = Just $ Monitors.unQueryMonitorId status.monitorId & UUID.toText
+          , Widget.alertThreshold = Just status.alertThreshold
+          , Widget.warningThreshold = status.warningThreshold
+          , Widget.alertStatus = Just $ display status.alertStatus
+          }
+
+
+dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
+dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = do
   (_, dash) <- getDashAndVM dashId Nothing
   uid <- UUID.genUUID <&> UUID.toText
-  let (dash', widget') = case widgetIdM of
-        Just wID -> do
-          let normalizedWidgetId = T.replace "Expanded" "" wID
-
-          let updateWidget w =
-                if (w.id == Just normalizedWidgetId) || (maybeToMonoid (slugify <$> w.title) == normalizedWidgetId)
-                  then widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just normalizedWidgetId}
-                  else w
-              updatedWidgets = map updateWidget (dash :: Dashboards.Dashboard).widgets
-              updatedWidget = widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just normalizedWidgetId}
-          ((dash :: Dashboards.Dashboard) & #widgets .~ updatedWidgets, updatedWidget)
-        Nothing -> do
-          -- When adding a new widget
-          let widgetUpdated = widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just uid, Widget._centerTitle = Nothing}
-          ((dash :: Dashboards.Dashboard) & #widgets %~ (<> [widgetUpdated]), widgetUpdated)
+  let normalizedWidgetIdM = normalizeWidgetId <$> widgetIdM
+  let widgetUpdated = normalizeWidget widget normalizedWidgetIdM uid
+  let dash' = updateDashboardWidgets dash tabSlugM normalizedWidgetIdM widgetUpdated
 
   _ <- Dashboards.updateSchema dashId dash'
   syncDashboardAndQueuePush pid dashId
+  whenJust normalizedWidgetIdM \nwid -> syncWidgetAlert pid nwid widget
 
-  let successMsg = case widgetIdM of
-        Just _ -> "Widget updated successfully"
-        Nothing -> "Widget added to dashboard successfully"
-
+  let successMsg = if isJust normalizedWidgetIdM then "Widget updated successfully" else "Widget added to dashboard successfully"
   addSuccessToast successMsg Nothing
   addTriggerEvent "closeModal" ""
-  addRespHeaders widget'
+  addRespHeaders widgetUpdated
+
+
+normalizeWidget :: Widget.Widget -> Maybe Text -> Text -> Widget.Widget
+normalizeWidget widget normalizedWidgetIdM generatedId = case normalizedWidgetIdM of
+  Just nwid -> widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just nwid}
+  Nothing -> widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just generatedId, Widget._centerTitle = Nothing}
+
+
+updateDashboardWidgets :: Dashboards.Dashboard -> Maybe Text -> Maybe Text -> Widget.Widget -> Dashboards.Dashboard
+updateDashboardWidgets dash tabSlugM normalizedWidgetIdM widgetUpdated =
+  let updateWidgets ws = case normalizedWidgetIdM of
+        Just nwid ->
+          let updateWidget w = if (w.id == Just nwid) || (maybeToMonoid (slugify <$> w.title) == nwid) then widgetUpdated else w
+           in map updateWidget ws
+        Nothing -> ws <> [widgetUpdated]
+   in case (tabSlugM, dash.tabs) of
+        (Just slug, Just _) -> updateTabBySlug slug (#widgets %~ updateWidgets) dash
+        _ -> dash & #widgets %~ updateWidgets
+
+
+syncWidgetAlert :: DB es => Projects.ProjectId -> Text -> Widget.Widget -> Eff es ()
+syncWidgetAlert pid widgetId widget = do
+  existingMonitor <- Monitors.queryMonitorByWidgetId widgetId
+  whenJust existingMonitor \monitor -> do
+    let newQuery = fromMaybe "" widget.query
+    when (monitor.logQuery /= newQuery) do
+      let sqlQueryCfg = (defSqlQueryCfg pid fixedUTCTime Nothing Nothing){presetRollup = Just "5m"}
+          newSqlQuery = case parseQueryToComponents sqlQueryCfg newQuery of
+            Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
+            Left _ -> monitor.logQueryAsSql -- Keep previous SQL on parse failure
+          updatedMonitor = (monitor :: Monitors.QueryMonitor){Monitors.logQuery = newQuery, Monitors.logQueryAsSql = newSqlQuery}
+      void $ Monitors.queryMonitorUpsert updatedMonitor
 
 
 data WidgetReorderItem = WidgetReorderItem
@@ -567,18 +723,31 @@ data WidgetReorderItem = WidgetReorderItem
 dashboardWidgetReorderPatchH
   :: Projects.ProjectId
   -> Dashboards.DashboardId
+  -> Maybe Text
+  -- ^ Optional tab slug for tabbed dashboards
   -> Map Text WidgetReorderItem
   -- ^ The ordered list of widget IDs
   -> ATAuthCtx (RespHeaders NoContent)
-dashboardWidgetReorderPatchH pid dashId widgetOrder = do
+dashboardWidgetReorderPatchH _ _ _ widgetOrder | Map.null widgetOrder = addRespHeaders NoContent
+dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
   (_, dash) <- getDashAndVM dashId Nothing
 
-  let sortedWidgets = reorderWidgets widgetOrder (dash :: Dashboards.Dashboard).widgets
-      newDash = (dash :: Dashboards.Dashboard) & #widgets .~ sortedWidgets
+  let oldWidgets = case (tabSlugM, dash.tabs) of
+        (Just slug, Just tabs) -> maybe [] (.widgets) $ find (\t -> slugify t.name == slug) tabs
+        _ -> dash.widgets
+      oldWidgetIds = mapMaybe (.id) oldWidgets
+      newWidgetIds = Map.keys widgetOrder
+      deletedWidgetIds = filter (`notElem` newWidgetIds) oldWidgetIds
+
+  -- Delete alerts for removed widgets first (before updating dashboard to avoid orphaned monitors)
+  unless (null deletedWidgetIds) $ void $ Monitors.deleteMonitorsByWidgetIds deletedWidgetIds
+
+  let newDash = case (tabSlugM, dash.tabs) of
+        (Just slug, Just _) -> updateTabBySlug slug (\tab -> tab & #widgets .~ reorderWidgets widgetOrder tab.widgets) dash
+        _ -> dash & #widgets .~ reorderWidgets widgetOrder dash.widgets
 
   _ <- Dashboards.updateSchema dashId newDash
   syncDashboardAndQueuePush pid dashId
-
   addRespHeaders NoContent
 
 
@@ -594,10 +763,10 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
       let newLayout =
             Just
               $ maybe def Relude.id orig.layout
-              & #x %~ (<|> item.x)
-              & #y %~ (<|> item.y)
-              & #w %~ (<|> item.w)
-              & #h %~ (<|> item.h)
+              & #x .~ (item.x <|> (orig.layout >>= (.x)))
+              & #y .~ (item.y <|> (orig.layout >>= (.y)))
+              & #w .~ (item.w <|> (orig.layout >>= (.w)))
+              & #h .~ (item.h <|> (orig.layout >>= (.h)))
       pure
         orig
           { Widget.layout = newLayout
@@ -607,6 +776,12 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
     mkWidgetMap = Map.fromList . concatMap flatten
     flatten w = (widgetId w, w) : maybe [] (concatMap flatten) w.children
     widgetId w = fromMaybe (maybeToMonoid $ slugify <$> w.title) w.id
+
+
+updateTabBySlug :: Text -> (Dashboards.Tab -> Dashboards.Tab) -> Dashboards.Dashboard -> Dashboards.Dashboard
+updateTabBySlug slug f dash = dash & #tabs %~ fmap (map updateTab)
+  where
+    updateTab tab = if slugify tab.name == slug then f tab else tab
 
 
 getDashAndVM :: (DB es, Error ServerError :> es, Wreq.HTTP :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
@@ -632,76 +807,79 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
 
   (dashVM, dash) <- getDashAndVM dashId fileM
 
-  -- Process constants first - these are executed once and made available to all queries
-  processedConstants <- traverse (processConstant pid now (sinceStr, fromDStr, toDStr) allParams) (fromMaybe [] dash.constants)
-  let allParamsWithConstants = allParams <> [("const-" <> c.key, Just $ DashboardUtils.constantToSQLList $ fromMaybe [] c.result) | c <- processedConstants]
+  -- If the dashboard has tabs, redirect to the first tab's URL
+  -- This ensures users always land on a tab-based URL for dashboards with tabs
+  case getDefaultTabSlug dash.tabs of
+    Just firstTabSlug -> do
+      let redirectUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/" <> firstTabSlug <> queryStringFrom allParams
+      throwError $ err302{errHeaders = [("Location", encodeUtf8 redirectUrl)]}
+    Nothing -> do
+      -- No tabs - render the dashboard normally (existing behavior for non-tabbed dashboards)
+      let timeParams = (sinceStr, fromDStr, toDStr)
+      (processedConstants, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams allParams (fromMaybe [] dash.constants)
 
-  -- Update dashboard with processed constants
-  let dashWithConstants = dash & #constants ?~ processedConstants
+      let dashWithConstants = dash & #constants ?~ processedConstants
+          processWidgetWithDashboardId = mkWidgetProcessor pid dashId now timeParams allParamsWithConstants
 
-  dash' <- forOf (#variables . traverse . traverse) dashWithConstants (processVariable pid now (sinceStr, fromDStr, toDStr) allParamsWithConstants)
+      dash' <- forOf (#variables . traverse . traverse) dashWithConstants (processVariable pid now timeParams allParamsWithConstants)
+      -- Process widgets concurrently
+      processedWidgets <- pooledForConcurrently dash'.widgets processWidgetWithDashboardId
+      -- Populate alert statuses for widgets
+      widgetsWithAlerts <- populateWidgetAlertStatuses processedWidgets
+      let dash'' = dash' & #widgets .~ widgetsWithAlerts
 
-  let processWidgetWithDashboardId w = do
-        processed <- processWidget pid now (sinceStr, fromDStr, toDStr) allParamsWithConstants w
-        pure $ processed{Widget._dashboardId = Just dashId.toText}
+      freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
 
-  -- Process widgets in the main widgets array
-  dash'' <- forOf (#widgets . traverse) dash' processWidgetWithDashboardId
-
-  -- Also process widgets in tabs if they exist
-  dash''' <- forOf (#tabs . _Just . traverse . #widgets . traverse) dash'' processWidgetWithDashboardId
-
-  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
-
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , prePageTitle = Just "Dashboards"
-          , pageTitle = dashTitle dashVM.title
-          , pageTitleModalId = Just "pageTitleModalId"
-          , config = appCtx.config
-          , freeTierExceeded = freeTierExceeded
-          , pageActions = Just $ div_ [class_ "flex gap-3 items-center"] do
-              TimePicker.timepicker_ Nothing currentRange Nothing
-              TimePicker.refreshButton_
-              div_ [class_ "flex items-center"] do
-                span_ [class_ "text-fillDisabled mr-2"] "|"
-                Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
-                div_ [class_ "dropdown dropdown-end"] do
-                  div_ [tabindex_ "0", role_ "button", class_ "text-iconNeutral cursor-pointer  p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Context Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
-                  ul_ [tabindex_ "0", class_ "dropdown-content menu menu-md bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none"] do
-                    li_ $ label_ [Lucid.for_ "pageTitleModalId", class_ "p-2"] "Rename dashboard"
-                    li_
-                      $ button_
-                        [ class_ "p-2 w-full text-left"
-                        , hxPost_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/duplicate")
-                        , hxSwap_ "none"
-                        , data_ "tippy-content" "Creates a copy of this dashboard"
-                        ]
-                        "Duplicate dashboard"
-                    li_
-                      $ button_
-                        [ class_ "p-2 w-full text-left text-textError"
-                        , hxDelete_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText)
-                        , hxSwap_ "none"
-                        , hxConfirm_ "Are you sure you want to delete this dashboard? This action cannot be undone."
-                        , data_ "tippy-content" "Permanently deletes this dashboard"
-                        ]
-                        "Delete dashboard"
-          , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/dashboard/"
-          }
-  addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash''' dashVM allParams
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = Just project
+              , prePageTitle = Just "Dashboards"
+              , pageTitle = dashTitle dashVM.title
+              , pageTitleModalId = Just "pageTitleModalId"
+              , config = appCtx.config
+              , freeTierExceeded = freeTierExceeded
+              , pageActions = Just $ div_ [class_ "flex gap-3 items-center"] do
+                  TimePicker.timepicker_ Nothing currentRange Nothing
+                  TimePicker.refreshButton_
+                  div_ [class_ "flex items-center"] do
+                    span_ [class_ "text-fillDisabled mr-2"] "|"
+                    Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid dashId Nothing currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
+                    div_ [class_ "dropdown dropdown-end"] do
+                      div_ [tabindex_ "0", role_ "button", class_ "text-iconNeutral cursor-pointer  p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Context Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
+                      ul_ [tabindex_ "0", class_ "dropdown-content menu menu-md bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none"] do
+                        li_ $ label_ [Lucid.for_ "pageTitleModalId", class_ "p-2"] "Rename dashboard"
+                        li_
+                          $ button_
+                            [ class_ "p-2 w-full text-left"
+                            , hxPost_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/duplicate")
+                            , hxSwap_ "none"
+                            , data_ "tippy-content" "Creates a copy of this dashboard"
+                            ]
+                            "Duplicate dashboard"
+                        li_
+                          $ button_
+                            [ class_ "p-2 w-full text-left text-textError"
+                            , hxDelete_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText)
+                            , hxSwap_ "none"
+                            , hxConfirm_ "Are you sure you want to delete this dashboard? This action cannot be undone."
+                            , data_ "tippy-content" "Permanently deletes this dashboard"
+                            ]
+                            "Delete dashboard"
+              , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/dashboard/"
+              }
+      addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM allParams
 
 
 -- | A unified widget viewer/editor component that uses DaisyUI tabs without JavaScript
 -- @param pid Project ID
 -- @param dashboardIdM Optional dashboard ID
+-- @param tabSlugM Optional tab slug for tabbed dashboards
 -- @param currentRange Time range for the widget
 -- @param existingWidgetM Optional existing widget (for edit mode)
 -- @param activeTab Which tab should be active initially ("edit" or "overview")
-widgetViewerEditor_ :: Projects.ProjectId -> Maybe Dashboards.DashboardId -> Maybe (Text, Text) -> Maybe Widget.Widget -> Text -> Html ()
-widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = div_ [class_ "group/wgtexp"] do
+widgetViewerEditor_ :: Projects.ProjectId -> Maybe Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Maybe Widget.Widget -> Text -> Html ()
+widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activeTab = div_ [class_ "group/wgtexp"] do
   let isNewWidget = isNothing existingWidgetM
   let effectiveActiveTab = if isNewWidget then "edit" else activeTab
 
@@ -724,7 +902,7 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
 
   -- Generate unique IDs for all elements based on widget ID to prevent conflicts
   let wid = maybeToMonoid widgetToUse.id
-      sourceWid = T.replace "Expanded" "" wid
+      sourceWid = normalizeWidgetId wid
       widPrefix = "id" <> T.take 8 wid
       widgetFormId = widPrefix <> "-widget-form"
       widgetPreviewId = widPrefix <> "-widget-preview"
@@ -735,9 +913,12 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
       drawerStateCheckbox = if isJust existingWidgetM then "global-data-drawer" else "page-data-drawer"
 
   let widgetJSON = decodeUtf8 $ fromLazy $ AE.encode widgetToUse
-  let formAction = case (dashboardIdM, existingWidgetM) of
-        (Just dashId, Just w) -> "?widget_id=" <> fromMaybe "" w.id
-        _ -> ""
+  let formAction = case dashboardIdM of
+        Just dashId ->
+          let baseUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText
+              params = catMaybes [("widget_id=" <>) . fromMaybe "" . (.id) <$> existingWidgetM, ("tab=" <>) <$> tabSlugM]
+           in baseUrl <> if null params then "" else "?" <> T.intercalate "&" params
+        Nothing -> ""
 
   form_
     [ class_ "hidden"
@@ -780,8 +961,9 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
                     ]
                   <> [checked_ | isActive]
                 toHtml tabName
-          mkTab "Overview" (effectiveActiveTab /= "edit")
+          mkTab "Overview" (effectiveActiveTab /= "edit" && effectiveActiveTab /= "alerts")
           mkTab "Edit" (effectiveActiveTab == "edit")
+          mkTab "Alerts" (effectiveActiveTab == "alerts")
       when isNewWidget $ h3_ [class_ "text-lg font-normal"] "Add a new widget"
 
     div_ [class_ "flex items-center gap-2"] do
@@ -854,18 +1036,198 @@ widgetViewerEditor_ pid dashboardIdM currentRange existingWidgetM activeTab = di
             , value_ $ fromMaybe "" widgetToUse.title
             , term
                 "_"
-                [text| on change 
-                 set widgetJSON.title to my value then 
+                [text| on change
+                 set widgetJSON.title to my value then
                  trigger 'update-widget' on #{'${widgetPreviewId}'}
                |]
             ]
 
+  -- Alerts tab content
+  unless isNewWidget do
+    let alertFormId = widPrefix <> "-alert-form"
+        alertEndpoint = case dashboardIdM of
+          Just dashId -> "/p/" <> pid.toText <> "/widgets/" <> sourceWid <> "/alert?dashboard_id=" <> dashId.toText
+          Nothing -> ""
+    div_ [class_ "hidden group-has-[.page-drawer-tab-alerts:checked]/wgtexp:block"] do
+      widgetAlertConfig_ pid alertFormId alertEndpoint sourceWid widgetToUse
+
+
+-- | Widget alert configuration form
+widgetAlertConfig_ :: Projects.ProjectId -> Text -> Text -> Text -> Widget.Widget -> Html ()
+widgetAlertConfig_ pid alertFormId alertEndpoint widgetId widget = do
+  let hasAlert = isJust widget.alertId
+  form_
+    [ id_ alertFormId
+    , hxPost_ alertEndpoint
+    , hxSwap_ "none"
+    , hxTrigger_ "submit"
+    , class_ "space-y-4"
+    ]
+    do
+      input_ [type_ "hidden", name_ "widgetId", value_ widgetId]
+      input_ [type_ "hidden", name_ "query", value_ $ fromMaybe "" widget.query]
+      input_
+        [ type_ "hidden"
+        , name_ "vizType"
+        , value_ $ case widget.wType of
+            Widget.WTTimeseries -> "timeseries"
+            Widget.WTTimeseriesLine -> "timeseries_line"
+            _ -> "timeseries"
+        ]
+
+      div_ [class_ "flex items-center justify-between p-4 bg-fillWeaker rounded-lg"] do
+        div_ [] do
+          h4_ [class_ "font-medium text-textStrong"] "Enable Alert"
+          p_ [class_ "text-xs text-textWeak"] "Get notified when this widget's value crosses thresholds"
+        input_ $ [type_ "checkbox", name_ "alertEnabled", class_ "toggle toggle-primary"] <> [checked_ | hasAlert]
+
+      -- Alert thresholds
+      div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4 space-y-4"] do
+        h4_ [class_ "font-medium text-textStrong mb-3"] "Thresholds"
+        div_ [class_ "grid grid-cols-2 gap-4"] do
+          Alerts.thresholdInput_ "alertThreshold" "bg-fillError-weak" "Alert threshold" True "input-bordered w-full" [] widget.alertThreshold
+          Alerts.thresholdInput_ "warningThreshold" "bg-fillWarning-weak" "Warning threshold" False "input-bordered w-full" [] widget.warningThreshold
+        Alerts.directionSelect_ False "select-bordered w-full"
+        div_ [class_ "mt-3"] do
+          label_ [class_ "text-xs font-medium text-textStrong block mb-1"] "Show threshold lines"
+          select_ [name_ "showThresholdLines", class_ "select select-bordered w-full"] do
+            let isAlways = widget.showThresholdLines == Just "always" || isNothing widget.showThresholdLines
+                isOnBreach = widget.showThresholdLines == Just "on_breach"
+                isNever = widget.showThresholdLines == Just "never"
+            option_ ([value_ "always"] <> [selected_ "" | isAlways]) "Always"
+            option_ ([value_ "on_breach"] <> [selected_ "" | isOnBreach]) "Only when breached"
+            option_ ([value_ "never"] <> [selected_ "" | isNever]) "Never"
+
+      -- Recovery thresholds (collapsible)
+      Alerts.collapsibleSection_ "rotate-left" "regular" "Recovery thresholds" (Just "(prevents flapping)") do
+        p_ [class_ "text-xs text-textWeak mb-3"] "Alert recovers only when value crosses these thresholds"
+        div_ [class_ "grid grid-cols-2 gap-4"] do
+          Alerts.recoveryInput_ "alertRecoveryThreshold" "bg-fillError-weak" "Alert recovery" "input-bordered w-full" Nothing
+          Alerts.recoveryInput_ "warningRecoveryThreshold" "bg-fillWarning-weak" "Warning recovery" "input-bordered w-full" Nothing
+
+      -- Check interval
+      div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4"] $ Alerts.frequencySelect_ 5 True "select-bordered w-full"
+
+      -- Alert title
+      div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4"] do
+        label_ [class_ "text-xs font-medium text-textStrong block mb-2"] "Alert title"
+        input_
+          [ type_ "text"
+          , name_ "title"
+          , class_ "input input-bordered w-full"
+          , placeholder_ "Widget threshold exceeded"
+          , required_ "required"
+          , value_ $ fromMaybe (fromMaybe "Widget Alert" widget.title <> " - Threshold Alert") Nothing
+          ]
+
+      -- Submit button
+      div_ [class_ "flex justify-end gap-2 pt-2"] do
+        when hasAlert do
+          button_
+            [ type_ "button"
+            , class_ "btn btn-ghost btn-sm"
+            , hxDelete_ alertEndpoint
+            , hxSwap_ "none"
+            ]
+            "Remove Alert"
+        button_ [type_ "submit", class_ "btn btn-primary btn-sm"] $ if hasAlert then "Update Alert" else "Create Alert"
+
+
+--------------------------------------------------------------------
+-- Widget Alert Handlers
+--
+
+data WidgetAlertForm = WidgetAlertForm
+  { widgetId :: Text
+  , query :: Text
+  , vizType :: Maybe Text
+  , alertEnabled :: Maybe Text -- "on" when checked
+  , alertThreshold :: Double
+  , warningThreshold :: Maybe Text
+  , direction :: Text
+  , showThresholdLines :: Maybe Text
+  , alertRecoveryThreshold :: Maybe Text
+  , warningRecoveryThreshold :: Maybe Text
+  , frequency :: Maybe Text
+  , title :: Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+widgetAlertUpsertH :: Projects.ProjectId -> Text -> Maybe UUID.UUID -> WidgetAlertForm -> ATAuthCtx (RespHeaders (Html ()))
+widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
+  now <- Time.currentTime
+
+  -- Check if alert already exists for this widget
+  existingMonitor <- Monitors.queryMonitorByWidgetId form.widgetId
+  queryMonitorId <- case existingMonitor of
+    Just m -> pure m.id
+    Nothing -> liftIO $ Monitors.QueryMonitorId <$> UUID.nextRandom
+
+  -- Update widget's showThresholdLines in the dashboard
+  whenJust dashboardIdM \dashId -> do
+    let dashboardId = UUIDId dashId
+    (_, dash) <- getDashAndVM dashboardId Nothing
+    let updateWidget w = if w.id == Just form.widgetId then w{Widget.showThresholdLines = form.showThresholdLines} else w
+        dash' = dash & #widgets %~ map updateWidget & #tabs %~ fmap (map (\t -> t & #widgets %~ map updateWidget))
+    void $ Dashboards.updateSchema dashboardId dash'
+
+  -- If alertEnabled is not checked, delete the monitor
+  case form.alertEnabled of
+    Nothing -> do
+      _ <- Monitors.deleteMonitorsByWidgetIds [form.widgetId]
+      addSuccessToast "Alert removed from widget" Nothing
+      addRespHeaders $ toHtml ("" :: Text)
+    Just _ -> do
+      -- Convert to AlertUpsertForm and reuse convertToQueryMonitor
+      let alertForm =
+            Alerts.AlertUpsertForm
+              { alertId = Just $ Monitors.unQueryMonitorId queryMonitorId & UUID.toText
+              , alertThreshold = form.alertThreshold
+              , warningThreshold = form.warningThreshold
+              , recipientEmails = []
+              , recipientSlacks = []
+              , recipientEmailAll = Nothing
+              , direction = form.direction
+              , title = form.title
+              , severity = "warning"
+              , subject = form.title
+              , message = ""
+              , query = form.query
+              , since = "1h"
+              , from = ""
+              , to = ""
+              , frequency = form.frequency
+              , timeWindow = Nothing
+              , conditionType = Just "threshold_exceeded"
+              , source = Just "widget"
+              , vizType = form.vizType
+              , teams = []
+              , alertRecoveryThreshold = form.alertRecoveryThreshold
+              , warningRecoveryThreshold = form.warningRecoveryThreshold
+              , widgetId = Just form.widgetId
+              , dashboardId = UUID.toText <$> dashboardIdM
+              }
+
+      let queryMonitor = Alerts.convertToQueryMonitor pid now queryMonitorId alertForm
+      _ <- Monitors.queryMonitorUpsert queryMonitor
+      addSuccessToast "Widget alert configured successfully" Nothing
+      addRespHeaders $ toHtml ("" :: Text)
+
+
+widgetAlertDeleteH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (Html ()))
+widgetAlertDeleteH _pid widgetId = do
+  _ <- Monitors.deleteMonitorsByWidgetIds [widgetId]
+  addSuccessToast "Alert removed from widget" Nothing
+  addRespHeaders $ toHtml ("" :: Text)
+
 
 -- visTypes is now imported from LogQueryBox to avoid circular dependencies
 
--- | Backward compatibility wrapper for the new widget editor
-newWidget_ :: Projects.ProjectId -> Maybe (Text, Text) -> Html ()
-newWidget_ pid currentRange = widgetViewerEditor_ pid Nothing currentRange Nothing "edit"
+-- | Wrapper for the new widget editor
+newWidget_ :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Html ()
+newWidget_ pid dashId tabSlugM currentRange = widgetViewerEditor_ pid (Just dashId) tabSlugM currentRange Nothing "edit"
 
 
 --------------------------------------------------------------------
@@ -1434,14 +1796,33 @@ data WidgetMoveForm = WidgetMoveForm
 -- | Handler for duplicating a widget within the same dashboard.
 -- It creates a copy of the widget with "(Copy)" appended to the title.
 -- Returns the duplicated widget that will be converted to HTML automatically.
+-- If the original widget has an alert, the alert is also duplicated with the new widget.
 dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATAuthCtx (RespHeaders Widget.Widget)
 dashboardDuplicateWidgetPostH pid dashId widgetId = do
   (_, dash) <- getDashAndVM dashId Nothing
-  let widgetToDuplicateM = find (\w -> (w.id == Just widgetId) || (maybeToMonoid (slugify <$> w.title) == widgetId)) (dash :: Dashboards.Dashboard).widgets
-  case widgetToDuplicateM of
+  case findWidgetInDashboard widgetId dash of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
-    Just widgetToDuplicate -> do
+    Just (tabSlugM, widgetToDuplicate) -> do
       newWidgetId <- UUID.genUUID <&> UUID.toText
+      now <- Time.currentTime
+
+      -- Clone alert if original widget has one
+      existingMonitorM <- Monitors.queryMonitorByWidgetId (normalizeWidgetId widgetId)
+      newAlertIdM <- forM existingMonitorM \monitor -> do
+        newMonitorId <- Monitors.QueryMonitorId <$> liftIO UUID.nextRandom
+        let newMonitor =
+              (monitor :: Monitors.QueryMonitor)
+                { Monitors.id = newMonitorId
+                , Monitors.createdAt = now
+                , Monitors.updatedAt = now
+                , Monitors.widgetId = Just newWidgetId
+                , Monitors.alertLastTriggered = Nothing
+                , Monitors.warningLastTriggered = Nothing
+                , Monitors.currentStatus = Monitors.MSNormal
+                }
+        void $ Monitors.queryMonitorUpsert newMonitor
+        pure newMonitorId.toText
+
       let widgetCopy =
             widgetToDuplicate
               { Widget.id = Just newWidgetId
@@ -1451,10 +1832,13 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
                   Just title -> Just (title <> " (Copy)")
               , Widget._projectId = Just pid
               , Widget._dashboardId = Just dashId.toText
+              , Widget.alertId = newAlertIdM
+              , Widget.alertStatus = Nothing
               }
 
-      let updatedDash = (dash :: Dashboards.Dashboard) & #widgets %~ (<> [widgetCopy])
-      now <- Time.currentTime
+      let updatedDash = case tabSlugM of
+            Just slug -> updateTabBySlug slug (#widgets %~ (<> [widgetCopy])) dash
+            Nothing -> dash & #widgets %~ (<> [widgetCopy])
       _ <- Dashboards.updateSchemaAndUpdatedAt dashId updatedDash now
       syncDashboardAndQueuePush pid dashId
 
@@ -1467,10 +1851,273 @@ dashboardWidgetExpandGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Tex
 dashboardWidgetExpandGetH pid dashId widgetId = do
   (_, dash) <- getDashAndVM dashId Nothing
   now <- Time.currentTime
-  let widgetToExpandM = find (\w -> (w.id == Just widgetId) || (maybeToMonoid (slugify <$> w.title) == widgetId)) (dash :: Dashboards.Dashboard).widgets
-
-  case widgetToExpandM of
+  case snd <$> findWidgetInDashboard widgetId dash of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
     Just widgetToExpand -> do
       processedWidget <- processWidget pid now (Nothing, Nothing, Nothing) [] widgetToExpand
-      addRespHeaders $ widgetViewerEditor_ pid (Just dashId) Nothing (Just processedWidget) "edit"
+      addRespHeaders $ widgetViewerEditor_ pid (Just dashId) Nothing Nothing (Just processedWidget) "edit"
+
+
+-- | Find a tab by its slug, returns (index, tab) if found
+findTabBySlug :: [Dashboards.Tab] -> Text -> Maybe (Int, Dashboards.Tab)
+findTabBySlug tabs tabSlug = find ((== tabSlug) . slugify . (.name) . snd) (zip [0 ..] tabs)
+
+
+-- | Find widget by ID in dashboard, searching tabs and root. Returns (Maybe tabSlug, Widget)
+findWidgetInDashboard :: Text -> Dashboards.Dashboard -> Maybe (Maybe Text, Widget.Widget)
+findWidgetInDashboard wid dash = tabResult <|> rootResult
+  where
+    match w = w.id == Just wid || maybeToMonoid (slugify <$> w.title) == wid
+    tabResult = listToMaybe [(Just $ slugify t.name, w) | t <- fromMaybe [] dash.tabs, w <- t.widgets, match w]
+    rootResult = (Nothing,) <$> find match dash.widgets
+
+
+-- | Get the first tab as default if available
+getDefaultTabSlug :: Maybe [Dashboards.Tab] -> Maybe Text
+getDefaultTabSlug = fmap (slugify . (.name)) . (>>= viaNonEmpty head)
+
+
+-- | Render breadcrumb suffix with out-of-band swap for htmx
+breadcrumbSuffixOob_ :: Monad m => Text -> HtmlT m ()
+breadcrumbSuffixOob_ tabName =
+  span_ [id_ "pageTitleSuffix", class_ "flex items-center gap-1", hxSwapOob_ "true"] do
+    faSprite_ "chevron-right" "regular" "w-3 h-3"
+    span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml tabName
+
+
+-- | Internal param key for passing active tab slug between handlers and rendering
+activeTabSlugKey :: Text
+activeTabSlugKey = "activeTabSlug"
+
+
+-- | Build query string from params, prefixed with ? if non-empty
+queryStringFrom :: [(Text, Maybe Text)] -> Text
+queryStringFrom params = let qs = toQueryParams params in if T.null qs then "" else "?" <> qs
+
+
+-- | Process dashboard constants and build extended params with constant results
+processConstantsAndExtendParams
+  :: Projects.ProjectId
+  -> UTCTime
+  -> (Maybe Text, Maybe Text, Maybe Text)
+  -> [(Text, Maybe Text)]
+  -> [Dashboards.Constant]
+  -> ATAuthCtx ([Dashboards.Constant], [(Text, Maybe Text)])
+processConstantsAndExtendParams pid now timeParams allParams constants =
+  traverse (processConstant pid now timeParams allParams) constants <&> \pc ->
+    (pc, allParams <> [("const-" <> c.key, Just $ DashboardUtils.constantToSQLList $ fromMaybe [] c.result) | c <- pc])
+
+
+-- | Create a widget processor that adds dashboard ID to processed widgets
+mkWidgetProcessor
+  :: Projects.ProjectId
+  -> Dashboards.DashboardId
+  -> UTCTime
+  -> (Maybe Text, Maybe Text, Maybe Text)
+  -> [(Text, Maybe Text)]
+  -> Widget.Widget
+  -> ATAuthCtx Widget.Widget
+mkWidgetProcessor pid dashId now timeParams paramsWithConstants =
+  fmap (#_dashboardId ?~ dashId.toText) . processWidget pid now timeParams paramsWithConstants
+
+
+-- | Handler for dashboard with tab in path: /p/{pid}/dashboards/{dash_id}/tab/{tab_slug}
+-- This renders the full page with the specified tab active
+dashboardTabGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
+dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
+  now <- Time.currentTime
+  let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
+
+  (dashVM, dash) <- getDashAndVM dashId fileM
+
+  -- Find the active tab by slug
+  let activeTabInfo = dash.tabs >>= (`findTabBySlug` tabSlug)
+      activeTabIdx = maybe 0 fst activeTabInfo
+      activeTabName = fmap ((.name) . snd) activeTabInfo
+      timeParams = (sinceStr, fromDStr, toDStr)
+
+  -- Process constants and variables
+  (processedConstants, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams allParams (fromMaybe [] dash.constants)
+  let dashWithConstants = dash & #constants ?~ processedConstants
+      processWidgetWithDashboardId = mkWidgetProcessor pid dashId now timeParams allParamsWithConstants
+
+  dash' <- forOf (#variables . traverse . traverse) dashWithConstants (processVariable pid now timeParams allParamsWithConstants)
+
+  -- Only process widgets for the ACTIVE tab (lazy loading - other tabs load via htmx)
+  -- Note: We don't process dash.widgets here since this is a tab-based dashboard
+  dash'' <- case dash'.tabs of
+    Just tabs -> do
+      processedTabs <- forM (zip [0 ..] tabs) \(idx, tab) ->
+        if idx == activeTabIdx
+          then do
+            -- Process widgets concurrently for faster initial page load
+            processedWidgets <- pooledForConcurrently tab.widgets processWidgetWithDashboardId
+            widgetsWithAlerts <- populateWidgetAlertStatuses processedWidgets
+            pure $ tab & #widgets .~ widgetsWithAlerts
+          else pure tab -- Don't process widgets for inactive tabs
+      pure $ dash' & #tabs ?~ processedTabs
+    Nothing -> pure dash'
+
+  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
+
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess
+          , currProject = Just project
+          , prePageTitle = Just "Dashboards"
+          , pageTitle = dashTitle dashVM.title
+          , pageTitleSuffix = activeTabName -- Show current tab in breadcrumbs
+          , pageTitleModalId = Just "pageTitleModalId"
+          , pageTitleSuffixModalId = Just "tabRenameModalId" -- Modal for renaming tab
+          , config = appCtx.config
+          , freeTierExceeded = freeTierExceeded
+          , pageActions = Just $ div_ [class_ "flex gap-3 items-center"] do
+              TimePicker.timepicker_ Nothing currentRange Nothing
+              TimePicker.refreshButton_
+              div_ [class_ "flex items-center"] do
+                span_ [class_ "text-fillDisabled mr-2"] "|"
+                Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid dashId (Just tabSlug) currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
+                div_ [class_ "dropdown dropdown-end"] do
+                  div_ [tabindex_ "0", role_ "button", class_ "text-iconNeutral cursor-pointer  p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Context Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
+                  ul_ [tabindex_ "0", class_ "dropdown-content menu menu-md bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none"] do
+                    li_ $ label_ [Lucid.for_ "pageTitleModalId", class_ "p-2"] "Rename dashboard"
+                    li_ $ label_ [Lucid.for_ "tabRenameModalId", class_ "p-2"] "Rename tab"
+                    li_
+                      $ button_
+                        [ class_ "p-2 w-full text-left"
+                        , hxPost_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/duplicate")
+                        , hxSwap_ "none"
+                        , data_ "tippy-content" "Creates a copy of this dashboard"
+                        ]
+                        "Duplicate dashboard"
+                    li_
+                      $ button_
+                        [ class_ "p-2 w-full text-left text-textError"
+                        , hxDelete_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText)
+                        , hxSwap_ "none"
+                        , hxConfirm_ "Are you sure you want to delete this dashboard? This action cannot be undone."
+                        , data_ "tippy-content" "Permanently deletes this dashboard"
+                        ]
+                        "Delete dashboard"
+          , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/dashboard/"
+          }
+  -- Pass the active tab slug and computed constants in params for rendering
+  -- Including constants allows HTMX tab switches to skip re-executing constant queries
+  let paramsWithTab = (activeTabSlugKey, Just tabSlug) : allParamsWithConstants
+  addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM paramsWithTab
+
+
+-- | Handler for tab content partial (htmx): /p/{pid}/dashboards/{dash_id}/tab/{tab_slug}/content
+-- This returns only the tab content panel for htmx swapping
+dashboardTabContentGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (Html ()))
+dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = do
+  now <- Time.currentTime
+  (_dashVM, dash) <- getDashAndVM dashId fileM
+  let timeParams = (sinceStr, fromDStr, toDStr)
+      -- Check if constants are already in params (passed from initial page load)
+      hasConstants = any (\(k, _) -> "const-" `T.isPrefixOf` k) allParams
+
+  -- Find the tab by slug
+  case dash.tabs of
+    Nothing -> throwError $ err404{errBody = "Dashboard has no tabs"}
+    Just tabs -> case findTabBySlug tabs tabSlug of
+      Nothing -> throwError $ err404{errBody = "Tab not found: " <> encodeUtf8 tabSlug}
+      Just (idx, tab) -> do
+        -- Skip constant processing if already provided via params (avoids redundant SQL queries)
+        allParamsWithConstants <-
+          if hasConstants
+            then pure allParams
+            else snd <$> processConstantsAndExtendParams pid now timeParams allParams (fromMaybe [] dash.constants)
+        let processWidgetWithDashboardId = mkWidgetProcessor pid dashId now timeParams allParamsWithConstants
+
+        -- Process variables to check if tab requires one that's not set
+        processedVars <- traverse (traverse (processVariable pid now timeParams allParamsWithConstants)) dash.variables
+        let varToPrompt = findVarToPrompt (Just tab) (fromMaybe [] processedVars)
+
+        -- Process widgets concurrently to speed up tabs with multiple eager widgets
+        processedWidgets <- pooledForConcurrently tab.widgets processWidgetWithDashboardId
+        widgetsWithAlerts <- populateWidgetAlertStatuses processedWidgets
+
+        -- Render tab content panel + OOB modal if variable needs prompting + OOB form URL update
+        let widgetOrderUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets_order?tab=" <> tabSlug
+        addRespHeaders $ do
+          tabContentPanel_ pid dashId.toText idx tab.name widgetsWithAlerts True True
+          whenJust varToPrompt \v -> variablePickerModal_ pid dashId (Just tabSlug) allParamsWithConstants v True
+          -- OOB swap to update widget-order-trigger form's hx-patch URL for the current tab
+          form_
+            [ id_ "widget-order-trigger"
+            , class_ "hidden"
+            , hxPatch_ widgetOrderUrl
+            , hxVals_ "js:{...buildWidgetOrder(document.querySelector('.grid-stack'))}"
+            , hxExt_ "json-enc"
+            , hxSwap_ "none"
+            , hxTrigger_ "widget-order-changed from:body"
+            , hxSwapOob_ "true"
+            ]
+            ""
+
+
+-- | Render a single tab content panel
+-- isPartial: True for HTMX partial loads (include OOB swap), False for full page loads
+tabContentPanel_ :: Projects.ProjectId -> Text -> Int -> Text -> [Widget.Widget] -> Bool -> Bool -> Html ()
+tabContentPanel_ pid dashboardId idx tabName widgets isActive isPartial = do
+  when isPartial $ breadcrumbSuffixOob_ tabName
+  -- Tab content panel
+  div_
+    [ class_ $ "tab-panel grid-stack -m-2" <> if isActive then "" else " hidden"
+    , data_ "tab-index" (show idx)
+    , id_ $ "tab-panel-" <> dashboardId <> "-" <> show idx
+    ]
+    do
+      forM_ widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
+      when (null widgets) $ label_ [id_ $ "add_widget_tab_" <> show idx, class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
+        faSprite_ "plus" "regular" "h-8 w-8"
+        span_ "Add a widget"
+
+
+-- | Form for renaming a tab
+newtype TabRenameForm = TabRenameForm
+  { newName :: Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+-- | Response for tab rename containing new tab name and slug
+data TabRenameRes = TabRenameRes
+  { newName :: Text
+  , newSlug :: Text
+  }
+  deriving stock (Generic, Show)
+
+
+instance ToHtml TabRenameRes where
+  toHtml res = breadcrumbSuffixOob_ res.newName
+  toHtmlRaw = toHtml
+
+
+-- | Handler for renaming a tab
+dashboardTabRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> TabRenameForm -> ATAuthCtx (RespHeaders TabRenameRes)
+dashboardTabRenamePatchH pid dashId tabSlug form = do
+  (dashVM, dash) <- getDashAndVM dashId Nothing
+  now <- Time.currentTime
+
+  case dash.tabs of
+    Nothing -> throwError $ err404{errBody = "Dashboard has no tabs"}
+    Just tabs -> case findTabBySlug tabs tabSlug of
+      Nothing -> throwError $ err404{errBody = "Tab not found: " <> encodeUtf8 tabSlug}
+      Just (idx, _) -> do
+        let updatedTabs = tabs & ix idx . #name .~ form.newName
+            updatedDash = dash & #tabs ?~ updatedTabs
+            newSlug = slugify form.newName
+
+        -- Update the dashboard schema
+        _ <- Dashboards.updateSchemaAndUpdatedAt dashId updatedDash now
+        syncDashboardAndQueuePush pid dashId
+
+        addSuccessToast "Tab renamed successfully" Nothing
+        -- Redirect to new tab URL after rename
+        redirectCS $ "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/" <> newSlug
+        addRespHeaders $ TabRenameRes{newName = form.newName, newSlug = newSlug}

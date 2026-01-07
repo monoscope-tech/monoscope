@@ -1,4 +1,4 @@
-module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), chartImageUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory) where
+module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), chartImageUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory, formatHistoryAsContext) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE

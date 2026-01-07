@@ -207,15 +207,22 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
   , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "sort" :> QPT "embedded" :> QPUUId "teamId" :> RecordParam KeepPrefixExp Dashboards.DashboardFilters :> Get '[HTML] (RespHeaders Dashboards.DashboardsGet)
   , dashboardsPost :: mode :- "p" :> ProjectId :> "dashboards" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardForm :> Post '[HTML] (RespHeaders Dashboards.DashboardRes)
-  , dashboardWidgetPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "widget_id" :> ReqBody '[JSON] Widget.Widget :> Put '[HTML] (RespHeaders Widget.Widget)
-  , dashboardWidgetReorderPatchH :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets_order" :> ReqBody '[JSON] (Map Text Dashboards.WidgetReorderItem) :> Patch '[HTML] (RespHeaders NoContent)
+  , dashboardWidgetPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "widget_id" :> QPT "tab" :> ReqBody '[JSON] Widget.Widget :> Put '[HTML] (RespHeaders Widget.Widget)
+  , dashboardWidgetReorderPatchH :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets_order" :> QPT "tab" :> ReqBody '[JSON] (Map Text Dashboards.WidgetReorderItem) :> Patch '[HTML] (RespHeaders NoContent)
   , dashboardDelete :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Delete '[HTML] (RespHeaders Dashboards.DashboardRes)
   , dashboardRenamePatch :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "rename" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardRenameForm :> Patch '[HTML] (RespHeaders Dashboards.DashboardRes)
   , dashboardDuplicatePost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "duplicate" :> Post '[HTML] (RespHeaders Dashboards.DashboardRes)
   , dashboardStarPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Post '[HTML] (RespHeaders (Html ()))
   , dashboardDuplicateWidget :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "duplicate" :> Post '[HTML] (RespHeaders Widget.Widget)
   , dashboardWidgetExpandGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "expand" :> Get '[HTML] (RespHeaders (Html ()))
+  , -- Widget alert routes
+    widgetAlertUpsert :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QPUUId "dashboard_id" :> ReqBody '[FormUrlEncoded] Dashboards.WidgetAlertForm :> Post '[HTML] (RespHeaders (Html ()))
+  , widgetAlertDelete :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> Delete '[HTML] (RespHeaders (Html ()))
   , dashboardBulkActionPost :: mode :- "p" :> ProjectId :> "dashboards" :> "bulk_action" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] Dashboards.DashboardBulkActionForm :> Post '[HTML] (RespHeaders NoContent)
+  , -- Dashboard tab routes (htmx lazy loading)
+    dashboardTabGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
+  , dashboardTabContentGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> "content" :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> AllQueryParams :> Get '[HTML] (RespHeaders (Html ()))
+  , dashboardTabRenamePatch :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> "rename" :> ReqBody '[FormUrlEncoded] Dashboards.TabRenameForm :> Patch '[HTML] (RespHeaders Dashboards.TabRenameRes)
   , -- API routes
     apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders Api.ApiGet)
   , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (RespHeaders Api.ApiMut)
@@ -288,6 +295,8 @@ data AnomaliesRoutes' mode = AnomaliesRoutes'
   , listGet :: mode :- QPT "layout" :> QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QEID "endpoint" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders AnomalyList.AnomalyListGet)
   , anomalyGet :: mode :- Capture "anomalyID" Anomalies.IssueId :> QPT "first_occurrence" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , anomalyHashGet :: mode :- "by_hash" :> Capture "anomalyHash" Text :> QPT "first_occurrence" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , aiChatPost :: mode :- Capture "issueID" Anomalies.IssueId :> "ai_chat" :> ReqBody '[FormUrlEncoded] AnomalyList.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
+  , aiChatHistoryGet :: mode :- Capture "issueID" Anomalies.IssueId :> "ai_chat" :> "history" :> Get '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
 
@@ -432,7 +441,12 @@ cookieProtectedServer =
     , dashboardStarPost = Dashboards.dashboardStarPostH
     , dashboardDuplicateWidget = Dashboards.dashboardDuplicateWidgetPostH
     , dashboardWidgetExpandGet = Dashboards.dashboardWidgetExpandGetH
+    , widgetAlertUpsert = Dashboards.widgetAlertUpsertH
+    , widgetAlertDelete = Dashboards.widgetAlertDeleteH
     , dashboardBulkActionPost = Dashboards.dashboardBulkActionPostH
+    , dashboardTabGet = Dashboards.dashboardTabGetH
+    , dashboardTabContentGet = Dashboards.dashboardTabContentGetH
+    , dashboardTabRenamePatch = Dashboards.dashboardTabRenamePatchH
     , -- API handlers
       apiGet = Api.apiGetH
     , apiDelete = Api.apiDeleteH
@@ -496,6 +510,8 @@ anomaliesServer pid =
     , listGet = AnomalyList.anomalyListGetH pid
     , anomalyGet = AnomalyList.anomalyDetailGetH pid
     , anomalyHashGet = AnomalyList.anomalyDetailHashGetH pid
+    , aiChatPost = AnomalyList.aiChatPostH pid
+    , aiChatHistoryGet = AnomalyList.aiChatHistoryGetH pid
     }
 
 

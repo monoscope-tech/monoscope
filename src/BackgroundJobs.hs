@@ -1,4 +1,4 @@
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -14,6 +14,7 @@ import Data.List.Extra (chunksOf, groupBy)
 import Data.Map.Lazy qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
 import Data.Time.Clock (diffUTCTime)
 import Data.Time.Format (defaultTimeLocale)
@@ -50,6 +51,8 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.SystemLogs (insertSystemLog, mkSystemLog)
+import Models.Telemetry.Telemetry (SeverityLevel (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
@@ -77,7 +80,7 @@ import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, try)
-import Utils (DBField, getAlertStatusColor, getDurationNSMS)
+import Utils (DBField)
 
 
 data BgJobs
@@ -814,7 +817,7 @@ createAndInsertIssue monitorE hostUrl = do
         monitorE.alertConfig.title
         monitorE.logQuery
         threshold
-        (fromIntegral monitorE.evalResult :: Double)
+        monitorE.evalResult
         thresholdType
   Issues.insertIssue issue
   pure issue
@@ -823,7 +826,7 @@ createAndInsertIssue monitorE hostUrl = do
 calculateThreshold :: Monitors.QueryMonitorEvaled -> (Text, Double)
 calculateThreshold monitorE =
   ( if monitorE.triggerLessThan then "below" else "above"
-  , fromIntegral monitorE.alertThreshold
+  , monitorE.alertThreshold
   )
 
 
@@ -1517,45 +1520,120 @@ gitSyncPushAllDashboards pid = do
 checkTriggeredQueryMonitors :: ATBackgroundCtx ()
 checkTriggeredQueryMonitors = do
   Log.logInfo "Checking query monitors" ()
-  ctx <- ask @Config.AuthContext
   monitors <- Monitors.getActiveQueryMonitors
   forM_ monitors \monitor -> do
     startWall <- Time.currentTime
     let evalInterval = startWall `diffUTCTime` monitor.lastEvaluated
     Relude.when (evalInterval >= fromIntegral monitor.checkIntervalMins * 60) $ do
       Log.logInfo "Evaluating query monitor" (monitor.id, monitor.alertConfig.title)
-      start <- liftIO $ getTime Monotonic
-      results <- PG.query (Query $ encodeUtf8 monitor.logQueryAsSql) () :: ATBackgroundCtx [Only Int]
-      end <- liftIO $ getTime Monotonic
-
-      let total = sum (map (\(Only v) -> v) results)
-          durationNs = toNanoSecs (diffTimeSpec end start)
-          title = monitor.alertConfig.title
-          status = monitorStatus monitor.triggerLessThan monitor.warningThreshold monitor.alertThreshold total
-          q = [sql| INSERT INTO otel_logs_and_spans (resource___service___name, project_id, kind,  timestamp , name , duration , summary , status_message , parent_id , body, hashes, start_time, date) VALUES (?, ?, 'alert', NOW(), ?, ?, ?, ?, ?, ?, '{}'::text[], ?, ?)|]
-          body = AE.object ["title" AE..= title, "value" AE..= total, "alert_threshold" AE..= monitor.alertThreshold, "warning_threshold" AE..= monitor.warningThreshold, "status" AE..= status, "query" AE..= monitor.logQueryAsSql]
-          attrText = decodeUtf8 (AE.encode body)
-          truncated = if T.length attrText > 500 then T.take 497 attrText <> "..." else attrText
-          summary = V.fromList ["status;" <> getAlertStatusColor status <> "⇒" <> status, truncated, "condition;right-badge-neutral⇒" <> if monitor.triggerLessThan then "Less Than" else "Greater Than", "duration;right-badge-neutral⇒" <> toText (getDurationNSMS durationNs)]
-      _ <- PG.execute q ("query-monitor", monitor.projectId, title, durationNs, summary, status, UUID.toText monitor.id.unQueryMonitorId, body, startWall, startWall)
-      if status /= "Normal"
-        then do
-          Log.logInfo "Query monitor triggered alert" (monitor.id, title, status, total)
-          let warningAt = if status == "Warning" then Just startWall else Nothing
-              alertAt = if status == "Alerting" then Just startWall else Nothing
-          _ <- PG.execute [sql| UPDATE monitors.query_monitors SET warning_last_triggered = ?, alert_last_triggered = ? WHERE id = ? |] (warningAt, alertAt, monitor.id)
-          let qq = [sql| INSERT INTO background_jobs (run_at, status, payload)  VALUES (NOW(), 'queued', ?) |]
-          _ <- PG.execute qq (Only $ AE.object ["tag" AE..= "QueryMonitorAlert", "contents" AE..= V.singleton monitor.id])
-          pass
-        else pass
-      _ <- Monitors.updateLastEvaluatedAt monitor.id startWall
-      pass
+      catch (evaluateQueryMonitor monitor startWall) \(err :: SomePostgreSqlException) -> do
+        Log.logWarn "Query monitor evaluation failed" (monitor.id, monitor.alertConfig.title, show err)
+        void $ Monitors.updateLastEvaluatedAt monitor.id startWall -- Still update to prevent infinite retry loop
 
 
-monitorStatus :: Bool -> Maybe Int -> Int -> Int -> Text
-monitorStatus triggerLessThan warn alert value
-  | not triggerLessThan, alert <= value = "Alerting"
-  | not triggerLessThan, maybe False (<= value) warn = "Warning"
-  | triggerLessThan, alert >= value = "Alerting"
-  | triggerLessThan, maybe False (>= value) warn = "Warning"
-  | otherwise = "Normal"
+evaluateQueryMonitor :: Monitors.QueryMonitor -> UTCTime -> ATBackgroundCtx ()
+evaluateQueryMonitor monitor startWall = do
+  start <- liftIO $ getTime Monotonic
+  results <- PG.query (Query $ encodeUtf8 monitor.logQueryAsSql) () :: ATBackgroundCtx [Only Double]
+  end <- liftIO $ getTime Monotonic
+
+  let total = sum [v | Only v <- results]
+      durationNs = toNanoSecs (diffTimeSpec end start)
+      title = monitor.alertConfig.title
+      status =
+        monitorStatus
+          monitor.triggerLessThan
+          monitor.warningThreshold
+          monitor.alertThreshold
+          monitor.alertRecoveryThreshold
+          monitor.warningRecoveryThreshold
+          (monitor.currentStatus == Monitors.MSAlerting)
+          (monitor.currentStatus == Monitors.MSWarning)
+          total
+      severity = case status of Monitors.MSAlerting -> SLError; Monitors.MSWarning -> SLWarn; _ -> SLInfo
+      attrs =
+        Map.fromList
+          [ ("monitor.id", AE.toJSON monitor.id)
+          , ("monitor.title", AE.toJSON title)
+          , ("monitor.value", AE.toJSON total)
+          , ("monitor.threshold", AE.toJSON monitor.alertThreshold)
+          , ("monitor.warning_threshold", AE.toJSON monitor.warningThreshold)
+          , ("monitor.status", AE.toJSON status)
+          , ("monitor.query", AE.toJSON monitor.logQueryAsSql)
+          , ("monitor.condition", AE.toJSON $ if monitor.triggerLessThan then "less_than" :: Text else "greater_than")
+          ]
+      otelLog = mkSystemLog monitor.projectId "monitor.alert.triggered" severity (title <> ": " <> display status) attrs (Just $ fromIntegral durationNs) startWall
+  insertSystemLog otelLog
+  void $ PG.execute [sql| UPDATE monitors.query_monitors SET current_status = ?, current_value = ? WHERE id = ? |] (status, total, monitor.id)
+  Relude.when (status /= Monitors.MSNormal) do
+    Log.logInfo "Query monitor triggered alert" (monitor.id, title, status, total)
+    let warningAt = if status == Monitors.MSWarning then Just startWall else Nothing
+        alertAt = if status == Monitors.MSAlerting then Just startWall else Nothing
+    void $ PG.execute [sql| UPDATE monitors.query_monitors SET warning_last_triggered = ?, alert_last_triggered = ? WHERE id = ? |] (warningAt, alertAt, monitor.id)
+    void
+      $ PG.execute
+        [sql| INSERT INTO background_jobs (run_at, status, payload) VALUES (NOW(), 'queued', ?) |]
+        (Only $ AE.object ["tag" AE..= "QueryMonitorAlert", "contents" AE..= V.singleton monitor.id])
+  void $ Monitors.updateLastEvaluatedAt monitor.id startWall
+
+
+-- | Determine monitor status with hysteresis support.
+-- Args: triggerLessThan warnThreshold alertThreshold alertRecovery warnRecovery wasAlerting wasWarning value
+-- For "above" (triggerLessThan=False): alert when value >= threshold, recover when value < recoveryThreshold
+-- For "below" (triggerLessThan=True): alert when value <= threshold, recover when value > recoveryThreshold
+--
+-- Trigger tests (above direction):
+-- >>> monitorStatus False Nothing 100 Nothing Nothing False False 100
+-- MSAlerting
+-- >>> monitorStatus False Nothing 100 Nothing Nothing False False 150
+-- MSAlerting
+-- >>> monitorStatus False Nothing 100 Nothing Nothing False False 99
+-- MSNormal
+--
+-- Trigger tests (below direction):
+-- >>> monitorStatus True Nothing 100 Nothing Nothing False False 100
+-- MSAlerting
+-- >>> monitorStatus True Nothing 100 Nothing Nothing False False 50
+-- MSAlerting
+-- >>> monitorStatus True Nothing 100 Nothing Nothing False False 101
+-- MSNormal
+--
+-- Hysteresis: stays alerting until recovery threshold crossed (above)
+-- >>> monitorStatus False Nothing 100 (Just 80) Nothing True False 95
+-- MSAlerting
+-- >>> monitorStatus False Nothing 100 (Just 80) Nothing True False 79
+-- MSNormal
+--
+-- Hysteresis: stays alerting until recovery threshold crossed (below)
+-- >>> monitorStatus True Nothing 100 (Just 120) Nothing True False 105
+-- MSAlerting
+-- >>> monitorStatus True Nothing 100 (Just 120) Nothing True False 121
+-- MSNormal
+--
+-- Warning threshold with hysteresis
+-- >>> monitorStatus False (Just 80) 100 Nothing (Just 60) False True 75
+-- MSWarning
+-- >>> monitorStatus False (Just 80) 100 Nothing (Just 60) False True 59
+-- MSNormal
+--
+-- Edge case: recovery > threshold (above) - no hysteresis band
+-- >>> monitorStatus False Nothing 100 (Just 120) Nothing True False 110
+-- MSAlerting
+-- >>> monitorStatus False Nothing 100 (Just 120) Nothing True False 99
+-- MSNormal
+--
+-- Edge case: recovery < threshold (below) - no hysteresis band
+-- >>> monitorStatus True Nothing 100 (Just 80) Nothing True False 95
+-- MSAlerting
+-- >>> monitorStatus True Nothing 100 (Just 80) Nothing True False 101
+-- MSNormal
+monitorStatus :: Bool -> Maybe Double -> Double -> Maybe Double -> Maybe Double -> Bool -> Bool -> Double -> Monitors.MonitorStatus
+monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRecovery wasAlerting wasWarning value
+  | breached alertThreshold = Monitors.MSAlerting
+  | maybe False breached warnThreshold = Monitors.MSWarning
+  | wasAlerting && not (recovered alertRecovery alertThreshold) = Monitors.MSAlerting
+  | wasWarning && not (recovered warnRecovery (fromMaybe alertThreshold warnThreshold)) = Monitors.MSWarning
+  | otherwise = Monitors.MSNormal
+  where
+    breached t = if triggerLessThan then t >= value else t <= value
+    recovered r t = if triggerLessThan then value > fromMaybe t r else value < fromMaybe t r

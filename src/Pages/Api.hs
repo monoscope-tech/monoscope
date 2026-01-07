@@ -181,7 +181,7 @@ makeApiKeysTable pid apiKeys elemId =
     { config = def{Table.elemID = elemId, Table.renderAsTable = True}
     , columns = apiKeyColumns pid
     , rows = V.indexed apiKeys
-    , features = def{Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]}
+    , features = Table.Features{rowLink = Nothing, rowId = Nothing, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], selectRow = Nothing, bulkActions = [], search = Nothing, tabs = Nothing, sort = Nothing, sortableColumns = Nothing, tableHeaderActions = Nothing, pagination = Nothing, zeroState = Nothing, header = Nothing}
     }
 
 
@@ -193,16 +193,17 @@ apiKeyColumns pid =
       let idx = "key-" <> show i
       div_ [class_ "whitespace-nowrap w-full flex items-center text-sm text-textWeak"] do
         span_ [class_ $ "mr-2 w-full " <> idx] $ toHtml $ T.take 8 apiKey.keyPrefix <> T.replicate 20 "*"
-        div_ [class_ "hidden group-hover:flex justify-between items-center gap-3"] do
+        div_ [class_ "hidden group-hover/row:flex justify-between items-center gap-3"] do
           button_
             [ class_ "text-textBrand"
             , term "data-key" apiKey.keyPrefix
             , term "data-state" "hide"
+            , type_ "button"
             , term "data-tippy-content" "Show key"
             , term "data-prefix" (T.take 8 apiKey.keyPrefix <> T.replicate 20 "*")
             , term
                 "_"
-                [text|on click
+                [text|on click 
                  if my @data-state is "hide"
                    put my @data-key into <.$idx/>
                    put "show" into my @data-state
@@ -216,6 +217,7 @@ apiKeyColumns pid =
             $ faSprite_ "eye" "regular" "h-4 w-4 text-textWeak"
           button_
             [ class_ "text-textBrand cursor-pointer"
+            , type_ "button"
             , term "data-key" apiKey.keyPrefix
             , [__| on click if 'clipboard' in window.navigator then
                             call navigator.clipboard.writeText(my @data-key)

@@ -521,25 +521,6 @@ window.formatDuration = (ns: number): string => {
   }
 };
 
-// Update the widget order on the server.
-export const updateWidgetOrder = (projectId: string, dashboardId: string) => () => {
-  const mainContainer = document.querySelector('.grid-stack') as HTMLElement;
-  const widgetOrder = buildWidgetOrder(mainContainer);
-  fetch(`/p/${projectId}/dashboards/${dashboardId}/widgets_order`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(widgetOrder),
-  })
-    .then((response) => {
-      if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
-      }
-    })
-    .catch((error) => console.error('Error updating widget order:', error));
-};
-
-(window as any).updateWidgetOrder = updateWidgetOrder;
-
 // Recursively build the widget order from a grid container.
 // It looks for direct children with the class "grid-stack-item" and
 // expects their ids to end with "_widgetEl". If an item contains a nested grid
@@ -733,3 +714,6 @@ export const applyThresholds = (chart: any, thresholds: Record<string, number>) 
     })),
   });
 };
+
+// Signal that widget dependencies are ready
+(window as any).widgetDepsReady = true;

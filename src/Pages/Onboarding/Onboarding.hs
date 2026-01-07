@@ -47,6 +47,7 @@ import Models.Users.Users
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components
+import Pkg.THUtils (hashAssetFile)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -694,20 +695,20 @@ integrationsPage pid apikey =
         div_ [class_ "modal-action"] do
           button_ [class_ "btn", onclick_ "document.getElementById('telemetrygen-modal').close()"] "Close"
 
-    -- Highlight.js CDN for syntax highlighting
-    link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css"]
-    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"] ("" :: Text)
-    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"] ("" :: Text)
-    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"] ("" :: Text)
-    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/go.min.js"] ("" :: Text)
-    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/java.min.js"] ("" :: Text)
-    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/csharp.min.js"] ("" :: Text)
-    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/php.min.js"] ("" :: Text)
-    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/elixir.min.js"] ("" :: Text)
-    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"] ("" :: Text)
-    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/shell.min.js"] ("" :: Text)
-    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/yaml.min.js"] ("" :: Text)
-    script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/json.min.js"] ("" :: Text)
+    -- Highlight.js for syntax highlighting (v11.11.1)
+    link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/highlightjs/atom-one-dark.min.css")]
+    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/highlight.min.js")] ("" :: Text)
+    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/javascript.min.js")] ("" :: Text)
+    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/python.min.js")] ("" :: Text)
+    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/go.min.js")] ("" :: Text)
+    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/java.min.js")] ("" :: Text)
+    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/csharp.min.js")] ("" :: Text)
+    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/php.min.js")] ("" :: Text)
+    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/elixir.min.js")] ("" :: Text)
+    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/bash.min.js")] ("" :: Text)
+    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/shell.min.js")] ("" :: Text)
+    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/yaml.min.js")] ("" :: Text)
+    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/json.min.js")] ("" :: Text)
 
     -- Initialize highlight.js after HTMX loads content
     script_
@@ -821,10 +822,8 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
       script_
         [text|
      document.addEventListener('DOMContentLoaded', function() {
-      var inputElem = document.querySelector('#emails_input')
-      var tagify = new Tagify(inputElem)
-      tagify.addTags($tgs);
-      window.tagify = tagify
+      window.tagify = createTagify('#emails_input');
+      window.tagify.addTags($tgs);
     })
 
     function appendMember() {

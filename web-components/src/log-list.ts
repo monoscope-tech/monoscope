@@ -1121,6 +1121,11 @@ export class LogList extends LitElement {
           table-layout: fixed;
         }
 
+        /* Prevent clicks on closed popovers */
+        [popover]:not(:popover-open) {
+          pointer-events: none;
+        }
+
         /* Optimize virtualizer container */
         lit-virtualizer {
           will-change: transform;
@@ -1583,31 +1588,32 @@ export class LogList extends LitElement {
     }
   };
 
-  createLoadButton = (text: string, onClick: () => void) => html`
-    <button class="cursor-pointer text-textBrand underline font-semibold w-max mx-auto" @pointerdown=${onClick}>${text}</button>
-  `;
+  createLoadButton = (text: string) => html`<span class="text-textBrand underline font-semibold w-max mx-auto">${text}</span>`;
 
-  createLoadingRow = (id: string | null, content: TemplateResult) => html`
-    <tr class="w-full flex relative" ${id ? `id="${id}"` : ''}>
+  createLoadingRow = (id: string | null, content: TemplateResult, onClick?: () => void) => html`
+    <tr
+      class=${clsx('w-full flex relative h-[28px]', onClick && 'cursor-pointer hover:bg-fillWeaker')}
+      id=${id || nothing}
+      @click=${onClick ? () => onClick() : nothing}
+    >
       <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
-        <div class="h-8 flex items-center justify-center">${content}</div>
+        <div class="h-7 flex items-center justify-center">${content}</div>
       </td>
     </tr>
   `;
 
   renderExpandTimeRangeButton = () => {
-    return html` <tr class="w-full flex relative">
-      <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
-        <div class="h-8 flex items-center justify-center">
-          ${this.isLoading || this.isLoadingMore
-            ? html`<div class="loading loading-dots loading-md h-5"></div>`
-            : this.createLoadButton('Expand time range to see more events', () => {
-                this.fetchData(this.expandTimeRangeUrl(), false, false, true);
-                this.expandTimeRange = false;
-              })}
-        </div>
-      </td>
-    </tr>`;
+    const expandTimeRange = () => {
+      this.fetchData(this.expandTimeRangeUrl(), false, false, true);
+      this.expandTimeRange = false;
+    };
+    return this.createLoadingRow(
+      null,
+      this.isLoading || this.isLoadingMore
+        ? html`<div class="loading loading-dots loading-md h-5"></div>`
+        : this.createLoadButton('Expand time range to see more events'),
+      this.isLoading || this.isLoadingMore ? undefined : expandTimeRange
+    );
   };
 
   renderLoadMoreButton = () => {
@@ -1616,6 +1622,8 @@ export class LogList extends LitElement {
     }
     if (this.expandTimeRange && !this.hasMore && !!this.spanListTree.length) return this.renderExpandTimeRangeButton();
     if (!this.hasMore || !this.spanListTree.length) return html`<tr></tr>`;
+
+    const loadMore = () => this.fetchData(this.buildLoadMoreUrl(), false, false, true);
 
     // Use a ref to observe when this element comes into view
     const loadMoreRef = createRef<HTMLTableRowElement>();
@@ -1646,13 +1654,16 @@ export class LogList extends LitElement {
       }
     });
 
+    const isLoadingState = this.isLoading || this.isLoadingMore;
     return html`
-      <tr class="w-full flex relative" ${ref(loadMoreRef)}>
+      <tr
+        class=${clsx('w-full flex relative h-[28px]', !isLoadingState && 'cursor-pointer hover:bg-fillWeaker')}
+        ${ref(loadMoreRef)}
+        @click=${isLoadingState ? nothing : () => loadMore()}
+      >
         <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
-          <div class="h-8 flex items-center justify-center">
-            ${this.isLoading || this.isLoadingMore
-              ? html`<div class="loading loading-dots loading-md h-5"></div>`
-              : this.createLoadButton('Load more', () => this.fetchData(this.buildLoadMoreUrl(), false, false, true))}
+          <div class="h-7 flex items-center justify-center">
+            ${isLoadingState ? html`<div class="loading loading-dots loading-md h-5"></div>` : this.createLoadButton('Load more')}
           </div>
         </td>
       </tr>
@@ -1666,13 +1677,15 @@ export class LogList extends LitElement {
 
     if (!this.spanListTree.length) return html`<tr></tr>`;
 
+    const fetchRecent = () => this.fetchData(this.buildRecentFetchUrl(), false, true);
     return this.createLoadingRow(
       'recent-logs',
       this.isLiveStreaming
         ? html`<p class="h-5 leading-5 m-0">Live streaming latest data...</p>`
         : this.isFetchingRecent
         ? html`<div class="loading loading-dots loading-md h-5"></div>`
-        : this.createLoadButton('Check for recent data', () => this.fetchData(this.buildRecentFetchUrl(), false, true))
+        : this.createLoadButton('Check for recent data'),
+      this.isLiveStreaming || this.isFetchingRecent ? undefined : fetchRecent
     );
   };
 
@@ -1780,28 +1793,33 @@ export class LogList extends LitElement {
           finalWidth ? `col-${column}` : ''
         }`}
       >
-        <div class="dropdown font-medium text-base" data-tippy-content=${title}>
-          <div tabindex="0" role="button" class="py-1">
-            ${title.split('•').reverse()[0]}
-            <span class="ml-1 p-0.5 border border-strokeWeak rounded-sm inline-flex">
-              ${faSprite('chevron-down', 'regular', 'w-3 h-3')}
-            </span>
-          </div>
-          <ul
-            tabindex="0"
-            class="dropdown-content z-1 flex flex-col font-normal bg-bgBase border w-64 border-strokeWeak p-2 text-sm rounded shadow"
-          >
-            <li class="px-1 cursor-pointer hover:bg-fillWeak">
-              <button class="cursor-pointer py-0.5" @pointerdown=${() => this.hideColumn(column)}>Hide column</button>
-            </li>
-            <li class="px-1 cursor-pointer hover:bg-fillWeak">
-              <button class="cursor-pointer py-0.5" @pointerdown=${() => this.moveColumn(column, -1)}>Move column left</button>
-            </li>
-            <li class="px-1 cursor-pointer hover:bg-fillWeak">
-              <button class="cursor-pointer py-0.5" @pointerdown=${() => this.moveColumn(column, 1)}>Move column right</button>
-            </li>
-          </ul>
-        </div>
+        <button
+          class="font-medium text-base py-1 cursor-pointer"
+          data-tippy-content=${title}
+          popovertarget=${`col-dropdown-${column}`}
+          style=${`anchor-name: --col-dropdown-${column}`}
+        >
+          ${title.split('•').reverse()[0]}
+          <span class="ml-1 p-0.5 border border-strokeWeak rounded-sm inline-flex">
+            ${faSprite('chevron-down', 'regular', 'w-3 h-3')}
+          </span>
+        </button>
+        <ul
+          popover
+          id=${`col-dropdown-${column}`}
+          style=${`position-anchor: --col-dropdown-${column}`}
+          class="dropdown menu flex flex-col font-normal bg-bgBase border w-64 border-strokeWeak p-2 text-sm rounded shadow"
+        >
+          <li class="px-1 cursor-pointer hover:bg-fillWeak">
+            <button class="cursor-pointer py-0.5" @pointerdown=${() => this.hideColumn(column)}>Hide column</button>
+          </li>
+          <li class="px-1 cursor-pointer hover:bg-fillWeak">
+            <button class="cursor-pointer py-0.5" @pointerdown=${() => this.moveColumn(column, -1)}>Move column left</button>
+          </li>
+          <li class="px-1 cursor-pointer hover:bg-fillWeak">
+            <button class="cursor-pointer py-0.5" @pointerdown=${() => this.moveColumn(column, 1)}>Move column right</button>
+          </li>
+        </ul>
         <div
           @mousedown=${(event: any) => {
             this.resizeTarget = column;
