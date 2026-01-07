@@ -630,13 +630,13 @@ createNewErrorIssue projectId err = do
 
 
 -- | Create issue for an error spike
-createErrorSpikeIssue ::
-  Projects.ProjectId ->
-  Errors.Error ->
-  Double -> -- current rate
-  Double -> -- baseline mean
-  Double -> -- baseline stddev
-  IO Issue
+createErrorSpikeIssue
+  :: Projects.ProjectId
+  -> Errors.Error
+  -> Double -- current rate
+  -> Double -- baseline mean
+  -> Double -- baseline stddev
+  -> IO Issue
 createErrorSpikeIssue projectId err currentRate baselineMean baselineStddev = do
   issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime
@@ -736,13 +736,13 @@ createNewLogPatternIssue projectId lp = do
 
 
 -- | Create an issue for a log pattern volume spike
-createLogPatternSpikeIssue ::
-  Projects.ProjectId ->
-  LogPatterns.LogPattern ->
-  Double -> -- current rate (events/hour)
-  Double -> -- baseline mean
-  Double -> -- baseline stddev
-  IO Issue
+createLogPatternSpikeIssue
+  :: Projects.ProjectId
+  -> LogPatterns.LogPattern
+  -> Double -- current rate (events/hour)
+  -> Double -- baseline mean
+  -> Double -- baseline stddev
+  -> IO Issue
 createLogPatternSpikeIssue projectId lp currentRate baselineMean baselineStddev = do
   issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime

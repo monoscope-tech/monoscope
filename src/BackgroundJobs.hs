@@ -39,11 +39,11 @@ import Log qualified as LogLegacy
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Errors qualified as Errors
-import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Issues.Enhancement qualified as Enhancement
+import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps (ATError (..))
@@ -1715,9 +1715,7 @@ detectErrorSpikes pid authCtx = do
               void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
 
             Log.logInfo "Created issue for error spike" (pid, err.id, issue.id)
-
       _ -> pass -- Skip errors without established baseline
-
   Log.logInfo "Finished error spike detection" pid
 
 
@@ -1806,9 +1804,7 @@ detectLogPatternSpikes pid authCtx = do
               void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
 
             Log.logInfo "Created issue for log pattern spike" (pid, lp.id, issue.id)
-
       _ -> pass -- Skip patterns without established baseline
-
   Log.logInfo "Finished log pattern spike detection" pid
 
 

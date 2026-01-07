@@ -39,12 +39,12 @@ import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
+import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import Relude hiding (id)
 import System.Types (DB)
 import Utils (DBField (MkDBField))
-import Models.Apis.RequestDumps qualified as RequestDump
 
 
 newtype ErrorId = ErrorId {unErrorId :: UUID.UUID}
@@ -252,7 +252,7 @@ getErrorByHash pid hash env = do
 
 -- | Get active (non-resolved) errors
 getActiveErrors :: DB es => Projects.ProjectId -> Eff es [Error]
-getActiveErrors pid = PG.query q (Only  pid)
+getActiveErrors pid = PG.query q (Only pid)
   where
     q =
       [sql|
@@ -303,19 +303,21 @@ updateErrorState eid newState = PG.execute q (errorStateToText newState, eid)
     q =
       [sql| UPDATE apis.errors SET state = ?, updated_at = NOW() WHERE id = ? |]
 
+
 resolveError :: DB es => ErrorId -> Eff es Int64
-resolveError eid =  PG.execute q (Only eid)
+resolveError eid = PG.execute q (Only eid)
   where
     q = [sql| UPDATE apis.errors SET state = 'resolved', resolved_at = NOW(), updated_at = NOW() WHERE id = ? |]
+
 
 assignError :: DB es => ErrorId -> Users.UserId -> Eff es Int64
 assignError eid uid = PG.execute q (uid, eid)
   where
-    q =  [sql| UPDATE apis.errors SET assignee_id = ?, assigned_at = NOW(), updated_at = NOW() WHERE id = ? |]
+    q = [sql| UPDATE apis.errors SET assignee_id = ?, assigned_at = NOW(), updated_at = NOW() WHERE id = ? |]
 
 
 -- | Update baseline data for an error
-updateBaseline :: DB es => ErrorId -> Text ->  Double -> Double ->  Int -> Eff es Int64
+updateBaseline :: DB es => ErrorId -> Text -> Double -> Double -> Int -> Eff es Int64
 updateBaseline eid bState rateMean rateStddev samples =
   PG.execute q (bState, rateMean, rateStddev, samples, eid)
   where
@@ -330,6 +332,7 @@ updateBaseline eid bState rateMean rateStddev samples =
         WHERE id = ?
       |]
 
+
 -- | Hourly bucket for error event aggregation
 data HourlyBucket = HourlyBucket
   { hourStart :: UTCTime
@@ -341,11 +344,11 @@ data HourlyBucket = HourlyBucket
 
 -- | Get hourly error counts for a specific error over a time range
 -- Returns counts bucketed by hour for baseline calculation
-getHourlyErrorCounts ::
-  DB es =>
-  ErrorId ->
-  Int -> -- hours to look back
-  Eff es [HourlyBucket]
+getHourlyErrorCounts
+  :: DB es
+  => ErrorId
+  -> Int -- hours to look back
+  -> Eff es [HourlyBucket]
 getHourlyErrorCounts eid hoursBack =
   PG.query q (eid, hoursBack)
   where
@@ -391,7 +394,7 @@ data ErrorEventStats = ErrorEventStats
   deriving anyclass (FromRow)
 
 
-getErrorEventStats ::  DB es =>  ErrorId ->  Int -> Eff es (Maybe ErrorEventStats)
+getErrorEventStats :: DB es => ErrorId -> Int -> Eff es (Maybe ErrorEventStats)
 getErrorEventStats eid hoursBack = do
   results <- PG.query q (eid, hoursBack)
   return $ listToMaybe results
@@ -418,10 +421,10 @@ getErrorEventStats eid hoursBack = do
 
 -- | Check if an error is spiking compared to its baseline
 -- Returns (isSpike, currentRate, zScore) if baseline is established
-checkErrorSpike ::
-  DB es =>
-  Error ->
-  Eff es (Maybe (Bool, Double, Double))
+checkErrorSpike
+  :: DB es
+  => Error
+  -> Eff es (Maybe (Bool, Double, Double))
 checkErrorSpike err = do
   case (err.baselineState, err.baselineErrorRateMean, err.baselineErrorRateStddev) of
     ("established", Just mean, Just stddev) | stddev > 0 -> do
@@ -477,6 +480,7 @@ getErrorsWithCurrentRates pid =
           AND e.state != 'resolved'
           AND e.is_ignored = false
       |]
+
 
 -- | Upsert an error (insert or update on conflict)
 upsertErrorQueryAndParam :: DB es => Projects.ProjectId -> RequestDump.ATError -> (Query, [DBField])
