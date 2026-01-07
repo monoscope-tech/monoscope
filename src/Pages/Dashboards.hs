@@ -779,7 +779,8 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
 
 updateTabBySlug :: Text -> (Dashboards.Tab -> Dashboards.Tab) -> Dashboards.Dashboard -> Dashboards.Dashboard
 updateTabBySlug slug f dash = dash & #tabs %~ fmap (map updateTab)
-  where updateTab tab = if slugify tab.name == slug then f tab else tab
+  where
+    updateTab tab = if slugify tab.name == slug then f tab else tab
 
 
 getDashAndVM :: (DB es, Error ServerError :> es, Wreq.HTTP :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)

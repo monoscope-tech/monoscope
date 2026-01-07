@@ -1578,6 +1578,7 @@ monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRec
   | wasWarning, not (recovered warnRecovery (fromMaybe alertThreshold warnThreshold)) = "warning"
   | otherwise = "normal"
   where
-    (breached, recovered) = if triggerLessThan
-      then ((>= value), \r t -> value > fromMaybe t r)
-      else ((<= value), \r t -> value < fromMaybe t r)
+    (breached, recovered) =
+      if triggerLessThan
+        then ((>= value), \r t -> value > fromMaybe t r)
+        else ((<= value), \r t -> value < fromMaybe t r)
