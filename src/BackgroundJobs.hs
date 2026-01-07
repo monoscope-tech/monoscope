@@ -1533,8 +1533,9 @@ checkTriggeredQueryMonitors = do
       let total = sum (map (\(Only v) -> v) results)
           durationNs = toNanoSecs (diffTimeSpec end start)
           title = monitor.alertConfig.title
-          wasAlerting = maybe False (\t -> startWall `diffUTCTime` t < alertActiveWindow) monitor.alertLastTriggered
-          wasWarning = maybe False (\t -> startWall `diffUTCTime` t < alertActiveWindow) monitor.warningLastTriggered
+          isRecentAlert = (< alertActiveWindow) . diffUTCTime startWall
+          wasAlerting = maybe False isRecentAlert monitor.alertLastTriggered
+          wasWarning = maybe False isRecentAlert monitor.warningLastTriggered
           status =
             monitorStatus
               monitor.triggerLessThan
@@ -1545,7 +1546,7 @@ checkTriggeredQueryMonitors = do
               wasAlerting
               wasWarning
               total
-          severity = case status of "Alerting" -> SLError; "Warning" -> SLWarn; _ -> SLInfo
+          severity = case status of "alerting" -> SLError; "warning" -> SLWarn; _ -> SLInfo
           attrs =
             Map.fromList
               [ ("monitor.id", AE.toJSON monitor.id)
@@ -1560,15 +1561,14 @@ checkTriggeredQueryMonitors = do
           otelLog = mkSystemLog monitor.projectId "monitor.alert.triggered" severity (title <> ": " <> status) attrs (Just $ fromIntegral durationNs) startWall
       insertSystemLog otelLog
       _ <- PG.execute [sql| UPDATE monitors.query_monitors SET current_status = ? WHERE id = ? |] (status, monitor.id)
-      Relude.when (status /= "Normal") do
+      Relude.when (status /= "normal") do
         Log.logInfo "Query monitor triggered alert" (monitor.id, title, status, total)
-        let warningAt = if status == "Warning" then Just startWall else Nothing
-            alertAt = if status == "Alerting" then Just startWall else Nothing
+        let warningAt = if status == "warning" then Just startWall else Nothing
+            alertAt = if status == "alerting" then Just startWall else Nothing
         _ <- PG.execute [sql| UPDATE monitors.query_monitors SET warning_last_triggered = ?, alert_last_triggered = ? WHERE id = ? |] (warningAt, alertAt, monitor.id)
         let qq = [sql| INSERT INTO background_jobs (run_at, status, payload)  VALUES (NOW(), 'queued', ?) |]
         void $ PG.execute qq (Only $ AE.object ["tag" AE..= "QueryMonitorAlert", "contents" AE..= V.singleton monitor.id])
-      _ <- Monitors.updateLastEvaluatedAt monitor.id startWall
-      pass
+      void $ Monitors.updateLastEvaluatedAt monitor.id startWall
 
 
 alertActiveWindow :: NominalDiffTime
@@ -1578,22 +1578,19 @@ alertActiveWindow = 300
 monitorStatus :: Bool -> Maybe Int -> Int -> Maybe Int -> Maybe Int -> Bool -> Bool -> Int -> Text
 monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRecovery wasAlerting wasWarning value
   | not triggerLessThan = case () of
-      -- Trigger thresholds (going from normal to alerting/warning)
       _
-        | alertThreshold <= value -> "Alerting"
-        | maybe False (<= value) warnThreshold -> "Warning"
-        -- Recovery with hysteresis: stay in state until recovery threshold crossed
-        | wasAlerting, not (hasRecovered alertRecovery alertThreshold) -> "Alerting"
-        | wasWarning, not (hasRecovered warnRecovery (fromMaybe alertThreshold warnThreshold)) -> "Warning"
-        | otherwise -> "Normal"
+        | alertThreshold <= value -> "alerting"
+        | maybe False (<= value) warnThreshold -> "warning"
+        | wasAlerting, not (hasRecovered alertRecovery alertThreshold) -> "alerting"
+        | wasWarning, not (hasRecovered warnRecovery (fromMaybe alertThreshold warnThreshold)) -> "warning"
+        | otherwise -> "normal"
   | otherwise = case () of -- triggerLessThan
       _
-        | alertThreshold >= value -> "Alerting"
-        | maybe False (>= value) warnThreshold -> "Warning"
-        -- Recovery with hysteresis (inverted for less-than)
-        | wasAlerting, not (hasRecoveredLT alertRecovery alertThreshold) -> "Alerting"
-        | wasWarning, not (hasRecoveredLT warnRecovery (fromMaybe alertThreshold warnThreshold)) -> "Warning"
-        | otherwise -> "Normal"
+        | alertThreshold >= value -> "alerting"
+        | maybe False (>= value) warnThreshold -> "warning"
+        | wasAlerting, not (hasRecoveredLT alertRecovery alertThreshold) -> "alerting"
+        | wasWarning, not (hasRecoveredLT warnRecovery (fromMaybe alertThreshold warnThreshold)) -> "warning"
+        | otherwise -> "normal"
   where
     -- For "above" threshold: recovered when value drops below recovery threshold
     hasRecovered recoveryM trigger = value < fromMaybe trigger recoveryM
