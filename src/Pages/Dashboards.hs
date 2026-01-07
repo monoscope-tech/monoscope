@@ -1194,7 +1194,7 @@ data WidgetAlertForm = WidgetAlertForm
   , query :: Text
   , vizType :: Maybe Text
   , alertEnabled :: Maybe Text -- "on" when checked
-  , alertThreshold :: Int
+  , alertThreshold :: Double
   , warningThreshold :: Maybe Text
   , direction :: Text
   , showThresholdLines :: Maybe Text

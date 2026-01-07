@@ -15,8 +15,6 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
-import Fmt.Internal.Core (fmt)
-import Fmt.Internal.Numeric (commaizeF)
 import Lucid
 import Lucid.Htmx
 import Models.Apis.Monitors qualified as Monitors
@@ -67,8 +65,8 @@ data UnifiedMonitorItem = UnifiedMonitorItem
 data UnifiedMonitorDetails
   = AlertDetails
   { query :: Text
-  , alertThreshold :: Int
-  , warningThreshold :: Maybe Int
+  , alertThreshold :: Double
+  , warningThreshold :: Maybe Double
   , triggerDirection :: Text -- "above" or "below"
   , lastEvaluated :: Maybe UTCTime
   , alertLastTriggered :: Maybe UTCTime
@@ -336,7 +334,7 @@ statusBadge_ isLarge status = do
 
 
 -- | Threshold box for alerts
-thresholdBox_ :: Int -> Maybe Int -> Text -> Html ()
+thresholdBox_ :: Double -> Maybe Double -> Text -> Html ()
 thresholdBox_ alert warning direction = do
   div_ [class_ "flex gap-2 p-3 items-center border rounded-3xl"] do
     div_ [class_ "flex items-center gap-3"] do
@@ -491,9 +489,9 @@ alertStats_ pid alert currTime = do
   section_ [class_ "space-y-3 shrink-0 w-full"] do
     div_ [class_ "flex gap-2"] do
       statBox_ (Just pid) Nothing "Check Interval" "How often the alert query is evaluated" (show alert.checkIntervalMins <> " min") Nothing Nothing
-      statBox_ (Just pid) Nothing "Alert Threshold" ("Trigger alert when value is " <> direction) (fmt (commaizeF alert.alertThreshold)) Nothing Nothing
+      statBox_ (Just pid) Nothing "Alert Threshold" ("Trigger alert when value is " <> direction) (show alert.alertThreshold) Nothing Nothing
       whenJust alert.warningThreshold $ \warning ->
-        statBox_ (Just pid) Nothing "Warning Threshold" ("Trigger warning when value is " <> direction) (fmt (commaizeF warning)) Nothing Nothing
+        statBox_ (Just pid) Nothing "Warning Threshold" ("Trigger warning when value is " <> direction) (show warning) Nothing Nothing
       statBox_ (Just pid) Nothing "Last Evaluated" "When the alert was last checked" (toText $ prettyTimeAuto currTime alert.lastEvaluated) Nothing Nothing
       statBox_ (Just pid) Nothing "Last Triggered" "When the alert was last triggered" (maybe "Never" (toText . prettyTimeAuto currTime) alert.alertLastTriggered) Nothing Nothing
   where

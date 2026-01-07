@@ -121,7 +121,7 @@ data Widget = Widget
   , xAxis :: Maybe WidgetAxis
   , yAxis :: Maybe WidgetAxis -- Optional y-axis label
   , unit :: Maybe Text
-  , value :: Maybe Int -- value could represent a number or a count
+  , value :: Maybe Double -- value could represent a number or a count
   , wData :: Maybe AE.Value
   , hideLegend :: Maybe Bool
   , legendPosition :: Maybe Text -- Legend position: "top", "bottom", "top-right", "top-left", "bottom-right", "bottom-left"
@@ -144,8 +144,8 @@ data Widget = Widget
   , onRowClick :: Maybe RowClickAction -- Action when table row is clicked
   -- Alert fields (populated from QueryMonitor at render time)
   , alertId :: Maybe Text -- Linked QueryMonitor ID
-  , alertThreshold :: Maybe Int -- For threshold line rendering
-  , warningThreshold :: Maybe Int
+  , alertThreshold :: Maybe Double -- For threshold line rendering
+  , warningThreshold :: Maybe Double
   , showThresholdLines :: Maybe Text -- 'always' | 'on_breach' | 'never'
   , alertStatus :: Maybe Text -- 'normal' | 'warning' | 'alerting' (runtime)
   }

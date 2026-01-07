@@ -816,7 +816,7 @@ createAndInsertIssue monitorE hostUrl = do
         monitorE.alertConfig.title
         monitorE.logQuery
         threshold
-        (fromIntegral monitorE.evalResult :: Double)
+        monitorE.evalResult
         thresholdType
   Issues.insertIssue issue
   pure issue
@@ -825,7 +825,7 @@ createAndInsertIssue monitorE hostUrl = do
 calculateThreshold :: Monitors.QueryMonitorEvaled -> (Text, Double)
 calculateThreshold monitorE =
   ( if monitorE.triggerLessThan then "below" else "above"
-  , fromIntegral monitorE.alertThreshold
+  , monitorE.alertThreshold
   )
 
 
@@ -1527,7 +1527,7 @@ checkTriggeredQueryMonitors = do
     Relude.when (evalInterval >= fromIntegral monitor.checkIntervalMins * 60) $ do
       Log.logInfo "Evaluating query monitor" (monitor.id, monitor.alertConfig.title)
       start <- liftIO $ getTime Monotonic
-      results <- PG.query (Query $ encodeUtf8 monitor.logQueryAsSql) () :: ATBackgroundCtx [Only Int]
+      results <- PG.query (Query $ encodeUtf8 monitor.logQueryAsSql) () :: ATBackgroundCtx [Only Double]
       end <- liftIO $ getTime Monotonic
 
       let total = sum (map (\(Only v) -> v) results)
@@ -1570,7 +1570,7 @@ checkTriggeredQueryMonitors = do
       void $ Monitors.updateLastEvaluatedAt monitor.id startWall
 
 
-monitorStatus :: Bool -> Maybe Int -> Int -> Maybe Int -> Maybe Int -> Bool -> Bool -> Int -> Text
+monitorStatus :: Bool -> Maybe Double -> Double -> Maybe Double -> Maybe Double -> Bool -> Bool -> Double -> Text
 monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRecovery wasAlerting wasWarning value
   | breached alertThreshold = "alerting"
   | maybe False breached warnThreshold = "warning"

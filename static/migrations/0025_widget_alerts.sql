@@ -1,12 +1,18 @@
 -- Widget-integrated alerts: link alerts to dashboard widgets
 
+-- Add new columns
 ALTER TABLE monitors.query_monitors
   ADD COLUMN IF NOT EXISTS widget_id TEXT,
   ADD COLUMN IF NOT EXISTS dashboard_id UUID REFERENCES projects.dashboards(id) ON DELETE CASCADE,
-  ADD COLUMN IF NOT EXISTS alert_recovery_threshold INT,
-  ADD COLUMN IF NOT EXISTS warning_recovery_threshold INT,
+  ADD COLUMN IF NOT EXISTS alert_recovery_threshold DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS warning_recovery_threshold DOUBLE PRECISION,
   ADD COLUMN IF NOT EXISTS current_status TEXT DEFAULT 'normal',
-  ADD COLUMN IF NOT EXISTS current_value INT DEFAULT 0;
+  ADD COLUMN IF NOT EXISTS current_value DOUBLE PRECISION DEFAULT 0;
+
+-- Convert existing threshold columns to DOUBLE PRECISION for decimal support
+ALTER TABLE monitors.query_monitors
+  ALTER COLUMN alert_threshold TYPE DOUBLE PRECISION,
+  ALTER COLUMN warning_threshold TYPE DOUBLE PRECISION;
 
 DO $$ BEGIN
   ALTER TABLE monitors.query_monitors

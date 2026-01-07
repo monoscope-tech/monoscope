@@ -39,7 +39,7 @@ import Web.FormUrlEncoded (FromForm)
 
 data AlertUpsertForm = AlertUpsertForm
   { alertId :: Maybe Text
-  , alertThreshold :: Int
+  , alertThreshold :: Double
   , warningThreshold :: Maybe Text
   , recipientEmails :: [Text]
   , recipientSlacks :: [Text]
@@ -74,7 +74,7 @@ convertToQueryMonitor :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitorI
 convertToQueryMonitor projectId now queryMonitorId alertForm =
   let sqlQueryCfg = (defSqlQueryCfg projectId fixedUTCTime Nothing Nothing){presetRollup = Just "5m"}
       (_, qc) = fromRight' $ parseQueryToComponents sqlQueryCfg alertForm.query
-      warningThresholdInt = readMaybe . toString =<< alertForm.warningThreshold
+      warningThresholdD = readMaybe . toString =<< alertForm.warningThreshold
 
       checkInterval = case alertForm.frequency of
         Just freq -> max 1 $ fromMaybe 5 $ readMaybe $ toString $ T.dropEnd 1 freq
@@ -92,8 +92,8 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
           , emailAll = fromMaybe False alertForm.recipientEmailAll
           , slackChannels = V.fromList alertForm.recipientSlacks
           }
-      alertRecoveryInt = readMaybe . toString =<< alertForm.alertRecoveryThreshold
-      warningRecoveryInt = readMaybe . toString =<< alertForm.warningRecoveryThreshold
+      alertRecoveryD = readMaybe . toString =<< alertForm.alertRecoveryThreshold
+      warningRecoveryD = readMaybe . toString =<< alertForm.warningRecoveryThreshold
       dashboardUuid = UUID.fromText =<< alertForm.dashboardId
    in Monitors.QueryMonitor
         { id = queryMonitorId
@@ -102,7 +102,7 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , projectId = projectId
         , checkIntervalMins = checkInterval
         , alertThreshold = if isThresholdAlert then alertForm.alertThreshold else 0
-        , warningThreshold = if isThresholdAlert then warningThresholdInt else Nothing
+        , warningThreshold = if isThresholdAlert then warningThresholdD else Nothing
         , logQuery = alertForm.query
         , logQueryAsSql = fromMaybe "" qc.finalAlertQuery
         , lastEvaluated = now
@@ -118,8 +118,8 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , -- Widget alert fields
           widgetId = alertForm.widgetId
         , dashboardId = dashboardUuid
-        , alertRecoveryThreshold = if isThresholdAlert then alertRecoveryInt else Nothing
-        , warningRecoveryThreshold = if isThresholdAlert then warningRecoveryInt else Nothing
+        , alertRecoveryThreshold = if isThresholdAlert then alertRecoveryD else Nothing
+        , warningRecoveryThreshold = if isThresholdAlert then warningRecoveryD else Nothing
         , currentStatus = "normal"
         , currentValue = 0
         }

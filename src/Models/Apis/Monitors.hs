@@ -83,8 +83,8 @@ data QueryMonitor = QueryMonitor
   , updatedAt :: UTCTime
   , projectId :: Projects.ProjectId
   , checkIntervalMins :: Int
-  , alertThreshold :: Int
-  , warningThreshold :: Maybe Int
+  , alertThreshold :: Double
+  , warningThreshold :: Maybe Double
   , logQuery :: Text
   , logQueryAsSql :: Text
   , lastEvaluated :: UTCTime
@@ -100,10 +100,10 @@ data QueryMonitor = QueryMonitor
   , -- Widget alert fields
     widgetId :: Maybe Text
   , dashboardId :: Maybe UUID.UUID
-  , alertRecoveryThreshold :: Maybe Int
-  , warningRecoveryThreshold :: Maybe Int
+  , alertRecoveryThreshold :: Maybe Double
+  , warningRecoveryThreshold :: Maybe Double
   , currentStatus :: Text
-  , currentValue :: Int
+  , currentValue :: Double
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, NFData, ToRow)
@@ -117,8 +117,8 @@ data QueryMonitorEvaled = QueryMonitorEvaled
   , updatedAt :: UTCTime
   , projectId :: Projects.ProjectId
   , checkIntervalMins :: Int
-  , alertThreshold :: Int
-  , warningThreshold :: Maybe Int
+  , alertThreshold :: Double
+  , warningThreshold :: Maybe Double
   , logQuery :: Text
   , logQueryAsSql :: Text
   , lastEvaluated :: UTCTime
@@ -134,10 +134,10 @@ data QueryMonitorEvaled = QueryMonitorEvaled
   , -- Widget alert fields
     widgetId :: Maybe Text
   , dashboardId :: Maybe UUID.UUID
-  , alertRecoveryThreshold :: Maybe Int
-  , warningRecoveryThreshold :: Maybe Int
+  , alertRecoveryThreshold :: Maybe Double
+  , warningRecoveryThreshold :: Maybe Double
   , currentStatus :: Text
-  , evalResult :: Int
+  , evalResult :: Double
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, NFData, ToRow)
@@ -325,9 +325,9 @@ data WidgetAlertStatus = WidgetAlertStatus
   { widgetId :: Text
   , monitorId :: QueryMonitorId
   , alertStatus :: Text
-  , currentValue :: Maybe Int
-  , alertThreshold :: Int
-  , warningThreshold :: Maybe Int
+  , currentValue :: Maybe Double
+  , alertThreshold :: Double
+  , warningThreshold :: Maybe Double
   , lastTriggeredAt :: Maybe UTCTime
   }
   deriving stock (Generic, Show)
