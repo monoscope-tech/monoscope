@@ -1530,21 +1530,12 @@ checkTriggeredQueryMonitors = do
       results <- PG.query (Query $ encodeUtf8 monitor.logQueryAsSql) () :: ATBackgroundCtx [Only Double]
       end <- liftIO $ getTime Monotonic
 
-      let total = sum (map (\(Only v) -> v) results)
+      let total = sum [v | Only v <- results]
           durationNs = toNanoSecs (diffTimeSpec end start)
           title = monitor.alertConfig.title
-          wasAlerting = monitor.currentStatus == "alerting"
-          wasWarning = monitor.currentStatus == "warning"
-          status =
-            monitorStatus
-              monitor.triggerLessThan
-              monitor.warningThreshold
-              monitor.alertThreshold
-              monitor.alertRecoveryThreshold
-              monitor.warningRecoveryThreshold
-              wasAlerting
-              wasWarning
-              total
+          status = monitorStatus monitor.triggerLessThan monitor.warningThreshold monitor.alertThreshold
+            monitor.alertRecoveryThreshold monitor.warningRecoveryThreshold
+            (monitor.currentStatus == "alerting") (monitor.currentStatus == "warning") total
           severity = case status of "alerting" -> SLError; "warning" -> SLWarn; _ -> SLInfo
           attrs =
             Map.fromList
@@ -1559,14 +1550,14 @@ checkTriggeredQueryMonitors = do
               ]
           otelLog = mkSystemLog monitor.projectId "monitor.alert.triggered" severity (title <> ": " <> status) attrs (Just $ fromIntegral durationNs) startWall
       insertSystemLog otelLog
-      _ <- PG.execute [sql| UPDATE monitors.query_monitors SET current_status = ?, current_value = ? WHERE id = ? |] (status, total, monitor.id)
+      void $ PG.execute [sql| UPDATE monitors.query_monitors SET current_status = ?, current_value = ? WHERE id = ? |] (status, total, monitor.id)
       Relude.when (status /= "normal") do
         Log.logInfo "Query monitor triggered alert" (monitor.id, title, status, total)
         let warningAt = if status == "warning" then Just startWall else Nothing
             alertAt = if status == "alerting" then Just startWall else Nothing
-        _ <- PG.execute [sql| UPDATE monitors.query_monitors SET warning_last_triggered = ?, alert_last_triggered = ? WHERE id = ? |] (warningAt, alertAt, monitor.id)
-        let qq = [sql| INSERT INTO background_jobs (run_at, status, payload)  VALUES (NOW(), 'queued', ?) |]
-        void $ PG.execute qq (Only $ AE.object ["tag" AE..= "QueryMonitorAlert", "contents" AE..= V.singleton monitor.id])
+        void $ PG.execute [sql| UPDATE monitors.query_monitors SET warning_last_triggered = ?, alert_last_triggered = ? WHERE id = ? |] (warningAt, alertAt, monitor.id)
+        void $ PG.execute [sql| INSERT INTO background_jobs (run_at, status, payload) VALUES (NOW(), 'queued', ?) |]
+          (Only $ AE.object ["tag" AE..= "QueryMonitorAlert", "contents" AE..= V.singleton monitor.id])
       void $ Monitors.updateLastEvaluatedAt monitor.id startWall
 
 
@@ -1574,11 +1565,9 @@ monitorStatus :: Bool -> Maybe Double -> Double -> Maybe Double -> Maybe Double 
 monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRecovery wasAlerting wasWarning value
   | breached alertThreshold = "alerting"
   | maybe False breached warnThreshold = "warning"
-  | wasAlerting, not (recovered alertRecovery alertThreshold) = "alerting"
-  | wasWarning, not (recovered warnRecovery (fromMaybe alertThreshold warnThreshold)) = "warning"
+  | wasAlerting && not (recovered alertRecovery alertThreshold) = "alerting"
+  | wasWarning && not (recovered warnRecovery (fromMaybe alertThreshold warnThreshold)) = "warning"
   | otherwise = "normal"
   where
-    (breached, recovered) =
-      if triggerLessThan
-        then ((>= value), \r t -> value > fromMaybe t r)
-        else ((<= value), \r t -> value < fromMaybe t r)
+    breached t = if triggerLessThan then t >= value else t <= value
+    recovered r t = if triggerLessThan then value > fromMaybe t r else value < fromMaybe t r
