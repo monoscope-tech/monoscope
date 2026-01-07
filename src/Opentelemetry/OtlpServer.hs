@@ -838,16 +838,19 @@ removeProjectId (AE.Array arr) = AE.Array $ V.map removeProjectId arr
 removeProjectId v = v
 
 
-severityAliases :: [(Text, (Text, Telemetry.SeverityLevel))]
-severityAliases = [("TRACE", ("TRACE", Telemetry.SLTrace)), ("DEBUG", ("DEBUG", Telemetry.SLDebug)), ("INFO", ("INFO", Telemetry.SLInfo)), ("WARN", ("WARN", Telemetry.SLWarn)), ("ERROR", ("ERROR", Telemetry.SLError)), ("FATAL", ("FATAL", Telemetry.SLFatal)), ("WARNING", ("WARN", Telemetry.SLWarn)), ("INFORMATION", ("INFO", Telemetry.SLInfo)), ("CRITICAL", ("FATAL", Telemetry.SLFatal))]
+canonicalLevels :: [(Text, Telemetry.SeverityLevel)]
+canonicalLevels = [("TRACE", Telemetry.SLTrace), ("DEBUG", Telemetry.SLDebug), ("INFO", Telemetry.SLInfo), ("WARN", Telemetry.SLWarn), ("ERROR", Telemetry.SLError), ("FATAL", Telemetry.SLFatal)]
 
+severityMap :: Map.Map Text (Text, Telemetry.SeverityLevel)
+severityMap = Map.fromList $ [(t, (t, sl)) | (t, sl) <- canonicalLevels] <> [(alias, (canonical, sl)) | (alias, canonical) <- [("WARNING", "WARN"), ("INFORMATION", "INFO"), ("CRITICAL", "FATAL")], Just sl <- [L.lookup canonical canonicalLevels]]
 
+{-# INLINE parseSeverityLevel #-}
 parseSeverityLevel :: Text -> Maybe Telemetry.SeverityLevel
-parseSeverityLevel = fmap snd . (`L.lookup` severityAliases) . T.toUpper
+parseSeverityLevel txt = snd <$> Map.lookup (T.toUpper txt) severityMap
 
-
+{-# INLINE normalizeSeverityLevel #-}
 normalizeSeverityLevel :: Text -> Maybe Text
-normalizeSeverityLevel = fmap fst . (`L.lookup` severityAliases) . T.toUpper
+normalizeSeverityLevel txt = fst <$> Map.lookup (T.toUpper txt) severityMap
 
 
 -- | Convert ResourceLogs to OtelLogsAndSpans
