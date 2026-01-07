@@ -54,6 +54,7 @@ import Models.Apis.Monitors (MonitorAlertConfig (..))
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ManageMembers
 import Pages.Components (resizer_)
+import Pages.Monitors qualified as AlertUI
 import Pkg.AI qualified as AI
 
 
@@ -883,7 +884,7 @@ alertConfigurationForm_ :: Projects.Project -> Maybe Monitors.QueryMonitor -> V.
 alertConfigurationForm_ project alertM teams = do
   let pid = project.id
       isByos = project.paymentPlan == "Bring your own storage"
-  div_ [class_ "bg-fillWeaker h-full flex flex-col group/alt"] do
+  div_ [class_ "surface-raised h-full flex flex-col group/alt"] do
     -- Header section (more compact)
     div_ [class_ "flex items-center justify-between px-4 py-2.5"] do
       div_ [class_ "flex items-center gap-2.5"] do
@@ -1001,46 +1002,22 @@ alertConfigurationForm_ project alertM teams = do
               faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral peer-checked:rotate-180 transition-transform"
 
             div_ [class_ "p-3 pt-0 peer-has-[:checked]:block hidden"] do
+              let chartUpdateAttr =
+                    [__|on input set chart to #visualization-widget
+                                        if chart exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
               div_ [class_ "flex flex-row gap-3"] do
-                let thresholdInput name color label req vM = fieldset_ [class_ "fieldset flex-1"] do
-                      _ <- label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] do
-                        _ <- div_ [class_ $ "w-1.5 h-1.5 rounded-full " <> color] ""
-                        _ <- span_ [class_ "font-medium"] label
-                        when req $ span_ [class_ "text-textWeak"] "*"
-                      div_ [class_ "relative"] do
-                        input_
-                          $ [ type_ "number"
-                            , name_ name
-                            , id_ name
-                            , class_ "input input-sm pr-14"
-                            , [__|on input 
-                                   set chart to #visualization-widget
-                                   if chart exists
-                                     call chart.applyThresholds({
-                                       alert: parseFloat(#alertThreshold.value),
-                                       warning: parseFloat(#warningThreshold.value)
-                                     })
-                                   end|]
-                            ]
-                          ++ [required_ "" | req]
-                          ++ [value_ (maybe "" show vM) | isJust vM]
-                        span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
-
-                thresholdInput "alertThreshold" "bg-fillError-strong" "Alert threshold" True (fmap (.alertThreshold) alertM)
-                thresholdInput "warningThreshold" "bg-fillWarning-strong" "Warning threshold" False ((.warningThreshold) =<< alertM)
-
-                fieldset_ [class_ "fieldset flex-1"] do
-                  label_ [class_ "label text-xs font-medium mb-1"] "Trigger condition"
-                  select_ [name_ "direction", class_ "select select-sm"] do
-                    option_ (value_ "above" : [selected_ "" | maybe True (not . (.triggerLessThan)) alertM]) "Above threshold"
-                    option_ (value_ "below" : [selected_ "" | maybe False (.triggerLessThan) alertM]) "Below threshold"
-
-              -- Info banner (more compact)
-              div_ [class_ "flex items-start gap-2 p-2.5 bg-bgAlternate rounded-lg mt-3 hidden"] do
-                faSprite_ "lightbulb" "regular" "w-3.5 h-3.5 text-iconBrand mt-0.5 shrink-0"
-                div_ [class_ "flex-1 text-xs"] do
-                  p_ [class_ "text-textStrong font-medium"] "Preview thresholds on chart"
-                  p_ [class_ "text-textWeak mt-0.5"] "Colored lines show threshold values"
+                AlertUI.thresholdInput_ "alertThreshold" "bg-fillError-strong" "Alert threshold" True "input-sm" [chartUpdateAttr] (fmap (.alertThreshold) alertM)
+                AlertUI.thresholdInput_ "warningThreshold" "bg-fillWarning-strong" "Warning threshold" False "input-sm" [chartUpdateAttr] ((.warningThreshold) =<< alertM)
+                AlertUI.directionSelect_ (maybe False (.triggerLessThan) alertM) "select-sm"
+              -- Recovery thresholds (hysteresis)
+              div_ [class_ "mt-3 pt-3 border-t border-strokeWeak"] do
+                div_ [class_ "mb-2"] do
+                  label_ [class_ "text-xs font-medium text-textStrong"] "Recovery thresholds "
+                  span_ [class_ "text-xs text-textWeak"] "(optional)"
+                  p_ [class_ "text-xs text-textWeak mt-0.5"] "Alert recovers only when value crosses these thresholds"
+                div_ [class_ "flex flex-row gap-3"] do
+                  AlertUI.recoveryInput_ "alertRecoveryThreshold" "bg-fillError-weak" "Alert recovery" "input-sm" ((.alertRecoveryThreshold) =<< alertM)
+                  AlertUI.recoveryInput_ "warningRecoveryThreshold" "bg-fillWarning-weak" "Warning recovery" "input-sm" ((.warningRecoveryThreshold) =<< alertM)
 
           -- Notification settings (collapsible)
           div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
