@@ -345,7 +345,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                           faSprite_ "code" "regular" "w-4 h-4"
                           div_ [] do
                             span_ [class_ "text-sm text-textWeak"] "Stack:"
-                            span_ [class_ "ml-2 text-sm"] $ toHtml $ fromMaybe "Unknown stack" err.errorData.stack
+                            span_ [class_ "ml-2 text-sm"] $ toHtml $ fromMaybe "Unknown stack" err.errorData.runtime
 
                         div_ [class_ "flex items-center gap-2"] do
                           faSprite_ "server" "regular" "w-3 h-3"

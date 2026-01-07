@@ -1087,7 +1087,7 @@ extractATError spanObj (AE.Object o) = do
       , requestPath = urlPath
       , spanId = spanId
       , traceId = trId
-      , stack = tech
+      , runtime = tech
       }
 extractATError _ _ = Nothing
 
