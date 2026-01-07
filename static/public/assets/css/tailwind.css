@@ -239,6 +239,7 @@
 [data-theme] {
   --backgroundPrimary: rgb(255 255 255);
   --rounded-btn: 0.5rem;
+  --page-scroll-bg-on: var(--color-bgBase);
 
   --tw-prose-body: var(--color-textStrong) !important;
 }
