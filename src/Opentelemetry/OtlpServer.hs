@@ -838,15 +838,22 @@ removeProjectId (AE.Array arr) = AE.Array $ V.map removeProjectId arr
 removeProjectId v = v
 
 
--- Parse severity level
+canonicalLevels :: [(Text, Telemetry.SeverityLevel)]
+canonicalLevels = [("TRACE", Telemetry.SLTrace), ("DEBUG", Telemetry.SLDebug), ("INFO", Telemetry.SLInfo), ("WARN", Telemetry.SLWarn), ("ERROR", Telemetry.SLError), ("FATAL", Telemetry.SLFatal)]
+
+
+severityMap :: Map.Map Text (Text, Telemetry.SeverityLevel)
+severityMap = Map.fromList $ [(t, (t, sl)) | (t, sl) <- canonicalLevels] <> [(alias, (canonical, sl)) | (alias, canonical) <- [("WARNING", "WARN"), ("INFORMATION", "INFO"), ("CRITICAL", "FATAL")], Just sl <- [L.lookup canonical canonicalLevels]]
+
+
+{-# INLINE parseSeverityLevel #-}
 parseSeverityLevel :: Text -> Maybe Telemetry.SeverityLevel
-parseSeverityLevel input = case T.toUpper input of
-  "DEBUG" -> Just Telemetry.SLDebug
-  "INFO" -> Just Telemetry.SLInfo
-  "WARN" -> Just Telemetry.SLWarn
-  "ERROR" -> Just Telemetry.SLError
-  "FATAL" -> Just Telemetry.SLFatal
-  _ -> Nothing
+parseSeverityLevel txt = snd <$> Map.lookup (T.toUpper txt) severityMap
+
+
+{-# INLINE normalizeSeverityLevel #-}
+normalizeSeverityLevel :: Text -> Maybe Text
+normalizeSeverityLevel txt = fst <$> Map.lookup (T.toUpper txt) severityMap
 
 
 -- | Convert ResourceLogs to OtelLogsAndSpans
@@ -931,7 +938,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
                   , trace_flags = Nothing
                   , is_remote = Nothing
                   }
-          , level = Just severityText
+          , level = normalizeSeverityLevel severityText
           , severity =
               Just
                 $ Severity
