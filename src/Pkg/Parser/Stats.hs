@@ -403,12 +403,12 @@ withAlias sql explicitAlias agg = sql <> " AS " <> fromMaybe (defaultAlias agg) 
 
 
 instance Display AggFunction where
-  displayPrec _prec agg@(Count sub alias) = displayBuilder $ withAlias ("count(" <> display sub <> ")") alias agg
-  displayPrec _prec agg@(CountIf cond alias) = displayBuilder $ withAlias ("COUNT(*) FILTER (WHERE " <> display cond <> ")") alias agg
+  displayPrec _prec agg@(Count sub alias) = displayBuilder $ withAlias ("count(" <> display sub <> ")::float") alias agg
+  displayPrec _prec agg@(CountIf cond alias) = displayBuilder $ withAlias ("COUNT(*) FILTER (WHERE " <> display cond <> ")::float") alias agg
   -- dcount(field [, accuracy]) -> COUNT(DISTINCT field)
   -- Note: KQL accuracy parameter (0-4 for HyperLogLog precision) is intentionally ignored
   -- because PostgreSQL's COUNT(DISTINCT) doesn't support HLL accuracy hints
-  displayPrec _prec agg@(DCount sub _ alias) = displayBuilder $ withAlias ("COUNT(DISTINCT " <> display sub <> ")") alias agg
+  displayPrec _prec agg@(DCount sub _ alias) = displayBuilder $ withAlias ("COUNT(DISTINCT " <> display sub <> ")::float") alias agg
   displayPrec _prec agg@(P50 sub alias) = displayBuilder $ withAlias ("approx_percentile(0.50, percentile_agg((" <> display sub <> ")::float))::int") alias agg
   displayPrec _prec agg@(P75 sub alias) = displayBuilder $ withAlias ("approx_percentile(0.75, percentile_agg((" <> display sub <> ")::float))::int") alias agg
   displayPrec _prec agg@(P90 sub alias) = displayBuilder $ withAlias ("approx_percentile(0.90, percentile_agg((" <> display sub <> ")::float))::int") alias agg
