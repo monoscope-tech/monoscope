@@ -849,6 +849,21 @@ parseSeverityLevel input = case T.toUpper input of
   _ -> Nothing
 
 
+-- Normalize severity level text to standard values, returning Nothing for invalid
+normalizeSeverityLevel :: Text -> Maybe Text
+normalizeSeverityLevel input = case T.toUpper input of
+  "DEBUG" -> Just "DEBUG"
+  "INFO" -> Just "INFO"
+  "WARN" -> Just "WARN"
+  "ERROR" -> Just "ERROR"
+  "FATAL" -> Just "FATAL"
+  "WARNING" -> Just "WARN"
+  "INFORMATION" -> Just "INFO"
+  "CRITICAL" -> Just "FATAL"
+  "TRACE" -> Just "DEBUG"
+  _ -> Nothing
+
+
 -- | Convert ResourceLogs to OtelLogsAndSpans
 convertResourceLogsToOtelLogs :: UTCTime -> HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId) -> PL.ResourceLogs -> [OtelLogsAndSpans]
 convertResourceLogsToOtelLogs !fallbackTime !projectCaches !pids resourceLogs =
@@ -931,7 +946,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
                   , trace_flags = Nothing
                   , is_remote = Nothing
                   }
-          , level = Just severityText
+          , level = normalizeSeverityLevel severityText
           , severity =
               Just
                 $ Severity
