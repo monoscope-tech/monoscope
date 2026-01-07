@@ -29,6 +29,10 @@ module Pages.Dashboards (
   dashboardBulkActionPostH,
   TabRenameForm (..),
   TabRenameRes (..),
+  -- Widget alerts
+  WidgetAlertForm (..),
+  widgetAlertUpsertH,
+  widgetAlertDeleteH,
 ) where
 
 import Control.Lens
@@ -43,7 +47,9 @@ import Data.HashMap.Lazy qualified as M
 import Data.List qualified as L
 import Data.Map qualified as Map
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
@@ -55,6 +61,7 @@ import Lucid
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxIndicator_, hxPatch_, hxPost_, hxPushUrl_, hxPut_, hxSelect_, hxSwapOob_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
+import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
@@ -71,6 +78,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.LogExplorer.LogItem (getServiceName)
+import Pages.Monitors qualified as Alerts
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
 import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
@@ -78,6 +86,7 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DashboardUtils qualified as DashboardUtils
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.Parser (defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import Servant (NoContent (..), ServerError, err302, err404, errBody, errHeaders)
@@ -96,6 +105,10 @@ import Web.FormUrlEncoded (FromForm)
 folderFromPath :: Maybe Text -> Text
 folderFromPath Nothing = ""
 folderFromPath (Just path) = let dir = takeDirectory (toString path) in if dir == "." then "" else toText dir <> "/"
+
+
+normalizeWidgetId :: Text -> Text
+normalizeWidgetId = T.replace "Expanded" ""
 
 
 dashTitle :: Text -> Text
@@ -494,7 +507,7 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
         label_ [Lucid.for_ modalId, class_ "btn btn-sm btn-circle btn-ghost absolute right-2 top-2"] "X"
         h3_ [class_ "font-bold text-lg"] $ toHtml $ "Select " <> varTitle
         p_ [class_ "text-sm text-textWeak"] $ toHtml $ "This view requires a " <> varTitle <> " to be selected."
-        whenJust var.helpText \h -> p_ [class_ "text-sm text-textWeak italic"] $ toHtml h
+        whenJust var.helpText $ p_ [class_ "text-sm text-textWeak italic"] . toHtml
         input_
           [ type_ "text"
           , class_ "input input-bordered w-full"
@@ -623,38 +636,76 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
           }
 
 
+-- | Populate widgets with their alert statuses
+populateWidgetAlertStatuses :: DB es => [Widget.Widget] -> Eff es [Widget.Widget]
+populateWidgetAlertStatuses widgets = do
+  let widgetIds = V.fromList $ mapMaybe (.id) widgets
+  if V.null widgetIds
+    then pure widgets
+    else do
+      statuses <- Monitors.getWidgetAlertStatuses widgetIds
+      let statusMap = foldMap (\s -> one (s.widgetId, s)) statuses
+      pure $ map (applyAlertStatus statusMap) widgets
+  where
+    applyAlertStatus statusMap w = fromMaybe w do
+      status <- (.id) w >>= (`Map.lookup` statusMap)
+      pure
+        w
+          { Widget.alertId = Just $ Monitors.unQueryMonitorId status.monitorId & UUID.toText
+          , Widget.alertThreshold = Just status.alertThreshold
+          , Widget.warningThreshold = status.warningThreshold
+          , Widget.alertStatus = Just $ display status.alertStatus
+          }
+
+
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
 dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = do
   (_, dash) <- getDashAndVM dashId Nothing
   uid <- UUID.genUUID <&> UUID.toText
-
-  let widgetUpdated = case widgetIdM of
-        Just wID -> widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just (T.replace "Expanded" "" wID)}
-        Nothing -> widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just uid, Widget._centerTitle = Nothing}
-
-  let updateWidgets ws = case widgetIdM of
-        Just wID ->
-          let normalizedWidgetId = T.replace "Expanded" "" wID
-              updateWidget w = if (w.id == Just normalizedWidgetId) || (maybeToMonoid (slugify <$> w.title) == normalizedWidgetId) then widgetUpdated else w
-           in map updateWidget ws
-        Nothing -> ws <> [widgetUpdated]
-
-  let dash' = case (tabSlugM, (dash :: Dashboards.Dashboard).tabs) of
-        (Just slug, Just _) ->
-          let updateTab tab = if slugify tab.name == slug then (tab :: Dashboards.Tab) & #widgets %~ updateWidgets else tab
-           in (dash :: Dashboards.Dashboard) & #tabs %~ fmap (map updateTab)
-        _ -> (dash :: Dashboards.Dashboard) & #widgets %~ updateWidgets
+  let normalizedWidgetIdM = normalizeWidgetId <$> widgetIdM
+  let widgetUpdated = normalizeWidget widget normalizedWidgetIdM uid
+  let dash' = updateDashboardWidgets dash tabSlugM normalizedWidgetIdM widgetUpdated
 
   _ <- Dashboards.updateSchema dashId dash'
   syncDashboardAndQueuePush pid dashId
+  whenJust normalizedWidgetIdM \nwid -> syncWidgetAlert pid nwid widget
 
-  let successMsg = case widgetIdM of
-        Just _ -> "Widget updated successfully"
-        Nothing -> "Widget added to dashboard successfully"
-
+  let successMsg = if isJust normalizedWidgetIdM then "Widget updated successfully" else "Widget added to dashboard successfully"
   addSuccessToast successMsg Nothing
   addTriggerEvent "closeModal" ""
   addRespHeaders widgetUpdated
+
+
+normalizeWidget :: Widget.Widget -> Maybe Text -> Text -> Widget.Widget
+normalizeWidget widget normalizedWidgetIdM generatedId = case normalizedWidgetIdM of
+  Just nwid -> widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just nwid}
+  Nothing -> widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just generatedId, Widget._centerTitle = Nothing}
+
+
+updateDashboardWidgets :: Dashboards.Dashboard -> Maybe Text -> Maybe Text -> Widget.Widget -> Dashboards.Dashboard
+updateDashboardWidgets dash tabSlugM normalizedWidgetIdM widgetUpdated =
+  let updateWidgets ws = case normalizedWidgetIdM of
+        Just nwid ->
+          let updateWidget w = if (w.id == Just nwid) || (maybeToMonoid (slugify <$> w.title) == nwid) then widgetUpdated else w
+           in map updateWidget ws
+        Nothing -> ws <> [widgetUpdated]
+   in case (tabSlugM, dash.tabs) of
+        (Just slug, Just _) -> updateTabBySlug slug (#widgets %~ updateWidgets) dash
+        _ -> dash & #widgets %~ updateWidgets
+
+
+syncWidgetAlert :: DB es => Projects.ProjectId -> Text -> Widget.Widget -> Eff es ()
+syncWidgetAlert pid widgetId widget = do
+  existingMonitor <- Monitors.queryMonitorByWidgetId widgetId
+  whenJust existingMonitor \monitor -> do
+    let newQuery = fromMaybe "" widget.query
+    when (monitor.logQuery /= newQuery) do
+      let sqlQueryCfg = (defSqlQueryCfg pid fixedUTCTime Nothing Nothing){presetRollup = Just "5m"}
+          newSqlQuery = case parseQueryToComponents sqlQueryCfg newQuery of
+            Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
+            Left _ -> monitor.logQueryAsSql -- Keep previous SQL on parse failure
+          updatedMonitor = (monitor :: Monitors.QueryMonitor){Monitors.logQuery = newQuery, Monitors.logQueryAsSql = newSqlQuery}
+      void $ Monitors.queryMonitorUpsert updatedMonitor
 
 
 data WidgetReorderItem = WidgetReorderItem
@@ -681,11 +732,19 @@ dashboardWidgetReorderPatchH _ _ _ widgetOrder | Map.null widgetOrder = addRespH
 dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
   (_, dash) <- getDashAndVM dashId Nothing
 
-  let newDash = case (tabSlugM, (dash :: Dashboards.Dashboard).tabs) of
-        (Just slug, Just tabs) ->
-          let updateTab tab = if slugify tab.name == slug then (tab :: Dashboards.Tab) & #widgets .~ reorderWidgets widgetOrder tab.widgets else tab
-           in (dash :: Dashboards.Dashboard) & #tabs %~ fmap (map updateTab)
-        _ -> (dash :: Dashboards.Dashboard) & #widgets .~ reorderWidgets widgetOrder (dash :: Dashboards.Dashboard).widgets
+  let oldWidgets = case (tabSlugM, dash.tabs) of
+        (Just slug, Just tabs) -> maybe [] (.widgets) $ find (\t -> slugify t.name == slug) tabs
+        _ -> dash.widgets
+      oldWidgetIds = mapMaybe (.id) oldWidgets
+      newWidgetIds = Map.keys widgetOrder
+      deletedWidgetIds = filter (`notElem` newWidgetIds) oldWidgetIds
+
+  -- Delete alerts for removed widgets first (before updating dashboard to avoid orphaned monitors)
+  unless (null deletedWidgetIds) $ void $ Monitors.deleteMonitorsByWidgetIds deletedWidgetIds
+
+  let newDash = case (tabSlugM, dash.tabs) of
+        (Just slug, Just _) -> updateTabBySlug slug (\tab -> tab & #widgets .~ reorderWidgets widgetOrder tab.widgets) dash
+        _ -> dash & #widgets .~ reorderWidgets widgetOrder dash.widgets
 
   _ <- Dashboards.updateSchema dashId newDash
   syncDashboardAndQueuePush pid dashId
@@ -717,6 +776,12 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
     mkWidgetMap = Map.fromList . concatMap flatten
     flatten w = (widgetId w, w) : maybe [] (concatMap flatten) w.children
     widgetId w = fromMaybe (maybeToMonoid $ slugify <$> w.title) w.id
+
+
+updateTabBySlug :: Text -> (Dashboards.Tab -> Dashboards.Tab) -> Dashboards.Dashboard -> Dashboards.Dashboard
+updateTabBySlug slug f dash = dash & #tabs %~ fmap (map updateTab)
+  where
+    updateTab tab = if slugify tab.name == slug then f tab else tab
 
 
 getDashAndVM :: (DB es, Error ServerError :> es, Wreq.HTTP :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
@@ -759,7 +824,9 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
       dash' <- forOf (#variables . traverse . traverse) dashWithConstants (processVariable pid now timeParams allParamsWithConstants)
       -- Process widgets concurrently
       processedWidgets <- pooledForConcurrently dash'.widgets processWidgetWithDashboardId
-      let dash'' = dash' & #widgets .~ processedWidgets
+      -- Populate alert statuses for widgets
+      widgetsWithAlerts <- populateWidgetAlertStatuses processedWidgets
+      let dash'' = dash' & #widgets .~ widgetsWithAlerts
 
       freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
 
@@ -835,7 +902,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
 
   -- Generate unique IDs for all elements based on widget ID to prevent conflicts
   let wid = maybeToMonoid widgetToUse.id
-      sourceWid = T.replace "Expanded" "" wid
+      sourceWid = normalizeWidgetId wid
       widPrefix = "id" <> T.take 8 wid
       widgetFormId = widPrefix <> "-widget-form"
       widgetPreviewId = widPrefix <> "-widget-preview"
@@ -894,8 +961,9 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
                     ]
                   <> [checked_ | isActive]
                 toHtml tabName
-          mkTab "Overview" (effectiveActiveTab /= "edit")
+          mkTab "Overview" (effectiveActiveTab /= "edit" && effectiveActiveTab /= "alerts")
           mkTab "Edit" (effectiveActiveTab == "edit")
+          mkTab "Alerts" (effectiveActiveTab == "alerts")
       when isNewWidget $ h3_ [class_ "text-lg font-normal"] "Add a new widget"
 
     div_ [class_ "flex items-center gap-2"] do
@@ -968,11 +1036,191 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
             , value_ $ fromMaybe "" widgetToUse.title
             , term
                 "_"
-                [text| on change 
-                 set widgetJSON.title to my value then 
+                [text| on change
+                 set widgetJSON.title to my value then
                  trigger 'update-widget' on #{'${widgetPreviewId}'}
                |]
             ]
+
+  -- Alerts tab content
+  unless isNewWidget do
+    let alertFormId = widPrefix <> "-alert-form"
+        alertEndpoint = case dashboardIdM of
+          Just dashId -> "/p/" <> pid.toText <> "/widgets/" <> sourceWid <> "/alert?dashboard_id=" <> dashId.toText
+          Nothing -> ""
+    div_ [class_ "hidden group-has-[.page-drawer-tab-alerts:checked]/wgtexp:block"] do
+      widgetAlertConfig_ pid alertFormId alertEndpoint sourceWid widgetToUse
+
+
+-- | Widget alert configuration form
+widgetAlertConfig_ :: Projects.ProjectId -> Text -> Text -> Text -> Widget.Widget -> Html ()
+widgetAlertConfig_ pid alertFormId alertEndpoint widgetId widget = do
+  let hasAlert = isJust widget.alertId
+  form_
+    [ id_ alertFormId
+    , hxPost_ alertEndpoint
+    , hxSwap_ "none"
+    , hxTrigger_ "submit"
+    , class_ "space-y-4"
+    ]
+    do
+      input_ [type_ "hidden", name_ "widgetId", value_ widgetId]
+      input_ [type_ "hidden", name_ "query", value_ $ fromMaybe "" widget.query]
+      input_
+        [ type_ "hidden"
+        , name_ "vizType"
+        , value_ $ case widget.wType of
+            Widget.WTTimeseries -> "timeseries"
+            Widget.WTTimeseriesLine -> "timeseries_line"
+            _ -> "timeseries"
+        ]
+
+      div_ [class_ "flex items-center justify-between p-4 bg-fillWeaker rounded-lg"] do
+        div_ [] do
+          h4_ [class_ "font-medium text-textStrong"] "Enable Alert"
+          p_ [class_ "text-xs text-textWeak"] "Get notified when this widget's value crosses thresholds"
+        input_ $ [type_ "checkbox", name_ "alertEnabled", class_ "toggle toggle-primary"] <> [checked_ | hasAlert]
+
+      -- Alert thresholds
+      div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4 space-y-4"] do
+        h4_ [class_ "font-medium text-textStrong mb-3"] "Thresholds"
+        div_ [class_ "grid grid-cols-2 gap-4"] do
+          Alerts.thresholdInput_ "alertThreshold" "bg-fillError-weak" "Alert threshold" True "input-bordered w-full" [] widget.alertThreshold
+          Alerts.thresholdInput_ "warningThreshold" "bg-fillWarning-weak" "Warning threshold" False "input-bordered w-full" [] widget.warningThreshold
+        Alerts.directionSelect_ False "select-bordered w-full"
+        div_ [class_ "mt-3"] do
+          label_ [class_ "text-xs font-medium text-textStrong block mb-1"] "Show threshold lines"
+          select_ [name_ "showThresholdLines", class_ "select select-bordered w-full"] do
+            let isAlways = widget.showThresholdLines == Just "always" || isNothing widget.showThresholdLines
+                isOnBreach = widget.showThresholdLines == Just "on_breach"
+                isNever = widget.showThresholdLines == Just "never"
+            option_ ([value_ "always"] <> [selected_ "" | isAlways]) "Always"
+            option_ ([value_ "on_breach"] <> [selected_ "" | isOnBreach]) "Only when breached"
+            option_ ([value_ "never"] <> [selected_ "" | isNever]) "Never"
+
+      -- Recovery thresholds (collapsible)
+      Alerts.collapsibleSection_ "rotate-left" "regular" "Recovery thresholds" (Just "(prevents flapping)") do
+        p_ [class_ "text-xs text-textWeak mb-3"] "Alert recovers only when value crosses these thresholds"
+        div_ [class_ "grid grid-cols-2 gap-4"] do
+          Alerts.recoveryInput_ "alertRecoveryThreshold" "bg-fillError-weak" "Alert recovery" "input-bordered w-full" Nothing
+          Alerts.recoveryInput_ "warningRecoveryThreshold" "bg-fillWarning-weak" "Warning recovery" "input-bordered w-full" Nothing
+
+      -- Check interval
+      div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4"] $ Alerts.frequencySelect_ 5 True "select-bordered w-full"
+
+      -- Alert title
+      div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4"] do
+        label_ [class_ "text-xs font-medium text-textStrong block mb-2"] "Alert title"
+        input_
+          [ type_ "text"
+          , name_ "title"
+          , class_ "input input-bordered w-full"
+          , placeholder_ "Widget threshold exceeded"
+          , required_ "required"
+          , value_ $ fromMaybe (fromMaybe "Widget Alert" widget.title <> " - Threshold Alert") Nothing
+          ]
+
+      -- Submit button
+      div_ [class_ "flex justify-end gap-2 pt-2"] do
+        when hasAlert do
+          button_
+            [ type_ "button"
+            , class_ "btn btn-ghost btn-sm"
+            , hxDelete_ alertEndpoint
+            , hxSwap_ "none"
+            ]
+            "Remove Alert"
+        button_ [type_ "submit", class_ "btn btn-primary btn-sm"] $ if hasAlert then "Update Alert" else "Create Alert"
+
+
+--------------------------------------------------------------------
+-- Widget Alert Handlers
+--
+
+data WidgetAlertForm = WidgetAlertForm
+  { widgetId :: Text
+  , query :: Text
+  , vizType :: Maybe Text
+  , alertEnabled :: Maybe Text -- "on" when checked
+  , alertThreshold :: Double
+  , warningThreshold :: Maybe Text
+  , direction :: Text
+  , showThresholdLines :: Maybe Text
+  , alertRecoveryThreshold :: Maybe Text
+  , warningRecoveryThreshold :: Maybe Text
+  , frequency :: Maybe Text
+  , title :: Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+widgetAlertUpsertH :: Projects.ProjectId -> Text -> Maybe UUID.UUID -> WidgetAlertForm -> ATAuthCtx (RespHeaders (Html ()))
+widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
+  now <- Time.currentTime
+
+  -- Check if alert already exists for this widget
+  existingMonitor <- Monitors.queryMonitorByWidgetId form.widgetId
+  queryMonitorId <- case existingMonitor of
+    Just m -> pure m.id
+    Nothing -> liftIO $ Monitors.QueryMonitorId <$> UUID.nextRandom
+
+  -- Update widget's showThresholdLines in the dashboard
+  whenJust dashboardIdM \dashId -> do
+    let dashboardId = UUIDId dashId
+    (_, dash) <- getDashAndVM dashboardId Nothing
+    let updateWidget w = if w.id == Just form.widgetId then w{Widget.showThresholdLines = form.showThresholdLines} else w
+        dash' = dash & #widgets %~ map updateWidget & #tabs %~ fmap (map (\t -> t & #widgets %~ map updateWidget))
+    void $ Dashboards.updateSchema dashboardId dash'
+
+  -- If alertEnabled is not checked, delete the monitor
+  case form.alertEnabled of
+    Nothing -> do
+      _ <- Monitors.deleteMonitorsByWidgetIds [form.widgetId]
+      addSuccessToast "Alert removed from widget" Nothing
+      addRespHeaders $ toHtml ("" :: Text)
+    Just _ -> do
+      -- Convert to AlertUpsertForm and reuse convertToQueryMonitor
+      let alertForm =
+            Alerts.AlertUpsertForm
+              { alertId = Just $ Monitors.unQueryMonitorId queryMonitorId & UUID.toText
+              , alertThreshold = form.alertThreshold
+              , warningThreshold = form.warningThreshold
+              , recipientEmails = []
+              , recipientSlacks = []
+              , recipientEmailAll = Nothing
+              , direction = form.direction
+              , title = form.title
+              , severity = "warning"
+              , subject = form.title
+              , message = ""
+              , query = form.query
+              , since = "1h"
+              , from = ""
+              , to = ""
+              , frequency = form.frequency
+              , timeWindow = Nothing
+              , conditionType = Just "threshold_exceeded"
+              , source = Just "widget"
+              , vizType = form.vizType
+              , teams = []
+              , alertRecoveryThreshold = form.alertRecoveryThreshold
+              , warningRecoveryThreshold = form.warningRecoveryThreshold
+              , widgetId = Just form.widgetId
+              , dashboardId = UUID.toText <$> dashboardIdM
+              }
+
+      let queryMonitor = Alerts.convertToQueryMonitor pid now queryMonitorId alertForm
+      _ <- Monitors.queryMonitorUpsert queryMonitor
+      addSuccessToast "Widget alert configured successfully" Nothing
+      addRespHeaders $ toHtml ("" :: Text)
+
+
+widgetAlertDeleteH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (Html ()))
+widgetAlertDeleteH _pid widgetId = do
+  _ <- Monitors.deleteMonitorsByWidgetIds [widgetId]
+  addSuccessToast "Alert removed from widget" Nothing
+  addRespHeaders $ toHtml ("" :: Text)
 
 
 -- visTypes is now imported from LogQueryBox to avoid circular dependencies
@@ -1548,14 +1796,33 @@ data WidgetMoveForm = WidgetMoveForm
 -- | Handler for duplicating a widget within the same dashboard.
 -- It creates a copy of the widget with "(Copy)" appended to the title.
 -- Returns the duplicated widget that will be converted to HTML automatically.
+-- If the original widget has an alert, the alert is also duplicated with the new widget.
 dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATAuthCtx (RespHeaders Widget.Widget)
 dashboardDuplicateWidgetPostH pid dashId widgetId = do
   (_, dash) <- getDashAndVM dashId Nothing
-  let widgetToDuplicateM = find (\w -> (w.id == Just widgetId) || (maybeToMonoid (slugify <$> w.title) == widgetId)) (dash :: Dashboards.Dashboard).widgets
-  case widgetToDuplicateM of
+  case findWidgetInDashboard widgetId dash of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
-    Just widgetToDuplicate -> do
+    Just (tabSlugM, widgetToDuplicate) -> do
       newWidgetId <- UUID.genUUID <&> UUID.toText
+      now <- Time.currentTime
+
+      -- Clone alert if original widget has one
+      existingMonitorM <- Monitors.queryMonitorByWidgetId (normalizeWidgetId widgetId)
+      newAlertIdM <- forM existingMonitorM \monitor -> do
+        newMonitorId <- Monitors.QueryMonitorId <$> liftIO UUID.nextRandom
+        let newMonitor =
+              (monitor :: Monitors.QueryMonitor)
+                { Monitors.id = newMonitorId
+                , Monitors.createdAt = now
+                , Monitors.updatedAt = now
+                , Monitors.widgetId = Just newWidgetId
+                , Monitors.alertLastTriggered = Nothing
+                , Monitors.warningLastTriggered = Nothing
+                , Monitors.currentStatus = Monitors.MSNormal
+                }
+        void $ Monitors.queryMonitorUpsert newMonitor
+        pure newMonitorId.toText
+
       let widgetCopy =
             widgetToDuplicate
               { Widget.id = Just newWidgetId
@@ -1565,10 +1832,13 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
                   Just title -> Just (title <> " (Copy)")
               , Widget._projectId = Just pid
               , Widget._dashboardId = Just dashId.toText
+              , Widget.alertId = newAlertIdM
+              , Widget.alertStatus = Nothing
               }
 
-      let updatedDash = (dash :: Dashboards.Dashboard) & #widgets %~ (<> [widgetCopy])
-      now <- Time.currentTime
+      let updatedDash = case tabSlugM of
+            Just slug -> updateTabBySlug slug (#widgets %~ (<> [widgetCopy])) dash
+            Nothing -> dash & #widgets %~ (<> [widgetCopy])
       _ <- Dashboards.updateSchemaAndUpdatedAt dashId updatedDash now
       syncDashboardAndQueuePush pid dashId
 
@@ -1581,9 +1851,7 @@ dashboardWidgetExpandGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Tex
 dashboardWidgetExpandGetH pid dashId widgetId = do
   (_, dash) <- getDashAndVM dashId Nothing
   now <- Time.currentTime
-  let widgetToExpandM = find (\w -> (w.id == Just widgetId) || (maybeToMonoid (slugify <$> w.title) == widgetId)) (dash :: Dashboards.Dashboard).widgets
-
-  case widgetToExpandM of
+  case snd <$> findWidgetInDashboard widgetId dash of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
     Just widgetToExpand -> do
       processedWidget <- processWidget pid now (Nothing, Nothing, Nothing) [] widgetToExpand
@@ -1593,6 +1861,15 @@ dashboardWidgetExpandGetH pid dashId widgetId = do
 -- | Find a tab by its slug, returns (index, tab) if found
 findTabBySlug :: [Dashboards.Tab] -> Text -> Maybe (Int, Dashboards.Tab)
 findTabBySlug tabs tabSlug = find ((== tabSlug) . slugify . (.name) . snd) (zip [0 ..] tabs)
+
+
+-- | Find widget by ID in dashboard, searching tabs and root. Returns (Maybe tabSlug, Widget)
+findWidgetInDashboard :: Text -> Dashboards.Dashboard -> Maybe (Maybe Text, Widget.Widget)
+findWidgetInDashboard wid dash = tabResult <|> rootResult
+  where
+    match w = w.id == Just wid || maybeToMonoid (slugify <$> w.title) == wid
+    tabResult = listToMaybe [(Just $ slugify t.name, w) | t <- fromMaybe [] dash.tabs, w <- t.widgets, match w]
+    rootResult = (Nothing,) <$> find match dash.widgets
 
 
 -- | Get the first tab as default if available
@@ -1677,7 +1954,8 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
           then do
             -- Process widgets concurrently for faster initial page load
             processedWidgets <- pooledForConcurrently tab.widgets processWidgetWithDashboardId
-            pure $ tab & #widgets .~ processedWidgets
+            widgetsWithAlerts <- populateWidgetAlertStatuses processedWidgets
+            pure $ tab & #widgets .~ widgetsWithAlerts
           else pure tab -- Don't process widgets for inactive tabs
       pure $ dash' & #tabs ?~ processedTabs
     Nothing -> pure dash'
@@ -1760,11 +2038,12 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
 
         -- Process widgets concurrently to speed up tabs with multiple eager widgets
         processedWidgets <- pooledForConcurrently tab.widgets processWidgetWithDashboardId
+        widgetsWithAlerts <- populateWidgetAlertStatuses processedWidgets
 
         -- Render tab content panel + OOB modal if variable needs prompting + OOB form URL update
         let widgetOrderUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets_order?tab=" <> tabSlug
         addRespHeaders $ do
-          tabContentPanel_ pid dashId.toText idx tab.name processedWidgets True True
+          tabContentPanel_ pid dashId.toText idx tab.name widgetsWithAlerts True True
           whenJust varToPrompt \v -> variablePickerModal_ pid dashId (Just tabSlug) allParamsWithConstants v True
           -- OOB swap to update widget-order-trigger form's hx-patch URL for the current tab
           form_

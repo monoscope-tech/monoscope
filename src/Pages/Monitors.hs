@@ -9,6 +9,12 @@ module Pages.Monitors (
   alertTeamDeleteH,
   AlertUpsertForm (..),
   Alert (..),
+  -- Shared alert UI helpers
+  thresholdInput_,
+  recoveryInput_,
+  directionSelect_,
+  frequencySelect_,
+  collapsibleSection_,
 )
 where
 
@@ -39,7 +45,7 @@ import Web.FormUrlEncoded (FromForm)
 
 data AlertUpsertForm = AlertUpsertForm
   { alertId :: Maybe Text
-  , alertThreshold :: Int
+  , alertThreshold :: Double
   , warningThreshold :: Maybe Text
   , recipientEmails :: [Text]
   , recipientSlacks :: [Text]
@@ -59,6 +65,12 @@ data AlertUpsertForm = AlertUpsertForm
   , source :: Maybe Text
   , vizType :: Maybe Text
   , teams :: [UUID.UUID]
+  , -- Recovery thresholds (hysteresis)
+    alertRecoveryThreshold :: Maybe Text
+  , warningRecoveryThreshold :: Maybe Text
+  , -- Widget alert fields
+    widgetId :: Maybe Text
+  , dashboardId :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -68,7 +80,7 @@ convertToQueryMonitor :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitorI
 convertToQueryMonitor projectId now queryMonitorId alertForm =
   let sqlQueryCfg = (defSqlQueryCfg projectId fixedUTCTime Nothing Nothing){presetRollup = Just "5m"}
       (_, qc) = fromRight' $ parseQueryToComponents sqlQueryCfg alertForm.query
-      warningThresholdInt = readMaybe . toString =<< alertForm.warningThreshold
+      warningThresholdD = readMaybe . toString =<< alertForm.warningThreshold
 
       checkInterval = case alertForm.frequency of
         Just freq -> max 1 $ fromMaybe 5 $ readMaybe $ toString $ T.dropEnd 1 freq
@@ -86,6 +98,9 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
           , emailAll = fromMaybe False alertForm.recipientEmailAll
           , slackChannels = V.fromList alertForm.recipientSlacks
           }
+      alertRecoveryD = readMaybe . toString =<< alertForm.alertRecoveryThreshold
+      warningRecoveryD = readMaybe . toString =<< alertForm.warningRecoveryThreshold
+      dashboardUuid = UUID.fromText =<< alertForm.dashboardId
    in Monitors.QueryMonitor
         { id = queryMonitorId
         , createdAt = now
@@ -93,7 +108,7 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , projectId = projectId
         , checkIntervalMins = checkInterval
         , alertThreshold = if isThresholdAlert then alertForm.alertThreshold else 0
-        , warningThreshold = if isThresholdAlert then warningThresholdInt else Nothing
+        , warningThreshold = if isThresholdAlert then warningThresholdD else Nothing
         , logQuery = alertForm.query
         , logQueryAsSql = fromMaybe "" qc.finalAlertQuery
         , lastEvaluated = now
@@ -106,6 +121,13 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , deactivatedAt = Nothing
         , visualizationType = fromMaybe "timeseries" alertForm.vizType
         , teams = V.fromList alertForm.teams
+        , -- Widget alert fields
+          widgetId = alertForm.widgetId
+        , dashboardId = dashboardUuid
+        , alertRecoveryThreshold = if isThresholdAlert then alertRecoveryD else Nothing
+        , warningRecoveryThreshold = if isThresholdAlert then warningRecoveryD else Nothing
+        , currentStatus = Monitors.MSNormal
+        , currentValue = 0
         }
 
 
@@ -116,7 +138,18 @@ alertUpsertPostH pid form = do
     Just alertId' -> pure (Monitors.QueryMonitorId alertId')
     Nothing -> Monitors.QueryMonitorId <$> UUID.nextRandom
   now <- Time.currentTime
-  let queryMonitor = convertToQueryMonitor pid now queryMonitorId form
+
+  -- For widget-tied alerts, preserve the query from the widget (can't edit directly)
+  existingMonitor <- case alertId of
+    Just _ -> Monitors.queryMonitorById queryMonitorId
+    Nothing -> pure Nothing
+
+  let baseMonitor = convertToQueryMonitor pid now queryMonitorId form
+      queryMonitor = case existingMonitor of
+        Just existing
+          | isJust existing.widgetId ->
+              (baseMonitor :: Monitors.QueryMonitor){Monitors.logQuery = existing.logQuery, Monitors.logQueryAsSql = existing.logQueryAsSql}
+        _ -> baseMonitor
 
   _ <- Monitors.queryMonitorUpsert queryMonitor
   addSuccessToast "Monitor was updated successfully" Nothing
@@ -172,6 +205,7 @@ queryMonitors_ monitors = do
   table_ [class_ "table text-lg min-w-[65ch]"] do
     thead_ $ tr_ do
       th_ "Title"
+      th_ "Source"
       th_ ""
     tbody_ do
       V.forM_ monitors \monitor -> tr_ do
@@ -193,6 +227,19 @@ end
           , editAction
           ]
           $ toHtml monitor.alertConfig.title
+        td_ [class_ "text-sm text-textWeak"] do
+          case monitor.widgetId of
+            Just wid -> case monitor.dashboardId of
+              Just dashId ->
+                a_ [class_ "flex items-center gap-1 hover:text-textStrong", href_ $ "/p/" <> monitor.projectId.toText <> "/dashboards/" <> UUID.toText dashId <> "#" <> wid] do
+                  faSprite_ "chart-simple" "regular" "w-3.5 h-3.5"
+                  "Widget"
+              Nothing -> span_ [class_ "flex items-center gap-1"] do
+                faSprite_ "chart-simple" "regular" "w-3.5 h-3.5"
+                "Widget"
+            Nothing -> span_ [class_ "flex items-center gap-1"] do
+              faSprite_ "file-lines" "regular" "w-3.5 h-3.5"
+              "Log Explorer"
         td_ [] do
           a_
             [ class_ "btn btn-ghost btn-xs"
@@ -264,3 +311,53 @@ alertTeamDeleteH pid monitorId teamId = do
   _ <- Monitors.monitorRemoveTeam pid monitorId teamId
   addSuccessToast "Team removed from alert successfully" Nothing
   addRespHeaders $ AlertNoContent ""
+
+
+-- Shared Alert UI Helpers
+
+thresholdInput_ :: Text -> Text -> Text -> Bool -> Text -> [Attribute] -> Maybe Double -> Html ()
+thresholdInput_ nm color lbl req inputCls extraAttrs vM = fieldset_ [class_ "fieldset flex-1"] do
+  label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] do
+    div_ [class_ $ "w-1.5 h-1.5 rounded-full " <> color] ""
+    span_ [class_ "font-medium"] $ toHtml lbl
+    when req $ span_ [class_ "text-textWeak"] "*"
+  div_ [class_ "relative"] do
+    input_ $ [type_ "number", name_ nm, id_ nm, class_ $ "input " <> inputCls <> " pr-14"] <> [required_ "" | req] <> [value_ (show v) | Just v <- [vM]] <> extraAttrs
+    span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
+
+
+recoveryInput_ :: Text -> Text -> Text -> Text -> Maybe Double -> Html ()
+recoveryInput_ nm color lbl inputCls vM = fieldset_ [class_ "fieldset flex-1"] do
+  label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] $ div_ [class_ $ "w-1.5 h-1.5 rounded-full " <> color] "" >> span_ [class_ "font-medium"] (toHtml lbl)
+  div_ [class_ "relative"] do
+    input_ $ [type_ "number", name_ nm, class_ $ "input " <> inputCls <> " pr-14", placeholder_ "Same as trigger"] <> [value_ (show v) | Just v <- [vM]]
+    span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
+
+
+directionSelect_ :: Bool -> Text -> Html ()
+directionSelect_ belowSelected selectCls = fieldset_ [class_ "fieldset flex-1"] do
+  label_ [class_ "label text-xs font-medium mb-1"] "Trigger condition"
+  select_ [name_ "direction", class_ $ "select " <> selectCls] do
+    option_ (value_ "above" : [selected_ "" | not belowSelected]) "Above threshold"
+    option_ (value_ "below" : [selected_ "" | belowSelected]) "Below threshold"
+
+
+frequencySelect_ :: Int -> Bool -> Text -> Html ()
+frequencySelect_ defaultMins isByos selectCls = fieldset_ [class_ "fieldset flex-1"] do
+  label_ [class_ "label text-xs"] "Check interval"
+  select_ [name_ "frequency", class_ $ "select " <> selectCls] $ forM_ timeOpts mkOpt
+  where
+    timeOpts :: [(Int, Text)]
+    timeOpts = [(1, "1 minute"), (2, "2 minutes"), (5, "5 minutes"), (10, "10 minutes"), (15, "15 minutes"), (30, "30 minutes"), (60, "1 hour"), (360, "6 hours"), (720, "12 hours"), (1440, "1 day")]
+    mkOpt (m, l) = option_ ([value_ (show m <> "m")] <> [disabled_ "" | not isByos && m < 5] <> [selected_ "" | m == defaultMins]) ("Every " <> toHtml l)
+
+
+collapsibleSection_ :: Text -> Text -> Text -> Maybe Text -> Html () -> Html ()
+collapsibleSection_ icon iconKind title subtitleM content =
+  details_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
+    summary_ [class_ "p-3 cursor-pointer hover:bg-fillWeak transition-colors"] do
+      div_ [class_ "flex items-center gap-2"] do
+        faSprite_ icon iconKind "w-4 h-4 text-iconNeutral"
+        span_ [class_ "font-medium text-sm"] $ toHtml title
+        whenJust subtitleM $ span_ [class_ "text-xs text-textWeak"] . toHtml
+    div_ [class_ "p-4 pt-0 border-t border-strokeWeak mt-2"] content
