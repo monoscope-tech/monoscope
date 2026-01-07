@@ -41,48 +41,23 @@ CREATE INDEX IF NOT EXISTS idx_log_patterns_service ON apis.log_patterns(project
 
 
 CREATE OR REPLACE FUNCTION apis.new_log_pattern_proc() RETURNS trigger AS $$
-DECLARE
-  existing_job_id INT;
-  existing_pattern_hashes JSONB;
 BEGIN
   IF TG_WHEN <> 'AFTER' THEN
     RAISE EXCEPTION 'apis.new_log_pattern_proc() may only run as an AFTER trigger';
   END IF;
 
-  -- Look for existing queued job to batch patterns together
-  SELECT id, payload->'patternHashes'
-  INTO existing_job_id, existing_pattern_hashes
-  FROM background_jobs
-  WHERE payload->>'tag' = 'NewLogPattern'
-    AND payload->>'projectId' = NEW.project_id::TEXT
-    AND status = 'queued'
-  ORDER BY run_at ASC
-  LIMIT 1;
-
-  IF existing_job_id IS NOT NULL THEN
-    -- Append to existing job
-    UPDATE background_jobs SET payload = jsonb_build_object(
-      'tag', 'NewLogPattern',
-      'projectId', NEW.project_id,
-      'createdAt', to_jsonb(NOW()),
-      'patternHashes', existing_pattern_hashes || to_jsonb(NEW.pattern_hash),
-      'serviceName', NEW.service_name
-    ) WHERE id = existing_job_id;
-  ELSE
-    -- Create new job
-    INSERT INTO background_jobs (run_at, status, payload)
-    VALUES (
-      NOW(),
-      'queued',
-      jsonb_build_object(
-        'tag', 'NewLogPattern',
-        'projectId', NEW.project_id,
-        'createdAt', to_jsonb(NOW()),
-        'patternHashes', jsonb_build_array(NEW.pattern_hash),
-        'serviceName', NEW.service_name
-      )
-    );
-  END IF;
+  -- Create a job for the new pattern
+  -- JSON format matches Aeson's derived FromJSON for:
+  -- NewLogPatternDetected Projects.ProjectId Text
+  INSERT INTO background_jobs (run_at, status, payload)
+  VALUES (
+    NOW(),
+    'queued',
+    jsonb_build_object(
+      'tag', 'NewLogPatternDetected',
+      'contents', jsonb_build_array(NEW.project_id, NEW.pattern_hash)
+    )
+  );
 
   RETURN NULL;
 END;

@@ -10,6 +10,14 @@ module Models.Apis.LogPatterns (
   upsertLogPattern,
   updateLogPatternStats,
   updateBaseline,
+  -- Pattern stats from otel_logs_and_spans
+  PatternStats (..),
+  getPatternStats,
+  getCurrentHourPatternCount,
+  -- Pattern with current rate for spike detection
+  LogPatternWithRate (..),
+  getPatternsWithCurrentRates,
+  getLogPatternById,
 )
 where
 
@@ -248,4 +256,132 @@ updateBaseline pid patHash bState hourlyMean hourlyStddev samples =
             baseline_samples = ?,
             baseline_updated_at = NOW()
         WHERE project_id = ? AND pattern_hash = ?
+      |]
+
+
+-- ============================================================================
+-- Log Pattern Occurrence Queries (from otel_logs_and_spans)
+-- ============================================================================
+
+-- | Stats for a log pattern from otel_logs_and_spans
+data PatternStats = PatternStats
+  { hourlyMean :: Double
+  , hourlyStddev :: Double
+  , totalHours :: Int
+  , totalEvents :: Int
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow)
+
+
+-- | Get pattern stats from otel_logs_and_spans
+getPatternStats ::
+  DB es =>
+  Projects.ProjectId ->
+  Text -> -- pattern (log_pattern value)
+  Int -> -- hours to look back
+  Eff es (Maybe PatternStats)
+getPatternStats pid pattern hoursBack = do
+  results <- PG.query q (pid, pattern, hoursBack)
+  return $ listToMaybe results
+  where
+    q =
+      [sql|
+        WITH hourly_counts AS (
+          SELECT
+            date_trunc('hour', timestamp) AS hour_start,
+            COUNT(*) AS event_count
+          FROM otel_logs_and_spans
+          WHERE project_id = ?::text
+            AND log_pattern = ?
+            AND timestamp >= NOW() - INTERVAL '1 hour' * ?
+          GROUP BY date_trunc('hour', timestamp)
+        )
+        SELECT
+          COALESCE(AVG(event_count), 0)::FLOAT AS hourly_mean,
+          COALESCE(STDDEV(event_count), 0)::FLOAT AS hourly_stddev,
+          COUNT(*)::INT AS total_hours,
+          COALESCE(SUM(event_count), 0)::INT AS total_events
+        FROM hourly_counts
+      |]
+
+
+-- | Get current hour count for a pattern
+getCurrentHourPatternCount :: DB es => Projects.ProjectId -> Text -> Eff es Int
+getCurrentHourPatternCount pid pattern = do
+  results <- PG.query q (pid, pattern)
+  case results of
+    [Only count] -> return count
+    _ -> return 0
+  where
+    q =
+      [sql|
+        SELECT COUNT(*)::INT
+        FROM otel_logs_and_spans
+        WHERE project_id = ?::text
+          AND log_pattern = ?
+          AND timestamp >= date_trunc('hour', NOW())
+      |]
+
+
+-- | Log pattern with current rate (for batch spike detection)
+data LogPatternWithRate = LogPatternWithRate
+  { patternId :: LogPatternId
+  , projectId :: Projects.ProjectId
+  , pattern :: Text
+  , patternHash :: Text
+  , baselineState :: Text
+  , baselineMean :: Maybe Double
+  , baselineStddev :: Maybe Double
+  , currentHourCount :: Int
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow)
+
+
+-- | Get all patterns with their current hour counts
+getPatternsWithCurrentRates :: DB es => Projects.ProjectId -> Eff es [LogPatternWithRate]
+getPatternsWithCurrentRates pid =
+  PG.query q (pid, pid)
+  where
+    q =
+      [sql|
+        SELECT
+          lp.id,
+          lp.project_id,
+          lp.pattern,
+          lp.pattern_hash,
+          lp.baseline_state,
+          lp.baseline_volume_hourly_mean,
+          lp.baseline_volume_hourly_stddev,
+          COALESCE(counts.current_count, 0)::INT AS current_hour_count
+        FROM apis.log_patterns lp
+        LEFT JOIN (
+          SELECT log_pattern, COUNT(*) AS current_count
+          FROM otel_logs_and_spans
+          WHERE project_id = ?::text
+            AND timestamp >= date_trunc('hour', NOW())
+            AND log_pattern IS NOT NULL
+          GROUP BY log_pattern
+        ) counts ON counts.log_pattern = lp.pattern
+        WHERE lp.project_id = ?
+          AND lp.state != 'ignored'
+      |]
+
+
+-- | Get a pattern by ID
+getLogPatternById :: DB es => LogPatternId -> Eff es (Maybe LogPattern)
+getLogPatternById lpid = do
+  results <- PG.query q (lpid,)
+  return $ listToMaybe results
+  where
+    q =
+      [sql|
+        SELECT id, project_id, created_at, updated_at, pattern, pattern_hash,
+               service_name, log_level, sample_message, first_seen_at, last_seen_at,
+               occurrence_count, state, acknowledged_by, acknowledged_at,
+               baseline_state, baseline_volume_hourly_mean, baseline_volume_hourly_stddev,
+               baseline_samples, baseline_updated_at
+        FROM apis.log_patterns
+        WHERE id = ?
       |]

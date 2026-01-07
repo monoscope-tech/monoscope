@@ -39,6 +39,10 @@ module Models.Apis.Issues (
   createAPIChangeIssue,
   createRuntimeExceptionIssue,
   createQueryAlertIssue,
+  createNewErrorIssue,
+  createErrorSpikeIssue,
+  createNewLogPatternIssue,
+  createLogPatternSpikeIssue,
 
   -- * Utilities
   issueIdText,
@@ -81,6 +85,8 @@ import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.Errors qualified as Errors
+import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
@@ -569,6 +575,219 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
       , recommendedAction = "Review the query results and take appropriate action."
       , migrationComplexity = "n/a"
       , issueData = Aeson $ AE.toJSON alertData
+      , requestPayloads = Aeson []
+      , responsePayloads = Aeson []
+      , llmEnhancedAt = Nothing
+      , llmEnhancementVersion = Nothing
+      }
+
+
+-- | Create issue for a new error
+createNewErrorIssue :: Projects.ProjectId -> Errors.Error -> IO Issue
+createNewErrorIssue projectId err = do
+  issueId <- UUIDId <$> UUID4.nextRandom
+  now <- getCurrentTime
+  zonedNow <- utcToLocalZonedTime now
+
+  let exceptionData =
+        RuntimeExceptionData
+          { errorType = err.exceptionType
+          , errorMessage = err.message
+          , stackTrace = err.stacktrace
+          , requestPath = Nothing
+          , requestMethod = Nothing
+          , occurrenceCount = 1
+          , firstSeen = now
+          , lastSeen = now
+          }
+
+  pure
+    Issue
+      { id = issueId
+      , createdAt = zonedNow
+      , updatedAt = zonedNow
+      , projectId = projectId
+      , issueType = RuntimeException
+      , endpointHash = err.hash
+      , acknowledgedAt = Nothing
+      , acknowledgedBy = Nothing
+      , archivedAt = Nothing
+      , title = "New Error: " <> err.exceptionType <> " - " <> T.take 80 err.message
+      , service = fromMaybe "unknown-service" err.service
+      , critical = True
+      , severity = "critical"
+      , affectedRequests = 1
+      , affectedClients = 0
+      , errorRate = Nothing
+      , recommendedAction = "Investigate the new error and implement a fix."
+      , migrationComplexity = "n/a"
+      , issueData = Aeson $ AE.toJSON exceptionData
+      , requestPayloads = Aeson []
+      , responsePayloads = Aeson []
+      , llmEnhancedAt = Nothing
+      , llmEnhancementVersion = Nothing
+      }
+
+
+-- | Create issue for an error spike
+createErrorSpikeIssue ::
+  Projects.ProjectId ->
+  Errors.Error ->
+  Double -> -- current rate
+  Double -> -- baseline mean
+  Double -> -- baseline stddev
+  IO Issue
+createErrorSpikeIssue projectId err currentRate baselineMean baselineStddev = do
+  issueId <- UUIDId <$> UUID4.nextRandom
+  now <- getCurrentTime
+  zonedNow <- utcToLocalZonedTime now
+
+  let zScore = if baselineStddev > 0 then (currentRate - baselineMean) / baselineStddev else 0
+      increasePercent = if baselineMean > 0 then ((currentRate / baselineMean) - 1) * 100 else 0
+      exceptionData =
+        RuntimeExceptionData
+          { errorType = err.exceptionType
+          , errorMessage = err.message
+          , stackTrace = err.stacktrace
+          , requestPath = Nothing
+          , requestMethod = Nothing
+          , occurrenceCount = round currentRate
+          , firstSeen = now
+          , lastSeen = now
+          }
+
+  pure
+    Issue
+      { id = issueId
+      , createdAt = zonedNow
+      , updatedAt = zonedNow
+      , projectId = projectId
+      , issueType = RuntimeException
+      , endpointHash = err.hash
+      , acknowledgedAt = Nothing
+      , acknowledgedBy = Nothing
+      , archivedAt = Nothing
+      , title = "Error Spike: " <> err.exceptionType <> " (" <> T.pack (show (round increasePercent :: Int)) <> "% increase)"
+      , service = fromMaybe "unknown-service" err.service
+      , critical = True
+      , severity = "critical"
+      , affectedRequests = round currentRate
+      , affectedClients = 0
+      , errorRate = Just currentRate
+      , recommendedAction = "Error rate has spiked " <> T.pack (show (round zScore :: Int)) <> " standard deviations above baseline. Current: " <> T.pack (show (round currentRate :: Int)) <> "/hr, Baseline: " <> T.pack (show (round baselineMean :: Int)) <> "/hr. Investigate recent deployments or changes."
+      , migrationComplexity = "n/a"
+      , issueData = Aeson $ AE.toJSON exceptionData
+      , requestPayloads = Aeson []
+      , responsePayloads = Aeson []
+      , llmEnhancedAt = Nothing
+      , llmEnhancementVersion = Nothing
+      }
+
+
+-- | Create an issue for a new log pattern
+createNewLogPatternIssue :: Projects.ProjectId -> LogPatterns.LogPattern -> IO Issue
+createNewLogPatternIssue projectId lp = do
+  issueId <- UUIDId <$> UUID4.nextRandom
+  now <- getCurrentTime
+  zonedNow <- utcToLocalZonedTime now
+
+  -- Use RuntimeExceptionData for log patterns (similar to errors)
+  let exceptionData =
+        RuntimeExceptionData
+          { errorType = "LogPattern"
+          , errorMessage = fromMaybe lp.pattern lp.sampleMessage
+          , stackTrace = ""
+          , requestPath = Nothing
+          , requestMethod = Nothing
+          , occurrenceCount = fromIntegral lp.occurrenceCount
+          , firstSeen = now
+          , lastSeen = now
+          }
+
+  pure
+    Issue
+      { id = issueId
+      , createdAt = zonedNow
+      , updatedAt = zonedNow
+      , projectId = projectId
+      , issueType = RuntimeException
+      , endpointHash = lp.patternHash
+      , acknowledgedAt = Nothing
+      , acknowledgedBy = Nothing
+      , archivedAt = Nothing
+      , title = "New Log Pattern: " <> T.take 100 lp.pattern
+      , service = fromMaybe "unknown-service" lp.serviceName
+      , critical = False
+      , severity = case lp.logLevel of
+          Just "error" -> "high"
+          Just "warning" -> "medium"
+          _ -> "low"
+      , affectedRequests = fromIntegral lp.occurrenceCount
+      , affectedClients = 0
+      , errorRate = Nothing
+      , recommendedAction = "A new log pattern has been detected. Review to ensure it's expected behavior. Pattern first seen at: " <> T.pack (show lp.firstSeenAt)
+      , migrationComplexity = "n/a"
+      , issueData = Aeson $ AE.toJSON exceptionData
+      , requestPayloads = Aeson []
+      , responsePayloads = Aeson []
+      , llmEnhancedAt = Nothing
+      , llmEnhancementVersion = Nothing
+      }
+
+
+-- | Create an issue for a log pattern volume spike
+createLogPatternSpikeIssue ::
+  Projects.ProjectId ->
+  LogPatterns.LogPattern ->
+  Double -> -- current rate (events/hour)
+  Double -> -- baseline mean
+  Double -> -- baseline stddev
+  IO Issue
+createLogPatternSpikeIssue projectId lp currentRate baselineMean baselineStddev = do
+  issueId <- UUIDId <$> UUID4.nextRandom
+  now <- getCurrentTime
+  zonedNow <- utcToLocalZonedTime now
+
+  let zScore = if baselineStddev > 0 then (currentRate - baselineMean) / baselineStddev else 0
+      increasePercent = if baselineMean > 0 then ((currentRate / baselineMean) - 1) * 100 else 0
+      exceptionData =
+        RuntimeExceptionData
+          { errorType = "LogPatternSpike"
+          , errorMessage = fromMaybe lp.pattern lp.sampleMessage
+          , stackTrace = ""
+          , requestPath = Nothing
+          , requestMethod = Nothing
+          , occurrenceCount = round currentRate
+          , firstSeen = now
+          , lastSeen = now
+          }
+
+  pure
+    Issue
+      { id = issueId
+      , createdAt = zonedNow
+      , updatedAt = zonedNow
+      , projectId = projectId
+      , issueType = RuntimeException
+      , endpointHash = lp.patternHash
+      , acknowledgedAt = Nothing
+      , acknowledgedBy = Nothing
+      , archivedAt = Nothing
+      , title = "Log Pattern Spike: " <> T.take 60 lp.pattern <> " (" <> T.pack (show (round increasePercent :: Int)) <> "% increase)"
+      , service = fromMaybe "unknown-service" lp.serviceName
+      , critical = case lp.logLevel of
+          Just "error" -> True
+          _ -> False
+      , severity = case lp.logLevel of
+          Just "error" -> "critical"
+          Just "warning" -> "high"
+          _ -> "medium"
+      , affectedRequests = round currentRate
+      , affectedClients = 0
+      , errorRate = Just currentRate
+      , recommendedAction = "Log pattern volume has spiked " <> T.pack (show (round zScore :: Int)) <> " standard deviations above baseline. Current: " <> T.pack (show (round currentRate :: Int)) <> "/hr, Baseline: " <> T.pack (show (round baselineMean :: Int)) <> "/hr. Investigate recent changes."
+      , migrationComplexity = "n/a"
+      , issueData = Aeson $ AE.toJSON exceptionData
       , requestPayloads = Aeson []
       , responsePayloads = Aeson []
       , llmEnhancedAt = Nothing
