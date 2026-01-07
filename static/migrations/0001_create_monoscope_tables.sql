@@ -212,7 +212,7 @@ CREATE INDEX IF NOT EXISTS idx_apis_endpoints_project_id ON apis.endpoints(proje
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_endpoints_hash ON apis.endpoints(hash);
 
 -----------------------------------------------------------------------
--- SHAPES table
+-- SHAPES table --
 -----------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS apis.shapes
