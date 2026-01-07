@@ -643,7 +643,7 @@ populateWidgetAlertStatuses widgets = do
     then pure widgets
     else do
       statuses <- Monitors.getWidgetAlertStatuses widgetIds
-      let statusMap = Map.fromList [(s.widgetId, s) | s <- statuses]
+      let statusMap = foldMap (\s -> Map.singleton s.widgetId s) statuses
       pure $ map (applyAlertStatus statusMap) widgets
   where
     applyAlertStatus statusMap w = case (.id) w >>= (`Map.lookup` statusMap) of

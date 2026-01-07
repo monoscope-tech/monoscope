@@ -1560,7 +1560,7 @@ checkTriggeredQueryMonitors = do
               ]
           otelLog = mkSystemLog monitor.projectId "monitor.alert.triggered" severity (title <> ": " <> status) attrs (Just $ fromIntegral durationNs) startWall
       insertSystemLog otelLog
-      _ <- PG.execute [sql| UPDATE monitors.query_monitors SET current_status = ? WHERE id = ? |] (status, monitor.id)
+      _ <- PG.execute [sql| UPDATE monitors.query_monitors SET current_status = ?, current_value = ? WHERE id = ? |] (status, total, monitor.id)
       Relude.when (status /= "normal") do
         Log.logInfo "Query monitor triggered alert" (monitor.id, title, status, total)
         let warningAt = if status == "warning" then Just startWall else Nothing

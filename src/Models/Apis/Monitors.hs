@@ -104,6 +104,7 @@ data QueryMonitor = QueryMonitor
   , alertRecoveryThreshold :: Maybe Int
   , warningRecoveryThreshold :: Maybe Int
   , currentStatus :: Text
+  , currentValue :: Int
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, NFData, ToRow)
@@ -253,7 +254,7 @@ getAlertsByTeamHandle pid teamId = PG.query q (pid, teamId)
       SELECT qm.id, qm.created_at, qm.updated_at, qm.project_id, qm.check_interval_mins, qm.alert_threshold, qm.warning_threshold,
         qm.log_query, qm.log_query_as_sql, qm.last_evaluated, qm.warning_last_triggered, qm.alert_last_triggered, qm.trigger_less_than,
         qm.threshold_sustained_for_mins, qm.alert_config, qm.deactivated_at, qm.deleted_at, qm.visualization_type, qm.teams,
-        qm.widget_id, qm.dashboard_id, qm.show_threshold_lines, qm.alert_recovery_threshold, qm.warning_recovery_threshold, qm.current_status
+        qm.widget_id, qm.dashboard_id, qm.show_threshold_lines, qm.alert_recovery_threshold, qm.warning_recovery_threshold, qm.current_status, qm.current_value
       FROM monitors.query_monitors qm
       WHERE qm.project_id = ? AND ? = ANY(qm.teams)
     |]
@@ -278,7 +279,7 @@ getActiveQueryMonitors = PG.query q ()
     SELECT  qm.id, qm.created_at, qm.updated_at, qm.project_id, qm.check_interval_mins, qm.alert_threshold, qm.warning_threshold,
         qm.log_query, qm.log_query_as_sql, qm.last_evaluated, qm.warning_last_triggered, qm.alert_last_triggered, qm.trigger_less_than,
         qm.threshold_sustained_for_mins, qm.alert_config, qm.deactivated_at, qm.deleted_at, qm.visualization_type, qm.teams,
-        qm.widget_id, qm.dashboard_id, qm.show_threshold_lines, qm.alert_recovery_threshold, qm.warning_recovery_threshold, qm.current_status
+        qm.widget_id, qm.dashboard_id, qm.show_threshold_lines, qm.alert_recovery_threshold, qm.warning_recovery_threshold, qm.current_status, qm.current_value
       FROM monitors.query_monitors qm
       WHERE qm.deactivated_at IS NULL AND qm.log_query_as_sql IS NOT NULL AND qm.log_query_as_sql != ''
     |]
@@ -300,7 +301,7 @@ queryMonitorByWidgetId wId = listToMaybe <$> PG.query q (Only wId)
       SELECT id, created_at, updated_at, project_id, check_interval_mins, alert_threshold, warning_threshold,
         log_query, log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
         threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, visualization_type, teams,
-        widget_id, dashboard_id, show_threshold_lines, alert_recovery_threshold, warning_recovery_threshold, current_status
+        widget_id, dashboard_id, show_threshold_lines, alert_recovery_threshold, warning_recovery_threshold, current_status, current_value
       FROM monitors.query_monitors
       WHERE widget_id = ? AND deleted_at IS NULL
     |]
@@ -314,16 +315,14 @@ queryMonitorsByDashboardId dId = PG.query q (Only dId)
       SELECT id, created_at, updated_at, project_id, check_interval_mins, alert_threshold, warning_threshold,
         log_query, log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
         threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, visualization_type, teams,
-        widget_id, dashboard_id, show_threshold_lines, alert_recovery_threshold, warning_recovery_threshold, current_status
+        widget_id, dashboard_id, show_threshold_lines, alert_recovery_threshold, warning_recovery_threshold, current_status, current_value
       FROM monitors.query_monitors
       WHERE dashboard_id = ? AND deleted_at IS NULL
     |]
 
 
 deleteMonitorsByWidgetIds :: DB es => [Text] -> Eff es Int64
-deleteMonitorsByWidgetIds widgetIds
-  | null widgetIds = pure 0
-  | otherwise = PG.execute q (Only (V.fromList widgetIds))
+deleteMonitorsByWidgetIds widgetIds = PG.execute q (Only (V.fromList widgetIds))
   where
     q = [sql|DELETE FROM monitors.query_monitors WHERE widget_id = ANY(?::text[])|]
 
@@ -353,7 +352,7 @@ getWidgetAlertStatuses widgetIds
         widget_id,
         id,
         current_status,
-        eval(log_query_as_sql),
+        current_value,
         alert_threshold,
         warning_threshold,
         GREATEST(alert_last_triggered, warning_last_triggered)
