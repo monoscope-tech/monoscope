@@ -9,8 +9,6 @@ module Models.Apis.Errors (
   getErrorById,
   getErrorByHash,
   getActiveErrors,
-  upsertError,
-  insertErrorEvent,
   updateOccurrenceCounts,
   updateErrorState,
   updateBaseline,
@@ -37,6 +35,7 @@ import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
+import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
@@ -44,6 +43,8 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import Relude hiding (id)
 import System.Types (DB)
+import Utils (DBField (MkDBField))
+import Models.Apis.RequestDumps qualified as RequestDump
 
 
 newtype ErrorId = ErrorId {unErrorId :: UUID.UUID}
@@ -97,7 +98,7 @@ instance FromField ErrorState where
       Just bs ->
         case parseErrorState bs of
           Just s -> pure s
-          Nothing -> ESNew
+          Nothing -> pure ESNew
 
 
 data Error = Error
@@ -206,7 +207,7 @@ getErrors pid mstate limit offset = PG.query q (pid, maybe "%" errorStateToText 
 -- | Get error by ID
 getErrorById :: DB es => ErrorId -> Eff es (Maybe Error)
 getErrorById eid = do
-  results <- PG.query q (eid,)
+  results <- PG.query q (Only eid)
   return $ listToMaybe results
   where
     q =
@@ -251,7 +252,7 @@ getErrorByHash pid hash env = do
 
 -- | Get active (non-resolved) errors
 getActiveErrors :: DB es => Projects.ProjectId -> Eff es [Error]
-getActiveErrors pid = PG.query q (pid,)
+getActiveErrors pid = PG.query q (Only  pid)
   where
     q =
       [sql|
@@ -303,7 +304,7 @@ updateErrorState eid newState = PG.execute q (errorStateToText newState, eid)
       [sql| UPDATE apis.errors SET state = ?, updated_at = NOW() WHERE id = ? |]
 
 resolveError :: DB es => ErrorId -> Eff es Int64
-resolveError eid =  PG.execute q (eid,)
+resolveError eid =  PG.execute q (Only eid)
   where
     q = [sql| UPDATE apis.errors SET state = 'resolved', resolved_at = NOW(), updated_at = NOW() WHERE id = ? |]
 
@@ -364,7 +365,7 @@ getHourlyErrorCounts eid hoursBack =
 -- | Get current hour error count for a specific error
 getCurrentHourErrorCount :: DB es => ErrorId -> Eff es Int
 getCurrentHourErrorCount eid = do
-  results <- PG.query q (eid,)
+  results <- PG.query q (Only eid)
   case results of
     [Only count] -> return count
     _ -> return 0
@@ -451,7 +452,7 @@ data ErrorWithCurrentRate = ErrorWithCurrentRate
 
 getErrorsWithCurrentRates :: DB es => Projects.ProjectId -> Eff es [ErrorWithCurrentRate]
 getErrorsWithCurrentRates pid =
-  PG.query q (pid,)
+  PG.query q (pid)
   where
     q =
       [sql|
@@ -478,8 +479,8 @@ getErrorsWithCurrentRates pid =
       |]
 
 -- | Upsert an error (insert or update on conflict)
-upsertErrorQueryAndParam :: DB es => Projects.ProjectId -> (Query, [DBField])
-upsertErrorQueryAndParam pid err exType msg stack hash env service runtime = (q, params)
+upsertErrorQueryAndParam :: DB es => Projects.ProjectId -> RequestDump.ATError -> (Query, [DBField])
+upsertErrorQueryAndParam pid err = (q, params)
   where
     q =
       [sql|

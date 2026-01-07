@@ -1760,7 +1760,7 @@ calculateLogPatternBaselines pid = do
 
   forM_ patterns \lp -> do
     -- Get hourly stats from otel_logs_and_spans over last 7 days (168 hours)
-    statsM <- LogPatterns.getPatternStats pid lp.pattern 168
+    statsM <- LogPatterns.getPatternStats pid lp.logPattern 168
 
     case statsM of
       Nothing -> pass
@@ -1795,7 +1795,7 @@ detectLogPatternSpikes pid authCtx = do
             isSpike = zScore > 3.0 && currentRate > mean + 10
 
         Relude.when isSpike $ do
-          Log.logInfo "Log pattern spike detected" (lpRate.patternId, lpRate.pattern, currentRate, mean, zScore)
+          Log.logInfo "Log pattern spike detected" (lpRate.patternId, lpRate.logPattern, currentRate, mean, zScore)
 
           -- Get full pattern record for issue creation
           patternM <- LogPatterns.getLogPatternById lpRate.patternId

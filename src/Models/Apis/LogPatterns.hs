@@ -4,9 +4,7 @@ module Models.Apis.LogPatterns (
   LogPatternState (..),
   getLogPatterns,
   getLogPatternByHash,
-  getNewLogPatterns,
   acknowledgeLogPatterns,
-  ignoreLogPatterns,
   upsertLogPattern,
   updateLogPatternStats,
   updateBaseline,
@@ -27,7 +25,7 @@ import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow, ToRow)
+import Database.PostgreSQL.Simple (FromRow, Only (Only),ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
@@ -88,7 +86,7 @@ data LogPattern = LogPattern
   , projectId :: Projects.ProjectId
   , createdAt :: ZonedTime
   , updatedAt :: ZonedTime
-  , pattern :: Text
+  , logPattern :: Text
   , patternHash :: Text
   , serviceName :: Maybe Text
   , logLevel :: Maybe Text
@@ -151,22 +149,6 @@ getLogPatternByHash pid hash = do
       |]
 
 
--- | Get new (unacknowledged) log patterns for a project
-getNewLogPatterns :: DB es => Projects.ProjectId -> Eff es [LogPattern]
-getNewLogPatterns pid = PG.query q (pid,)
-  where
-    q =
-      [sql|
-        SELECT id, project_id, created_at, updated_at, pattern, pattern_hash,
-               service_name, log_level, sample_message, first_seen_at, last_seen_at,
-               occurrence_count, state, acknowledged_by, acknowledged_at,
-               baseline_state, baseline_volume_hourly_mean, baseline_volume_hourly_stddev,
-               baseline_samples, baseline_updated_at
-        FROM apis.log_patterns
-        WHERE project_id = ? AND state = 'new'
-        ORDER BY first_seen_at DESC
-      |]
-
 
 -- | Acknowledge log patterns
 acknowledgeLogPatterns :: DB es => Users.UserId -> V.Vector Text -> Eff es Int64
@@ -180,21 +162,6 @@ acknowledgeLogPatterns uid patternHashes
         SET state = 'acknowledged', acknowledged_by = ?, acknowledged_at = NOW()
         WHERE pattern_hash = ANY(?)
       |]
-
-
--- | Ignore log patterns (won't alert on them)
-ignoreLogPatterns :: DB es => V.Vector Text -> Eff es Int64
-ignoreLogPatterns patternHashes
-  | V.null patternHashes = pure 0
-  | otherwise = PG.execute q (patternHashes,)
-  where
-    q =
-      [sql|
-        UPDATE apis.log_patterns
-        SET state = 'ignored'
-        WHERE pattern_hash = ANY(?)
-      |]
-
 
 -- | Upsert a log pattern (insert or update occurrence count)
 upsertLogPattern ::
@@ -281,8 +248,8 @@ getPatternStats ::
   Text -> -- pattern (log_pattern value)
   Int -> -- hours to look back
   Eff es (Maybe PatternStats)
-getPatternStats pid pattern hoursBack = do
-  results <- PG.query q (pid, pattern, hoursBack)
+getPatternStats pid pattern' hoursBack = do
+  results <- PG.query q (pid, pattern', hoursBack)
   return $ listToMaybe results
   where
     q =
@@ -308,8 +275,8 @@ getPatternStats pid pattern hoursBack = do
 
 -- | Get current hour count for a pattern
 getCurrentHourPatternCount :: DB es => Projects.ProjectId -> Text -> Eff es Int
-getCurrentHourPatternCount pid pattern = do
-  results <- PG.query q (pid, pattern)
+getCurrentHourPatternCount pid pattern' = do
+  results <- PG.query q (pid, pattern')
   case results of
     [Only count] -> return count
     _ -> return 0
@@ -328,7 +295,7 @@ getCurrentHourPatternCount pid pattern = do
 data LogPatternWithRate = LogPatternWithRate
   { patternId :: LogPatternId
   , projectId :: Projects.ProjectId
-  , pattern :: Text
+  , logPattern :: Text
   , patternHash :: Text
   , baselineState :: Text
   , baselineMean :: Maybe Double
@@ -349,7 +316,7 @@ getPatternsWithCurrentRates pid =
         SELECT
           lp.id,
           lp.project_id,
-          lp.pattern,
+          lp.log_pattern,
           lp.pattern_hash,
           lp.baseline_state,
           lp.baseline_volume_hourly_mean,
@@ -363,7 +330,7 @@ getPatternsWithCurrentRates pid =
             AND timestamp >= date_trunc('hour', NOW())
             AND log_pattern IS NOT NULL
           GROUP BY log_pattern
-        ) counts ON counts.log_pattern = lp.pattern
+        ) counts ON counts.log_pattern = lp.log_pattern
         WHERE lp.project_id = ?
           AND lp.state != 'ignored'
       |]
@@ -372,7 +339,7 @@ getPatternsWithCurrentRates pid =
 -- | Get a pattern by ID
 getLogPatternById :: DB es => LogPatternId -> Eff es (Maybe LogPattern)
 getLogPatternById lpid = do
-  results <- PG.query q (lpid,)
+  results <- PG.query q (Only lpid)
   return $ listToMaybe results
   where
     q =

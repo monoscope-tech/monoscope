@@ -193,8 +193,8 @@ data ATError = ATError
   , requestPath :: Maybe Text
   , serviceName :: Maybe Text
   , environment :: Maybe Text
-  , runtime :: Maybe Text,
-  , traceId :: Maybe Text, 
+  , runtime :: Maybe Text
+  , traceId :: Maybe Text
   , spanId :: Maybe Text
   , parentSpanId :: Maybe Text
   , endpointHash :: Maybe Text

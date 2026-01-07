@@ -695,7 +695,7 @@ createNewLogPatternIssue projectId lp = do
   let exceptionData =
         RuntimeExceptionData
           { errorType = "LogPattern"
-          , errorMessage = fromMaybe lp.pattern lp.sampleMessage
+          , errorMessage = fromMaybe lp.logPattern lp.sampleMessage
           , stackTrace = ""
           , requestPath = Nothing
           , requestMethod = Nothing
@@ -715,7 +715,7 @@ createNewLogPatternIssue projectId lp = do
       , acknowledgedAt = Nothing
       , acknowledgedBy = Nothing
       , archivedAt = Nothing
-      , title = "New Log Pattern: " <> T.take 100 lp.pattern
+      , title = "New Log Pattern: " <> T.take 100 lp.logPattern
       , service = fromMaybe "unknown-service" lp.serviceName
       , critical = False
       , severity = case lp.logLevel of
@@ -753,7 +753,7 @@ createLogPatternSpikeIssue projectId lp currentRate baselineMean baselineStddev 
       exceptionData =
         RuntimeExceptionData
           { errorType = "LogPatternSpike"
-          , errorMessage = fromMaybe lp.pattern lp.sampleMessage
+          , errorMessage = fromMaybe lp.logPattern lp.sampleMessage
           , stackTrace = ""
           , requestPath = Nothing
           , requestMethod = Nothing
@@ -773,7 +773,7 @@ createLogPatternSpikeIssue projectId lp currentRate baselineMean baselineStddev 
       , acknowledgedAt = Nothing
       , acknowledgedBy = Nothing
       , archivedAt = Nothing
-      , title = "Log Pattern Spike: " <> T.take 60 lp.pattern <> " (" <> T.pack (show (round increasePercent :: Int)) <> "% increase)"
+      , title = "Log Pattern Spike: " <> T.take 60 lp.logPattern <> " (" <> T.pack (show (round increasePercent :: Int)) <> "% increase)"
       , service = fromMaybe "unknown-service" lp.serviceName
       , critical = case lp.logLevel of
           Just "error" -> True
