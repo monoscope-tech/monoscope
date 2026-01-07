@@ -838,30 +838,14 @@ removeProjectId (AE.Array arr) = AE.Array $ V.map removeProjectId arr
 removeProjectId v = v
 
 
--- Parse severity level
+severityAliases :: [(Text, (Text, Telemetry.SeverityLevel))]
+severityAliases = [("TRACE", ("TRACE", Telemetry.SLTrace)), ("DEBUG", ("DEBUG", Telemetry.SLDebug)), ("INFO", ("INFO", Telemetry.SLInfo)), ("WARN", ("WARN", Telemetry.SLWarn)), ("ERROR", ("ERROR", Telemetry.SLError)), ("FATAL", ("FATAL", Telemetry.SLFatal)), ("WARNING", ("WARN", Telemetry.SLWarn)), ("INFORMATION", ("INFO", Telemetry.SLInfo)), ("CRITICAL", ("FATAL", Telemetry.SLFatal))]
+
 parseSeverityLevel :: Text -> Maybe Telemetry.SeverityLevel
-parseSeverityLevel input = case T.toUpper input of
-  "DEBUG" -> Just Telemetry.SLDebug
-  "INFO" -> Just Telemetry.SLInfo
-  "WARN" -> Just Telemetry.SLWarn
-  "ERROR" -> Just Telemetry.SLError
-  "FATAL" -> Just Telemetry.SLFatal
-  _ -> Nothing
+parseSeverityLevel = fmap snd . (`L.lookup` severityAliases) . T.toUpper
 
-
--- Normalize severity level text to standard values, returning Nothing for invalid
 normalizeSeverityLevel :: Text -> Maybe Text
-normalizeSeverityLevel input = case T.toUpper input of
-  "DEBUG" -> Just "DEBUG"
-  "INFO" -> Just "INFO"
-  "WARN" -> Just "WARN"
-  "ERROR" -> Just "ERROR"
-  "FATAL" -> Just "FATAL"
-  "WARNING" -> Just "WARN"
-  "INFORMATION" -> Just "INFO"
-  "CRITICAL" -> Just "FATAL"
-  "TRACE" -> Just "DEBUG"
-  _ -> Nothing
+normalizeSeverityLevel = fmap fst . (`L.lookup` severityAliases) . T.toUpper
 
 
 -- | Convert ResourceLogs to OtelLogsAndSpans
