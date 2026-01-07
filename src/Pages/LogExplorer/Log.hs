@@ -1002,7 +1002,8 @@ alertConfigurationForm_ project alertM teams = do
               faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral peer-checked:rotate-180 transition-transform"
 
             div_ [class_ "p-3 pt-0 peer-has-[:checked]:block hidden"] do
-              let chartUpdateAttr = [__|on input set chart to #visualization-widget
+              let chartUpdateAttr =
+                    [__|on input set chart to #visualization-widget
                                         if chart exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
               div_ [class_ "flex flex-row gap-3"] do
                 AlertUI.thresholdInput_ "alertThreshold" "bg-fillError-strong" "Alert threshold" True "input-sm" [chartUpdateAttr] (fmap (.alertThreshold) alertM)
