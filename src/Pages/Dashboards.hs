@@ -649,12 +649,13 @@ populateWidgetAlertStatuses widgets = do
   where
     applyAlertStatus statusMap w = fromMaybe w do
       status <- (.id) w >>= (`Map.lookup` statusMap)
-      pure w
-        { Widget.alertId = Just $ Monitors.unQueryMonitorId status.monitorId & UUID.toText
-        , Widget.alertThreshold = Just status.alertThreshold
-        , Widget.warningThreshold = status.warningThreshold
-        , Widget.alertStatus = Just $ display status.alertStatus
-        }
+      pure
+        w
+          { Widget.alertId = Just $ Monitors.unQueryMonitorId status.monitorId & UUID.toText
+          , Widget.alertThreshold = Just status.alertThreshold
+          , Widget.warningThreshold = status.warningThreshold
+          , Widget.alertStatus = Just $ display status.alertStatus
+          }
 
 
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
