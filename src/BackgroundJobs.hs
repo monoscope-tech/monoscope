@@ -15,7 +15,7 @@ import Data.Map.Lazy qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
-import Data.Time.Clock (diffUTCTime)
+import Data.Time.Clock (NominalDiffTime, diffUTCTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime)
 import Data.UUID qualified as UUID
@@ -1533,9 +1533,8 @@ checkTriggeredQueryMonitors = do
       let total = sum (map (\(Only v) -> v) results)
           durationNs = toNanoSecs (diffTimeSpec end start)
           title = monitor.alertConfig.title
-          -- Determine if previously alerting/warning (within last 5 minutes)
-          wasAlerting = maybe False (\t -> startWall `diffUTCTime` t < 300) monitor.alertLastTriggered
-          wasWarning = maybe False (\t -> startWall `diffUTCTime` t < 300) monitor.warningLastTriggered
+          wasAlerting = maybe False (\t -> startWall `diffUTCTime` t < alertActiveWindow) monitor.alertLastTriggered
+          wasWarning = maybe False (\t -> startWall `diffUTCTime` t < alertActiveWindow) monitor.warningLastTriggered
           status =
             monitorStatus
               monitor.triggerLessThan
@@ -1560,22 +1559,22 @@ checkTriggeredQueryMonitors = do
               ]
           otelLog = mkSystemLog monitor.projectId "monitor.alert.triggered" severity (title <> ": " <> status) attrs (Just $ fromIntegral durationNs) startWall
       insertSystemLog otelLog
-      if status /= "Normal"
-        then do
-          Log.logInfo "Query monitor triggered alert" (monitor.id, title, status, total)
-          let warningAt = if status == "Warning" then Just startWall else Nothing
-              alertAt = if status == "Alerting" then Just startWall else Nothing
-          _ <- PG.execute [sql| UPDATE monitors.query_monitors SET warning_last_triggered = ?, alert_last_triggered = ? WHERE id = ? |] (warningAt, alertAt, monitor.id)
-          let qq = [sql| INSERT INTO background_jobs (run_at, status, payload)  VALUES (NOW(), 'queued', ?) |]
-          _ <- PG.execute qq (Only $ AE.object ["tag" AE..= "QueryMonitorAlert", "contents" AE..= V.singleton monitor.id])
-          pass
-        else pass
+      _ <- PG.execute [sql| UPDATE monitors.query_monitors SET current_status = ? WHERE id = ? |] (status, monitor.id)
+      Relude.when (status /= "Normal") do
+        Log.logInfo "Query monitor triggered alert" (monitor.id, title, status, total)
+        let warningAt = if status == "Warning" then Just startWall else Nothing
+            alertAt = if status == "Alerting" then Just startWall else Nothing
+        _ <- PG.execute [sql| UPDATE monitors.query_monitors SET warning_last_triggered = ?, alert_last_triggered = ? WHERE id = ? |] (warningAt, alertAt, monitor.id)
+        let qq = [sql| INSERT INTO background_jobs (run_at, status, payload)  VALUES (NOW(), 'queued', ?) |]
+        void $ PG.execute qq (Only $ AE.object ["tag" AE..= "QueryMonitorAlert", "contents" AE..= V.singleton monitor.id])
       _ <- Monitors.updateLastEvaluatedAt monitor.id startWall
       pass
 
 
--- Determine alert status with optional recovery thresholds (hysteresis)
--- When recovery thresholds are set, alert/warning stays active until value crosses recovery threshold
+alertActiveWindow :: NominalDiffTime
+alertActiveWindow = 300
+
+
 monitorStatus :: Bool -> Maybe Int -> Int -> Maybe Int -> Maybe Int -> Bool -> Bool -> Int -> Text
 monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRecovery wasAlerting wasWarning value
   | not triggerLessThan = case () of

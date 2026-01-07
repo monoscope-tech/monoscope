@@ -48,7 +48,6 @@ import Data.List qualified as L
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
-import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
@@ -86,6 +85,7 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DashboardUtils qualified as DashboardUtils
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.Parser (defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import Servant (NoContent (..), ServerError, err302, err404, errBody, errHeaders)
@@ -104,6 +104,10 @@ import Web.FormUrlEncoded (FromForm)
 folderFromPath :: Maybe Text -> Text
 folderFromPath Nothing = ""
 folderFromPath (Just path) = let dir = takeDirectory (toString path) in if dir == "." then "" else toText dir <> "/"
+
+
+normalizeWidgetId :: Text -> Text
+normalizeWidgetId = T.replace "Expanded" ""
 
 
 dashTitle :: Text -> Text
@@ -659,13 +663,13 @@ dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = do
   uid <- UUID.genUUID <&> UUID.toText
 
   let widgetUpdated = case widgetIdM of
-        Just wID -> widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just (T.replace "Expanded" "" wID)}
+        Just wID -> widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just (normalizeWidgetId wID)}
         Nothing -> widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just uid, Widget._centerTitle = Nothing}
 
   let updateWidgets ws = case widgetIdM of
         Just wID ->
-          let normalizedWidgetId = T.replace "Expanded" "" wID
-              updateWidget w = if (w.id == Just normalizedWidgetId) || (maybeToMonoid (slugify <$> w.title) == normalizedWidgetId) then widgetUpdated else w
+          let nwid = normalizeWidgetId wID
+              updateWidget w = if (w.id == Just nwid) || (maybeToMonoid (slugify <$> w.title) == nwid) then widgetUpdated else w
            in map updateWidget ws
         Nothing -> ws <> [widgetUpdated]
 
@@ -680,15 +684,17 @@ dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = do
 
   -- Sync widget alert if exists
   whenJust widgetIdM \wid -> do
-    let normalizedWidgetId = T.replace "Expanded" "" wid
-    existingMonitor <- Monitors.queryMonitorByWidgetId normalizedWidgetId
+    existingMonitor <- Monitors.queryMonitorByWidgetId (normalizeWidgetId wid)
     whenJust existingMonitor \monitor -> do
-      -- Update monitor's query to match widget's query
       let newQuery = fromMaybe "" widget.query
       when (monitor.logQuery /= newQuery) do
-        let updatedMonitor = (monitor :: Monitors.QueryMonitor){Monitors.logQuery = newQuery}
-        _ <- Monitors.queryMonitorUpsert updatedMonitor
-        pass
+        let sqlQueryCfg = (defSqlQueryCfg pid fixedUTCTime Nothing Nothing){presetRollup = Just "5m"}
+            newSqlQuery = case parseQueryToComponents sqlQueryCfg newQuery of
+              Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
+              Left _ -> monitor.logQueryAsSql
+            updatedMonitor = (monitor :: Monitors.QueryMonitor)
+              { Monitors.logQuery = newQuery, Monitors.logQueryAsSql = newSqlQuery }
+        void $ Monitors.queryMonitorUpsert updatedMonitor
 
   let successMsg = case widgetIdM of
         Just _ -> "Widget updated successfully"
@@ -743,9 +749,7 @@ dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
   syncDashboardAndQueuePush pid dashId
 
   -- Delete alerts for removed widgets
-  unless (null deletedWidgetIds) do
-    _ <- Monitors.deleteMonitorsByWidgetIds deletedWidgetIds
-    pass
+  unless (null deletedWidgetIds) $ void $ Monitors.deleteMonitorsByWidgetIds deletedWidgetIds
 
   addRespHeaders NoContent
 
@@ -895,7 +899,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
 
   -- Generate unique IDs for all elements based on widget ID to prevent conflicts
   let wid = maybeToMonoid widgetToUse.id
-      sourceWid = T.replace "Expanded" "" wid
+      sourceWid = normalizeWidgetId wid
       widPrefix = "id" <> T.take 8 wid
       widgetFormId = widPrefix <> "-widget-form"
       widgetPreviewId = widPrefix <> "-widget-preview"
@@ -1835,6 +1839,7 @@ data WidgetMoveForm = WidgetMoveForm
 -- | Handler for duplicating a widget within the same dashboard.
 -- It creates a copy of the widget with "(Copy)" appended to the title.
 -- Returns the duplicated widget that will be converted to HTML automatically.
+-- If the original widget has an alert, the alert is also duplicated with the new widget.
 dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATAuthCtx (RespHeaders Widget.Widget)
 dashboardDuplicateWidgetPostH pid dashId widgetId = do
   (_, dash) <- getDashAndVM dashId Nothing
@@ -1843,6 +1848,24 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
     Just widgetToDuplicate -> do
       newWidgetId <- UUID.genUUID <&> UUID.toText
+      now <- Time.currentTime
+
+      -- Clone alert if original widget has one
+      existingMonitorM <- Monitors.queryMonitorByWidgetId (normalizeWidgetId widgetId)
+      newAlertIdM <- forM existingMonitorM \monitor -> do
+        newMonitorId <- Monitors.QueryMonitorId <$> liftIO UUID.nextRandom
+        let newMonitor = (monitor :: Monitors.QueryMonitor)
+              { Monitors.id = newMonitorId
+              , Monitors.createdAt = now
+              , Monitors.updatedAt = now
+              , Monitors.widgetId = Just newWidgetId
+              , Monitors.alertLastTriggered = Nothing
+              , Monitors.warningLastTriggered = Nothing
+              , Monitors.currentStatus = "normal"
+              }
+        void $ Monitors.queryMonitorUpsert newMonitor
+        pure newMonitorId.toText
+
       let widgetCopy =
             widgetToDuplicate
               { Widget.id = Just newWidgetId
@@ -1852,10 +1875,11 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
                   Just title -> Just (title <> " (Copy)")
               , Widget._projectId = Just pid
               , Widget._dashboardId = Just dashId.toText
+              , Widget.alertId = newAlertIdM
+              , Widget.alertStatus = Nothing
               }
 
       let updatedDash = (dash :: Dashboards.Dashboard) & #widgets %~ (<> [widgetCopy])
-      now <- Time.currentTime
       _ <- Dashboards.updateSchemaAndUpdatedAt dashId updatedDash now
       syncDashboardAndQueuePush pid dashId
 

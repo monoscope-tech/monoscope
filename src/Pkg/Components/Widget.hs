@@ -837,22 +837,17 @@ addMarkLinesToFirstSeries widget series
       Just "on_breach" -> widget.alertStatus == Just "warning" || widget.alertStatus == Just "alerting"
       _ -> isJust widget.alertThreshold || isJust widget.warningThreshold
 
+    mkMarkLine color label threshold = AE.object
+      [ "yAxis" AE..= threshold
+      , "lineStyle" AE..= AE.object ["color" AE..= (color :: Text), "type" AE..= ("dashed" :: Text), "width" AE..= (2 :: Int)]
+      , "label" AE..= AE.object ["formatter" AE..= ((label <> ": {c}") :: Text), "position" AE..= ("insideEndTop" :: Text)]
+      ]
+
     markLineData :: [AE.Value]
-    markLineData =
-      catMaybes
-        [ widget.alertThreshold <&> \t ->
-            AE.object
-              [ "yAxis" AE..= t
-              , "lineStyle" AE..= AE.object ["color" AE..= ("#dc2626" :: Text), "type" AE..= ("dashed" :: Text), "width" AE..= (2 :: Int)]
-              , "label" AE..= AE.object ["formatter" AE..= ("Alert: {c}" :: Text), "position" AE..= ("insideEndTop" :: Text)]
-              ]
-        , widget.warningThreshold <&> \t ->
-            AE.object
-              [ "yAxis" AE..= t
-              , "lineStyle" AE..= AE.object ["color" AE..= ("#f59e0b" :: Text), "type" AE..= ("dashed" :: Text), "width" AE..= (2 :: Int)]
-              , "label" AE..= AE.object ["formatter" AE..= ("Warning: {c}" :: Text), "position" AE..= ("insideEndTop" :: Text)]
-              ]
-        ]
+    markLineData = catMaybes
+      [ widget.alertThreshold <&> mkMarkLine "#dc2626" "Alert"
+      , widget.warningThreshold <&> mkMarkLine "#f59e0b" "Warning"
+      ]
 
     addMarkLine :: AE.Value -> AE.Value
     addMarkLine (AE.Object obj) = AE.Object $ AE.KeyMap.insert (K.fromText "markLine") markLineObj obj

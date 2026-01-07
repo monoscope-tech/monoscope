@@ -122,6 +122,7 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , showThresholdLines = alertForm.showThresholdLines
         , alertRecoveryThreshold = if isThresholdAlert then alertRecoveryInt else Nothing
         , warningRecoveryThreshold = if isThresholdAlert then warningRecoveryInt else Nothing
+        , currentStatus = "normal"
         }
 
 
@@ -132,7 +133,17 @@ alertUpsertPostH pid form = do
     Just alertId' -> pure (Monitors.QueryMonitorId alertId')
     Nothing -> Monitors.QueryMonitorId <$> UUID.nextRandom
   now <- Time.currentTime
-  let queryMonitor = convertToQueryMonitor pid now queryMonitorId form
+
+  -- For widget-tied alerts, preserve the query from the widget (can't edit directly)
+  existingMonitor <- case alertId of
+    Just _ -> Monitors.queryMonitorById queryMonitorId
+    Nothing -> pure Nothing
+
+  let baseMonitor = convertToQueryMonitor pid now queryMonitorId form
+      queryMonitor = case existingMonitor of
+        Just existing | isJust existing.widgetId ->
+          (baseMonitor :: Monitors.QueryMonitor){Monitors.logQuery = existing.logQuery, Monitors.logQueryAsSql = existing.logQueryAsSql}
+        _ -> baseMonitor
 
   _ <- Monitors.queryMonitorUpsert queryMonitor
   addSuccessToast "Monitor was updated successfully" Nothing

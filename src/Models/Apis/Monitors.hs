@@ -103,6 +103,7 @@ data QueryMonitor = QueryMonitor
   , showThresholdLines :: Maybe Text
   , alertRecoveryThreshold :: Maybe Int
   , warningRecoveryThreshold :: Maybe Int
+  , currentStatus :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, NFData, ToRow)
@@ -136,6 +137,7 @@ data QueryMonitorEvaled = QueryMonitorEvaled
   , showThresholdLines :: Maybe Text
   , alertRecoveryThreshold :: Maybe Int
   , warningRecoveryThreshold :: Maybe Int
+  , currentStatus :: Text
   , evalResult :: Int
   }
   deriving stock (Generic, Show)
@@ -212,7 +214,7 @@ queryMonitorsById ids
     SELECT id, created_at, updated_at, project_id, check_interval_mins, alert_threshold, warning_threshold,
         log_query, log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
         threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, visualization_type, teams,
-        widget_id, dashboard_id, show_threshold_lines, alert_recovery_threshold, warning_recovery_threshold,
+        widget_id, dashboard_id, show_threshold_lines, alert_recovery_threshold, warning_recovery_threshold, current_status,
         eval(log_query_as_sql)
       FROM monitors.query_monitors where id=ANY(?::UUID[])
     |]
@@ -350,11 +352,7 @@ getWidgetAlertStatuses widgetIds
       SELECT
         widget_id,
         id,
-        CASE
-          WHEN alert_last_triggered > NOW() - INTERVAL '5 minutes' THEN 'alerting'
-          WHEN warning_last_triggered > NOW() - INTERVAL '5 minutes' THEN 'warning'
-          ELSE 'normal'
-        END,
+        current_status,
         eval(log_query_as_sql),
         alert_threshold,
         warning_threshold,
