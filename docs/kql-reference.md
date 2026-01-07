@@ -122,7 +122,7 @@ response_time >= 100 and response_time <= 500
 | `endswith` | Ends with string | No | `filename endswith ".json"` |
 | `!endswith` | Does not end with string | No | `url !endswith ".css"` |
 | `matches` | Matches regex pattern | Yes | `email matches /.*@company\.com/` |
-| `=~` | Matches regex pattern | Yes | `body =~ /^ERROR:.*/` |
+| `=~` | Matches regex pattern (alternate syntax) | Yes | `body =~ /^ERROR:.*/` |
 
 **Examples:**
 ```kusto
@@ -528,8 +528,30 @@ Assign custom names to aggregation results:
 alias=aggregation_function(...)
 ```
 
+**Default Column Names:**
+
+When no alias is provided, aggregation functions automatically generate column names following KQL conventions:
+
+| Function | Default Column Name |
+|----------|---------------------|
+| `count()` | `count_` |
+| `count(field)` | `count_field` |
+| `sum(field)` | `sum_field` |
+| `avg(field)` | `avg_field` |
+| `min(field)` | `min_field` |
+| `max(field)` | `max_field` |
+| `p50(field)` | `p50_field` |
+| `p95(field)` | `p95_field` |
+| `dcount(field)` | `dcount_field` |
+| `countif(...)` | `countif_` |
+
 **Examples:**
 ```kusto
+// Without alias - uses default column name count_
+| summarize count() by message
+| sort by count_ desc
+
+// With explicit aliases
 | summarize
     total_count=count(),
     error_count=countif(status_code >= 400),
@@ -594,7 +616,7 @@ timestamp >= ago(24h)
   by service_name
 | sort by error_rate desc
 
-// Top error messages
+// Top error messages (count_ is the default column name for count())
 status_code >= 500
 | summarize count() by message
 | sort by count_ desc

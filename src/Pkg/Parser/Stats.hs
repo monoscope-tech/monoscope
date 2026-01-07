@@ -369,48 +369,80 @@ instance ToQueryText [AggFunction] where
   toQText xs = T.intercalate "," $ map toQText xs
 
 
+-- | Get KQL default alias for aggregation (e.g., count_, sum_field)
+defaultAlias :: AggFunction -> Text
+defaultAlias = \case
+  Count (Subject name _ _) _ -> if name == "*" then "count_" else "count_" <> name
+  CountIf _ _ -> "countif_"
+  DCount (Subject name _ _) _ _ -> "dcount_" <> name
+  P50 (Subject name _ _) _ -> "p50_" <> name
+  P75 (Subject name _ _) _ -> "p75_" <> name
+  P90 (Subject name _ _) _ -> "p90_" <> name
+  P95 (Subject name _ _) _ -> "p95_" <> name
+  P99 (Subject name _ _) _ -> "p99_" <> name
+  P100 (Subject name _ _) _ -> "p100_" <> name
+  Percentile (SubjectExpr (Subject name _ _) _) pct _ -> "percentile_" <> name <> "_" <> T.replace "." "_" (show pct)
+  Percentiles (SubjectExpr (Subject name _ _) _) _ _ -> "percentiles_" <> name
+  Sum (Subject name _ _) _ -> "sum_" <> name
+  Avg (Subject name _ _) _ -> "avg_" <> name
+  Min (Subject name _ _) _ -> "min_" <> name
+  Max (Subject name _ _) _ -> "max_" <> name
+  Median (Subject name _ _) _ -> "median_" <> name
+  Stdev (Subject name _ _) _ -> "stdev_" <> name
+  Range (Subject name _ _) _ -> "range_" <> name
+  Coalesce _ _ -> "coalesce_"
+  Strcat _ _ -> "strcat_"
+  Iff _ _ _ _ -> "iff_"
+  Case _ _ _ -> "case_"
+  Plain (Subject name _ _) _ -> name
+
+
+-- | Wrap SQL expression with AS alias (user-supplied or default)
+withAlias :: Text -> Maybe Text -> AggFunction -> Text
+withAlias sql explicitAlias agg = sql <> " AS " <> fromMaybe (defaultAlias agg) explicitAlias
+
+
 instance Display AggFunction where
-  displayPrec _prec (Count sub _alias) = displayBuilder $ "count(" <> display sub <> ")"
-  -- countif(predicate) -> COUNT(*) FILTER (WHERE predicate)
-  displayPrec _prec (CountIf cond _alias) = displayBuilder $ "COUNT(*) FILTER (WHERE " <> display cond <> ")"
+  displayPrec _prec agg@(Count sub alias) = displayBuilder $ withAlias ("count(" <> display sub <> ")") alias agg
+  displayPrec _prec agg@(CountIf cond alias) = displayBuilder $ withAlias ("COUNT(*) FILTER (WHERE " <> display cond <> ")") alias agg
   -- dcount(field [, accuracy]) -> COUNT(DISTINCT field)
   -- Note: KQL accuracy parameter (0-4 for HyperLogLog precision) is intentionally ignored
   -- because PostgreSQL's COUNT(DISTINCT) doesn't support HLL accuracy hints
-  displayPrec _prec (DCount sub _acc _alias) = displayBuilder $ "COUNT(DISTINCT " <> display sub <> ")"
-  displayPrec _prec (P50 sub _alias) = displayBuilder $ "approx_percentile(0.50, percentile_agg((" <> display sub <> ")::float))::int"
-  displayPrec _prec (P75 sub _alias) = displayBuilder $ "approx_percentile(0.75, percentile_agg((" <> display sub <> ")::float))::int"
-  displayPrec _prec (P90 sub _alias) = displayBuilder $ "approx_percentile(0.90, percentile_agg((" <> display sub <> ")::float))::int"
-  displayPrec _prec (P95 sub _alias) = displayBuilder $ "approx_percentile(0.95, percentile_agg((" <> display sub <> ")::float))::int"
-  displayPrec _prec (P99 sub _alias) = displayBuilder $ "approx_percentile(0.99, percentile_agg((" <> display sub <> ")::float))::int"
-  displayPrec _prec (P100 sub _alias) = displayBuilder $ "approx_percentile(1, percentile_agg((" <> display sub <> ")::float))::int"
+  displayPrec _prec agg@(DCount sub _ alias) = displayBuilder $ withAlias ("COUNT(DISTINCT " <> display sub <> ")") alias agg
+  displayPrec _prec agg@(P50 sub alias) = displayBuilder $ withAlias ("approx_percentile(0.50, percentile_agg((" <> display sub <> ")::float))::int") alias agg
+  displayPrec _prec agg@(P75 sub alias) = displayBuilder $ withAlias ("approx_percentile(0.75, percentile_agg((" <> display sub <> ")::float))::int") alias agg
+  displayPrec _prec agg@(P90 sub alias) = displayBuilder $ withAlias ("approx_percentile(0.90, percentile_agg((" <> display sub <> ")::float))::int") alias agg
+  displayPrec _prec agg@(P95 sub alias) = displayBuilder $ withAlias ("approx_percentile(0.95, percentile_agg((" <> display sub <> ")::float))::int") alias agg
+  displayPrec _prec agg@(P99 sub alias) = displayBuilder $ withAlias ("approx_percentile(0.99, percentile_agg((" <> display sub <> ")::float))::int") alias agg
+  displayPrec _prec agg@(P100 sub alias) = displayBuilder $ withAlias ("approx_percentile(1, percentile_agg((" <> display sub <> ")::float))::int") alias agg
   -- Percentile/Percentiles are handled specially via extractPercentilesInfo and LATERAL unnest SQL
-  displayPrec _prec (Percentile subExpr pct _alias) =
-    displayBuilder $ "approx_percentile(" <> show (pct / 100.0) <> ", percentile_agg((" <> subjectExprToSQL subExpr <> ")::float))::float"
-  displayPrec _prec (Percentiles subExpr pcts _alias) =
+  displayPrec _prec agg@(Percentile subExpr pct alias) =
+    displayBuilder $ withAlias ("approx_percentile(" <> show (pct / 100.0) <> ", percentile_agg((" <> subjectExprToSQL subExpr <> ")::float))::float") alias agg
+  displayPrec _prec agg@(Percentiles subExpr pcts alias) =
     let firstPct = fromMaybe 50.0 (listToMaybe pcts)
-     in displayBuilder $ "approx_percentile(" <> show (firstPct / 100.0) <> ", percentile_agg((" <> subjectExprToSQL subExpr <> ")::float))::float"
-  displayPrec _prec (Sum sub _alias) = displayBuilder $ "sum((" <> display sub <> ")::float)"
-  displayPrec _prec (Avg sub _alias) = displayBuilder $ "avg((" <> display sub <> ")::float)"
-  displayPrec _prec (Min sub _alias) = displayBuilder $ "min((" <> display sub <> ")::float)"
-  displayPrec _prec (Max sub _alias) = displayBuilder $ "max((" <> display sub <> ")::float)"
-  displayPrec _prec (Median sub _alias) = displayBuilder $ "median((" <> display sub <> ")::float)"
-  displayPrec _prec (Stdev sub _alias) = displayBuilder $ "stdev((" <> display sub <> ")::float)"
-  displayPrec _prec (Range sub _alias) = displayBuilder $ "range((" <> display sub <> ")::float)"
+     in displayBuilder $ withAlias ("approx_percentile(" <> show (firstPct / 100.0) <> ", percentile_agg((" <> subjectExprToSQL subExpr <> ")::float))::float") alias agg
+  displayPrec _prec agg@(Sum sub alias) = displayBuilder $ withAlias ("sum((" <> display sub <> ")::float)") alias agg
+  displayPrec _prec agg@(Avg sub alias) = displayBuilder $ withAlias ("avg((" <> display sub <> ")::float)") alias agg
+  displayPrec _prec agg@(Min sub alias) = displayBuilder $ withAlias ("min((" <> display sub <> ")::float)") alias agg
+  displayPrec _prec agg@(Max sub alias) = displayBuilder $ withAlias ("max((" <> display sub <> ")::float)") alias agg
+  displayPrec _prec agg@(Median sub alias) = displayBuilder $ withAlias ("median((" <> display sub <> ")::float)") alias agg
+  displayPrec _prec agg@(Stdev sub alias) = displayBuilder $ withAlias ("stdev((" <> display sub <> ")::float)") alias agg
+  displayPrec _prec agg@(Range sub alias) = displayBuilder $ withAlias ("range((" <> display sub <> ")::float)") alias agg
   -- coalesce(expr1, expr2, ...) -> COALESCE(expr1, expr2, ...)
-  displayPrec _prec (Coalesce exprs _alias) =
-    displayBuilder $ "COALESCE(" <> T.intercalate ", " (map display exprs) <> ")"
+  displayPrec _prec agg@(Coalesce exprs alias) =
+    displayBuilder $ withAlias ("COALESCE(" <> T.intercalate ", " (map display exprs) <> ")") alias agg
   -- strcat(expr1, expr2, ...) -> CONCAT(expr1, expr2, ...)
-  displayPrec _prec (Strcat exprs _alias) =
-    displayBuilder $ "CONCAT(" <> T.intercalate ", " (map display exprs) <> ")"
+  displayPrec _prec agg@(Strcat exprs alias) =
+    displayBuilder $ withAlias ("CONCAT(" <> T.intercalate ", " (map display exprs) <> ")") alias agg
   -- iff(condition, then, else) -> CASE WHEN condition THEN then ELSE else END
-  displayPrec _prec (Iff cond thenVal elseVal _alias) =
-    displayBuilder $ "CASE WHEN " <> display cond <> " THEN " <> display thenVal <> " ELSE " <> display elseVal <> " END"
+  displayPrec _prec agg@(Iff cond thenVal elseVal alias) =
+    displayBuilder $ withAlias ("CASE WHEN " <> display cond <> " THEN " <> display thenVal <> " ELSE " <> display elseVal <> " END") alias agg
   -- case(pred1, val1, ..., else) -> CASE WHEN pred1 THEN val1 ... ELSE else END
-  displayPrec _prec (Case pairs defaultVal _alias) =
-    displayBuilder $ "CASE " <> foldMap displayCaseWhen pairs <> "ELSE " <> display defaultVal <> " END"
+  displayPrec _prec agg@(Case pairs defaultVal alias) =
+    displayBuilder $ withAlias ("CASE " <> foldMap displayCaseWhen pairs <> "ELSE " <> display defaultVal <> " END") alias agg
     where
       displayCaseWhen (cond, val) = "WHEN " <> display cond <> " THEN " <> display val <> " "
-  displayPrec _prec (Plain sub _alias) = displayBuilder $ display sub
+  displayPrec _prec agg@(Plain sub alias) = displayBuilder $ withAlias (display sub) alias agg
 
 
 instance ToQueryText Section where
