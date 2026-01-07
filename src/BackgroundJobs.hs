@@ -1520,55 +1520,61 @@ gitSyncPushAllDashboards pid = do
 checkTriggeredQueryMonitors :: ATBackgroundCtx ()
 checkTriggeredQueryMonitors = do
   Log.logInfo "Checking query monitors" ()
-  ctx <- ask @Config.AuthContext
   monitors <- Monitors.getActiveQueryMonitors
   forM_ monitors \monitor -> do
     startWall <- Time.currentTime
     let evalInterval = startWall `diffUTCTime` monitor.lastEvaluated
     Relude.when (evalInterval >= fromIntegral monitor.checkIntervalMins * 60) $ do
       Log.logInfo "Evaluating query monitor" (monitor.id, monitor.alertConfig.title)
-      start <- liftIO $ getTime Monotonic
-      results <- PG.query (Query $ encodeUtf8 monitor.logQueryAsSql) () :: ATBackgroundCtx [Only Double]
-      end <- liftIO $ getTime Monotonic
+      catch (evaluateQueryMonitor monitor startWall) \(err :: SomePostgreSqlException) -> do
+        Log.logWarn "Query monitor evaluation failed" (monitor.id, monitor.alertConfig.title, show err)
+        void $ Monitors.updateLastEvaluatedAt monitor.id startWall -- Still update to prevent infinite retry loop
 
-      let total = sum [v | Only v <- results]
-          durationNs = toNanoSecs (diffTimeSpec end start)
-          title = monitor.alertConfig.title
-          status =
-            monitorStatus
-              monitor.triggerLessThan
-              monitor.warningThreshold
-              monitor.alertThreshold
-              monitor.alertRecoveryThreshold
-              monitor.warningRecoveryThreshold
-              (monitor.currentStatus == Monitors.MSAlerting)
-              (monitor.currentStatus == Monitors.MSWarning)
-              total
-          severity = case status of Monitors.MSAlerting -> SLError; Monitors.MSWarning -> SLWarn; _ -> SLInfo
-          attrs =
-            Map.fromList
-              [ ("monitor.id", AE.toJSON monitor.id)
-              , ("monitor.title", AE.toJSON title)
-              , ("monitor.value", AE.toJSON total)
-              , ("monitor.threshold", AE.toJSON monitor.alertThreshold)
-              , ("monitor.warning_threshold", AE.toJSON monitor.warningThreshold)
-              , ("monitor.status", AE.toJSON status)
-              , ("monitor.query", AE.toJSON monitor.logQueryAsSql)
-              , ("monitor.condition", AE.toJSON $ if monitor.triggerLessThan then "less_than" :: Text else "greater_than")
-              ]
-          otelLog = mkSystemLog monitor.projectId "monitor.alert.triggered" severity (title <> ": " <> display status) attrs (Just $ fromIntegral durationNs) startWall
-      insertSystemLog otelLog
-      void $ PG.execute [sql| UPDATE monitors.query_monitors SET current_status = ?, current_value = ? WHERE id = ? |] (status, total, monitor.id)
-      Relude.when (status /= Monitors.MSNormal) do
-        Log.logInfo "Query monitor triggered alert" (monitor.id, title, status, total)
-        let warningAt = if status == Monitors.MSWarning then Just startWall else Nothing
-            alertAt = if status == Monitors.MSAlerting then Just startWall else Nothing
-        void $ PG.execute [sql| UPDATE monitors.query_monitors SET warning_last_triggered = ?, alert_last_triggered = ? WHERE id = ? |] (warningAt, alertAt, monitor.id)
-        void
-          $ PG.execute
-            [sql| INSERT INTO background_jobs (run_at, status, payload) VALUES (NOW(), 'queued', ?) |]
-            (Only $ AE.object ["tag" AE..= "QueryMonitorAlert", "contents" AE..= V.singleton monitor.id])
-      void $ Monitors.updateLastEvaluatedAt monitor.id startWall
+
+evaluateQueryMonitor :: Monitors.QueryMonitor -> UTCTime -> ATBackgroundCtx ()
+evaluateQueryMonitor monitor startWall = do
+  start <- liftIO $ getTime Monotonic
+  results <- PG.query (Query $ encodeUtf8 monitor.logQueryAsSql) () :: ATBackgroundCtx [Only Double]
+  end <- liftIO $ getTime Monotonic
+
+  let total = sum [v | Only v <- results]
+      durationNs = toNanoSecs (diffTimeSpec end start)
+      title = monitor.alertConfig.title
+      status =
+        monitorStatus
+          monitor.triggerLessThan
+          monitor.warningThreshold
+          monitor.alertThreshold
+          monitor.alertRecoveryThreshold
+          monitor.warningRecoveryThreshold
+          (monitor.currentStatus == Monitors.MSAlerting)
+          (monitor.currentStatus == Monitors.MSWarning)
+          total
+      severity = case status of Monitors.MSAlerting -> SLError; Monitors.MSWarning -> SLWarn; _ -> SLInfo
+      attrs =
+        Map.fromList
+          [ ("monitor.id", AE.toJSON monitor.id)
+          , ("monitor.title", AE.toJSON title)
+          , ("monitor.value", AE.toJSON total)
+          , ("monitor.threshold", AE.toJSON monitor.alertThreshold)
+          , ("monitor.warning_threshold", AE.toJSON monitor.warningThreshold)
+          , ("monitor.status", AE.toJSON status)
+          , ("monitor.query", AE.toJSON monitor.logQueryAsSql)
+          , ("monitor.condition", AE.toJSON $ if monitor.triggerLessThan then "less_than" :: Text else "greater_than")
+          ]
+      otelLog = mkSystemLog monitor.projectId "monitor.alert.triggered" severity (title <> ": " <> display status) attrs (Just $ fromIntegral durationNs) startWall
+  insertSystemLog otelLog
+  void $ PG.execute [sql| UPDATE monitors.query_monitors SET current_status = ?, current_value = ? WHERE id = ? |] (status, total, monitor.id)
+  Relude.when (status /= Monitors.MSNormal) do
+    Log.logInfo "Query monitor triggered alert" (monitor.id, title, status, total)
+    let warningAt = if status == Monitors.MSWarning then Just startWall else Nothing
+        alertAt = if status == Monitors.MSAlerting then Just startWall else Nothing
+    void $ PG.execute [sql| UPDATE monitors.query_monitors SET warning_last_triggered = ?, alert_last_triggered = ? WHERE id = ? |] (warningAt, alertAt, monitor.id)
+    void
+      $ PG.execute
+        [sql| INSERT INTO background_jobs (run_at, status, payload) VALUES (NOW(), 'queued', ?) |]
+        (Only $ AE.object ["tag" AE..= "QueryMonitorAlert", "contents" AE..= V.singleton monitor.id])
+  void $ Monitors.updateLastEvaluatedAt monitor.id startWall
 
 
 -- | Determine monitor status with hysteresis support.

@@ -507,7 +507,7 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
         label_ [Lucid.for_ modalId, class_ "btn btn-sm btn-circle btn-ghost absolute right-2 top-2"] "X"
         h3_ [class_ "font-bold text-lg"] $ toHtml $ "Select " <> varTitle
         p_ [class_ "text-sm text-textWeak"] $ toHtml $ "This view requires a " <> varTitle <> " to be selected."
-        whenJust var.helpText \h -> p_ [class_ "text-sm text-textWeak italic"] $ toHtml h
+        whenJust var.helpText $ p_ [class_ "text-sm text-textWeak italic"] . toHtml
         input_
           [ type_ "text"
           , class_ "input input-bordered w-full"
@@ -644,7 +644,7 @@ populateWidgetAlertStatuses widgets = do
     then pure widgets
     else do
       statuses <- Monitors.getWidgetAlertStatuses widgetIds
-      let statusMap = foldMap (\s -> Map.singleton s.widgetId s) statuses
+      let statusMap = foldMap (\s -> one (s.widgetId, s)) statuses
       pure $ map (applyAlertStatus statusMap) widgets
   where
     applyAlertStatus statusMap w = fromMaybe w do
@@ -663,51 +663,49 @@ dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = do
   (_, dash) <- getDashAndVM dashId Nothing
   uid <- UUID.genUUID <&> UUID.toText
   let normalizedWidgetIdM = normalizeWidgetId <$> widgetIdM
+  let widgetUpdated = normalizeWidget widget normalizedWidgetIdM uid
+  let dash' = updateDashboardWidgets dash tabSlugM normalizedWidgetIdM widgetUpdated
 
-  let widgetUpdated = case normalizedWidgetIdM of
-        Just nwid -> widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just nwid}
-        Nothing -> widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just uid, Widget._centerTitle = Nothing}
+  _ <- Dashboards.updateSchema dashId dash'
+  syncDashboardAndQueuePush pid dashId
+  whenJust normalizedWidgetIdM \nwid -> syncWidgetAlert pid nwid widget
 
+  let successMsg = if isJust normalizedWidgetIdM then "Widget updated successfully" else "Widget added to dashboard successfully"
+  addSuccessToast successMsg Nothing
+  addTriggerEvent "closeModal" ""
+  addRespHeaders widgetUpdated
+
+
+normalizeWidget :: Widget.Widget -> Maybe Text -> Text -> Widget.Widget
+normalizeWidget widget normalizedWidgetIdM generatedId = case normalizedWidgetIdM of
+  Just nwid -> widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just nwid}
+  Nothing -> widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just generatedId, Widget._centerTitle = Nothing}
+
+
+updateDashboardWidgets :: Dashboards.Dashboard -> Maybe Text -> Maybe Text -> Widget.Widget -> Dashboards.Dashboard
+updateDashboardWidgets dash tabSlugM normalizedWidgetIdM widgetUpdated =
   let updateWidgets ws = case normalizedWidgetIdM of
         Just nwid ->
           let updateWidget w = if (w.id == Just nwid) || (maybeToMonoid (slugify <$> w.title) == nwid) then widgetUpdated else w
            in map updateWidget ws
         Nothing -> ws <> [widgetUpdated]
-
-  let dash' = case (tabSlugM, dash.tabs) of
+   in case (tabSlugM, dash.tabs) of
         (Just slug, Just _) -> updateTabBySlug slug (#widgets %~ updateWidgets) dash
         _ -> dash & #widgets %~ updateWidgets
 
-  _ <- Dashboards.updateSchema dashId dash'
-  syncDashboardAndQueuePush pid dashId
 
-  -- Sync widget alert if exists
-  whenJust normalizedWidgetIdM \nwid -> do
-    existingMonitor <- Monitors.queryMonitorByWidgetId nwid
-    whenJust existingMonitor \monitor -> do
-      let newQuery = fromMaybe "" widget.query
-      when (monitor.logQuery /= newQuery) do
-        let sqlQueryCfg = (defSqlQueryCfg pid fixedUTCTime Nothing Nothing){presetRollup = Just "5m"}
-            parseResult = parseQueryToComponents sqlQueryCfg newQuery
-        newSqlQuery <- case parseResult of
-          Right (_, qc) -> pure $ fromMaybe "" qc.finalAlertQuery
-          Left err -> do
-            Log.logWarn "Failed to parse widget alert query, keeping previous SQL" (monitor.id, err)
-            pure monitor.logQueryAsSql
-        let updatedMonitor =
-              (monitor :: Monitors.QueryMonitor)
-                { Monitors.logQuery = newQuery
-                , Monitors.logQueryAsSql = newSqlQuery
-                }
-        void $ Monitors.queryMonitorUpsert updatedMonitor
-
-  let successMsg = case normalizedWidgetIdM of
-        Just _ -> "Widget updated successfully"
-        Nothing -> "Widget added to dashboard successfully"
-
-  addSuccessToast successMsg Nothing
-  addTriggerEvent "closeModal" ""
-  addRespHeaders widgetUpdated
+syncWidgetAlert :: DB es => Projects.ProjectId -> Text -> Widget.Widget -> Eff es ()
+syncWidgetAlert pid widgetId widget = do
+  existingMonitor <- Monitors.queryMonitorByWidgetId widgetId
+  whenJust existingMonitor \monitor -> do
+    let newQuery = fromMaybe "" widget.query
+    when (monitor.logQuery /= newQuery) do
+      let sqlQueryCfg = (defSqlQueryCfg pid fixedUTCTime Nothing Nothing){presetRollup = Just "5m"}
+          newSqlQuery = case parseQueryToComponents sqlQueryCfg newQuery of
+            Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
+            Left _ -> monitor.logQueryAsSql -- Keep previous SQL on parse failure
+          updatedMonitor = (monitor :: Monitors.QueryMonitor){Monitors.logQuery = newQuery, Monitors.logQueryAsSql = newSqlQuery}
+      void $ Monitors.queryMonitorUpsert updatedMonitor
 
 
 data WidgetReorderItem = WidgetReorderItem
@@ -1802,10 +1800,9 @@ data WidgetMoveForm = WidgetMoveForm
 dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATAuthCtx (RespHeaders Widget.Widget)
 dashboardDuplicateWidgetPostH pid dashId widgetId = do
   (_, dash) <- getDashAndVM dashId Nothing
-  let widgetToDuplicateM = find (\w -> (w.id == Just widgetId) || (maybeToMonoid (slugify <$> w.title) == widgetId)) (dash :: Dashboards.Dashboard).widgets
-  case widgetToDuplicateM of
+  case findWidgetInDashboard widgetId dash of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
-    Just widgetToDuplicate -> do
+    Just (tabSlugM, widgetToDuplicate) -> do
       newWidgetId <- UUID.genUUID <&> UUID.toText
       now <- Time.currentTime
 
@@ -1839,7 +1836,9 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
               , Widget.alertStatus = Nothing
               }
 
-      let updatedDash = (dash :: Dashboards.Dashboard) & #widgets %~ (<> [widgetCopy])
+      let updatedDash = case tabSlugM of
+            Just slug -> updateTabBySlug slug (#widgets %~ (<> [widgetCopy])) dash
+            Nothing -> dash & #widgets %~ (<> [widgetCopy])
       _ <- Dashboards.updateSchemaAndUpdatedAt dashId updatedDash now
       syncDashboardAndQueuePush pid dashId
 
@@ -1852,9 +1851,7 @@ dashboardWidgetExpandGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Tex
 dashboardWidgetExpandGetH pid dashId widgetId = do
   (_, dash) <- getDashAndVM dashId Nothing
   now <- Time.currentTime
-  let widgetToExpandM = find (\w -> (w.id == Just widgetId) || (maybeToMonoid (slugify <$> w.title) == widgetId)) (dash :: Dashboards.Dashboard).widgets
-
-  case widgetToExpandM of
+  case snd <$> findWidgetInDashboard widgetId dash of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
     Just widgetToExpand -> do
       processedWidget <- processWidget pid now (Nothing, Nothing, Nothing) [] widgetToExpand
@@ -1864,6 +1861,15 @@ dashboardWidgetExpandGetH pid dashId widgetId = do
 -- | Find a tab by its slug, returns (index, tab) if found
 findTabBySlug :: [Dashboards.Tab] -> Text -> Maybe (Int, Dashboards.Tab)
 findTabBySlug tabs tabSlug = find ((== tabSlug) . slugify . (.name) . snd) (zip [0 ..] tabs)
+
+
+-- | Find widget by ID in dashboard, searching tabs and root. Returns (Maybe tabSlug, Widget)
+findWidgetInDashboard :: Text -> Dashboards.Dashboard -> Maybe (Maybe Text, Widget.Widget)
+findWidgetInDashboard wid dash = tabResult <|> rootResult
+ where
+  match w = w.id == Just wid || maybeToMonoid (slugify <$> w.title) == wid
+  tabResult = listToMaybe [(Just $ slugify t.name, w) | t <- fromMaybe [] dash.tabs, w <- t.widgets, match w]
+  rootResult = (Nothing,) <$> find match dash.widgets
 
 
 -- | Get the first tab as default if available

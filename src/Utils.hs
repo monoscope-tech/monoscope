@@ -593,7 +593,7 @@ formatWithCommas :: Double -> Text
 formatWithCommas d =
   let (intPart, fracPart) = properFraction d :: (Int, Double)
       intFormatted = fmt (commaizeF intPart)
-   in if fracPart == 0 then intFormatted else intFormatted <> T.pack (dropWhile (/= '.') (show d))
+   in if fracPart == 0 then intFormatted else intFormatted <> toText (dropWhile (/= '.') (show d))
 
 
 messageKeys :: [T.Text]

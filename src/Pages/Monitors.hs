@@ -359,5 +359,5 @@ collapsibleSection_ icon iconKind title subtitleM content =
       div_ [class_ "flex items-center gap-2"] do
         faSprite_ icon iconKind "w-4 h-4 text-iconNeutral"
         span_ [class_ "font-medium text-sm"] $ toHtml title
-        whenJust subtitleM \sub -> span_ [class_ "text-xs text-textWeak"] $ toHtml sub
+        whenJust subtitleM $ span_ [class_ "text-xs text-textWeak"] . toHtml
     div_ [class_ "p-4 pt-0 border-t border-strokeWeak mt-2"] content
