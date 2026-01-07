@@ -692,8 +692,11 @@ dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = do
             newSqlQuery = case parseQueryToComponents sqlQueryCfg newQuery of
               Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
               Left _ -> monitor.logQueryAsSql
-            updatedMonitor = (monitor :: Monitors.QueryMonitor)
-              { Monitors.logQuery = newQuery, Monitors.logQueryAsSql = newSqlQuery }
+            updatedMonitor =
+              (monitor :: Monitors.QueryMonitor)
+                { Monitors.logQuery = newQuery
+                , Monitors.logQueryAsSql = newSqlQuery
+                }
         void $ Monitors.queryMonitorUpsert updatedMonitor
 
   let successMsg = case widgetIdM of
@@ -1854,15 +1857,16 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
       existingMonitorM <- Monitors.queryMonitorByWidgetId (normalizeWidgetId widgetId)
       newAlertIdM <- forM existingMonitorM \monitor -> do
         newMonitorId <- Monitors.QueryMonitorId <$> liftIO UUID.nextRandom
-        let newMonitor = (monitor :: Monitors.QueryMonitor)
-              { Monitors.id = newMonitorId
-              , Monitors.createdAt = now
-              , Monitors.updatedAt = now
-              , Monitors.widgetId = Just newWidgetId
-              , Monitors.alertLastTriggered = Nothing
-              , Monitors.warningLastTriggered = Nothing
-              , Monitors.currentStatus = "normal"
-              }
+        let newMonitor =
+              (monitor :: Monitors.QueryMonitor)
+                { Monitors.id = newMonitorId
+                , Monitors.createdAt = now
+                , Monitors.updatedAt = now
+                , Monitors.widgetId = Just newWidgetId
+                , Monitors.alertLastTriggered = Nothing
+                , Monitors.warningLastTriggered = Nothing
+                , Monitors.currentStatus = "normal"
+                }
         void $ Monitors.queryMonitorUpsert newMonitor
         pure newMonitorId.toText
 

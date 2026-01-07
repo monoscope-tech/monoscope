@@ -141,8 +141,9 @@ alertUpsertPostH pid form = do
 
   let baseMonitor = convertToQueryMonitor pid now queryMonitorId form
       queryMonitor = case existingMonitor of
-        Just existing | isJust existing.widgetId ->
-          (baseMonitor :: Monitors.QueryMonitor){Monitors.logQuery = existing.logQuery, Monitors.logQueryAsSql = existing.logQueryAsSql}
+        Just existing
+          | isJust existing.widgetId ->
+              (baseMonitor :: Monitors.QueryMonitor){Monitors.logQuery = existing.logQuery, Monitors.logQueryAsSql = existing.logQueryAsSql}
         _ -> baseMonitor
 
   _ <- Monitors.queryMonitorUpsert queryMonitor
