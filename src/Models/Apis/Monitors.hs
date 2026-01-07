@@ -13,6 +13,12 @@ module Models.Apis.Monitors (
   monitorRemoveTeam,
   getActiveQueryMonitors,
   updateLastEvaluatedAt,
+  -- Widget alert functions
+  queryMonitorByWidgetId,
+  queryMonitorsByDashboardId,
+  deleteMonitorsByWidgetIds,
+  WidgetAlertStatus (..),
+  getWidgetAlertStatuses,
 ) where
 
 import Data.Aeson qualified as AE
@@ -91,6 +97,12 @@ data QueryMonitor = QueryMonitor
   , deletedAt :: Maybe UTCTime
   , visualizationType :: Text
   , teams :: V.Vector UUID.UUID
+  -- Widget alert fields
+  , widgetId :: Maybe Text
+  , dashboardId :: Maybe UUID.UUID
+  , showThresholdLines :: Maybe Text
+  , alertRecoveryThreshold :: Maybe Int
+  , warningRecoveryThreshold :: Maybe Int
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, NFData, ToRow)
@@ -118,6 +130,12 @@ data QueryMonitorEvaled = QueryMonitorEvaled
   , deletedAt :: Maybe UTCTime
   , visualizationType :: Text
   , teams :: V.Vector UUID.UUID
+  -- Widget alert fields
+  , widgetId :: Maybe Text
+  , dashboardId :: Maybe UUID.UUID
+  , showThresholdLines :: Maybe Text
+  , alertRecoveryThreshold :: Maybe Int
+  , warningRecoveryThreshold :: Maybe Int
   , evalResult :: Int
   }
   deriving stock (Generic, Show)
@@ -144,14 +162,21 @@ queryMonitorUpsert qm =
     , qm.checkIntervalMins
     , qm.visualizationType
     , qm.teams
+    , qm.widgetId
+    , qm.dashboardId
+    , qm.showThresholdLines
+    , qm.alertRecoveryThreshold
+    , qm.warningRecoveryThreshold
     )
   where
     q =
       [sql|
     INSERT INTO monitors.query_monitors (id, project_id, alert_threshold, warning_threshold, log_query,
                   log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
-                  threshold_sustained_for_mins, alert_config, check_interval_mins, visualization_type, teams) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::uuid[])
-          ON CONFLICT (id) DO UPDATE SET
+                  threshold_sustained_for_mins, alert_config, check_interval_mins, visualization_type, teams,
+                  widget_id, dashboard_id, show_threshold_lines, alert_recovery_threshold, warning_recovery_threshold)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::uuid[],?,?,?,?,?)
+    ON CONFLICT (id) DO UPDATE SET
                   alert_threshold=EXCLUDED.alert_threshold,
                   warning_threshold=EXCLUDED.warning_threshold,
                   log_query=EXCLUDED.log_query,
@@ -164,7 +189,12 @@ queryMonitorUpsert qm =
                   alert_config=EXCLUDED.alert_config,
                   check_interval_mins=EXCLUDED.check_interval_mins,
                   visualization_type=EXCLUDED.visualization_type,
-                  teams=EXCLUDED.teams
+                  teams=EXCLUDED.teams,
+                  widget_id=EXCLUDED.widget_id,
+                  dashboard_id=EXCLUDED.dashboard_id,
+                  show_threshold_lines=EXCLUDED.show_threshold_lines,
+                  alert_recovery_threshold=EXCLUDED.alert_recovery_threshold,
+                  warning_recovery_threshold=EXCLUDED.warning_recovery_threshold
     |]
 
 
@@ -181,7 +211,9 @@ queryMonitorsById ids
       [sql|
     SELECT id, created_at, updated_at, project_id, check_interval_mins, alert_threshold, warning_threshold,
         log_query, log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
-        threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, visualization_type, teams, eval(log_query_as_sql)
+        threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, visualization_type, teams,
+        widget_id, dashboard_id, show_threshold_lines, alert_recovery_threshold, warning_recovery_threshold,
+        eval(log_query_as_sql)
       FROM monitors.query_monitors where id=ANY(?::UUID[])
     |]
 
@@ -218,7 +250,8 @@ getAlertsByTeamHandle pid teamId = PG.query q (pid, teamId)
       [sql|
       SELECT qm.id, qm.created_at, qm.updated_at, qm.project_id, qm.check_interval_mins, qm.alert_threshold, qm.warning_threshold,
         qm.log_query, qm.log_query_as_sql, qm.last_evaluated, qm.warning_last_triggered, qm.alert_last_triggered, qm.trigger_less_than,
-        qm.threshold_sustained_for_mins, qm.alert_config, qm.deactivated_at, qm.deleted_at, qm.visualization_type, qm.teams
+        qm.threshold_sustained_for_mins, qm.alert_config, qm.deactivated_at, qm.deleted_at, qm.visualization_type, qm.teams,
+        qm.widget_id, qm.dashboard_id, qm.show_threshold_lines, qm.alert_recovery_threshold, qm.warning_recovery_threshold
       FROM monitors.query_monitors qm
       WHERE qm.project_id = ? AND ? = ANY(qm.teams)
     |]
@@ -242,7 +275,8 @@ getActiveQueryMonitors = PG.query q ()
       [sql|
     SELECT  qm.id, qm.created_at, qm.updated_at, qm.project_id, qm.check_interval_mins, qm.alert_threshold, qm.warning_threshold,
         qm.log_query, qm.log_query_as_sql, qm.last_evaluated, qm.warning_last_triggered, qm.alert_last_triggered, qm.trigger_less_than,
-        qm.threshold_sustained_for_mins, qm.alert_config, qm.deactivated_at, qm.deleted_at, qm.visualization_type, qm.teams
+        qm.threshold_sustained_for_mins, qm.alert_config, qm.deactivated_at, qm.deleted_at, qm.visualization_type, qm.teams,
+        qm.widget_id, qm.dashboard_id, qm.show_threshold_lines, qm.alert_recovery_threshold, qm.warning_recovery_threshold
       FROM monitors.query_monitors qm
       WHERE qm.deactivated_at IS NULL AND qm.log_query_as_sql IS NOT NULL AND qm.log_query_as_sql != ''
     |]
@@ -252,3 +286,81 @@ updateLastEvaluatedAt :: DB es => QueryMonitorId -> UTCTime -> Eff es Int64
 updateLastEvaluatedAt qmId time = PG.execute q (time, qmId)
   where
     q = [sql|UPDATE monitors.query_monitors SET last_evaluated=? where id=?|]
+
+
+-- Widget alert queries
+
+queryMonitorByWidgetId :: DB es => Text -> Eff es (Maybe QueryMonitor)
+queryMonitorByWidgetId wId = listToMaybe <$> PG.query q (Only wId)
+  where
+    q =
+      [sql|
+      SELECT id, created_at, updated_at, project_id, check_interval_mins, alert_threshold, warning_threshold,
+        log_query, log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
+        threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, visualization_type, teams,
+        widget_id, dashboard_id, show_threshold_lines, alert_recovery_threshold, warning_recovery_threshold
+      FROM monitors.query_monitors
+      WHERE widget_id = ? AND deleted_at IS NULL
+    |]
+
+
+queryMonitorsByDashboardId :: DB es => UUID.UUID -> Eff es [QueryMonitor]
+queryMonitorsByDashboardId dId = PG.query q (Only dId)
+  where
+    q =
+      [sql|
+      SELECT id, created_at, updated_at, project_id, check_interval_mins, alert_threshold, warning_threshold,
+        log_query, log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
+        threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, visualization_type, teams,
+        widget_id, dashboard_id, show_threshold_lines, alert_recovery_threshold, warning_recovery_threshold
+      FROM monitors.query_monitors
+      WHERE dashboard_id = ? AND deleted_at IS NULL
+    |]
+
+
+deleteMonitorsByWidgetIds :: DB es => [Text] -> Eff es Int64
+deleteMonitorsByWidgetIds widgetIds
+  | null widgetIds = pure 0
+  | otherwise = PG.execute q (Only (V.fromList widgetIds))
+  where
+    q = [sql|DELETE FROM monitors.query_monitors WHERE widget_id = ANY(?::text[])|]
+
+
+data WidgetAlertStatus = WidgetAlertStatus
+  { widgetId :: Text
+  , monitorId :: QueryMonitorId
+  , alertStatus :: Text
+  , currentValue :: Maybe Int
+  , alertThreshold :: Int
+  , warningThreshold :: Maybe Int
+  , lastTriggeredAt :: Maybe UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] WidgetAlertStatus
+
+
+getWidgetAlertStatuses :: DB es => V.Vector Text -> Eff es [WidgetAlertStatus]
+getWidgetAlertStatuses widgetIds
+  | V.null widgetIds = pure []
+  | otherwise = PG.query q (Only widgetIds)
+  where
+    q =
+      [sql|
+      SELECT
+        widget_id,
+        id,
+        CASE
+          WHEN alert_last_triggered > NOW() - INTERVAL '5 minutes' THEN 'alerting'
+          WHEN warning_last_triggered > NOW() - INTERVAL '5 minutes' THEN 'warning'
+          ELSE 'normal'
+        END,
+        eval(log_query_as_sql),
+        alert_threshold,
+        warning_threshold,
+        GREATEST(alert_last_triggered, warning_last_triggered)
+      FROM monitors.query_monitors
+      WHERE widget_id = ANY(?::text[])
+        AND deleted_at IS NULL
+        AND deactivated_at IS NULL
+    |]

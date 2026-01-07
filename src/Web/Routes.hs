@@ -215,6 +215,9 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardStarPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Post '[HTML] (RespHeaders (Html ()))
   , dashboardDuplicateWidget :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "duplicate" :> Post '[HTML] (RespHeaders Widget.Widget)
   , dashboardWidgetExpandGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "expand" :> Get '[HTML] (RespHeaders (Html ()))
+  , -- Widget alert routes
+    widgetAlertUpsert :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QPUUId "dashboard_id" :> ReqBody '[FormUrlEncoded] Dashboards.WidgetAlertForm :> Post '[HTML] (RespHeaders (Html ()))
+  , widgetAlertDelete :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> Delete '[HTML] (RespHeaders (Html ()))
   , dashboardBulkActionPost :: mode :- "p" :> ProjectId :> "dashboards" :> "bulk_action" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] Dashboards.DashboardBulkActionForm :> Post '[HTML] (RespHeaders NoContent)
   , -- Dashboard tab routes (htmx lazy loading)
     dashboardTabGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
@@ -438,6 +441,8 @@ cookieProtectedServer =
     , dashboardStarPost = Dashboards.dashboardStarPostH
     , dashboardDuplicateWidget = Dashboards.dashboardDuplicateWidgetPostH
     , dashboardWidgetExpandGet = Dashboards.dashboardWidgetExpandGetH
+    , widgetAlertUpsert = Dashboards.widgetAlertUpsertH
+    , widgetAlertDelete = Dashboards.widgetAlertDeleteH
     , dashboardBulkActionPost = Dashboards.dashboardBulkActionPostH
     , dashboardTabGet = Dashboards.dashboardTabGetH
     , dashboardTabContentGet = Dashboards.dashboardTabContentGetH

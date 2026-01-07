@@ -29,6 +29,10 @@ module Pages.Dashboards (
   dashboardBulkActionPostH,
   TabRenameForm (..),
   TabRenameRes (..),
+  -- Widget alerts
+  WidgetAlertForm (..),
+  widgetAlertUpsertH,
+  widgetAlertDeleteH,
 ) where
 
 import Control.Lens
@@ -91,6 +95,10 @@ import Text.Slugify (slugify)
 import UnliftIO.Exception (try)
 import Utils
 import Web.FormUrlEncoded (FromForm)
+import Data.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUID
+import Models.Apis.Monitors qualified as Monitors
+import Pages.Monitors qualified as Alerts
 
 
 folderFromPath :: Maybe Text -> Text
@@ -623,6 +631,27 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
           }
 
 
+-- | Populate widgets with their alert statuses
+populateWidgetAlertStatuses :: DB es => [Widget.Widget] -> Eff es [Widget.Widget]
+populateWidgetAlertStatuses widgets = do
+  let widgetIds = V.fromList $ mapMaybe (.id) widgets
+  if V.null widgetIds
+    then pure widgets
+    else do
+      statuses <- Monitors.getWidgetAlertStatuses widgetIds
+      let statusMap = Map.fromList [(s.widgetId, s) | s <- statuses]
+      pure $ map (applyAlertStatus statusMap) widgets
+  where
+    applyAlertStatus statusMap w = case (.id) w >>= (`Map.lookup` statusMap) of
+      Nothing -> w
+      Just status -> w
+        { Widget.alertId = Just $ Monitors.unQueryMonitorId status.monitorId & UUID.toText
+        , Widget.alertThreshold = Just status.alertThreshold
+        , Widget.warningThreshold = status.warningThreshold
+        , Widget.alertStatus = Just status.alertStatus
+        }
+
+
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
 dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = do
   (_, dash) <- getDashAndVM dashId Nothing
@@ -647,6 +676,18 @@ dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = do
 
   _ <- Dashboards.updateSchema dashId dash'
   syncDashboardAndQueuePush pid dashId
+
+  -- Sync widget alert if exists
+  whenJust widgetIdM \wid -> do
+    let normalizedWidgetId = T.replace "Expanded" "" wid
+    existingMonitor <- Monitors.queryMonitorByWidgetId normalizedWidgetId
+    whenJust existingMonitor \monitor -> do
+      -- Update monitor's query to match widget's query
+      let newQuery = fromMaybe "" widget.query
+      when (monitor.logQuery /= newQuery) do
+        let updatedMonitor = (monitor :: Monitors.QueryMonitor){Monitors.logQuery = newQuery}
+        _ <- Monitors.queryMonitorUpsert updatedMonitor
+        pass
 
   let successMsg = case widgetIdM of
         Just _ -> "Widget updated successfully"
@@ -681,6 +722,16 @@ dashboardWidgetReorderPatchH _ _ _ widgetOrder | Map.null widgetOrder = addRespH
 dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
   (_, dash) <- getDashAndVM dashId Nothing
 
+  -- Get the old widgets to detect deletions
+  let oldWidgets = case (tabSlugM, (dash :: Dashboards.Dashboard).tabs) of
+        (Just slug, Just tabs) ->
+          let tab = find (\t -> slugify t.name == slug) tabs
+           in maybe [] (.widgets) tab
+        _ -> (dash :: Dashboards.Dashboard).widgets
+      oldWidgetIds = mapMaybe (.id) oldWidgets
+      newWidgetIds = Map.keys widgetOrder
+      deletedWidgetIds = filter (`notElem` newWidgetIds) oldWidgetIds
+
   let newDash = case (tabSlugM, (dash :: Dashboards.Dashboard).tabs) of
         (Just slug, Just tabs) ->
           let updateTab tab = if slugify tab.name == slug then (tab :: Dashboards.Tab) & #widgets .~ reorderWidgets widgetOrder tab.widgets else tab
@@ -689,6 +740,12 @@ dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
 
   _ <- Dashboards.updateSchema dashId newDash
   syncDashboardAndQueuePush pid dashId
+
+  -- Delete alerts for removed widgets
+  unless (null deletedWidgetIds) do
+    _ <- Monitors.deleteMonitorsByWidgetIds deletedWidgetIds
+    pass
+
   addRespHeaders NoContent
 
 
@@ -759,7 +816,9 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
       dash' <- forOf (#variables . traverse . traverse) dashWithConstants (processVariable pid now timeParams allParamsWithConstants)
       -- Process widgets concurrently
       processedWidgets <- pooledForConcurrently dash'.widgets processWidgetWithDashboardId
-      let dash'' = dash' & #widgets .~ processedWidgets
+      -- Populate alert statuses for widgets
+      widgetsWithAlerts <- populateWidgetAlertStatuses processedWidgets
+      let dash'' = dash' & #widgets .~ widgetsWithAlerts
 
       freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
 
@@ -894,8 +953,9 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
                     ]
                   <> [checked_ | isActive]
                 toHtml tabName
-          mkTab "Overview" (effectiveActiveTab /= "edit")
+          mkTab "Overview" (effectiveActiveTab /= "edit" && effectiveActiveTab /= "alerts")
           mkTab "Edit" (effectiveActiveTab == "edit")
+          mkTab "Alerts" (effectiveActiveTab == "alerts")
       when isNewWidget $ h3_ [class_ "text-lg font-normal"] "Add a new widget"
 
     div_ [class_ "flex items-center gap-2"] do
@@ -968,11 +1028,232 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
             , value_ $ fromMaybe "" widgetToUse.title
             , term
                 "_"
-                [text| on change 
-                 set widgetJSON.title to my value then 
+                [text| on change
+                 set widgetJSON.title to my value then
                  trigger 'update-widget' on #{'${widgetPreviewId}'}
                |]
             ]
+
+  -- Alerts tab content
+  unless isNewWidget do
+    let alertFormId = widPrefix <> "-alert-form"
+        alertEndpoint = case dashboardIdM of
+          Just dashId -> "/p/" <> pid.toText <> "/widgets/" <> sourceWid <> "/alert?dashboard_id=" <> dashId.toText
+          Nothing -> ""
+    div_ [class_ "hidden group-has-[.page-drawer-tab-alerts:checked]/wgtexp:block"] do
+      widgetAlertConfig_ pid alertFormId alertEndpoint sourceWid widgetToUse
+
+
+-- | Widget alert configuration form
+widgetAlertConfig_ :: Projects.ProjectId -> Text -> Text -> Text -> Widget.Widget -> Html ()
+widgetAlertConfig_ pid alertFormId alertEndpoint widgetId widget = do
+  let hasAlert = isJust widget.alertId
+  form_
+    [ id_ alertFormId
+    , hxPost_ alertEndpoint
+    , hxSwap_ "none"
+    , hxTrigger_ "submit"
+    , class_ "space-y-4"
+    ]
+    do
+      input_ [type_ "hidden", name_ "widgetId", value_ widgetId]
+      input_ [type_ "hidden", name_ "query", value_ $ fromMaybe "" widget.query]
+      input_ [type_ "hidden", name_ "vizType", value_ $ case widget.wType of
+        Widget.WTTimeseries -> "timeseries"
+        Widget.WTTimeseriesLine -> "timeseries_line"
+        _ -> "timeseries"]
+
+      div_ [class_ "flex items-center justify-between p-4 bg-fillWeaker rounded-lg"] do
+        div_ [] do
+          h4_ [class_ "font-medium text-textStrong"] "Enable Alert"
+          p_ [class_ "text-xs text-textWeak"] "Get notified when this widget's value crosses thresholds"
+        input_ $ [type_ "checkbox", name_ "alertEnabled", class_ "toggle toggle-primary"] <> [checked_ | hasAlert]
+
+      -- Alert thresholds
+      div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4 space-y-4"] do
+        h4_ [class_ "font-medium text-textStrong mb-3"] "Thresholds"
+        div_ [class_ "grid grid-cols-2 gap-4"] do
+          fieldset_ [class_ "fieldset"] do
+            label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] do
+              div_ [class_ "w-1.5 h-1.5 rounded-full bg-fillError-weak"] ""
+              span_ "Alert threshold"
+            div_ [class_ "relative"] do
+              input_
+                [ type_ "number"
+                , name_ "alertThreshold"
+                , class_ "input input-bordered w-full pr-14"
+                , placeholder_ "100"
+                , required_ "required"
+                , value_ $ maybe "" show widget.alertThreshold
+                ]
+              span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
+          fieldset_ [class_ "fieldset"] do
+            label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] do
+              div_ [class_ "w-1.5 h-1.5 rounded-full bg-fillWarning-weak"] ""
+              span_ "Warning threshold"
+            div_ [class_ "relative"] do
+              input_
+                [ type_ "number"
+                , name_ "warningThreshold"
+                , class_ "input input-bordered w-full pr-14"
+                , placeholder_ "50"
+                , value_ $ maybe "" show widget.warningThreshold
+                ]
+              span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
+
+        -- Direction
+        div_ [class_ "mt-3"] do
+          label_ [class_ "text-xs font-medium text-textStrong block mb-1"] "Trigger when value goes"
+          select_ [name_ "direction", class_ "select select-bordered w-full"] do
+            option_ [value_ "above", selected_ ""] "Above threshold"
+            option_ [value_ "below"] "Below threshold"
+
+        -- Threshold line visibility
+        div_ [class_ "mt-3"] do
+          label_ [class_ "text-xs font-medium text-textStrong block mb-1"] "Show threshold lines"
+          select_ [name_ "showThresholdLines", class_ "select select-bordered w-full"] do
+            let isAlways = widget.showThresholdLines == Just "always" || isNothing widget.showThresholdLines
+                isOnBreach = widget.showThresholdLines == Just "on_breach"
+                isNever = widget.showThresholdLines == Just "never"
+            option_ ([value_ "always"] <> [selected_ "" | isAlways]) "Always"
+            option_ ([value_ "on_breach"] <> [selected_ "" | isOnBreach]) "Only when breached"
+            option_ ([value_ "never"] <> [selected_ "" | isNever]) "Never"
+
+      -- Recovery thresholds (collapsible)
+      details_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
+        summary_ [class_ "p-3 cursor-pointer hover:bg-fillWeak transition-colors"] do
+          div_ [class_ "flex items-center gap-2"] do
+            faSprite_ "rotate-left" "regular" "w-4 h-4 text-iconNeutral"
+            span_ [class_ "font-medium text-sm"] "Recovery thresholds"
+            span_ [class_ "text-xs text-textWeak"] "(prevents flapping)"
+        div_ [class_ "p-4 pt-0 border-t border-strokeWeak mt-2"] do
+          p_ [class_ "text-xs text-textWeak mb-3"] "Alert recovers only when value crosses these thresholds"
+          div_ [class_ "grid grid-cols-2 gap-4"] do
+            fieldset_ [class_ "fieldset"] do
+              label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] do
+                div_ [class_ "w-1.5 h-1.5 rounded-full bg-fillError-weak"] ""
+                span_ "Alert recovery"
+              input_ [type_ "number", name_ "alertRecoveryThreshold", class_ "input input-bordered w-full", placeholder_ "e.g., 80"]
+            fieldset_ [class_ "fieldset"] do
+              label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] do
+                div_ [class_ "w-1.5 h-1.5 rounded-full bg-fillWarning-weak"] ""
+                span_ "Warning recovery"
+              input_ [type_ "number", name_ "warningRecoveryThreshold", class_ "input input-bordered w-full", placeholder_ "e.g., 40"]
+
+      -- Check interval
+      div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4"] do
+        label_ [class_ "text-xs font-medium text-textStrong block mb-2"] "Check interval"
+        select_ [name_ "frequency", class_ "select select-bordered w-full"] do
+          option_ [value_ "1m"] "Every 1 minute"
+          option_ [value_ "5m", selected_ ""] "Every 5 minutes"
+          option_ [value_ "15m"] "Every 15 minutes"
+          option_ [value_ "1h"] "Every hour"
+
+      -- Alert title
+      div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4"] do
+        label_ [class_ "text-xs font-medium text-textStrong block mb-2"] "Alert title"
+        input_
+          [ type_ "text"
+          , name_ "title"
+          , class_ "input input-bordered w-full"
+          , placeholder_ "Widget threshold exceeded"
+          , required_ "required"
+          , value_ $ fromMaybe (fromMaybe "Widget Alert" widget.title <> " - Threshold Alert") Nothing
+          ]
+
+      -- Submit button
+      div_ [class_ "flex justify-end gap-2 pt-2"] do
+        when hasAlert do
+          button_
+            [ type_ "button"
+            , class_ "btn btn-ghost btn-sm"
+            , hxDelete_ alertEndpoint
+            , hxSwap_ "none"
+            ]
+            "Remove Alert"
+        button_ [type_ "submit", class_ "btn btn-primary btn-sm"] $ if hasAlert then "Update Alert" else "Create Alert"
+
+
+--------------------------------------------------------------------
+-- Widget Alert Handlers
+--
+
+data WidgetAlertForm = WidgetAlertForm
+  { widgetId :: Text
+  , query :: Text
+  , vizType :: Maybe Text
+  , alertEnabled :: Maybe Text -- "on" when checked
+  , alertThreshold :: Int
+  , warningThreshold :: Maybe Text
+  , direction :: Text
+  , showThresholdLines :: Maybe Text
+  , alertRecoveryThreshold :: Maybe Text
+  , warningRecoveryThreshold :: Maybe Text
+  , frequency :: Maybe Text
+  , title :: Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+widgetAlertUpsertH :: Projects.ProjectId -> Text -> Maybe UUID.UUID -> WidgetAlertForm -> ATAuthCtx (RespHeaders (Html ()))
+widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
+  now <- Time.currentTime
+
+  -- Check if alert already exists for this widget
+  existingMonitor <- Monitors.queryMonitorByWidgetId form.widgetId
+  queryMonitorId <- case existingMonitor of
+    Just m -> pure m.id
+    Nothing -> liftIO $ Monitors.QueryMonitorId <$> UUID.nextRandom
+
+  -- If alertEnabled is not checked, delete the monitor
+  case form.alertEnabled of
+    Nothing -> do
+      _ <- Monitors.deleteMonitorsByWidgetIds [form.widgetId]
+      addSuccessToast "Alert removed from widget" Nothing
+      addRespHeaders $ toHtml ("" :: Text)
+    Just _ -> do
+      -- Convert to AlertUpsertForm and reuse convertToQueryMonitor
+      let alertForm = Alerts.AlertUpsertForm
+            { alertId = Just $ Monitors.unQueryMonitorId queryMonitorId & UUID.toText
+            , alertThreshold = form.alertThreshold
+            , warningThreshold = form.warningThreshold
+            , recipientEmails = []
+            , recipientSlacks = []
+            , recipientEmailAll = Nothing
+            , direction = form.direction
+            , title = form.title
+            , severity = "warning"
+            , subject = form.title
+            , message = ""
+            , query = form.query
+            , since = "1h"
+            , from = ""
+            , to = ""
+            , frequency = form.frequency
+            , timeWindow = Nothing
+            , conditionType = Just "threshold_exceeded"
+            , source = Just "widget"
+            , vizType = form.vizType
+            , teams = []
+            , alertRecoveryThreshold = form.alertRecoveryThreshold
+            , warningRecoveryThreshold = form.warningRecoveryThreshold
+            , widgetId = Just form.widgetId
+            , dashboardId = UUID.toText <$> dashboardIdM
+            , showThresholdLines = form.showThresholdLines
+            }
+
+      let queryMonitor = Alerts.convertToQueryMonitor pid now queryMonitorId alertForm
+      _ <- Monitors.queryMonitorUpsert queryMonitor
+      addSuccessToast "Widget alert configured successfully" Nothing
+      addRespHeaders $ toHtml ("" :: Text)
+
+
+widgetAlertDeleteH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (Html ()))
+widgetAlertDeleteH _pid widgetId = do
+  _ <- Monitors.deleteMonitorsByWidgetIds [widgetId]
+  addSuccessToast "Alert removed from widget" Nothing
+  addRespHeaders $ toHtml ("" :: Text)
 
 
 -- visTypes is now imported from LogQueryBox to avoid circular dependencies
@@ -1677,7 +1958,8 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
           then do
             -- Process widgets concurrently for faster initial page load
             processedWidgets <- pooledForConcurrently tab.widgets processWidgetWithDashboardId
-            pure $ tab & #widgets .~ processedWidgets
+            widgetsWithAlerts <- populateWidgetAlertStatuses processedWidgets
+            pure $ tab & #widgets .~ widgetsWithAlerts
           else pure tab -- Don't process widgets for inactive tabs
       pure $ dash' & #tabs ?~ processedTabs
     Nothing -> pure dash'
@@ -1760,11 +2042,12 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
 
         -- Process widgets concurrently to speed up tabs with multiple eager widgets
         processedWidgets <- pooledForConcurrently tab.widgets processWidgetWithDashboardId
+        widgetsWithAlerts <- populateWidgetAlertStatuses processedWidgets
 
         -- Render tab content panel + OOB modal if variable needs prompting + OOB form URL update
         let widgetOrderUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets_order?tab=" <> tabSlug
         addRespHeaders $ do
-          tabContentPanel_ pid dashId.toText idx tab.name processedWidgets True True
+          tabContentPanel_ pid dashId.toText idx tab.name widgetsWithAlerts True True
           whenJust varToPrompt \v -> variablePickerModal_ pid dashId (Just tabSlug) allParamsWithConstants v True
           -- OOB swap to update widget-order-trigger form's hx-patch URL for the current tab
           form_

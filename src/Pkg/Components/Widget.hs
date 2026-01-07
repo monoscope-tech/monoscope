@@ -3,6 +3,7 @@ module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as K
+import Data.Aeson.KeyMap qualified as AE.KeyMap
 import Data.Default
 import Data.Generics.Labels ()
 import Data.HashMap.Lazy qualified as HM
@@ -141,6 +142,12 @@ data Widget = Widget
   , showMarkArea :: Maybe Bool -- Show mark area in the chart
   , columns :: Maybe [TableColumn] -- Table columns
   , onRowClick :: Maybe RowClickAction -- Action when table row is clicked
+  -- Alert fields (populated from QueryMonitor at render time)
+  , alertId :: Maybe Text -- Linked QueryMonitor ID
+  , alertThreshold :: Maybe Int -- For threshold line rendering
+  , warningThreshold :: Maybe Int
+  , showThresholdLines :: Maybe Text -- 'always' | 'on_breach' | 'never'
+  , alertStatus :: Maybe Text -- 'normal' | 'warning' | 'alerting' (runtime)
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
@@ -306,8 +313,23 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
     span_ [class_ $ "text-textDisabled widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
     span_ [class_ "hidden", id_ $ wId <> "_loader"] $ Utils.faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
-  div_ [class_ "text-iconNeutral flex items-center"] do
-    -- Add expand button that's visible on hover
+  div_ [class_ "text-iconNeutral flex items-center gap-0.5"] do
+    -- Alert status indicator (visible on hover, always visible when alerting/warning)
+    whenJust widget.alertId \_ -> do
+      let (iconColor, iconType, tooltip) = case widget.alertStatus of
+            Just "alerting" -> ("text-fillError-strong", "bell-exclamation", "Alert triggered")
+            Just "warning" -> ("text-fillWarning-strong", "bell", "Warning threshold exceeded")
+            _ -> ("text-iconNeutral", "bell", "Alert configured")
+          visibilityClass = case widget.alertStatus of
+            Just "alerting" -> ""
+            Just "warning" -> ""
+            _ -> "opacity-0 group-hover/wgt:opacity-100"
+      span_
+        [ class_ $ "p-1 transition-opacity " <> visibilityClass
+        , data_ "tippy-content" tooltip
+        , id_ $ wId <> "_alert_indicator"
+        ]
+        $ Utils.faSprite_ iconType "regular" ("w-3.5 h-3.5 " <> iconColor)
 
     whenJust ctaM \(ctaTitle, uri) -> a_ [class_ "underline underline-offset-2 text-textBrand", href_ uri] $ toHtml ctaTitle
     whenJust expandBtnFn \fn ->
@@ -789,7 +811,7 @@ widgetToECharts widget =
         , "dataset"
             AE..= AE.object
               ["source" AE..= maybe AE.Null (.source) widget.dataset]
-        , "series" AE..= map (createSeries widget.wType) ([] :: [Maybe Query])
+        , "series" AE..= addMarkLinesToFirstSeries widget (map (createSeries widget.wType) ([] :: [Maybe Query]))
         , "animation" AE..= False
         , if widget.allowZoom == Just True
             then
@@ -799,6 +821,44 @@ widgetToECharts widget =
                   ]
             else "toolbox" AE..= AE.object []
         ]
+
+
+-- Helper: Add markLines to first series for alert thresholds
+addMarkLinesToFirstSeries :: Widget -> [AE.Value] -> [AE.Value]
+addMarkLinesToFirstSeries widget series
+  | shouldShowLines, not (null markLineData) = case series of
+      [] -> series
+      (first : rest) -> addMarkLine first : rest
+  | otherwise = series
+  where
+    shouldShowLines = case widget.showThresholdLines of
+      Just "never" -> False
+      Just "on_breach" -> widget.alertStatus == Just "warning" || widget.alertStatus == Just "alerting"
+      _ -> isJust widget.alertThreshold || isJust widget.warningThreshold
+
+    markLineData :: [AE.Value]
+    markLineData = catMaybes
+      [ widget.alertThreshold <&> \t -> AE.object
+          [ "yAxis" AE..= t
+          , "lineStyle" AE..= AE.object ["color" AE..= ("#dc2626" :: Text), "type" AE..= ("dashed" :: Text), "width" AE..= (2 :: Int)]
+          , "label" AE..= AE.object ["formatter" AE..= ("Alert: {c}" :: Text), "position" AE..= ("insideEndTop" :: Text)]
+          ]
+      , widget.warningThreshold <&> \t -> AE.object
+          [ "yAxis" AE..= t
+          , "lineStyle" AE..= AE.object ["color" AE..= ("#f59e0b" :: Text), "type" AE..= ("dashed" :: Text), "width" AE..= (2 :: Int)]
+          , "label" AE..= AE.object ["formatter" AE..= ("Warning: {c}" :: Text), "position" AE..= ("insideEndTop" :: Text)]
+          ]
+      ]
+
+    addMarkLine :: AE.Value -> AE.Value
+    addMarkLine (AE.Object obj) = AE.Object $ AE.KeyMap.insert (K.fromText "markLine") markLineObj obj
+    addMarkLine v = v
+
+    markLineObj = AE.object
+      [ "silent" AE..= True
+      , "symbol" AE..= ("none" :: Text)
+      , "data" AE..= markLineData
+      ]
 
 
 -- Helper: Extract legend data

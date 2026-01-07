@@ -1533,7 +1533,11 @@ checkTriggeredQueryMonitors = do
       let total = sum (map (\(Only v) -> v) results)
           durationNs = toNanoSecs (diffTimeSpec end start)
           title = monitor.alertConfig.title
-          status = monitorStatus monitor.triggerLessThan monitor.warningThreshold monitor.alertThreshold total
+          -- Determine if previously alerting/warning (within last 5 minutes)
+          wasAlerting = maybe False (\t -> startWall `diffUTCTime` t < 300) monitor.alertLastTriggered
+          wasWarning = maybe False (\t -> startWall `diffUTCTime` t < 300) monitor.warningLastTriggered
+          status = monitorStatus monitor.triggerLessThan monitor.warningThreshold monitor.alertThreshold
+                     monitor.alertRecoveryThreshold monitor.warningRecoveryThreshold wasAlerting wasWarning total
           severity = case status of "Alerting" -> SLError; "Warning" -> SLWarn; _ -> SLInfo
           attrs =
             Map.fromList
@@ -1562,10 +1566,27 @@ checkTriggeredQueryMonitors = do
       pass
 
 
-monitorStatus :: Bool -> Maybe Int -> Int -> Int -> Text
-monitorStatus triggerLessThan warn alert value
-  | not triggerLessThan, alert <= value = "Alerting"
-  | not triggerLessThan, maybe False (<= value) warn = "Warning"
-  | triggerLessThan, alert >= value = "Alerting"
-  | triggerLessThan, maybe False (>= value) warn = "Warning"
-  | otherwise = "Normal"
+-- Determine alert status with optional recovery thresholds (hysteresis)
+-- When recovery thresholds are set, alert/warning stays active until value crosses recovery threshold
+monitorStatus :: Bool -> Maybe Int -> Int -> Maybe Int -> Maybe Int -> Bool -> Bool -> Int -> Text
+monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRecovery wasAlerting wasWarning value
+  | not triggerLessThan = case () of
+      -- Trigger thresholds (going from normal to alerting/warning)
+      _ | alertThreshold <= value -> "Alerting"
+        | maybe False (<= value) warnThreshold -> "Warning"
+        -- Recovery with hysteresis: stay in state until recovery threshold crossed
+        | wasAlerting, not (hasRecovered alertRecovery alertThreshold) -> "Alerting"
+        | wasWarning, not (hasRecovered warnRecovery (fromMaybe alertThreshold warnThreshold)) -> "Warning"
+        | otherwise -> "Normal"
+  | otherwise = case () of -- triggerLessThan
+      _ | alertThreshold >= value -> "Alerting"
+        | maybe False (>= value) warnThreshold -> "Warning"
+        -- Recovery with hysteresis (inverted for less-than)
+        | wasAlerting, not (hasRecoveredLT alertRecovery alertThreshold) -> "Alerting"
+        | wasWarning, not (hasRecoveredLT warnRecovery (fromMaybe alertThreshold warnThreshold)) -> "Warning"
+        | otherwise -> "Normal"
+  where
+    -- For "above" threshold: recovered when value drops below recovery threshold
+    hasRecovered recoveryM trigger = value < fromMaybe trigger recoveryM
+    -- For "below" threshold: recovered when value rises above recovery threshold
+    hasRecoveredLT recoveryM trigger = value > fromMaybe trigger recoveryM

@@ -59,6 +59,13 @@ data AlertUpsertForm = AlertUpsertForm
   , source :: Maybe Text
   , vizType :: Maybe Text
   , teams :: [UUID.UUID]
+  -- Recovery thresholds (hysteresis)
+  , alertRecoveryThreshold :: Maybe Text
+  , warningRecoveryThreshold :: Maybe Text
+  -- Widget alert fields
+  , widgetId :: Maybe Text
+  , dashboardId :: Maybe Text
+  , showThresholdLines :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -86,6 +93,9 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
           , emailAll = fromMaybe False alertForm.recipientEmailAll
           , slackChannels = V.fromList alertForm.recipientSlacks
           }
+      alertRecoveryInt = readMaybe . toString =<< alertForm.alertRecoveryThreshold
+      warningRecoveryInt = readMaybe . toString =<< alertForm.warningRecoveryThreshold
+      dashboardUuid = UUID.fromText =<< alertForm.dashboardId
    in Monitors.QueryMonitor
         { id = queryMonitorId
         , createdAt = now
@@ -106,6 +116,12 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , deactivatedAt = Nothing
         , visualizationType = fromMaybe "timeseries" alertForm.vizType
         , teams = V.fromList alertForm.teams
+        -- Widget alert fields
+        , widgetId = alertForm.widgetId
+        , dashboardId = dashboardUuid
+        , showThresholdLines = alertForm.showThresholdLines
+        , alertRecoveryThreshold = if isThresholdAlert then alertRecoveryInt else Nothing
+        , warningRecoveryThreshold = if isThresholdAlert then warningRecoveryInt else Nothing
         }
 
 
@@ -172,6 +188,7 @@ queryMonitors_ monitors = do
   table_ [class_ "table text-lg min-w-[65ch]"] do
     thead_ $ tr_ do
       th_ "Title"
+      th_ "Source"
       th_ ""
     tbody_ do
       V.forM_ monitors \monitor -> tr_ do
@@ -193,6 +210,19 @@ end
           , editAction
           ]
           $ toHtml monitor.alertConfig.title
+        td_ [class_ "text-sm text-textWeak"] do
+          case monitor.widgetId of
+            Just wid -> case monitor.dashboardId of
+              Just dashId ->
+                a_ [class_ "flex items-center gap-1 hover:text-textStrong", href_ $ "/p/" <> monitor.projectId.toText <> "/dashboards/" <> UUID.toText dashId <> "#" <> wid] do
+                  faSprite_ "chart-simple" "regular" "w-3.5 h-3.5"
+                  "Widget"
+              Nothing -> span_ [class_ "flex items-center gap-1"] do
+                faSprite_ "chart-simple" "regular" "w-3.5 h-3.5"
+                "Widget"
+            Nothing -> span_ [class_ "flex items-center gap-1"] do
+              faSprite_ "file-lines" "regular" "w-3.5 h-3.5"
+              "Log Explorer"
         td_ [] do
           a_
             [ class_ "btn btn-ghost btn-xs"

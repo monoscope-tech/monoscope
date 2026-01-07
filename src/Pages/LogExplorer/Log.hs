@@ -1035,12 +1035,28 @@ alertConfigurationForm_ project alertM teams = do
                     option_ (value_ "above" : [selected_ "" | maybe True (not . (.triggerLessThan)) alertM]) "Above threshold"
                     option_ (value_ "below" : [selected_ "" | maybe False (.triggerLessThan) alertM]) "Below threshold"
 
-              -- Info banner (more compact)
-              div_ [class_ "flex items-start gap-2 p-2.5 bg-bgAlternate rounded-lg mt-3 hidden"] do
-                faSprite_ "lightbulb" "regular" "w-3.5 h-3.5 text-iconBrand mt-0.5 shrink-0"
-                div_ [class_ "flex-1 text-xs"] do
-                  p_ [class_ "text-textStrong font-medium"] "Preview thresholds on chart"
-                  p_ [class_ "text-textWeak mt-0.5"] "Colored lines show threshold values"
+              -- Recovery thresholds (hysteresis)
+              div_ [class_ "mt-3 pt-3 border-t border-strokeWeak"] do
+                div_ [class_ "mb-2"] do
+                  label_ [class_ "text-xs font-medium text-textStrong"] "Recovery thresholds "
+                  span_ [class_ "text-xs text-textWeak"] "(optional)"
+                  p_ [class_ "text-xs text-textWeak mt-0.5"] "Alert recovers only when value crosses these thresholds"
+                div_ [class_ "flex flex-row gap-3"] do
+                  let recoveryInput name color label vM = fieldset_ [class_ "fieldset flex-1"] do
+                        _ <- label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] do
+                          _ <- div_ [class_ $ "w-1.5 h-1.5 rounded-full " <> color] ""
+                          span_ [class_ "font-medium"] label
+                        div_ [class_ "relative"] do
+                          input_
+                            $ [ type_ "number"
+                              , name_ name
+                              , class_ "input input-sm pr-14"
+                              , placeholder_ "Same as trigger"
+                              ]
+                            ++ [value_ (maybe "" show vM) | isJust vM]
+                          span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
+                  recoveryInput "alertRecoveryThreshold" "bg-fillError-weak" "Alert recovery" ((.alertRecoveryThreshold) =<< alertM)
+                  recoveryInput "warningRecoveryThreshold" "bg-fillWarning-weak" "Warning recovery" ((.warningRecoveryThreshold) =<< alertM)
 
           -- Notification settings (collapsible)
           div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
