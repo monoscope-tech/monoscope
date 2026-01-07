@@ -1866,10 +1866,10 @@ findTabBySlug tabs tabSlug = find ((== tabSlug) . slugify . (.name) . snd) (zip 
 -- | Find widget by ID in dashboard, searching tabs and root. Returns (Maybe tabSlug, Widget)
 findWidgetInDashboard :: Text -> Dashboards.Dashboard -> Maybe (Maybe Text, Widget.Widget)
 findWidgetInDashboard wid dash = tabResult <|> rootResult
- where
-  match w = w.id == Just wid || maybeToMonoid (slugify <$> w.title) == wid
-  tabResult = listToMaybe [(Just $ slugify t.name, w) | t <- fromMaybe [] dash.tabs, w <- t.widgets, match w]
-  rootResult = (Nothing,) <$> find match dash.widgets
+  where
+    match w = w.id == Just wid || maybeToMonoid (slugify <$> w.title) == wid
+    tabResult = listToMaybe [(Just $ slugify t.name, w) | t <- fromMaybe [] dash.tabs, w <- t.widgets, match w]
+    rootResult = (Nothing,) <$> find match dash.widgets
 
 
 -- | Get the first tab as default if available
