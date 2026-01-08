@@ -88,6 +88,11 @@ subjectExprToSQL (SubjectExpr sub Nothing) = display sub
 subjectExprToSQL (SubjectExpr sub (Just (op, val))) = "(" <> display sub <> " " <> op <> " " <> show val <> ")"
 
 
+instance ToQueryText SubjectExpr where
+  toQText (SubjectExpr sub Nothing) = toQText sub
+  toQText (SubjectExpr sub (Just (op, val))) = toQText sub <> " " <> op <> " " <> show val
+
+
 -- Modify Aggregation Functions to include optional aliases
 data AggFunction
   = Count Subject (Maybe Text) -- Optional field and alias
@@ -344,37 +349,30 @@ pRound =
     <*> (comma *> pScalarExpr <* string ")")
 
 
--- | Parse tofloat(value) - convert to float
--- Microsoft KQL: tofloat(value) / todouble(value)
+-- | Helper for type casting parsers with keyword aliases
+pTypeCast :: [Text] -> (Values -> Maybe Text -> AggFunction) -> Parser AggFunction
+pTypeCast keywords ctor = withoutAlias $ ctor <$> (asum (map (\k -> string (k <> "(")) keywords) *> pScalarExpr <* string ")")
+
+
+-- | Parse tofloat(value) / todouble(value) - convert to float
 -- >>> parse pToFloat "" "tofloat(count_)"
 -- Right (ToFloat (Field (Subject "count_" "count_" [])) Nothing)
 pToFloat :: Parser AggFunction
-pToFloat =
-  withoutAlias
-    $ ToFloat
-    <$> ((string "tofloat(" <|> string "todouble(") *> pScalarExpr <* string ")")
+pToFloat = pTypeCast ["tofloat", "todouble"] ToFloat
 
 
--- | Parse toint(value) - convert to integer
--- Microsoft KQL: toint(value) / tolong(value)
+-- | Parse toint(value) / tolong(value) - convert to integer
 -- >>> parse pToInt "" "toint(duration)"
 -- Right (ToInt (Field (Subject "duration" "duration" [])) Nothing)
 pToInt :: Parser AggFunction
-pToInt =
-  withoutAlias
-    $ ToInt
-    <$> ((string "toint(" <|> string "tolong(") *> pScalarExpr <* string ")")
+pToInt = pTypeCast ["toint", "tolong"] ToInt
 
 
 -- | Parse tostring(value) - convert to text
--- Microsoft KQL: tostring(value)
 -- >>> parse pToString "" "tostring(status_code)"
 -- Right (ToString (Field (Subject "status_code" "status_code" [])) Nothing)
 pToString :: Parser AggFunction
-pToString =
-  withoutAlias
-    $ ToString
-    <$> (string "tostring(" *> pScalarExpr <* string ")")
+pToString = pTypeCast ["tostring"] ToString
 
 
 -- | Helper for simple function(subject) parsers
@@ -423,12 +421,41 @@ aggFunctionParser =
     ]
 
 
+-- | Convert AggFunction to KQL syntax (NOT SQL - use Display for SQL)
 instance ToQueryText AggFunction where
-  toQText = display
+  toQText (Count (Subject "*" _ _) _) = "count()"
+  toQText (Count sub _) = "count(" <> toQText sub <> ")"
+  toQText (CountIf cond _) = "countif(" <> toQText cond <> ")"
+  toQText (DCount sub Nothing _) = "dcount(" <> toQText sub <> ")"
+  toQText (DCount sub (Just acc) _) = "dcount(" <> toQText sub <> ", " <> show acc <> ")"
+  toQText (P50 sub _) = "p50(" <> toQText sub <> ")"
+  toQText (P75 sub _) = "p75(" <> toQText sub <> ")"
+  toQText (P90 sub _) = "p90(" <> toQText sub <> ")"
+  toQText (P95 sub _) = "p95(" <> toQText sub <> ")"
+  toQText (P99 sub _) = "p99(" <> toQText sub <> ")"
+  toQText (P100 sub _) = "p100(" <> toQText sub <> ")"
+  toQText (Percentile subExpr pct _) = "percentile(" <> toQText subExpr <> ", " <> show pct <> ")"
+  toQText (Percentiles subExpr pcts _) = "percentiles(" <> toQText subExpr <> ", " <> T.intercalate ", " (map show pcts) <> ")"
+  toQText (Sum sub _) = "sum(" <> toQText sub <> ")"
+  toQText (Avg sub _) = "avg(" <> toQText sub <> ")"
+  toQText (Min sub _) = "min(" <> toQText sub <> ")"
+  toQText (Max sub _) = "max(" <> toQText sub <> ")"
+  toQText (Median sub _) = "median(" <> toQText sub <> ")"
+  toQText (Stdev sub _) = "stdev(" <> toQText sub <> ")"
+  toQText (Range sub _) = "range(" <> toQText sub <> ")"
+  toQText (Coalesce exprs _) = "coalesce(" <> T.intercalate ", " (map toQText exprs) <> ")"
+  toQText (Strcat exprs _) = "strcat(" <> T.intercalate ", " (map toQText exprs) <> ")"
+  toQText (Iff cond thenVal elseVal _) = "iff(" <> toQText cond <> ", " <> toQText thenVal <> ", " <> toQText elseVal <> ")"
+  toQText (Case pairs defVal _) = "case(" <> T.intercalate ", " (concatMap (\(c, v) -> [toQText c, toQText v]) pairs) <> ", " <> toQText defVal <> ")"
+  toQText (Round val decimals _) = "round(" <> toQText val <> ", " <> toQText decimals <> ")"
+  toQText (ToFloat val _) = "tofloat(" <> toQText val <> ")"
+  toQText (ToInt val _) = "toint(" <> toQText val <> ")"
+  toQText (ToString val _) = "tostring(" <> toQText val <> ")"
+  toQText (Plain sub _) = toQText sub
 
 
 instance ToQueryText [AggFunction] where
-  toQText xs = T.intercalate "," $ map toQText xs
+  toQText xs = T.intercalate ", " $ map toQText xs
 
 
 -- | Get KQL default alias for aggregation (e.g., count_, sum_field)
@@ -686,17 +713,18 @@ pColumnAssignment = do
   pure (name, setAlias name expr)
 
 
+-- | Helper for column-assignment commands (extend/project)
+pColumnCommand :: Text -> ([(Text, AggFunction)] -> Section) -> Parser Section
+pColumnCommand keyword ctor = string keyword *> space *> (ctor <$> pColumnAssignment `sepBy1` comma)
+
+
 -- | Parser for 'extend' command - add computed columns
 -- Microsoft KQL: extend ColumnName = Expression [, ...]
 --
 -- >>> parse pExtendSection "" "extend error_cat = case(status >= 500, \"5xx\", \"ok\")"
 -- Right (ExtendCommand [("error_cat",Case [(GTEq (Subject "status" "status" []) (Num "500"),Str "5xx")] (Str "ok") (Just "error_cat"))])
 pExtendSection :: Parser Section
-pExtendSection = do
-  _ <- string "extend"
-  space
-  cols <- pColumnAssignment `sepBy1` comma
-  pure $ ExtendCommand cols
+pExtendSection = pColumnCommand "extend" ExtendCommand
 
 
 -- | Parser for 'project' command - select specific columns
@@ -705,11 +733,7 @@ pExtendSection = do
 -- >>> parse pProjectSection "" "project service = resource.service.name, count = count()"
 -- Right (ProjectCommand [("service",Plain (Subject "resource.service.name" "resource" [FieldKey "service",FieldKey "name"]) (Just "service")),("count",Count (Subject "*" "*" []) (Just "count"))])
 pProjectSection :: Parser Section
-pProjectSection = do
-  _ <- string "project"
-  space
-  cols <- pColumnAssignment `sepBy1` comma
-  pure $ ProjectCommand cols
+pProjectSection = pColumnCommand "project" ProjectCommand
 
 
 -- | Set alias on an aggregation function
