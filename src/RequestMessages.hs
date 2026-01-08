@@ -43,6 +43,7 @@ import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Simple (Query)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.Errors qualified as Errors
 import Models.Apis.Fields.Types qualified as Fields (
   Field (..),
   FieldCategoryEnum (..),
@@ -149,19 +150,10 @@ replaceNullChars = T.replace "\\u0000" ""
 
 -- | Process errors with optional HTTP-specific fields
 -- If HTTP fields are not provided, they remain as Nothing in the error record
-processErrors :: Projects.ProjectId -> Maybe RequestDumps.SDKTypes -> Maybe Text -> Maybe Text -> RequestDumps.ATError -> (RequestDumps.ATError, Query, [DBField])
-processErrors pid maybeSdkType maybeMethod maybePath err = (normalizedError, q, params)
+processErrors :: Projects.ProjectId -> Maybe RequestDumps.SDKTypes -> Maybe Text -> Maybe Text -> Errors.ATError -> ( Query, [DBField])
+processErrors pid maybeSdkType maybeMethod maybePath err = (q, params)
   where
-    (q, params) = Anomalies.insertErrorQueryAndParams pid normalizedError
-    normalizedError =
-      err
-        { RequestDumps.projectId = Just pid
-        , RequestDumps.hash = Just $ fromMaybe defaultHash err.hash
-        , RequestDumps.technology = maybeSdkType <|> err.technology
-        , RequestDumps.requestMethod = maybeMethod <|> err.requestMethod
-        , RequestDumps.requestPath = maybePath <|> err.requestPath
-        }
-    defaultHash = toXXHash (pid.toText <> fromMaybe "" err.serviceName <> err.errorType <> replaceAllFormats (err.message <> err.stackTrace) <> maybe "" show maybeSdkType)
+    (q, params) = Errors.upsertErrorQueryAndParam pid err
 
 
 sortVector :: Ord a => V.Vector a -> V.Vector a

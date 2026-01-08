@@ -14,6 +14,7 @@ module Models.Apis.Errors (
   updateErrorState,
   updateBaseline,
   resolveError,
+  upsertErrorQueryAndParam,
   assignError,
   -- Error Events (for baseline/spike detection)
   HourlyBucket (..),
@@ -512,7 +513,7 @@ getErrorsWithCurrentRates pid =
 
 
 -- | Upsert an error (insert or update on conflict)
-upsertErrorQueryAndParam :: DB es => Projects.ProjectId -> RequestDump.ATError -> (Query, [DBField])
+upsertErrorQueryAndParam :: Projects.ProjectId -> ATError -> (Query, [DBField])
 upsertErrorQueryAndParam pid err = (q, params)
   where
     q =
