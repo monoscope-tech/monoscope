@@ -29,7 +29,7 @@ alertForm =
     , message = "This is a test alert"
     , severity = "warning"
     , subject = "Test Alert"
-    , query = "SELECT 1"
+    , query = "status_code == 200"
     , since = "1"
     , from = "1"
     , to = "1"
