@@ -1,6 +1,8 @@
 module Pkg.Parser.Stats (
   -- Types
   AggFunction (..),
+  ArithOp (..),
+  ScalarExpr (..),
   Section (..),
   SummarizeByClause (..),
   BinFunction (..),
@@ -37,6 +39,7 @@ module Pkg.Parser.Stats (
   pPercentilesMulti,
   pSubjectExpr,
   pScalarExpr,
+  pScalarExprNested,
   -- Utilities
   defaultBinSize,
   extractPercentilesInfo,
@@ -95,21 +98,37 @@ instance ToQueryText SubjectExpr where
   toQText (SubjectExpr sub (Just (op, val))) = toQText sub <> " " <> op <> " " <> show val
 
 
--- | Scalar expression that can be either a simple value or a nested aggregation
--- This enables patterns like round(countif(...), 2) where the first arg is an aggregation
-data ScalarExpr = SVal Values | SAgg AggFunction
+-- | Arithmetic operators for scalar expressions
+data ArithOp = Mul | Div | Add | Sub
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | Scalar expression that can be a value, aggregation, or arithmetic combination
+-- Enables: round(countif(...) * 100.0 / count(), 2)
+data ScalarExpr = SVal Values | SAgg AggFunction | SArith ScalarExpr ArithOp ScalarExpr
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+arithOpToSQL :: ArithOp -> Text
+arithOpToSQL = \case Mul -> " * "; Div -> " / "; Add -> " + "; Sub -> " - "
 
 
 instance Display ScalarExpr where
   displayPrec p (SVal v) = displayPrec p v
   displayPrec _ (SAgg agg) = displayBuilder $ aggToSqlNoAlias agg
+  displayPrec _ (SArith l op r) = displayBuilder $ "(" <> display l <> arithOpToSQL op <> display r <> ")"
+
+
+arithOpToKQL :: ArithOp -> Text
+arithOpToKQL = \case Mul -> " * "; Div -> " / "; Add -> " + "; Sub -> " - "
 
 
 instance ToQueryText ScalarExpr where
   toQText (SVal v) = toQText v
   toQText (SAgg agg) = toQText agg
+  toQText (SArith l op r) = toQText l <> arithOpToKQL op <> toQText r
 
 
 -- | SQL pattern for simple aggregations: fn((subject)::float)
@@ -117,9 +136,9 @@ simpleAggSQL :: Text -> Subject -> Text
 simpleAggSQL fn sub = fn <> "((" <> display sub <> ")::float)"
 
 
--- | SQL pattern for percentiles: approx_percentile(pct, percentile_agg((subject)::float))::int
+-- | SQL pattern for percentiles: approx_percentile(pct, percentile_agg((subject)::float))::float
 percentileSQL :: Double -> Subject -> Text
-percentileSQL pct sub = "approx_percentile(" <> show pct <> ", percentile_agg((" <> display sub <> ")::float))::int"
+percentileSQL pct sub = "approx_percentile(" <> show pct <> ", percentile_agg((" <> display sub <> ")::float))::float"
 
 
 -- | Convert AggFunction to SQL without the AS alias (for use inside other expressions)
@@ -368,10 +387,26 @@ baseAggParsers =
   ]
 
 
--- | Parse a nested scalar expression that can be a value or an aggregation
--- This enables patterns like round(countif(...), 2) or tofloat(sum(field))
+-- | Left-associative chain combinator for expression parsing
+chainl1 :: Parser a -> Parser (a -> a -> a) -> Parser a
+chainl1 p op = p >>= rest where rest x = (op <*> pure x <*> p >>= rest) <|> pure x
+
+
+-- | Parse a nested scalar expression with arithmetic support
+-- Precedence: * / binds tighter than + -
+-- Enables: round(countif(status >= 400) * 100.0 / count(), 2)
+--
+-- >>> parse pScalarExprNested "" "countif(status >= 400) * 100.0 / count()"
+-- Right (SArith (SArith (SAgg (CountIf (GTEq (Subject "status" "status" []) (Num "400")) Nothing)) Mul (SVal (Num "100.0"))) Div (SAgg (Count (Subject "*" "*" []) Nothing)))
 pScalarExprNested :: Parser ScalarExpr
-pScalarExprNested = (SAgg <$> try (choice baseAggParsers)) <|> (SVal <$> pScalarExpr)
+pScalarExprNested = pAddSub
+  where
+    pAddSub = chainl1 pMulDiv (space *> (pOp '+' Add <|> pOp '-' Sub) <* space)
+    pMulDiv = chainl1 pFactor (space *> (pOp '*' Mul <|> pOp '/' Div) <* space)
+    pFactor = between (char '(' <* space) (space *> char ')') pAddSub
+          <|> SAgg <$> try (choice baseAggParsers)
+          <|> SVal <$> pScalarExpr
+    pOp c op = (\l r -> SArith l op r) <$ char c
 
 
 -- | Helper for variadic scalar functions like coalesce/strcat
@@ -446,7 +481,7 @@ pRound = withoutAlias $ do
   case decimals of
     Num n -> case readMaybe (toString n) :: Maybe Int of
       Just d | d < 0 || d > 15 -> fail "round() decimals must be 0-15 per PostgreSQL limit"
-      _ -> pure ()
+      _ -> pass
     _ -> fail "round() decimals must be numeric"
   _ <- string ")"
   pure $ Round val decimals

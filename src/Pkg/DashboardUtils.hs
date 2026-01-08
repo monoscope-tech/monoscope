@@ -1,4 +1,4 @@
-module Pkg.DashboardUtils (replacePlaceholders, variablePresets, constantToSQLList) where
+module Pkg.DashboardUtils (replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList) where
 
 import Data.Map qualified as Map
 import Data.Text qualified as T
@@ -46,6 +46,17 @@ variablePresets pid mf mt allParams currentTime =
         <> allParams'
 
 
+-- | Like variablePresets but uses KQL format for constants.
+-- For {{const-*}} placeholders, looks up the const-*-kql value which has KQL-compatible formatting.
+variablePresetsKQL :: Text -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Map.Map Text Text
+variablePresetsKQL pid mf mt allParams currentTime =
+  let basePresets = variablePresets pid mf mt allParams currentTime
+      paramsMap = Map.fromList [(k, fromMaybe "" v) | (k, v) <- allParams]
+      -- For each const-* key, use the const-*-kql value instead
+      kqlRemapping = Map.fromList [(k, v) | (k, _) <- allParams, "const-" `T.isPrefixOf` k, not ("-kql" `T.isSuffixOf` k), let kqlKey = k <> "-kql", v <- maybeToList (Map.lookup kqlKey paramsMap)]
+   in Map.union kqlRemapping basePresets
+
+
 -- | Convert constant results to a SQL list format suitable for IN clauses.
 -- For single-column results [["api/users"], ["api/orders"]],
 -- this generates: "('api/users', 'api/orders')".
@@ -58,3 +69,16 @@ constantToSQLList = \case
   rows -> "(" <> T.intercalate ", " [escapeQuote v | (v : _) <- rows] <> ")"
   where
     escapeQuote v = "'" <> T.replace "'" "''" v <> "'"
+
+
+-- | Convert constant results to a KQL list format suitable for IN expressions.
+-- For single-column results [["api/users"], ["api/orders"]],
+-- this generates: ("api/users", "api/orders").
+-- KQL uses double quotes for strings with backslash escaping.
+-- For empty results, generates a sentinel value that will never match real data.
+constantToKQLList :: [[Text]] -> Text
+constantToKQLList = \case
+  [] -> "(\"__EMPTY_CONST__\")"  -- Sentinel value - valid syntax but won't match real data
+  rows -> "(" <> T.intercalate ", " [escapeDoubleQuote v | (v : _) <- rows] <> ")"
+  where
+    escapeDoubleQuote v = "\"" <> T.replace "\"" "\\\"" (T.replace "\\" "\\\\" v) <> "\""

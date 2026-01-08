@@ -3,6 +3,7 @@ module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedCol
 
 import Control.Error (hush)
 import Data.Default (Default (def))
+import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..), addUTCTime, diffUTCTime, secondsToDiffTime)
@@ -22,6 +23,7 @@ data QueryComponents = QueryComponents
   , groupByClause :: [Text]
   , fromTable :: Maybe Text
   , select :: [Text]
+  , aggregations :: [Text] -- Summarize aggregations (separate from extended columns in select)
   , finalColumns :: [Text]
   , finalSqlQuery :: Text -- includes count(*) OVER() as last column
   , finalAlertQuery :: Maybe Text
@@ -29,6 +31,7 @@ data QueryComponents = QueryComponents
   , sortFields :: Maybe [SortField] -- Fields to sort by
   , takeLimit :: Maybe Int -- Limit number of results
   , percentilesInfo :: Maybe (Text, [Double]) -- (field expr SQL, percentile values) extracted from AST
+  , extendedColumns :: [(Text, Text)] -- Extended column mappings (alias -> full SQL expression without AS)
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -36,6 +39,11 @@ data QueryComponents = QueryComponents
 
 sectionsToComponents :: SqlQueryCfg -> [Section] -> QueryComponents
 sectionsToComponents sqlCfg = foldl' (applySectionToComponent sqlCfg) (def :: QueryComponents)
+
+
+-- | Resolve a column name to its full expression if it's an extended column
+resolveExtendedColumn :: [(Text, Text)] -> Text -> Text
+resolveExtendedColumn extCols colName = fromMaybe colName (L.lookup colName extCols)
 
 
 -- | Combine where clauses using AND
@@ -50,9 +58,13 @@ applySectionToComponent _ qc (WhereClause expr) = qc{whereClause = combineWhereC
 applySectionToComponent _ qc (Source source) = qc{fromTable = Just $ display source}
 applySectionToComponent sqlCfg qc (SummarizeCommand aggs byClauseM) =
   let pctInfo = extractPercentilesInfo [SummarizeCommand aggs byClauseM]
-   in applySummarizeByClauseToQC sqlCfg byClauseM $ qc{select = qc.select <> map display aggs, percentilesInfo = pctInfo}
--- extend adds computed columns to existing select (preserves all columns)
-applySectionToComponent _ qc (ExtendCommand cols) = qc{select = qc.select <> map (display . snd) cols}
+   in applySummarizeByClauseToQC sqlCfg byClauseM $ qc{aggregations = qc.aggregations <> map display aggs, percentilesInfo = pctInfo}
+-- extend tracks computed column mappings for GROUP BY resolution (does NOT add to select)
+applySectionToComponent _ qc (ExtendCommand cols) =
+  let colMappings = [(name, stripAlias $ display expr) | (name, expr) <- cols]
+   in qc{extendedColumns = qc.extendedColumns <> colMappings}
+  where
+    stripAlias expr = let (pre, post) = T.breakOn " AS " expr in if T.null post then expr else pre
 -- project replaces select with only the specified columns
 applySectionToComponent _ qc (ProjectCommand cols) = qc{select = map (display . snd) cols}
 applySectionToComponent _ qc (SortCommand sortFields) = qc{sortFields = Just sortFields}
@@ -150,7 +162,8 @@ sqlFromQueryComponents sqlCfg qc =
         if T.null rawWhere
           then ""
           else "(" <> rawWhere <> ")"
-      groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
+      resolvedGroupByCols = map (resolveExtendedColumn qc.extendedColumns) qc.groupByClause
+      groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," resolvedGroupByCols
 
       -- Date range for data queries (with cursor for pagination)
       -- When cursor is present, use it as the upper bound for data queries
@@ -175,7 +188,10 @@ sqlFromQueryComponents sqlCfg qc =
             Nothing ->
               if any (\s -> "time_bucket" `T.isInfixOf` s) qc.select
                 then "ORDER BY " <> "time_bucket('" <> defaultBinSize <> "', " <> timestampCol <> ") desc"
-                else "ORDER BY " <> timestampCol <> " desc"
+                -- When GROUP BY exists without bin, order by first group column (timestamp not in GROUP BY)
+                else if not (null qc.groupByClause)
+                  then "ORDER BY " <> fromMaybe timestampCol (listToMaybe qc.groupByClause) <> " desc"
+                  else "ORDER BY " <> timestampCol <> " desc"
 
       -- Handle limit - only apply for non-summarize queries by default
       limitClause = case qc.takeLimit of
@@ -209,8 +225,12 @@ sqlFromQueryComponents sqlCfg qc =
           case qc.finalSummarizeQuery of
             Just binInterval ->
               let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-                  selectCols = T.intercalate "," $ filter (not . T.isInfixOf "time_bucket") qc.select
-               in [fmt|SELECT extract(epoch from {timeBucketExpr})::integer, {selectCols}, {countOver}
+                  -- Use aggregations if available (from summarize), otherwise fall back to select
+                  cols = if null qc.aggregations then qc.select else qc.aggregations
+                  selectCols = T.intercalate "," $ filter (not . T.isInfixOf "time_bucket") cols
+                  -- Only add comma separator if there are select columns
+                  selectPart = if T.null selectCols then "" else selectCols <> ", "
+               in [fmt|SELECT extract(epoch from {timeBucketExpr})::integer, {selectPart}{countOver}
                    FROM {fromTable}
                    WHERE {buildWhere}
                    GROUP BY {timeBucketExpr}
@@ -253,24 +273,26 @@ sqlFromQueryComponents sqlCfg qc =
                     ORDER BY timeB DESC {limitClause}|]
               Nothing ->
                 -- Normal summarize query
-                let groupCol =
+                let resolve = resolveExtendedColumn qc.extendedColumns
+                    groupCol =
                       if null qc.groupByClause
-                        then "'" <> (if null qc.select then "count" else "value") <> "'"
-                        else "COALESCE(" <> fromMaybe "status_code" (listToMaybe qc.groupByClause) <> "::text, 'null')"
-                    aggCol = if null qc.select then "count(*)::float" else fromMaybe "count(*)::float" (listToMaybe qc.select)
+                        then "'" <> (if null qc.aggregations then "count" else "value") <> "'"
+                        else "COALESCE(" <> fromMaybe "status_code" (resolve <$> listToMaybe qc.groupByClause) <> "::text, 'null')"
+                    aggCol = if null qc.aggregations then "count(*)::float" else fromMaybe "count(*)::float" (listToMaybe qc.aggregations)
                     timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-                    firstGroupCol = fromMaybe "status_code" (listToMaybe qc.groupByClause)
+                    firstGroupCol = resolve $ fromMaybe "status_code" (listToMaybe qc.groupByClause)
                     groupByPart = if null qc.groupByClause then timeBucketExpr else timeBucketExpr <> ", " <> firstGroupCol
                  in [fmt|SELECT extract(epoch from {timeBucketExpr})::integer, {groupCol}, {aggCol}
                       FROM {fromTable} WHERE {buildWhere} GROUP BY {groupByPart}
                       ORDER BY {timeBucketExpr} DESC {limitClause}|]
           Nothing ->
-            [fmt|SELECT {T.intercalate "," qc.select} FROM {fromTable} WHERE {buildWhere}
-              {groupByClause} ORDER BY {timestampCol} DESC {limitClause}|]
+            let orderCol = if null qc.groupByClause then timestampCol else fromMaybe timestampCol (listToMaybe qc.groupByClause)
+             in [fmt|SELECT {T.intercalate "," qc.select} FROM {fromTable} WHERE {buildWhere}
+              {groupByClause} ORDER BY {orderCol} DESC {limitClause}|]
 
       -- FIXME: render this based on the aggregations, but without the aliases
       alertSelect = [fmt| count(*)::integer|] :: Text
-      alertGroupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
+      alertGroupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," resolvedGroupByCols
       -- Returns the max of all the values returned by the query. Change 5mins to
       -- For alert queries, we use a simplified whereCondition without the time range/cursor
       alertWhereCondition =

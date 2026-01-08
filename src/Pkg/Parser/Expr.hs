@@ -47,6 +47,7 @@ symbol = L.symbol sc
 -- TimeFunction stores KQL time functions like now()
 -- AgoExpression represents KQL ago() function with the value and unit for SQL interval conversion
 -- Field represents a field reference (column name) - displayed unquoted in SQL
+-- ScalarFunc represents KQL scalar functions: coalesce, iff, isnull, etc.
 data Values
   = Num Text
   | Str Text
@@ -58,6 +59,7 @@ data Values
   | AgoExpression Text -- The original KQL timespan expression for direct conversion to PostgreSQL interval
   | NowExpression -- Represents now() function
   | Field Subject -- Field reference - displayed as column name, not quoted string
+  | ScalarFunc Text [Values] -- Scalar function: name, arguments (coalesce, iff, isnull, toint, etc.)
   deriving stock (Eq, Generic, Ord, Show)
 
 
@@ -67,7 +69,7 @@ instance AE.FromJSON Values where
   parseJSON (AE.Bool b) = return $ Boolean b
   parseJSON AE.Null = return Null
   parseJSON (AE.Array arr) = List <$> traverse AE.parseJSON (V.toList arr)
-  parseJSON (AE.Object _) = fail "Cannot parse Object into Values"
+  parseJSON (AE.Object obj) = ScalarFunc <$> obj AE..: "func" <*> obj AE..: "args"
 
 
 instance AE.ToJSON Values where
@@ -83,9 +85,12 @@ instance AE.ToJSON Values where
   toJSON (AgoExpression expr) = AE.String ("ago(" <> expr <> ")")
   toJSON NowExpression = AE.String "now()"
   toJSON (Field sub) = AE.toJSON sub
+  toJSON (ScalarFunc name args) = AE.object ["func" AE..= name, "args" AE..= args]
 
 
 instance ToQueryText Values where
+  toQText (ScalarFunc name args) = name <> "(" <> T.intercalate ", " (map toQText args) <> ")"
+  toQText (Field sub) = toQText sub
   toQText v = decodeUtf8 $ AE.encode v
 
 
@@ -171,9 +176,13 @@ data Expr
   | Paren Expr
   | And Expr Expr
   | Or Expr Expr
-  --  | Not Expr
-  --  | JSONPathExpr Expr
-  --  | FunctionCall String [Expr] -- For functions like ANY
+  | ValEq Values Values -- Value-to-value comparison (e.g., "" == "")
+  | ValNotEq Values Values -- Value-to-value not-equal (e.g., "" != "x")
+  | ValGT Values Values -- Value-to-value greater than (e.g., coalesce(x,0) > 100)
+  | ValLT Values Values -- Value-to-value less than
+  | ValGTEq Values Values -- Value-to-value greater than or equal
+  | ValLTEq Values Values -- Value-to-value less than or equal
+  | BoolFunc Values -- Boolean scalar function as standalone expression (isnull, isnotnull, isempty, isnotempty)
   deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -312,6 +321,57 @@ pAgoFunction = do
   return $ AgoExpression (toText timespan)
 
 
+-- | KQL scalar function names (longer names first to avoid prefix matching)
+scalarFuncNames :: [Text]
+scalarFuncNames = ["isnotnull", "isnotempty", "isnull", "isempty", "coalesce", "strcat", "iff", "iif", "todouble", "tofloat", "tolong", "toint", "tostring", "tobool"]
+
+
+-- | Boolean scalar functions that can be used as standalone expressions in filters
+boolScalarFuncNames :: [Text]
+boolScalarFuncNames = ["isnotnull", "isnotempty", "isnull", "isempty"]
+
+
+-- | Parse boolean scalar function as standalone expression (isnull(x), isnotnull(x), etc.)
+pBoolScalarFunc :: Parser Values
+pBoolScalarFunc = do
+  name <- asum $ map (\n -> n <$ string n) boolScalarFuncNames
+  args <- parens (pScalarArg `sepBy` (space *> char ',' <* space))
+  pure $ ScalarFunc name args
+
+
+-- | Parse scalar function argument: nested function, field reference, or literal
+pScalarArg :: Parser Values
+pScalarArg = try pScalarFunc <|> try (Field <$> pSubject) <|> pValuesNoFunc
+
+
+-- | Parse KQL scalar functions: coalesce(a,b), iff(cond,t,f), isnull(x), toint(x), etc.
+pScalarFunc :: Parser Values
+pScalarFunc = do
+  name <- asum $ map (\n -> n <$ string n) scalarFuncNames
+  args <- parens (pScalarArg `sepBy` (space *> char ',' <* space))
+  pure $ ScalarFunc (if name == "iif" then "iff" else name) args
+
+
+-- | pValuesNoFunc: pValues without scalar function parsing (avoids left recursion)
+pValuesNoFunc :: Parser Values
+pValuesNoFunc =
+  choice @[]
+    [ Null <$ string "null"
+    , Boolean <$> (True <$ string "true" <|> False <$ string "false" <|> False <$ string "FALSE" <|> True <$ string "TRUE")
+    , Str . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"'))
+    , Str . toText <$> (char '\'' *> manyTill L.charLiteral (char '\''))
+    , List [] <$ string "[]"
+    , List <$> sqParens (pValuesNoFunc `sepBy` (space *> char ',' <* space))
+    , List [] <$ string "()"
+    , List <$> parens (pValuesNoFunc `sepBy` (space *> char ',' <* space))
+    , try pNowFunction
+    , try pAgoFunction
+    , try pDuration
+    , try (Num . toText . show <$> L.signed (pure ()) L.float)
+    , Num . toText . show <$> L.signed (pure ()) L.decimal
+    ]
+
+
 -- | parse values into our internal AST representation. Int, Str, Num, Bool, List, etc
 --
 -- Examples:
@@ -356,7 +416,8 @@ pAgoFunction = do
 pValues :: Parser Values
 pValues =
   choice @[]
-    [ Null <$ string "null"
+    [ try pScalarFunc -- Must come first to handle coalesce(), iff(), etc.
+    , Null <$ string "null"
     , Boolean <$> (True <$ string "true" <|> False <$ string "false" <|> False <$ string "FALSE" <|> True <$ string "TRUE")
     , Str . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"'))
     , Str . toText <$> (char '\'' *> manyTill L.charLiteral (char '\''))
@@ -429,6 +490,12 @@ pValues =
 pTerm :: Parser Expr
 pTerm =
   (Paren <$> parens pExpr)
+    <|> try (ValEq <$> pValues <* space <* void (symbol "==") <* space <*> pValues)
+    <|> try (ValNotEq <$> pValues <* space <* void (symbol "!=") <* space <*> pValues)
+    <|> try (ValGTEq <$> pValues <* space <* void (symbol ">=") <* space <*> pValues)
+    <|> try (ValLTEq <$> pValues <* space <* void (symbol "<=") <* space <*> pValues)
+    <|> try (ValGT <$> pValues <* space <* void (symbol ">") <* space <*> pValues)
+    <|> try (ValLT <$> pValues <* space <* void (symbol "<") <* space <*> pValues)
     <|> try (Eq <$> pSubject <* space <* void (symbol "==") <* space <*> pValues)
     <|> try (NotEq <$> pSubject <* space <* void (symbol "!=") <* space <*> pValues)
     <|> try (GTEq <$> pSubject <* space <* void (symbol ">=") <* space <*> pValues)
@@ -449,6 +516,7 @@ pTerm =
     <|> try (EndsWith <$> pSubject <* space <* void (symbol "endswith") <* space <*> pValues)
     <|> try (Matches <$> pSubject <* space <* void (symbol "matches") <* space <*> (toText <$> (char '/' *> manyTill L.charLiteral (char '/'))))
     <|> try regexParser
+    <|> try (BoolFunc <$> pBoolScalarFunc) -- Standalone boolean functions: isnull(x), isnotnull(x), etc.
 
 
 -- >>> parse regexParser "" "abc=~/abc.*/"
@@ -677,6 +745,32 @@ instance Display Values where
     let arrayElements = mconcat . intersperse "," . map (displayPrec prec) $ vs
      in "ARRAY[" <> arrayElements <> "]"
   displayPrec prec (Field sub) = displayPrec prec sub
+  displayPrec _ (ScalarFunc name args) = displayBuilder $ scalarFuncToSQL name args
+
+
+-- | Map scalar function to SQL (consolidates all function->SQL logic)
+scalarFuncToSQL :: Text -> [Values] -> Text
+scalarFuncToSQL "coalesce" args = "COALESCE(" <> T.intercalate ", " (map display args) <> ")"
+scalarFuncToSQL "strcat" args = "CONCAT(" <> T.intercalate ", " (map display args) <> ")"
+scalarFuncToSQL "iff" [c, t, f] = "CASE WHEN " <> display c <> " THEN " <> display t <> " ELSE " <> display f <> " END"
+scalarFuncToSQL "isnull" [v] = display v <> " IS NULL"
+scalarFuncToSQL "isnotnull" [v] = display v <> " IS NOT NULL"
+scalarFuncToSQL "isempty" [v] = "(" <> display v <> " IS NULL OR " <> display v <> " = '')"
+scalarFuncToSQL "isnotempty" [v] = "(" <> display v <> " IS NOT NULL AND " <> display v <> " != '')"
+scalarFuncToSQL name [v] | name `elem` ["toint", "tolong", "tostring", "tofloat", "todouble", "tobool"] = "(" <> display v <> ")::" <> typeCastSQL name
+scalarFuncToSQL name args = T.toUpper name <> "(" <> T.intercalate ", " (map display args) <> ")"
+
+
+-- | Map type cast function name to SQL type
+typeCastSQL :: Text -> Text
+typeCastSQL = \case
+  "toint" -> "integer"
+  "tolong" -> "bigint"
+  "tostring" -> "text"
+  "tofloat" -> "float"
+  "todouble" -> "double precision"
+  "tobool" -> "boolean"
+  _ -> "text"
 
 
 -- | Render the expr ast to a value. Start with Eq only, for supporting jsonpath
@@ -774,6 +868,13 @@ instance Display Expr where
   displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayPrec prec u2
   displayPrec prec (Or u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayPrec prec u2
   displayPrec prec (Regex sub val) = displayPrec prec $ jsonPathQuery "like_regex" sub (Str val)
+  displayPrec prec (ValEq v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " = " <> displayPrec prec v2
+  displayPrec prec (ValNotEq v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " != " <> displayPrec prec v2
+  displayPrec prec (ValGT v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " > " <> displayPrec prec v2
+  displayPrec prec (ValLT v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " < " <> displayPrec prec v2
+  displayPrec prec (ValGTEq v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " >= " <> displayPrec prec v2
+  displayPrec prec (ValLTEq v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " <= " <> displayPrec prec v2
+  displayPrec prec (BoolFunc v) = displayPrec prec v -- Boolean scalar function renders directly to SQL
 
 
 -- To be used when generating the text query given an ast
@@ -801,6 +902,13 @@ instance ToQueryText Expr where
   toQText (And left right) = toQText left <> " AND " <> toQText right
   toQText (Or left right) = toQText left <> " OR " <> toQText right
   toQText (Regex sub val) = toQText sub <> " =~ " <> toQText (Str val)
+  toQText (ValEq v1 v2) = toQText v1 <> " == " <> toQText v2
+  toQText (ValNotEq v1 v2) = toQText v1 <> " != " <> toQText v2
+  toQText (ValGT v1 v2) = toQText v1 <> " > " <> toQText v2
+  toQText (ValLT v1 v2) = toQText v1 <> " < " <> toQText v2
+  toQText (ValGTEq v1 v2) = toQText v1 <> " >= " <> toQText v2
+  toQText (ValLTEq v1 v2) = toQText v1 <> " <= " <> toQText v2
+  toQText (BoolFunc v) = toQText v
 
 
 -- Helper function to handle the common display logic
@@ -897,3 +1005,4 @@ jsonPathQuery op' (Subject entire base keys) val =
         _ -> " ? (@ " <> oper <> " null" <> pstfx <> ")"
     buildCondition oper (List xs) pstfx = " ? (@ " <> oper <> " [" <> (mconcat . intersperse "," . map display) xs <> "]" <> pstfx <> ")"
     buildCondition oper (Field sub) pstfx = " ? (@ " <> oper <> " " <> display sub <> pstfx <> ")"
+    buildCondition oper (ScalarFunc name args) pstfx = " ? (@ " <> oper <> " " <> scalarFuncToSQL name args <> pstfx <> ")"

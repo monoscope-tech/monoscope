@@ -69,9 +69,10 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       normT query `shouldBe` normT expected
     it "summarize with named aggregation" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "timestamp >= ago(7d) | summarize TotalCount = count() by Computer"
+      -- ORDER BY uses GROUP BY column (Computer) since timestamp is not in GROUP BY
       let expected =
             [text|
-      SELECT count(*)::float AS TotalCount, count(*) OVER() as _total_count FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((timestamp >= NOW() - INTERVAL '7 days')) GROUP BY Computer ORDER BY timestamp desc limit 500 |]
+      SELECT count(*)::float AS TotalCount, count(*) OVER() as _total_count FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((timestamp >= NOW() - INTERVAL '7 days')) GROUP BY Computer ORDER BY Computer desc limit 500 |]
       normT query `shouldBe` normT expected
     it "summarize with sort by and take" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60) | sort by parent_id asc | take 1000"
@@ -484,4 +485,53 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
     it "sanitizes dots in summarize named aggregations" do
       let result = parseQueryToAST "| summarize total.count = count() by status"
       isRight result `shouldBe` True
+
+  describe "scalar functions in filter expressions" do
+    it "parses coalesce in where clause comparison" do
+      let result = parseQueryToAST "coalesce(status_code, 0) >= 400"
+      isRight result `shouldBe` True
+
+    it "parses coalesce with nested field path" do
+      let result = parseQueryToAST "coalesce(attributes.http.response.status_code, 0) >= 400"
+      isRight result `shouldBe` True
+
+    it "parses complex filter with coalesce" do
+      let result = parseQueryToAST "name != null and kind == \"server\" and (status_code == \"ERROR\" or coalesce(attributes.http.response.status_code, 0) >= 400)"
+      isRight result `shouldBe` True
+
+    it "generates correct SQL for coalesce in filter" do
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "coalesce(status_code, 0) >= 400"
+      T.isInfixOf "COALESCE(status_code, 0) >= 400" query `shouldBe` True
+
+    it "parses isnull as standalone expression" do
+      let result = parseQueryToAST "isnull(error_message)"
+      isRight result `shouldBe` True
+
+    it "parses isnotnull in combined expression" do
+      let result = parseQueryToAST "isnotnull(trace_id) and status_code == 200"
+      isRight result `shouldBe` True
+
+    it "generates SQL for isnull" do
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "isnull(error_message)"
+      T.isInfixOf "error_message IS NULL" query `shouldBe` True
+
+    it "generates SQL for isnotnull" do
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "isnotnull(trace_id)"
+      T.isInfixOf "trace_id IS NOT NULL" query `shouldBe` True
+
+    it "parses toint in filter comparison" do
+      let result = parseQueryToAST "toint(status_code) >= 400"
+      isRight result `shouldBe` True
+
+    it "generates SQL for toint in filter" do
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "toint(status_code) >= 400"
+      T.isInfixOf "(status_code)::integer >= 400" query `shouldBe` True
+
+    it "parses nested scalar functions" do
+      let result = parseQueryToAST "toint(coalesce(status_code, 0)) >= 400"
+      isRight result `shouldBe` True
+
+    it "generates SQL for nested scalar functions" do
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "toint(coalesce(status_code, 0)) >= 400"
+      T.isInfixOf "(COALESCE(status_code, 0))::integer >= 400" query `shouldBe` True
 

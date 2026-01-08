@@ -114,8 +114,10 @@ data Widget = Widget
   , icon :: Maybe Text
   , timeseriesStatAggregate :: Maybe Text -- average, min, max, sum, etc
   , sql :: Maybe Text
+  , rawSql :: Maybe Text -- Original SQL with {{const-...}} placeholders (for display)
   , summarizeBy :: Maybe SummarizeBy
   , query :: Maybe Text
+  , rawQuery :: Maybe Text -- Original KQL with {{const-...}} placeholders (for display)
   , queries :: Maybe [Query] -- Multiple queries for combined visualizations
   , layout :: Maybe Layout -- Layout (x, y, w, h)
   , xAxis :: Maybe WidgetAxis
@@ -382,6 +384,38 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
             |]
             ]
             "Copy to dashboard"
+        li_
+          $ a_
+            [ class_ "p-2 w-full text-left block cursor-pointer"
+            , data_ "tippy-content" "Copy generated SQL to clipboard"
+            , term "_" [text|
+                on click
+                set widgetEl to the closest <[data-widget]/>
+                set widgetData to JSON.parse(widgetEl.dataset.widget)
+                set sql to widgetData.sql or widgetData.query or 'No SQL available'
+                if 'clipboard' in window.navigator then
+                  call navigator.clipboard.writeText(sql)
+                  send successToast(value:['SQL copied to clipboard']) to <body/>
+                end
+              |]
+            ]
+            "Copy SQL"
+        li_
+          $ a_
+            [ class_ "p-2 w-full text-left block cursor-pointer"
+            , data_ "tippy-content" "Copy KQL query to clipboard"
+            , term "_" [text|
+                on click
+                set widgetEl to the closest <[data-widget]/>
+                set widgetData to JSON.parse(widgetEl.dataset.widget)
+                set kql to widgetData.query or 'No KQL available'
+                if 'clipboard' in window.navigator then
+                  call navigator.clipboard.writeText(kql)
+                  send successToast(value:['KQL copied to clipboard']) to <body/>
+                end
+              |]
+            ]
+            "Copy KQL"
 
         -- Only show the "Duplicate widget" option if we're in a dashboard context
         when (isJust widget._dashboardId) do
@@ -590,8 +624,10 @@ renderChart widget = do
             let echartOpt = decodeUtf8 $ AE.encode $ widgetToECharts widget
             let yAxisLabel = fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
             let query = decodeUtf8 $ AE.encode widget.query
+            let rawQuery = decodeUtf8 $ AE.encode widget.rawQuery
             let pid = decodeUtf8 $ AE.encode $ widget._projectId <&> (.toText)
             let querySQL = maybeToMonoid widget.sql
+            let rawQuerySQL = maybeToMonoid widget.rawSql
             let chartType = mapWidgetTypeToChartType widget.wType
             let summarizeBy = T.toLower $ T.drop 2 $ show $ fromMaybe SBSum widget.summarizeBy
             let summarizeByPfx = summarizeByPrefix $ fromMaybe SBSum widget.summarizeBy
@@ -611,7 +647,9 @@ renderChart widget = do
                   chartType: '${chartType}',
                   widgetType: ${wType},
                   query: ${query},
+                  rawQuery: ${rawQuery},
                   querySQL: `${querySQL}`,
+                  rawQuerySQL: `${rawQuerySQL}`,
                   theme: "${theme}",
                   yAxisLabel: "${yAxisLabel}",
                   pid: ${pid},
@@ -664,7 +702,9 @@ renderChart widget = do
                     opt: echartOpt,
                     chartId: config.chartId,
                     query: config.query,
+                    rawQuery: config.rawQuery,
                     querySQL: config.querySQL,
+                    rawQuerySQL: config.rawQuerySQL,
                     theme: config.theme,
                     yAxisLabel: config.yAxisLabel,
                     pid: config.pid,
