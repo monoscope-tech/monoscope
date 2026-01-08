@@ -388,7 +388,9 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
           $ a_
             [ class_ "p-2 w-full text-left block cursor-pointer"
             , data_ "tippy-content" "Copy generated SQL to clipboard"
-            , term "_" [text|
+            , term
+                "_"
+                [text|
                 on click
                 set widgetEl to the closest <[data-widget]/>
                 set widgetData to JSON.parse(widgetEl.dataset.widget)
@@ -404,7 +406,9 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
           $ a_
             [ class_ "p-2 w-full text-left block cursor-pointer"
             , data_ "tippy-content" "Copy KQL query to clipboard"
-            , term "_" [text|
+            , term
+                "_"
+                [text|
                 on click
                 set widgetEl to the closest <[data-widget]/>
                 set widgetData to JSON.parse(widgetEl.dataset.widget)

@@ -78,7 +78,7 @@ constantToSQLList = \case
 -- For empty results, generates a sentinel value that will never match real data.
 constantToKQLList :: [[Text]] -> Text
 constantToKQLList = \case
-  [] -> "(\"__EMPTY_CONST__\")"  -- Sentinel value - valid syntax but won't match real data
+  [] -> "(\"__EMPTY_CONST__\")" -- Sentinel value - valid syntax but won't match real data
   rows -> "(" <> T.intercalate ", " [escapeDoubleQuote v | (v : _) <- rows] <> ")"
   where
     escapeDoubleQuote v = "\"" <> T.replace "\"" "\\\"" (T.replace "\\" "\\\\" v) <> "\""

@@ -189,9 +189,10 @@ sqlFromQueryComponents sqlCfg qc =
               if any (\s -> "time_bucket" `T.isInfixOf` s) qc.select
                 then "ORDER BY " <> "time_bucket('" <> defaultBinSize <> "', " <> timestampCol <> ") desc"
                 -- When GROUP BY exists without bin, order by first group column (timestamp not in GROUP BY)
-                else if not (null qc.groupByClause)
-                  then "ORDER BY " <> fromMaybe timestampCol (listToMaybe qc.groupByClause) <> " desc"
-                  else "ORDER BY " <> timestampCol <> " desc"
+                else
+                  if not (null qc.groupByClause)
+                    then "ORDER BY " <> fromMaybe timestampCol (listToMaybe qc.groupByClause) <> " desc"
+                    else "ORDER BY " <> timestampCol <> " desc"
 
       -- Handle limit - only apply for non-summarize queries by default
       limitClause = case qc.takeLimit of

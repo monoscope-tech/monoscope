@@ -403,9 +403,12 @@ pScalarExprNested = pAddSub
   where
     pAddSub = chainl1 pMulDiv (space *> (pOp '+' Add <|> pOp '-' Sub) <* space)
     pMulDiv = chainl1 pFactor (space *> (pOp '*' Mul <|> pOp '/' Div) <* space)
-    pFactor = between (char '(' <* space) (space *> char ')') pAddSub
-          <|> SAgg <$> try (choice baseAggParsers)
-          <|> SVal <$> pScalarExpr
+    pFactor =
+      between (char '(' <* space) (space *> char ')') pAddSub
+        <|> SAgg
+        <$> try (choice baseAggParsers)
+        <|> SVal
+        <$> pScalarExpr
     pOp c op = (\l r -> SArith l op r) <$ char c
 
 
