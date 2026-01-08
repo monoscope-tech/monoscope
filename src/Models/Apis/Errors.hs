@@ -4,6 +4,7 @@ module Models.Apis.Errors (
   ErrorState (..),
   ErrorEvent (..),
   ErrorEventId,
+  ATError (..),
   -- Queries
   getErrors,
   getErrorById,
@@ -45,6 +46,9 @@ import Models.Users.Users qualified as Users
 import Relude hiding (id)
 import System.Types (DB)
 import Utils (DBField (MkDBField))
+import Models.Apis.RequestDumps qualified as RequestDumps
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+import Data.Default
 
 
 newtype ErrorId = ErrorId {unErrorId :: UUID.UUID}
@@ -100,7 +104,6 @@ instance FromField ErrorState where
           Just s -> pure s
           Nothing -> pure ESNew
 
-
 data Error = Error
   { id :: ErrorId
   , projectId :: Projects.ProjectId
@@ -113,7 +116,7 @@ data Error = Error
   , environment :: Text
   , service :: Maybe Text
   , runtime :: Maybe Text
-  , errorData :: AE.Value
+  , errorData :: ATError
   , representativeMessage :: Maybe Text
   , firstEventId :: Maybe ErrorEventId
   , lastEventId :: Maybe ErrorEventId
@@ -145,6 +148,37 @@ data Error = Error
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Error
 
+
+data ATError = ATError
+  { projectId :: Maybe Projects.ProjectId
+  , when :: UTCTime
+  , errorType :: Text
+  , rootErrorType :: Text
+  , message :: Text
+  , rootErrorMessage :: Text
+  , stackTrace :: Text
+  , hash :: Maybe Text
+  , technology :: Maybe RequestDumps.SDKTypes
+  , requestMethod :: Maybe Text
+  , requestPath :: Maybe Text
+  , serviceName :: Maybe Text
+  , environment :: Maybe Text
+  , runtime :: Maybe Text
+  , traceId :: Maybe Text
+  , spanId :: Maybe Text
+  , parentSpanId :: Maybe Text
+  , endpointHash :: Maybe Text
+  , userId :: Maybe Text
+  , userEmail :: Maybe Text
+  , userIp :: Maybe Text
+  , sessionId :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, NFData)
+  deriving (FromField, ToField) via Aeson ATError
+  deriving
+    (AE.FromJSON, AE.ToJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
 
 data ErrorEvent = ErrorEvent
   { id :: ErrorEventId
@@ -228,9 +262,9 @@ getErrorById eid = do
 
 
 -- | Get error by hash
-getErrorByHash :: DB es => Projects.ProjectId -> Text -> Text -> Eff es (Maybe Error)
-getErrorByHash pid hash env = do
-  results <- PG.query q (pid, hash, env)
+getErrorByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Error)
+getErrorByHash pid hash = do
+  results <- PG.query q (pid, hash)
   return $ listToMaybe results
   where
     q =
@@ -246,7 +280,7 @@ getErrorByHash pid hash env = do
                baseline_error_rate_mean, baseline_error_rate_stddev, baseline_updated_at,
                is_ignored, ignored_until
         FROM apis.errors
-        WHERE project_id = ? AND hash = ? AND environment = ?
+        WHERE project_id = ? AND hash = ?
       |]
 
 

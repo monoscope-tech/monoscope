@@ -688,7 +688,6 @@ processProjectErrors pid errors = do
     Left (e :: SomePostgreSqlException) ->
       Log.logAttention "Failed to insert errors" ("error", AE.toJSON $ show e)
     Right _ ->
-      -- Only log if errors were actually inserted (reduces noise in tests)
       Relude.when (V.length errors > 0)
         $ Log.logInfo "Successfully inserted errors for project"
         $ AE.object [("project_id", AE.toJSON pid.toText), ("error_count", AE.toJSON $ V.length errors)]
@@ -1145,59 +1144,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
     Anomalies.ATFormat -> processAPIChangeAnomalies pid targetHashes
     -- Runtime exceptions get individual issues
     -- Each unique error pattern gets its own issue for tracking
-    Anomalies.ATRuntimeException -> do
-      errors <- Anomalies.errorsByHashes pid targetHashes
-
-      -- Create one issue per error
-      forM_ errors \err -> do
-        issue <- liftIO $ Issues.createRuntimeExceptionIssue pid err.errorData
-        Issues.insertIssue issue
-        -- Queue enhancement job
-        _ <- liftIO $ withResource authCtx.jobsPool \conn ->
-          createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
-        -- Send notifications only if project exists and has alerts enabled
-        projectM <- Projects.projectById pid
-        whenJust projectM \project -> Relude.when project.errorAlerts do
-          users <- Projects.usersByProjectId pid
-          let issueId = UUID.toText issue.id.unUUIDId
-          forM_ project.notificationsChannel \case
-            Projects.NSlack ->
-              forM_ errors \err' -> sendSlackAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData}) pid project.title Nothing
-            Projects.NDiscord ->
-              forM_ errors \err' -> sendDiscordAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData}) pid project.title Nothing
-            Projects.NPhone ->
-              forM_ errors \err' ->
-                sendWhatsAppAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData}) pid project.title project.whatsappNumbers
-            Projects.NEmail ->
-              forM_ users \u -> do
-                let errosJ =
-                      ( \ee ->
-                          let e = ee.errorData
-                           in AE.object
-                                [ "root_error_message" AE..= e.rootErrorMessage
-                                , "error_type" AE..= e.errorType
-                                , "error_message" AE..= e.message
-                                , "stack_trace" AE..= e.stackTrace
-                                , "when" AE..= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
-                                , "hash" AE..= e.hash
-                                , "tech" AE..= e.technology
-                                , "request_info" AE..= (fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
-                                , "root_error_type" AE..= e.rootErrorType
-                                ]
-                      )
-                        <$> errors
-                    title = project.title
-                    errors_url = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
-                    templateVars =
-                      [aesonQQ|{
-                          "project_name": #{title},
-                          "errors_url": #{errors_url},
-                          "errors": #{errosJ}
-                     }|]
-                sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
-    -- Ignore other anomaly types
     _ -> pass
-
 
 -- | Process API change anomalies (endpoint, shape, format) into unified APIChange issues
 -- This function groups related anomalies by endpoint to prevent notification spam.
@@ -1735,10 +1682,7 @@ detectErrorSpikes pid authCtx = do
 processNewError :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBackgroundCtx ()
 processNewError pid errorHash authCtx = do
   Log.logInfo "Processing new error" (pid, errorHash)
-
-  -- Get the error by hash
-  errorM <- Errors.getErrorByHash pid errorHash "production"
-
+  errorM <- Errors.getErrorByHash pid errorHash
   case errorM of
     Nothing -> Log.logAttention "Error not found for new error processing" (pid, errorHash)
     Just err -> do
@@ -1747,10 +1691,41 @@ processNewError pid errorHash authCtx = do
         -- Create a runtime exception issue
         issue <- liftIO $ Issues.createNewErrorIssue pid err
         Issues.insertIssue issue
-
         -- Queue LLM enhancement
         liftIO $ withResource authCtx.jobsPool \conn ->
           void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+        -- Send notifications only if project exists and has alerts enabled
+        projectM <- Projects.projectById pid
+        whenJust projectM \project -> Relude.when project.errorAlerts do
+          users <- Projects.usersByProjectId pid
+          let issueId = UUID.toText issue.id.unUUIDId
+          forM_ project.notificationsChannel \case
+            Projects.NSlack -> sendSlackAlert (RuntimeErrorAlert{issueId = issueId, errorData = err.errorData}) pid project.title Nothing
+            Projects.NDiscord -> sendDiscordAlert (RuntimeErrorAlert{issueId = issueId, errorData = err.errorData}) pid project.title Nothing
+            Projects.NPhone -> sendWhatsAppAlert (RuntimeErrorAlert{issueId = issueId, errorData = err.errorData}) pid project.title project.whatsappNumbers
+            Projects.NEmail ->
+              forM_ users \u -> do
+                let e = err.errorData
+                    errorsJ = V.singleton $ AE.object
+                                [ "root_error_message" AE..= e.rootErrorMessage
+                                , "error_type" AE..= e.errorType
+                                , "error_message" AE..= e.message
+                                , "stack_trace" AE..= e.stackTrace
+                                , "when" AE..= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
+                                , "hash" AE..= e.hash
+                                , "tech" AE..= e.technology
+                                , "request_info" AE..= (fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
+                                , "root_error_type" AE..= e.rootErrorType
+                                ]
+                    title = project.title
+                    errors_url = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
+                    templateVars =
+                      [aesonQQ|{
+                          "project_name": #{title},
+                          "errors_url": #{errors_url},
+                          "errors": #{errorsJ}
+                     }|]
+                sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
 
         Log.logInfo "Created issue for new error" (pid, err.id, issue.id)
 
@@ -1923,20 +1898,8 @@ detectEndpointErrorRateSpike pid authCtx = do
 
         Relude.when isSpike $ do
           Log.logInfo "Endpoint error rate spike detected" (epRate.endpointHash, currentErrorRate, baselineMean, zScore)
-          issue <-
-            liftIO
-              $ Issues.createEndpointErrorRateSpikeIssue
-                pid
-                epRate.endpointHash
-                epRate.method
-                epRate.urlPath
-                (Just epRate.host)
-                currentErrorRate
-                baselineMean
-                stddev
-                epRate.currentHourErrors
-                epRate.currentHourRequests
-                V.empty
+          issue <- liftIO $ Issues.createEndpointErrorRateSpikeIssue 
+                pid epRate.endpointHash epRate.method epRate.urlPath (Just epRate.host) currentErrorRate baselineMean stddev epRate.currentHourErrors epRate.currentHourRequests V.empty 
           Issues.insertIssue issue
           liftIO $ withResource authCtx.jobsPool \conn ->
             void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
@@ -1962,18 +1925,8 @@ detectEndpointVolumeRateChange pid authCtx = do
             direction = if currentRate > baselineMean then "spike" else "drop"
         Relude.when isSignificantChange $ do
           Log.logInfo "Endpoint volume rate change detected" (epRate.endpointHash, currentRate, baselineMean, zScore, direction)
-          issue <-
-            liftIO
-              $ Issues.createEndpointVolumeRateChangeIssue
-                pid
-                epRate.endpointHash
-                epRate.method
-                epRate.urlPath
-                (Just epRate.host)
-                currentRate
-                baselineMean
-                stddev
-                direction
+          issue <- liftIO $ Issues.createEndpointVolumeRateChangeIssue
+            pid epRate.endpointHash epRate.method epRate.urlPath (Just epRate.host) currentRate baselineMean stddev direction
 
           Issues.insertIssue issue
           liftIO $ withResource authCtx.jobsPool \conn ->
