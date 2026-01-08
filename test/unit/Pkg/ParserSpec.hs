@@ -313,3 +313,80 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       let result = parseQueryToAST "| summarize case(status >= 500, \"5xx\", status >= 400, \"4xx\", status >= 300, \"3xx\", \"ok\") by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
+  describe "round parsing" do
+    it "parses round with value and decimals" do
+      let result = parseQueryToAST "| summarize round(duration, 2) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "generates ROUND SQL" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize round(duration, 2) by bin(timestamp, 1h)"
+      let sql = fromMaybe "" c.finalSummarizeQuery
+      -- round produces ROUND(value::numeric, decimals)::float
+      normT sql `shouldBe` normT "SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', ROUND((duration)::numeric, 2)::float AS round_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC"
+
+  describe "type casting functions" do
+    it "parses tofloat" do
+      let result = parseQueryToAST "| summarize tofloat(count_val) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "parses todouble (alias for tofloat)" do
+      let result = parseQueryToAST "| summarize todouble(count_val) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "parses toint" do
+      let result = parseQueryToAST "| summarize toint(duration) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "parses tolong (alias for toint)" do
+      let result = parseQueryToAST "| summarize tolong(duration) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "parses tostring" do
+      let result = parseQueryToAST "| summarize tostring(status_code) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "generates proper SQL for tofloat" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize tofloat(count_val) by bin(timestamp, 1h)"
+      let sql = fromMaybe "" c.finalSummarizeQuery
+      -- tofloat produces ::float which is correct for numeric aggregation
+      normT sql `shouldBe` normT "SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (count_val)::float AS tofloat_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC"
+
+    it "generates proper SQL for toint" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize toint(duration) by bin(timestamp, 1h)"
+      let sql = fromMaybe "" c.finalSummarizeQuery
+      -- toint produces ::integer
+      normT sql `shouldBe` normT "SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (duration)::integer AS toint_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC"
+
+    it "generates proper SQL for tostring" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize tostring(status_code) by bin(timestamp, 1h)"
+      let sql = fromMaybe "" c.finalSummarizeQuery
+      -- tostring produces ::text (not ::float, as text cannot be cast to float)
+      normT sql `shouldBe` normT "SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (status_code)::text AS tostring_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC"
+
+  describe "extend operator" do
+    it "parses extend with single column" do
+      let result = parseQueryToAST "| extend error_cat = case(status >= 500, \"5xx\", \"ok\")"
+      isRight result `shouldBe` True
+
+    it "parses extend with multiple columns" do
+      let result = parseQueryToAST "| extend cat = case(status >= 500, \"5xx\", \"ok\"), formatted = tostring(status)"
+      isRight result `shouldBe` True
+
+    it "generates SQL for extend with case" do
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| extend error_cat = case(status >= 500, \"5xx\", \"ok\")"
+      -- extend should add columns to the select
+      T.isInfixOf "CASE WHEN status >= 500 THEN '5xx' ELSE 'ok' END AS error_cat" query `shouldBe` True
+
+  describe "project operator" do
+    it "parses project with single column" do
+      let result = parseQueryToAST "| project service = resource.service.name"
+      isRight result `shouldBe` True
+
+    it "parses project with multiple columns" do
+      let result = parseQueryToAST "| project service = resource.service.name, total = count()"
+      isRight result `shouldBe` True
+
+    it "parses project with aggregation functions" do
+      let result = parseQueryToAST "| project error_rate = round(countif(status_code == \"ERROR\"), 2)"
+      isRight result `shouldBe` True
+

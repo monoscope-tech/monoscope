@@ -51,6 +51,10 @@ applySectionToComponent _ qc (Source source) = qc{fromTable = Just $ display sou
 applySectionToComponent sqlCfg qc (SummarizeCommand aggs byClauseM) =
   let pctInfo = extractPercentilesInfo [SummarizeCommand aggs byClauseM]
    in applySummarizeByClauseToQC sqlCfg byClauseM $ qc{select = qc.select <> map display aggs, percentilesInfo = pctInfo}
+-- extend adds computed columns to existing select (preserves all columns)
+applySectionToComponent _ qc (ExtendCommand cols) = qc{select = qc.select <> map (display . snd) cols}
+-- project replaces select with only the specified columns
+applySectionToComponent _ qc (ProjectCommand cols) = qc{select = map (display . snd) cols}
 applySectionToComponent _ qc (SortCommand sortFields) = qc{sortFields = Just sortFields}
 applySectionToComponent _ qc (TakeCommand limit) = qc{takeLimit = Just limit}
 

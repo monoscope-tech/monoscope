@@ -11,6 +11,8 @@ module Pkg.Parser.Stats (
   pSummarizeSection,
   pSortSection,
   pTakeSection,
+  pExtendSection,
+  pProjectSection,
   parseQuery,
   pSource,
   -- Aggregation parsers
@@ -27,6 +29,10 @@ module Pkg.Parser.Stats (
   pStrcat,
   pIff,
   pCase,
+  pRound,
+  pToFloat,
+  pToInt,
+  pToString,
   pPercentileSingle,
   pPercentilesMulti,
   pSubjectExpr,
@@ -108,6 +114,11 @@ data AggFunction
   | Strcat [Values] (Maybe Text) -- strcat(expr1, expr2, ...) - concatenate any scalar expressions
   | Iff Expr Values Values (Maybe Text) -- iff(condition, then_expr, else_expr)
   | Case [(Expr, Values)] Values (Maybe Text) -- case(pred1, val1, pred2, val2, ..., else)
+  | -- Type casting and formatting functions (Microsoft KQL compatible)
+    Round Values Values (Maybe Text) -- round(value, decimals) - round to N decimal places
+  | ToFloat Values (Maybe Text) -- tofloat(value) - convert to float
+  | ToInt Values (Maybe Text) -- toint(value) - convert to integer
+  | ToString Values (Maybe Text) -- tostring(value) - convert to text
   | Plain Subject (Maybe Text)
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -319,6 +330,53 @@ pCase =
     <*> (pScalarExpr <* string ")")
 
 
+-- | Parse round(value, decimals) - round to N decimal places
+-- Microsoft KQL: round(value [, decimals])
+-- >>> parse pRound "" "round(3.14159, 2)"
+-- Right (Round (Num "3.14159") (Num "2") Nothing)
+-- >>> parse pRound "" "round(duration / 1000000, 2)"
+-- Right (Round (Field (Subject "duration / 1000000" "duration" [])) (Num "2") Nothing)
+pRound :: Parser AggFunction
+pRound =
+  withoutAlias
+    $ Round
+    <$> (string "round(" *> pScalarExpr)
+    <*> (comma *> pScalarExpr <* string ")")
+
+
+-- | Parse tofloat(value) - convert to float
+-- Microsoft KQL: tofloat(value) / todouble(value)
+-- >>> parse pToFloat "" "tofloat(count_)"
+-- Right (ToFloat (Field (Subject "count_" "count_" [])) Nothing)
+pToFloat :: Parser AggFunction
+pToFloat =
+  withoutAlias
+    $ ToFloat
+    <$> ((string "tofloat(" <|> string "todouble(") *> pScalarExpr <* string ")")
+
+
+-- | Parse toint(value) - convert to integer
+-- Microsoft KQL: toint(value) / tolong(value)
+-- >>> parse pToInt "" "toint(duration)"
+-- Right (ToInt (Field (Subject "duration" "duration" [])) Nothing)
+pToInt :: Parser AggFunction
+pToInt =
+  withoutAlias
+    $ ToInt
+    <$> ((string "toint(" <|> string "tolong(") *> pScalarExpr <* string ")")
+
+
+-- | Parse tostring(value) - convert to text
+-- Microsoft KQL: tostring(value)
+-- >>> parse pToString "" "tostring(status_code)"
+-- Right (ToString (Field (Subject "status_code" "status_code" [])) Nothing)
+pToString :: Parser AggFunction
+pToString =
+  withoutAlias
+    $ ToString
+    <$> (string "tostring(" *> pScalarExpr <* string ")")
+
+
 -- | Helper for simple function(subject) parsers
 pSimpleAgg :: Text -> (Subject -> Maybe Text -> AggFunction) -> Parser AggFunction
 pSimpleAgg name ctor = withoutAlias $ ctor <$> (string (name <> "(") *> pSubject <* string ")")
@@ -351,6 +409,10 @@ aggFunctionParser =
     , try pStrcat
     , try pIff
     , try pCase
+    , try pRound -- Type casting and formatting functions
+    , try pToFloat
+    , try pToInt
+    , try pToString
     , pSimpleAgg "avg" Avg
     , pSimpleAgg "min" Min
     , pSimpleAgg "max" Max
@@ -394,6 +456,10 @@ defaultAlias = \case
   Strcat _ _ -> "strcat_"
   Iff _ _ _ _ -> "iff_"
   Case _ _ _ -> "case_"
+  Round _ _ _ -> "round_"
+  ToFloat _ _ -> "tofloat_"
+  ToInt _ _ -> "toint_"
+  ToString _ _ -> "tostring_"
   Plain (Subject name _ _) _ -> name
 
 
@@ -442,6 +508,18 @@ instance Display AggFunction where
     displayBuilder $ withAlias ("CASE " <> foldMap displayCaseWhen pairs <> "ELSE " <> display defaultVal <> " END") alias agg
     where
       displayCaseWhen (cond, val) = "WHEN " <> display cond <> " THEN " <> display val <> " "
+  -- round(value, decimals) -> ROUND((value)::numeric, decimals)::float
+  displayPrec _prec agg@(Round val decimals alias) =
+    displayBuilder $ withAlias ("ROUND((" <> display val <> ")::numeric, " <> display decimals <> ")::float") alias agg
+  -- tofloat(value) -> (value)::float
+  displayPrec _prec agg@(ToFloat val alias) =
+    displayBuilder $ withAlias ("(" <> display val <> ")::float") alias agg
+  -- toint(value) -> (value)::integer
+  displayPrec _prec agg@(ToInt val alias) =
+    displayBuilder $ withAlias ("(" <> display val <> ")::integer") alias agg
+  -- tostring(value) -> (value)::text
+  displayPrec _prec agg@(ToString val alias) =
+    displayBuilder $ withAlias ("(" <> display val <> ")::text") alias agg
   displayPrec _prec agg@(Plain sub alias) = displayBuilder $ withAlias (display sub) alias agg
 
 
@@ -453,6 +531,10 @@ instance ToQueryText Section where
     "summarize "
       <> T.intercalate "," (map toQText funcs)
       <> maybeToMonoid (toQText <$> byClauseM)
+  toQText (ExtendCommand cols) =
+    "extend " <> T.intercalate ", " [name <> " = " <> toQText expr | (name, expr) <- cols]
+  toQText (ProjectCommand cols) =
+    "project " <> T.intercalate ", " [name <> " = " <> toQText expr | (name, expr) <- cols]
   toQText (SortCommand fields) = "sort by " <> T.intercalate ", " (map toQText fields)
   toQText (TakeCommand limit) = "take " <> toText (show (limit :: Int))
 
@@ -474,6 +556,8 @@ data Section
   = Search Expr
   | WhereClause Expr -- New constructor for where clause after pipe
   | SummarizeCommand [AggFunction] (Maybe SummarizeByClause)
+  | ExtendCommand [(Text, AggFunction)] -- extend col = expr, col2 = expr2 (add computed columns)
+  | ProjectCommand [(Text, AggFunction)] -- project col = expr, col2 = expr2 (select specific columns)
   | SortCommand [SortField] -- sort by multiple fields
   | TakeCommand Int -- limit/take number of results
   | Source Sources
@@ -591,6 +675,43 @@ pTakeSection = do
   return $ TakeCommand (fromMaybe 1000 limit) -- Default to 1000 if parsing fails
 
 
+-- | Parse a column assignment like 'col_name = expression' for extend/project
+pColumnAssignment :: Parser (Text, AggFunction)
+pColumnAssignment = do
+  name <- toText <$> some (alphaNumChar <|> oneOf ("_" :: String))
+  space
+  _ <- string "="
+  space
+  expr <- aggFunctionParser
+  pure (name, setAlias name expr)
+
+
+-- | Parser for 'extend' command - add computed columns
+-- Microsoft KQL: extend ColumnName = Expression [, ...]
+--
+-- >>> parse pExtendSection "" "extend error_cat = case(status >= 500, \"5xx\", \"ok\")"
+-- Right (ExtendCommand [("error_cat",Case [(GTEq (Subject "status" "status" []) (Num "500"),Str "5xx")] (Str "ok") (Just "error_cat"))])
+pExtendSection :: Parser Section
+pExtendSection = do
+  _ <- string "extend"
+  space
+  cols <- pColumnAssignment `sepBy1` comma
+  pure $ ExtendCommand cols
+
+
+-- | Parser for 'project' command - select specific columns
+-- Microsoft KQL: project ColumnName = Expression [, ...]
+--
+-- >>> parse pProjectSection "" "project service = resource.service.name, count = count()"
+-- Right (ProjectCommand [("service",Plain (Subject "resource.service.name" "resource" [FieldKey "service",FieldKey "name"]) (Just "service")),("count",Count (Subject "*" "*" []) (Just "count"))])
+pProjectSection :: Parser Section
+pProjectSection = do
+  _ <- string "project"
+  space
+  cols <- pColumnAssignment `sepBy1` comma
+  pure $ ProjectCommand cols
+
+
 -- | Set alias on an aggregation function
 setAlias :: Text -> AggFunction -> AggFunction
 setAlias name (Count sub _) = Count sub (Just name)
@@ -615,6 +736,10 @@ setAlias name (Coalesce exprs _) = Coalesce exprs (Just name)
 setAlias name (Strcat exprs _) = Strcat exprs (Just name)
 setAlias name (Iff cond thenVal elseVal _) = Iff cond thenVal elseVal (Just name)
 setAlias name (Case pairs defVal _) = Case pairs defVal (Just name)
+setAlias name (Round val decimals _) = Round val decimals (Just name)
+setAlias name (ToFloat val _) = ToFloat val (Just name)
+setAlias name (ToInt val _) = ToInt val (Just name)
+setAlias name (ToString val _) = ToString val (Just name)
 setAlias name (Plain sub _) = Plain sub (Just name)
 
 
@@ -673,6 +798,8 @@ pSection = do
     [ pSummarizeSection
     , pSortSection
     , pTakeSection
+    , try pExtendSection
+    , try pProjectSection
     , try pWhereSection -- Try to parse 'where' clause first
     , Search <$> pExpr -- Fall back to bare expression for backward compatibility
     , Source <$> pSource
