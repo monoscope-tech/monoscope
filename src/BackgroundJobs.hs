@@ -539,7 +539,7 @@ processPatterns :: Text -> Text -> V.Vector (Text, Text) -> Projects.ProjectId -
 processPatterns kind fieldName events pid scheduledTime since = do
   Relude.when (not $ V.null events) $ do
     let qq = [text| select $fieldName from otel_logs_and_spans where project_id= ? AND timestamp >= now() - interval '1 hour' and $fieldName is not null GROUP BY $fieldName ORDER BY count(*) desc limit 20|]
-    existingPatterns <- if kind == "summary" then coerce @[Only Text] @[Text] <$> PG.query (Query $ encodeUtf8 qq) pid else LogPattern.getLogPatternTexts pid
+    existingPatterns <- if kind == "summary" then coerce @[Only Text] @[Text] <$> PG.query (Query $ encodeUtf8 qq) pid else LogPatterns.getLogPatternTexts pid
     let known = V.fromList $ map ("",) existingPatterns
         combined = known <> events
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree

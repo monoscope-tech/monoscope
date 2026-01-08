@@ -201,16 +201,7 @@ updateLogPatternStats pid patHash additionalCount =
       |]
 
 
--- | Update baseline data for a log pattern
-updateBaseline
-  :: DB es
-  => Projects.ProjectId
-  -> Text -- pattern_hash
-  -> Text -- baseline_state ('learning' or 'established')
-  -> Double -- hourly_mean
-  -> Double -- hourly_stddev
-  -> Int -- samples
-  -> Eff es Int64
+updateBaseline :: DB es => Projects.ProjectId -> Text  -> Text  -> Double -> Double -> Int  -> Eff es Int64
 updateBaseline pid patHash bState hourlyMean hourlyStddev samples =
   PG.execute q (bState, hourlyMean, hourlyStddev, samples, pid, patHash)
   where
