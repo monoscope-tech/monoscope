@@ -339,14 +339,17 @@ pCase =
 -- Microsoft KQL: round(value [, decimals])
 -- >>> parse pRound "" "round(3.14159, 2)"
 -- Right (Round (Num "3.14159") (Num "2") Nothing)
--- >>> parse pRound "" "round(duration / 1000000, 2)"
--- Right (Round (Field (Subject "duration / 1000000" "duration" [])) (Num "2") Nothing)
 pRound :: Parser AggFunction
-pRound =
-  withoutAlias
-    $ Round
-    <$> (string "round(" *> pScalarExpr)
-    <*> (comma *> pScalarExpr <* string ")")
+pRound = withoutAlias $ do
+  _ <- string "round("
+  val <- pScalarExpr
+  _ <- comma
+  decimals <- pScalarExpr
+  case decimals of
+    Num _ -> pure ()
+    _ -> fail "round() decimals must be numeric"
+  _ <- string ")"
+  pure $ Round val decimals
 
 
 -- | Helper for type casting parsers with keyword aliases
@@ -702,20 +705,18 @@ pTakeSection = do
   return $ TakeCommand (fromMaybe 1000 limit) -- Default to 1000 if parsing fails
 
 
--- | Parse a column assignment like 'col_name = expression' for extend/project
-pColumnAssignment :: Parser (Text, AggFunction)
-pColumnAssignment = do
+-- | Parse 'name = expression' pattern, returns (name, aliased expression)
+-- Used by extend/project commands and named aggregations in summarize
+pNamedExpr :: Parser (Text, AggFunction)
+pNamedExpr = do
   name <- toText <$> some (alphaNumChar <|> oneOf ("_" :: String))
-  space
-  _ <- string "="
-  space
-  expr <- aggFunctionParser
-  pure (name, setAlias name expr)
+  space *> string "=" *> space
+  (name,) . setAlias name <$> aggFunctionParser
 
 
 -- | Helper for column-assignment commands (extend/project)
 pColumnCommand :: Text -> ([(Text, AggFunction)] -> Section) -> Parser Section
-pColumnCommand keyword ctor = string keyword *> space *> (ctor <$> pColumnAssignment `sepBy1` comma)
+pColumnCommand keyword ctor = string keyword *> space *> (ctor <$> pNamedExpr `sepBy1` comma)
 
 
 -- | Parser for 'extend' command - add computed columns
@@ -775,12 +776,7 @@ setAlias name (Plain sub _) = Plain sub (Just name)
 -- >>> parse namedAggregation "" "error_count = countif(status_code == \"ERROR\")"
 -- Right (CountIf (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) (Just "error_count"))
 namedAggregation :: Parser AggFunction
-namedAggregation = do
-  name <- toText <$> some (alphaNumChar <|> oneOf ("_" :: String))
-  space
-  _ <- string "="
-  space
-  setAlias name <$> aggFunctionParser
+namedAggregation = snd <$> pNamedExpr
 
 
 -- | Parse the summarize command
