@@ -124,6 +124,11 @@ data BgJobs
     LogPatternBaselineCalculation Projects.ProjectId -- Calculate baselines for log patterns
   | LogPatternSpikeDetection Projects.ProjectId -- Detect log pattern volume spikes
   | NewLogPatternDetected Projects.ProjectId Text -- projectId, pattern hash - notify about new pattern
+  | -- Endpoint anomaly detection jobs
+    EndpointBaselineCalculation Projects.ProjectId -- Calculate baselines for endpoints (latency, error rate, volume)
+  | EndpointLatencyDegradationDetection Projects.ProjectId -- Detect endpoint latency degradation
+  | EndpointErrorRateSpikeDetection Projects.ProjectId -- Detect endpoint error rate spikes
+  | EndpointVolumeRateChangeDetection Projects.ProjectId -- Detect endpoint volume changes (spike/drop)
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -371,6 +376,11 @@ processBackgroundJob authCtx bgJob =
     LogPatternBaselineCalculation pid -> calculateLogPatternBaselines pid
     LogPatternSpikeDetection pid -> detectLogPatternSpikes pid authCtx
     NewLogPatternDetected pid patternHash -> processNewLogPattern pid patternHash authCtx
+    -- Endpoint anomaly detection jobs
+    EndpointBaselineCalculation pid -> calculateEndpointBaselines pid
+    EndpointLatencyDegradationDetection pid -> detectEndpointLatencyDegradation pid authCtx
+    EndpointErrorRateSpikeDetection pid -> detectEndpointErrorRateSpike pid authCtx
+    EndpointVolumeRateChangeDetection pid -> detectEndpointVolumeRateChange pid authCtx
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -409,6 +419,11 @@ runHourlyJob scheduledTime hour = do
       -- Log pattern baseline and spike detection
       createJob conn "background_jobs" $ LogPatternBaselineCalculation pid
       createJob conn "background_jobs" $ LogPatternSpikeDetection pid
+      -- Endpoint baseline and anomaly detection
+      createJob conn "background_jobs" $ EndpointBaselineCalculation pid
+      createJob conn "background_jobs" $ EndpointLatencyDegradationDetection pid
+      createJob conn "background_jobs" $ EndpointErrorRateSpikeDetection pid
+      createJob conn "background_jobs" $ EndpointVolumeRateChangeDetection pid
 
   -- Cleanup expired query cache entries
   deletedCount <- QueryCache.cleanupExpiredCache
@@ -1795,7 +1810,7 @@ detectLogPatternSpikes pid authCtx = do
           -- Get full pattern record for issue creation
           patternM <- LogPatterns.getLogPatternById lpRate.patternId
           whenJust patternM \lp -> do
-            issue <- liftIO $ Issues.createLogPatternSpikeIssue pid lp currentRate mean stddev
+            issue <- liftIO $ Issues.createLogPatternRateChangeIssue pid lp currentRate mean stddev "spike"
             Issues.insertIssue issue
             liftIO $ withResource authCtx.jobsPool \conn ->
               void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
@@ -1819,7 +1834,7 @@ processNewLogPattern pid patternHash authCtx = do
       -- Only create issue for truly new patterns (state = 'new')
       Relude.when (lp.state == LogPatterns.LPSNew) $ do
         -- Create a new log pattern issue
-        issue <- liftIO $ Issues.createNewLogPatternIssue pid lp
+        issue <- liftIO $ Issues.createLogPatternIssue pid lp
         Issues.insertIssue issue
 
         -- Queue LLM enhancement
@@ -1827,3 +1842,122 @@ processNewLogPattern pid patternHash authCtx = do
           void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
 
         Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
+
+
+-- ============================================================================
+-- Endpoint Anomaly Detection Jobs
+-- ============================================================================
+
+-- | Calculate baselines for endpoints (latency, error rate, volume)
+-- Uses hourly stats from otel_logs_and_spans over the last 7 days
+calculateEndpointBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
+calculateEndpointBaselines pid = do
+  Log.logInfo "Calculating endpoint baselines" pid
+  endpoints <- Endpoints.getActiveEndpoints pid
+
+  forM_ endpoints \ep -> do
+    -- Get hourly stats over last 7 days (168 hours)
+    statsM <- Endpoints.getEndpointStats pid ep.hash 168
+    case statsM of
+      Nothing -> pass
+      Just stats -> do
+        let newSamples = stats.totalHours
+            -- Establish baseline after 24 hours of data
+            newState = if newSamples >= 24 then "established" else "learning"
+        Endpoints.updateEndpointBaseline
+          ep.id
+          newState
+          stats.hourlyMeanErrors
+          stats.hourlyStddevErrors
+          stats.meanLatency
+          stats.stddevLatency
+          stats.p95Latency
+          stats.p99Latency
+          stats.hourlyMeanRequests
+          stats.hourlyStddevRequests
+          newSamples
+
+  Log.logInfo "Finished calculating endpoint baselines" (pid, length endpoints)
+
+
+-- | Detect endpoint latency degradation and create issues
+detectEndpointLatencyDegradation :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
+detectEndpointLatencyDegradation pid authCtx = do
+  Log.logInfo "Detecting endpoint latency degradation" pid
+
+  endpointsWithRates <- Endpoints.getEndpointsWithCurrentRates pid
+
+  forM_ endpointsWithRates \epRate -> do
+    -- Check P95 latency degradation
+    case (epRate.baselineLatencyP95, epRate.baselineLatencyStddev, epRate.currentHourLatencyP95) of
+      (Just baselineP95, Just stddev, Just currentP95) | stddev > 0 -> do
+        let zScore = (currentP95 - baselineP95) / stddev
+            -- Degradation: >3 std devs AND at least 50% increase
+            isDegraded = zScore > 3.0 && currentP95 > baselineP95 * 1.5
+        Relude.when isDegraded $ do
+          Log.logInfo "Endpoint latency degradation detected" (epRate.endpointHash, currentP95, baselineP95, zScore)
+          issue <- liftIO $ Issues.createEndpointLatencyDegradationIssue pid epRate.endpointHash epRate.method epRate.urlPath (Just epRate.host) currentP95 baselineP95 stddev "p95" V.empty
+          Issues.insertIssue issue
+          liftIO $ withResource authCtx.jobsPool \conn ->
+            void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+          Log.logInfo "Created issue for endpoint latency degradation" (pid, epRate.endpointHash, issue.id)
+      _ -> pass
+
+  Log.logInfo "Finished endpoint latency degradation detection" pid
+
+
+-- | Detect endpoint error rate spikes and create issues
+detectEndpointErrorRateSpike :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
+detectEndpointErrorRateSpike pid authCtx = do
+  Log.logInfo "Detecting endpoint error rate spikes" pid
+
+  endpointsWithRates <- Endpoints.getEndpointsWithCurrentRates pid
+
+  forM_ endpointsWithRates \epRate -> do
+    case (epRate.baselineErrorRateMean, epRate.baselineErrorRateStddev) of
+      (Just baselineMean, Just stddev) | stddev > 0 && epRate.currentHourRequests > 0 -> do
+        let currentErrorRate = fromIntegral epRate.currentHourErrors / fromIntegral epRate.currentHourRequests
+            zScore = (currentErrorRate - baselineMean) / stddev
+            -- Spike: >3 std devs AND error rate > 5% AND at least 5 errors
+            isSpike = zScore > 3.0 && currentErrorRate > 0.05 && epRate.currentHourErrors >= 5
+
+        Relude.when isSpike $ do
+          Log.logInfo "Endpoint error rate spike detected" (epRate.endpointHash, currentErrorRate, baselineMean, zScore)
+          issue <- liftIO $ Issues.createEndpointErrorRateSpikeIssue 
+                pid epRate.endpointHash epRate.method epRate.urlPath (Just epRate.host) currentErrorRate baselineMean stddev epRate.currentHourErrors epRate.currentHourRequests V.empty 
+          Issues.insertIssue issue
+          liftIO $ withResource authCtx.jobsPool \conn ->
+            void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+          Log.logInfo "Created issue for endpoint error rate spike" (pid, epRate.endpointHash, issue.id)
+      _ -> pass
+
+  Log.logInfo "Finished endpoint error rate spike detection" pid
+
+
+-- | Detect endpoint volume rate changes (spike or drop) and create issues
+detectEndpointVolumeRateChange :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
+detectEndpointVolumeRateChange pid authCtx = do
+  Log.logInfo "Detecting endpoint volume rate changes" pid
+  endpointsWithRates <- Endpoints.getEndpointsWithCurrentRates pid
+  forM_ endpointsWithRates \epRate -> do
+    case (epRate.baselineVolumeHourlyMean, epRate.baselineVolumeHourlyStddev) of
+      (Just baselineMean, Just stddev) | stddev > 0 && baselineMean > 10 -> do
+        let currentRate = fromIntegral epRate.currentHourRequests
+            zScore = (currentRate - baselineMean) / stddev
+            absZScore = abs zScore
+            -- Significant change: >3 std devs in either direction
+            isSignificantChange = absZScore > 3.0
+            direction = if currentRate > baselineMean then "spike" else "drop"
+        Relude.when isSignificantChange $ do
+          Log.logInfo "Endpoint volume rate change detected" (epRate.endpointHash, currentRate, baselineMean, zScore, direction)
+          issue <- liftIO $ Issues.createEndpointVolumeRateChangeIssue
+            pid epRate.endpointHash epRate.method epRate.urlPath (Just epRate.host) currentRate baselineMean stddev direction
+
+          Issues.insertIssue issue
+          liftIO $ withResource authCtx.jobsPool \conn ->
+            void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+
+          Log.logInfo "Created issue for endpoint volume rate change" (pid, epRate.endpointHash, issue.id, direction)
+      _ -> pass
+
+  Log.logInfo "Finished endpoint volume rate change detection" pid
