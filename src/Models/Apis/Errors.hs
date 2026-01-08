@@ -28,12 +28,14 @@ module Models.Apis.Errors (
 where
 
 import Data.Aeson qualified as AE
+import Data.Default
 import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
@@ -41,14 +43,12 @@ import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Apis.RequestDumps qualified as RequestDump
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import Relude hiding (id)
 import System.Types (DB)
 import Utils (DBField (MkDBField))
-import Models.Apis.RequestDumps qualified as RequestDumps
-import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Data.Default
 
 
 newtype ErrorId = ErrorId {unErrorId :: UUID.UUID}
@@ -103,6 +103,7 @@ instance FromField ErrorState where
         case parseErrorState bs of
           Just s -> pure s
           Nothing -> pure ESNew
+
 
 data Error = Error
   { id :: ErrorId
@@ -179,6 +180,7 @@ data ATError = ATError
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
+
 
 data ErrorEvent = ErrorEvent
   { id :: ErrorEventId
