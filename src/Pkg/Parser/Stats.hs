@@ -560,7 +560,7 @@ getAlias = view typed
 defaultAlias :: AggFunction -> Text
 defaultAlias = \case
   Count (Subject n _ _) _ -> "count_" <> if n == "*" then "" else sanitizeAlias n
-  CountIf {} -> "countif_"
+  CountIf{} -> "countif_"
   DCount (Subject n _ _) _ _ -> "dcount_" <> sanitizeAlias n
   P50 (Subject n _ _) _ -> "p50_" <> sanitizeAlias n
   P75 (Subject n _ _) _ -> "p75_" <> sanitizeAlias n
@@ -577,8 +577,14 @@ defaultAlias = \case
   Median (Subject n _ _) _ -> "median_" <> sanitizeAlias n
   Stdev (Subject n _ _) _ -> "stdev_" <> sanitizeAlias n
   Range (Subject n _ _) _ -> "range_" <> sanitizeAlias n
-  Coalesce {} -> "coalesce_"; Strcat {} -> "strcat_"; Iff {} -> "iff_"; Case {} -> "case_"
-  Round {} -> "round_"; ToFloat {} -> "tofloat_"; ToInt {} -> "toint_"; ToString {} -> "tostring_"
+  Coalesce{} -> "coalesce_"
+  Strcat{} -> "strcat_"
+  Iff{} -> "iff_"
+  Case{} -> "case_"
+  Round{} -> "round_"
+  ToFloat{} -> "tofloat_"
+  ToInt{} -> "toint_"
+  ToString{} -> "tostring_"
   Plain (Subject n _ _) _ -> sanitizeAlias n
 
 
