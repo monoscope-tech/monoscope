@@ -30,7 +30,7 @@
     "lit": "^3.3.2",
     "lodash": "^4.17.21",
     "monaco-editor": "^0.55.1",
-    "vite": "^6.4.1"
+    "vite": "^7.3.0"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
