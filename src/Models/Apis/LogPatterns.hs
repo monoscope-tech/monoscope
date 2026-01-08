@@ -131,11 +131,13 @@ getLogPatterns pid mstate limit offset = PG.query q (pid, maybe "%" logPatternSt
         LIMIT ? OFFSET ?
       |]
 
+
 getLogPatternTexts :: DB es => Projects.ProjectId -> Eff es [Text]
 getLogPatternTexts pid = PG.query q (Only pid)
   where
     q = [sql| SELECT log_pattern FROM apis.log_patterns WHERE project_id = ?|]
-    
+
+
 -- | Get log pattern by hash
 getLogPatternByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe LogPattern)
 getLogPatternByHash pid hash = do
@@ -168,7 +170,7 @@ acknowledgeLogPatterns uid patternHashes
       |]
 
 
-upsertLogPattern :: DB es => Projects.ProjectId -> Text  -> Text  -> Maybe Text  -> Maybe Text  -> Maybe Text  -> Eff es Int64
+upsertLogPattern :: DB es => Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es Int64
 upsertLogPattern pid pat patHash serviceName logLevel sampleMsg =
   PG.execute q (pid, pat, patHash, serviceName, logLevel, sampleMsg)
   where
