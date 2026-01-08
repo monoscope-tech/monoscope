@@ -1923,8 +1923,20 @@ detectEndpointErrorRateSpike pid authCtx = do
 
         Relude.when isSpike $ do
           Log.logInfo "Endpoint error rate spike detected" (epRate.endpointHash, currentErrorRate, baselineMean, zScore)
-          issue <- liftIO $ Issues.createEndpointErrorRateSpikeIssue 
-                pid epRate.endpointHash epRate.method epRate.urlPath (Just epRate.host) currentErrorRate baselineMean stddev epRate.currentHourErrors epRate.currentHourRequests V.empty 
+          issue <-
+            liftIO
+              $ Issues.createEndpointErrorRateSpikeIssue
+                pid
+                epRate.endpointHash
+                epRate.method
+                epRate.urlPath
+                (Just epRate.host)
+                currentErrorRate
+                baselineMean
+                stddev
+                epRate.currentHourErrors
+                epRate.currentHourRequests
+                V.empty
           Issues.insertIssue issue
           liftIO $ withResource authCtx.jobsPool \conn ->
             void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
@@ -1950,8 +1962,18 @@ detectEndpointVolumeRateChange pid authCtx = do
             direction = if currentRate > baselineMean then "spike" else "drop"
         Relude.when isSignificantChange $ do
           Log.logInfo "Endpoint volume rate change detected" (epRate.endpointHash, currentRate, baselineMean, zScore, direction)
-          issue <- liftIO $ Issues.createEndpointVolumeRateChangeIssue
-            pid epRate.endpointHash epRate.method epRate.urlPath (Just epRate.host) currentRate baselineMean stddev direction
+          issue <-
+            liftIO
+              $ Issues.createEndpointVolumeRateChangeIssue
+                pid
+                epRate.endpointHash
+                epRate.method
+                epRate.urlPath
+                (Just epRate.host)
+                currentRate
+                baselineMean
+                stddev
+                direction
 
           Issues.insertIssue issue
           liftIO $ withResource authCtx.jobsPool \conn ->
