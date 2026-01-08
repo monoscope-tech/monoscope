@@ -514,6 +514,6 @@ resizer_ targetId urlParam increasingDirection =
     $ div_ [class_ "h-full border-l hover:border-strokeBrand-strong"]
     $ div_
       [ id_ $ "resizer-" <> urlParam
-      , class_ "absolute left-1/2 top-1/2 z-50 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-bgBase rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"
+      , class_ "absolute left-1/2 top-1/2 z-10 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-bgBase rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"
       ]
     $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"

@@ -404,3 +404,44 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
     it "rejects project with no columns" do
       parseQueryToAST "| project" `shouldFailWith` "expecting"
 
+  describe "nested aggregations" do
+    it "parses round with nested countif" do
+      let result = parseQueryToAST "| summarize round(countif(status >= 400), 2) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+    it "generates SQL for round with nested countif" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize round(countif(status >= 400), 2) by bin(timestamp, 1h)"
+      let sql = fromMaybe "" c.finalSummarizeQuery
+      T.isInfixOf "ROUND((COUNT(*) FILTER (WHERE" sql `shouldBe` True
+
+    it "parses tofloat with nested count" do
+      let result = parseQueryToAST "| summarize tofloat(count()) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+
+  describe "project SQL output" do
+    it "project generates correct alias" do
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| project service = resource.service.name"
+      T.isInfixOf "AS service" query `shouldBe` True
+
+  describe "round validation" do
+    it "rejects decimals > 15" do
+      parseQueryToAST "| summarize round(duration, 16) by bin_auto(timestamp)" `shouldFailWith` "round() decimals must be 0-15 per PostgreSQL limit"
+
+    it "rejects negative decimals" do
+      parseQueryToAST "| summarize round(duration, -1) by bin_auto(timestamp)" `shouldFailWith` "round() decimals must be 0-15 per PostgreSQL limit"
+
+    it "accepts valid decimals range" do
+      let result = parseQueryToAST "| summarize round(duration, 0) by bin_auto(timestamp)"
+      isRight result `shouldBe` True
+      let result2 = parseQueryToAST "| summarize round(duration, 15) by bin_auto(timestamp)"
+      isRight result2 `shouldBe` True
+
+  describe "pNamedExpr with dots" do
+    it "allows dots in names and sanitizes to underscores" do
+      let result = parseQueryToAST "| extend error.count = count()"
+      isRight result `shouldBe` True
+
+    it "sanitizes dots in summarize named aggregations" do
+      let result = parseQueryToAST "| summarize total.count = count() by status"
+      isRight result `shouldBe` True
+
